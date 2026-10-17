@@ -88,7 +88,7 @@ pub struct Handling {
 impl Handling {
     /// The handling of a ship whose `Speed`, `Accel` and `Maneuver`, its
     /// outfits' included, total these. A total of 0 or below gives 0: the
-    /// ship cannot move that way. [`ShipStats`](crate::stats::ShipStats)
+    /// ship cannot move that way. `nova_sim::stats::ShipStats`
     /// gives a ship's handling.
     #[must_use]
     pub(crate) fn from_totals(speed: i64, accel: i64, maneuver: f32) -> Self {

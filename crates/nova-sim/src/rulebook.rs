@@ -16,194 +16,194 @@
 //!
 //! | [`RuleKey`] | settings key | engine | Bible |
 //! |---|---|---|---|
-//! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's, and its systems along the crime's walk ([`NovaLaw`](crate::NovaLaw)) | only the victim's enemies |
-//! | [`EmptyBooty`](RuleKey::EmptyBooty) | `empty_booty` | boarding a ship of `Booty` 0 opens the plunder dialog anyway ([`NovaBoarding`](crate::NovaBoarding)) | the player is repelled |
-//! | [`CrewlessCapture`](RuleKey::CrewlessCapture) | `crewless_capture` | a player of no crew still has odds of 1 or more ([`NovaBoarding`](crate::NovaBoarding)) | no odds: it cannot capture |
-//! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding ([`NovaAi`](crate::NovaAi)) | interceptors only |
-//! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing ([`hail::nova`](crate::hail::nova)) | they answer Greetings "No response.", and the middle button works |
-//! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." ([`hail::reply`](crate::hail::reply)) | it is shown as written\* |
-//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player ([`EscortAi`](crate::EscortAi)) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
-//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation ([`Session`](crate::Session)) | the orders are kept\* |
-//! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command ([`Session`](crate::Session)) | it attacks the player's target at once\* |
-//! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed ([`Session`](crate::Session)) | every fighter out goes back into its bay on arrival and on landing\* |
-//! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 ([`Session`](crate::Session)) | an unmet `Require` makes a listed ship greyed and refused\* |
-//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for a jump's days; the days a stay passes pay none\* |
-//! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass\*\*\*\*\*\* |
-//! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out†††††† |
-//! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see [`story`](crate::story)) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
-//! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it‡‡‡‡‡‡ |
-//! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
-//! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see [`story`](crate::story)) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
-//! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see [`landing`](crate::landing)) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
-//! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
-//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
-//! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
-//! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance ([`NovaPersons`](crate::NovaPersons)) | always |
-//! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 ([`NovaPersons`](crate::NovaPersons)) | that system only |
-//! | [`ShieldMod`](RuleKey::ShieldMod) | `shield_mod` | a person's `ShieldMod` scales its shield and armour ([`NovaPersons`](crate::NovaPersons)) | its shield only |
-//! | [`DerelictSetupSpeed`](RuleKey::DerelictSetupSpeed) | `derelict_setup_speed` | a person of a derelict government (`Flags` 0x0800) brought by a setup pass starts at its top speed, as its zeroed velocity is accelerated again (`_SetupShipsInSystem` @0x43245, @0x432eb), and one brought by its Person slot at rest (@0x433fe, then @0x43438) ([`NovaPersons`](crate::NovaPersons)) | both start at rest\* |
-//! | [`PersonCoward`](RuleKey::PersonCoward) | `person_coward` | only a warship person of a government with `Flags` 0x0010 runs at `Coward` % ([`NovaAi`](crate::NovaAi)) | any warship or interceptor person |
-//! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
-//! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
-//! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
-//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max`, and `G` past its `Max` and the free mass ([`OutfitRules`](crate::OutfitRules), which the boarding grant reads too) | both are held to `Max` less the owned and to the free mass, weighed as the outfitter weighs it ([`held_to_max`](crate::grant::held_to_max))\* |
-//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; [`JoinFleet`](crate::hail::nova::JoinFleet)), and an accept with `Flags` 0x0040 and one ship left swaps it for its mission's ship | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
-//! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
-//! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
-//! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
-//! | [`RefitReserves`](RuleKey::RefitReserves) | `refit_reserves` | a refit by `G`, `D` or boarding keeps a shield or armour above the new most until damage, the outfitter or a reload takes it ([`OutfitRules`](crate::OutfitRules)) | each is held to its most\* |
-//! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost ([`HookRules`](crate::HookRules)) | the paint is cleared before the hook, so a paint it grants stays\* |
-//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
-//! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
-//! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
-//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
-//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | the cargo `C`, `E` and `H` leave past the new hold is trimmed as the set expression ends, as every set expression's reset trims: each commodity cut to trunc(held x holds/total) in single floats, against the fleet's holds with the trader escorts' `Holds`, the mission cargo counted and never cut, the `jünk` never cut (`_SystemInfoToShipStats` @0x1566a, `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`ShipChangeRules`](crate::ShipChangeRules)) | every ton is kept past the hold: no set expression's reset trims, and the cargo waits for a reset outside one (a take-off, a jump's arrival, a landing, a jettison, ...)\* |
-//! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
-//! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
-//! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; [`ShipChangeRules`](crate::ShipChangeRules)) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
-//! | [`ShipChangeNegativeStock`](RuleKey::ShipChangeNegativeStock) | `ship_change_negative_stock` | `E` and `H` add a negative `WeapCount` or `AmmoLoad` signed, taking that many launchers or rounds away, floored at none (`_EvalSetExp` @0x15555, @0x155c3; [`ShipChangeRules`](crate::ShipChangeRules)) | it adds nothing, as a purchase reads it\* |
-//! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
-//! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only every ship the player leads (hired and mission escorts, fighters out) follows, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
-//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
-//! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
-//! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
-//! | [`OutOfRangeMove`](RuleKey::OutOfRangeMove) | `out_of_range_move` | an `N` whose system is out of range (128-2175) runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x158e3, @0x1593f-0x159ad; [`ScriptEffectRules`](crate::ScriptEffectRules)) | it does nothing, as every other operator out of range does\* |
-//! | [`MissingSystemMove`](RuleKey::MissingSystemMove) | `missing_system_move` | an `M` or `N` to a system 128-2175 with no `sÿst` runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x15723, @0x158ea, @0x1593f-0x159ad; [`ScriptEffectRules`](crate::ScriptEffectRules)) | it does nothing\* |
-//! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
-//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, the fleet's holds less the goods and the mission cargo aboard (`_TotalCargo` @0x4a0b), measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b, @0x70863-0x70888; [`Session`](crate::Session)) | tribbles goods grow only into that free space, and perishable goods always decay‡ |
-//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
-//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
-//! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
-//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase trims the commodities to the new fleet's holds, counting the mission cargo aboard but never cutting it, then keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims again (`_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0xcd32-0xcff6, each ending in `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; `_TotalCargo` @0x4a0b called @0xc7ea; [`Session`](crate::Session)) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
-//! | [`OutfitSaleCargo`](RuleKey::OutfitSaleCargo) | `outfit_sale_cargo` | an outfit sale that leaves the fleet's holds below the cargo trims the commodities, as the sale's resets do (`_DoOutfitDialog` @0x5cff6, @0x5cffb; `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`Session`](crate::Session)) | no reset through the sale trims: the cargo stays past the hold until the next reset after it\* |
-//! | [`ReleaseCargoShare`](RuleKey::ReleaseCargoShare) | `release_cargo_share` | an escort released by hail takes its share of the fleet's cargo whatever its ship type, as the release tests no `InherentAI` (`_DoCommDialog` @0x96864, `_DoEscortDialog` @0x9549d, @0x9561d; [`Session`](crate::Session)) | only a trader takes a share, as for every other escort lost\* |
-//! | [`CaptureCargo`](RuleKey::CaptureCargo) | `capture_cargo` | Use As My Ship leaves the commodities with the old ship, the player taking the captured ship's, which carries none (`_DoShipCapture` @0x412e6-0x412fe, @0x41762-0x41779; [`Session`](crate::Session)) | the player keeps every commodity; either way the reset (@0x41a3e) trims them to the new fleet's holds\* |
-//! | [`LeaderlessSwapHold`](RuleKey::LeaderlessSwapHold) | `leaderless_swap_hold` | a ship swapped in for a person by a `ShipGoal` 3 mission, neither hunting nor escorting the player, holds goal 10 with no leader: it coasts with no thrust and no fire, picks no destination, target or ship to inspect, and leaves the hold only when provoked, at its government's word, or as a plundering warship (`_AIMakeEscortFlyInForm` @0x89b8e-0x89c3d, `_HighLevelAIHandler` @0x8ed18-0x8ed31; see [`Goal::Hold`](crate::ai::Goal::Hold)) | it decides as its `düde`'s AI from the start, landing or jumping out\* |
-//! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
-//! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
-//! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
-//! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; [`Outfitter::refund`](crate::Outfitter::refund)) | every sale refunds half§§§ |
-//! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; [`Outfitter::count_asked`](crate::Outfitter::count_asked)) | Alt changes nothing: each click moves one¶¶¶ |
-//! | [`SaleMass`](RuleKey::SaleMass) | `sale_mass` | only an outfit of negative mass is refused, when the free mass clamped at 0 plus its mass is below 0; one of mass 0 or more sells while the free mass is below 0 (`_DoOutfitDialog` @0x5c735-0x5c747, `_ShipFreeMass` @0xb506-0xb50a; [`Session`](crate::Session)) | a sale is refused whenever it would leave the free mass below 0\*\*\*\* |
-//! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold. A counted sale runs on past it, each later pass refused silently; the sales before it stand (@0x5d19c-0x5d1b1) (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; [`Outfitter::can`](crate::Outfitter::can) / [`Outfitter::sale_alert`](crate::Outfitter::sale_alert)) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
-//! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
-//! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; [`Session`](crate::Session)) | the ordered outfit and the pass index are kept††††† |
-//! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; [`Session`](crate::Session)) | the selected cell is kept and the outfitter stays open§§§§§ |
+//! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's, and its systems along the crime's walk (`nova_sim::NovaLaw`) | only the victim's enemies |
+//! | [`EmptyBooty`](RuleKey::EmptyBooty) | `empty_booty` | boarding a ship of `Booty` 0 opens the plunder dialog anyway (`nova_sim::NovaBoarding`) | the player is repelled |
+//! | [`CrewlessCapture`](RuleKey::CrewlessCapture) | `crewless_capture` | a player of no crew still has odds of 1 or more (`nova_sim::NovaBoarding`) | no odds: it cannot capture |
+//! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding (`nova_sim::NovaAi`) | interceptors only |
+//! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing (`nova_sim::hail::nova`) | they answer Greetings "No response.", and the middle button works |
+//! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." (`nova_sim::hail::reply`) | it is shown as written\* |
+//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player (`nova_sim::EscortAi`) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
+//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`) | the orders are kept\* |
+//! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command (`nova_sim::Session`) | it attacks the player's target at once\* |
+//! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed (`nova_sim::Session`) | every fighter out goes back into its bay on arrival and on landing\* |
+//! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 (`nova_sim::Session`) | an unmet `Require` makes a listed ship greyed and refused\* |
+//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage (`nova_sim::Session`) | wages are paid only for a jump's days; the days a stay passes pay none\* |
+//! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; `nova_sim::Session`) | a stay passes no days: only a jump's and a gate's like a jump pass\*\*\*\*\*\* |
+//! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see `nova_sim::story`) | it waits until the script has settled, then dispatches first in, first out†††††† |
+//! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see `nova_sim::story`) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
+//! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see `nova_sim::story`) | a landing forgets them, and each is drawn the first time a list asks for it‡‡‡‡‡‡ |
+//! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see `nova_sim::story`) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
+//! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see `nova_sim::story`) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
+//! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see `nova_sim::landing`) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
+//! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
+//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now (`nova_sim::Session`) | the wage kept on its record when hired\* |
+//! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
+//! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance (`nova_sim::NovaPersons`) | always |
+//! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 (`nova_sim::NovaPersons`) | that system only |
+//! | [`ShieldMod`](RuleKey::ShieldMod) | `shield_mod` | a person's `ShieldMod` scales its shield and armour (`nova_sim::NovaPersons`) | its shield only |
+//! | [`DerelictSetupSpeed`](RuleKey::DerelictSetupSpeed) | `derelict_setup_speed` | a person of a derelict government (`Flags` 0x0800) brought by a setup pass starts at its top speed, as its zeroed velocity is accelerated again (`_SetupShipsInSystem` @0x43245, @0x432eb), and one brought by its Person slot at rest (@0x433fe, then @0x43438) (`nova_sim::NovaPersons`) | both start at rest\* |
+//! | [`PersonCoward`](RuleKey::PersonCoward) | `person_coward` | only a warship person of a government with `Flags` 0x0010 runs at `Coward` % (`nova_sim::NovaAi`) | any warship or interceptor person |
+//! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more (`nova_sim::NovaBoarding`) | its `Credits`, ±25 % |
+//! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings (`nova_sim::Session`) | it opens the hail, in place of the opening line\* |
+//! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 (`nova_sim::NovaBoarding`) | 1 + `Rand(GrantCount)`\* |
+//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max`, and `G` past its `Max` and the free mass (`nova_sim::OutfitRules`, which the boarding grant reads too) | both are held to `Max` less the owned and to the free mass, weighed as the outfitter weighs it (`nova_sim::grant::held_to_max`)\* |
+//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; `nova_sim::hail::nova::JoinFleet`), and an accept with `Flags` 0x0040 and one ship left swaps it for its mission's ship | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars (`nova_sim::OutfitRules`) | every system within N jumps, and any stellar |
+//! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up (`nova_sim::OutfitRules`) | it is added to the outfits as a plain item\* |
+//! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing (`nova_sim::OutfitRules`) | it pays what selling the outfit would\* |
+//! | [`RefitReserves`](RuleKey::RefitReserves) | `refit_reserves` | a refit by `G`, `D` or boarding keeps a shield or armour above the new most until damage, the outfitter or a reload takes it (`nova_sim::OutfitRules`) | each is held to its most\* |
+//! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost (`nova_sim::HookRules`) | the paint is cleared before the hook, so a paint it grants stays\* |
+//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants (`nova_sim::HookRules`) | they run after the swap, so it stays\* |
+//! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` (`nova_sim::HookRules`) | it runs once, right before the `chär`'s `OnStart`\* |
+//! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 (`nova_sim::ShipChangeRules`) | only one flagged 0x0020 |
+//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items (`nova_sim::ShipChangeRules`) | nothing is held: every outfit is kept |
+//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | the cargo `C`, `E` and `H` leave past the new hold is trimmed as the set expression ends, as every set expression's reset trims: each commodity cut to trunc(held x holds/total) in single floats, against the fleet's holds with the trader escorts' `Holds`, the mission cargo counted and never cut, the `jünk` never cut (`_SystemInfoToShipStats` @0x1566a, `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; `nova_sim::ShipChangeRules`) | every ton is kept past the hold: no set expression's reset trims, and the cargo waits for a reset outside one (a take-off, a jump's arrival, a landing, a jettison, ...)\* |
+//! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it (`nova_sim::ShipChangeRules`) | each is held to its new most\* |
+//! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters (`nova_sim::ShipChangeRules`) | the bay's own fighters are loaded, as a purchase loads them\* |
+//! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; `nova_sim::ShipChangeRules`) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
+//! | [`ShipChangeNegativeStock`](RuleKey::ShipChangeNegativeStock) | `ship_change_negative_stock` | `E` and `H` add a negative `WeapCount` or `AmmoLoad` signed, taking that many launchers or rounds away, floored at none (`_EvalSetExp` @0x15555, @0x155c3; `nova_sim::ShipChangeRules`) | it adds nothing, as a purchase reads it\* |
+//! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity (`nova_sim::ScriptEffectRules`) | the ship is put at rest at the system's centre |
+//! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only every ship the player leads (hired and mission escorts, fighters out) follows, the new system filling with arrivals over time (`nova_sim::ScriptEffectRules`) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
+//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed (`nova_sim::ScriptEffectRules`) | only a landed `N` keeps the landing position\* |
+//! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one (`nova_sim::ScriptEffectRules`) | the player leaves all the same, with no message |
+//! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing (`nova_sim::ScriptEffectRules`) | every `P` sounds at once, landed or not\* |
+//! | [`OutOfRangeMove`](RuleKey::OutOfRangeMove) | `out_of_range_move` | an `N` whose system is out of range (128-2175) runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x158e3, @0x1593f-0x159ad; `nova_sim::ScriptEffectRules`) | it does nothing, as every other operator out of range does\* |
+//! | [`MissingSystemMove`](RuleKey::MissingSystemMove) | `missing_system_move` | an `M` or `N` to a system 128-2175 with no `sÿst` runs the move's tail with no move: landed, the offers are emptied; in flight, the scene is reset and the system entered again where the ship is (`_EvalSetExp` @0x15723, @0x158ea, @0x1593f-0x159ad; `nova_sim::ScriptEffectRules`) | it does nothing\* |
+//! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; `nova_sim::Session`) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
+//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, the fleet's holds less the goods and the mission cargo aboard (`_TotalCargo` @0x4a0b), measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b, @0x70863-0x70888; `nova_sim::Session`) | tribbles goods grow only into that free space, and perishable goods always decay‡ |
+//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; `nova_sim::Session`); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
+//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; `nova_sim::Session`); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
+//! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; `nova_sim::Session`) | the level price plus every event's `PriceDelta`\*\* |
+//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase trims the commodities to the new fleet's holds, counting the mission cargo aboard but never cutting it, then keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims again (`_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0xcd32-0xcff6, each ending in `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; `_TotalCargo` @0x4a0b called @0xc7ea; `nova_sim::Session`) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
+//! | [`OutfitSaleCargo`](RuleKey::OutfitSaleCargo) | `outfit_sale_cargo` | an outfit sale that leaves the fleet's holds below the cargo trims the commodities, as the sale's resets do (`_DoOutfitDialog` @0x5cff6, @0x5cffb; `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; `nova_sim::Session`) | no reset through the sale trims: the cargo stays past the hold until the next reset after it\* |
+//! | [`ReleaseCargoShare`](RuleKey::ReleaseCargoShare) | `release_cargo_share` | an escort released by hail takes its share of the fleet's cargo whatever its ship type, as the release tests no `InherentAI` (`_DoCommDialog` @0x96864, `_DoEscortDialog` @0x9549d, @0x9561d; `nova_sim::Session`) | only a trader takes a share, as for every other escort lost\* |
+//! | [`CaptureCargo`](RuleKey::CaptureCargo) | `capture_cargo` | Use As My Ship leaves the commodities with the old ship, the player taking the captured ship's, which carries none (`_DoShipCapture` @0x412e6-0x412fe, @0x41762-0x41779; `nova_sim::Session`) | the player keeps every commodity; either way the reset (@0x41a3e) trims them to the new fleet's holds\* |
+//! | [`LeaderlessSwapHold`](RuleKey::LeaderlessSwapHold) | `leaderless_swap_hold` | a ship swapped in for a person by a `ShipGoal` 3 mission, neither hunting nor escorting the player, holds goal 10 with no leader: it coasts with no thrust and no fire, picks no destination, target or ship to inspect, and leaves the hold only when provoked, at its government's word, or as a plundering warship (`_AIMakeEscortFlyInForm` @0x89b8e-0x89c3d, `_HighLevelAIHandler` @0x8ed18-0x8ed31; see `nova_sim::ai::Goal::Hold`) | it decides as its `düde`'s AI from the start, landing or jumping out\* |
+//! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; `nova_sim::Session`) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
+//! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; `nova_sim::Session`) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
+//! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; `nova_sim::Session`) | no limit§§ |
+//! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; `nova_sim::Outfitter::refund`) | every sale refunds half§§§ |
+//! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; `nova_sim::Outfitter::count_asked`) | Alt changes nothing: each click moves one¶¶¶ |
+//! | [`SaleMass`](RuleKey::SaleMass) | `sale_mass` | only an outfit of negative mass is refused, when the free mass clamped at 0 plus its mass is below 0; one of mass 0 or more sells while the free mass is below 0 (`_DoOutfitDialog` @0x5c735-0x5c747, `_ShipFreeMass` @0xb506-0xb50a; `nova_sim::Session`) | a sale is refused whenever it would leave the free mass below 0\*\*\*\* |
+//! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold. A counted sale runs on past it, each later pass refused silently; the sales before it stand (@0x5d19c-0x5d1b1) (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; `nova_sim::Outfitter::can` / `nova_sim::Outfitter::sale_alert`) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
+//! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; `nova_sim::Outfitter::check_at`) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
+//! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; `nova_sim::Session`) | the ordered outfit and the pass index are kept††††† |
+//! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; `nova_sim::Session`) | the selected cell is kept and the outfitter stays open§§§§§ |
 //! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`) | the selection is the highlighted cell: a press on an empty cell is ignored, and the description follows the cell¶¶¶¶¶ |
-//! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
-//! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; [`unit_mass`](crate::outfitter::unit_mass)) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
-//! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
-//! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
-//! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
-//! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::option_asks_count`](crate::Market::option_asks_count)) | Alt trades the most at once††† |
-//! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::tons`](crate::Market::tons)) | cash below 0 counts as none‡‡‡ |
-//! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)); and `_CanBuyOutfitItem` tests an outfit's Buy apart: one of `TechLevel` -1 always passes, any other passes at or below the stellar's tech or by a slot, with no sign or 0x7fff test (@0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold, and can be bought, by that one test ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
-//! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; [`Session`](crate::Session)) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
-//! | [`ShipInfoRounding`](RuleKey::ShipInfoRounding) | `ship_info_rounding` | the Shipyard Info panel reads `Speed` / 100 and `Accel` / 10000 back from the loader's single floats, so `Speed` 190 draws 189 and `Accel` 130 and 250 rate a step higher (`_LoadObjectData` @0x7a0b3-0x7a0ef, `_ShipDescDialogUpdate` @0x4fbf0-0x4fbfe, @0x4fc74-0x4fd05; [`ShipSpecs`](crate::ShipSpecs)) | `Speed` as recorded and `Accel` rated on whole numbers\* |
-//! | [`StaleSecondary`](RuleKey::StaleSecondary) | `stale_secondary` | a refit outside the shops (`G`, `D`, a script's change of ship, boarding) leaves the secondary selected as it is, one the ship no longer carries too: it is still named and fires nothing, as `_EvalSetExp` and `_SystemInfoToShipStats` never write it and `_DrawStatusWeap` draws it (@0x4c16c-0x4c1b9; [`Session`](crate::Session)) | a refit lets go of a secondary the ship no longer carries\* |
-//! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; [`Session`](crate::Session)) | the sale lets it go when it leaves the ship not carrying it\* |
-//! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
-//! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
-//! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers; the unrefusable offer's caller then shifts the list as [`offer_shift`](RuleKey::OfferShift) reads it, which, the list left as it is, drops that offer itself under either reading of that key (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | every accept acts as if made from the offer dialog, so the unrefusable offer's accept drops and refilters the offers, and the engine's `offer_shift` then drops the next listed offer as well\* |
-//! | [`OfferShift`](RuleKey::OfferShift) | `offer_shift` | once an outside offer is answered, by an accept from the dialog, a refusal or the accept at once, unless the accept fails, the outside list loses the entry at the index the offer was found at, in the list as the answer left it: a dialog accept, whose own offer is dropped already, drops the next listed offer whatever its venue; a refusal whose `OnRefuse` refilters can leave the refused offer listed; the accept at once drops its own offer, or the next one too when `start_outside_dialog` reads otherwise (`_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | each answer drops only the answered offer, so the next offer is offered next\* |
+//! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; `nova_sim::outfitter::unit_price`) | `Cost` × `Mass`, never below 0§§§§ |
+//! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; `nova_sim::outfitter::unit_mass`) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
+//! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; `nova_sim::Session`) | an unsellable outfit is left out too†††† |
+//! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; `nova_sim::Session`) | a plain trade moves 1 ton¶¶ |
+//! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; `nova_sim::Market::row_max`) | exact integer division\*\*\* |
+//! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; `nova_sim::Market::option_asks_count`) | Alt trades the most at once††† |
+//! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; `nova_sim::Market::tons`) | cash below 0 counts as none‡‡‡ |
+//! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; `nova_sim::wares::outfit_tech_allows`, `nova_sim::wares::ship_tech_allows`); and `_CanBuyOutfitItem` tests an outfit's Buy apart: one of `TechLevel` -1 always passes, any other passes at or below the stellar's tech or by a slot, with no sign or 0x7fff test (@0x4e7ff-0x4e83d; `nova_sim::wares::outfit_buy_tech_allows`) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold, and can be bought, by that one test (`nova_sim::wares::by_tech_level`) |
+//! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; `nova_sim::Session`) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
+//! | [`ShipInfoRounding`](RuleKey::ShipInfoRounding) | `ship_info_rounding` | the Shipyard Info panel reads `Speed` / 100 and `Accel` / 10000 back from the loader's single floats, so `Speed` 190 draws 189 and `Accel` 130 and 250 rate a step higher (`_LoadObjectData` @0x7a0b3-0x7a0ef, `_ShipDescDialogUpdate` @0x4fbf0-0x4fbfe, @0x4fc74-0x4fd05; `nova_sim::ShipSpecs`) | `Speed` as recorded and `Accel` rated on whole numbers\* |
+//! | [`StaleSecondary`](RuleKey::StaleSecondary) | `stale_secondary` | a refit outside the shops (`G`, `D`, a script's change of ship, boarding) leaves the secondary selected as it is, one the ship no longer carries too: it is still named and fires nothing, as `_EvalSetExp` and `_SystemInfoToShipStats` never write it and `_DrawStatusWeap` draws it (@0x4c16c-0x4c1b9; `nova_sim::Session`) | a refit lets go of a secondary the ship no longer carries\* |
+//! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; `nova_sim::Session`) | the sale lets it go when it leaves the ship not carrying it\* |
+//! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see `nova_sim::mission`) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
+//! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see `nova_sim::mission`) | `S` leaves an active mission and the slots as they are\* |
+//! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers; the unrefusable offer's caller then shifts the list as [`offer_shift`](RuleKey::OfferShift) reads it, which, the list left as it is, drops that offer itself under either reading of that key (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa377d-0xa37a1; see `nova_sim::mission`) | every accept acts as if made from the offer dialog, so the unrefusable offer's accept drops and refilters the offers, and the engine's `offer_shift` then drops the next listed offer as well\* |
+//! | [`OfferShift`](RuleKey::OfferShift) | `offer_shift` | once an outside offer is answered, by an accept from the dialog, a refusal or the accept at once, unless the accept fails, the outside list loses the entry at the index the offer was found at, in the list as the answer left it: a dialog accept, whose own offer is dropped already, drops the next listed offer whatever its venue; a refusal whose `OnRefuse` refilters can leave the refused offer listed; the accept at once drops its own offer, or the next one too when `start_outside_dialog` reads otherwise (`_OfferMissionFromPort` @0xa377d-0xa37a1; see `nova_sim::mission`) | each answer drops only the answered offer, so the next offer is offered next\* |
 //! | [`DescMovieGlobals`](RuleKey::DescMovieGlobals) | `desc_movie_globals` | the movie checks read the last `dësc` loaded: a `STR#` text (no room, a cargo pickup with no space, the mission computer's refusal) plays that `dësc`'s after-movie once it closes, so inside an offer the offer's after-movie plays after the no-room text too; and the offer dialog's after-check reads what its answer left, so a `RefuseText`'s after-movie plays a second time and the offer's none (`_LoadDescription` @0x71895-0x718de, @0x71a5e-0x71a77; `_ShowTextDialog` @0x5b40b-0x5b44f; `_OfferOneMission` @0xa3580-0xa35b8) | each dialog plays only its own `dësc`'s movie: a `STR#` text none, and the offer dialog its own after-movie\* |
-//! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
-//! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
-//! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, or spöb 128 with none (@0xa14e8-0xa1518), and an accept in flight reaches no destination\* |
-//! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see [`mission`](crate::mission))\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
-//! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
-//! | [`MissionAllyIndex`](RuleKey::MissionAllyIndex) | `mission_ally_index` | a random destination 15000-19999 also takes a stellar of another government, not independent, when the system with the stellar's own ID has the target government in its catalog `Govt`, hidden or not; a stellar past the last system loaded reads government index 0, so matches only 15000 (`_SelectMissionStellar` @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa; `_LoadObjectData` @0x77a7e-0x77d81; see [`mission`](crate::mission)) | only a stellar allied with the target government (`_GovtAllies`)\* |
-//! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see [`mission`](crate::mission)) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
-//! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
-//! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
-//! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
-//! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux_ships`](crate::mission::aux_ships)) | the exit restarts them as a jump does: "-1: any system" |
-//! | [`AuxAbortFallThrough`](RuleKey::AuxAbortFallThrough) | `aux_abort_fall_through` | after a `Flags` 0x0001 mission auto-aborts as its auxiliary ships all come, the special-ship part runs on the freed slot's stale record: when its appear timer runs out that frame the special ships come, marked with the freed slot, and the mission auto-aborts again, its script, days, fuel and pay over again (`_EnterMoreShips` @0x4373a-0x43752, @0x43757-0x43ad4; see [`mission::aux_ships`](crate::mission::aux_ships)) | the freed slot is skipped\* |
-//! | [`PlainBoardCounts`](RuleKey::PlainBoardCounts) | `plain_board_counts` | a board or rescue goal's ship counts as boarded only on the assist path (`ShipGoal` 2 or 5, `Flags` 0x0001, one ship left) or on a `PickupMode` 2 pickup; a plain board only marks it boarded, so a goal with neither path is never met (`_HandlePlayerBoardAttempt` @0x653a7, @0x65575-0x65762; see [`mission::goals`](crate::mission::goals)) | any board of a board or rescue goal's ship counts, as the Bible's "board them" and "rescue them" read |
-//! | [`HiddenLossFails`](RuleKey::HiddenLossFails) | `hidden_loss_fails` | a hidden mission (`Flags` 0x0400) is not failed at once when one of its ships is destroyed or disabled, so a hidden board or rescue mission whose ship is destroyed never ends (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede; see [`mission::goals`](crate::mission::goals)) | the first loss fails it as any other, but with no message\* |
-//! | [`ShipDoneOnce`](RuleKey::ShipDoneOnce) | `ship_done_once` | every time a mission's goals go from unmet to met, its `ShipDoneText` is shown and its `OnShipDone` runs, so an escort goal's run again each time its ships come back to the player (`_MissionObjectivesCheck` @0x9ec70-0x9ed87; see [`mission::goals`](crate::mission::goals)) | the moment's text, script and auto-abort happen only the first time\* |
-//! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see [`mission::ships`](crate::mission::ships)) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
-//! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see [`scan`](crate::scan)) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
+//! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see `nova_sim::text_tags`) | it reads in full with its commas, "1,234,567"\* |
+//! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see `nova_sim::mission`) | all by descending `DispWeight`, ties in index order |
+//! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see `nova_sim::mission`) | it is resolved from the first stellar the player's system lists, or spöb 128 with none (@0xa14e8-0xa1518), and an accept in flight reaches no destination\* |
+//! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see `nova_sim::mission`)\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
+//! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see `nova_sim::mission`) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
+//! | [`MissionAllyIndex`](RuleKey::MissionAllyIndex) | `mission_ally_index` | a random destination 15000-19999 also takes a stellar of another government, not independent, when the system with the stellar's own ID has the target government in its catalog `Govt`, hidden or not; a stellar past the last system loaded reads government index 0, so matches only 15000 (`_SelectMissionStellar` @0x9a7af-0x9a7c8, @0x9a8e5-0x9a8fa; `_LoadObjectData` @0x77a7e-0x77d81; see `nova_sim::mission`) | only a stellar allied with the target government (`_GovtAllies`)\* |
+//! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see `nova_sim::mission`) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
+//! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see `nova_sim::legal`) | one record a government, read through the system's (landing: the stellar's) government |
+//! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see `nova_sim::mission::goals`) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
+//! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see `nova_sim::story`) | it leaves the system, counted as one that jumped out\* |
+//! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see `nova_sim::mission::aux_ships`) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`AuxAbortFallThrough`](RuleKey::AuxAbortFallThrough) | `aux_abort_fall_through` | after a `Flags` 0x0001 mission auto-aborts as its auxiliary ships all come, the special-ship part runs on the freed slot's stale record: when its appear timer runs out that frame the special ships come, marked with the freed slot, and the mission auto-aborts again, its script, days, fuel and pay over again (`_EnterMoreShips` @0x4373a-0x43752, @0x43757-0x43ad4; see `nova_sim::mission::aux_ships`) | the freed slot is skipped\* |
+//! | [`PlainBoardCounts`](RuleKey::PlainBoardCounts) | `plain_board_counts` | a board or rescue goal's ship counts as boarded only on the assist path (`ShipGoal` 2 or 5, `Flags` 0x0001, one ship left) or on a `PickupMode` 2 pickup; a plain board only marks it boarded, so a goal with neither path is never met (`_HandlePlayerBoardAttempt` @0x653a7, @0x65575-0x65762; see `nova_sim::mission::goals`) | any board of a board or rescue goal's ship counts, as the Bible's "board them" and "rescue them" read |
+//! | [`HiddenLossFails`](RuleKey::HiddenLossFails) | `hidden_loss_fails` | a hidden mission (`Flags` 0x0400) is not failed at once when one of its ships is destroyed or disabled, so a hidden board or rescue mission whose ship is destroyed never ends (`_HandleShipDisplay` @0x2db27, `_DamageShip` @0x3aede; see `nova_sim::mission::goals`) | the first loss fails it as any other, but with no message\* |
+//! | [`ShipDoneOnce`](RuleKey::ShipDoneOnce) | `ship_done_once` | every time a mission's goals go from unmet to met, its `ShipDoneText` is shown and its `OnShipDone` runs, so an escort goal's run again each time its ships come back to the player (`_MissionObjectivesCheck` @0x9ec70-0x9ed87; see `nova_sim::mission::goals`) | the moment's text, script and auto-abort happen only the first time\* |
+//! | [`SwapArrives`](RuleKey::SwapArrives) | `swap_arrives` | the ship swapped in for a person raises no arrived count and leaves the appear timer running, so for a `ShipStart` of 1 or more the timer still brings another ship in beside it (`_HandlePlayerCommunication` @0x6244b-0x6252f, `_EnterMoreShips` @0x437ec-0x43aa5; see `nova_sim::mission::ships`) | the swapped ship counts as the timer's arrival: the timer stops, and for `ShipStart` 1 the arrived count goes up by one\* |
+//! | [`SmugglingShipName`](RuleKey::SmugglingShipName) | `smuggling_ship_name` | the smuggling notice names the scanner by the found mission's drawn ship name whenever that name is not empty, whoever the scanner is (`_ScanPlayer` @0x7e7ce; see `nova_sim::scan`) | by the mission's ship name only when the scanner is that mission's special ship, else by its class\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; docked, the bar holds between the port's redraws: the radar after an outfitter order, radar, nav and target on a ship purchase (everything on a new `ïntf`, @0x739bd), fuel on a recharge (@0x5fe05), everything as a shop closes (`_RefreshSAT`); see `nova_view::flight::cadence` | it follows every frame\* |
-//! | [`PaySlotOffset`](RuleKey::PaySlotOffset) | `pay_slot_offset` | a slot's `<PAY>` of a pay that is not cash, a fine or a charge reads the slot's byte offset, slot × 2,284 (`_MungeBriefing` @0x9cd2a-0x9cdb6; see [`text_tags`](crate::text_tags)) | it reads 0, as an offer's does\* |
-//! | [`MissionlessTags`](RuleKey::MissionlessTags) | `missionless_tags` | a text filled with no mission (a hail quote, a `RefuseText`) reads `"[Error]"` for each mission tag (`_MungeBriefing` @0x9c83f-0x9c843; see [`text_tags`](crate::text_tags)) | they are left as written\* |
-//! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see [`text_tags`](crate::text_tags)) | its `ConvName`, "same as `<PRK>`" |
-//! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see [`text_tags`](crate::text_tags)) | each reads government nnn's own rank |
-//! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see [`text_tags`](crate::text_tags)) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
+//! | [`PaySlotOffset`](RuleKey::PaySlotOffset) | `pay_slot_offset` | a slot's `<PAY>` of a pay that is not cash, a fine or a charge reads the slot's byte offset, slot × 2,284 (`_MungeBriefing` @0x9cd2a-0x9cdb6; see `nova_sim::text_tags`) | it reads 0, as an offer's does\* |
+//! | [`MissionlessTags`](RuleKey::MissionlessTags) | `missionless_tags` | a text filled with no mission (a hail quote, a `RefuseText`) reads `"[Error]"` for each mission tag (`_MungeBriefing` @0x9c83f-0x9c843; see `nova_sim::text_tags`) | they are left as written\* |
+//! | [`PrkNnnName`](RuleKey::PrkNnnName) | `prk_nnn_name` | `<PRKnnn>` reads the rank's `ShortName`, as `<SRKnnn>` does (`_MungeBriefing` +0xde @0x9d1ef, @0x9d2d0; see `nova_sim::text_tags`) | its `ConvName`, "same as `<PRK>`" |
+//! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see `nova_sim::text_tags`) | each reads government nnn's own rank |
+//! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see `nova_sim::text_tags`) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
 //! | [`CachedAvailBits`](RuleKey::CachedAvailBits) | `cached_avail_bits` | a person's 0x0400 hail quote filter reads its mission's `AvailBits` verdict as cached at the last landing, arrival, load or check of it, so a bit changed in flight goes unseen until then (`_IsMissionAvailable` @0x9b4af-0x9b4f5, `_HandleShip` @0x33e1d) | the bits are tested now\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
-//! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
-//! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
-//! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see [`cron`](crate::cron)) | `Random` % (0 never, 100 or more always)§§§§§§ |
-//! | [`CronDateCompare`](RuleKey::CronDateCompare) | `cron_date_compare` | year on its own, month and day on their own; a range across a year end with month/day set never matches (`_CronDateInRange` @0x74d3-0x75bf; see [`cron`](crate::cron)) | compared as dates; a range may cross a year end¶¶¶¶¶¶ |
-//! | [`NewsGovtMatch`](RuleKey::NewsGovtMatch) | `news_govt_match` | a cron's news shows at a stellar whose government is allied with its `NewsGovt` (`_GovtAllies` @0x4e3d, called @0x48640; see [`news`](crate::news)) | only at a stellar of that government\*\*\*\*\*\*\* |
-//! | [`RankUnaffiliatedGroup`](RuleKey::RankUnaffiliatedGroup) | `rank_unaffiliated_group` | the sweeps take every rank of `AffilGovt` -1 (or 127 and below) as one government, by raw equality (`_ActivateRank` @0x4535f-0x45367, `_DeactivateRank` @0x45487-0x4548f; see [`rank`](crate::rank)) | an unaffiliated rank shares no government: it is never swept, and its own sweeps clear nothing††††††† |
-//! | [`SalaryCap`](RuleKey::SalaryCap) | `salary_cap` | the cap is tested before paying, so one payment can overshoot it; a cap of 0 or less is none (`_IncrementGameTime` @0xb779-0xb794; see [`rank`](crate::rank)) | the cash never goes past the cap‡‡‡‡‡‡‡ |
-//! | [`RankGovtReach`](RuleKey::RankGovtReach) | `rank_govt_reach` | a rank's flags reach ships of its government and of every government `_GovtAllies` finds allied with it (`_DoCommDialog` @0x95dbf; see [`rank`](crate::rank)) | only ships of the rank's own government§§§§§§§ |
-//! | [`RankPriceScope`](RuleKey::RankPriceScope) | `rank_price_scope` | a rank's `PriceMod` reaches only the shipyard: a ship's price, the hire fee and the trade-in (`_ApplyPriceAndTechnologyFlux` @0x4e6cd, read only by `_CalcShipCanBuy`, `_ShipyardDialogUpdate` and `_DoShipyardDialog`; see [`rank`](crate::rank)) | the outfitter's buy price too‡‡‡‡‡‡‡‡ |
-//! | [`RankTradeIn`](RuleKey::RankTradeIn) | `rank_trade_in` | the trade-in goes through the flux twice, `_priceFluxMult[0]` then `[1]` (@0x4f769-0x4f7d3, @0x59433-0x5949a, @0x5ec13-0x5ec96), so the rank's factor is squared and the low-tech discount and rounding apply twice (see [`shipyard`](crate::shipyard)) | once, with `[1]`§§§§§§§§ |
-//! | [`RankPriceTiming`](RuleKey::RankPriceTiming) | `rank_price_timing` | the multipliers are taken as the spaceport opens (`_DoPortDialog` @0x5f970-0x5fa04, before the landing's mission check @0x5fbeb), so a rank gained while landed changes no price until the next landing (see [`rank`](crate::rank)) | live: the ranks and the stellar's government as they are when a price is asked¶¶¶¶¶¶¶¶ |
-//! | [`RankCrimeReach`](RuleKey::RankCrimeReach) | `rank_crime_reach` | a crime takes a rank of `Flags` 0x0004 or 0x0040 when `_GovtAllies` finds the victim's government allied with the rank's, an equal one included, so a crime against an independent ship takes an unaffiliated rank (`_SlapWithPenalty` @0x9c70; see [`rank`](crate::rank)) | 0x0040 only for a crime against the rank's own government, 0x0004 for its own or its allies, an unaffiliated rank never\*\*\*\*\*\*\*\*\* |
-//! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar, so a mission's random destination never draws a stellar only shadowed systems list, unless the player is in one that lists it (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x9968a-0x997ae, `_HandleStellarSystemVisibility` @0x32c58-0x32cdf; see [`story`](crate::story) and [`mission`](crate::mission)) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it, so a mission may draw it¶¶¶¶¶¶¶ |
-//! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
-//! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
-//! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
-//! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at each of the original's resets (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981), the end of every set expression that is not empty among them, so a `K` or `L` blesses or stops blessing as its expression ends, not between its operators, and a crime's rank loss (`_SlapWithPenalty`, which reaches no reset) only at the next reset (see [`rank`](crate::rank)) | live, from the active ranks: within an expression, and from the crime on\* |
-//! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see [`landing`](crate::landing)) | past `MinStatus` only, so `Require` still refuses |
-//! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see [`ai::warship`](crate::ai::warship)) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
-//! | [`ExploredByPlace`](RuleKey::ExploredByPlace) | `explored_by_place` | exploring a system explores its place's head (`_RecursiveAutoExplore` @0xd9b6-0xda10, the arrivals and the take-off), and each rebuild point explores every system at an explored head's place, hidden or not (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f; see [`exploration`](crate::exploration)) | each system is explored on its own\* |
-//! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden hop of the course to the system at its place and cuts the course at the first hop with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see [`course`](crate::course)) | hops resolved only when used, and an arrival drops only the hops made\* |
-//! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile` @0x765a2-0x765ce; see [`nebula`](crate::nebula)) | `OnExplore` runs once a pilot, through the once-fired record\* |
-//! | [`NebulaNewPilot`](RuleKey::NebulaNewPilot) | `nebula_new_pilot` | a new pilot explores no nebula until its first exploration, a take-off, a jump or a map (`_DoNewPilot` @0x18de5, @0x1df4b, @0x19118, before its first refresh @0x1925e; see [`nebula`](crate::nebula)) | the start system's nebulae are explored as the game begins††††††††† |
-//! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see [`scan`](crate::scan)) | the outfits are scanned when no illegal `jünk` is found\* |
-//! | [`OutfitScanFine`](RuleKey::OutfitScanFine) | `outfit_scan_fine` | only a `ScanFine` above 0 fines an illegal outfit, as it is; a negative one fines nothing (`_ScanPlayer` `jle` @0x7f222; see [`scan`](crate::scan)) | a negative `ScanFine` takes that percent of the cash in hundreds, at least 1, as for `jünk` and mission cargo (the Bible's `ScanFine`) |
+//! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see `nova_sim::mission::ships`) | the exit leaves them as a jump does, and its setup sets them up again\* |
+//! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see `nova_sim::red_alert`) | the icon blinks with every alert\* |
+//! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see `nova_sim::cron`) | `Random` % (0 never, 100 or more always)§§§§§§ |
+//! | [`CronDateCompare`](RuleKey::CronDateCompare) | `cron_date_compare` | year on its own, month and day on their own; a range across a year end with month/day set never matches (`_CronDateInRange` @0x74d3-0x75bf; see `nova_sim::cron`) | compared as dates; a range may cross a year end¶¶¶¶¶¶ |
+//! | [`NewsGovtMatch`](RuleKey::NewsGovtMatch) | `news_govt_match` | a cron's news shows at a stellar whose government is allied with its `NewsGovt` (`_GovtAllies` @0x4e3d, called @0x48640; see `nova_sim::news`) | only at a stellar of that government\*\*\*\*\*\*\* |
+//! | [`RankUnaffiliatedGroup`](RuleKey::RankUnaffiliatedGroup) | `rank_unaffiliated_group` | the sweeps take every rank of `AffilGovt` -1 (or 127 and below) as one government, by raw equality (`_ActivateRank` @0x4535f-0x45367, `_DeactivateRank` @0x45487-0x4548f; see `nova_sim::rank`) | an unaffiliated rank shares no government: it is never swept, and its own sweeps clear nothing††††††† |
+//! | [`SalaryCap`](RuleKey::SalaryCap) | `salary_cap` | the cap is tested before paying, so one payment can overshoot it; a cap of 0 or less is none (`_IncrementGameTime` @0xb779-0xb794; see `nova_sim::rank`) | the cash never goes past the cap‡‡‡‡‡‡‡ |
+//! | [`RankGovtReach`](RuleKey::RankGovtReach) | `rank_govt_reach` | a rank's flags reach ships of its government and of every government `_GovtAllies` finds allied with it (`_DoCommDialog` @0x95dbf; see `nova_sim::rank`) | only ships of the rank's own government§§§§§§§ |
+//! | [`RankPriceScope`](RuleKey::RankPriceScope) | `rank_price_scope` | a rank's `PriceMod` reaches only the shipyard: a ship's price, the hire fee and the trade-in (`_ApplyPriceAndTechnologyFlux` @0x4e6cd, read only by `_CalcShipCanBuy`, `_ShipyardDialogUpdate` and `_DoShipyardDialog`; see `nova_sim::rank`) | the outfitter's buy price too‡‡‡‡‡‡‡‡ |
+//! | [`RankTradeIn`](RuleKey::RankTradeIn) | `rank_trade_in` | the trade-in goes through the flux twice, `_priceFluxMult[0]` then `[1]` (@0x4f769-0x4f7d3, @0x59433-0x5949a, @0x5ec13-0x5ec96), so the rank's factor is squared and the low-tech discount and rounding apply twice (see `nova_sim::shipyard`) | once, with `[1]`§§§§§§§§ |
+//! | [`RankPriceTiming`](RuleKey::RankPriceTiming) | `rank_price_timing` | the multipliers are taken as the spaceport opens (`_DoPortDialog` @0x5f970-0x5fa04, before the landing's mission check @0x5fbeb), so a rank gained while landed changes no price until the next landing (see `nova_sim::rank`) | live: the ranks and the stellar's government as they are when a price is asked¶¶¶¶¶¶¶¶ |
+//! | [`RankCrimeReach`](RuleKey::RankCrimeReach) | `rank_crime_reach` | a crime takes a rank of `Flags` 0x0004 or 0x0040 when `_GovtAllies` finds the victim's government allied with the rank's, an equal one included, so a crime against an independent ship takes an unaffiliated rank (`_SlapWithPenalty` @0x9c70; see `nova_sim::rank`) | 0x0040 only for a crime against the rank's own government, 0x0004 for its own or its allies, an unaffiliated rank never\*\*\*\*\*\*\*\*\* |
+//! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar, so a mission's random destination never draws a stellar only shadowed systems list, unless the player is in one that lists it (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x9968a-0x997ae, `_HandleStellarSystemVisibility` @0x32c58-0x32cdf; see `nova_sim::story` and `nova_sim::mission`) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it, so a mission may draw it¶¶¶¶¶¶¶ |
+//! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see `nova_sim::story`) | after every settled script as well\*\*\*\*\*\*\*\* |
+//! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see `nova_sim::cron`) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
+//! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see `nova_sim::cron`) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
+//! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at each of the original's resets (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981), the end of every set expression that is not empty among them, so a `K` or `L` blesses or stops blessing as its expression ends, not between its operators, and a crime's rank loss (`_SlapWithPenalty`, which reaches no reset) only at the next reset (see `nova_sim::rank`) | live, from the active ranks: within an expression, and from the crime on\* |
+//! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see `nova_sim::landing`) | past `MinStatus` only, so `Require` still refuses |
+//! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see `nova_sim::ai::warship`) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
+//! | [`ExploredByPlace`](RuleKey::ExploredByPlace) | `explored_by_place` | exploring a system explores its place's head (`_RecursiveAutoExplore` @0xd9b6-0xda10, the arrivals and the take-off), and each rebuild point explores every system at an explored head's place, hidden or not (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f; see `nova_sim::exploration`) | each system is explored on its own\* |
+//! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden hop of the course to the system at its place and cuts the course at the first hop with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see `nova_sim::course`) | hops resolved only when used, and an arrival drops only the hops made\* |
+//! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile` @0x765a2-0x765ce; see `nova_sim::nebula`) | `OnExplore` runs once a pilot, through the once-fired record\* |
+//! | [`NebulaNewPilot`](RuleKey::NebulaNewPilot) | `nebula_new_pilot` | a new pilot explores no nebula until its first exploration, a take-off, a jump or a map (`_DoNewPilot` @0x18de5, @0x1df4b, @0x19118, before its first refresh @0x1925e; see `nova_sim::nebula`) | the start system's nebulae are explored as the game begins††††††††† |
+//! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see `nova_sim::scan`) | the outfits are scanned when no illegal `jünk` is found\* |
+//! | [`OutfitScanFine`](RuleKey::OutfitScanFine) | `outfit_scan_fine` | only a `ScanFine` above 0 fines an illegal outfit, as it is; a negative one fines nothing (`_ScanPlayer` `jle` @0x7f222; see `nova_sim::scan`) | a negative `ScanFine` takes that percent of the cash in hundreds, at least 1, as for `jünk` and mission cargo (the Bible's `ScanFine`) |
 //! | [`GateEscorts`](RuleKey::GateEscorts) | `gate_escorts` | at a hypergate or wormhole exit, every ship the player leads comes out of the exit gate after it, with its heading, waiting `Rand(20) + 15` ticks and bursting out at 15 (`_HandlePlayerDockRequest` @0x674ef-0x675c8, `_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd) | each is snapped onto its slot beside the player\* |
-//! | [`LostCargoShare`](RuleKey::LostCargoShare) | `lost_cargo_share` | a lost trader escort's own `Holds` are never in the fleet's space it takes its share of, so it takes min(1, its `Holds` over the rest) of every good (`_DamageShip` @0x3afdd, @0x3b013; `_DestroyPartialFleetCargo` @0xce98-0xcf37; [`Session`](crate::Session)) | they are, so it takes the share of the space it added, mission escorts too\* |
-//! | [`NonStrictSpeed`](RuleKey::NonStrictSpeed) | `non_strict_speed` | the player and every ship it leads fly at 1.5 × their top speed when the pilot does not play Strict Play (`_ShipMaxSpeed` @0x382e-0x384f, @0xdd078; see [`top_speed`](crate::top_speed)) | every ship flies at its own top speed, Strict Play or not\* |
-//! | [`HunterBribe`](RuleKey::HunterBribe) | `hunter_bribe` | a `ShipBehav` 0 mission ship the player paid off attacks the player again on its next think, as no site reads the bribe (`_HighLevelAIHandler` @0x8d628-0x8d6e9, `_AIMakeShipLeave` @0x7e2b0; see [`mission_hunt`](crate::ai::target::mission_hunt)) | the bribe holds: it decides as its type, a wimpy trader, does\* |
-//! | [`ShipOverlap`](RuleKey::ShipOverlap) | `ship_overlap` | ships overlap within each draw layer in the order they last entered it, the player starting on top and a ship entering a layer going over every ship in it (`_PutSpriteInLayer` @0x766c, `_InitSprites` @0x1f0eb-0x1f88b, `_DoPlayGameWork` @0x43e29, @0x444ad; see [`Session::draw_order`](crate::Session::draw_order)) | each layer in the session's NPC order, the player on top of its own\* |
-//! | [`QuadrantTurretArc`](RuleKey::QuadrantTurretArc) | `quadrant_turret_arc` | an NPC's quadrant turret fires only while the angle to its target less the heading (front, 7) or `(heading + 180) mod 360` (rear, 8), absolute and mod 360 with no fold, is at most 45, so one whose reference sits near 0 holds fire across the seam (`_AIFireTurret` @0x80c3d-0x80cf3; [`NovaAi`](crate::NovaAi)) | the angle folds and the arc wraps\* |
-//! | [`HiddenShips`](RuleKey::HiddenShips) | `hidden_ships` | a ship whose type's `Cost` is -1 is hidden, the player too, and its slot keeps its draw-layer place, as `_HandleShipDisplay` skips its showing and layer block (@0x2b7f3 → @0x2cc6b; see [`Session::draw_order`](crate::Session::draw_order)) | drawn and laid out as any other ship\* |
-//! | [`HiddenShipHoverBox`](RuleKey::HiddenShipHoverBox) | `hidden_ship_hover_box` | while `hidden_ships` reads the engine, the pointer hovers a hidden ship by the box of the frames its slot last cloned, its last shown type's or `shïp` 128's in a slot nothing shown has used, as `_HandleShipDisplay` skips `_SWCloneFramesFromMaster` (@0x2b824) and `_HandleMouse` boxes the stale sprite (@0x38171; `_InitSprites` @0x1f193; see [`Session::framed_by`](crate::Session::framed_by)) | the box of its own type's sheet\* |
-//! | [`BreakupStall`](RuleKey::BreakupStall) | `breakup_stall` | a breakup whose death timer never rises above 0 by the display check (`DeathDelay` 0 or less, or 1 for an NPC) is set again every frame and never explodes (`_HandleShipDisplay` @0x2d80d-0x2d83d; the decrements @0x6d7e6, @0x35083; see [`Breakup`](crate::combat::hull::Breakup)): for the player, a soft-lock | it is destroyed on its breakup tick (0 or less) or the tick after (an NPC's 1): **the default — a deliberate departure from the original**†††††††††† |
-//! | [`EjectVelocity`](RuleKey::EjectVelocity) | `eject_velocity` | as the player ejects, its new ship's x velocity takes the y velocity's value, the hulk keeping the true velocity, before the push of its top speed along its heading (`_HandlePlayer` @0x6f782-0x6f788; see [`escape`](crate::escape)) | the new ship keeps the velocity it had\* |
+//! | [`LostCargoShare`](RuleKey::LostCargoShare) | `lost_cargo_share` | a lost trader escort's own `Holds` are never in the fleet's space it takes its share of, so it takes min(1, its `Holds` over the rest) of every good (`_DamageShip` @0x3afdd, @0x3b013; `_DestroyPartialFleetCargo` @0xce98-0xcf37; `nova_sim::Session`) | they are, so it takes the share of the space it added, mission escorts too\* |
+//! | [`NonStrictSpeed`](RuleKey::NonStrictSpeed) | `non_strict_speed` | the player and every ship it leads fly at 1.5 × their top speed when the pilot does not play Strict Play (`_ShipMaxSpeed` @0x382e-0x384f, @0xdd078; see `nova_sim::top_speed`) | every ship flies at its own top speed, Strict Play or not\* |
+//! | [`HunterBribe`](RuleKey::HunterBribe) | `hunter_bribe` | a `ShipBehav` 0 mission ship the player paid off attacks the player again on its next think, as no site reads the bribe (`_HighLevelAIHandler` @0x8d628-0x8d6e9, `_AIMakeShipLeave` @0x7e2b0; see `nova_sim::ai::target::mission_hunt`) | the bribe holds: it decides as its type, a wimpy trader, does\* |
+//! | [`ShipOverlap`](RuleKey::ShipOverlap) | `ship_overlap` | ships overlap within each draw layer in the order they last entered it, the player starting on top and a ship entering a layer going over every ship in it (`_PutSpriteInLayer` @0x766c, `_InitSprites` @0x1f0eb-0x1f88b, `_DoPlayGameWork` @0x43e29, @0x444ad; see `nova_sim::Session::draw_order`) | each layer in the session's NPC order, the player on top of its own\* |
+//! | [`QuadrantTurretArc`](RuleKey::QuadrantTurretArc) | `quadrant_turret_arc` | an NPC's quadrant turret fires only while the angle to its target less the heading (front, 7) or `(heading + 180) mod 360` (rear, 8), absolute and mod 360 with no fold, is at most 45, so one whose reference sits near 0 holds fire across the seam (`_AIFireTurret` @0x80c3d-0x80cf3; `nova_sim::NovaAi`) | the angle folds and the arc wraps\* |
+//! | [`HiddenShips`](RuleKey::HiddenShips) | `hidden_ships` | a ship whose type's `Cost` is -1 is hidden, the player too, and its slot keeps its draw-layer place, as `_HandleShipDisplay` skips its showing and layer block (@0x2b7f3 → @0x2cc6b; see `nova_sim::Session::draw_order`) | drawn and laid out as any other ship\* |
+//! | [`HiddenShipHoverBox`](RuleKey::HiddenShipHoverBox) | `hidden_ship_hover_box` | while `hidden_ships` reads the engine, the pointer hovers a hidden ship by the box of the frames its slot last cloned, its last shown type's or `shïp` 128's in a slot nothing shown has used, as `_HandleShipDisplay` skips `_SWCloneFramesFromMaster` (@0x2b824) and `_HandleMouse` boxes the stale sprite (@0x38171; `_InitSprites` @0x1f193; see `nova_sim::Session::framed_by`) | the box of its own type's sheet\* |
+//! | [`BreakupStall`](RuleKey::BreakupStall) | `breakup_stall` | a breakup whose death timer never rises above 0 by the display check (`DeathDelay` 0 or less, or 1 for an NPC) is set again every frame and never explodes (`_HandleShipDisplay` @0x2d80d-0x2d83d; the decrements @0x6d7e6, @0x35083; see `nova_sim::combat::hull::Breakup`): for the player, a soft-lock | it is destroyed on its breakup tick (0 or less) or the tick after (an NPC's 1): **the default — a deliberate departure from the original**†††††††††† |
+//! | [`EjectVelocity`](RuleKey::EjectVelocity) | `eject_velocity` | as the player ejects, its new ship's x velocity takes the y velocity's value, the hulk keeping the true velocity, before the push of its top speed along its heading (`_HandlePlayer` @0x6f782-0x6f788; see `nova_sim::escape`) | the new ship keeps the velocity it had\* |
 //! | [`RescueArmor`](RuleKey::RescueArmor) | `rescue_armor` | the escape pod's rescue sets the armour to the shield capacity, `_ShipShieldCapacity` a second time (`_HandlePlayer` @0x690db-0x69100; see the session's `rescue` module), so it may stand above the armour's most | the armour is filled to its own capacity\* |
-//! | [`UnlistedStellar`](RuleKey::UnlistedStellar) | `unlisted_stellar` | a loaded pilot whose saved stellar no system lists resumes in the lowest system that exists, which needn't hold the stellar (`_LoadPilotData` @0x752d6-0x75318; see [`Session::load`](crate::Session::load)) | it keeps its saved system: **the default — a deliberate departure from the original**††††††††††† |
-//! | [`NewbieFuelRefusal`](RuleKey::NewbieFuelRefusal) | `newbie_fuel_refusal` | a newbie whose J has a hyperspace selection but too little fuel is told nothing, with no beep, as the jump key's newbie branch swallows it (`_HandlePlayer` @0x6b995-0x6b9a3; see [`tutorial`](crate::tutorial)) | "Insufficient energy for hyperspace jump." with `snd ` 153, as for any pilot\* |
-//! | [`MissingBuoyString`](RuleKey::MissingBuoyString) | `missing_buoy_string` | a hyperspace arrival whose system's buoy names an index `STR#` 1000 does not hold, with no `STR ` of it + 999, shows an empty line for 480 ticks in place of the arrival line (`_DisplayMessage` @0x52b3-0x52c7; see [`buoy`](crate::buoy)) | the arrival line, as for a system with no buoy\* |
-//! | [`PatrolUninhabited`](RuleKey::PatrolUninhabited) | `patrol_uninhabited` | an interceptor's patrol, picking plain stellars only, can pick an uninhabited one: the count that lets it pick needs an inhabited one, but the pick does not test for one (`_SelectRandomStellarDest` @0x808b6, @0x80911-0x80940; see [`destination`](crate::traffic::destination)) | it leaves uninhabited stellars out too\* |
-//! | [`GateExitCounts`](RuleKey::GateExitCounts) | `gate_exit_counts` | a mission ship that leaves through a hypergate or wormhole counts nothing, and comes back at the next setup: `_HandleShipDisplay` frees its slot (@0x2c078) without the end of a warp out's count (`_LowLevelAIHandler` @0x85960-0x859aa; see [`gate_entry`](crate::traffic::gate_entry)) | it is counted as one that jumped out\* |
-//! | [`MoveLeftBehind`](RuleKey::MoveLeftBehind) | `move_left_behind` | the ships an in-flight `M` or `N` leaves behind stay in the ship table until that frame's display pass frees them (`_EvalSetExp` @0x15807, @0x1590b; `_HandleShipDisplay` @0x2ded6-0x2dee7): through the next traffic tick they hold their berths and persons, a move back brings them back as they were, and no aux ship of theirs is given back ([`Traffic::retarget`](crate::Traffic::retarget)) | they are dropped at the move, their aux ships given back as a setup gives them back (`_DeleteAllComputerShips` @0x3bfce-0x3c028)\* |
-//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x41136; [`Traffic::free_berth`](crate::Traffic::free_berth)) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
-//! | [`ArrivalHits`](RuleKey::ArrivalHits) | `arrival_hits` | a ship gliding in, waiting in a gate or bursting out of one answers a hit as a flying ship does: it takes the attacker as its target and the damage as provocation, a wait in a gate is cut to 20, and the player's hit on a ship waiting in a gate holds it there, seen, attacking the player (`_DamageShip` @0x3b4b0-0x3b4c2, @0x3be66-0x3be7c; `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d; see [`Traffic::tick_in`](crate::Traffic::tick_in)) | it ignores every hit until it has arrived\* |
-//! | [`HireNoSlot`](RuleKey::HireNoSlot) | `hire_no_slot` | a hire that finds no ship-table slot below the spawn reserve still takes the fee and draws the class's roll again, and no escort joins, as `_DoShipyardDialog` ignores `_SpawnEscort`'s -1 (@0x5f1f1-0x5f221; [`Session::hire`](crate::Session::hire)) | the hire is refused and nothing changes\* |
-//! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see [`asteroid`](crate::asteroid)) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
-//! | [`AsteroidRespawnRing`](RuleKey::AsteroidRespawnRing) | `asteroid_respawn_ring` | an asteroid spawned at the edge starts at least 0.7 × (half the play area + 128) out on both axes (`_SpawnAsteroid` @0x3a351-0x3a538; [`Ring::Original`](crate::asteroid::Ring::Original)), which can be on screen on a wide play area | just off the screen, inside the cull ([`Ring::Outside`](crate::asteroid::Ring::Outside))\* |
-//! | [`FuseIgnoresAsteroids`](RuleKey::FuseIgnoresAsteroids) | `fuse_ignores_asteroids` | every armed proximity fuse is set off by the first asteroid in reach, as no code reads `Flags2` 0x0004 (`_CheckShotProximities` @0x376ab-0x37758; [`AsteroidFuse::Original`](crate::combat::asteroid_hit::AsteroidFuse::Original)) | the fuse of a weapon with `Flags2` 0x0004 ignores asteroids: "proximity detonator ignores asteroids" ([`AsteroidFuse::Bible`](crate::combat::asteroid_hit::AsteroidFuse::Bible)) |
-//! | [`PlayerPassThrough`](RuleKey::PlayerPassThrough) | `player_pass_through` | the whole player side passes through ships of `gövt` `Flags` 0x0008 and `düde` `Booty` 0x0100, a player-side firer of `Flags` 0x0040 hits nothing, the player's and its direct escorts' shots pass through `Flags` 0x0040 ships, and a `Booty` 0x0100 ship's fire (or its led ships' of no `düde`) passes through every ship allied with the player (`_ShotCanHitShip` @0x4496d-0x44a4e, @0x44ad2-0x44b2f; `_HandleBeams` @0x30c3c-0x30cf2; see [`sides`](crate::combat::sides)) | the player alone: its own shots pass through those ships, its beams through the 0x0040 and 0x0100 ones, and a 0x0100 ship's own fire through the player |
-//! | [`ShotDecay`](RuleKey::ShotDecay) | `shot_decay` | a decaying shot loses a point of its direct hit's mass and energy damage every `Decay` + 1 ticks, each floored at none, its blasts whole (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit` @0x36add-0x36afd; see [`DecayStep`](crate::combat::projectile::DecayStep)) | every `Decay` ticks |
-//! | [`PlunderAmmoBays`](RuleKey::PlunderAmmoBays) | `plunder_ammo_bays` | a fighter bay the player carries, of a fighter other than the launcher's `AmmoType`, ends the search for a weapon that fires a boarded ship's rounds, so none are offered when it comes before every such weapon by ID (`_PlayerCanUseAmmoType` @0x58bb-0x58df; see [`board::player_fires`](crate::board::player_fires)) | the bay is passed by\* |
-//! | [`AiSpendWithoutShot`](RuleKey::AiSpendWithoutShot) | `ai_spend_without_shot` | every copy of an NPC's pick that has its ammunition spends its round or fuel whether or not it spawns: a turret with its target in a blind spot or outside the box of its reach, a quadrant turret out of its arc, a missile or turret with no target, a bomb, and a fighter bay kept as the pick, which drains a fighter a frame with no launch (`_FireAIShipWeapon` @0x88cd8-0x88dac; see [`Armament::fire_pick`](crate::combat::armament::Armament::fire_pick)) | only a copy that spawns spends\* |
-//! | [`ExitCompression`](RuleKey::ExitCompression) | `exit_compression` | a weapon exit point takes its `shän`'s up compression when, turned to the frame its ship is drawn on, it lies up the screen, and the down one otherwise, so an exit behind a ship facing up takes the down one (`_ModifyShotStartPosition2` @0x717d-0x71f2; see [`exits`](crate::combat::exits)) | by the heading: up for 0-90 and 270-359, down for 91-269 (the Bible's `UpCompressX`) |
-//! | [`PdExitStep`](RuleKey::PdExitStep) | `pd_exit_step` | each point-defence shot moves its cursor on two exits, one in `_SpawnShot` and one as it is set back to the centre and placed again, so a ship's point defence fires from every other exit (`_HandleShipPointDefense` @0x396e5, @0x39707-0x3976c; see [`Combat`](crate::combat::Combat)) | one exit a shot, each in turn\* |
-//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see [`beam`](crate::combat::beam)) | the first ship whose hit circle its segment meets, ending where it meets it\* |
+//! | [`UnlistedStellar`](RuleKey::UnlistedStellar) | `unlisted_stellar` | a loaded pilot whose saved stellar no system lists resumes in the lowest system that exists, which needn't hold the stellar (`_LoadPilotData` @0x752d6-0x75318; see `nova_sim::Session::load`) | it keeps its saved system: **the default — a deliberate departure from the original**††††††††††† |
+//! | [`NewbieFuelRefusal`](RuleKey::NewbieFuelRefusal) | `newbie_fuel_refusal` | a newbie whose J has a hyperspace selection but too little fuel is told nothing, with no beep, as the jump key's newbie branch swallows it (`_HandlePlayer` @0x6b995-0x6b9a3; see `nova_sim::tutorial`) | "Insufficient energy for hyperspace jump." with `snd ` 153, as for any pilot\* |
+//! | [`MissingBuoyString`](RuleKey::MissingBuoyString) | `missing_buoy_string` | a hyperspace arrival whose system's buoy names an index `STR#` 1000 does not hold, with no `STR ` of it + 999, shows an empty line for 480 ticks in place of the arrival line (`_DisplayMessage` @0x52b3-0x52c7; see `nova_sim::buoy`) | the arrival line, as for a system with no buoy\* |
+//! | [`PatrolUninhabited`](RuleKey::PatrolUninhabited) | `patrol_uninhabited` | an interceptor's patrol, picking plain stellars only, can pick an uninhabited one: the count that lets it pick needs an inhabited one, but the pick does not test for one (`_SelectRandomStellarDest` @0x808b6, @0x80911-0x80940; see `nova_sim::traffic::destination`) | it leaves uninhabited stellars out too\* |
+//! | [`GateExitCounts`](RuleKey::GateExitCounts) | `gate_exit_counts` | a mission ship that leaves through a hypergate or wormhole counts nothing, and comes back at the next setup: `_HandleShipDisplay` frees its slot (@0x2c078) without the end of a warp out's count (`_LowLevelAIHandler` @0x85960-0x859aa; see `nova_sim::traffic::gate_entry`) | it is counted as one that jumped out\* |
+//! | [`MoveLeftBehind`](RuleKey::MoveLeftBehind) | `move_left_behind` | the ships an in-flight `M` or `N` leaves behind stay in the ship table until that frame's display pass frees them (`_EvalSetExp` @0x15807, @0x1590b; `_HandleShipDisplay` @0x2ded6-0x2dee7): through the next traffic tick they hold their berths and persons, a move back brings them back as they were, and no aux ship of theirs is given back (`nova_sim::Traffic::retarget`) | they are dropped at the move, their aux ships given back as a setup gives them back (`_DeleteAllComputerShips` @0x3bfce-0x3c028)\* |
+//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x41136; `nova_sim::Traffic::free_berth`) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
+//! | [`ArrivalHits`](RuleKey::ArrivalHits) | `arrival_hits` | a ship gliding in, waiting in a gate or bursting out of one answers a hit as a flying ship does: it takes the attacker as its target and the damage as provocation, a wait in a gate is cut to 20, and the player's hit on a ship waiting in a gate holds it there, seen, attacking the player (`_DamageShip` @0x3b4b0-0x3b4c2, @0x3be66-0x3be7c; `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d; see `nova_sim::Traffic::tick_in`) | it ignores every hit until it has arrived\* |
+//! | [`HireNoSlot`](RuleKey::HireNoSlot) | `hire_no_slot` | a hire that finds no ship-table slot below the spawn reserve still takes the fee and draws the class's roll again, and no escort joins, as `_DoShipyardDialog` ignores `_SpawnEscort`'s -1 (@0x5f1f1-0x5f221; `nova_sim::Session::hire`) | the hire is refused and nothing changes\* |
+//! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see `nova_sim::asteroid`) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
+//! | [`AsteroidRespawnRing`](RuleKey::AsteroidRespawnRing) | `asteroid_respawn_ring` | an asteroid spawned at the edge starts at least 0.7 × (half the play area + 128) out on both axes (`_SpawnAsteroid` @0x3a351-0x3a538; `nova_sim::asteroid::Ring::Original`), which can be on screen on a wide play area | just off the screen, inside the cull (`nova_sim::asteroid::Ring::Outside`)\* |
+//! | [`FuseIgnoresAsteroids`](RuleKey::FuseIgnoresAsteroids) | `fuse_ignores_asteroids` | every armed proximity fuse is set off by the first asteroid in reach, as no code reads `Flags2` 0x0004 (`_CheckShotProximities` @0x376ab-0x37758; `nova_sim::combat::asteroid_hit::AsteroidFuse::Original`) | the fuse of a weapon with `Flags2` 0x0004 ignores asteroids: "proximity detonator ignores asteroids" (`nova_sim::combat::asteroid_hit::AsteroidFuse::Bible`) |
+//! | [`PlayerPassThrough`](RuleKey::PlayerPassThrough) | `player_pass_through` | the whole player side passes through ships of `gövt` `Flags` 0x0008 and `düde` `Booty` 0x0100, a player-side firer of `Flags` 0x0040 hits nothing, the player's and its direct escorts' shots pass through `Flags` 0x0040 ships, and a `Booty` 0x0100 ship's fire (or its led ships' of no `düde`) passes through every ship allied with the player (`_ShotCanHitShip` @0x4496d-0x44a4e, @0x44ad2-0x44b2f; `_HandleBeams` @0x30c3c-0x30cf2; see `nova_sim::combat::sides`) | the player alone: its own shots pass through those ships, its beams through the 0x0040 and 0x0100 ones, and a 0x0100 ship's own fire through the player |
+//! | [`ShotDecay`](RuleKey::ShotDecay) | `shot_decay` | a decaying shot loses a point of its direct hit's mass and energy damage every `Decay` + 1 ticks, each floored at none, its blasts whole (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit` @0x36add-0x36afd; see `nova_sim::combat::projectile::DecayStep`) | every `Decay` ticks |
+//! | [`PlunderAmmoBays`](RuleKey::PlunderAmmoBays) | `plunder_ammo_bays` | a fighter bay the player carries, of a fighter other than the launcher's `AmmoType`, ends the search for a weapon that fires a boarded ship's rounds, so none are offered when it comes before every such weapon by ID (`_PlayerCanUseAmmoType` @0x58bb-0x58df; see `nova_sim::board::player_fires`) | the bay is passed by\* |
+//! | [`AiSpendWithoutShot`](RuleKey::AiSpendWithoutShot) | `ai_spend_without_shot` | every copy of an NPC's pick that has its ammunition spends its round or fuel whether or not it spawns: a turret with its target in a blind spot or outside the box of its reach, a quadrant turret out of its arc, a missile or turret with no target, a bomb, and a fighter bay kept as the pick, which drains a fighter a frame with no launch (`_FireAIShipWeapon` @0x88cd8-0x88dac; see `nova_sim::combat::armament::Armament::fire_pick`) | only a copy that spawns spends\* |
+//! | [`ExitCompression`](RuleKey::ExitCompression) | `exit_compression` | a weapon exit point takes its `shän`'s up compression when, turned to the frame its ship is drawn on, it lies up the screen, and the down one otherwise, so an exit behind a ship facing up takes the down one (`_ModifyShotStartPosition2` @0x717d-0x71f2; see `nova_sim::combat::exits`) | by the heading: up for 0-90 and 270-359, down for 91-269 (the Bible's `UpCompressX`) |
+//! | [`PdExitStep`](RuleKey::PdExitStep) | `pd_exit_step` | each point-defence shot moves its cursor on two exits, one in `_SpawnShot` and one as it is set back to the centre and placed again, so a ship's point defence fires from every other exit (`_HandleShipPointDefense` @0x396e5, @0x39707-0x3976c; see `nova_sim::combat::Combat`) | one exit a shot, each in turn\* |
+//! | [`BeamHitTest`](RuleKey::BeamHitTest) | `beam_hit_test` | a beam hits the nearest ship whose centre lies in its cone: within its `BeamLength` plus half the ship's radius trunc(0.66 × its sprite's width), and trunc(10r / 32) degrees of its heading, the hit ending trunc(dist − 0.2 × width) along it (`_HandleBeams` @0x30dde-0x31051; see `nova_sim::combat::beam`) | the first ship whose hit circle its segment meets, ending where it meets it\* |
 //! | [`BeamConeQuirks`](RuleKey::BeamConeQuirks) | `beam_cone_quirks` | the cone's angle test is the plain difference of the whole-degree bearing and the jittered heading, with no 0/360 wrap, so a beam at 2° misses a ship at 358° (`_HandleBeams` @0x30ec4-0x30edd); the asteroid pass takes its "nearest" asteroid by the ship of the same index's distance (@0x317f2-0x3180c; asteroids phase 6) | the angle wraps, and the nearest asteroid is by its own distance: **the default — a deliberate departure from the original**†††††††††††† |
-//! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see [`BombLaunch`](crate::combat::projectile::BombLaunch)) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
-//! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see [`defence`](crate::combat::defence)) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
-//! | [`JamHalving`](RuleKey::JamHalving) | `jam_halving` | a government of `Flags` 0x0080 halves the whole jamming of every NPC of it, its class government's `InhJam` and its default items' jammers, toward zero before the 0-100 clamp, whatever its AI type (`_ShipECM` @0x3ccf-0x3cef; see [`jamming`](crate::combat::jamming)) | only a freighter's (AI type 1 or 2), and only its `InhJam` share |
-//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5 (`_HandleShotGuidance` @0x323ac-0x323ed; see [`LockAngle`](crate::combat::projectile::LockAngle)) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
+//! | [`BombRocketLaunch`](RuleKey::BombRocketLaunch) | `bomb_rocket_launch` | an NPC's freefall bomb (5) and rocket (6), an escort's too, leave at its ship's velocity and its `Speed` along its heading, broadside with a negative `Inaccuracy`; only the player's bomb takes 0.8 of its ship's velocity, and its rocket its ship's (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a; see `nova_sim::combat::projectile::BombLaunch`) | every ship's bomb at 0.8 of its ship's velocity, and its rocket at its ship's |
+//! | [`PdHostility`](RuleKey::PdHostility) | `pd_hostility` | point defence fires at a missile aimed at its ship or its leader whoever fired it, with no hostility test; the collision side meets any missile it touches, and with no missile the ship branch fires at a ship by its own threat tests, under both readings (`_HandleShipPointDefense` @0x393b1-0x3969d; see `nova_sim::combat::defence`) | only at a missile whose firer the fight's point-defence rule calls hostile, Nova's by fleets and alliances\* |
+//! | [`JamHalving`](RuleKey::JamHalving) | `jam_halving` | a government of `Flags` 0x0080 halves the whole jamming of every NPC of it, its class government's `InhJam` and its default items' jammers, toward zero before the 0-100 clamp, whatever its AI type (`_ShipECM` @0x3ccf-0x3cef; see `nova_sim::combat::jamming`) | only a freighter's (AI type 1 or 2), and only its `InhJam` share |
+//! | [`SeekerLockAngle`](RuleKey::SeekerLockAngle) | `seeker_lock_angle` | a `Seeker` 0x4000 missile drops its lock on a target within ±249 pixels on each axis whose truncated bearing less its heading, absolute and mod 360 with no fold, is above 45, so one heading 355 drops it at a bearing of 5 (`_HandleShotGuidance` @0x323ac-0x323ed; see `nova_sim::combat::projectile::LockAngle`) | the short way round: **the default — a deliberate departure from the original**††††††††††††† |
 //! | [`ShipDebris`](RuleKey::ShipDebris) | `ship_debris` | a destroyed ship scatters no debris: `_HandleShipDisplay` sets off only its `Explode2` (@0x2d7ef-0x2dee7), with no `_SpawnParticles` call on the death branch | the view's `DEBRIS_COUNT` pieces of debris: **the default — a deliberate departure from the original**†††††††††††††† |
-//! | [`QuadrantTurretBlindSpots`](RuleKey::QuadrantTurretBlindSpots) | `quadrant_turret_blind_spots` | the player's quadrant turrets (7 and 8) test no blind spot: a 7 or 8 fires at a target in its arc whatever its weapon's or its ship's blind-spot flags, while a 3 or 4 holds fire in one (`_FirePlayerWeapon` @0x62aeb-0x62c38; see [`aim`](crate::combat::aim)); an escort's formation trigger tests them under both readings, as `_AIFireTurret` picks its turrets (@0x80d0b) | a blind spot holds a 7 or 8 as it holds a 3 or 4 (the Bible: "Turreted weapon has a blind spot") |
-//! | [`PlayerForwardRecoil`](RuleKey::PlayerForwardRecoil) | `player_forward_recoil` | a player's weapon recoils only for a `Recoil` above none (`_FirePlayerWeapon` @0x62eb2-0x62eb5, a signed `jle`), so a negative one pushes it nowhere (see [`Combat`](crate::combat::Combat)) | a negative `Recoil` but -1 pushes the player forward, as an NPC's does (the Bible: "Negative values thrust the ship forwards") |
-//! | [`CombatCaps`](RuleKey::CombatCaps) | `combat_caps` | 128 shots (`_SpawnShot` @0x3e5a3-0x3e5d5), 64 beams (`_SpawnBeam` @0x4505e), 32 explosions (`_SpawnExplod` @0x3f615-0x3f68e) and 1024 particles (`_InitParticles(0x400)` @0x22170-0x2217f, `_NewParticle` @0xc5054, @0xc5092), each failing quietly: a shot or beam finding no slot still spends, sounds, recoils and reloads; point defence's shot spends nothing; a release stops; an explosion is still heard; a particle of no life holds its count until the pool clears (see [`Combat`](crate::combat::Combat) and the view's `effects`) | nothing is capped: **the default — a deliberate departure from the original**††††††††††††††† |
-//! | [`ProximityFuse`](RuleKey::ProximityFuse) | `proximity_fuse` | a ship sets off an armed fuse at the end of the shot's move only: the first ship in slot order, the player first, within trunc(`ProxRadius` + 0.333 × its sprite's width) of the shot in whole pixels, each coordinate truncated, the hit at the shot (`_CheckShotProximities` @0x37549-0x376a5; see [`Shot::fused`](crate::combat::projectile::Shot::fused)) | swept along the move against each ship's hit radius plus `ProxRadius`, the first met along it taking the hit where the move entered its reach\* |
-//! | [`MapCycleStart`](RuleKey::MapCycleStart) | `map_cycle_start` | the galaxy map's Tab / `\` cycle, started in mode 2, starts after the link slot the selected stellar's index (its ID less 128) names when that is 0-15, and at the first slot otherwise, as `_MapFilter` steps +0x6c on from the stellar's index (@0x13f77-0x13fa6; [`Session::cycle_map_selection`](crate::Session::cycle_map_selection)) | outside mode 3 the cycle starts at the first slot, as Hyper Select does (@0x69c98)\* |
-//! | [`MapLinkPairing`](RuleKey::MapLinkPairing) | `map_link_pairing` | the galaxy map draws a link a qualifying system lists only when its far end isn't flagged yet, each system flagged after its links, by ascending ID, so a link listed only by the higher of its two systems, after the lower one qualified, is never drawn (`_DrawMap`'s `_doneFlag` @0xe9da-0xebd2; see [`galaxy_map`](crate::galaxy_map)) | every link a qualifying system lists is drawn once\* |
-//! | [`StellarIdentityRecord`](RuleKey::StellarIdentityRecord) | `stellar_identity_record` | two stellars are compared as the original's stellar records hold them: either ID outside 128..=2175 is identical to nothing, even itself (`_StellarsAreIdentical` @0xab51-0xab6c), a name keeps its full length but only its first 30 characters (`_LoadObjectData` @0x77310-0x7732a; compared @0xaba6-0xac74), and a `spöb` that doesn't load reads as a zeroed record at 0,0 with no name (see [`StellarMarks::identical`](crate::mission::StellarMarks::identical)) | as the `spöb`s are written: equal IDs are always identical, names are compared whole, and a missing `spöb` is identical only to itself\* |
+//! | [`QuadrantTurretBlindSpots`](RuleKey::QuadrantTurretBlindSpots) | `quadrant_turret_blind_spots` | the player's quadrant turrets (7 and 8) test no blind spot: a 7 or 8 fires at a target in its arc whatever its weapon's or its ship's blind-spot flags, while a 3 or 4 holds fire in one (`_FirePlayerWeapon` @0x62aeb-0x62c38; see `nova_sim::combat::aim`); an escort's formation trigger tests them under both readings, as `_AIFireTurret` picks its turrets (@0x80d0b) | a blind spot holds a 7 or 8 as it holds a 3 or 4 (the Bible: "Turreted weapon has a blind spot") |
+//! | [`PlayerForwardRecoil`](RuleKey::PlayerForwardRecoil) | `player_forward_recoil` | a player's weapon recoils only for a `Recoil` above none (`_FirePlayerWeapon` @0x62eb2-0x62eb5, a signed `jle`), so a negative one pushes it nowhere (see `nova_sim::combat::Combat`) | a negative `Recoil` but -1 pushes the player forward, as an NPC's does (the Bible: "Negative values thrust the ship forwards") |
+//! | [`CombatCaps`](RuleKey::CombatCaps) | `combat_caps` | 128 shots (`_SpawnShot` @0x3e5a3-0x3e5d5), 64 beams (`_SpawnBeam` @0x4505e), 32 explosions (`_SpawnExplod` @0x3f615-0x3f68e) and 1024 particles (`_InitParticles(0x400)` @0x22170-0x2217f, `_NewParticle` @0xc5054, @0xc5092), each failing quietly: a shot or beam finding no slot still spends, sounds, recoils and reloads; point defence's shot spends nothing; a release stops; an explosion is still heard; a particle of no life holds its count until the pool clears (see `nova_sim::combat::Combat` and the view's `effects`) | nothing is capped: **the default — a deliberate departure from the original**††††††††††††††† |
+//! | [`ProximityFuse`](RuleKey::ProximityFuse) | `proximity_fuse` | a ship sets off an armed fuse at the end of the shot's move only: the first ship in slot order, the player first, within trunc(`ProxRadius` + 0.333 × its sprite's width) of the shot in whole pixels, each coordinate truncated, the hit at the shot (`_CheckShotProximities` @0x37549-0x376a5; see `nova_sim::combat::projectile::Shot::fused`) | swept along the move against each ship's hit radius plus `ProxRadius`, the first met along it taking the hit where the move entered its reach\* |
+//! | [`MapCycleStart`](RuleKey::MapCycleStart) | `map_cycle_start` | the galaxy map's Tab / `\` cycle, started in mode 2, starts after the link slot the selected stellar's index (its ID less 128) names when that is 0-15, and at the first slot otherwise, as `_MapFilter` steps +0x6c on from the stellar's index (@0x13f77-0x13fa6; `nova_sim::Session::cycle_map_selection`) | outside mode 3 the cycle starts at the first slot, as Hyper Select does (@0x69c98)\* |
+//! | [`MapLinkPairing`](RuleKey::MapLinkPairing) | `map_link_pairing` | the galaxy map draws a link a qualifying system lists only when its far end isn't flagged yet, each system flagged after its links, by ascending ID, so a link listed only by the higher of its two systems, after the lower one qualified, is never drawn (`_DrawMap`'s `_doneFlag` @0xe9da-0xebd2; see `nova_sim::galaxy_map`) | every link a qualifying system lists is drawn once\* |
+//! | [`StellarIdentityRecord`](RuleKey::StellarIdentityRecord) | `stellar_identity_record` | two stellars are compared as the original's stellar records hold them: either ID outside 128..=2175 is identical to nothing, even itself (`_StellarsAreIdentical` @0xab51-0xab6c), a name keeps its full length but only its first 30 characters (`_LoadObjectData` @0x77310-0x7732a; compared @0xaba6-0xac74), and a `spöb` that doesn't load reads as a zeroed record at 0,0 with no name (see `nova_sim::mission::StellarMarks::identical`) | as the `spöb`s are written: equal IDs are always identical, names are compared whole, and a missing `spöb` is identical only to itself\* |
 //! | [`OfferClock`](RuleKey::OfferClock) | `offer_clock` | a venue's next offer is due `30 + Rand(30)` ticks after its last ask (the bar's first 15 after it opens, and again 30 + Rand(30) after its hire screen opens), on wall time through the offer and every dialog or screen open over the venue; one that comes due while something is open over the venue is asked for on the first tick nothing does (`_BarFilter` @0x47be0-0x47c11, `_TradeFilter` @0x4e550-0x4e581, `_OutfitFilter` @0x589ce-0x58a01, `_ShipyardFilter` @0x60de5-0x60e21; `_MyModalDialog` @0x59fee; `_DoShipyardDialog` @0x5e74c-0x5e775) | the gap runs from the answer, and the wait stops while the offer, a venue's own dialog, the mission info or player info screen or a mission text is open\* |
-//! | [`CharacterStatusSpread`](RuleKey::CharacterStatusSpread) | `character_status_spread` | a new pilot's `chär` status spreads to every system of its government's allies, and negated to every system of its enemies (a xenophobe's to the independent ones too), and to the records with those governments (`_ActivateCharResource` @0x76dc0-0x76e6e; see [`legal::spread_statuses`](crate::legal::spread_statuses)) | each status is the record with its own government alone ("the player's initial legal status with the above governments") |
-//! | [`TextNegation`](RuleKey::TextNegation) | `text_negation` | a `!` in a conditional text flips that conditional and every later one in the same text, as the flag is cleared only as the text starts (`_ParseTextDescription` @0x14c0f, @0x14d2d, @0x14dc0; see [`text_parse`](crate::text_parse)) | it negates only its own conditional, "negate the logic" |
-//! | [`StrayTextBrace`](RuleKey::StrayTextBrace) | `stray_text_brace` | a `{` not followed by `G`, `P`, `B` or `!` drops the text up to the next of those letters (`_ParseTextDescription` @0x14efa; see [`text_parse`](crate::text_parse)) | the `{` and the text after it are copied as written\* |
+//! | [`CharacterStatusSpread`](RuleKey::CharacterStatusSpread) | `character_status_spread` | a new pilot's `chär` status spreads to every system of its government's allies, and negated to every system of its enemies (a xenophobe's to the independent ones too), and to the records with those governments (`_ActivateCharResource` @0x76dc0-0x76e6e; see `nova_sim::legal::spread_statuses`) | each status is the record with its own government alone ("the player's initial legal status with the above governments") |
+//! | [`TextNegation`](RuleKey::TextNegation) | `text_negation` | a `!` in a conditional text flips that conditional and every later one in the same text, as the flag is cleared only as the text starts (`_ParseTextDescription` @0x14c0f, @0x14d2d, @0x14dc0; see `nova_sim::text_parse`) | it negates only its own conditional, "negate the logic" |
+//! | [`StrayTextBrace`](RuleKey::StrayTextBrace) | `stray_text_brace` | a `{` not followed by `G`, `P`, `B` or `!` drops the text up to the next of those letters (`_ParseTextDescription` @0x14efa; see `nova_sim::text_parse`) | the `{` and the text after it are copied as written\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -402,58 +402,58 @@
 //! and nothing of how the range is compared. The other reading is the
 //! port's choice, not anything the Bible says: each end compared at the
 //! precision it gives, a yearless range allowed to cross the year end
-//! (see [`cron`](crate::cron)).
+//! (see `nova_sim::cron`).
 //!
 //! \*\*\*\*\*\*\* The Bible names the government whose stellars show a
 //! cron's news and says nothing of its allies. The other reading takes
 //! that government only; it is the port's choice, not anything the Bible
-//! says (see [`news`](crate::news)).
+//! says (see `nova_sim::news`).
 //!
 //! ††††††† The Bible says a rank's sweep flags clear the ranks of "this
 //! same govt" and says nothing of a rank of `AffilGovt` -1. The other
 //! reading gives such a rank no government; it is the port's choice, not
-//! anything the Bible says (see [`rank`](crate::rank)).
+//! anything the Bible says (see `nova_sim::rank`).
 //!
 //! ‡‡‡‡‡‡‡ The Bible calls `SalaryCap` the "maximum amount of money the
 //! player can have"; the other reading pays only up to it. A fee (a
 //! negative `Salary`) stops at the cap too under both readings, since
-//! nothing is paid at or above it (see [`rank`](crate::rank)).
+//! nothing is paid at or above it (see `nova_sim::rank`).
 //!
 //! §§§§§§§ The Bible gives a rank's flags to its affiliated government
 //! and says nothing of that government's allies. The other reading
 //! reaches only ships of the rank's own government, so an unaffiliated
 //! rank reaches no ship; it is the port's choice, not anything the Bible
-//! says (see [`rank`](crate::rank)).
+//! says (see `nova_sim::rank`).
 //!
 //! ¶¶¶¶¶¶¶ The Bible says a replacement system shares its original's
 //! coordinates and does not say which of two visible systems at one place
 //! wins. The other reading is story-runtime phase 4's, the port's choice,
-//! not anything the Bible says (see [`story`](crate::story)).
+//! not anything the Bible says (see `nova_sim::story`).
 //!
 //! \*\*\*\*\*\*\*\* The Bible gives `Visibility` as a test and does not
 //! say when it is evaluated. The other reading is the port's choice, not
 //! anything the Bible says. Crons-news-ranks phase 16's nebula `ActiveOn`
-//! follows the same key (see [`story`](crate::story)).
+//! follows the same key (see `nova_sim::story`).
 //!
 //! ‡‡‡‡‡‡‡‡ The Bible gives `PriceMod` as the percentage the rank's
 //! government charges for "items and ships". The other reading takes that
 //! wording, so the outfitter's buy price takes the factor too; an outfit's
-//! resale is unchanged (see [`outfitter`](crate::outfitter)).
+//! resale is unchanged (see `nova_sim::outfitter`).
 //!
 //! §§§§§§§§ The Bible says nothing of the trade-in under a rank. The other
 //! reading, the factor once, is the port's choice, not anything the Bible
-//! says (see [`shipyard`](crate::shipyard)).
+//! says (see `nova_sim::shipyard`).
 //!
 //! ¶¶¶¶¶¶¶¶ The Bible says nothing of when a rank's `PriceMod` takes
 //! effect. The other reading, live prices, is the port's choice, not
-//! anything the Bible says (see [`rank`](crate::rank)).
+//! anything the Bible says (see `nova_sim::rank`).
 //!
 //! \*\*\*\*\*\*\*\*\* The Bible says 0x0040 takes the rank on "any
 //! crime against the affiliated government", and 0x0004 on disabling or
 //! destroying "a ship of the affiliated government or its allies". The
 //! other reading takes that wording; that an unaffiliated rank is never
 //! taken is the port's choice, not anything the Bible says (see
-//! [`rank`](crate::rank)).
+//! `nova_sim::rank`).
 //!
 //! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff`, with
 //! `breakup_stall` (††††††††††), `unlisted_stellar` (†††††††††††) and
@@ -467,12 +467,12 @@
 //! 192 re-arm after their `PostHoldoff` and their news comes down. The
 //! Bible gives `PostHoldoff` as the days after the end before the crön
 //! can fire again, and says nothing of the rest; the other reading is
-//! the intended end the cron pass builds (see [`cron`](crate::cron)).
+//! the intended end the cron pass builds (see `nova_sim::cron`).
 //!
 //! ††††††††† The Bible says a nebula's explored state is "recalculated
 //! every time based on the systems the player has explored", which covers
 //! a new pilot's start system: the other reading of `nebula_new_pilot`
-//! takes that wording (see [`nebula`](crate::nebula)).
+//! takes that wording (see `nova_sim::nebula`).
 //! †††††††††† `breakup_stall` follows the other reading by default too:
 //! the original's stall leaves a player whose ship has a `DeathDelay` of
 //! 0 or less breaking up for good, a soft-lock with no way on, and no
@@ -527,7 +527,7 @@
 //!    ([`Rulebook::source_for`]) from the rule set the code already holds:
 //!    the one the session or a shop builder holds, or the rulebook a
 //!    strategy port is built `from_rulebook` with (as
-//!    [`NovaLaw::from_rulebook`](crate::NovaLaw::from_rulebook) does).
+//!    `nova_sim::NovaLaw::from_rulebook` does).
 //!    Every layer already carries the whole rule set, so nothing is
 //!    threaded.
 //! 3. Test both readings, [`RuleSource::Engine`] and [`RuleSource::Bible`],
@@ -600,45 +600,45 @@ rule_keys! {
     /// Which governments a crime against a ship improves the player's
     /// record with, and in which governments' systems along its walk: by
     /// the engine, every government not allied with the victim's; by the
-    /// Bible, only its enemies (see [`legal`](crate::legal)).
+    /// Bible, only its enemies (see `nova_sim::legal`).
     CrimeGains => "crime_gains",
     /// Boarding a ship whose `düde` `Booty` is 0: by the engine, the
     /// plunder dialog opens anyway; by the Bible, the player is repelled
-    /// (see [`board`](crate::board)).
+    /// (see `nova_sim::board`).
     EmptyBooty => "empty_booty",
     /// Capturing with a ship of no crew: by the engine, the odds are held
     /// at 1 or more; by the Bible, it cannot capture (see
-    /// [`board`](crate::board)).
+    /// `nova_sim::board`).
     CrewlessCapture => "crewless_capture",
     /// Which NPCs come to the help of a ship the player fires on or
     /// boards: by the engine, warships and interceptors; by the Bible,
     /// interceptors only, the "piracy police" (see
-    /// [`react`](crate::ai::react)).
+    /// `nova_sim::ai::react`).
     PiracyPolice => "piracy_police",
     /// What a quiet government's ships (`gövt` `Flags2` 0x0008, or
     /// their ship type's inherent government's) answer when hailed: by
     /// the engine, Greetings as usual, while Request Assistance and Beg
     /// For Mercy do nothing; by the Bible, "No response." to Greetings,
-    /// and the middle button as usual (see [`hail::nova`](crate::hail::nova)).
+    /// and the middle button as usual (see `nova_sim::hail::nova`).
     QuietHails => "quiet_hails",
     /// An advice line exactly 42 characters long: by the engine, it reads
     /// "Nice to meet you.", as the original mistakes its length for a
     /// `*`; otherwise it is shown as written. The Bible is silent here, so
     /// the other reading is the intended behaviour, not the engine's bug
-    /// (see [`hail::reply`](crate::hail::reply)).
+    /// (see `nova_sim::hail::reply`).
     LongAdvice => "long_advice",
     /// What the player's escort with no standing command does: by the
     /// engine, it keeps formation and fires its turrets at a ship
     /// threatening the player; by the Bible (`shïp` `InherentAI`), it
     /// flies as its AI type would, a warship or interceptor attacking
-    /// such a ship with every weapon (see [`ai::escort`](crate::ai::escort)).
+    /// such a ship with every weapon (see `nova_sim::ai::escort`).
     EscortAi => "escort_ai",
     /// What becomes of the escorts' standing orders when the player
     /// enters a system (a jump's arrival, a take-off, a pilot loaded): by
     /// the engine, every one is reset to formation; otherwise they are
     /// kept. The Bible is silent here, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     EscortOrders => "escort_orders",
     /// What a fighter the player launches from a bay does first: by the
     /// engine, it takes the standing order of the first ship of its class
@@ -648,7 +648,7 @@ rule_keys! {
     /// ("choose a target and then launch your fighters"). The Bible is
     /// silent here, so the other reading is the intended behaviour, not
     /// anything the Bible says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     FighterLaunch => "fighter_launch",
     /// What becomes of the player's fighters out when it leaves the
     /// system: by the engine, those whose ship type holds a jump's fuel
@@ -658,7 +658,7 @@ rule_keys! {
     /// `_InstantFighterRecall` does. The Bible is silent here, so the
     /// other reading is the intended behaviour, not anything the Bible
     /// says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     FighterRecall => "fighter_recall",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
@@ -667,7 +667,7 @@ rule_keys! {
     /// greyed and refused, as it does in the shipyard. The Bible speaks
     /// of `Require` only for purchase, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     HireRequire => "hire_require",
     /// Whether leaving the spaceport costs the hired escorts' wages for a
     /// day: by the engine, each take-off pays every hired escort a day's
@@ -676,7 +676,7 @@ rule_keys! {
     /// jump's days; the days a stay passes ([`RuleKey::StayDays`]) pay
     /// none. The Bible is silent here, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     TakeOffPay => "take_off_pay",
     /// Whether days pass in the spaceport: by the engine, leaving it
     /// passes, through the daily step, half as many days as escorts sold
@@ -687,16 +687,16 @@ rule_keys! {
     /// otherwise a stay passes no days, and only a jump's and a gate's
     /// like a jump pass. The Bible says nothing of it, so the other
     /// reading is the port's earlier behaviour, not anything the Bible
-    /// says (see [`Session::take_off`](crate::Session::take_off)).
+    /// says (see `nova_sim::Session::take_off`).
     StayDays => "stay_days",
     /// When an event a script raises is dispatched (see the
-    /// [`story`](crate::story) module's "Dispatch"): by the engine, depth
+    /// `nova_sim::story` module's "Dispatch"): by the engine, depth
     /// first, before the script's next operator, as `_EvalSetExp`
     /// (@0x150fc) handles `S` (`_DoMissionAccept` @0x15407) and an `M` or
     /// `N` in flight (@0x159a3, @0x159a8) before going on; the moves a
     /// script queues are applied there too. Otherwise the events wait
     /// until the script has settled
-    /// ([`Session::settle_script`](crate::Session::settle_script)), then
+    /// (`nova_sim::Session::settle_script`), then
     /// dispatch first in, first out. Either way at most 64 events are
     /// dispatched from one settling. The Bible says nothing of it, so the
     /// other reading is the port's earlier after-settle order, not
@@ -710,7 +710,7 @@ rule_keys! {
     /// day restores it (@0xb700); by the Bible, whose `Y` is "destroy
     /// stellar ID xxx" whatever its `Strength`, which it calls invincible
     /// only to planetary weapons, it is destroyed (see the
-    /// [`story`](crate::story) module's "Galaxy overlay").
+    /// `nova_sim::story` module's "Galaxy overlay").
     DestroyInvincible => "destroy_invincible",
     /// When the shop and hire day rolls are drawn: by the engine, once a
     /// day in the daily step, every ship class's hire and buy roll then
@@ -719,7 +719,7 @@ rule_keys! {
     /// and a relocation, forget them and each is drawn the first time a
     /// list asks for it. The Bible says nothing of it, so the other
     /// reading is the port's earlier landing-time draw, not anything the
-    /// Bible says (see the [`story`](crate::story) module's "Built by
+    /// Bible says (see the `nova_sim::story` module's "Built by
     /// phase 6").
     DayRolls => "day_rolls",
     /// Whether `Y` runs the stellar's `OnDestroy`: by the engine, it does
@@ -730,7 +730,7 @@ rule_keys! {
     /// destroys a whole stellar, after the destruction, and not when the
     /// stellar was destroyed already or stays whole (an invincible one
     /// under [`RuleKey::DestroyInvincible`]'s engine reading; see the
-    /// [`story`](crate::story) module's "Built by phase 8").
+    /// `nova_sim::story` module's "Built by phase 8").
     YOnDestroy => "y_on_destroy",
     /// What a destroyed stellar whose `DeadType` has no readable sheet
     /// (-1, outside 0 to 255, no `spïn`, or an `rlëD` that cannot be
@@ -742,7 +742,7 @@ rule_keys! {
     /// once it finds the stellar whole (`_HandleStellarSprites`
     /// @0x2e77b-0x2e7e5); by the Bible, whose `DeadType` -1 is "Don't
     /// display different graphic type when destroyed", its `Type` sheet
-    /// throughout (see the [`story`](crate::story) module's "Built by
+    /// throughout (see the `nova_sim::story` module's "Built by
     /// phase 9").
     DeadTypeFallback => "dead_type_fallback",
     /// How close the player's ship must be to a stellar to land on it,
@@ -757,7 +757,7 @@ rule_keys! {
     /// frame, as a circle, or 32 with no sprite, the port's earlier
     /// radius. The Bible says nothing of a landing distance, so the other
     /// reading is the intended behaviour, not anything the Bible says
-    /// (see the [`story`](crate::story) module's "Built by phase 10").
+    /// (see the `nova_sim::story` module's "Built by phase 10").
     LandingDistance => "landing_distance",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
@@ -765,7 +765,7 @@ rule_keys! {
     /// fee shown (`_DoShipyardDialog` @0x5f168-0x5f1d1); otherwise
     /// exactly the fee shown. The Bible gives no fee, so the other
     /// reading is the intended behaviour, not anything the Bible says
-    /// (see [`NovaHire`](crate::NovaHire)).
+    /// (see `nova_sim::NovaHire`).
     HireFee => "hire_fee",
     /// Which wage a hired escort is paid each day, and shows when hailed:
     /// by the engine, the wage its ship type's record gives now, worked
@@ -773,7 +773,7 @@ rule_keys! {
     /// otherwise the wage kept on its record when it was hired, as the
     /// phase has it. The Bible is silent here, so the other reading is
     /// the intended behaviour, not anything the Bible says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     EscortWage => "escort_wage",
     /// How often a person (`përs`) takes an ordinary ship's place, and
     /// which: by the engine, a draw of `Rand(7)` of 0, then `Rand(1022)`
@@ -781,24 +781,24 @@ rule_keys! {
     /// each person has a fixed 1-in-1022 share; by the Bible ("a 5% chance
     /// that a specific AI-person will also be created"), `Rand(100)`
     /// below 5, then one of the persons who may appear, picked evenly,
-    /// taking the ship's place (see [`person`](crate::person)).
+    /// taking the ship's place (see `nova_sim::person`).
     PersonOdds => "person_odds",
     /// Whether a `sÿst` Person slot brings its person: by the engine,
     /// when `Rand(100) + 1` is at most the slot's chance
     /// (`_SetupShipsInSystem` @0x43363-0x43386); by the Bible ("Want to
     /// make a ‘pers’ type ship always appear? Put its ID into one of the
-    /// Person fields"), always (see [`person`](crate::person)).
+    /// Person fields"), always (see `nova_sim::person`).
     SystemPersons => "system_persons",
     /// Which systems a system-linked person's `LinkSyst` allows: by the
     /// engine, that system and, by its slip comparing the raw value with
     /// the system's index (@0x409db), the one whose ID is `LinkSyst` +
     /// 128 too; by the Bible, that system only (see
-    /// [`person`](crate::person)).
+    /// `nova_sim::person`).
     LinkSystSlip => "link_syst_slip",
     /// What a person's `ShieldMod` scales: by the engine, its shield and
     /// its armour (`_SpawnPerson` @0x40f68-0x40f9e); by the Bible ("How
     /// much to increase/decrease the person's shield capacity"), its
-    /// shield only (see [`person`](crate::person)).
+    /// shield only (see `nova_sim::person`).
     ShieldMod => "shield_mod",
     /// How fast a person of a derelict government (`gövt` `Flags`
     /// 0x0800) starts at system setup: by the engine, at its top speed
@@ -807,20 +807,20 @@ rule_keys! {
     /// the pass's shared `_AdjustedAccel` (@0x432b0, @0x432eb), and at
     /// rest when its Person slot brings it, the zeroing (@0x43418-0x43443)
     /// coming after that slot's `_AdjustedAccel` (@0x433fe); by the other
-    /// reading, at rest either way (see [`spawn`](crate::traffic::spawn)).
+    /// reading, at rest either way (see `nova_sim::traffic::spawn`).
     DerelictSetupSpeed => "derelict_setup_speed",
     /// Which persons run below `Coward`% of their shields: by the engine,
     /// only a warship person of a government with `Flags` 0x0010 and no
     /// fleet lead (`_WarshipAI` @0x8be36); by the Bible ("At what percent
     /// of total shield capacity will the person run away from a fight?"),
     /// any warship or interceptor person with no fleet lead (see
-    /// [`ai::warship`](crate::ai::warship)).
+    /// `nova_sim::ai::warship`).
     PersonCoward => "person_coward",
     /// The credits a boarded person carries: by the engine, half its
     /// `Credits` in thousands (kept in 16 bits), with a draw of as many
     /// more thousands above 2 (`_SetPlunderValues` @0x922f2-0x9238f); by
     /// the Bible ("This many credits, +/- 25%"), its `Credits` times 75 to
-    /// 125 % (see [`board`](crate::board)).
+    /// 125 % (see `nova_sim::board`).
     PersonCredits => "person_credits",
     /// When a person's comm quote (`STR#` 7100) is said: by the engine,
     /// as a friendly person's answer to Greetings, in place of its advice
@@ -829,7 +829,7 @@ rule_keys! {
     /// attitude. The Bible says only that it is "displayed in the
     /// communications dialog", so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// [`Session::with_rules`](crate::Session::with_rules)).
+    /// `nova_sim::Session::with_rules`).
     CommQuote => "comm_quote",
     /// How many outfits boarding a person grants: by the engine,
     /// trunc((50 + `Rand(51)`) x `GrantCount` / 100), at least 1
@@ -838,7 +838,7 @@ rule_keys! {
     /// between 1 and `GrantCount` evenly, as the phase has it. The Bible
     /// agrees with the engine, so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// [`grant`](crate::grant)).
+    /// `nova_sim::grant`).
     GrantCount => "grant_count",
     /// Whether a grant may take the player past the outfit's `Max`: by the
     /// engine, a boarding grant may, as only an outfit's owned count is
@@ -848,7 +848,7 @@ rule_keys! {
     /// Otherwise both are held to `Max` less the owned and to the free
     /// mass. The Bible is silent here, so the other reading is the
     /// obvious fix, not anything the Bible says (see
-    /// [`grant`](crate::grant) and [`OutfitRules`](crate::OutfitRules)).
+    /// `nova_sim::grant` and `nova_sim::OutfitRules`).
     GrantMax => "grant_max",
     /// Whether a person offers to join the player when hailed: by the
     /// engine, none does, as the original brings a person to fly with the
@@ -857,16 +857,16 @@ rule_keys! {
     /// (`_HandlePlayerCommunication` @0x6220d), and an accept of a person
     /// of `Flags` 0x0040 whose mission has one ship left, whatever its
     /// goal, swaps it for that ship (@0x62421-0x6252f;
-    /// [`swaps_for_mission_ship`](crate::person::swaps_for_mission_ship)),
+    /// `nova_sim::person::swaps_for_mission_ship`),
     /// which flies in formation with the player as a mission escort when
     /// the mission's `ShipBehav` is 1 (@0x62509, @0x8fc03-0x8fc22).
     /// Otherwise, a person whose record allows
-    /// it ([`offers_to_join`](crate::person::offers_to_join)), its
+    /// it (`nova_sim::person::offers_to_join`), its
     /// `LinkMission` available, opens the comm dialog listing Use As
     /// Escort while the fleet has room, and joins the fleet as itself,
     /// for good. The Bible is silent here, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`JoinFleet`](crate::hail::nova::JoinFleet)).
+    /// `nova_sim::hail::nova::JoinFleet`).
     PersonJoin => "person_join",
     /// Which systems a map outfit (`ModType` 16) of `ModVal` N above 0
     /// explores, and which systems count as inhabited for a `ModVal` of
@@ -881,7 +881,7 @@ rule_keys! {
     /// @0x4c4a). By the Bible ("how many jumps away from the current
     /// system to explore"), every system within N jumps, and any stellar
     /// of the system counts (see
-    /// [`exploration`](crate::exploration)).
+    /// `nova_sim::exploration`).
     MapExplore => "map_explore",
     /// What becomes of a map outfit whose `ModVal` explores nothing (0,
     /// or -2 to -999): by the engine, it is used up all the same, as any
@@ -889,14 +889,14 @@ rule_keys! {
     /// @0x44ea9); otherwise it is no map, and is added to the outfits as
     /// a plain item. The Bible is silent on those values, so the other
     /// reading is the obvious fix, not anything the Bible says (see
-    /// [`outfit_effects`](crate::outfit_effects)).
+    /// `nova_sim::outfit_effects`).
     InvalidMap => "invalid_map",
     /// What the `D` set operator pays for the outfit it removes: by the
     /// engine, nothing (`_EvalSetExp` @0x1544b only lowers the count);
     /// otherwise what selling the outfit at the outfitter would. The
     /// Bible is silent here, so the other reading is the obvious
     /// alternative, not anything the Bible says (see
-    /// [`OutfitRules`](crate::OutfitRules)).
+    /// `nova_sim::OutfitRules`).
     RemoveRefund => "remove_refund",
     /// What becomes of a shield or armour above its most when `G`, `D`
     /// or a boarding grant or ammunition take refits the ship: by the
@@ -910,14 +910,14 @@ rule_keys! {
     /// its most. The fuel is held to its most either way, as flight
     /// clamps it every frame (`_HandlePlayer` @0x6d9e1). The Bible is
     /// silent here, so the other reading is the obvious alternative, not
-    /// anything the Bible says (see [`OutfitRules`](crate::OutfitRules)).
+    /// anything the Bible says (see `nova_sim::OutfitRules`).
     RefitReserves => "refit_reserves",
     /// When buying a ship clears its paint: by the engine, after the new
     /// ship's `OnPurchase` runs (`_DoShipyardDialog` @0x5f00d, then
     /// @0x5f022), so a paint that hook grants is lost; otherwise before
     /// it, so the paint stays. The Bible is silent here, so the other
     /// reading is the obvious alternative, not anything the Bible says
-    /// (see [`HookRules`](crate::HookRules)).
+    /// (see `nova_sim::HookRules`).
     PurchasePaintOrder => "purchase_paint_order",
     /// When "Use As My Ship" runs the old ship's `OnRetire` and the
     /// captured ship's `OnCapture`: by the engine, before the outfit swap
@@ -925,14 +925,14 @@ rule_keys! {
     /// non-persistent outfit either grants is stripped; otherwise after
     /// it, so the outfit stays. The Bible is silent here, so the other
     /// reading is the obvious alternative, not anything the Bible says
-    /// (see [`HookRules`](crate::HookRules)).
+    /// (see `nova_sim::HookRules`).
     CaptureHookOrder => "capture_hook_order",
     /// Whether a new pilot's starting ship runs its `OnPurchase`: by the
     /// engine, it does not (`_DoNewPilot` runs only the `chär`'s
     /// `OnStart`, @0x19345); otherwise it runs once, right before
     /// `OnStart`, as though the ship were bought. The Bible is silent
     /// here, so the other reading is the obvious alternative, not
-    /// anything the Bible says (see [`HookRules`](crate::HookRules)).
+    /// anything the Bible says (see `nova_sim::HookRules`).
     StartShipPurchase => "start_ship_purchase",
     /// Which outfits survive the `H` set operator's change of ship: by
     /// the engine, any flagged persistent (0x0004) or persistent through a
@@ -941,16 +941,16 @@ rule_keys! {
     /// flag 0x0020 ("persistent in the case where the player's ship is
     /// changed by a mission set operator", 0x0004 governing buying and
     /// capture), only those flagged 0x0020 (see
-    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// `nova_sim::ShipChangeRules`).
     ShipChangePersistence => "ship_change_persistence",
     /// Whether the `E` and `H` set operators hold the outfits owned to
     /// their limits: by the engine, every outfit, old and new, is clamped
     /// to its limit once the new class's default items and stock weapons
     /// are added (`_HasMaxOfItem` @0x4512, called @0x15648): its
     /// ammunition cap, its raised `Max`, or the new class's gun or turret
-    /// slots (see [`ship_change`](crate::ship_change)); by the Bible's
+    /// slots (see `nova_sim::ship_change`); by the Bible's
     /// "the player will keep all of his previous outfit items", nothing is
-    /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// clamped (see `nova_sim::ShipChangeRules`).
     ShipChangeMax => "ship_change_max",
     /// What becomes of the cargo a `C`, `E` or `H` change of ship leaves
     /// past the new hold. By the engine, it is trimmed as the set
@@ -966,7 +966,7 @@ rule_keys! {
     /// cargo waits for a reset outside one, a take-off, a jump's arrival,
     /// a landing or a jettison among them. The Bible is silent here, so
     /// the other reading is the obvious alternative, not anything the
-    /// Bible says (see [`ShipChangeRules`](crate::ShipChangeRules) and
+    /// Bible says (see `nova_sim::ShipChangeRules` and
     /// the session's `precalced` module).
     ShipChangeCargo => "ship_change_cargo",
     /// What becomes of a shield or armour above the new class's most on a
@@ -977,7 +977,7 @@ rule_keys! {
     /// the surplus lasts until damage or landing takes it; otherwise each
     /// is held to its new most. The Bible is silent here, so the other
     /// reading is the obvious alternative, not anything the Bible says
-    /// (see [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// (see `nova_sim::ShipChangeRules`).
     ShipChangeReserves => "ship_change_reserves",
     /// Where the `E` and `H` set operators put a fighter bay's
     /// `AmmoLoad` when they add the new class's stock weapons: by the
@@ -989,7 +989,7 @@ rule_keys! {
     /// fighters, as a purchase loads them (`_DoShipyardDialog`
     /// @0x5ef3e-0x5ef56). The Bible is silent here, so the other reading
     /// is the obvious alternative, not anything the Bible says (see
-    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// `nova_sim::ShipChangeRules`).
     ShipChangeBayAmmo => "ship_change_bay_ammo",
     /// What becomes of a new class's default item that is a weapon or
     /// ammunition outfit when the `E` and `H` set operators add it: by
@@ -1001,8 +1001,8 @@ rule_keys! {
     /// otherwise the default items' first-mod weapons and rounds are added
     /// to the arrays too, so they are kept. The Bible is silent here, so
     /// the other reading is the obvious alternative, not anything the
-    /// Bible says (see [`ship_change`](crate::ship_change) and
-    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// Bible says (see `nova_sim::ship_change` and
+    /// `nova_sim::ShipChangeRules`).
     ShipChangeDefaultWeapons => "ship_change_default_weapons",
     /// What a new class's negative `WeapCount` or `AmmoLoad` does when the
     /// `E` and `H` set operators add its stock weapons: by the engine, it
@@ -1012,14 +1012,14 @@ rule_keys! {
     /// @0xcaee); otherwise it adds nothing, as a purchase reads it. The
     /// Bible is silent here, so the other reading is the obvious
     /// alternative, not anything the Bible says (see
-    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// `nova_sim::ShipChangeRules`).
     ShipChangeNegativeStock => "ship_change_negative_stock",
     /// Where the `M` set operator puts a ship in flight when the system
     /// moved to has no stellar: by the engine, nowhere new, its position
     /// and velocity kept, as `_EvalSetExp` places the ship only on a
     /// stellar it finds (@0x1570e-0x158d4); by the Bible ("in the center
     /// of the system if no stellars exist there"), at rest at the
-    /// system's centre (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// system's centre (see `nova_sim::ScriptEffectRules`).
     MoveStarless => "move_starless",
     /// What else the `M` and `N` set operators do beyond changing where
     /// the ship is: by the engine, nothing, as `_EvalSetExp` calls neither
@@ -1037,7 +1037,7 @@ rule_keys! {
     /// [`RuleKey::MoveLeftBehind`]'s; by the other, populating drops
     /// them. The Bible is silent here, so
     /// the other reading is the intended behaviour, not anything the
-    /// Bible says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// Bible says (see `nova_sim::ScriptEffectRules`).
     MoveArrival => "move_arrival",
     /// What the `N` set operator's flag does when it runs in flight: by
     /// the engine, `_dontMovePlayerAfterLanding` (@0x158d9) stays set
@@ -1048,7 +1048,7 @@ rule_keys! {
     /// flight is from the stellar's centre as any other. The Bible is
     /// silent here, so the other reading is the intended behaviour, not
     /// anything the Bible says (see
-    /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// `nova_sim::ScriptEffectRules`).
     MoveKeepFlag => "move_keep_flag",
     /// What a `Q` set operator whose `STR#` is missing or empty, or whose
     /// pick is empty, does: by the engine, nothing, as the player leaves
@@ -1056,7 +1056,7 @@ rule_keys! {
     /// dialogs' filters such as `_PortFilter` @0x4f041), and it cancels an
     /// earlier `Q`, whose message it overwrites; by the Bible ("make the
     /// player immediately leave"), the player leaves all the same, with no
-    /// message (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// message (see `nova_sim::ScriptEffectRules`).
     BlankLeave => "blank_leave",
     /// When the `P` set operator's sound plays: by the engine, one
     /// mission sound at a time, as `_missionSoundID` (@0x20fa14) is read
@@ -1067,7 +1067,7 @@ rule_keys! {
     /// sounds at once, landed or not, over whatever is playing. The Bible
     /// is silent here, so the other reading is the intended behaviour, not
     /// anything the Bible says (see
-    /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// `nova_sim::ScriptEffectRules`).
     ScriptSound => "script_sound",
     /// What an `N` set operator whose system is out of range (128-2175)
     /// does: by the engine, the move's tail with no move, as
@@ -1078,7 +1078,7 @@ rule_keys! {
     /// (@0x1596e-0x159ad). Otherwise it does nothing, as every other
     /// operator out of range does. The Bible is silent here, so the other
     /// reading is the intended behaviour, not anything the Bible says
-    /// (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// (see `nova_sim::ScriptEffectRules`).
     OutOfRangeMove => "out_of_range_move",
     /// What an `M` or `N` set operator to a system in range (128-2175)
     /// with no `sÿst` does: by the engine, the move's tail with no move,
@@ -1089,7 +1089,7 @@ rule_keys! {
     /// where the ship is. The move itself, into a row with no record, is
     /// left out. Otherwise it does nothing. The Bible is silent here, so
     /// the other reading is the intended behaviour, not anything the Bible
-    /// says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    /// says (see `nova_sim::ScriptEffectRules`).
     MissingSystemMove => "missing_system_move",
     /// How a `BuyRandom` outside 1-100 reads: by the engine, an outfit's
     /// below 1 is never for sale and a ship's below 0 always, as the
@@ -1097,8 +1097,8 @@ rule_keys! {
     /// @0x7a340); by the Bible, an outfit's below 1 or above 100 is
     /// always for sale and a ship's 0 or below never. The Bible is silent
     /// on a ship's negative value, so for it "0 means never" is taken to
-    /// cover it (see [`outfitter`](crate::outfitter) and
-    /// [`shipyard`](crate::shipyard)).
+    /// cover it (see `nova_sim::outfitter` and
+    /// `nova_sim::shipyard`).
     BuyRandom => "buy_random",
     /// When held `jünk` with the Tribbles (0x0001) and Perishable
     /// (0x0002) `Flags` grow and decay, a ton each every due frame in
@@ -1111,7 +1111,7 @@ rule_keys! {
     /// perishable goods "gradually decay away", tribbles goods grow only
     /// into free space and perishable goods always decay. The Bible gives
     /// no rates, so both readings take the engine's ton every due frame
-    /// (see [`market`](crate::market)).
+    /// (see `nova_sim::market`).
     JunkFlags => "junk_flags",
     /// When a launcher outfit (one whose first `ModType` 1 names a
     /// `wëap`) cannot be sold for the ammunition held: by the engine,
@@ -1122,7 +1122,7 @@ rule_keys! {
     /// ammunition is held, whatever its `MaxAmmo`. The Bible says nothing
     /// of it, so the other reading is the phase's first wording of the
     /// rule, not anything the Bible says (see
-    /// [`outfitter`](crate::outfitter)). In a counted sale, (n - 1) is as
+    /// `nova_sim::outfitter`). In a counted sale, (n - 1) is as
     /// [`CountedSale`](RuleKey::CountedSale) says.
     LauncherSale => "launcher_sale",
     /// How an `oütf` of `ModType` 27 raises the `Max` of the outfit its
@@ -1136,7 +1136,7 @@ rule_keys! {
     /// the Bible, the multiplier is the number of owned items with any
     /// such mod, at least 1, and a sale is refused while the target owned
     /// exceeds that maximum after the sale (see
-    /// [`outfitter`](crate::outfitter)). In a counted sale, (n - 1) is as
+    /// `nova_sim::outfitter`). In a counted sale, (n - 1) is as
     /// [`CountedSale`](RuleKey::CountedSale) says.
     RaisedMax => "raised_max",
     /// How an active `öops` event prices its commodity at its stellar. By
@@ -1148,7 +1148,7 @@ rule_keys! {
     /// is added to the stellar's own (level) price, several add up, and an
     /// event on a commodity not traded there moves nothing. Under both, a
     /// standard commodity's price of 4 or less is 5 (see
-    /// [`market`](crate::market)).
+    /// `nova_sim::market`).
     EventPrice => "event_price",
     /// What cargo a ship purchase keeps. By the engine, as
     /// `_DoShipyardDialog` writes the new class's stats
@@ -1168,7 +1168,7 @@ rule_keys! {
     /// space first and always stays, and the goods that fit in the rest
     /// are kept, in order. The Bible says nothing of it, so the other
     /// reading is the phase's first wording of the rule, not anything the
-    /// Bible says (see [`shipyard`](crate::shipyard)).
+    /// Bible says (see `nova_sim::shipyard`).
     PurchaseCargo => "purchase_cargo",
     /// What an outfit sale that leaves the fleet's holds below the cargo
     /// does to it. By the engine, the sale's resets trim the commodities
@@ -1183,7 +1183,7 @@ rule_keys! {
     /// the next reset after it (a take-off at the latest), the port's
     /// earlier behaviour. The Bible says nothing of it, so the other
     /// reading is the obvious alternative, not anything the Bible says
-    /// (see [`outfitter`](crate::outfitter) and the session's `precalced`
+    /// (see `nova_sim::outfitter` and the session's `precalced`
     /// module).
     OutfitSaleCargo => "outfit_sale_cargo",
     /// Which escorts released by hail take their share of the fleet's
@@ -1214,7 +1214,7 @@ rule_keys! {
     /// (`_DoPlunderDialog` @0x94515) passes 0, so no share is cut. The
     /// Bible says nothing of it, so the other reading is the obvious
     /// alternative, not anything the Bible says (see
-    /// [`Session::assign`](crate::Session::assign)).
+    /// `nova_sim::Session::assign`).
     CaptureCargo => "capture_cargo",
     /// What a ship swapped in for a person by a `ShipGoal` 3 mission
     /// does when it neither hunts nor escorts the player. By the engine,
@@ -1225,7 +1225,7 @@ rule_keys! {
     /// (@0x8ed18-0x8ed31). It coasts with no thrust and no fire, and keeps
     /// the hold until provoked, until its government's word turns it on
     /// the player, or, for a warship of a plundering government, at its
-    /// first think (see [`Goal::Hold`](crate::ai::Goal::Hold)). By the
+    /// first think (see `nova_sim::ai::Goal::Hold`). By the
     /// other reading it decides as its `düde`'s AI from the start. The
     /// Bible says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says (see the session's
@@ -1243,7 +1243,7 @@ rule_keys! {
     /// price is never below 0, and a row priced 0 is listed and bought
     /// free, limited by space. The Bible says nothing of it, so the other
     /// reading is the port's own floor, not anything the Bible says (see
-    /// [`market`](crate::market)).
+    /// `nova_sim::market`).
     JunkPrice => "junk_price",
     /// Which ways a listed `jünk` row trades. By the engine, every row
     /// trades both ways at its own price: the trade buttons ask only
@@ -1254,7 +1254,7 @@ rule_keys! {
     /// at that row's price (@0x5e2c4-0x5e2e2, @0x5e528-0x5e546). By the
     /// Bible, whose `SoldAt` is where "the commodity is sold" and
     /// `BoughtAt` where it "is purchased", the `SoldAt` row is bought only
-    /// and the `BoughtAt` row sold only (see [`market`](crate::market)).
+    /// and the `BoughtAt` row sold only (see `nova_sim::market`).
     JunkTrade => "junk_trade",
     /// Whether the outfitter sells a map or clean-record outfit only once
     /// an opening. By the engine, an outfit with a `ModType` 16 mod, or
@@ -1267,7 +1267,7 @@ rule_keys! {
     /// `ModType` 2 mod. By the other reading, there is no limit. The Bible
     /// says nothing of it, so the other reading is the port's behaviour
     /// before the engine's was found, not anything the Bible says (see
-    /// [`outfitter`](crate::outfitter)).
+    /// `nova_sim::outfitter`).
     OutfitLimit => "outfit_limit",
     /// What a sold outfit refunds. By the engine, `_DoOutfitDialog`
     /// copies the counts owned when the outfitter opens (@0x5badd-0x5bafa)
@@ -1277,19 +1277,19 @@ rule_keys! {
     /// @0xdd128); a counted sale does so item by item. By the other
     /// reading, every sale refunds half. The Bible says nothing of it, so
     /// the other reading is the port's earlier behaviour, not anything the
-    /// Bible says (see [`Outfitter::refund`](crate::Outfitter::refund)).
+    /// Bible says (see `nova_sim::Outfitter::refund`).
     OutfitRefund => "outfit_refund",
     /// What Option (Alt here) does with Buy or Sell at the outfitter. By
     /// the engine, it asks for a count in the quantity dialog
     /// (`_DoQuantityDialog` @0x56d5b, called from `_DoOutfitDialog`
     /// @0x5c0c0-0x5c1aa and @0x5c5e3-0x5c628), which opens at the most
-    /// the order allows ([`Outfitter::count_max`](crate::Outfitter::count_max))
+    /// the order allows (`nova_sim::Outfitter::count_max`)
     /// and buys or sells the count confirmed
-    /// ([`Session::outfit_counted`](crate::Session::outfit_counted)). By
+    /// (`nova_sim::Session::outfit_counted`). By
     /// the other reading, Alt changes nothing: each click moves one. The
     /// Bible says nothing of Option at the outfitter, so the other reading
     /// is the port's earlier behaviour, not anything the Bible says (see
-    /// [`Outfitter::count_asked`](crate::Outfitter::count_asked)).
+    /// `nova_sim::Outfitter::count_asked`).
     OutfitCount => "outfit_count",
     /// When a sale at the outfitter is refused for the free mass. By the
     /// engine, `_DoOutfitDialog` checks only an outfit of negative mass
@@ -1300,7 +1300,7 @@ rule_keys! {
     /// refused that would leave the unclamped free mass below 0. The
     /// Bible says nothing of it, so the other reading is the port's
     /// earlier behaviour, not anything the Bible says (see
-    /// [`outfitter`](crate::outfitter)).
+    /// `nova_sim::outfitter`).
     SaleMass => "sale_mass",
     /// When Sell is enabled at the outfitter, and where a sale refused for
     /// the free mass, a raised `Max` or a launcher's ammunition is worded.
@@ -1313,7 +1313,7 @@ rule_keys! {
     /// words them. By the other reading, any of them greys Sell and the
     /// info box words the first, with no dialog. The Bible says nothing
     /// of it, so the other reading is the port's earlier behaviour, not
-    /// anything the Bible says (see [`outfitter`](crate::outfitter)).
+    /// anything the Bible says (see `nova_sim::outfitter`).
     SaleRefusal => "sale_refusal",
     /// How each pass of a counted sale checks a raised `Max` and a
     /// launcher's ammunition. By the engine, each pass checks the order as
@@ -1330,7 +1330,7 @@ rule_keys! {
     /// [`LauncherSale`](RuleKey::LauncherSale) read it. The Bible says
     /// nothing of it, so the other reading is the port's earlier
     /// behaviour, not anything the Bible says (see
-    /// [`outfitter`](crate::outfitter)).
+    /// `nova_sim::outfitter`).
     CountedSale => "counted_sale",
     /// Which outfit, and from which index, the passes of a counted sale
     /// go on after a sale that changes the listing. By the engine, after
@@ -1353,7 +1353,7 @@ rule_keys! {
     /// cheap key can end an order that revisits an earlier state. The
     /// Bible says nothing of it, so the other reading is the port's
     /// earlier behaviour, not anything the Bible says (see
-    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    /// `nova_sim::Session::outfit_order`).
     RelistedSale => "relisted_sale",
     /// What the outfitter selects after an order that changes the
     /// listing, and whether it stays open. By the engine, when
@@ -1373,7 +1373,7 @@ rule_keys! {
     /// stays open. An order that leaves the listing unchanged is the same
     /// by both. The Bible says nothing of it, so the other reading is the
     /// port's earlier behaviour, not anything the Bible says (see
-    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    /// `nova_sim::Session::outfit_order`).
     RelistedSelection => "relisted_selection",
     /// What the outfitter's selection is, as its grid's presses and
     /// arrow keys move it. By the engine, `_OutfitFilter` (@0x58039)
@@ -1405,7 +1405,7 @@ rule_keys! {
     /// `_PlayerShipTradeInPrice` inlines the same (@0xb0e3-0xb106). By the
     /// other reading, the price is `Cost` × `Mass`, never below 0, as the
     /// Bible's "ship class Mass field is multiplied by this item's Cost
-    /// field" reads (see [`outfitter`](crate::outfitter)).
+    /// field" reads (see `nova_sim::outfitter`).
     MassPrice => "mass_price",
     /// How much an outfit flagged 0x0400 (mass by ship mass) weighs. By
     /// the engine, `_AdjustedItemMass` (@0x2889-0x28c2) gives the outfit's
@@ -1417,7 +1417,7 @@ rule_keys! {
     /// `Mass`, as the Bible's "ship class Mass field is multiplied by this
     /// item's Mass field and then divided by 100" reads, so a flagged
     /// outfit can weigh less than its `Mass`, and 0 or less on a class of
-    /// `Mass` 0 or less (see [`outfitter`](crate::outfitter)).
+    /// `Mass` 0 or less (see `nova_sim::outfitter`).
     ScaledMass => "scaled_mass",
     /// Which outfits a ship's trade-in counts. By the engine,
     /// `_PlayerShipTradeInPrice` skips only an outfit with a count of 0
@@ -1427,7 +1427,7 @@ rule_keys! {
     /// its line. By the other reading, an unsellable outfit is left out
     /// too. The Bible says only that a persistent outfit stays with the
     /// player, so the other reading is the port's earlier behaviour, not
-    /// anything the Bible says (see [`shipyard`](crate::shipyard)).
+    /// anything the Bible says (see `nova_sim::shipyard`).
     TradeInOutfits => "trade_in_outfits",
     /// How many tons a plain Buy or Sell at the exchange moves. By the
     /// engine, a plain buy moves min(trunc(cash / price), 10, free) tons
@@ -1435,7 +1435,7 @@ rule_keys! {
     /// (@0x5e48d-0x5e4fa); only Option opens the quantity dialog. By the
     /// other reading, a plain trade moves 1 ton. The Bible says nothing of
     /// it, so the other reading is the port's earlier behaviour, not
-    /// anything the Bible says (see [`market`](crate::market)).
+    /// anything the Bible says (see `nova_sim::market`).
     TradeLot => "trade_lot",
     /// How the exchange divides the cash by a row's price for the most a
     /// buy can move (the default of the original's quantity dialog, and
@@ -1446,18 +1446,18 @@ rule_keys! {
     /// than the cash covers, which the buy then leaves below 0. By the
     /// other reading, exact integer division. The Bible says nothing of
     /// it, so the other reading is the port's earlier behaviour, not
-    /// anything the Bible says (see [`market`](crate::market)).
+    /// anything the Bible says (see `nova_sim::market`).
     TradeQuotient => "trade_quotient",
     /// What Option (Alt here) does with Buy or Sell at the exchange. By
     /// the engine, it asks for a count in the quantity dialog
     /// (`_DoQuantityDialog` @0x56d5b, called from `_DoTradeDialog`
     /// @0x5e211 and @0x5e45c), which opens at the most the row offers
-    /// ([`Market::row_max`](crate::Market::row_max)) and trades the count
-    /// confirmed ([`Lot::Count`](crate::Lot::Count)). By the other
-    /// reading, Alt trades the most at once ([`Lot::Max`](crate::Lot::Max)).
+    /// (`nova_sim::Market::row_max`) and trades the count
+    /// confirmed (`nova_sim::Lot::Count`). By the other
+    /// reading, Alt trades the most at once (`nova_sim::Lot::Max`).
     /// The Bible says nothing of it, so the other reading is the port's
     /// earlier behaviour, not anything the Bible says (see
-    /// [`market`](crate::market)).
+    /// `nova_sim::market`).
     TradeCount => "trade_count",
     /// What cash a buy at the exchange divides by the row's price. By the
     /// engine, the cash as it stands, signed: the quotient
@@ -1469,7 +1469,7 @@ rule_keys! {
     /// such a buy is refused. Under both, a buy with cash below the price
     /// is refused, as the engine greys Buy. The Bible says nothing of it,
     /// so the other reading is the port's earlier behaviour, not anything
-    /// the Bible says (see [`market`](crate::market)).
+    /// the Bible says (see `nova_sim::market`).
     TradeDebt => "trade_debt",
     /// Whether an outfit or a ship class of a negative `TechLevel`, or an
     /// outfit of 0x7fff, is sold by tech. By the engine, never: an outfit
@@ -1477,10 +1477,10 @@ rule_keys! {
     /// 0x7fff (`_SetupPortAvailableItems` @0xbf88-0xbf9d), and a ship
     /// class only when 0 or more, with no 0x7fff test
     /// (`_SetupPortAvailableShipTypes` @0xbc4b-0xbc52;
-    /// [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows),
-    /// [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)). An
+    /// `nova_sim::wares::outfit_tech_allows`,
+    /// `nova_sim::wares::ship_tech_allows`). An
     /// outfit's Buy runs a tech test of its own (`_CanBuyOutfitItem`
-    /// @0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)):
+    /// @0x4e7ff-0x4e83d; `nova_sim::wares::outfit_buy_tech_allows`):
     /// one of `TechLevel` -1 always passes (`cmpw $-0x1` @0x4e802), and any
     /// other passes at or below the stellar's tech or by a slot, with no
     /// sign or 0x7fff test, so an owned `SELL_ANYWHERE` or `Flags2` 0x0400
@@ -1494,12 +1494,12 @@ rule_keys! {
     /// "This ship will be available at all shipyards with a tech level of
     /// this value or higher", and its `spöb` `TechLevel` "Only items and
     /// ships with `TechLevels` at or below this value will be available"
-    /// ([`wares::by_tech_level`](crate::wares::by_tech_level)). Under both
+    /// (`nova_sim::wares::by_tech_level`). Under both
     /// readings a `SpecialTech` slot is compared raw, 0 and below
     /// included: the Bible's "only items and ships with exactly this
     /// `TechLevel` will appear here" gives no exception, and the engine
     /// makes none (@0xbfb2-0xbfbd, @0xbc67-0xbc72). The bar's hire list
-    /// follows the engine alone (see [`hire`](crate::hire)).
+    /// follows the engine alone (see `nova_sim::hire`).
     TechLevel => "tech_level",
     /// Which persistent outfits a ship purchase carries over. By the
     /// engine, `_DoShipyardDialog` zeroes only the outfits whose record
@@ -1514,12 +1514,12 @@ rule_keys! {
     /// mass holds it with its default items and stock fitted, and the rest
     /// is sold back at the outfitter's rate on the old ship's mass. The
     /// Bible says only that a persistent outfit "stays with you when you
-    /// trade ships" (see [`shipyard`](crate::shipyard)).
+    /// trade ships" (see `nova_sim::shipyard`).
     PurchaseCarry => "purchase_carry",
     /// The Shipyard Info panel's Speed and Accel: by the engine, through
     /// the loader's single-precision `Speed` / 100 and `Accel` / 10000, so
     /// Speed can draw one less than recorded and Accel 130 and 250 rate a
-    /// step higher; otherwise exact (see [`ShipSpecs`](crate::ShipSpecs)).
+    /// step higher; otherwise exact (see `nova_sim::ShipSpecs`).
     /// The Bible is silent here, so the other reading is the intended
     /// behaviour, not anything the Bible says.
     ShipInfoRounding => "ship_info_rounding",
@@ -1531,7 +1531,7 @@ rule_keys! {
     /// `_DrawStatusWeap` still draws it (@0x4c16c-0x4c1b9). Otherwise, it
     /// is let go. The Bible is silent here, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session`](crate::Session)).
+    /// `nova_sim::Session`).
     StaleSecondary => "stale_secondary",
     /// When the outfitter's sale lets go of the secondary selected. By the
     /// engine, when the sold outfit's own count falls to 0 and one of its
@@ -1541,7 +1541,7 @@ rule_keys! {
     /// both, the test is made after the sale and before `OnSell`. The
     /// Bible is silent here, so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// [`Session`](crate::Session)).
+    /// `nova_sim::Session`).
     SecondarySale => "secondary_sale",
     /// What an unabortable mission (`CanAbort` 0) failed by its deadline
     /// does at its return landing. By the engine, it fails there again:
@@ -1554,7 +1554,7 @@ rule_keys! {
     /// them only at that landing. A mission failed by `F` runs `OnFailure`
     /// once at its return either way. The Bible says nothing of it, so
     /// the other reading is the intended behaviour, not anything the
-    /// Bible says (see the [`mission`](crate::mission) module's "Active
+    /// Bible says (see the `nova_sim::mission` module's "Active
     /// missions").
     RepeatMissionFailure => "repeat_mission_failure",
     /// What `S` does with a mission active already. By the engine, it
@@ -1563,7 +1563,7 @@ rule_keys! {
     /// is active. By the other reading, the active mission and the slots
     /// are left as they are. The Bible's "start mission xxx" says nothing
     /// of it, so the other reading is the intended behaviour, not anything
-    /// the Bible says (see the [`mission`](crate::mission) module's
+    /// the Bible says (see the `nova_sim::mission` module's
     /// "Active missions").
     StartActiveMission => "start_active_mission",
     /// What an accept outside an offer dialog does, as `S` makes one from a
@@ -1591,7 +1591,7 @@ rule_keys! {
     /// a dialog accept does. With `offer_shift`'s other reading, it drops
     /// only its own offer either way. The Bible's "start mission xxx" says
     /// nothing of it, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see the [`mission`](crate::mission)
+    /// anything the Bible says (see the `nova_sim::mission`
     /// module's "Active missions").
     StartOutsideDialog => "start_outside_dialog",
     /// What answering an outside offer drops from the outside list (the
@@ -1622,7 +1622,7 @@ rule_keys! {
     /// entry, so the next offer is offered next. The mission computer has
     /// no shift (`_DoMissionDialog` @0xa3bb4) either way. The Bible says
     /// nothing of it, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see the [`mission`](crate::mission)
+    /// anything the Bible says (see the `nova_sim::mission`
     /// module's offers).
     OfferShift => "offer_shift",
     /// Whose movie the `STR#` texts and the offer dialog's after-check
@@ -1643,7 +1643,7 @@ rule_keys! {
     /// dialog plays only its own `dësc`'s movie: a `STR#` text none, and
     /// the offer dialog its own after-movie. The Bible says nothing of it,
     /// so the other reading is the intended behaviour, not anything the
-    /// Bible says (see [`Session::loaded_after_movie`](crate::Session::loaded_after_movie)).
+    /// Bible says (see `nova_sim::Session::loaded_after_movie`).
     DescMovieGlobals => "desc_movie_globals",
     /// How a mission text's `<PAY>` writes an amount of a million or
     /// more. By the engine, in millions to two places, truncated, as
@@ -1651,7 +1651,7 @@ rule_keys! {
     /// other reading, in full with its commas: "1,234,567". The Bible
     /// says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// [`text_tags`](crate::text_tags)).
+    /// `nova_sim::text_tags`).
     PayMillions => "pay_millions",
     /// The order the mission computer and the other venues list their
     /// offers in. By the engine, as `_RandomizeMissionData`
@@ -1660,7 +1660,7 @@ rule_keys! {
     /// weight, ties in index order, as its first threshold reads the zero
     /// padding before the weights. By the Bible's "higher values appear
     /// nearer the top of the list", every offer by descending weight, ties
-    /// in index order (see [`mission`](crate::mission)).
+    /// in index order (see `nova_sim::mission`).
     MissionOrder => "mission_order",
     /// The stellar a person's mission is offered from, the player ship's
     /// stellar target (+0x6c), which the original reads both as a
@@ -1674,7 +1674,7 @@ rule_keys! {
     /// 128 with none, as `S` resolves in flight (@0xa14e8-0xa1518): the offer is resolved from it, and an accept
     /// in flight reaches no destination. The Bible says nothing of it, so
     /// the other reading is the intended behaviour, not anything the
-    /// Bible says (see [`mission`](crate::mission)).
+    /// Bible says (see `nova_sim::mission`).
     PersonMissionStellar => "person_mission_stellar",
     /// How a random mission destination -2 is drawn
     /// (`_SelectMissionStellar` @0x9a26a). By the engine, as the original
@@ -1686,7 +1686,7 @@ rule_keys! {
     /// the origin. By the other reading, the port's earlier draw: only
     /// candidates distant from the origin. The Bible says nothing of it,
     /// so the other reading is the intended behaviour, not anything the
-    /// Bible says (see [`mission`](crate::mission)).
+    /// Bible says (see `nova_sim::mission`).
     MissionStellarDraw => "mission_stellar_draw",
     /// Whether a mission's random stellar is distant from its origin
     /// (`_StellarsAreDistant` @0x9cb9-0x9ef6). By the engine, as the
@@ -1702,7 +1702,7 @@ rule_keys! {
     /// with the origin's either way, and no test with no origin or an
     /// origin of no visible system. The Bible says nothing of it, so the
     /// other reading is the intended behaviour, not anything the Bible
-    /// says (see [`mission`](crate::mission)).
+    /// says (see `nova_sim::mission`).
     MissionStellarDistance => "mission_stellar_distance",
     /// Which stellars a random mission destination of 15000-19999, an
     /// ally of a government, takes (`_SelectMissionStellar`). By the
@@ -1713,11 +1713,11 @@ rule_keys! {
     /// government in its catalog `Govt` (the scan @0x9a7af-0x9a7c8, the
     /// draw @0x9a8e5-0x9a8fa); a stellar past the last system loaded reads
     /// a slot the loader never writes, taken as government index 0 (see
-    /// [`Stellar::index_govt`](crate::mission::select::Stellar::index_govt)).
+    /// `nova_sim::mission::select::Stellar::index_govt`).
     /// By the other reading, the port's earlier test: only a stellar
     /// allied with the government. The Bible says nothing of it, so the
     /// other reading is the intended behaviour, not anything the Bible
-    /// says (see [`mission`](crate::mission)).
+    /// says (see `nova_sim::mission`).
     MissionAllyIndex => "mission_ally_index",
     /// Whether a mission's destination or return is reached at a stellar
     /// of another ID (`_StellarsAreIdentical` @0xab35-0xac90). By the
@@ -1727,7 +1727,7 @@ rule_keys! {
     /// (@0xaba6-0xac74), in any system, so a storyline's variant of a
     /// stellar stands in for it. By the Bible, only the stellar of that
     /// ID: its `TravelStel` and `ReturnStel` each name one stellar by ID
-    /// (see [`mission`](crate::mission)).
+    /// (see `nova_sim::mission`).
     MissionStellarIdentity => "mission_stellar_identity",
     /// Which legal record the readers read (markup, hail and AI through
     /// the session's system record, landing, `AvailRecord`). By the
@@ -1737,7 +1737,7 @@ rule_keys! {
     /// (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable`
     /// @0x9b59d). By the Bible, one record a government, read through the
     /// system's government, and at a landing through the stellar's (see
-    /// [`legal`](crate::legal)). Both stores are always written.
+    /// `nova_sim::legal`). Both stores are always written.
     LegalRecords => "legal_records",
     /// Which mission ships that leave the system lower their mission's
     /// ships left, so they are not brought in again. By the engine, as
@@ -1750,7 +1750,7 @@ rule_keys! {
     /// counts nothing (@0x8597c-0x85981), and only a chase-off goal's
     /// counts chased off. The Bible says nothing of it, so the other
     /// reading is the intended behaviour, not anything the Bible says
-    /// (see [`mission::goals`](crate::mission::goals)).
+    /// (see `nova_sim::mission::goals`).
     LeftRespawn => "left_respawn",
     /// Whether a mission ship that lands leaves the system, for the
     /// counts of [`RuleKey::LeftRespawn`]. By the engine, no: in the
@@ -1760,13 +1760,13 @@ rule_keys! {
     /// lands counts nothing. By the other reading, it leaves as one that
     /// jumped out does. The Bible says nothing of it, so the other
     /// reading is the intended behaviour, not anything the Bible says
-    /// (see [`story`](crate::story)).
+    /// (see `nova_sim::story`).
     LandedLeaves => "landed_leaves",
     /// What the player's exit from a hypergate or wormhole does to the
     /// special ships of a mission that follow the player (`ShipSyst` -6).
     /// By the engine, as the original's loop A decides
     /// (`_HandlePlayerDockRequest` @0x6716a-0x67294, see
-    /// [`mission::ships::through_gate`](crate::mission::ships::through_gate)):
+    /// `nova_sim::mission::ships::through_gate`):
     /// escorts of the player are set up at once; attackers of the player
     /// follow on their `düde` government's `Flags2` or odds and come out
     /// of the exit gate after the player (@0x67346-0x67487), fresh ships;
@@ -1787,7 +1787,7 @@ rule_keys! {
     /// so they come no more until the next restart (a jump, an `M` or
     /// `N` in flight, or a take-off). By the other reading, the Bible's
     /// "-1: any system": the exit restarts them as a jump does (see
-    /// [`mission::aux_ships`](crate::mission::aux_ships)).
+    /// `nova_sim::mission::aux_ships`).
     AuxGate => "aux_gate",
     /// What `_EnterMoreShips` does after a mission of `Flags` 0x0001
     /// auto-aborts once its auxiliary ships have all come. By the engine,
@@ -1810,7 +1810,7 @@ rule_keys! {
     /// counts it; a plain board only marks the ship boarded, so a goal with
     /// neither path can never be met. By the other reading, the Bible's
     /// "board them" and "rescue them": any board of such a ship counts it
-    /// (see [`mission::goals`](crate::mission::goals)).
+    /// (see `nova_sim::mission::goals`).
     PlainBoardCounts => "plain_board_counts",
     /// Whether a hidden mission (`Flags` 0x0400) fails at once on the
     /// first loss of one of its ships. By the engine, as the original: the
@@ -1820,7 +1820,7 @@ rule_keys! {
     /// first loss fails it as it does any other mission, but quietly: no
     /// message, as a hidden mission shows nothing of itself. The Bible says
     /// nothing of it, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see [`mission::goals`](crate::mission::goals)).
+    /// anything the Bible says (see `nova_sim::mission::goals`).
     HiddenLossFails => "hidden_loss_fails",
     /// How often a mission's goals-met moment shows and runs. By the
     /// engine, as the original: every time its goals go from unmet to met
@@ -1828,11 +1828,11 @@ rule_keys! {
     /// shown and its `OnShipDone` runs, so an escort goal's run again each
     /// time its ships come back to the player. By the other reading the
     /// moment's `ShipDoneText`, `OnShipDone` and auto-abort happen only the
-    /// first time ([`SpecialShips::ship_done`](crate::mission::SpecialShips::ship_done));
+    /// first time (`nova_sim::mission::SpecialShips::ship_done`);
     /// later moments still update the goals met but show and run nothing.
     /// The Bible says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// [`mission::goals`](crate::mission::goals)).
+    /// `nova_sim::mission::goals`).
     ShipDoneOnce => "ship_done_once",
     /// What the ship swapped in for a person counts. By the engine, as the
     /// original's swap (`_HandlePlayerCommunication` @0x6244b-0x6252f): no
@@ -1843,7 +1843,7 @@ rule_keys! {
     /// stops, as after the timer's own arrival, and for `ShipStart` 1 the
     /// arrived count goes up by one. The Bible says nothing of it, so the
     /// other reading is the intended behaviour, not anything the Bible says
-    /// (see [`mission::ships`](crate::mission::ships)).
+    /// (see `nova_sim::mission::ships`).
     SwapArrives => "swap_arrives",
     /// Which name the smuggling notice gives the scanner. By the engine, as
     /// the original (`_ScanPlayer` @0x7e7ce reads the found slot's drawn
@@ -1852,10 +1852,10 @@ rule_keys! {
     /// reading, that name only when the scanner is that mission's own
     /// special ship; any other scanner is named by its class. The Bible says
     /// nothing of it, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see [`scan`](crate::scan)).
+    /// anything the Bible says (see `nova_sim::scan`).
     SmugglingShipName => "smuggling_ship_name",
     /// What a slot's `<PAY>` reads for a pay that is not cash, a fine or a
-    /// charge (see [`text_tags`](crate::text_tags)). By the engine, as
+    /// charge (see `nova_sim::text_tags`). By the engine, as
     /// `_MungeBriefing` leaves its register (@0x9cd2a-0x9cdb6), the slot's byte
     /// offset, slot × 2,284 (0x8ec), so slot 1 reads "2,284". By the other
     /// reading 0, as an offer's reads (@0x9c7e6-0x9c7f0). The Bible says only
@@ -1864,20 +1864,20 @@ rule_keys! {
     /// not anything the Bible says.
     PaySlotOffset => "pay_slot_offset",
     /// What a text filled with no mission reads for the mission tags, `<DST>`
-    /// to `<PAY>`: a hail quote or a `RefuseText` (see [`text_tags`](crate::text_tags)). By the engine, as
+    /// to `<PAY>`: a hail quote or a `RefuseText` (see `nova_sim::text_tags`). By the engine, as
     /// `_MungeBriefing` with index -1 leaves every mission value as it starts
     /// (@0x9c83f-0x9c843 → 0x9ce14), `"[Error]"`. By the other reading they
     /// are left as written. The Bible says nothing of it, so the other reading
     /// is the intended behaviour, not anything the Bible says.
     MissionlessTags => "missionless_tags",
-    /// Which name of a rank `<PRKnnn>` reads (see [`text_tags`](crate::text_tags)).
+    /// Which name of a rank `<PRKnnn>` reads (see `nova_sim::text_tags`).
     /// By the engine, as `_MungeBriefing` reads it (+0xde @0x9d1ef, @0x9d2d0),
     /// the rank's `ShortName`, as `<SRKnnn>` does. By the Bible, "Same as
     /// `<PRK>`, but only for ranks affiliated with government ID nnn": its
     /// `ConvName`. `<SRKnnn>` reads `ShortName` under both.
     PrkNnnName => "prk_nnn_name",
     /// Which government's rank `<PRKnnn>` and `<SRKnnn>` read (see
-    /// [`text_tags`](crate::text_tags)). By the engine, as the original remembers
+    /// `nova_sim::text_tags`). By the engine, as the original remembers
     /// the last `<PRKnnn>` and `<SRKnnn>` government a text named
     /// (`_descRankGovt`, set by `_ParseTextDescription` @0x14f34-0x15055 and reset
     /// by `_LoadDescription` @0x71926-0x71930 before each `dësc`) and crosses
@@ -1888,7 +1888,7 @@ rule_keys! {
     /// By the Bible, "only for ranks affiliated with government ID nnn": each
     /// tag reads government nnn's own rank.
     CrossedRankTags => "crossed_rank_tags",
-    /// Whom `<OSN>` names (see [`text_tags`](crate::text_tags) and the
+    /// Whom `<OSN>` names (see `nova_sim::text_tags` and the
     /// session's `person_offers` module). By the engine, as the original reads
     /// `_offeringShipIndex` (`_MungeBriefing` @0x9cebe-0x9cf28): the person of
     /// the ship in the slot the last hail of a linked person named
@@ -1938,59 +1938,59 @@ rule_keys! {
     /// 1 or less; louder, the alert is `snd ` 370 alone. By the other
     /// reading, with every alert. The Bible says nothing of it, so the
     /// other reading is the obvious alternative, not anything the Bible
-    /// says (see [`red_alert`](crate::red_alert)).
+    /// says (see `nova_sim::red_alert`).
     AlertBlink => "alert_blink",
     /// A crön's `Random`: by the engine, it starts when `_Rand(101)`
     /// (0-100) is at most `Random`, so 0 still fires 1 day in 101 and
     /// below 0 never; by the Bible, `Random` is a percent chance (see
-    /// [`cron`](crate::cron)).
+    /// `nova_sim::cron`).
     CronRandomScale => "cron_random_scale",
     /// A crön's date range: by the engine, the year is compared on its
     /// own and the month and day on their own, so a range across a year
     /// end with month/day set never matches; by the other reading the
     /// range is compared as dates and may cross a year end (see
-    /// [`cron`](crate::cron)).
+    /// `nova_sim::cron`).
     CronDateCompare => "cron_date_compare",
     /// Whose stellars show a cron's government news: by the engine, a
     /// stellar whose government `_GovtAllies` finds allied with the
     /// slot's `NewsGovt` (the same government, or a shared ally class);
     /// by the other reading, only a stellar of that government (see
-    /// [`news`](crate::news)).
+    /// `nova_sim::news`).
     NewsGovtMatch => "news_govt_match",
     /// Whether unaffiliated ranks are one government for the `K` and `L`
     /// sweeps: by the engine, every rank of `AffilGovt` -1 (or 127 and
     /// below) sweeps and is swept by the others, as the original compares
     /// the governments raw; by the other reading, an unaffiliated rank
-    /// shares no government (see [`rank`](crate::rank)).
+    /// shares no government (see `nova_sim::rank`).
     RankUnaffiliatedGroup => "rank_unaffiliated_group",
     /// How a rank's `SalaryCap` limits its salary: by the engine, the cap
     /// is tested against the cash before paying, so one payment can
     /// overshoot it; by the other reading, the cash never goes past it
-    /// (see [`rank`](crate::rank)).
+    /// (see `nova_sim::rank`).
     SalaryCap => "salary_cap",
     /// Which governments a rank's `Flags` reach: by the engine, ships of
     /// the rank's government and of every government `_GovtAllies` finds
     /// allied with it; by the other reading, only ships of the rank's
     /// own government, so an unaffiliated rank reaches none (see
-    /// [`rank`](crate::rank)).
+    /// `nova_sim::rank`).
     RankGovtReach => "rank_govt_reach",
     /// What a rank's `PriceMod` reaches: by the engine, only the
     /// shipyard (a ship's price, the hire fee and the trade-in), as only
     /// the shipyard reads `_priceFluxMult`; by the other reading, the
     /// outfitter's buy price too, the Bible's "items and ships" (see
-    /// [`rank`](crate::rank)).
+    /// `nova_sim::rank`).
     RankPriceScope => "rank_price_scope",
     /// How the ranks' factor reaches the trade-in: by the engine, through
     /// the flux twice, `_priceFluxMult[0]` then `[1]`, so the factor is
     /// squared and the low-tech discount and rounding apply twice; by the
     /// other reading, once, with `[1]` (see
-    /// [`shipyard`](crate::shipyard)).
+    /// `nova_sim::shipyard`).
     RankTradeIn => "rank_trade_in",
     /// When the ranks' price factor is taken: by the engine, as the
     /// spaceport opens (`_DoPortDialog`), so a rank gained or lost while
     /// landed changes no price until the next landing; by the other
     /// reading, live, from the ranks and the stellar's government as they
-    /// are when a price is asked (see [`rank`](crate::rank)).
+    /// are when a price is asked (see `nova_sim::rank`).
     RankPriceTiming => "rank_price_timing",
     /// Which governments a crime reaches to take a rank of `Flags` 0x0004
     /// or 0x0040: by the engine, both reach every government
@@ -1998,7 +1998,7 @@ rule_keys! {
     /// so a crime against an independent ship takes an unaffiliated rank;
     /// by the other reading, 0x0040 only the rank's own government,
     /// 0x0004 its own or its allies, and an unaffiliated rank none (see
-    /// [`rank`](crate::rank)).
+    /// `nova_sim::rank`).
     RankCrimeReach => "rank_crime_reach",
     /// Which visible system stands for a place two visible systems share:
     /// by the engine, the lowest-ID one, for a visible system too, so links
@@ -2006,14 +2006,14 @@ rule_keys! {
     /// the other reading, each visible system stands for itself, links
     /// reach every visible system at the place, and each stellar goes to
     /// the lowest-ID visible system listing it (see
-    /// [`CoLocated`](crate::hyperspace::CoLocated) and the
-    /// [`story`](crate::story) module's "Visibility and governments").
+    /// `nova_sim::hyperspace::CoLocated` and the
+    /// `nova_sim::story` module's "Visibility and governments").
     ColocatedResolution => "colocated_resolution",
     /// When each `sÿst` `Visibility` is evaluated: by the engine, at the
     /// original's refresh points (a landing, a jump's arrival before its
     /// days, a new pilot after its `OnStart`, and a load); by the other
     /// reading, after every settled script as well (see the
-    /// [`story`](crate::story) module's "Visibility and governments").
+    /// `nova_sim::story` module's "Visibility and governments").
     VisibilityRefresh => "visibility_refresh",
     /// What a `Duration` 0 crön does on the day its `PreHoldoff` ends: by
     /// the engine, `OnStart` and `OnEnd` run but nothing more is written
@@ -2022,14 +2022,14 @@ rule_keys! {
     /// the end [`CronPostHoldoff`](RuleKey::CronPostHoldoff) gives; by the
     /// other reading, the intended end: `OnEnd` once, then the
     /// `PostHoldoff`. The other reading is the default (see
-    /// [`cron`](crate::cron)).
+    /// `nova_sim::cron`).
     CronZeroDurationHoldoff => "cron_zero_duration_holdoff",
     /// What a running crön's end loads: by the engine, its `PreHoldoff`
     /// into the holdoff when `PostHoldoff` is above 0, with its days left
     /// as they are (@0x387f1-0x387f6 → 0x388c5), so it re-runs, or with
     /// `PreHoldoff` 0 never ends; by the other reading, the intended
     /// end: `PostHoldoff` days with the days at -1. The other reading is
-    /// the default (see [`cron`](crate::cron)).
+    /// the default (see `nova_sim::cron`).
     CronPostHoldoff => "cron_post_holdoff",
     /// When the ranks' blessing table is taken. By the engine, at each of
     /// the original's resets (`_ResetPlayerPrecalcedValues`
@@ -2040,21 +2040,21 @@ rule_keys! {
     /// between its operators; and a crime's rank loss
     /// (`_SlapWithPenalty`'s pass, which reaches no reset) stops blessing
     /// only at the next reset. By the other reading, live, from the active
-    /// ranks (see [`rank`](crate::rank) and the session's `ranks`
+    /// ranks (see `nova_sim::rank` and the session's `ranks`
     /// module).
     BlessingRefresh => "blessing_refresh",
     /// What a rank's `Flags` 0x0200 clears a governed stellar past: by the
     /// engine, both its `MinStatus` and its government's `Require`
     /// (`_HandlePlayerDockRequest` @0x67940-0x67a05); by the other
     /// reading, the Bible's, its `MinStatus` only, so an unmet `Require`
-    /// still refuses (see [`landing`](crate::landing)).
+    /// still refuses (see `nova_sim::landing`).
     BlessingLanding => "blessing_landing",
     /// Whether a government's word to attack the player (`gövt` `Flags`
     /// 0x0004) reaches a player its ships are blessed to spare (rank
     /// `Flags` 0x0100): by the engine, it does, as `_WarshipAI` @0x8b7b0
     /// and `_InterceptorAI` @0x8cb5c read no blessing; by the other
     /// reading, the Bible's ("will not automatically attack"), the
-    /// blessing holds the word back (see [`ai::warship`](crate::ai::warship)).
+    /// blessing holds the word back (see `nova_sim::ai::warship`).
     BlessingAlwaysAttacks => "blessing_always_attacks",
     /// Whether exploration is shared across a place: by the engine,
     /// exploring a system explores its place's head too
@@ -2062,7 +2062,7 @@ rule_keys! {
     /// explores every system at an explored head's place, hidden or not
     /// (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f); by the other
     /// reading, each system is explored on its own (see
-    /// [`exploration`](crate::exploration)).
+    /// `nova_sim::exploration`).
     ExploredByPlace => "explored_by_place",
     /// Whether the player's course is rewritten at the rebuild points: by
     /// the engine, each rebuild point rewrites every hidden hop to the
@@ -2072,7 +2072,7 @@ rule_keys! {
     /// hop stands elsewhere, or drops that hop when it stands at the
     /// arrival (@0x6c472-0x6c4c6); by the other reading, hops are resolved
     /// only when used, and an arrival drops only the hops made (see
-    /// [`course`](crate::course)).
+    /// `nova_sim::course`).
     RouteRewrite => "route_rewrite",
     /// How often a nebula's `OnExplore` runs: by the engine, whether a
     /// nebula is explored is never saved, so after every load the sweep
@@ -2081,26 +2081,26 @@ rule_keys! {
     /// @0x765a2-0x765ce); by the other reading, once a pilot, kept in the
     /// once-fired record. The Bible agrees with the engine ("this
     /// expression may get evaluated multiple times"), so the other reading
-    /// is the port's choice (see [`nebula`](crate::nebula)).
+    /// is the port's choice (see `nova_sim::nebula`).
     NebulaExploreOnce => "nebula_explore_once",
     /// Whether a new pilot's start system explores its nebulae: by the
     /// engine, not until the pilot's first exploration (a take-off, a jump
     /// or a map), as `_DoNewPilot` explores its start system while every
     /// nebula is inactive (@0x18de5, @0x1df4b, @0x19118, before its first
     /// refresh @0x1925e); by the other reading, as the game begins (see
-    /// [`nebula`](crate::nebula)).
+    /// `nova_sim::nebula`).
     NebulaNewPilot => "nebula_new_pilot",
     /// Whether a scan's set `jünk` latch shadows the outfits: by the
     /// engine, a scan that finds no illegal `jünk` while the player
     /// carries any `jünk` with a `ScanMask` ends there, outfits unscanned
     /// (`_ScanPlayer` @0x7eefa); by the other reading, the outfits are
-    /// scanned then (see [`scan`](crate::scan)).
+    /// scanned then (see `nova_sim::scan`).
     ScanOutfitsPastJunk => "scan_outfits_past_junk",
     /// What a negative `ScanFine` fines an illegal outfit: by the engine,
     /// nothing, as only a `ScanFine` above 0 fines an outfit (`jle`
     /// @0x7f222); by the other reading, the Bible's, the percent of the
     /// cash in hundreds, as for `jünk` and mission cargo (see
-    /// [`scan`](crate::scan)).
+    /// `nova_sim::scan`).
     OutfitScanFine => "outfit_scan_fine",
     /// What the ships the player leads do at a hypergate or wormhole
     /// exit. By the engine, as the original's loop C
@@ -2112,7 +2112,7 @@ rule_keys! {
     GateEscorts => "gate_escorts",
     /// Whether a lost trader escort's own `Holds` count in the fleet's
     /// cargo space it takes its share of (`_DestroyPartialFleetCargo`
-    /// @0xcd32-0xcff6; see [`Session`](crate::Session)). By the engine,
+    /// @0xcd32-0xcff6; see `nova_sim::Session`). By the engine,
     /// never: `_DamageShip` clears the leader of an escort a hit disables
     /// (@0x3afdd) before its call (@0x3b013), and a hit that leaves armour
     /// at 0 or less always disables, so the lost ship is out of its own
@@ -2126,7 +2126,7 @@ rule_keys! {
     LostCargoShare => "lost_cargo_share",
     /// Whether the player and every ship it leads fly half as fast again
     /// when the pilot does not play Strict Play (see
-    /// [`top_speed`](crate::top_speed)). By the engine, as
+    /// `nova_sim::top_speed`). By the engine, as
     /// `_ShipMaxSpeed` does (@0x382e-0x384f): the top speed of the player
     /// and of every ship whose leader is the player is × 1.5 (@0xdd078)
     /// while the pilot's Strict Play flag is clear. By the other reading,
@@ -2134,7 +2134,7 @@ rule_keys! {
     NonStrictSpeed => "non_strict_speed",
     /// Whether a `ShipBehav` 0 mission ship the player has paid off
     /// attacks the player again (see
-    /// [`mission_hunt`](crate::ai::target::mission_hunt)). By the engine,
+    /// `nova_sim::ai::target::mission_hunt`). By the engine,
     /// yes: neither `_SelectWarshipTarget` @0x89f25-0x89f84 nor
     /// `_HighLevelAIHandler` @0x8d628-0x8d6e9 reads the bribe, whose leave
     /// (`_AIMakeShipLeave` @0x7e2b0, called @0x961eb-0x961f8) sets state
@@ -2145,7 +2145,7 @@ rule_keys! {
     /// not anything the Bible says.
     HunterBribe => "hunter_bribe",
     /// The order ships overlap in within each of their three draw layers
-    /// (see [`ship_layer`](crate::ship_layer)). By the engine, the order
+    /// (see `nova_sim::ship_layer`). By the engine, the order
     /// they last entered the layer, as `_PutSpriteInLayer` (@0x766c)
     /// leaves `SpriteWorld`'s layers from `_InitSprites`' start
     /// (@0x1f0eb-0x1f88b) and each tick's laying out of the player, then
@@ -2156,13 +2156,13 @@ rule_keys! {
     /// player on top of its own. The engine's history outlives a pilot,
     /// as the original's sprites do, so a pilot loaded later in the same
     /// run starts from the order the last one left
-    /// ([`Session::with_slot_sprites`](crate::Session::with_slot_sprites));
+    /// (`nova_sim::Session::with_slot_sprites`);
     /// the other reading has no history. The Bible says nothing of it, so
     /// the other reading is the intended behaviour, not anything the Bible
-    /// says (see [`Session::draw_order`](crate::Session::draw_order)).
+    /// says (see `nova_sim::Session::draw_order`).
     ShipOverlap => "ship_overlap",
     /// How an NPC's quadrant turret (guidance 7 and 8) measures its arc
-    /// (see [`fire`](crate::ai::fire)). By the engine, as `_AIFireTurret`
+    /// (see `nova_sim::ai::fire`). By the engine, as `_AIFireTurret`
     /// does (@0x80c3d-0x80cf3): the angle to the target less the
     /// reference, the heading for a front turret and `(heading + 180) mod
     /// 360` for a rear one, made absolute and taken mod 360 with no fold
@@ -2173,7 +2173,7 @@ rule_keys! {
     /// says.
     QuadrantTurretArc => "quadrant_turret_arc",
     /// Whether a ship whose type's `Cost` is -1 is shown (see
-    /// [`ship_layer`](crate::ship_layer)). By the engine, as
+    /// `nova_sim::ship_layer`). By the engine, as
     /// `_HandleShipDisplay` does for a ship in the player's system
     /// (@0x2b7f3 → @0x2cc6b), the player's too: it is hidden, and its
     /// slot keeps its place in whatever layer it last stood in, as the
@@ -2183,7 +2183,7 @@ rule_keys! {
     /// the Bible says.
     HiddenShips => "hidden_ships",
     /// The box the pointer hovers a hidden ship by (see
-    /// [`Session::framed_by`](crate::Session::framed_by)); it matters
+    /// `nova_sim::Session::framed_by`); it matters
     /// only while [`RuleKey::HiddenShips`] reads the engine. By the
     /// engine, the box of the frames its slot's sprite last cloned, as
     /// `_HandleShipDisplay` skips `_SWCloneFramesFromMaster` for a hidden
@@ -2198,7 +2198,7 @@ rule_keys! {
     /// What becomes of a breakup whose death timer never rises above 0 by
     /// the time `_HandleShipDisplay` checks it: a `DeathDelay` of 0 or
     /// less for any ship, or of 1 for an NPC (see
-    /// [`Breakup`](crate::combat::hull::Breakup)). By the engine, the
+    /// `nova_sim::combat::hull::Breakup`). By the engine, the
     /// timer is set again every frame (`_HandleShipDisplay`
     /// @0x2d80d-0x2d83d) and the decrements skip it (@0x6d7e6, @0x35083),
     /// so the ship breaks up for good and never explodes: for the player,
@@ -2208,7 +2208,7 @@ rule_keys! {
     /// default (see the module docs).
     BreakupStall => "breakup_stall",
     /// What becomes of the player's velocity as it ejects (see
-    /// [`escape`](crate::escape)). By the engine, as `_HandlePlayer` does
+    /// `nova_sim::escape`). By the engine, as `_HandlePlayer` does
     /// (@0x6f782-0x6f788), the new ship's x velocity takes the y
     /// velocity's value, so the hulk keeps the true velocity and the new
     /// ship's x is lost, before the push of its top speed along its
@@ -2227,16 +2227,16 @@ rule_keys! {
     RescueArmor => "rescue_armor",
     /// Where a loaded pilot resumes when its saved stellar is one no
     /// system lists, so the loaded data doesn't place it (see
-    /// [`Session::load`](crate::Session::load)). By the engine, as
+    /// `nova_sim::Session::load`). By the engine, as
     /// `_LoadPilotData` falls back when `_FindSystemFromStellar` finds no
     /// system (@0x752d6-0x75318), in the first system with +0x1ed set:
     /// the lowest that exists, which needn't hold the stellar. By the
     /// other reading, the default and a recorded departure, it keeps its
     /// saved system. Under both, the stellar is forgotten, the pilot
     /// starts undocked at the centre, and the load reports the repair
-    /// ([`Session::load_repaired`](crate::Session::load_repaired)).
+    /// (`nova_sim::Session::load_repaired`).
     UnlistedStellar => "unlisted_stellar",
-    /// Whether a newbie (see [`tutorial`](crate::tutorial)) whose J has a
+    /// Whether a newbie (see `nova_sim::tutorial`) whose J has a
     /// hyperspace selection but too little fuel is told so. By the engine,
     /// no: the jump key's newbie branch, which says "No destination" with
     /// nothing selected, swallows the case with a selection
@@ -2245,12 +2245,12 @@ rule_keys! {
     /// hyperspace jump." and `snd ` 153, as for any pilot (@0x6ba72-
     /// 0x6bab7). The Bible says nothing of it, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session::jump_refusal_told`](crate::Session::jump_refusal_told)).
+    /// `nova_sim::Session::jump_refusal_told`).
     NewbieFuelRefusal => "newbie_fuel_refusal",
     /// What a hyperspace arrival in a system whose message buoy names an
     /// index `STR#` 1000 does not hold (0, below 0 but −1, or past its
     /// count), with no `STR ` of that index + 999, shows (see the
-    /// [`buoy`](crate::buoy) module). By the engine, the original's empty
+    /// `nova_sim::buoy` module). By the engine, the original's empty
     /// line for 480 ticks in place of the arrival line, as
     /// `_DisplayMessage`'s `GetIndString` gives an empty string
     /// (@0x52b3-0x52c7): the two stock Nil'kol systems' 20003 shows it. By
@@ -2259,7 +2259,7 @@ rule_keys! {
     /// reading is the intended behaviour, not anything the Bible says.
     MissingBuoyString => "missing_buoy_string",
     /// Whether an interceptor's patrol can pick an uninhabited stellar
-    /// (see [`destination`](crate::traffic::destination)). `_InterceptorAI`
+    /// (see `nova_sim::traffic::destination`). `_InterceptorAI`
     /// asks `_SelectRandomStellarDest` for plain stellars only
     /// (@0x8d027-0x8d03a), which picks none unless one is inhabited
     /// (@0x808b6). By the engine, the pick among them does not test for
@@ -2270,7 +2270,7 @@ rule_keys! {
     PatrolUninhabited => "patrol_uninhabited",
     /// Whether a mission ship that leaves the system through a hypergate
     /// or wormhole counts, for the counts of [`RuleKey::LeftRespawn`]
-    /// (see [`gate_entry`](crate::traffic::gate_entry)). By the engine,
+    /// (see `nova_sim::traffic::gate_entry`). By the engine,
     /// no: `_HandleShipDisplay` frees its slot as its fade ends (@0x2c078)
     /// with no call, and only the end of a warp out counts
     /// (`_LowLevelAIHandler` @0x85960-0x859aa), so it counts nothing and
@@ -2280,7 +2280,7 @@ rule_keys! {
     GateExitCounts => "gate_exit_counts",
     /// What becomes of the ships an in-flight `M` or `N` leaves behind in
     /// the system left: every ship the player does not lead (see
-    /// [`Traffic::retarget`](crate::Traffic::retarget)). By the engine,
+    /// `nova_sim::Traffic::retarget`). By the engine,
     /// they stay in the ship table until that frame's display pass frees
     /// them: `_EvalSetExp` moves only the ships the player leads
     /// (@0x15807-0x1583e, @0x1590b-0x1593d), and `_HandleShipDisplay`
@@ -2298,7 +2298,7 @@ rule_keys! {
     /// says.
     MoveLeftBehind => "move_left_behind",
     /// How many of the ship table's slots a spawn leaves free (see
-    /// [`Traffic::free_berth`](crate::Traffic::free_berth)). By the engine, as
+    /// `nova_sim::Traffic::free_berth`). By the engine, as
     /// `_GenericRandomShipSpawn(arg1, reserve)` searches only slots
     /// 1..(63 - reserve) of its 64 (@0x3c8b1-0x3c8f0): the system's own
     /// traffic (`düde` ships, persons, fleets and auxiliary ships), the
@@ -2310,7 +2310,7 @@ rule_keys! {
     /// and holds none back, each may take any of slots 1-63.
     SpawnReserve => "spawn_reserve",
     /// Whether a ship still coming into the system answers a hit (see
-    /// [`Traffic::tick_in`](crate::Traffic::tick_in)). By the engine, as
+    /// `nova_sim::Traffic::tick_in`). By the engine, as
     /// `_DamageShip` drops a reaction only while the victim's hyperspace
     /// state +0x50 is above 0 (@0x3b4b0-0x3b4c2), a ship jumping out, and
     /// an arrival's is -1.0 or -999.0 (@0x89555, @0x82ece, @0x8f3c8): a
@@ -2325,7 +2325,7 @@ rule_keys! {
     /// says.
     ArrivalHits => "arrival_hits",
     /// What a hire does when it finds no ship-table slot below the spawn
-    /// reserve (see [`Session::hire`](crate::Session::hire)). By the
+    /// reserve (see `nova_sim::Session::hire`). By the
     /// engine, as `_DoShipyardDialog` takes the fee and marks the pilot
     /// changed before `_SpawnEscort` (@0x5f168-0x5f1df), ignores its -1
     /// (@0x5f1f1) and draws the class's roll again (@0x5f20d-0x5f21a):
@@ -2336,7 +2336,7 @@ rule_keys! {
     /// says.
     HireNoSlot => "hire_no_slot",
     /// What a hyperspace arrival does with the asteroid field `_CreateAsteroids`
-    /// places (see the [`asteroid`](crate::asteroid) module). By the
+    /// places (see the `nova_sim::asteroid` module). By the
     /// engine, every entry kills the field: each caller of
     /// `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc), so
     /// `_HandleAsteroids` kills the placed field that same tick, and the
@@ -2348,7 +2348,7 @@ rule_keys! {
     /// reading is the intended behaviour, not anything the Bible says.
     AsteroidEntryField => "asteroid_entry_field",
     /// Where an asteroid spawned at the field's edge starts (see
-    /// [`Ring`](crate::asteroid::Ring)). By the engine, as
+    /// `nova_sim::asteroid::Ring`). By the engine, as
     /// `_SpawnAsteroid(true)` places it (@0x3a351-0x3a538): at least
     /// 0.7 × (half the play area + 128) out on both axes, which on a
     /// play area wider than the original's smallest can be on screen, so
@@ -2359,7 +2359,7 @@ rule_keys! {
     AsteroidRespawnRing => "asteroid_respawn_ring",
     /// Whether a weapon's `Flags2` 0x0004 keeps asteroids from setting off
     /// its proximity fuse (see
-    /// [`asteroid_hit`](crate::combat::asteroid_hit)). By the engine, no
+    /// `nova_sim::combat::asteroid_hit`). By the engine, no
     /// code reads the bit (`_CheckShotProximities` @0x376ab-0x37758 tests
     /// only `Seeker` 0x0001, @0x37566-0x37575), so every armed fuse is
     /// set off by the first asteroid in reach. By the Bible, "proximity
@@ -2368,7 +2368,7 @@ rule_keys! {
     FuseIgnoresAsteroids => "fuse_ignores_asteroids",
     /// Who counts as the player where a government's or a `düde`'s flags
     /// let shots and beams pass through (see
-    /// [`sides`](crate::combat::sides)). By the engine, the whole player
+    /// `nova_sim::combat::sides`). By the engine, the whole player
     /// side: player-side fire (the player, its escorts and their fighters)
     /// passes through ships of a government of `Flags` 0x0008 and of a
     /// `düde` of `Booty` 0x0100, a player-side firer of a government of
@@ -2387,7 +2387,7 @@ rule_keys! {
     PlayerPassThrough => "player_pass_through",
     /// How often a decaying shot (`wëap` `Decay` above 0) loses a point
     /// of its direct hit's mass and energy damage (see
-    /// [`DecayStep`](crate::combat::projectile::DecayStep)). By the
+    /// `nova_sim::combat::projectile::DecayStep`). By the
     /// engine, every `Decay` + 1 ticks, as `_HandleShot` takes a step only
     /// once its count is above `Decay` (@0x35eb2-0x35efc). By the Bible
     /// ("Remove one point of mass & energy damage every time this number
@@ -2397,7 +2397,7 @@ rule_keys! {
     ShotDecay => "shot_decay",
     /// Whether a fighter bay the player carries ends the search for a
     /// weapon that fires a boarded ship's rounds (see
-    /// [`board::player_fires`](crate::board::player_fires)). By the engine,
+    /// `nova_sim::board::player_fires`). By the engine,
     /// as `_PlayerCanUseAmmoType` walks the player's weapons by ID
     /// (@0x5896-0x5905): a bay (guidance 99) answers at once, yes when its
     /// `AmmoType` is the launcher's and no otherwise, so a bay of lower ID
@@ -2407,7 +2407,7 @@ rule_keys! {
     /// behaviour, not anything the Bible says.
     PlunderAmmoBays => "plunder_ammo_bays",
     /// Whether a copy of an NPC's pick that spawns nothing still spends
-    /// (see [`Armament::fire_pick`](crate::combat::armament::Armament::fire_pick)).
+    /// (see `nova_sim::combat::armament::Armament::fire_pick`).
     /// By the engine, as `_FireAIShipWeapon` spends each copy that has its
     /// ammunition before it asks whether anything spawned
     /// (@0x88cd8-0x88dac): a turret holding fire, a missile with no
@@ -2418,7 +2418,7 @@ rule_keys! {
     /// the Bible says.
     AiSpendWithoutShot => "ai_spend_without_shot",
     /// Which of its `shän`'s compressions a weapon exit point takes (see
-    /// [`exits`](crate::combat::exits)). By the engine, as
+    /// `nova_sim::combat::exits`). By the engine, as
     /// `_ModifyShotStartPosition2` chooses it after turning the point
     /// (@0x717d-0x71f2): the up compression when the turned point lies up
     /// the screen, its y below 0, and the down one otherwise, so an exit
@@ -2428,7 +2428,7 @@ rule_keys! {
     /// drawn on. The two differ for exits behind or beside the ship.
     ExitCompression => "exit_compression",
     /// How many exits a ship's point-defence shot moves its cursor on (see
-    /// [`Combat`](crate::combat::Combat)). By the engine, two: the shot
+    /// `nova_sim::combat::Combat`). By the engine, two: the shot
     /// `_HandleShipPointDefense` spawns takes an exit in `_SpawnShot`
     /// (@0x396e5), is set back to the ship's centre, and takes the next
     /// (@0x39707-0x3976c), so a ship's point defence fires from every
@@ -2437,7 +2437,7 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says.
     PdExitStep => "pd_exit_step",
     /// How a beam finds the ship it hits (see
-    /// [`beam`](crate::combat::beam)). By the engine, the cone
+    /// `nova_sim::combat::beam`). By the engine, the cone
     /// (`_HandleBeams` @0x30dde-0x31051): the nearest ship whose centre is
     /// within the beam's `BeamLength` plus half its radius r, trunc(0.66
     /// × its sprite's width), and within trunc(10r / 32) degrees of the
@@ -2448,7 +2448,7 @@ rule_keys! {
     /// earlier choice, not anything the Bible says.
     BeamHitTest => "beam_hit_test",
     /// Whether the beam cone keeps the original's quirks (see
-    /// [`beam`](crate::combat::beam)). By the engine, the angle test is
+    /// `nova_sim::combat::beam`). By the engine, the angle test is
     /// the plain difference of the ship's whole-degree bearing and the
     /// beam's heading as its jitter left it, with no 0/360 wrap
     /// (@0x30ec4-0x30edd), so a beam at 2 degrees, or at -2 after its
@@ -2460,7 +2460,7 @@ rule_keys! {
     /// module docs).
     BeamConeQuirks => "beam_cone_quirks",
     /// How a ship's freefall bombs (guidance 5) and rockets (6) leave it
-    /// (see [`BombLaunch`](crate::combat::projectile::BombLaunch)). By the
+    /// (see `nova_sim::combat::projectile::BombLaunch`). By the
     /// engine, as `_SpawnShot` launches them: the player's bomb at 0.8 of
     /// its ship's velocity (@0x3e73a-0x3e783) and its rocket at its ship's,
     /// but an NPC's, an escort's too, at its ship's velocity and its
@@ -2471,28 +2471,28 @@ rule_keys! {
     /// maximum velocity"), every ship's as the player's.
     BombRocketLaunch => "bomb_rocket_launch",
     /// Which missiles a ship's point defence chooses to fire at (see
-    /// [`defence::choose`](crate::combat::defence::choose)). By the engine,
+    /// `nova_sim::combat::defence::choose`). By the engine,
     /// with no hostility test: a missile not lost, that point defence can
     /// target, aimed at the ship or at its leader, whoever fired it
     /// (`_HandleShipPointDefense` @0x393b1-0x394bd). By the other reading,
     /// only one whose firer the fight's
-    /// [`PointDefenceRule`](crate::combat::defence::PointDefenceRule) also
+    /// `nova_sim::combat::defence::PointDefenceRule` also
     /// calls hostile, as Nova's
-    /// [`Allegiance`](crate::combat::defence::Allegiance) does by fleets
+    /// `nova_sim::combat::defence::Allegiance` does by fleets
     /// and governments' alliances. It covers the choice of a missile
     /// alone: a point-defence shot meets any missile its sprite touches
     /// under both readings (`_PointDefenseCollisionHandler`
     /// @0x37776-0x3785d), and with no missile to fire at, point defence
     /// fires at a ship by the original's own threat tests under both
     /// readings, as the ship branch has no government test
-    /// ([`defence::choose_ship`](crate::combat::defence::choose_ship),
+    /// (`nova_sim::combat::defence::choose_ship`,
     /// @0x394ce-0x3969d), and no reading anyone would choose fires at
     /// friends.
     /// The Bible says nothing of it, so the other reading is the engine's
     /// earlier choice, not anything the Bible says.
     PdHostility => "pd_hostility",
     /// Whose jamming a government of `Flags` 0x0080 halves (see
-    /// [`jamming`](crate::combat::jamming)). By the engine, as `_ShipECM`
+    /// `nova_sim::combat::jamming`). By the engine, as `_ShipECM`
     /// halves the sum toward zero before its clamp for every NPC of it,
     /// whatever its AI type (@0x3ccf-0x3cef): its class government's
     /// `InhJam` and its default items' jammers alike. By the Bible
@@ -2503,7 +2503,7 @@ rule_keys! {
     JamHalving => "jam_halving",
     /// How a `Seeker` 0x4000 homing shot measures how far off ahead a
     /// target within its ±249-pixel box is (see
-    /// [`LockAngle`](crate::combat::projectile::LockAngle)). By the
+    /// `nova_sim::combat::projectile::LockAngle`). By the
     /// engine, as `_HandleShotGuidance` reads it (@0x323ac-0x323ed): the
     /// truncated bearing less the heading, absolute and mod 360 with no
     /// fold, so a shot heading 355 at a bearing of 5 is 350 off and drops
@@ -2520,7 +2520,7 @@ rule_keys! {
     /// module docs).
     ShipDebris => "ship_debris",
     /// Whether the player's quadrant turrets (guidance 7 and 8) test their
-    /// blind spots ([`aim`](crate::combat::aim::aim)). By the engine, never:
+    /// blind spots (`nova_sim::combat::aim::aim`). By the engine, never:
     /// `_FirePlayerWeapon` fires a 7 or 8 at a target in its arc whatever
     /// the weapon's or the ship's blind-spot flags (@0x62aeb-0x62c38),
     /// though it tests them for 3 and 4 (@0x629fe, @0x62a94). By the other
@@ -2540,12 +2540,12 @@ rule_keys! {
     PlayerForwardRecoil => "player_forward_recoil",
     /// Whether the original's fixed tables cap a fight (see the module
     /// docs). By the engine, 128 shots, 64 beams, 32 explosions and 1024
-    /// particles, each failing quietly ([`Combat`](crate::combat::Combat),
+    /// particles, each failing quietly (`nova_sim::combat::Combat`,
     /// the view's `effects`). By the other reading, nothing is capped. The
     /// other reading is the default (see the module docs).
     CombatCaps => "combat_caps",
     /// How an armed proximity fuse is set off by a ship (see
-    /// [`projectile`](crate::combat::projectile)). By the engine, a point
+    /// `nova_sim::combat::projectile`). By the engine, a point
     /// test at the end of each move: the first ship in slot order, the
     /// player first, within trunc(`ProxRadius` + a third of its sprite's
     /// width) of the shot in whole pixels, the hit at the shot
@@ -2556,7 +2556,7 @@ rule_keys! {
     /// ship it passes between two points.
     ProximityFuse => "proximity_fuse",
     /// Where the galaxy map's Tab / `\` cycle of the hyperspace selection
-    /// starts outside mode 3 ([`Session::cycle_map_selection`](crate::Session::cycle_map_selection)).
+    /// starts outside mode 3 (`nova_sim::Session::cycle_map_selection`).
     /// By the engine, `_MapFilter` steps +0x6c on from what it holds
     /// (@0x13f77-0x13fa6), and in mode 2 that is the selected stellar's
     /// index (its ID less 128): an index of 0-15 starts the cycle after
@@ -2568,7 +2568,7 @@ rule_keys! {
     /// says.
     MapCycleStart => "map_cycle_start",
     /// Which hyperlinks the galaxy map draws between two systems that
-    /// aren't the player's (see the [`galaxy_map`](crate::galaxy_map)
+    /// aren't the player's (see the `nova_sim::galaxy_map`
     /// module). By the engine, `_DrawMap` pairs them with a flag a
     /// system (`_doneFlag`, @0xe5b6-0xe5c7, @0xea5b, @0xebb4): it walks
     /// the systems by ascending ID, draws each link a qualifying system
@@ -2582,7 +2582,7 @@ rule_keys! {
     /// How two stellars' records are read when
     /// [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) counts
     /// them as one mission stop (see
-    /// [`StellarMarks::identical`](crate::mission::StellarMarks::identical)).
+    /// `nova_sim::mission::StellarMarks::identical`).
     /// By the engine, as the original's stellar record array holds the
     /// `spöb`s: `_StellarsAreIdentical` returns false when either ID is
     /// outside 128..=2175, the array's 0x800 slots, before it compares the
@@ -2627,10 +2627,10 @@ rule_keys! {
     /// one. By the Bible ("the player's initial legal status with the
     /// above governments"), each status is the record with its own
     /// government alone, and in that government's systems (see
-    /// [`legal::spread_statuses`](crate::legal::spread_statuses)).
+    /// `nova_sim::legal::spread_statuses`).
     CharacterStatusSpread => "character_status_spread",
     /// How far a `!` in a conditional text reaches (see
-    /// [`text_parse`](crate::text_parse)). By the engine, as
+    /// `nova_sim::text_parse`). By the engine, as
     /// `_ParseTextDescription` clears its negate flag only as a text starts
     /// (@0x14c0f) and sets it at each `!` (@0x14d2d): the conditional and
     /// every later one in the same text read flipped (@0x14dc0). By the
@@ -2638,7 +2638,7 @@ rule_keys! {
     /// own conditional.
     TextNegation => "text_negation",
     /// What a `{` not followed by a test (`G`, `P`, `B` or `!`) does (see
-    /// [`text_parse`](crate::text_parse)). By the engine, as
+    /// `nova_sim::text_parse`). By the engine, as
     /// `_ParseTextDescription` stays in its test state for any other
     /// character (@0x14efa): the text is dropped up to the next `g`, `p`,
     /// `b` (either case) or `!`, which starts a conditional there. By the

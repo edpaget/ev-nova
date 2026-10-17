@@ -48,7 +48,7 @@
 //! A drawing check may be disputed too ([`Check::disputed_drawing`]): the
 //! roll is drawn in check order whichever reading runs, and the rule set
 //! chooses how it is read, such as a crön's `Random`
-//! ([`cron`](crate::cron)). Its descriptor both reads a key and draws,
+//! (`nova_sim::cron`). Its descriptor both reads a key and draws,
 //! and `all_refusals` reports it as [`Verdict::Draws`] without running
 //! either reading.
 //!
@@ -451,7 +451,6 @@ mod tests {
     use std::cell::RefCell;
 
     use crate::chance::NeverFires;
-    use crate::control::{ControlBits, FreshPilot, Gate, PilotFacts, Test, TestExpr};
     use crate::testkit::Scripted;
 
     /// The outfitter's Sell flag's local copy of `OutfitFlags::CANNOT_SELL`,
@@ -608,10 +607,11 @@ mod tests {
         LostTheSecondRoll,
     }
 
-    /// A toy mission offer: what it asks of the pilot.
+    /// A toy mission offer: what it asks of the pilot. Its availability is
+    /// a control-bit test, blank when it asks nothing.
     struct MissionOffer {
         min_combat: u16,
-        availability: Test,
+        availability: &'static str,
         odds: u8,
         second_odds: u8,
     }
@@ -627,6 +627,23 @@ mod tests {
         has_bar: bool,
     }
 
+    /// The toy offer's gate onto the pilot's control bits, a port in the
+    /// toy's own terms: whether the pilot passes the control-bit test
+    /// `test`.
+    trait Gate {
+        fn allows(&self, test: &str) -> bool;
+    }
+
+    /// A new pilot's gate: no bit is set, so only a blank test, which asks
+    /// for nothing, passes.
+    struct FreshGate;
+
+    impl Gate for FreshGate {
+        fn allows(&self, test: &str) -> bool {
+            test.is_empty()
+        }
+    }
+
     /// A non-shop context: a mission offer, the pilot, the stellar, the
     /// gate the offer's control-bit test is asked through, and the rule
     /// set.
@@ -634,7 +651,7 @@ mod tests {
         mission: MissionOffer,
         pilot: PilotRecord,
         stellar: Stellar,
-        gate: Gate<'a>,
+        gate: &'a dyn Gate,
         rules: Rulebook,
     }
 
@@ -656,7 +673,7 @@ mod tests {
         Offer {
             mission: MissionOffer {
                 min_combat: 10,
-                availability: Test::default(),
+                availability: "",
                 odds: 40,
                 second_odds: 60,
             },
@@ -665,7 +682,7 @@ mod tests {
                 cash: 1000,
             },
             stellar: Stellar { has_bar: true },
-            gate: Gate::FRESH,
+            gate: &FreshGate,
             rules: Rulebook::default(),
         }
     }
@@ -707,7 +724,7 @@ mod tests {
                 "available",
                 "toy: the offer's availability",
                 |facts: &Offer| {
-                    if facts.gate.allows(&facts.mission.availability) {
+                    if facts.gate.allows(facts.mission.availability) {
                         Ok(())
                     } else {
                         Err(OfferRefusal::Unavailable)
@@ -740,12 +757,12 @@ mod tests {
         .into()
     }
 
-    /// A hand-written control-bit port with a canned answer, recording
-    /// each test it is asked.
+    /// A hand-written gate with a canned answer, recording each test it is
+    /// asked.
     #[derive(Debug)]
     struct MockBits {
         answer: bool,
-        asked: RefCell<Vec<TestExpr>>,
+        asked: RefCell<Vec<String>>,
     }
 
     impl MockBits {
@@ -757,9 +774,9 @@ mod tests {
         }
     }
 
-    impl ControlBits for MockBits {
-        fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
-            self.asked.borrow_mut().push(test.clone());
+    impl Gate for MockBits {
+        fn allows(&self, test: &str) -> bool {
+            self.asked.borrow_mut().push(test.to_owned());
             self.answer
         }
     }
@@ -768,13 +785,10 @@ mod tests {
     fn gated(bits: &MockBits) -> Offer<'_> {
         Offer {
             mission: MissionOffer {
-                availability: Test::parse("b5"),
+                availability: "b5",
                 ..offer().mission
             },
-            gate: Gate {
-                control_bits: bits,
-                pilot: &FreshPilot,
-            },
+            gate: bits,
             ..offer()
         }
     }
@@ -787,10 +801,7 @@ mod tests {
             offer_checks().first_refusal(&gated(&bits), &mut chance),
             Err(OfferRefusal::Unavailable)
         );
-        assert_eq!(
-            *bits.asked.borrow(),
-            [TestExpr::parse("b5").expect("parses")]
-        );
+        assert_eq!(*bits.asked.borrow(), ["b5"]);
         assert!(chance.asked.is_empty(), "no roll after the refusal");
     }
 

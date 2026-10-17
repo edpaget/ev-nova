@@ -2,9 +2,9 @@
 //! many equal outcomes a roll gives, and uniform draws.
 //!
 //! The rules that roll dice (each day's `öops` events, see
-//! [`market`](crate::market), where a wormhole leads and which way a ship
-//! comes out of a gate, see [`gate`](crate::gate), and the NPC traffic,
-//! see [`traffic`](crate::traffic)) ask a [`Chance`] the caller supplies,
+//! `nova_sim::market`, where a wormhole leads and which way a ship
+//! comes out of a gate, see `nova_sim::gate`, and the NPC traffic,
+//! see `nova_sim::traffic`) ask a [`Chance`] the caller supplies,
 //! so they stay deterministic under test. The real source lives at the
 //! program's edge.
 //!

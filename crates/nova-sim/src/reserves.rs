@@ -72,7 +72,7 @@ pub(crate) fn shield_points(shield: i16) -> i64 {
 
 impl Reserves {
     /// Reserves holding `shield`, `armor` and `fuel`, full.
-    /// [`ShipStats`](crate::stats::ShipStats) gives a ship's.
+    /// `nova_sim::stats::ShipStats` gives a ship's.
     #[must_use]
     pub fn full(shield: f32, armor: f32, fuel: f32) -> Self {
         Self {

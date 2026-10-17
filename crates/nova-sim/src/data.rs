@@ -1258,15 +1258,13 @@ fn ship_exits(anim: &ShipAnim) -> ShipExits {
 }
 
 /// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
-impl From<&ShipAnim> for Blink {
-    fn from(anim: &ShipAnim) -> Self {
-        Self {
-            mode: anim.blink_mode,
-            a: anim.blink_val_a,
-            b: anim.blink_val_b,
-            c: anim.blink_val_c,
-            d: anim.blink_val_d,
-        }
+fn blink_of(anim: &ShipAnim) -> Blink {
+    Blink {
+        mode: anim.blink_mode,
+        a: anim.blink_val_a,
+        b: anim.blink_val_b,
+        c: anim.blink_val_c,
+        d: anim.blink_val_d,
     }
 }
 
@@ -1275,7 +1273,7 @@ impl From<&ShipAnim> for Blink {
 #[must_use]
 pub fn ship_blink(data: &GameData, id: i16) -> Blink {
     match data.get::<ShipAnim>(id) {
-        Some(Ok(anim)) => Blink::from(anim.record),
+        Some(Ok(anim)) => blink_of(anim.record),
         _ => Blink::STEADY,
     }
 }
@@ -5049,7 +5047,7 @@ mod tests {
             .expect("decodes")
             .record;
         assert_eq!(
-            Blink::from(&shan),
+            blink_of(&shan),
             Blink {
                 mode: 2,
                 a: -3,
