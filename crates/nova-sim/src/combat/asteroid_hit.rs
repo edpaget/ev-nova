@@ -262,7 +262,7 @@ mod tests {
     use crate::combat::ShipRef;
     use crate::combat::projectile::Guide;
     use crate::flight::ShipState;
-    use crate::testkit::weapon;
+    use nova_sim_catalog::fixture::weapon;
 
     /// A gun of `record` fired from the centre facing right.
     fn shot_of(record: WeaponRecord) -> Shot {
@@ -580,7 +580,7 @@ mod tests {
             blast(&blasting(ShipRef::Player, 30, 0x0100, 0), at).map(|b| b.spares_player),
             Some(true)
         );
-        let npc = ShipRef::Npc(crate::traffic::npc::NpcId(1));
+        let npc = ShipRef::Npc(crate::combat::NpcId(1));
         assert_eq!(blast(&blasting(npc, 30, 0, 0), at), None);
         assert_eq!(blast(&blasting(ShipRef::Player, 0, 0, 0), at), None);
         assert_eq!(blast(&blasting(ShipRef::Player, 30, 0, 0x0400), at), None);

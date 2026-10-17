@@ -1669,7 +1669,7 @@ mod tests {
     use crate::mission::{ROLLED, Stop};
     use crate::pilot::Pilot;
     use crate::testkit::{
-        Draws, FakePilotCatalog, catalog, govt, jump, land_now, mission, planet, swapped,
+        Draws, FakePilotCatalog, arriving, catalog, govt, jump, land_now, mission, planet, swapped,
         with_variants,
     };
 
@@ -1775,7 +1775,7 @@ mod tests {
         for (rules, to, asked) in [(Rulebook::default(), (129, 130), 3), (bible, (150, 132), 1)] {
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
             assert_eq!(land_now(&mut session), Ok(StellarId(128)));
-            let mut chance = Draws::arriving(&[0]);
+            let mut chance = arriving(&[0]);
             let _ = session.settle_script(&catalog, &mut chance);
             assert_eq!(chance.asked, table_then(&[asked]), "{to:?}");
             assert_eq!(
@@ -1815,7 +1815,7 @@ mod tests {
                 .expect("starts")
                 .with_rules(rules(distance, colocated));
             assert_eq!(land_now(&mut session), Ok(StellarId(128)));
-            let mut chance = Draws::arriving(&[0]);
+            let mut chance = arriving(&[0]);
             let _ = session.settle_script(&catalog, &mut chance);
             assert_eq!(
                 chance.asked,
@@ -1844,7 +1844,7 @@ mod tests {
         for (rules, offered) in [(Rulebook::default(), true), (bible, false)] {
             let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
             assert_eq!(land_now(&mut session), Ok(StellarId(128)));
-            let _ = session.settle_script(&catalog, &mut Draws::arriving(&[0]));
+            let _ = session.settle_script(&catalog, &mut arriving(&[0]));
             let destinations: Vec<_> = session
                 .mission_offers(Venue::Computer)
                 .iter()

@@ -31,7 +31,7 @@
 //! - Its `Flags` 0x0400 ([`PLANET_TYPE`]) makes it a planet-type ship: an
 //!   NPC's missile flies at it only from a planet-type weapon, and at any
 //!   other ship only from any other weapon (`_AIFireMissile`
-//!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)). It dies in an
+//!   @0x812b4-0x812fb, see `nova_sim::ai::fire`). It dies in an
 //!   explosion of no size and makes no shockwave (`_HandleShipDisplay`
 //!   tests the flag @0x2d90d), and nothing pushes it, neither a hit nor
 //!   a shockwave (`_DamageShip` @0x3aacb), nor holds it in a tractor beam
@@ -53,8 +53,7 @@ use std::fmt::Debug;
 use super::exits::ExitPoints;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
-use crate::catalog::{HullRecord, ShipId};
-use crate::escort::EscortClass;
+use crate::catalog::{EscortClass, HullRecord, ShipId};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
@@ -100,7 +99,7 @@ pub const BOARD_REACH_PER_SIZE: f32 = 0.5;
 pub const TOUGH: u16 = 0x0010;
 /// The `shïp` `Flags` bit that shows its armour on the target panel
 /// while its shields are down (`_DrawStatusTarg` @0x4bbaa; see
-/// [`target_panel`](crate::target_panel)).
+/// `nova_sim::target_panel`).
 pub const SHOWS_ARMOR: u16 = 0x0100;
 /// The `shïp` `Flags` bit that hides the target panel's status line
 /// (`_DrawStatusTarg` @0x4b941).
@@ -183,7 +182,7 @@ pub struct HullSpec {
     pub board_reach: f32,
     /// Its sprite's width, its `shän`'s `BaseXSize`, in pixels; none
     /// without a sprite. A formation is spaced by it (see
-    /// [`escort::spacing`](crate::escort::spacing)).
+    /// `nova_sim::escort::spacing`).
     pub sprite_size: Option<f32>,
     /// Its sprite's height, its `shän`'s `BaseYSize`, in pixels; none
     /// without a sprite. Whether it is on screen reads it with the width
@@ -203,11 +202,11 @@ pub struct HullSpec {
     /// Its class's top speed, in pixels a tick: its `Speed` alone, none of
     /// its outfits' (the original's class +0x40, `_LoadObjectData`
     /// @0x7a0db-0x7a0ef), as a hopeless chase compares them (see
-    /// [`odds`](crate::ai::odds)); none below none.
+    /// `nova_sim::ai::odds`); none below none.
     pub class_speed: f32,
     /// How far its class's stock weapons reach, as `_AIInGunRange` asks
     /// with no weapon named (@0x7fa2d-0x7faa8, see
-    /// [`fire::in_reach`](crate::ai::fire::in_reach)): the longest reach
+    /// `nova_sim::ai::fire::in_reach`): the longest reach
     /// among its stock slots of a count above none and a raw guidance of 8
     /// or less, a beam (0 and 3) its length and 32, any other its range
     /// ([`WeaponSpec::range`](super::weapon::WeaponSpec::range)) and 32,
@@ -430,7 +429,7 @@ mod tests {
     use super::*;
     use crate::catalog::{BoomId, ShipExits, ShipId};
     use crate::combat::exits::ExitPoints;
-    use crate::testkit::hull;
+    use nova_sim_catalog::fixture::hull;
 
     fn armor(now: f32, max: f32) -> Gauge {
         Gauge { now, max }

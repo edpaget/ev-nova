@@ -74,6 +74,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) use crate::catalog::tally;
 use crate::catalog::{
     CombatCatalog, CronId, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, RankId, ShipId,
     ShipRecord, StartError, StellarId, SystemId,
@@ -83,7 +84,7 @@ pub use crate::control::Gender;
 use crate::control::{Bit, ControlBitSet};
 use crate::cron::CronState;
 use crate::date::GameDate;
-use crate::escort::EscortOrder;
+pub use crate::fleet::Escort;
 use crate::legal::LegalRecords;
 use crate::market::{ActiveEvent, Good, Trader};
 use crate::mission::ActiveMissions;
@@ -179,44 +180,6 @@ pub struct Pilot {
     pub(crate) crons: BTreeMap<CronId, CronState>,
     /// The active ranks, by ID (see [`rank`](crate::rank)).
     pub(crate) ranks: BTreeSet<RankId>,
-}
-
-/// A ship in the player's fleet: its class, its shield, armour and fuel,
-/// and the standing order it follows. In flight the session flies it as
-/// an NPC beside the player ([`Session`](crate::Session)); the record
-/// keeps what a save keeps.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Escort {
-    /// The escort's ship class.
-    pub ship: ShipId,
-    /// Its shield, armour and fuel.
-    pub reserves: Reserves,
-    /// Its standing order; none keeps formation (see
-    /// [`escort`](crate::escort)).
-    pub order: Option<EscortOrder>,
-    /// Whether it is a fighter launched from one of the player's bays,
-    /// out of its bay (see [`bay`](crate::bay)), rather than an escort of
-    /// its own.
-    pub carried: bool,
-    /// The daily wage it was hired at in the bar, which may be none; `None`
-    /// for an escort that was not hired (a ship captured, or the old ship
-    /// kept after "Use As My Ship"). Which wage a hired escort is paid
-    /// each day follows [`Session::with_rules`](crate::Session::with_rules)
-    /// (see [`hire`](crate::hire)).
-    pub wage: Option<i64>,
-    /// The person (`përs`) this escort is, flying as itself, its name,
-    /// ship and loadout its record's (see [`person`](crate::person));
-    /// none for any other escort. One whose person no longer has a record
-    /// flies as an ordinary escort of its ship class.
-    pub person: Option<PersonId>,
-}
-
-impl Escort {
-    /// Whether it was hired in the bar: it has a wage, even of none.
-    #[must_use]
-    pub fn hired(&self) -> bool {
-        self.wage.is_some()
-    }
 }
 
 impl Pilot {
@@ -640,24 +603,13 @@ pub(crate) fn merged(
     both
 }
 
-/// `items`, each an outfit with a count, as how many of each: repeats add
-/// up, saturating, and none of an item is not listed.
-pub(crate) fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMap<OutfitId, u16> {
-    let mut outfits = BTreeMap::new();
-    for (id, count) in items {
-        let owned: &mut u16 = outfits.entry(id).or_default();
-        *owned = owned.saturating_add(count);
-    }
-    outfits.retain(|_, count| *count > 0);
-    outfits
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, GovtId, PersonId, ShipId, StartError, SystemId};
     use crate::date::GameDate;
+    use crate::escort::EscortOrder;
     use crate::reserves::Gauge;
     use crate::testkit::{FAST, FakePilotCatalog, START, catalog, starting};
 

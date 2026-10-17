@@ -574,7 +574,7 @@ pub fn on_screen(view: Area, at: Vec2, width: f32, height: f32) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::testkit::outfit;
+    use nova_sim_catalog::fixture::outfit;
 
     fn at(fade: f32, direction: i8) -> Cloak {
         Cloak { fade, direction }

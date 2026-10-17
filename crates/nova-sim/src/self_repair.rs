@@ -33,8 +33,8 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord};
 use crate::combat::hull::Condition;
+use crate::fleet::Escort;
 use crate::message::SimMessage;
-use crate::pilot::Escort;
 use crate::reserves::Reserves;
 
 /// The `ModType` of a repair system (the Bible's 49, 0x31).
@@ -160,9 +160,9 @@ pub fn rejoin_message(kind: FormerKind) -> SimMessage {
 mod tests {
     use super::*;
     use crate::catalog::{PersonId, ShipId};
-    use crate::escort::EscortOrder;
+    use crate::fleet::EscortOrder;
     use crate::reserves::Gauge;
-    use crate::testkit::outfit;
+    use nova_sim_catalog::fixture::outfit;
 
     /// Repair Droids (437), a repair system in its third slot; a shield
     /// booster (300) with none.

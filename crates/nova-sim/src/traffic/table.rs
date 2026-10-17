@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
     DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
-    ShipRecord, SystemId, TrafficCatalog,
+    ShipRecord, SystemId, TrafficCatalog, tally,
 };
 use crate::chance::Chance;
 use crate::cloak::CloakGear;
@@ -35,7 +35,6 @@ use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::outfitter::outfit_mods;
 use crate::person::{self, PersonLink, PersonRules};
-use crate::pilot::tally;
 use crate::reserves::Reserves;
 use crate::self_repair;
 use crate::stats::ShipStats;

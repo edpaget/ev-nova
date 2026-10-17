@@ -233,7 +233,7 @@ fn word(spec: &WeaponSpec, field: FlagField) -> u16 {
 mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
-    use crate::testkit::weapon;
+    use nova_sim_catalog::fixture::weapon;
 
     const NA: Status = Status::NotApplicable;
 

@@ -247,7 +247,7 @@ pub struct WeaponSpec {
     /// What each shot spends.
     pub ammo: Ammo,
     /// Its `AmmoType`, raw, as the plunder compares it
-    /// ([`board::player_fires`](crate::board::player_fires)).
+    /// (`nova_sim::board::player_fires`).
     pub ammo_type: i16,
     /// How far off its heading a shot may leave, in degrees.
     pub inaccuracy: u32,
@@ -463,7 +463,7 @@ pub const DISABLE_ONLY: u16 = 0x1000;
 pub const PLANET_TYPE: u16 = 0x0400;
 /// `Flags`: a guided weapon that won't fire at fast ships: an NPC holds it
 /// at a target turning more than 3 degrees a tick (`_SuitableMissileType`
-/// @0x3507-0x3516, see [`fire`](crate::ai::fire)).
+/// @0x3507-0x3516, see `nova_sim::ai::fire`).
 pub const AVOIDS_FAST_SHIPS: u16 = 0x0008;
 /// `Flags2`: it needs its ship's `KeyCarried` aboard, a fighter bay of
 /// that ship holding rounds (`_WeaponHasAmmo` @0xba07-0xba85).
@@ -841,7 +841,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::BoomId;
-    use crate::testkit::weapon;
+    use nova_sim_catalog::fixture::weapon;
 
     /// The stock Light Blaster's numbers.
     fn light_blaster() -> WeaponRecord {

@@ -5,7 +5,7 @@ use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
 use crate::clearance::DockKind;
 use crate::tutorial::TutorialHint;
 
-/// Something a [`Session`](crate::Session) did that the player is told of.
+/// Something a `nova_sim::Session` did that the player is told of.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SimMessage {
     /// A jump ended in this system, the last of a multi-jump.
@@ -77,7 +77,7 @@ pub enum SimMessage {
     /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128).
     FighterRepaired,
     /// A scan found illegal `jünk`: the player is caught smuggling it
-    /// (`_ScanPlayer` @0x7eba9-0x7eece; see [`scan`](crate::scan)).
+    /// (`_ScanPlayer` @0x7eba9-0x7eece; see `nova_sim::scan`).
     IllegalJunk {
         /// The scanner's ship class, which names it when it is no person
         /// (ship +0x76 → `shïp` +0x6c, @0x7ebf7-0x7ec0c).
@@ -91,7 +91,7 @@ pub enum SimMessage {
         fine: i64,
     },
     /// A scan found an illegal outfit: the player is caught with it
-    /// (`_ScanPlayer` @0x7effc-0x7f38f; see [`scan`](crate::scan)).
+    /// (`_ScanPlayer` @0x7effc-0x7f38f; see `nova_sim::scan`).
     IllegalOutfit {
         /// The scanner's ship class, which names it when it is no person
         /// (@0x7f04a-0x7f05f).
@@ -110,7 +110,7 @@ pub enum SimMessage {
     /// An announced fleet arrived, showing this line of its `flët`'s
     /// `Quote`, its '#'s filled with digits, empty when the list has none
     /// (`_HyperSpawnFleet` @0x42607-0x426f4; see
-    /// [`quote`](crate::traffic::quote)).
+    /// `nova_sim::traffic::quote`).
     FleetArrivalQuote(String),
     /// The ship took off past the tutorial with no `Q` message: the
     /// take-off greeting, "{lead} {the stellar} on {the date}."

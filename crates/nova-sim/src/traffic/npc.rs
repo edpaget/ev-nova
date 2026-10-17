@@ -19,10 +19,7 @@ use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 
-/// An NPC's number in its system, unique while the player stays there:
-/// the order it appeared in.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NpcId(pub u32);
+pub use crate::combat::NpcId;
 
 /// How an NPC behaves: the `düde` `AIType`, or a `shïp`'s `InherentAI`
 /// (the Bible: 1 wimpy trader, 2 brave trader, 3 warship, 4 interceptor).

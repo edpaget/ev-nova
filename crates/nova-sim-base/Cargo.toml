@@ -11,8 +11,8 @@ publish.workspace = true
 # it, so it reaches nothing (`deny.toml` bans the way back up).
 
 [features]
-# Exposes the test support in `fixture` (the scripted `Chance`) to the
-# tests of the nova-sim crates above.
+# Exposes the test support in `fixture` (the `Chance` mocks: `Scripted`,
+# `Draws` and `Ranged`) to the tests of the nova-sim crates above.
 fixture = []
 
 [lints]

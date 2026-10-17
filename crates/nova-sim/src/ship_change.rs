@@ -91,7 +91,7 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord, WeaponId};
-use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
+pub use crate::combat::armament::Arrays;
 use crate::outfitter::{Hardpoints, ItemRoom, OutfitFlags, item_limit};
 use crate::rulebook::RuleSource;
 
@@ -140,69 +140,12 @@ pub struct Fold<'a> {
     pub default_weapons: RuleSource,
 }
 
-/// The original's weapon and rounds arrays: how many of each weapon, and
-/// of each weapon's rounds, as the outfits owned make them ([`Arrays::of`])
-/// or as a new class's stock adds to them
-/// ([`Arsenal::stock_added`](crate::combat::armament::Arsenal::stock_added)).
-/// Wide and signed, where the original's are 16-bit and wrap.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Arrays {
-    /// Each weapon's count.
-    pub weapons: BTreeMap<WeaponId, i64>,
-    /// Each weapon's rounds, by the weapon whose rounds they are.
-    pub rounds: BTreeMap<WeaponId, i64>,
-}
-
-impl Arrays {
-    /// The arrays `owned` of `records` make, each outfit counting for
-    /// the weapon (or the rounds) its first mod names, as
-    /// `_SystemInfoToShipStats` builds them (@0xca8d-0xcac9).
-    #[must_use]
-    pub fn of(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> Self {
-        let mut arrays = Self::default();
-        for record in records {
-            if let Some(&count) = owned.get(&record.id)
-                && let Some(array) = arrays.array(record.mods[0].0)
-            {
-                add(array, WeaponId(record.mods[0].1), i64::from(count));
-            }
-        }
-        arrays
-    }
-
-    /// Adds `other`'s counts to these.
-    fn add(&mut self, other: &Self) {
-        for (&weapon, &count) in &other.weapons {
-            add(&mut self.weapons, weapon, count);
-        }
-        for (&weapon, &count) in &other.rounds {
-            add(&mut self.rounds, weapon, count);
-        }
-    }
-
-    /// The array a first mod of `mod_type` counts in: none for any other
-    /// mod.
-    fn array(&mut self, mod_type: i16) -> Option<&mut BTreeMap<WeaponId, i64>> {
-        match mod_type {
-            MOD_WEAPON => Some(&mut self.weapons),
-            MOD_AMMO => Some(&mut self.rounds),
-            _ => None,
-        }
-    }
-}
-
 /// The weapons the fold reads a first mod for: `wëap` 128 to 383, the
 /// original's index 0 to 255 (`testw; js` then `cmpw $0xff; jg`,
 /// @0xcb6f-0xcb78 for `ModType` 1 and @0xcbb0-0xcbb9 for 3, and pass 3's
 /// loop of 256 @0xcc28-0xccd7). An outfit whose first mod names another
 /// is neither held nor given anything.
 pub const FOLDED_WEAPONS: std::ops::RangeInclusive<i16> = 128..=383;
-
-/// Adds `count` to `weapon`'s entry of `array`, saturating.
-fn add(array: &mut BTreeMap<WeaponId, i64>, weapon: WeaponId, count: i64) {
-    let entry = array.entry(weapon).or_default();
-    *entry = entry.saturating_add(count);
-}
 
 /// The outfits `owned` become on a change of ship as `carry` says, the
 /// new class's default items being `defaults`; with `fold`, the new

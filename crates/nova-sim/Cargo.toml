@@ -31,7 +31,7 @@ nova-sim-state.workspace = true
 # Synthetic resource forks for the GameData adapter tests under `tests/`.
 nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
-# The scripted `Chance` (`Scripted`) the unit tests draw on.
+# The `Chance` mocks (`Scripted`, `Draws`, `Ranged`) the unit tests draw on.
 nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog's record builders and control-bit mocks, which `testkit`
 # re-exports.

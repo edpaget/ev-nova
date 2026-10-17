@@ -144,13 +144,15 @@ pub fn release(
 mod tests {
     use super::*;
     use crate::catalog::{ShipId, WeaponId, WeaponRecord};
+    use crate::combat::NpcId;
+    use crate::combat::fixture::among;
     use crate::combat::hull::Condition;
     use crate::combat::projectile::Source;
     use crate::combat::sides::Ties;
     use crate::flight::{ShipState, facing};
     use crate::geometry::Vec2;
-    use crate::testkit::{Draws, among, weapon};
-    use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::weapon;
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
     const HIT: ShipRef = ShipRef::Npc(NpcId(2));

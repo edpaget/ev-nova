@@ -369,12 +369,13 @@ impl Sides<'_> {
 mod tests {
     use super::*;
     use crate::catalog::ShipId;
+    use crate::combat::NpcId;
+    use crate::combat::fixture::among;
     use crate::combat::projectile::Jam;
     use crate::combat::weapon::WeaponSpec;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
-    use crate::testkit::{among, weapon};
-    use crate::traffic::npc::NpcId;
+    use nova_sim_catalog::fixture::weapon;
 
     fn npc(id: u32) -> ShipRef {
         ShipRef::Npc(NpcId(id))

@@ -358,7 +358,8 @@ fn held<'a>(
 mod tests {
     use super::*;
     use crate::catalog::BoomId;
-    use crate::testkit::{Draws, outfit};
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::outfit;
 
     fn owning(counts: &[(i16, u16)]) -> BTreeMap<OutfitId, u16> {
         counts.iter().map(|&(id, n)| (OutfitId(id), n)).collect()

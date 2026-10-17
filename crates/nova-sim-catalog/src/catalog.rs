@@ -2175,6 +2175,18 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
     }
 }
 
+/// `items`, each an outfit with a count, as how many of each: repeats add
+/// up, saturating, and none of an item is not listed.
+pub fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMap<OutfitId, u16> {
+    let mut outfits = BTreeMap::new();
+    for (id, count) in items {
+        let owned: &mut u16 = outfits.entry(id).or_default();
+        *owned = owned.saturating_add(count);
+    }
+    outfits.retain(|_, count| *count > 0);
+    outfits
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

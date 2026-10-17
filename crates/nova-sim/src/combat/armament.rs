@@ -44,7 +44,7 @@
 //! - Whether a ship has the ammunition for a weapon is `_WeaponHasAmmo`'s
 //!   test ([`Armament::has_ammo`]), asked by every caller the original
 //!   asks it from (firing, point defence, and the AI's picks in
-//!   [`fire`](crate::ai::fire) and [`odds`](crate::ai::odds)): an NPC
+//!   `nova_sim::ai::fire` and `nova_sim::ai::odds`): an NPC
 //!   never uses a weapon of `Flags2` 0x0100, a cloaked ship only a weapon
 //!   of `Flags2` 0x4000, and a weapon of `Flags2` 0x0080 needs its ship's
 //!   `KeyCarried` aboard; then its rounds or fuel. An NPC's bay launch
@@ -99,7 +99,7 @@
 //! them up after its default items (`fit_stock`). The `E` and `H` set
 //! operators add them to the weapon and rounds arrays instead
 //! ([`Arsenal::stock_added`], `_EvalSetExp` @0x1551c-0x155de), which
-//! [`ship_change`](crate::ship_change)'s fold then puts on the outfits
+//! `nova_sim::ship_change`'s fold then puts on the outfits
 //! whose first mod names them: each `WeapCount` and `AmmoLoad` signed
 //! by the engine, the loads sharing an ammunition summed, and each load
 //! on its raw `AmmoType`'s weapon, so by the engine a fighter bay of a
@@ -122,7 +122,7 @@
 //! ascending ID, and its `DefaultItems` arm it with nothing. Its rounds
 //! ([`LauncherRounds`]) are each stock slot's `AmmoLoad`, raw, on its own
 //! weapon, so a load of -1 is kept. A person's own weapon slots add to
-//! these ([`person::fit`](crate::person::fit)).
+//! these (`nova_sim::person::fit`).
 
 use std::collections::BTreeMap;
 
@@ -138,13 +138,12 @@ use super::weapon::{
 };
 use crate::catalog::{
     CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, StockWeapon, WeaponId, WeaponRecord,
+    tally,
 };
 use crate::chance::Chance;
 use crate::flight::{ShipState, normalized};
-use crate::pilot::tally;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
-use crate::ship_change::Arrays;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -152,8 +151,65 @@ pub const MOD_WEAPON: i16 = 1;
 /// is the rounds of.
 pub const MOD_AMMO: i16 = 3;
 
+/// The original's weapon and rounds arrays: how many of each weapon, and
+/// of each weapon's rounds, as the outfits owned make them ([`Arrays::of`])
+/// or as a new class's stock adds to them
+/// ([`Arsenal::stock_added`](crate::combat::armament::Arsenal::stock_added)).
+/// Wide and signed, where the original's are 16-bit and wrap.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Arrays {
+    /// Each weapon's count.
+    pub weapons: BTreeMap<WeaponId, i64>,
+    /// Each weapon's rounds, by the weapon whose rounds they are.
+    pub rounds: BTreeMap<WeaponId, i64>,
+}
+
+impl Arrays {
+    /// The arrays `owned` of `records` make, each outfit counting for
+    /// the weapon (or the rounds) its first mod names, as
+    /// `_SystemInfoToShipStats` builds them (@0xca8d-0xcac9).
+    #[must_use]
+    pub fn of(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> Self {
+        let mut arrays = Self::default();
+        for record in records {
+            if let Some(&count) = owned.get(&record.id)
+                && let Some(array) = arrays.array(record.mods[0].0)
+            {
+                add(array, WeaponId(record.mods[0].1), i64::from(count));
+            }
+        }
+        arrays
+    }
+
+    /// Adds `other`'s counts to these.
+    pub(crate) fn add(&mut self, other: &Self) {
+        for (&weapon, &count) in &other.weapons {
+            add(&mut self.weapons, weapon, count);
+        }
+        for (&weapon, &count) in &other.rounds {
+            add(&mut self.rounds, weapon, count);
+        }
+    }
+
+    /// The array a first mod of `mod_type` counts in: none for any other
+    /// mod.
+    pub(crate) fn array(&mut self, mod_type: i16) -> Option<&mut BTreeMap<WeaponId, i64>> {
+        match mod_type {
+            MOD_WEAPON => Some(&mut self.weapons),
+            MOD_AMMO => Some(&mut self.rounds),
+            _ => None,
+        }
+    }
+}
+
+/// Adds `count` to `weapon`'s entry of `array`, saturating.
+fn add(array: &mut BTreeMap<WeaponId, i64>, weapon: WeaponId, count: i64) {
+    let entry = array.entry(weapon).or_default();
+    *entry = entry.saturating_add(count);
+}
+
 /// The fire command a ship holds: the player's keys, or an NPC's
-/// [`Behaviour`](crate::ai::Behaviour).
+/// `nova_sim::ai::Behaviour`.
 // Each flag is its own, read on its own.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1469,7 +1525,7 @@ impl Arsenal {
     /// ([`RuleKey::ShipChangeNegativeStock`](crate::RuleKey::ShipChangeNegativeStock)),
     /// by the engine a negative count or load is added signed, and by the
     /// other reading one of none or less adds nothing. Which outfits hold
-    /// them is the fold's ([`crate::ship_change`]); none for a class that
+    /// them is the fold's (`nova_sim::ship_change`); none for a class that
     /// cannot be read.
     #[must_use]
     pub fn stock_added(&self, ship: ShipId, bays: RuleSource, negative: RuleSource) -> Arrays {
@@ -1697,11 +1753,12 @@ mod tests {
     use super::*;
     use crate::catalog::StockWeapon;
     use crate::chance::NeverFires;
+    use crate::combat::NpcId;
     use crate::combat::ShipRef;
     use crate::combat::flags::FlagField;
     use crate::combat::projectile::ShotId;
-    use crate::testkit::{Draws, hull, outfit, weapon};
-    use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::{hull, outfit, weapon};
 
     /// The heading `launch` leaves a ship at the centre along.
     fn leaves(launch: &Launch) -> f32 {
@@ -4580,7 +4637,7 @@ mod tests {
     fn a_ships_strength_is_its_records_raw_or_none() {
         let hull = |id, strength| HullRecord {
             strength,
-            ..crate::testkit::hull(id)
+            ..nova_sim_catalog::fixture::hull(id)
         };
         let arsenal = Arsenal::new(&[], vec![hull(128, 325), hull(129, -2)]);
         assert_eq!(arsenal.strength(ShipId(128)), 325);

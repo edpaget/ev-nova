@@ -57,6 +57,7 @@
 //! ([`EscortCommand::will`], `_IssueNewEscortCommand` @0x66461-0x664e5).
 
 pub use crate::catalog::{EscortClass, FIGHTER_MASS, FREIGHTER_AI, MEDIUM_MASS};
+pub use crate::fleet::EscortOrder;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
@@ -70,22 +71,6 @@ pub const ESCORT_COMMANDS: &str = "Escort Commands";
 pub const NEW_ORDERS: &str = "New escort orders assigned:  ";
 /// `STR#` 2002 #154: Attack's message with no target to copy.
 pub const WILL_ATTACK: &str = "will attack.";
-
-/// A standing order an escort follows. An escort with none keeps
-/// formation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EscortOrder {
-    /// 1: it defends the player.
-    Defend,
-    /// 2: it attacks the player's target.
-    Attack,
-    /// 4: it holds position.
-    Hold,
-    /// 3: Return to Hangar: a carried fighter flies back and docks with
-    /// its carrier (see [`bay`](crate::bay)); any other escort keeps
-    /// formation.
-    Dock,
-}
 
 /// The escort menu's label for `order` (`STR#` 2002 #145-#149): none
 /// is "Formation".

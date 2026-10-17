@@ -36,13 +36,13 @@
 //! layer: an escort the player releases, or a ship repaired, is drawn
 //! over the player until history moves it. [`LayerEntries`] keeps that
 //! history by [`Slot`], and
-//! [`Session::draw_order`](crate::Session::draw_order) draws each layer
+//! `nova_sim::Session::draw_order` draws each layer
 //! in it. The history outlives a pilot, as the original's sprites do:
 //! `_ResetPlayer` and `_LoadPilotData` call no sprite routine, and
 //! `_EnterGameFromMainScreen`'s `_PrepareAllSprites` lays each slot out
 //! as a tick does, so a session loaded later in the same run starts from
 //! the history the last one left
-//! ([`Session::with_slot_sprites`](crate::Session::with_slot_sprites)),
+//! (`nova_sim::Session::with_slot_sprites`),
 //! which the `nova` app hands on.
 //!
 //! **Hidden ships.** For a ship in the player's system (@0x2b7d8-0x2b7ed),
@@ -55,7 +55,7 @@
 //! (@0x2b7fd-0x2cc69). So such a ship is not drawn and its slot keeps
 //! its place in whatever layer it last stood in
 //! ([`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden),
-//! [`Session::is_hidden`](crate::Session::is_hidden);
+//! `nova_sim::Session::is_hidden`;
 //! [`RuleKey::HiddenShips`](crate::rulebook::RuleKey::HiddenShips)
 //! chooses). By
 //! [`RuleKey::ShipOverlap`](crate::rulebook::RuleKey::ShipOverlap)'s
@@ -79,7 +79,7 @@
 //! or `shïp` 128's, which `_InitSprites` clones into every slot at launch
 //! (@0x1f17f-0x1f193). Like the layers, these outlive a pilot.
 //! [`SlotFrames`] keeps them by [`Slot`],
-//! [`Session::framed_by`](crate::Session::framed_by) answers which sheet
+//! `nova_sim::Session::framed_by` answers which sheet
 //! a ship's hover box takes, and
 //! [`RuleKey::HiddenShipHoverBox`](crate::rulebook::RuleKey::HiddenShipHoverBox)
 //! chooses. The slot's other five sprites (+0x4..+0x14, cloned
@@ -126,7 +126,7 @@ pub fn in_draw_order(ships: impl IntoIterator<Item = (ShipRef, ShipLayer)>) -> V
 }
 
 /// A ship's sprite slot: the player's, slot 0, or an NPC's
-/// [`Npc::berth`](crate::traffic::npc::Npc::berth), its slot in the ship
+/// `nova_sim::traffic::npc::Npc::berth`, its slot in the ship
 /// table. The slot, not the ship, keeps a place in a layer: a new ship at
 /// a berth takes the place its last ship left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -206,7 +206,7 @@ pub const INIT_FRAMES: ShipId = ShipId(128);
 ///
 /// `_HandleShipDisplay` clones a slot's base sprite from its ship's type
 /// each frame it shows the ship (`_SWCloneFramesFromMaster` @0x2b824),
-/// and [`Session::lay_out_ships`](crate::Session) records that here.
+/// and `nova_sim::Session::lay_out_ships` records that here.
 /// `_HandlePlayer`'s eject clones two more ship slots' base sprites, the
 /// hulk it leaves to the player's old type (@0x6f3f5) and the player's
 /// slot to the type it becomes, the escape pod (`shïp` index 0x2ff) or
@@ -258,7 +258,7 @@ pub fn disabled(condition: Condition) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traffic::npc::NpcId;
+    use crate::combat::NpcId;
 
     #[test]
     fn a_disabled_ship_is_in_the_bottom_layer_even_when_led() {

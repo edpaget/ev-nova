@@ -206,7 +206,7 @@ pub enum PlayerCommand {
     Jump,
     /// The mission info dialog: `missionInfoKey` (slot 0x50). The session
     /// decides a press of it
-    /// ([`Session::press_mission_info`](crate::Session::press_mission_info)).
+    /// (`nova_sim::Session::press_mission_info`).
     MissionInfo,
     /// Hailing the target: `hailKey` (slot 0x8).
     Hail,
@@ -235,7 +235,7 @@ pub enum PlayerCommand {
     /// 0x702cb). Flying, disabled and breaking-up players take it, and the
     /// session refuses it, with the shared refusal beep, during a jump and
     /// while the ship breaks up
-    /// ([`Session::press_player_info`](crate::Session::press_player_info)),
+    /// (`nova_sim::Session::press_player_info`),
     /// as `_HandlePlayer` does (@0x702f7, @0x7031d). The dead branch and
     /// the pod's frames reach no key handler, so the other rows refuse it
     /// in silence.

@@ -99,7 +99,7 @@ impl Reports {
 mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
-    use crate::testkit::weapon;
+    use nova_sim_catalog::fixture::weapon;
 
     fn flag(weapon: i16, field: FlagField, bit: u16) -> SimDiagnostic {
         SimDiagnostic::UnimplementedWeaponFlag {

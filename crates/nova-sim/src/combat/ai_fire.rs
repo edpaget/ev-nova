@@ -221,6 +221,7 @@ pub fn recoil(
 mod tests {
     use super::*;
     use crate::catalog::{ShipId, WeaponId, WeaponRecord};
+    use crate::combat::NpcId;
     use crate::combat::ShipRef;
     use crate::combat::aim::{BLIND_REAR, lead};
     use crate::combat::armament::LauncherRounds;
@@ -228,8 +229,7 @@ mod tests {
     use crate::combat::sides::Ties;
     use crate::combat::weapon::AMMO_AT_BURST_END;
     use crate::flight::facing;
-    use crate::testkit::weapon;
-    use crate::traffic::npc::NpcId;
+    use nova_sim_catalog::fixture::weapon;
 
     const B: ShipRef = ShipRef::Npc(NpcId(2));
 

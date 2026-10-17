@@ -229,7 +229,7 @@ mod tests {
         let weapon = WeaponSpec::new(&crate::catalog::WeaponRecord {
             ionization: -7,
             ionize_color: 0x00d4_ffff,
-            ..crate::testkit::weapon(128)
+            ..nova_sim_catalog::fixture::weapon(128)
         });
         let burst = Burst {
             centre: AT,

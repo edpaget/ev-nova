@@ -1,5 +1,8 @@
 //! Test support for the nova-sim crates' tests, behind the `fixture`
-//! feature: a [`Chance`] that follows a script.
+//! feature: [`Chance`] mocks. [`Scripted`] follows a script, [`Draws`]
+//! draws from a queue, and [`Ranged`] draws by the range asked.
+
+use std::collections::VecDeque;
 
 use crate::chance::{Chance, NeverFires};
 
@@ -59,6 +62,91 @@ impl Chance for Scripted {
     /// The last outcome, as [`NeverFires`] draws: no roll fires.
     fn below(&mut self, n: u32) -> u32 {
         NeverFires.below(n)
+    }
+}
+
+/// A [`Chance`] whose draws come from a queue (the last outcome, `n - 1`,
+/// once it runs out, so no roll fires) and that records each `n` it is
+/// asked. It never fires a percentage.
+#[derive(Debug, Default)]
+pub struct Draws {
+    queue: VecDeque<u32>,
+    /// Each `n` it was asked to draw below, in order.
+    pub asked: Vec<u32>,
+}
+
+impl Draws {
+    /// Draws `draws`, in order, then the last outcome.
+    #[must_use]
+    pub fn of(draws: &[u32]) -> Self {
+        Self {
+            queue: draws.iter().copied().collect(),
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Chance for Draws {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    /// The next draw queued; one outside `0..n` is a mistake in the test.
+    fn below(&mut self, n: u32) -> u32 {
+        self.asked.push(n);
+        match self.queue.pop_front() {
+            Some(draw) => {
+                assert!(draw < n, "drew {draw} below {n}");
+                draw
+            }
+            None => n.saturating_sub(1),
+        }
+    }
+}
+
+/// A chance keyed by range, not by the order of its draws: each
+/// `below(n)` gives the outcome given for `n`, or `n - 1` for a range
+/// given none, and each range asked is kept in `asked`. Every `fires` is
+/// false.
+pub struct Ranged {
+    outcomes: Vec<(u32, u32)>,
+    /// Each range it was asked to draw below, in order.
+    pub asked: Vec<u32>,
+}
+
+impl Ranged {
+    /// `outcomes`, each a range and what a draw below it gives.
+    #[must_use]
+    pub fn of(outcomes: &[(u32, u32)]) -> Self {
+        Self {
+            outcomes: outcomes.to_vec(),
+            asked: Vec::new(),
+        }
+    }
+
+    /// Whether a draw below `n` was asked.
+    #[must_use]
+    pub fn was_asked(&self, n: u32) -> bool {
+        self.asked.contains(&n)
+    }
+}
+
+impl Chance for Ranged {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    /// The outcome given for `n`; one outside `0..n` is a mistake in the
+    /// test.
+    fn below(&mut self, n: u32) -> u32 {
+        self.asked.push(n);
+        let outcome = self
+            .outcomes
+            .iter()
+            .find(|&&(range, _)| range == n)
+            .map_or(n.saturating_sub(1), |&(_, outcome)| outcome);
+        assert!(outcome < n, "drew {outcome} below {n}");
+        outcome
     }
 }
 

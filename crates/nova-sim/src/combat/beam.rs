@@ -443,12 +443,14 @@ mod tests {
     use crate::catalog::WeaponRecord;
     use crate::catalog::{GovtId, GovtRecord, ShipId};
     use crate::chance::NeverFires;
+    use crate::combat::NpcId;
+    use crate::combat::fixture::among;
     use crate::combat::hull::Condition;
     use crate::combat::projectile::ShotId;
     use crate::combat::sides::PassThrough;
     use crate::govt::Governments;
-    use crate::testkit::{Draws, among, govt, weapon};
-    use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::Draws;
+    use nova_sim_catalog::fixture::{govt, weapon};
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
 

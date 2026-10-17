@@ -216,8 +216,8 @@ impl Blast {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::combat::NpcId;
     use crate::combat::hull::NovaDisable;
-    use crate::traffic::npc::NpcId;
 
     /// What an armour-direct spared hit of `mass` leaves of 50 of 100
     /// shields and `armor` of 300 armour, on a hull `tough` or not that
@@ -560,7 +560,7 @@ mod tests {
             mass_dmg: 12,
             energy_dmg: 8,
             flags: 0x0020,
-            ..crate::testkit::weapon(232)
+            ..nova_sim_catalog::fixture::weapon(232)
         });
         assert_eq!(
             Hit::of(&weapon),

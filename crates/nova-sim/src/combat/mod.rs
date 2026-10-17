@@ -290,6 +290,8 @@ pub mod beam;
 pub mod damage;
 pub mod defence;
 pub mod exits;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod flags;
 pub mod hull;
 pub mod impact;
@@ -337,7 +339,11 @@ use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::NpcId;
+
+/// An NPC's number in its system, unique while the player stays there:
+/// the order it appeared in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NpcId(pub u32);
 
 /// A ship in a fight: the player's, or an NPC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -583,7 +589,7 @@ pub struct Strike {
     /// one fired at nothing, its firer's target at the hit (+0x70,
     /// @0x31463-0x315b4); a boarding always is. No blast or shockwave is.
     /// Only an intended strike by the player calls the Good Samaritans
-    /// (@0x3bed2, see [`answer`](crate::ai::react::answer)).
+    /// (@0x3bed2, see `nova_sim::ai::react::answer`).
     pub intended: bool,
     /// Whether it is a missile lock's: the no-damage strike a player's
     /// homing missile makes on its target as it passes
@@ -3313,7 +3319,8 @@ mod tests {
     use crate::combat::weapon::{
         LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_ON_FIRER, WeaponSpec,
     };
-    use crate::testkit::{Ranged, weapon};
+    use nova_sim_base::fixture::Ranged;
+    use nova_sim_catalog::fixture::weapon;
 
     /// A ship in a test fight, owning what a fighter borrows.
     #[allow(clippy::struct_excessive_bools)]
@@ -6397,7 +6404,7 @@ mod tests {
 
     #[test]
     fn point_defence_asks_the_rule_who_is_hostile_only_by_the_other_reading() {
-        let govts = Governments::new([crate::testkit::govt(140)]);
+        let govts = Governments::new([nova_sim_catalog::fixture::govt(140)]);
         let fought = |source: RuleSource| {
             let mut combat = Combat::default();
             combat.set_pd_hostility(source);
@@ -9709,7 +9716,7 @@ mod tests {
     fn rolled_by(ship: Ship, record: WeaponRecord, draws: &[u32]) -> (Option<u32>, Vec<u32>) {
         let mut combat = Combat::default();
         let mut ships = [ship.armed(record).targeting(B), Ship::at(2, 0.0, -300.0)];
-        let mut chance = crate::testkit::Draws::of(draws);
+        let mut chance = nova_sim_base::fixture::Draws::of(draws);
         tick_drawing(&mut combat, &mut ships, &mut chance);
         let shot = combat.shots().first().expect("a shot");
         (shot.miss_roll, chance.asked)
@@ -9769,7 +9776,7 @@ mod tests {
         };
         let mut ships = [defender.of(hull), attacker];
         let mut combat = Combat::default();
-        let mut chance = crate::testkit::Draws::of(&[60]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[60]);
         tick_drawing(&mut combat, &mut ships, &mut chance);
         let defence = combat
             .shots()
@@ -9801,7 +9808,7 @@ mod tests {
             Ship::at(2, 0.0, -300.0).of(of_class(100)),
             fighter,
         ];
-        let mut chance = crate::testkit::Draws::of(&[draw]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[draw]);
         let mut struck = Vec::new();
         for _ in 0..30 {
             tick_drawing(&mut combat, &mut ships, &mut chance);
@@ -9845,7 +9852,7 @@ mod tests {
             };
             let mut ships = [defender.of(hull), attacker, fighter];
             let mut combat = Combat::default();
-            let mut chance = crate::testkit::Draws::of(&[draw]);
+            let mut chance = nova_sim_base::fixture::Draws::of(&[draw]);
             let mut struck = Vec::new();
             for _ in 0..12 {
                 tick_drawing(&mut combat, &mut ships, &mut chance);
@@ -9895,7 +9902,7 @@ mod tests {
         tick_drawing(
             &mut combat,
             &mut ships,
-            &mut crate::testkit::Draws::of(draws),
+            &mut nova_sim_base::fixture::Draws::of(draws),
         );
         let shot = combat.shots().last().expect("a shot");
         (shot.velocity, shot.heading)
@@ -10214,7 +10221,7 @@ mod tests {
         };
         let mut combat = Combat::default();
         let mut ships = fighter_attack(wild, 100.0, 0.0);
-        let mut chance = crate::testkit::Draws::of(&[3]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[3]);
         tick_drawing(&mut combat, &mut ships, &mut chance);
         assert_eq!(chance.asked.first(), Some(&20), "Rand(2i)");
         assert_eq!(pd_shots(&combat)[0].heading, 83.0, "90, then 3 - 10");
@@ -10344,7 +10351,7 @@ mod tests {
         };
         let mut combat = Combat::default();
         let mut ships = fighter_attack(wild, 100.0, -100.0);
-        let mut chance = crate::testkit::Draws::of(&[0, 0, 0]);
+        let mut chance = nova_sim_base::fixture::Draws::of(&[0, 0, 0]);
         tick_drawing(&mut combat, &mut ships, &mut chance);
         let beam = combat.beams()[0];
         let bearing = crate::trig::intercept_angle(beam.start, Vec2::new(100.0, -100.0));

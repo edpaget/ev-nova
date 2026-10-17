@@ -263,9 +263,9 @@ pub fn on_bearing(target: &Target) -> Aim {
 mod tests {
     use super::*;
     use crate::catalog::WeaponRecord;
+    use crate::combat::NpcId;
     use crate::combat::hull::Condition;
-    use crate::testkit::weapon;
-    use crate::traffic::npc::NpcId;
+    use nova_sim_catalog::fixture::weapon;
 
     const TARGET: ShipRef = ShipRef::Npc(NpcId(2));
 

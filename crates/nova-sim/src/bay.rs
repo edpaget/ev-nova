@@ -17,7 +17,7 @@
 //! **Launching** (`_LaunchFighter` @0x3d62d): a launch spends a round and
 //! reloads `Reload` / bays, as any weapon. The fighter needs a free ship
 //! slot below the 8 of the
-//! [`MAX_SHIPS_IN_SYSTEM`](crate::board::MAX_SHIPS_IN_SYSTEM) it leaves
+//! `nova_sim::board::MAX_SHIPS_IN_SYSTEM` it leaves
 //! free (@0x3d648), so none once 55 NPCs are in the system by the engine
 //! ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)), or the round
 //! is put back. It leaves from the
@@ -38,7 +38,7 @@
 //! it closes as an escort closes on its slot; inside, it steers at the
 //! carrier, thrusting within its turn rate + [`DOCK_TURN_SLACK`] degrees
 //! of it, and is pulled on each axis by
-//! [`FORMATION_NUDGE`](crate::escort::FORMATION_NUDGE) ticks of its
+//! `nova_sim::escort::FORMATION_NUDGE` ticks of its
 //! acceleration (`Accel` × 10.0 @0xdd0b0). Within the carrier's sprite
 //! width on both axes ([`Carrier::reach`]) it docks
 //! (`_AIAddFighterToParent` @0x802a5): a round goes to the carrier's

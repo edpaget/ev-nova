@@ -96,6 +96,8 @@
 //!   player.
 //! - [`exploration`]: which systems a map outfit explores
 //!   ([`exploration::map_reveals`]) and which are inhabited.
+//! - [`fleet`]: the player's fleet as data: each ship in it, an
+//!   [`Escort`], and the [`EscortOrder`] it follows.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
@@ -316,6 +318,7 @@ pub mod escort;
 pub mod exploration;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod fleet;
 pub use nova_sim_base::flight;
 pub use nova_sim_base::fuel;
 pub mod galaxy_map;

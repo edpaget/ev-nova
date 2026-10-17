@@ -5,9 +5,9 @@
 //! **The flag's writes.**
 //! - Every flight start sets it to [`Tutorial::SEASONED`], 0x7fff
 //!   (`_ResetPlayer` @0x1d7cf): a pilot opened or created, and the
-//!   restarts. Here every [`Session`](crate::Session) starts so.
+//!   restarts. Here every `nova_sim::Session` starts so.
 //! - A new pilot then gets [`Tutorial::NEW_PILOT`], −3 (`_DoNewPilot`
-//!   @0x19254), here [`Session::begin`](crate::Session::begin). So only a
+//!   @0x19254), here `nova_sim::Session::begin`. So only a
 //!   pilot created in this run is a newbie; saved and reopened, it is not.
 //! - A take-off from a pilot at 2 or below sets −1, and above 2 greets
 //!   instead ([`Tutorial::take_off`], `_PlayerLandOnStellar`

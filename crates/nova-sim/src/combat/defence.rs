@@ -421,12 +421,12 @@ mod tests {
 
     use super::*;
     use crate::catalog::{GovtId, WeaponRecord};
+    use crate::combat::NpcId;
     use crate::combat::aim::BLIND_REAR;
     use crate::combat::hull::Condition;
     use crate::combat::projectile::{ShotId, Source, Target};
     use crate::combat::sides::Ties;
-    use crate::testkit::weapon;
-    use crate::traffic::npc::NpcId;
+    use nova_sim_catalog::fixture::weapon;
 
     const DEFENDER: ShipRef = ShipRef::Npc(NpcId(1));
     const LEAD: ShipRef = ShipRef::Npc(NpcId(9));
@@ -733,7 +733,7 @@ mod tests {
             missile(3, 0.0, -1000.0, Some(DEFENDER)),
         ];
         let peaceful = Recording::default();
-        let govts = Governments::new([crate::testkit::govt(128)]);
+        let govts = Governments::new([nova_sim_catalog::fixture::govt(128)]);
         let chosen = choose(
             ESCORT,
             &ShipState::default(),
@@ -770,7 +770,7 @@ mod tests {
     /// 131 is neutral.
     fn relations() -> Governments {
         use crate::catalog::GovtRecord;
-        use crate::testkit::govt;
+        use nova_sim_catalog::fixture::govt;
         Governments::new([
             GovtRecord {
                 classes: [1, -1, -1, -1],

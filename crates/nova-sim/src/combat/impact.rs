@@ -216,8 +216,8 @@ fn pulled(body: &Body, bearing: f32, impact: f32) -> Vec2 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::combat::NpcId;
     use crate::flight::facing;
-    use crate::traffic::npc::NpcId;
 
     const X: ShipRef = ShipRef::Npc(NpcId(7));
 

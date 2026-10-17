@@ -1099,11 +1099,13 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, WeaponRecord};
     use crate::chance::NeverFires;
+    use crate::combat::NpcId;
+    use crate::combat::fixture::among;
     use crate::combat::sides::PassThrough;
     use crate::combat::weapon::{LOSES_LOCK_OFF_AHEAD, TURNS_AWAY_JAMMED, TURNS_ON_FIRER};
     use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
-    use crate::testkit::{Ranged, among, govt, weapon};
-    use crate::traffic::npc::NpcId;
+    use nova_sim_base::fixture::Ranged;
+    use nova_sim_catalog::fixture::{govt, weapon};
 
     const FIRER: ShipRef = ShipRef::Npc(NpcId(1));
 

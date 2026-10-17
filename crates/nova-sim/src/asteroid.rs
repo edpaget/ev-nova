@@ -760,7 +760,7 @@ mod tests {
     use super::*;
     use crate::chance::NeverFires;
     use crate::cloak::DEFAULT_PLAY_AREA;
-    use crate::testkit::Scripted;
+    use nova_sim_base::fixture::Scripted;
 
     /// Every roll its last outcome.
     struct Last;

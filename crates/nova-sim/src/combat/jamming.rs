@@ -208,7 +208,8 @@ pub fn jams(rolls: [u16; JAMMING_TYPES], jamming: Jamming, disabled: bool) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{Ranged, outfit};
+    use nova_sim_base::fixture::Ranged;
+    use nova_sim_catalog::fixture::outfit;
 
     /// Outfits 240 (+30 to Jamming 1), 238 (+20 to Jamming 1 and +5 to
     /// Jamming 3), 241 (-10 to Jamming 2), 242 (a cloak and +50 to

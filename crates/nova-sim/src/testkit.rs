@@ -3,8 +3,8 @@
 
 use std::cell::RefCell;
 
-/// The scripted [`Chance`], from the foundation crate's test support.
-pub(crate) use nova_sim_base::fixture::Scripted;
+/// The [`Chance`] mocks, from the foundation crate's test support.
+pub(crate) use nova_sim_base::fixture::{Draws, Ranged, Scripted};
 /// The catalog's record builders and control-bit mocks, from the catalog
 /// crate's test support.
 pub(crate) use nova_sim_catalog::fixture::{
@@ -842,95 +842,12 @@ pub(crate) fn begin_jump_now(session: &mut Session) -> Result<SystemId, JumpRefu
     panic!("the jump never began: {:?}", session.player());
 }
 
-/// A [`Chance`] whose draws come from a queue (the last outcome, `n - 1`,
-/// once it runs out, so no roll fires) and that records each `n` it is
-/// asked. It never fires a percentage.
-#[derive(Debug, Default)]
-pub(crate) struct Draws {
-    queue: std::collections::VecDeque<u32>,
-    pub(crate) asked: Vec<u32>,
-}
-
-impl Draws {
-    /// Draws `draws`, in order, then the last outcome.
-    pub(crate) fn of(draws: &[u32]) -> Self {
-        Self {
-            queue: draws.iter().copied().collect(),
-            asked: Vec::new(),
-        }
-    }
-
-    /// A jump's arrival's draws: the roll table's
-    /// [`ROLLED`](crate::mission::ROLLED), each its last outcome, then
-    /// `draws`.
-    pub(crate) fn arriving(draws: &[u32]) -> Self {
-        let table = std::iter::repeat_n(99, crate::mission::ROLLED);
-        Self {
-            queue: table.chain(draws.iter().copied()).collect(),
-            asked: Vec::new(),
-        }
-    }
-}
-
-impl Chance for Draws {
-    fn fires(&mut self, _percent: u8) -> bool {
-        false
-    }
-
-    /// The next draw queued; one outside `0..n` is a mistake in the test.
-    fn below(&mut self, n: u32) -> u32 {
-        self.asked.push(n);
-        match self.queue.pop_front() {
-            Some(draw) => {
-                assert!(draw < n, "drew {draw} below {n}");
-                draw
-            }
-            None => n.saturating_sub(1),
-        }
-    }
-}
-
-/// A chance keyed by range, not by the order of its draws: each
-/// `below(n)` gives the outcome given for `n`, or `n - 1` for a range
-/// given none, and each range asked is kept in `asked`. Every `fires` is
-/// false.
-pub(crate) struct Ranged {
-    outcomes: Vec<(u32, u32)>,
-    pub(crate) asked: Vec<u32>,
-}
-
-impl Ranged {
-    /// `outcomes`, each a range and what a draw below it gives.
-    pub(crate) fn of(outcomes: &[(u32, u32)]) -> Self {
-        Self {
-            outcomes: outcomes.to_vec(),
-            asked: Vec::new(),
-        }
-    }
-
-    /// Whether a draw below `n` was asked.
-    pub(crate) fn was_asked(&self, n: u32) -> bool {
-        self.asked.contains(&n)
-    }
-}
-
-impl Chance for Ranged {
-    fn fires(&mut self, _percent: u8) -> bool {
-        false
-    }
-
-    /// The outcome given for `n`; one outside `0..n` is a mistake in the
-    /// test.
-    fn below(&mut self, n: u32) -> u32 {
-        self.asked.push(n);
-        let outcome = self
-            .outcomes
-            .iter()
-            .find(|&&(range, _)| range == n)
-            .map_or(n.saturating_sub(1), |&(_, outcome)| outcome);
-        assert!(outcome < n, "drew {outcome} below {n}");
-        outcome
-    }
+/// A jump's arrival's draws: the roll table's
+/// [`ROLLED`](crate::mission::ROLLED), each its last outcome, then
+/// `draws`.
+pub(crate) fn arriving(draws: &[u32]) -> Draws {
+    let table = std::iter::repeat_n(99, crate::mission::ROLLED);
+    Draws::of(&table.chain(draws.iter().copied()).collect::<Vec<_>>())
 }
 
 /// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
@@ -947,21 +864,6 @@ pub(crate) fn edge_lander() -> FakePilotCatalog {
         )],
         sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
         ..catalog()
-    }
-}
-
-/// No governments at all, for [`among`].
-static NO_GOVERNMENTS: crate::govt::Governments = crate::govt::Governments::empty();
-
-/// The fight's sides as `targets` alone make them: no governments, and
-/// the original's pass-through.
-pub(crate) fn among(
-    targets: &[crate::combat::projectile::Target],
-) -> crate::combat::sides::Sides<'_> {
-    crate::combat::sides::Sides {
-        targets,
-        govts: &NO_GOVERNMENTS,
-        pass_through: crate::combat::sides::PassThrough::default(),
     }
 }
 
