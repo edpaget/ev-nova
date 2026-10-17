@@ -130,6 +130,7 @@ impl<
             .unwrap_or_default();
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
+            map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));
             map.show_galaxy(session.galaxy());
             map.show_course(session.system(), &session.course_shown());
             // Entering the game draws the floating map, and a new or
@@ -234,13 +235,17 @@ impl<
     /// The flight with every disputed rule reading as `rules` says
     /// ([`Session::with_rules`]). The stellars of the scene shown are
     /// drawn again by the new rules, which say how a destroyed stellar
-    /// with no `DeadType` sheet draws, but not laid out again.
+    /// with no `DeadType` sheet draws, but not laid out again; the course
+    /// map's nebulae take their picture by the new
+    /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture).
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
+        let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
         let mut view = Self {
             session: self.session.map(|session| session.with_rules(rules)),
             ..self
         };
+        view.map.set_nebula_pick(pick);
         view.show_destroyed();
         view
     }

@@ -181,6 +181,12 @@ struct FakeCatalog {
     /// Whether system 128 exists, the escape pod's rescue's fallback,
     /// with no links and no stellars: not by default.
     home: bool,
+    /// Whether the map's catalog has nebula 128, (−20, −20) 60 × 60 over
+    /// Sol, with a 30 × 30 picture in slot 0 (`PICT` 9500) and a
+    /// 120 × 120 one in slot 2 (9502): not by default. The session's
+    /// catalog has no `nëbu`, so it is active, and unexplored until a
+    /// test explores it.
+    nebula: bool,
     /// The stellars that can be destroyed and regenerated: none, by
     /// default.
     lives: Vec<nova_sim::StellarLife>,
@@ -313,6 +319,7 @@ fn catalog() -> FakeCatalog {
         near: false,
         reborn: false,
         home: false,
+        nebula: false,
         sol_navs: Vec::new(),
         sol_interference: 0,
         alpha_buoy: -1,
@@ -732,8 +739,28 @@ impl GalaxyCatalog for FakeCatalog {
         if self.home {
             systems.push(entry(128, "Home", (-300, 200), &[]));
         }
+        let picture = |slot: u8, side| crate::galaxy::NebulaPicture {
+            id: 9500 + i16::from(slot),
+            slot,
+            width: side,
+            height: side,
+        };
+        let nebulae = if self.nebula {
+            vec![crate::galaxy::NebulaEntry {
+                id: nova_sim::NebulaId(128),
+                name: "Sol Nebula".to_owned(),
+                left: -20,
+                top: -20,
+                width: 60,
+                height: 60,
+                pictures: vec![picture(0, 30), picture(2, 120)],
+            }]
+        } else {
+            Vec::new()
+        };
         Galaxy {
             systems,
+            nebulae,
             ..Galaxy::default()
         }
     }

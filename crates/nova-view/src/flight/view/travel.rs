@@ -429,12 +429,16 @@ impl<
     /// destinations ([`Session::hypergate_cycle`],
     /// [`next_gate_pick`](nova_sim::gate::next_gate_pick)), back with
     /// Shift, held as it is so a hidden one steps on too; no nav mode is
-    /// written and nothing redraws, as the original's mode 4 is never
-    /// drawn (@0x13dd8-0x13ebd). On the course map, the session cycles
-    /// the hyperspace selection ([`Session::cycle_map_selection`]); the
-    /// map then draws the new selected link and selects the system the
+    /// written and the nav area isn't redrawn, as the original's mode 4 is
+    /// never drawn (@0x13dd8-0x13ebd). A pick redraws the map's item 3
+    /// ([`GalaxyMap::redraw`](crate::galaxy::GalaxyMap::redraw),
+    /// @0x13e6f); with no destination to pick nothing is invalidated
+    /// (`jle` @0x13daf). On the course map, the session cycles the
+    /// hyperspace selection ([`Session::cycle_map_selection`]); the map
+    /// then draws the new selected link and selects the system the
     /// original's `_selSystem` names (@0x1408c-0x140d8,
-    /// [`Session::map_preselection`]), and the nav area is redrawn at
+    /// [`Session::map_preselection`]), item 3 is redrawn whether a link
+    /// was picked or none (@0x14032), and the nav area is redrawn at
     /// once, as the filter runs `_DrawStatus` with nav marked
     /// (`_statusRedraw[0]`, @0x13fb2-0x1406e). Docked, as on the bar's
     /// map, nothing changes.
@@ -446,12 +450,14 @@ impl<
             let destinations = session.hypergate_cycle(&self.catalog);
             if let Some(pick) = next_gate_pick(&destinations, self.map.selected(), cycle.back) {
                 self.map.select_gate(pick);
+                self.map.redraw();
             }
             self.redraw_map();
             return;
         }
         if session.cycle_map_selection() {
             self.map.preselect(session.map_preselection());
+            self.map.redraw();
             self.redraw_map();
             self.retake_nav();
         }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::galaxy::update::MapUpdate;
 
 // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
 
@@ -180,6 +181,167 @@ fn tab_on_the_bars_map_changes_nothing() {
         assert_eq!(view.course_map().selected(), selected, "{k:?}");
         assert_eq!(view.course_map().hyper_selection(), None, "{k:?}");
     }
+}
+
+// Item 3's update: what the owner's settling redraws (`_MapFilter`'s Tab
+// and `\`, `_DoSystemMap`'s Clear Route).
+
+/// Drags the open map from empty space a pixel left, too little for the
+/// scroll to follow, and releases: the partial update kept.
+fn jiggle_map(view: &mut View) {
+    let (from, to) = (at(300.0, 200.0), at(299.0, 200.0));
+    let button = |pressed, at| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    view.input(&button(true, from));
+    view.input(&Input::PointerMoved(to));
+    view.input(&button(false, to));
+    assert_eq!(view.course_map().update(), Some(MapUpdate::Partial));
+}
+
+#[test]
+fn tab_on_the_course_map_redraws_item_3_with_a_link_or_none() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    jiggle_map(&mut view);
+    tap(&mut view, Key::Tab);
+    assert_eq!(view.course_map().update(), Some(MapUpdate::Full), "a link");
+    let mut view = FlightView::new(FakeCatalog {
+        onward: true,
+        ..catalog()
+    });
+    run_set(&mut view, "M132");
+    view.settle_script();
+    tap(&mut view, MAP);
+    jiggle_map(&mut view);
+    tap(&mut view, Key::Char('\\'));
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+    assert_eq!(
+        view.course_map().update(),
+        Some(MapUpdate::Full),
+        "no link: the course cycle redraws anyway (@0x14032)"
+    );
+}
+
+#[test]
+fn tab_on_the_hypergate_map_redraws_item_3_as_it_picks() {
+    let mut view = at_a_shadowed_gate();
+    jiggle_map(&mut view);
+    tap(&mut view, Key::Tab);
+    assert_eq!(view.course_map().update(), Some(MapUpdate::Full));
+}
+
+#[test]
+fn tab_on_the_bars_map_redraws_nothing() {
+    let mut view = in_the_bar(None);
+    view.open_bar_map();
+    let (from, to) = (at(300.0, 200.0), at(299.0, 200.0));
+    let button = |pressed, at| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    view.port_map_input(&button(true, from));
+    view.port_map_input(&Input::PointerMoved(to));
+    view.port_map_input(&button(false, to));
+    assert_eq!(view.course_map().update(), Some(MapUpdate::Partial));
+    view.port_map_input(&key(Key::Tab, true));
+    assert_eq!(
+        view.course_map().update(),
+        Some(MapUpdate::Partial),
+        "_onPlanet: the key falls through"
+    );
+}
+
+#[test]
+fn clear_route_redraws_item_3_by_c_or_its_button() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    tap(&mut view, MAP);
+    jiggle_map(&mut view);
+    tap(&mut view, Key::Char('c'));
+    assert_eq!(view.session().map(|session| session.course().len()), Ok(0));
+    assert_eq!(view.course_map().update(), Some(MapUpdate::Full), "C");
+    let mut view = flight();
+    tap(&mut view, MAP);
+    jiggle_map(&mut view);
+    tap(&mut view, Key::Char('C'));
+    assert_eq!(
+        view.course_map().update(),
+        Some(MapUpdate::Full),
+        "with no course, whatever the button"
+    );
+}
+
+// The course map's nebulae by `RuleKey::NebulaPicture`.
+
+/// The `PICT` each nebula the open course map draws is drawn from, and
+/// whether it is drawn with `addMax`.
+fn map_nebulae(view: &View) -> Vec<(i16, bool)> {
+    drawn(view)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Clipped { command, .. } => match **command {
+                DrawCommand::BlendedPicture { image, blend, .. } => {
+                    Some((image.id, blend == crate::draw::Blend::Max))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// A flight over Sol's nebula, explored, with the course map open: at
+/// 0.5625 its rect is 106 pixels a side.
+fn over_the_nebula(rules: Option<Rulebook>) -> View {
+    let view = FlightView::new(FakeCatalog {
+        nebula: true,
+        ..catalog()
+    });
+    let mut view = match rules {
+        Some(rules) => view.with_rules(rules),
+        None => view,
+    };
+    change_galaxy(&mut view, |overlay| {
+        overlay.set_nebula_explored(nova_sim::NebulaId(128), true);
+    });
+    view.tick(TICK);
+    tap(&mut view, MAP);
+    view
+}
+
+#[test]
+fn the_course_map_draws_a_nebula_from_the_largest_picture_that_fits() {
+    let view = over_the_nebula(None);
+    assert_eq!(map_nebulae(&view), [(9500, true)], "30 fits, 120 doesn't");
+}
+
+#[test]
+fn by_the_other_reading_the_course_map_draws_the_smallest_picture_that_covers() {
+    let rules = Rulebook::default().with_override(RuleKey::NebulaPicture, RuleSource::Bible);
+    let view = over_the_nebula(Some(rules));
+    assert_eq!(map_nebulae(&view), [(9502, true)]);
+}
+
+#[test]
+fn with_rules_switches_the_nebula_picture_back() {
+    let bible = Rulebook::default().with_override(RuleKey::NebulaPicture, RuleSource::Bible);
+    let view = FlightView::new(FakeCatalog {
+        nebula: true,
+        ..catalog()
+    })
+    .with_rules(bible)
+    .with_rules(Rulebook::default());
+    let mut view = view;
+    change_galaxy(&mut view, |overlay| {
+        overlay.set_nebula_explored(nova_sim::NebulaId(128), true);
+    });
+    view.tick(TICK);
+    tap(&mut view, MAP);
+    assert_eq!(map_nebulae(&view), [(9500, true)]);
 }
 
 #[test]
