@@ -5873,6 +5873,7 @@ mod tests {
             "berth 2's own pick, berth 1's left, berth 3 fresh"
         );
         let mut other = left_picking(WeaponId(131), RuleSource::Bible);
+        assert_eq!(other.reused_slot_pick(), RuleSource::Bible);
         other.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
         assert_eq!(other.npcs()[1].pick, None);
     }
