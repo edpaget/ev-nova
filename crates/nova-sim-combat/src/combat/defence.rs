@@ -427,7 +427,7 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, WeaponRecord};
     use crate::combat::NpcId;
-    use crate::combat::aim::BLIND_REAR;
+    use crate::combat::aim::{BLIND_FRONT, BLIND_REAR, BLIND_SIDES};
     use crate::combat::hull::Condition;
     use crate::combat::projectile::{ShotId, Source, Target};
     use crate::combat::sides::Ties;
@@ -674,6 +674,36 @@ mod tests {
             None,
             "blind both ways"
         );
+    }
+
+    #[test]
+    fn a_missiles_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = [missile(1, 100.0, -100.0, Some(DEFENDER))];
+        assert_eq!(picked(&diagonal, BLIND_FRONT, 0), Some(ShotId(1)), "46");
+        assert_eq!(picked(&diagonal, BLIND_SIDES, 0), None, "the side");
+        // Dead ahead of a defender facing 45.9 is 45.9 off by float, the
+        // side, but 45 off its truncated heading, the front.
+        let turned = ShipState {
+            heading: 45.9,
+            ..ShipState::default()
+        };
+        let ahead = [missile(1, 0.0, -100.0, Some(DEFENDER))];
+        let from_turned = |flags| {
+            choose(
+                ESCORT,
+                &turned,
+                &HullSpec::default(),
+                &quad(flags),
+                &ahead,
+                None,
+                &Governments::default(),
+            )
+            .map(|shot| shot.id)
+        };
+        assert_eq!(from_turned(BLIND_SIDES), Some(ShotId(1)), "45");
+        assert_eq!(from_turned(BLIND_FRONT), None, "the front");
     }
 
     #[test]
@@ -1187,6 +1217,36 @@ mod tests {
             ship_picked_by(GUARD, &quad(BLIND_REAR), BLIND_REAR, &ahead),
             Some(ENEMY)
         );
+    }
+
+    #[test]
+    fn a_ships_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = [attacker(ENEMY, 100.0, -100.0)];
+        assert_eq!(
+            ship_picked_by(GUARD, &quad(BLIND_FRONT), 0, &diagonal),
+            Some(ENEMY),
+            "46"
+        );
+        assert_eq!(
+            ship_picked_by(GUARD, &quad(BLIND_SIDES), 0, &diagonal),
+            None,
+            "the side"
+        );
+        // Dead ahead of a defender facing 45.9 is 45.9 off by float, the
+        // side, but 45 off its truncated heading, the front.
+        let turned = ShipState {
+            heading: 45.9,
+            ..ShipState::default()
+        };
+        let ahead = [attacker(ENEMY, 0.0, -100.0)];
+        let from_turned = |flags| {
+            choose_ship(GUARD, &turned, &HullSpec::default(), &quad(flags), &ahead)
+                .map(|candidate| candidate.target.ship)
+        };
+        assert_eq!(from_turned(BLIND_SIDES), Some(ENEMY), "45");
+        assert_eq!(from_turned(BLIND_FRONT), None, "the front");
     }
 
     #[test]

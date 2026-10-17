@@ -1589,6 +1589,48 @@ mod tests {
         assert_eq!(fired(&npc, 0.0, 232.1, 50.0), None, "out of range");
     }
 
+    #[test]
+    fn a_turrets_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        let blind = |guidance, flags| {
+            shooter(
+                &[WeaponRecord {
+                    flags,
+                    beam_length: 100,
+                    ..guided(130, guidance)
+                }],
+                Goal::Flee(ShipRef::Player),
+            )
+        };
+        for guidance in [3, 4] {
+            // The diagonal ahead and right is 45 off by float, the front,
+            // but the table reads it 46, the side.
+            let front_blind = blind(guidance, 0x1000);
+            let side_blind = blind(guidance, 0x2000);
+            assert_eq!(
+                fired(&front_blind, 50.0, -50.0, 50.0),
+                id(130),
+                "{guidance}: 46"
+            );
+            assert_eq!(
+                fired(&side_blind, 50.0, -50.0, 50.0),
+                None,
+                "{guidance}: the side"
+            );
+            // Dead ahead of a ship facing 45.9 is 45.9 off by float, the
+            // side, but 45 off its truncated heading, the front.
+            let mut turned = side_blind.clone();
+            turned.state.heading = 45.9;
+            assert_eq!(fired(&turned, 0.0, -50.0, 50.0), id(130), "{guidance}: 45");
+            let mut turned = front_blind.clone();
+            turned.state.heading = 45.9;
+            assert_eq!(
+                fired(&turned, 0.0, -50.0, 50.0),
+                None,
+                "{guidance}: the front"
+            );
+        }
+    }
+
     /// What `npc` fires at the player 150 away bearing `bearing` from
     /// [`SHOOTER`], its shields up, by `rules`.
     fn fired_bearing(npc: &Npc, bearing: f32, rules: FireRules) -> Option<WeaponId> {

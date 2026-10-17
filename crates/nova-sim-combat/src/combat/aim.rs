@@ -609,6 +609,37 @@ mod tests {
     }
 
     #[test]
+    fn a_turrets_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = target(100.0, -100.0, 0.0, 0.0);
+        let at_diagonal = |raw, flags| {
+            aim(
+                &spec(raw, flags),
+                &firer(0.0),
+                &HullSpec::default(),
+                Some(&diagonal),
+                RuleSource::Engine,
+            )
+        };
+        for raw in [3, 4] {
+            assert!(at_diagonal(raw, BLIND_FRONT).is_some(), "{raw}: 46");
+            assert_eq!(at_diagonal(raw, BLIND_SIDES), None, "{raw}: the side");
+            // Dead ahead of a ship facing 45.9 is 45.9 off by float, the
+            // side, but 45 off its truncated heading, the front.
+            assert!(
+                aimed(&spec(raw, BLIND_SIDES), 45.9, 0, true).is_some(),
+                "{raw}: 45"
+            );
+            assert_eq!(
+                aimed(&spec(raw, BLIND_FRONT), 45.9, 0, true),
+                None,
+                "{raw}: the front"
+            );
+        }
+    }
+
+    #[test]
     fn a_front_quadrant_turret_leads_a_target_within_45_degrees_and_otherwise_fires_ahead() {
         let front = spec(7, 0);
         let at_45 = aimed(&front, 45.0, 0, true).expect("fires");

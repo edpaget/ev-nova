@@ -225,7 +225,7 @@ mod tests {
     use crate::catalog::{ShipId, WeaponId, WeaponRecord};
     use crate::combat::NpcId;
     use crate::combat::ShipRef;
-    use crate::combat::aim::BLIND_REAR;
+    use crate::combat::aim::{BLIND_FRONT, BLIND_REAR, BLIND_SIDES};
     use crate::combat::armament::LauncherRounds;
     use crate::combat::hull::Condition;
     use crate::combat::sides::Ties;
@@ -375,6 +375,46 @@ mod tests {
             ..guided(8)
         };
         assert!(fires(&rear, Some(&behind)).is_some());
+    }
+
+    #[test]
+    fn a_turrets_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = at(100.0, -100.0);
+        for guidance in [3, 4] {
+            let blind = |flags| WeaponSpec {
+                flags,
+                ..guided(guidance)
+            };
+            assert!(
+                fires(&blind(BLIND_FRONT), Some(&diagonal)).is_some(),
+                "{guidance}: 46"
+            );
+            assert_eq!(
+                fires(&blind(BLIND_SIDES), Some(&diagonal)),
+                None,
+                "{guidance}: the side"
+            );
+            // Dead ahead of a firer facing 45.9 is 45.9 off by float, the
+            // side, but 45 off its truncated heading, the front.
+            let turned = ShipState {
+                heading: 45.9,
+                ..firer()
+            };
+            let ahead = at(0.0, -100.0);
+            let from_turned = |flags| {
+                spawn(
+                    &blind(flags),
+                    &turned,
+                    &HullSpec::default(),
+                    Some(&ahead),
+                    RuleSource::Engine,
+                )
+            };
+            assert!(from_turned(BLIND_SIDES).is_some(), "{guidance}: 45");
+            assert_eq!(from_turned(BLIND_FRONT), None, "{guidance}: the front");
+        }
     }
 
     #[test]
