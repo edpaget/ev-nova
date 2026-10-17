@@ -1251,6 +1251,20 @@ fn b_on_a_pickup_ship_says_the_cargo_retrieved_for_250_frames() {
     assert_lasts(&mut view, said, BOARD_LINE_TICKS);
 }
 
+/// The pickup path never tests whether the mission failed (@0x652ee),
+/// so a failed mission's ship picks up, says its line, then goes on to
+/// the plunder (@0x657e3 → @0x65f27).
+#[test]
+fn b_on_a_failed_missions_pickup_ship_says_the_cargo_retrieved_and_opens_the_plunder() {
+    let mut view = rescuing(false);
+    run_set(&mut view, "F140");
+    tap(&mut view, BOARD_KEY);
+    let said = "You retrieved  the Food from this ship.";
+    assert_eq!(view.message(), Some(said));
+    assert!(view.take_boarding().is_some(), "plundered");
+    assert_lasts(&mut view, said, BOARD_LINE_TICKS);
+}
+
 /// The refused pickup's dialog (`_DoMissionCargoPickup` @0x982ff) is
 /// queued as the B press returns, so the router shows it over flight
 /// as it settles that input, and the comm line says #130.
