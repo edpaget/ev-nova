@@ -105,13 +105,49 @@
 //! it as the map opens, a press that writes a hop sets it (by the
 //! planner's reading a press writes it outright, off when it plots no
 //! course), and the route's clear turns it off
-//! ([`GalaxyMap::route_cleared`]). Borders is
-//! drawn and taken, and does nothing until galaxy-map-fidelity's phase 8
-//! gives it the borders. Each is silent, as `_TrackMapButtons` is.
+//! ([`GalaxyMap::route_cleared`]). Borders, or B, flips the borders (see
+//! "The borders" below). Each is silent, as `_TrackMapButtons` is.
+//!
+//! # The borders
+//!
+//! Every map shades government borders under its nebulae
+//! ([`borders`](super::borders), worked out by
+//! [`map_borders`](nova_sim::map_borders)). An in-flight map adds the
+//! systems its owner shows ([`GalaxyMap::show_border_sources`],
+//! `nova_sim::Session::map_border_sources`), and runs the original's
+//! passes where `_DoSystemMap` and `_MapFilter` do, each only while the
+//! borders are on:
+//!
+//! - the open clears the grid and runs the coarse pass (step 8)
+//!   ([`GalaxyMap::opened`], @0x12440-0x12655);
+//! - so do an arrow and a zoom step taken, by key or button (@0x14301,
+//!   @0x143af, @0x1445f, @0x129e0, @0x12c13), Space (@0x1421a-0x1424c),
+//!   the end of every drag, moved or not (@0x138de-0x1392f), and the
+//!   borders turned on (@0x127b3-0x127fe); Find's centring runs one only
+//!   by [`RuleKey::MapFindBorders`]' other reading;
+//! - the map's ticks run the fine pass's null events, unless Find is open
+//!   (its dialog has its own filter), at [`RuleKey::MapBorderPace`]'s
+//!   pace ([`GalaxyMap::set_border_rules`]), and its last redraws item 3
+//!   (@0x1479a).
+//!
+//! B (either case, its repeats too, @0x14251) and the Borders button flip
+//! the setting, `_settings` +0x13, and redraw items 9 and 3
+//! (@0x126f0-0x12803); the owner reads whether the close should save it
+//! ([`GalaxyMap::borders_changed_since_open`]). After each input, tick or
+//! owner's call that redrew item 3, the map takes the cells the grid holds
+//! then, which the full update draws until the next redraw: so a redraw
+//! mid-pass shows the grid as far as the pass has got, as the original's
+//! update event does.
+//!
+//! The viewer, which has no session, counts every system with a
+//! government ([`BorderSources::unfiltered`]), runs the coarse pass
+//! whenever its view changes and the fine pass on its ticks, and B flips
+//! them there too, with nothing saved.
 //!
 //! # What the map draws
 //!
-//! First the nebulae, as `_MapDialogUpdate`'s nebula pass draws them
+//! First the borders' cells, then the nebulae, as `_MapDialogUpdate`'s
+//! nebula pass draws them
 //! ([`nebulae`](super::nebulae)): each one's rect truncated in the port,
 //! filled by the picture [`RuleKey::NebulaPicture`] picks
 //! ([`GalaxyMap::set_nebula_pick`]), clipped to the map area and copied
@@ -119,7 +155,7 @@
 //! course and hypergate maps draw the nebulae the session's galaxy shows,
 //! active and explored; while a drag shows the partial update
 //! ([`update`](super::update), [`GalaxyMap::update`]) they are plain
-//! copies, and the borders' slot is left empty. The partial frame stays
+//! copies, and no border cells are drawn (@0xf838-0xf840). The partial frame stays
 //! until a repair redraws item 3: the map makes most itself, and its
 //! owner calls [`GalaxyMap::redraw`] for the Tab cycle's pick, and
 //! [`GalaxyMap::route_cleared`] for Clear Route. The viewer draws every
@@ -202,6 +238,8 @@
 //! column.
 //!
 //! [`RuleKey::NebulaPicture`]: nova_sim::RuleKey::NebulaPicture
+//! [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
+//! [`RuleKey::MapFindBorders`]: nova_sim::RuleKey::MapFindBorders
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -209,10 +247,12 @@ use std::time::Duration;
 use nova_sim::Vec2;
 use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
 use nova_sim::iff::SystemColorCode;
+use nova_sim::map_borders::{BorderPasses, BorderSources, PaintedCell};
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::{self, SearchOutcome};
 use nova_sim::story::OverlaidGalaxy;
 
+use super::borders::MapBorders;
 use super::buttons::MapButton;
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::click::{PendingPress, PressAnswer, hits};
@@ -565,6 +605,8 @@ pub struct GalaxyMap {
     /// Which picture fills each nebula's rect on an in-flight map
     /// ([`GalaxyMap::set_nebula_pick`]).
     nebula_pick: PicturePick,
+    /// The government borders ([`borders`](super::borders)).
+    borders: MapBorders,
 }
 
 /// How a map is laid out: the viewer full-screen with its own pan and
@@ -613,7 +655,18 @@ impl GalaxyMap {
             Look::Dialog(MapDialog::new((0, 0)))
         };
         let picture = viewer.then(|| MapPicture::viewer(&model));
-        Self {
+        let mut borders = MapBorders::new();
+        if viewer {
+            let systems = model.catalog_systems().iter().map(|system| {
+                (
+                    system.entry.id,
+                    (system.entry.x, system.entry.y),
+                    system.entry.govt,
+                )
+            });
+            borders.show_sources(BorderSources::unfiltered(systems, model.govts().clone()));
+        }
+        let mut map = Self {
             mode,
             model,
             look,
@@ -639,7 +692,10 @@ impl GalaxyMap {
             query: None,
             sounds: Vec::new(),
             nebula_pick: PicturePick::LargestThatFits,
-        }
+            borders,
+        };
+        map.settle_borders();
+        map
     }
 
     /// What the map is for.
@@ -673,7 +729,7 @@ impl GalaxyMap {
             return;
         };
         // An accepted press redraws items 2, 3 and 6 (@0x131af-0x13259).
-        self.redraw();
+        self.invalidate();
         if let Some(selected) = answer.selected {
             self.selected = Some(selected);
             self.clicked = false;
@@ -684,6 +740,7 @@ impl GalaxyMap {
         if let Some(enabled) = answer.clear_route {
             self.set_clear_route(enabled);
         }
+        self.settle_borders();
     }
 
     /// Whether C, or a click on Clear Route while it is enabled, asked an
@@ -706,7 +763,7 @@ impl GalaxyMap {
     pub fn route_cleared(&mut self) {
         self.set_clear_route(false);
         self.gate_pick = None;
-        self.redraw();
+        self.invalidate();
     }
 
     /// Redraws an in-flight map's item 3 with the full update
@@ -715,6 +772,14 @@ impl GalaxyMap {
     /// cycle's @0x13e6f, the course cycle's @0x14032). See
     /// [`update`](super::update) for every repair.
     pub fn redraw(&mut self) {
+        self.invalidate();
+        self.settle_borders();
+    }
+
+    /// Redraws an in-flight map's item 3 ([`MapDialog::redraw`]) for the
+    /// handler running: the borders take their cells once it is done, as
+    /// the original's update event draws after the handler returns.
+    fn invalidate(&mut self) {
         if let Look::Dialog(dialog) = &mut self.look {
             dialog.redraw();
         }
@@ -949,10 +1014,14 @@ impl GalaxyMap {
         match outcome {
             SearchOutcome::Found(id) => {
                 self.select_and_centre(id);
+                if let Look::Dialog(dialog) = &mut self.look {
+                    self.borders.found(dialog);
+                }
                 self.sounds.push(UiSound::MapSystemFound);
             }
             SearchOutcome::NotFound => self.sounds.push(UiSound::MapSystemNotFound),
         }
+        self.settle_borders();
     }
 
     /// The beeps the map made since they were last taken, in order:
@@ -1037,7 +1106,9 @@ impl GalaxyMap {
         if let Look::Dialog(dialog) = &mut self.look {
             dialog.place_mut().opened();
             dialog.redraw();
+            self.borders.opened(dialog);
         }
+        self.settle_borders();
     }
 
     /// An in-flight map's zoom, which a run keeps across its flights;
@@ -1064,6 +1135,61 @@ impl GalaxyMap {
         if let Look::Dialog(dialog) = &mut self.look {
             dialog.set_borders_shown(shown);
         }
+    }
+
+    /// Shows `sources`, the session's ([`Session::map_border_sources`]),
+    /// as what an in-flight map's borders add from now on. The owner shows
+    /// them before the map opens and again with each drawing.
+    ///
+    /// [`Session::map_border_sources`]: nova_sim::Session::map_border_sources
+    pub fn show_border_sources(&mut self, sources: BorderSources) {
+        self.borders.show_sources(sources);
+        self.settle_borders();
+    }
+
+    /// Sets an in-flight map's readings of [`RuleKey::MapBorderPace`] and
+    /// [`RuleKey::MapFindBorders`]. The viewer has no rules: it keeps the
+    /// engine's.
+    ///
+    /// [`RuleKey::MapBorderPace`]: nova_sim::RuleKey::MapBorderPace
+    /// [`RuleKey::MapFindBorders`]: nova_sim::RuleKey::MapFindBorders
+    pub fn set_border_rules(&mut self, pace: nova_sim::RuleSource, find: nova_sim::RuleSource) {
+        if self.mode != MapMode::Viewer {
+            self.borders.set_rules(pace, find);
+        }
+    }
+
+    /// Whether the borders are shown: `_settings` +0x13 on an in-flight
+    /// map, the viewer's own toggle on the viewer.
+    #[must_use]
+    pub fn borders_shown(&self) -> bool {
+        match &self.look {
+            Look::Viewer(_) => self.borders.viewer_on(),
+            Look::Dialog(dialog) => dialog.borders_shown(),
+        }
+    }
+
+    /// Whether an in-flight map's borders setting differs from the one it
+    /// last opened with, as its close saves it (@0x13c3a); never on the
+    /// viewer, which saves nothing.
+    #[must_use]
+    pub fn borders_changed_since_open(&self) -> bool {
+        match &self.look {
+            Look::Viewer(_) => false,
+            Look::Dialog(dialog) => self.borders.changed_since_open(dialog),
+        }
+    }
+
+    /// The borders' passes and grid.
+    #[must_use]
+    pub fn border_passes(&self) -> &BorderPasses {
+        self.borders.passes()
+    }
+
+    /// The border cells a full update draws, as last taken.
+    #[must_use]
+    pub fn border_cells(&self) -> &[PaintedCell] {
+        self.borders.shown()
     }
 
     /// Whether Clear Route is enabled: `showClearRouteButton`
@@ -1100,12 +1226,21 @@ impl GalaxyMap {
     /// Handles a key press or repeat: the viewer pans and zooms through
     /// its view, an in-flight map as the dialog does ([`MapDialog::key`]).
     fn key(&mut self, key: Key) {
-        if let Look::Dialog(dialog) = &mut self.look
-            && dialog.key(key)
-        {
-            return;
+        if let Look::Dialog(dialog) = &mut self.look {
+            let before = *dialog.place();
+            if dialog.key(key) {
+                // An arrow or a zoom step taken (@0x14301, @0x143af,
+                // @0x1445f, @0x129e0, @0x12c13).
+                if *dialog.place() != before {
+                    self.borders.recompute(dialog);
+                }
+                return;
+            }
         }
         match (&mut self.look, key) {
+            // B, either case, its repeats too (@0x14251): item 9.
+            (Look::Dialog(dialog), Key::Char('b' | 'B')) => self.borders.toggle(dialog),
+            (Look::Viewer(_), Key::Char('b' | 'B')) => self.borders.toggle_viewer(),
             (Look::Viewer(view), Key::Left) => view.pan(-PAN_STEP, 0.0),
             (Look::Viewer(view), Key::Right) => view.pan(PAN_STEP, 0.0),
             (Look::Viewer(view), Key::Up) => view.pan(0.0, -PAN_STEP),
@@ -1142,7 +1277,11 @@ impl GalaxyMap {
         if let Some(current) = self.current {
             self.select_and_centre(current);
         }
-        self.redraw();
+        self.invalidate();
+        // @0x1421a-0x1424c.
+        if let Look::Dialog(dialog) = &mut self.look {
+            self.borders.recompute(dialog);
+        }
     }
 
     /// Opens Find, abandoning any press on the map, when the map has text
@@ -1161,8 +1300,10 @@ impl GalaxyMap {
         self.find = Some(dialog);
         self.press = None;
         self.armed = false;
-        if let Look::Dialog(dialog) = &mut self.look {
-            dialog.cancel_pointer();
+        if let Look::Dialog(dialog) = &mut self.look
+            && dialog.cancel_pointer()
+        {
+            self.borders.recompute(dialog);
         }
     }
 
@@ -1178,7 +1319,7 @@ impl GalaxyMap {
             return;
         };
         self.find = None;
-        self.redraw();
+        self.invalidate();
         if let FindOutcome::Search(text) = outcome {
             self.searched(text);
         }
@@ -1231,7 +1372,10 @@ impl GalaxyMap {
             return;
         };
         if let Look::Dialog(dialog) = &mut self.look {
-            dialog.release();
+            // Every drag's release, moved or not (@0x138de-0x1392f).
+            if dialog.release() {
+                self.borders.recompute(dialog);
+            }
             return;
         }
         if press.travelled <= CLICK_SLOP && self.in_map(at) {
@@ -1251,8 +1395,10 @@ impl GalaxyMap {
             self.awaiting = None;
             if !hits.is_empty() {
                 self.press = None;
-                if let Look::Dialog(dialog) = &mut self.look {
-                    dialog.release();
+                if let Look::Dialog(dialog) = &mut self.look
+                    && dialog.release()
+                {
+                    self.borders.recompute(dialog);
                 }
                 self.pending = Some(PendingPress {
                     at,
@@ -1309,6 +1455,7 @@ impl GalaxyMap {
             scroll: (f64::from(centre.x), f64::from(centre.y)),
             area: IRect::new(0, 0, MAP_WIDTH as i32, MAP_HEIGHT as i32),
         };
+        self.borders.draw_viewer(list, self.model.govt_colors());
         let nebulae = self.model.catalog_nebulae();
         draw_nebulae(
             list,
@@ -1340,9 +1487,8 @@ impl GalaxyMap {
     /// [`dialog`](super::dialog)):
     ///
     /// 1. the frame and its buttons, item 3 black;
-    /// 2. the borders' slot: galaxy-map-fidelity's phase 8 draws its cells
-    ///    here, before the nebulae, and none while
-    ///    [`MapUpdate::Partial`];
+    /// 2. the borders' cells ([`MapBorders::draw`]), before the nebulae,
+    ///    and none while [`MapUpdate::Partial`];
     /// 3. the nebulae the session's galaxy shows, active and explored
     ///    ([`draw_nebulae`]), blended as [`MapDialog::update`] says;
     /// 4. what `_DrawMap` draws, the brackets and the names, clipped to
@@ -1354,6 +1500,7 @@ impl GalaxyMap {
     fn draw_dialog(&self, dialog: &MapDialog, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         dialog.draw_frame(list, &self.style, metrics);
+        self.borders.draw(dialog, list, self.model.govt_colors());
         let nebulae = self.model.nebulae();
         let frame = dialog.nebula_frame();
         draw_nebulae(list, nebulae, &frame, dialog.update(), self.nebula_pick);
@@ -1697,8 +1844,9 @@ impl GalaxyMap {
     /// asks to close the map, as Return does; "-" and "+" step the zoom,
     /// each only while its flag allows, a step taken redrawing item 3;
     /// Find opens Find; Clear Route, while enabled, asks to clear the
-    /// route, as C does. Borders redraws item 3 and does nothing else
-    /// yet: galaxy-map-fidelity's phase 8 gives it the borders.
+    /// route, as C does. Borders flips the borders, as B does
+    /// ([`MapBorders::toggle`]). A zoom step taken runs the borders'
+    /// coarse pass.
     fn button_input(&mut self, input: &Input) {
         let Look::Dialog(dialog) = &mut self.look else {
             return;
@@ -1710,17 +1858,18 @@ impl GalaxyMap {
             Some(MapButton::ZoomOut) => {
                 if dialog.place_mut().zoom_out() {
                     dialog.redraw();
+                    self.borders.recompute(dialog);
                 }
             }
             Some(MapButton::ZoomIn) => {
                 if dialog.place_mut().zoom_in() {
                     dialog.redraw();
+                    self.borders.recompute(dialog);
                 }
             }
             Some(MapButton::Find) => self.open_find(),
             Some(MapButton::ClearRoute) => self.request = Some(Request::ClearRoute),
-            // Items 9 and 3 invalidated (@0x12756, @0x127ae).
-            Some(MapButton::Borders) => dialog.redraw(),
+            Some(MapButton::Borders) => self.borders.toggle(dialog),
             None => {}
         }
     }
@@ -1736,10 +1885,9 @@ impl std::fmt::Debug for MapMetrics {
     }
 }
 
-impl Screen for GalaxyMap {
-    /// Never quits: Escape is the navigator's. While Find is open, it
-    /// takes every input.
-    fn input(&mut self, input: &Input) -> ScreenAction {
+impl GalaxyMap {
+    /// [`Screen::input`]'s work, before the borders settle.
+    fn take_input(&mut self, input: &Input) {
         if let Input::Key {
             key: Key::Shift,
             pressed,
@@ -1750,7 +1898,7 @@ impl Screen for GalaxyMap {
         }
         if self.finding() {
             self.find_input(input);
-            return ScreenAction::None;
+            return;
         }
         self.button_input(input);
         match *input {
@@ -1810,18 +1958,49 @@ impl Screen for GalaxyMap {
                     } else {
                         // `_MapDialogUpdate` before `_TrackMapButtons`
                         // (@0x14558).
-                        self.redraw();
+                        self.invalidate();
                     }
                 }
             }
             Input::PointerMoved(to) => self.pointer_moved(to),
             _ => {}
         }
+    }
+
+    /// The borders settled after anything that can redraw item 3: an
+    /// in-flight map takes its cells when item 3 was redrawn
+    /// ([`MapBorders::settle`]), the viewer runs its coarse pass when its
+    /// view changed ([`MapBorders::settle_viewer`]).
+    fn settle_borders(&mut self) {
+        match &mut self.look {
+            Look::Dialog(dialog) => self.borders.settle(dialog),
+            Look::Viewer(view) => self.borders.settle_viewer(MapBorders::viewer_frame(view)),
+        }
+    }
+}
+
+impl Screen for GalaxyMap {
+    /// Never quits: Escape is the navigator's. While Find is open, it
+    /// takes every input.
+    fn input(&mut self, input: &Input) -> ScreenAction {
+        self.take_input(input);
+        self.settle_borders();
         ScreenAction::None
     }
 
-    /// The map does not animate.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The map's frame: the borders' null events while they are on and
+    /// Find isn't open, as only `_MapFilter` runs them and Find's dialog
+    /// has its own filter (see [`MapBorders::tick`]); then the cells taken
+    /// if item 3 was redrawn.
+    fn tick(&mut self, _dt: Duration) {
+        if !self.finding() {
+            match &mut self.look {
+                Look::Dialog(dialog) => self.borders.tick(dialog),
+                Look::Viewer(view) => self.borders.tick_viewer(MapBorders::viewer_frame(view)),
+            }
+        }
+        self.settle_borders();
+    }
 
     /// The map, its panel, then Find over them while it is open: the
     /// viewer full-screen, an in-flight map as its dialog.
@@ -1846,12 +2025,15 @@ impl Screen for GalaxyMap {
         self.pending = None;
         self.awaiting = None;
         self.armed = false;
-        if let Look::Dialog(dialog) = &mut self.look {
-            dialog.cancel_pointer();
+        if let Look::Dialog(dialog) = &mut self.look
+            && dialog.cancel_pointer()
+        {
+            self.borders.recompute(dialog);
         }
         if let Some(dialog) = &mut self.find {
             dialog.cancel_pointer();
         }
+        self.settle_borders();
     }
 
     /// Space's and Find's beeps ([`GalaxyMap::take_ui_sounds`]).
@@ -1883,8 +2065,14 @@ mod tests {
         Point::new(x, y)
     }
 
+    /// The viewer, its borders turned off with B, so that what it draws
+    /// is its nebulae and `_DrawMap`'s alone: the borders' own tests are
+    /// [`borders`](crate::galaxy::borders)'.
     fn map() -> GalaxyMap {
-        GalaxyMap::new(&FakeCatalog::new(galaxy()))
+        let mut map = GalaxyMap::new(&FakeCatalog::new(galaxy()));
+        map.input(&press(Key::Char('b')));
+        assert!(!map.borders_shown());
+        map
     }
 
     fn press(key: Key) -> Input {

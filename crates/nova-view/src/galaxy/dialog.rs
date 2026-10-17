@@ -20,7 +20,7 @@
 //! 3. the six buttons (`_DrawMapButtons(−1)` @0xf6d9);
 //! 4. item 3 painted black (@0xf833).
 //!
-//! Then the map: the borders (galaxy-map-fidelity's phase 8), its
+//! Then the map: the borders' cells ([`borders`](super::borders)), its
 //! nebulae, each clipped to its rect's overlap with item 3
 //! ([`nebulae`](super::nebulae), [`MapDialog::nebula_frame`]), and what
 //! `_DrawMap` draws, clipped to item 3 (`CopyBits` @0x100a2-0x10123,
@@ -161,6 +161,8 @@ pub struct MapDialog {
     drag: Option<Drag>,
     /// The update item 3 shows (see [`update`](super::update)).
     update: MapUpdate,
+    /// Whether item 3 was redrawn since this was last taken.
+    fresh: bool,
 }
 
 impl MapDialog {
@@ -176,6 +178,7 @@ impl MapDialog {
             clear_route: false,
             drag: None,
             update: MapUpdate::Full,
+            fresh: false,
         }
     }
 
@@ -298,27 +301,40 @@ impl MapDialog {
 
     /// Ends any drag, where the release left it: with the full update
     /// when the scroll moved from the drag's start, and otherwise with
-    /// item 3 as it was (@0x13934-0x13948).
-    pub fn release(&mut self) {
-        if let Some(drag) = self.drag.take()
-            && drag.scroll != self.place.scroll()
-        {
+    /// item 3 as it was (@0x13934-0x13948). Whether a drag ended, moved
+    /// or not: the borders' coarse pass follows every one
+    /// (@0x138de-0x1392f).
+    pub fn release(&mut self) -> bool {
+        let Some(drag) = self.drag.take() else {
+            return false;
+        };
+        if drag.scroll != self.place.scroll() {
             self.redraw();
         }
+        true
     }
 
     /// Abandons any drag, where it got to, as a release ends it (the
     /// original's loop ends on `StillDown` going false), and any press on
-    /// a button.
-    pub fn cancel_pointer(&mut self) {
-        self.release();
+    /// a button. Whether a drag ended ([`MapDialog::release`]).
+    pub fn cancel_pointer(&mut self) -> bool {
         self.buttons.cancel_pointer();
+        self.release()
     }
 
     /// Redraws item 3 with the full update: an invalidation of item 3 or
     /// a `_MapDialogUpdate` (see [`update`](super::update)).
     pub fn redraw(&mut self) {
         self.update = MapUpdate::Full;
+        self.fresh = true;
+    }
+
+    /// Whether item 3 was redrawn ([`MapDialog::redraw`]) since this was
+    /// last taken; taking it clears it. The borders take their picture
+    /// then, as the original's update event draws the grid as the handler
+    /// left it.
+    pub fn take_fresh(&mut self) -> bool {
+        std::mem::take(&mut self.fresh)
     }
 
     /// The update item 3 shows.
@@ -638,6 +654,34 @@ mod tests {
         assert_eq!(dialog.update(), MapUpdate::Partial, "refused at the limit");
         dialog.key(Key::Char('x'));
         assert_eq!(dialog.update(), MapUpdate::Partial, "not taken");
+    }
+
+    #[test]
+    fn a_redraw_is_fresh_until_taken() {
+        let mut dialog = MapDialog::new((0, 0));
+        assert!(!dialog.take_fresh(), "a new dialog");
+        dialog.redraw();
+        assert!(dialog.take_fresh());
+        assert!(!dialog.take_fresh(), "taken");
+        dialog.key(Key::Left);
+        assert!(dialog.take_fresh(), "an arrow redraws");
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(380.0, 300.0));
+        assert!(!dialog.take_fresh(), "the partial update isn't a redraw");
+    }
+
+    #[test]
+    fn a_release_or_a_cancel_says_whether_a_drag_ended_moved_or_not() {
+        let mut dialog = MapDialog::new((100, 100));
+        assert!(!dialog.release(), "no drag");
+        assert!(!dialog.cancel_pointer(), "no drag");
+        dialog.press(at(400.0, 300.0));
+        assert!(dialog.release(), "a drag that never moved");
+        assert!(!dialog.release(), "ended already");
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(380.0, 300.0));
+        assert!(dialog.cancel_pointer(), "moved");
+        assert!(!dialog.cancel_pointer());
     }
 
     #[test]
@@ -996,17 +1040,18 @@ mod tests {
     }
 
     #[test]
-    fn borders_is_taken_and_changes_nothing_yet() {
+    fn borders_is_taken_flipping_its_label_and_asks_the_owner_nothing() {
         let mut map = course_map().with_metrics(std::rc::Rc::new(MonoMetrics));
         map.show_course(SystemId(128), &[SystemId(129)]);
         map.set_clear_route(true);
-        let before = drawn(&map);
+        assert!(labels(&drawn(&map)).contains(&label(HIDE_BORDERS_LABEL, true)));
         click(&mut map, on(MapButton::Borders));
         assert!(!map.take_close());
         assert!(!map.finding());
         assert!(!map.take_clear_route());
         assert_eq!(map.route(), [SystemId(129)]);
-        assert_eq!(drawn(&map), before, "the labels unchanged");
+        assert!(!map.borders_shown());
+        assert!(labels(&drawn(&map)).contains(&label(SHOW_BORDERS_LABEL, true)));
     }
 
     #[test]

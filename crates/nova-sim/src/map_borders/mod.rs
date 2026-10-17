@@ -12,7 +12,7 @@
 //! # The grid ([`grid`])
 //!
 //! `_influenceOwner` (0xe09a0) and `_influenceValue` (0x1209c0) are 256 ×
-//! 256 cells of four slots, laid out [x][y][slot]. A cell is 2 × 2 screen
+//! 256 cells of four slots, laid out `[x][y][slot]`. A cell is 2 × 2 screen
 //! pixels of the map item, so the grid moves with every zoom and scroll.
 //! A system's cell is
 //! trunc(trunc((pos − scroll) / zoom) / 2) + trunc(map size / 4)

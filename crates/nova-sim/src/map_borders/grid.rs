@@ -121,7 +121,7 @@ pub fn merge(slots: &mut [Slot; SLOTS], govt: GovtId, value: u8, govts: &Governm
     slots[index] = Slot { govt, value };
 }
 
-/// The grid: each cell's four slots, laid out [x][y] as the original's
+/// The grid: each cell's four slots, laid out `[x][y]` as the original's
 /// `_influenceOwner` and `_influenceValue` are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InfluenceGrid {
