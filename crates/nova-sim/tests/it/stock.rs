@@ -6228,6 +6228,8 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             velocity: Vec2::ZERO,
             heading: 270.0,
         };
+        let defending = defender.trigger;
+        defender.trigger.point_defence = false;
         let mut ships = [defender, attacker];
         let mut chance = Rolling {
             class: 100,
@@ -6235,16 +6237,23 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             asked: Vec::new(),
         };
         let mut combat = Combat::default();
-        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
-        combat.tick(
-            &mut fighters,
-            &arsenal,
-            &nova_sim::Governments::default(),
-            Rules::default(),
-            nova_sim::Field::default(),
-            nova_sim::combat::Scenery::default(),
-            &mut chance,
-        );
+        // The missile is first met on the tick after it is fired, as
+        // `_AIDispatch` (@0x4429d) runs an NPC's point defence before
+        // `_HandleShip` (@0x44483) fires any NPC's pick.
+        for _ in 0..2 {
+            let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+            combat.tick(
+                &mut fighters,
+                &arsenal,
+                &nova_sim::Governments::default(),
+                Rules::default(),
+                nova_sim::Field::default(),
+                nova_sim::combat::Scenery::default(),
+                &mut chance,
+            );
+            ships[0].trigger = defending;
+            ships[1].trigger = Trigger::default();
+        }
         let rolls: Vec<Option<u32>> = combat
             .shots()
             .iter()
