@@ -429,6 +429,22 @@ mod tests {
     }
 
     #[test]
+    fn the_hypergate_cycle_lists_each_counted_link_in_slot_order_unresolved_or_not() {
+        let mut links = [None; 8];
+        links[0] = Some(StellarId(130));
+        links[2] = Some(StellarId(127));
+        links[3] = Some(StellarId(129));
+        links[5] = Some(StellarId(131));
+        let find = |link: StellarId| (link.0 != 129).then_some(SystemId(link.0 + 100));
+        assert_eq!(
+            hypergate_cycle(&links, find),
+            [Some(SystemId(230)), None, Some(SystemId(231))],
+            "127 doesn't count; 129 no system lists"
+        );
+        assert_eq!(hypergate_cycle(&[None; 8], find), []);
+    }
+
+    #[test]
     fn no_next_gate_pick_from_an_empty_cycle() {
         for back in [false, true] {
             assert_eq!(next_gate_pick(&[], Some(SystemId(131)), back), None);

@@ -1082,6 +1082,20 @@ mod tests {
     }
 
     #[test]
+    fn the_nearest_is_measured_from_where_the_ship_is() {
+        let npcs = [
+            ship(1, ME, 1000.0, 0.0),
+            ship(2, ENEMY, 900.0, 0.0),
+            ship(3, RIVAL, 0.0, 0.0),
+        ];
+        assert_eq!(
+            chosen(0, &npcs, None, 0, (5000.0, 5000.0)),
+            Some(n(2)),
+            "100 away, not 1000"
+        );
+    }
+
+    #[test]
     fn a_candidate_stronger_than_the_ship_times_its_odds_is_dropped() {
         let mut brute = ship(2, ENEMY, 100.0, 0.0);
         brute.hull.strength = 100.0;

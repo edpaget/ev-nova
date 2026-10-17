@@ -1622,6 +1622,18 @@ mod tests {
     }
 
     #[test]
+    fn threatens_player_extended_reads_only_the_target_as_led_by_the_player() {
+        let at_seven = Npc {
+            target: Some(ShipRef::Npc(NpcId(7))),
+            ..plain(1)
+        };
+        assert!(
+            !at_seven.threatens_player_extended(&[at_seven.clone(), plain(7), hired(8)], true),
+            "another ship the player leads is not its target"
+        );
+    }
+
+    #[test]
     fn threatens_player_extended_counts_a_lead_whose_escort_fights_the_player() {
         // The escort clause (@0x81cdd-0x81dcc): the lead targets an NPC.
         let p = ShipRef::Player;
@@ -1757,5 +1769,106 @@ mod tests {
             hold(&held),
             [(Good::Commodity(0), 3), (Good::Commodity(4), 2)]
         );
+    }
+
+    #[test]
+    fn an_npc_person_carries_its_records_fields_and_is_invincible_below_zero() {
+        let record = PersonRecord {
+            flags: 0x0030,
+            coward: 25,
+            comm_quote: 3,
+            hail_quote: 8,
+            link_mission: Some(140),
+            hail_pict: Some(5000),
+            shield_mod: -1,
+            ..nova_sim_catalog::fixture::person(151, 128)
+        };
+        assert_eq!(
+            NpcPerson::of(&record, true),
+            NpcPerson {
+                id: PersonId(151),
+                flags: 0x0030,
+                coward: 25,
+                comm_quote: 3,
+                hail_quote: 8,
+                mission: true,
+                portrait: Some(5000),
+                invincible: true,
+                grudge: true,
+                quoted: false,
+                quoted_at: None,
+            }
+        );
+        for shield_mod in [0, 100] {
+            let record = PersonRecord {
+                shield_mod,
+                ..record.clone()
+            };
+            assert!(!NpcPerson::of(&record, false).invincible, "{shield_mod}");
+        }
+    }
+
+    #[test]
+    fn an_npc_follows_the_player_while_it_escorts_it_and_else_its_leader() {
+        let npc = |leader: Option<u32>, escort: bool| Npc {
+            leader: leader.map(NpcId),
+            escort: escort.then(|| EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..crate::traffic::fixture::npc(
+                1,
+                crate::stats::ShipStats::new(nova_sim_base::fixture::FAST, &[]),
+            )
+        };
+        assert_eq!(npc(None, false).leader_ref(), None);
+        assert_eq!(
+            npc(Some(3), false).leader_ref(),
+            Some(ShipRef::Npc(NpcId(3)))
+        );
+        assert_eq!(npc(Some(3), true).leader_ref(), Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn an_npc_approaches_a_gate_it_is_bound_for_strictly_inside_its_reach_on_both_axes() {
+        let gate = StellarId(300);
+        let at = Vec2::new(1000.0, -500.0);
+        let bound = |goal: Goal, x: f32, y: f32| {
+            let mut npc = Npc { goal, ..plain(1) };
+            npc.state.position = Vec2::new(x, y);
+            npc
+        };
+        let landing = Goal::Land(gate);
+        assert!(bound(landing, 1000.0, -500.0).approaches_gate(gate, at, 50.0));
+        assert!(bound(Goal::EnterGate(gate), 1049.0, -451.0).approaches_gate(gate, at, 50.0));
+        assert!(bound(landing, 951.0, -549.0).approaches_gate(gate, at, 50.0));
+        for (x, y, why) in [
+            (1050.0, -500.0, "x at the reach"),
+            (950.0, -500.0, "x at the reach, the other side"),
+            (1000.0, -450.0, "y at the reach"),
+            (1000.0, -550.0, "y at the reach, the other side"),
+            (0.0, 0.0, "far"),
+        ] {
+            assert!(
+                !bound(landing, x, y).approaches_gate(gate, at, 50.0),
+                "{why}"
+            );
+        }
+        for goal in [
+            Goal::Land(StellarId(301)),
+            Goal::EnterGate(StellarId(301)),
+            Goal::Idle,
+            Goal::JumpOut,
+        ] {
+            assert!(
+                !bound(goal, 1000.0, -500.0).approaches_gate(gate, at, 50.0),
+                "{goal:?}"
+            );
+        }
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..bound(landing, 1000.0, -500.0)
+        };
+        assert!(!disabled.approaches_gate(gate, at, 50.0), "disabled");
     }
 }

@@ -1527,6 +1527,25 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_systems_catalog_government_is_still_its_systs() {
+        let map = StarMap::with_hidden(
+            vec![
+                StarSystem {
+                    govt: Some(GovtId(140)),
+                    ..system(128, &[129])
+                },
+                system(129, &[128]),
+            ],
+            &BTreeSet::from([SystemId(128)]),
+            CoLocated::Lowest,
+        );
+        assert_eq!(map.govt(SystemId(128)), None, "hidden from the map");
+        assert_eq!(map.catalog_govt(SystemId(128)), Some(GovtId(140)));
+        assert_eq!(map.catalog_govt(SystemId(129)), None, "independent");
+        assert_eq!(map.catalog_govt(SystemId(130)), None, "not in the catalog");
+    }
+
+    #[test]
     fn the_ordered_jumps_follow_the_con_slots_by_the_engine_and_the_ids_both_ways() {
         // 128 lists 131, 129 and 130, and 129 shares its position with
         // 132; 133 lists 128, which does not list it.

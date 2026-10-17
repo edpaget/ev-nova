@@ -1287,4 +1287,45 @@ mod tests {
         around.player = None;
         assert!(!around.blessed(Some(blessed)), "no player in the system");
     }
+
+    #[test]
+    fn two_ranks_of_the_same_help_still_grant_it() {
+        use nova_sim_catalog::fixture::rank;
+        let ranked = |id: i16, flags: u16| RankRecord {
+            affil_govt: Some(GovtId(140)),
+            flags,
+            ..rank(id)
+        };
+        let records = [
+            ranked(130, HELPS_IN_BATTLE),
+            ranked(131, HELPS_IN_BATTLE | HELPS_FREE),
+        ];
+        let active = BTreeSet::from([RankId(130), RankId(131)]);
+        let govts = Governments::new([crate::catalog::GovtRecord {
+            classes: [1, -1, -1, -1],
+            ..nova_sim_catalog::fixture::govt(140)
+        }]);
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                favour(&records, &active, Some(GovtId(140)), &govts, reach),
+                Favour {
+                    battle_help: true,
+                    free_help: true,
+                },
+                "{reach:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_blessing_table_ends_at_government_383() {
+        let mut blessing = Blessing::NONE;
+        blessing.bless(GovtId(384), Blessed::Peace);
+        blessing.bless(GovtId(127), Blessed::Landing);
+        assert_eq!(blessing, Blessing::NONE, "no slot for either");
+        assert!(!blessing.blesses(Some(GovtId(384)), Blessed::Peace));
+        blessing.bless(GovtId(383), Blessed::Peace);
+        assert!(blessing.blesses(Some(GovtId(383)), Blessed::Peace));
+        assert!(!blessing.blesses(Some(GovtId(383)), Blessed::Landing));
+    }
 }

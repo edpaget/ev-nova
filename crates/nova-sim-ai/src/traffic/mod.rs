@@ -5635,4 +5635,113 @@ mod tests {
         assert_eq!(traffic.npcs().len(), 63, "the table full");
         assert_eq!(World::new(&[]).spawn_reserve, SPAWN_RESERVE);
     }
+
+    #[test]
+    fn a_ship_start_code_reads_as_its_nav_slot_timer_or_random() {
+        for (code, start) in [
+            (-17, ShipStart::Random),
+            (-16, ShipStart::Nav(15)),
+            (-1, ShipStart::Nav(0)),
+            (0, ShipStart::Random),
+            (1, ShipStart::ComesLater),
+            (2, ShipStart::Cloaked),
+            (3, ShipStart::Timed),
+            (i16::MAX, ShipStart::Timed),
+        ] {
+            assert_eq!(ShipStart::from_code(code), start, "{code}");
+        }
+        for (start, timed) in [
+            (ShipStart::Nav(0), false),
+            (ShipStart::Random, false),
+            (ShipStart::ComesLater, true),
+            (ShipStart::Cloaked, true),
+            (ShipStart::Timed, true),
+        ] {
+            assert_eq!(start.timed(), timed, "{start:?}");
+        }
+    }
+
+    #[test]
+    fn a_ship_behav_code_reads_as_its_behaviour_and_any_other_as_their_own() {
+        for (code, behav) in [
+            (-1, ShipBehav::Own),
+            (0, ShipBehav::AttackPlayer),
+            (1, ShipBehav::EscortPlayer),
+            (2, ShipBehav::AttackStellars),
+            (3, ShipBehav::Own),
+        ] {
+            assert_eq!(ShipBehav::from_code(code), behav, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_ship_goal_code_reads_as_its_goal_and_any_other_as_other() {
+        for (code, goal) in [
+            (-2, ShipGoal::Other),
+            (-1, ShipGoal::None),
+            (0, ShipGoal::Destroy),
+            (1, ShipGoal::Disable),
+            (2, ShipGoal::Board),
+            (3, ShipGoal::Escort),
+            (4, ShipGoal::Observe),
+            (5, ShipGoal::Rescue),
+            (6, ShipGoal::ChaseOff),
+            (7, ShipGoal::Other),
+        ] {
+            assert_eq!(ShipGoal::from_code(code), goal, "{code}");
+        }
+    }
+
+    #[test]
+    fn the_spawn_table_reads_and_writes_through_the_traffic() {
+        let mut traffic = populated(1, 1);
+        assert_eq!(traffic.table(), &table(1));
+        traffic.table_mut().avg_ships = 5;
+        assert_eq!(traffic.table().avg_ships, 5);
+    }
+
+    #[test]
+    fn the_strength_timer_is_armed_only_once_armed() {
+        let mut traffic = Traffic::new();
+        assert!(!traffic.strength_armed());
+        traffic.arm_strength_timer(&mut Draws::of(&[0]));
+        assert!(traffic.strength_armed());
+    }
+
+    #[test]
+    fn answering_a_strike_now_provokes_the_npc_struck() {
+        let mut traffic = populated(2, 1);
+        let fighting = Fighting::deciding(Goal::Idle);
+        traffic.answer(&fighting, &World::new(&[]), &[struck(1, 4.0)]);
+        assert_eq!(
+            *fighting.log.borrow(),
+            ["react 0 Npc(NpcId(1))", "react 1 Npc(NpcId(1))"],
+            "answered, and nothing decided"
+        );
+        assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
+        assert_eq!(traffic.npcs()[0].target, None);
+    }
+
+    #[test]
+    fn after_firing_clears_each_npcs_fired_primary_pick() {
+        let mut traffic = populated(2, 1);
+        for npc in &mut traffic.npcs {
+            npc.trigger.only = Some(WeaponId(128));
+            npc.pick = Some(WeaponId(128));
+        }
+        traffic.after_firing();
+        for npc in traffic.npcs() {
+            assert_eq!((npc.trigger.only, npc.pick), (None, None), "{:?}", npc.id);
+        }
+    }
+
+    #[test]
+    fn a_berth_person_set_reads_back_until_forgotten() {
+        let mut traffic = Traffic::new();
+        traffic.set_berth_person(3, "Kane");
+        assert_eq!(traffic.berth_person(3), Some("Kane"));
+        assert_eq!(traffic.berth_person(4), None);
+        traffic.forget_berth_person(3);
+        assert_eq!(traffic.berth_person(3), None);
+    }
 }
