@@ -41,6 +41,9 @@ use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::center_window;
 use crate::{Color, DrawList, ImageKey, Key, Point};
 
+/// The map's `DLOG` and `DITL`, "Map" (`_DoSystemMap`'s `GetNewDialog`,
+/// @0x121e5).
+pub const MAP_DIALOG: i16 = 2000;
 /// `DLOG` 2000's size: its bounds (t −150, l 3, b 363, r 604).
 pub const DIALOG_SIZE: (f32, f32) = (601.0, 513.0);
 /// Where the dialog's top-left corner is on the 1024 × 768 screen

@@ -951,3 +951,46 @@ fn the_maps_find_dialog_lays_out_from_dlog_3005_as_recorded() {
         }
     }
 }
+
+#[test]
+fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
+    use nova_view::galaxy::buttons::MapButton;
+    use nova_view::galaxy::dialog::{DIALOG_SIZE, MAP_DIALOG, MAP_ITEM};
+    use nova_view::galaxy::panel::{INFO_COLUMN, INFO_STRIP, placed};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(MAP_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        let size = (template.bounds.width(), template.bounds.height());
+        assert_eq!(size, DIALOG_SIZE, "{name}");
+        assert_eq!(template.items.len(), 10, "{name}");
+        let corner = Point::new(0.0, 0.0);
+        let item = |n: usize| template.items[n - 1].bounds;
+        let expected = [
+            (1, placed(MapButton::Done.item(), corner)),
+            (2, placed(INFO_STRIP, corner)),
+            (3, placed(MAP_ITEM, corner)),
+            (4, placed(MapButton::ZoomOut.item(), corner)),
+            (5, placed(MapButton::ZoomIn.item(), corner)),
+            (6, placed(INFO_COLUMN, corner)),
+            (8, placed(MapButton::ClearRoute.item(), corner)),
+            (9, placed(MapButton::Borders.item(), corner)),
+            (10, placed(MapButton::Find.item(), corner)),
+        ];
+        for (n, bounds) in expected {
+            assert_eq!(item(n), bounds, "{name}: item {n}");
+            assert!(template.items[n - 1].enabled, "{name}: item {n}");
+            assert!(
+                matches!(template.items[n - 1].kind, ItemSpec::User),
+                "{name}: item {n} is a user item"
+            );
+        }
+        let seventh = &template.items[6];
+        assert!(!seventh.enabled, "{name}: item 7 is disabled");
+        assert!(
+            seventh.bounds.min.y > DIALOG_SIZE.1,
+            "{name}: item 7 is off the dialog"
+        );
+    }
+}

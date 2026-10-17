@@ -355,9 +355,12 @@ fn the_stock_viewers_find_searches_every_system_by_name() {
 }
 
 #[test]
-fn str_150_4_and_59_are_the_maps_done_and_find_labels() {
+fn str_150_holds_the_maps_six_button_labels() {
     use nova_data::records::string_list::StrList;
-    use nova_view::galaxy::buttons::{DONE_LABEL, FIND_LABEL};
+    use nova_view::galaxy::buttons::{
+        CLEAR_ROUTE_LABEL, DONE_LABEL, FIND_LABEL, HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL,
+        ZOOM_IN_LABEL, ZOOM_OUT_LABEL,
+    };
     let Some(data) = open() else {
         return;
     };
@@ -368,5 +371,28 @@ fn str_150_4_and_59_are_the_maps_done_and_find_labels() {
         .record
         .clone();
     assert_eq!(list.strings[4].as_str(), DONE_LABEL);
+    assert_eq!(
+        list.strings[16].as_str(),
+        ZOOM_OUT_LABEL,
+        "an ASCII hyphen-minus"
+    );
+    assert_eq!(list.strings[17].as_str(), ZOOM_IN_LABEL);
+    assert_eq!(list.strings[48].as_str(), CLEAR_ROUTE_LABEL);
+    assert_eq!(list.strings[55].as_str(), SHOW_BORDERS_LABEL);
+    assert_eq!(list.strings[56].as_str(), HIDE_BORDERS_LABEL);
     assert_eq!(list.strings[59].as_str(), FIND_LABEL);
+}
+
+#[test]
+fn pict_8509_the_maps_background_is_the_dialogs_own_size() {
+    use nova_data::graphics::{PICT, decode_pict};
+    use nova_view::galaxy::dialog::{BACKGROUND, DIALOG_SIZE};
+    let Some(data) = open() else {
+        return;
+    };
+    let resource = data.resource(PICT, BACKGROUND).expect("present").resource;
+    let image = decode_pict(resource.data()).expect("decodes");
+    #[allow(clippy::cast_precision_loss)] // A picture's size.
+    let size = (image.width() as f32, image.height() as f32);
+    assert_eq!(size, DIALOG_SIZE, "601 x 513: the stretch changes nothing");
 }
