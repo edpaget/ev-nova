@@ -29,4 +29,10 @@ deny = [
     { crate = "nova-sim-combat", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-story"], reason = "the combat layer sits on the foundation, the catalog and the state, below the ai, story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-ai", wrappers = ["nova-sim", "nova-sim-story"], reason = "the ai and traffic layer sits on the foundation, the catalog, the state and combat, below the story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-story", wrappers = ["nova-sim"], reason = "the story layer sits on the foundation, the catalog, the state, combat and the ai, below the port and session layers, and is reached through the nova-sim facade" },
+    # nova-sim-port predates its crate, which phase 10 creates: until then
+    # it bans every dependency on the name, so no crate below the port
+    # layer, nova-sim-story included, can take one. It has no `wrappers`
+    # yet because cargo-deny warns about a wrapper it never meets; phase 10
+    # adds `wrappers = ["nova-sim"]` when it creates the crate.
+    { crate = "nova-sim-port", reason = "the port layer sits on the foundation, the catalog, the state, combat, the ai and the story, below the session layer, and is reached through the nova-sim facade" },
 ]
