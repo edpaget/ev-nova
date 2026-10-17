@@ -9,7 +9,7 @@
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
 //! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
-//! [`pre_jump`], [`rating`], [`red_alert`], [`status_cargo`],
+//! [`map_panel`], [`pre_jump`], [`rating`], [`red_alert`], [`status_cargo`],
 //! [`target_panel`] and [`top_speed`], with the test support in
 //! `fixture`.
 //!
@@ -169,6 +169,10 @@
 //!   [`legal::systems_from_govts`], which derives the records in each
 //!   system, and [`legal::spread_statuses`], which spreads a new pilot's
 //!   `chär` statuses.
+//! - [`map_panel`]: what the galaxy map's two info panels say about the
+//!   system selected, as `_MapDialogUpdate` decides it: the ports, the
+//!   hazards, the title, and the explored level's goods and services
+//!   ([`map_panel::map_panel`]).
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
@@ -337,6 +341,7 @@ pub use nova_sim_ai::gate;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
+pub mod map_panel;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
