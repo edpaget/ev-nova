@@ -130,7 +130,10 @@ pub enum Mode {
     /// the velocity the glide or burst left it, with no steering, thrust,
     /// slowing, fire or decisions, but is seen, targeted and fought as a
     /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
-    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`].
+    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`]. A ship
+    /// boarded on a mission's assist path waits so too
+    /// ([`Npc::wait_on_course`]); one not intact drifts instead, its wait
+    /// counting down all the same.
     Coasting {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -733,6 +736,20 @@ impl Npc {
                 | Mode::Coasting { .. }
                 | Mode::EnteringGate { .. }
         )
+    }
+
+    /// Sets its AI wait (+0x4c) to `ticks_left`, as boarding a mission's
+    /// ship on the assist path does (`_HandlePlayerBoardAttempt` @0x65746):
+    /// flying, or already holding its course, it holds its course for that
+    /// long ([`Mode::Coasting`]), with no steering, thrust or fire, its
+    /// wait counting down even while it is disabled. A ship gliding in,
+    /// bursting out, or in or at a gate keeps its own glide or wait, which
+    /// the original's write would overwrite; a disabled ship is boarded
+    /// in flight, so none is. A wait of none leaves it as it is.
+    pub fn wait_on_course(&mut self, ticks_left: u32) {
+        if ticks_left > 0 && matches!(self.mode, Mode::Flying | Mode::Coasting { .. }) {
+            self.mode = Mode::Coasting { ticks_left };
+        }
     }
 
     /// Whether it is waiting at the gate it comes out of
@@ -1870,5 +1887,38 @@ mod tests {
             ..bound(landing, 1000.0, -500.0)
         };
         assert!(!disabled.approaches_gate(gate, at, 50.0), "disabled");
+    }
+
+    #[test]
+    fn a_wait_on_course_holds_a_flying_or_coasting_ship_and_leaves_any_other_mode() {
+        for mode in [Mode::Flying, Mode::Coasting { ticks_left: 7 }] {
+            let mut ship = Npc {
+                mode,
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            ship.wait_on_course(100);
+            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 100 }, "{mode:?}");
+            assert!(ship.wait_running(), "{mode:?}");
+        }
+        for mode in [
+            Mode::JumpingIn { tick: 3 },
+            Mode::LeavingGate { tick: 3 },
+            Mode::Emerging { ticks_left: 7 },
+            Mode::HeldAtGate { ticks_left: 7 },
+            Mode::EnteringGate {
+                gate: StellarId(300),
+                ticks_left: 7,
+            },
+        ] {
+            let mut ship = Npc {
+                mode,
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            ship.wait_on_course(100);
+            assert_eq!(ship.mode, mode, "its own glide or wait stands");
+        }
+        let mut idle = crate::traffic::fixture::npc(1, ShipStats::default());
+        idle.wait_on_course(0);
+        assert_eq!(idle.mode, Mode::Flying, "no wait");
     }
 }

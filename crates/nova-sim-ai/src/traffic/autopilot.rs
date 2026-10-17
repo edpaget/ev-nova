@@ -117,7 +117,10 @@
 //!   it, above its top speed, with no steering, thrust or fire, and its
 //!   trigger is released. Then it flies its goal, [`flight::step`]
 //!   bringing it down to its top speed. A ship with a lead flies at once.
-//!   One not intact while it waits drifts instead. Hit while it waits,
+//!   One not intact while it waits drifts instead, its wait still counting
+//!   down (@0x34424 → @0x34679 → @0x34a54 → @0x35026), so once intact
+//!   again it holds its course for what is left. A mission's ship boarded
+//!   on the assist path waits so too ([`Npc::wait_on_course`]). Hit while it waits,
 //!   it answers the hit as a flying ship does, and its wait is cut to
 //!   at most [`HIT_WAIT`] ticks.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
@@ -535,9 +538,15 @@ fn unsteered(
             glide(npc, tick, speeds, chance);
         }
         (mode, false) => {
-            if let Mode::LeavingGate { .. } | Mode::Coasting { .. } = mode {
-                npc.mode = Mode::Flying;
-                npc.emerges_from = None;
+            match mode {
+                Mode::LeavingGate { .. } => {
+                    npc.mode = Mode::Flying;
+                    npc.emerges_from = None;
+                }
+                // `_HandleShip` counts +0x4c down for a disabled ship too
+                // (@0x34424 → @0x34679 → @0x34a54 → @0x35026).
+                Mode::Coasting { ticks_left } => count_down(npc, ticks_left),
+                _ => {}
             }
             if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
                 flight::drag(&mut npc.state);
@@ -681,6 +690,12 @@ pub(crate) fn cut_wait(npc: &mut Npc) {
 /// (@0x3501f-0x35048).
 fn coast(npc: &mut Npc, ticks_left: u32) {
     npc.state.position = npc.state.position + npc.state.velocity;
+    count_down(npc, ticks_left);
+}
+
+/// Counts `npc`'s wait on its course down a tick from `ticks_left`
+/// (@0x35026-0x35048): it flies once the wait is out.
+fn count_down(npc: &mut Npc, ticks_left: u32) {
     let left = ticks_left.saturating_sub(1);
     npc.mode = if left == 0 {
         Mode::Flying
@@ -1823,19 +1838,47 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_not_intact_while_it_waits_drifts_instead() {
+    fn a_ship_not_intact_while_it_waits_drifts_instead_its_wait_running_down() {
         let speeds = TopSpeeds {
             own: 3.0,
             lead: None,
         };
         let mut ship = burst_out(AVERAGE, speeds, &mut Draws::of(&[0]));
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 30 });
         ship.condition = Condition::Disabled;
         fly_at(&mut ship, &[], None, speeds);
-        assert_eq!(ship.mode, Mode::Flying);
+        assert_eq!(
+            ship.mode,
+            Mode::Coasting { ticks_left: 29 },
+            "a disabled ship reaches the countdown too (@0x34424 → @0x34679 → @0x34a54 → @0x35026)"
+        );
         assert!(
             ship.state.velocity.length() <= 3.0 + 1e-4,
             "drifting at its top speed"
         );
+    }
+
+    #[test]
+    fn a_ship_intact_again_before_its_wait_is_out_holds_its_course_for_the_rest() {
+        let mut ship = npc(AVERAGE, Goal::JumpOut, at(0.0, 0.0, 1.0, 0.0, 90.0));
+        ship.mode = Mode::Coasting { ticks_left: 3 };
+        ship.condition = Condition::Disabled;
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 2 });
+        let drifted = ship.state;
+        assert!(drifted.velocity.x < 1.0, "slowed as it drifts");
+        ship.condition = Condition::Intact;
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 1 });
+        assert_eq!(ship.state.velocity, drifted.velocity, "no thrust");
+        assert_eq!(ship.state.heading, drifted.heading, "no turn");
+        assert_eq!(
+            ship.state.position,
+            drifted.position + drifted.velocity,
+            "on its course"
+        );
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::Flying, "the wait is out");
     }
 
     #[test]
