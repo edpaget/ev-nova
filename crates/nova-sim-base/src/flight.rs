@@ -12,7 +12,9 @@
 //!    its velocity. By default ([`SpeedCap::PerAxis`], the original's), as
 //!    `_AdjustedAccel` adds it ([`adjusted_accel`], @0x2ae4b-0x2af43): on
 //!    each axis only while that axis is short of the top speed's share
-//!    along the heading. Under [`SpeedCap::Circle`] it is added whole.
+//!    along the heading, and along the heading's whole degree, as the
+//!    original passes it (@0x6cd16, @0x34b9d). Under [`SpeedCap::Circle`]
+//!    it is added whole, along the heading itself.
 //! 3. Caps the speed. By default only the player's: its velocity is
 //!    clamped to the top speed on each axis, the box `_HandlePlayer`
 //!    clamps to before the move (@0x6d43f-0x6d4aa, [`speed_limit`]); an
@@ -680,6 +682,21 @@ mod tests {
                     && npc.velocity.y.abs() <= 3.0 + SHIP.accel,
                 "{npc:?}"
             );
+        }
+    }
+
+    #[test]
+    fn by_default_thrust_goes_along_the_whole_degree_and_under_the_circle_along_the_heading() {
+        for flyer in FLYERS {
+            let player = flown(heading(45.9), THRUST, 1, FlightRules::default(), flyer);
+            assert_eq!(player.velocity, facing(45.0) * SHIP.accel, "{flyer:?}");
+            assert_eq!(player.heading, 45.9, "the heading itself is kept");
+            let circled = flown(heading(45.9), THRUST, 1, CIRCLE, flyer);
+            assert!(
+                near(circled.velocity, facing(45.9) * SHIP.accel),
+                "{circled:?}"
+            );
+            assert_ne!(circled.velocity, facing(45.0) * SHIP.accel);
         }
     }
 

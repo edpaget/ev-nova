@@ -65,6 +65,22 @@ pub fn circle(velocity: Vec2, top_speed: f32) -> Vec2 {
     }
 }
 
+/// How near a whole degree, in degrees, a heading counts as on it (see
+/// [`adjusted_accel`]).
+pub const WHOLE_DEGREE_SLACK: f32 = 1e-3;
+
+/// `heading`'s whole degree, truncated toward zero, as `cvttss2si` gives
+/// it; a heading within [`WHOLE_DEGREE_SLACK`] of one is that one.
+#[must_use]
+pub fn whole_degree(heading: f32) -> f32 {
+    let nearest = heading.round();
+    if (heading - nearest).abs() < WHOLE_DEGREE_SLACK {
+        nearest
+    } else {
+        heading.trunc()
+    }
+}
+
 /// `velocity` pushed `push` pixels a tick along `heading`, soft-capped
 /// at `top_speed`: `_AdjustedAccel` (@0x2ae4b-0x2af43). On each axis the
 /// push's share is added while the velocity is short of the top speed's
@@ -72,9 +88,21 @@ pub fn circle(velocity: Vec2, top_speed: f32) -> Vec2 {
 /// in sign, or one is none, it is added whatever the velocity
 /// (@0x2aecd-0x2aeee), so a negative push always pulls. Nothing clamps
 /// it, so the last push can carry an axis past its share.
+///
+/// Both shares go along the whole degree of `heading`, truncated toward
+/// zero: `_AdjustedAccel` takes its heading as a 16-bit whole degree
+/// (@0x2ae53), every caller passing `cvttss2si` of the float heading
+/// (the player's thrust @0x6cd16, an NPC's @0x34b9d, a fighter's launch
+/// @0x3dc9a, the eject @0x68d84), and `_Accel` reads `_TableSin` and
+/// `_TableCos` there (@0x2adff, @0x2ae1e).
+///
+/// A heading within [`WHOLE_DEGREE_SLACK`] of a whole degree counts as
+/// that degree: the port's headings carry the float rounding its turns
+/// and reverse's aim leave (179.99998 for 180), which the original's,
+/// turned by whole degrees, don't.
 #[must_use]
 pub fn adjusted_accel(velocity: Vec2, heading: f32, push: f32, top_speed: f32) -> Vec2 {
-    let along = facing(heading);
+    let along = facing(whole_degree(heading));
     let gain = |velocity: f32, share: f32| {
         let push = share * push;
         let top = share * top_speed;
@@ -104,6 +132,38 @@ pub fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_whole_degree_is_truncated_toward_zero_but_for_rounding_near_one() {
+        assert_eq!(whole_degree(45.9), 45.0);
+        assert_eq!(whole_degree(45.0), 45.0);
+        assert_eq!(whole_degree(0.7), 0.0);
+        assert_eq!(whole_degree(-0.5), 0.0);
+        assert_eq!(whole_degree(-1.5), -1.0);
+        assert_eq!(whole_degree(179.999_98), 180.0, "rounding below 180");
+        assert_eq!(whole_degree(180.000_02), 180.0);
+        assert_eq!(whole_degree(179.998), 179.0, "past the slack");
+        assert_eq!(WHOLE_DEGREE_SLACK, 1e-3);
+    }
+
+    #[test]
+    fn the_push_goes_along_the_whole_degree_toward_zero() {
+        for (heading, whole) in [
+            (45.9, 45.0),
+            (45.0, 45.0),
+            (359.99, 359.0),
+            (0.7, 0.0),
+            (-0.5, 0.0),
+        ] {
+            let pushed = adjusted_accel(Vec2::ZERO, heading, 1.0, 10.0);
+            assert_eq!(pushed, facing(whole), "{heading}");
+        }
+        // The cap's share is the whole degree's too: at heading 45.9 the
+        // velocity is past x's share at 45 and short of it at 45.9.
+        let share = facing(45.0).x * 10.0;
+        let past = Vec2::new(share + 1e-3, 0.0);
+        assert_eq!(adjusted_accel(past, 45.9, 1.0, 10.0).x, past.x, "x past it");
+    }
 
     #[test]
     fn the_engines_reading_is_per_axis_and_the_other_the_circle() {
