@@ -2,7 +2,7 @@
 //! `NOVA_DATA` is unset, when the data has no `Fonts/Charcoal.ttf` beside
 //! it, or with no GPU adapter.
 
-mod common;
+use crate::common;
 
 use nova_data::fonts::{charcoal_path, open_charcoal};
 use nova_render::fonts::FontFaces;

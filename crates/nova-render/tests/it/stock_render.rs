@@ -1,7 +1,7 @@
 //! The stock data through the renderer: a real `PICT` and `rlëD` decode,
 //! pack, upload and batch. Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_data::graphics::PICT;
