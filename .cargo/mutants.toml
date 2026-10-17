@@ -207,7 +207,7 @@ exclude_re = [
     # `H`'s engine mask is the persistent bit (0x0004) and the mission
     # persistent bit (0x0020): two distinct bits, so `|` and `^` combine
     # them the same. (A constant, named by its line alone.)
-    "nova-sim/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
+    "nova-sim-port/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
     # The ship-change clamp lowers a count to its limit when it is above
     # it; with `<=` a count already at its limit is set to it again, which
     # changes nothing.

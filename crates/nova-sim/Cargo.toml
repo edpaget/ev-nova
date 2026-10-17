@@ -40,6 +40,11 @@ nova-sim-ai.workspace = true
 # persons, ranks, news, nebulae, exploration, the text tags and the pilot,
 # re-exported at their old paths (`nova_sim::mission`, ...).
 nova-sim-story.workspace = true
+# The port layer, on the story: the outfitter, the shipyard, hiring,
+# boarding and grants, recharging, the escape pod, the radar's IFF, the
+# gate sprite, the order loop and the player info screen, re-exported at
+# their old paths (`nova_sim::shipyard`, ...).
+nova-sim-port.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests under `tests/`.

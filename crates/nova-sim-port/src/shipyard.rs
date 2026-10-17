@@ -779,7 +779,8 @@ fn final_price_within_the_cash(asked: &RowShip) -> Result<(), ShipRefusal> {
 /// `_SetupPortAvailableShipTypes` sells only when it is not 0,
 /// @0xbc88-0xbc9d); by the Bible, 0 or below never and 100 or more
 /// always. Any other is a `BuyRandom` % chance.
-pub(crate) fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
+#[must_use]
+pub fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
     match source {
         RuleSource::Engine if buy_random < 0 => Roll::Always,
         _ => Roll::of(buy_random),
@@ -984,27 +985,27 @@ pub(crate) fn space(
 }
 
 /// Everything the shipyard rules read about the ship and where it is.
-pub(crate) struct Yard<'a> {
+pub struct Yard<'a> {
     /// Every `shïp`.
-    pub(crate) ships: &'a [ShipRecord],
+    pub ships: &'a [ShipRecord],
     /// Every `oütf`.
-    pub(crate) outfits: &'a [OutfitRecord],
+    pub outfits: &'a [OutfitRecord],
     /// Every `crön`, whose running ones contribute bits.
-    pub(crate) crons: &'a [CronRecord],
+    pub crons: &'a [CronRecord],
     /// Every `ränk`, whose active ones contribute bits.
-    pub(crate) ranks: &'a [RankRecord],
+    pub ranks: &'a [RankRecord],
     /// Every ship class's stock weapons, which the Info's Space reads.
-    pub(crate) arsenal: &'a Arsenal,
+    pub arsenal: &'a Arsenal,
     /// The ship flown's fields.
-    pub(crate) fields: ShipFields,
+    pub fields: ShipFields,
     /// The stellar landed on.
-    pub(crate) site: &'a LandingSite,
+    pub site: &'a LandingSite,
     /// The ranks' price multipliers, `_priceFluxMult`.
-    pub(crate) mults: PriceMults,
+    pub mults: PriceMults,
     /// How each disputed rule reads ([`Rulebook::source_for`]).
-    pub(crate) rules: Rulebook,
+    pub rules: Rulebook,
     /// The control-bit test of a ship's `Availability`.
-    pub(crate) gate: Gate<'a>,
+    pub gate: Gate<'a>,
 }
 
 impl Yard<'_> {
@@ -1024,7 +1025,7 @@ impl Yard<'_> {
     /// `Availability`), takes the higher-numbered classes of its
     /// `DispWeight` off sale (@0xbdc3-0xbe2c). No rule draws: the buy checks, the
     /// value rules and the purchase never ask `chance`.
-    pub(crate) fn shipyard(
+    pub fn shipyard(
         &self,
         pilot: &Pilot,
         rolls: &mut DayRolls<ShipId>,
@@ -1334,7 +1335,7 @@ pub struct ShipNaming {
 
 /// The prompt for naming a new ship of class `record`, its default's
 /// digits drawn on `chance`, as the module says.
-pub(crate) fn naming(record: &ShipRecord, chance: &mut dyn Chance) -> ShipNaming {
+pub fn naming(record: &ShipRecord, chance: &mut dyn Chance) -> ShipNaming {
     ShipNaming {
         ship: record.id,
         prompt: format!("{NAME_PROMPT} {}: ", record.long_name),
@@ -1344,7 +1345,7 @@ pub(crate) fn naming(record: &ShipRecord, chance: &mut dyn Chance) -> ShipNaming
 
 /// `name`, a space and `digits` digits each 1 to 9, drawn on `chance`: the
 /// shipyard's default name (three) and the escape pod rescue's (four).
-pub(crate) fn numbered_name(name: &str, digits: usize, chance: &mut dyn Chance) -> String {
+pub fn numbered_name(name: &str, digits: usize, chance: &mut dyn Chance) -> String {
     let mut numbered = format!("{name} ");
     for _ in 0..digits {
         numbered.push_str(&(chance.roll(9) + 1).to_string());
@@ -1385,11 +1386,11 @@ pub struct ShipPurchase {
 
 /// The price and trade-in a purchase settles at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Quote {
+pub struct Quote {
     /// The new ship's price.
-    pub(crate) price: i64,
+    pub price: i64,
     /// What the old ship trades in for.
-    pub(crate) trade_in: i64,
+    pub trade_in: i64,
 }
 
 /// Cuts `cargo` down to what a purchase keeps on a new ship of `capacity`
@@ -1470,29 +1471,29 @@ fn new_ships_share(capacity: u32, escorts: i64) -> f64 {
 /// A ship purchase asked what it does: the pilot as it stands once the
 /// old class's `OnRetire` has run and the launched fighters are gone, and
 /// what the new class, the records and the fleet say.
-pub(crate) struct Sale<'a> {
+pub struct Sale<'a> {
     /// The pilot buying.
-    pub(crate) pilot: &'a Pilot,
+    pub pilot: &'a Pilot,
     /// The old ship's mass, which a persistent outfit sold back is priced
     /// on.
-    pub(crate) old_mass: i16,
+    pub old_mass: i16,
     /// The class bought.
-    pub(crate) new: &'a ShipRecord,
+    pub new: &'a ShipRecord,
     /// The name confirmed ([`cull_name`]).
-    pub(crate) name: &'a str,
+    pub name: &'a str,
     /// The new class's stock weapons and ammunition
     /// ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)).
-    pub(crate) fits: &'a [StockFit],
+    pub fits: &'a [StockFit],
     /// Every `oütf`.
-    pub(crate) records: &'a [OutfitRecord],
+    pub records: &'a [OutfitRecord],
     /// The escorts that stay with the player, launched fighters already
     /// gone.
-    pub(crate) escorts: &'a [EscortHolds],
+    pub escorts: &'a [EscortHolds],
     /// How each disputed rule reads: the cargo kept by
     /// [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo), and the
     /// price of a persistent outfit sold back, by
     /// [`RuleKey::MassPrice`](crate::RuleKey::MassPrice).
-    pub(crate) rules: Rulebook,
+    pub rules: Rulebook,
 }
 
 impl Context for Sale<'_> {
@@ -1559,18 +1560,18 @@ struct Carry {
 
 /// What a ship purchase does, worked out and not yet applied: the
 /// session applies it through `Session::become_class`.
-pub(crate) struct Purchase {
+pub struct Purchase {
     /// What the pilot owns afterwards: the persistent outfits carried, the
     /// new class's default items on top, its stock topped up.
-    pub(crate) outfits: BTreeMap<OutfitId, u16>,
+    pub outfits: BTreeMap<OutfitId, u16>,
     /// What the purchase writes on the pilot beside the class.
-    pub(crate) settlement: Settlement,
+    pub settlement: Settlement,
     /// What it did, as `Session::buy_ship` reports it.
-    pub(crate) report: ShipPurchase,
+    pub report: ShipPurchase,
 }
 
 /// What a purchase writes on the pilot beside the class and the outfits.
-pub(crate) struct Settlement {
+pub struct Settlement {
     /// The cash after the price, the trade-in and the refund, if any.
     pub(crate) cash: i64,
     /// The ship's name ([`cull_name`]).
@@ -1583,7 +1584,7 @@ impl Settlement {
     /// Writes the cash, the name and the cargo on `pilot`. The reserves
     /// are filled later, once the new class's `OnPurchase` has run
     /// ([`filled`], `_DoShipyardDialog` @0x5f051-0x5f07b).
-    pub(crate) fn settle(self, pilot: &mut Pilot) {
+    pub fn settle(self, pilot: &mut Pilot) {
         pilot.ship_name = Some(self.name);
         pilot.cash = self.cash;
         pilot.cargo = self.cargo;
@@ -1749,14 +1750,16 @@ fn full_reserves(filled: &Filled) -> Reserves {
 /// `stats`, the class and outfits its `OnPurchase` leaves, as
 /// `_DoShipyardDialog` fills them after it (@0x5f051-0x5f07b, after
 /// @0x5f00d): what `Session::buy_ship` writes last.
-pub(crate) fn filled(stats: &ShipStats, rules: &Rulebook) -> Reserves {
+#[must_use]
+pub fn filled(stats: &ShipStats, rules: &Rulebook) -> Reserves {
     reserves_full().of(&Filled { stats, rules })
 }
 
 /// What buying `sale.new` at `quote` does, as the module says, worked out
 /// and not applied: the outfits the pilot owns afterwards, what it writes
 /// beside them, and what it did.
-pub(crate) fn purchase(sale: &Sale, quote: Quote) -> Purchase {
+#[must_use]
+pub fn purchase(sale: &Sale, quote: Quote) -> Purchase {
     let carry = carried().of(sale);
     let defaults = tally(sale.new.defaults.iter().copied());
     let mut outfits = merged(&carry.carried, &defaults);

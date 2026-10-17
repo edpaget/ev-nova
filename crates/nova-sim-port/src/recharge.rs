@@ -59,7 +59,7 @@ pub fn quote(fuel: Gauge, cash: i64) -> Result<i64, RechargeRefusal> {
 }
 
 /// Fills `pilot`'s tank and takes `price` from its cash.
-pub(crate) fn settle(pilot: &mut Pilot, price: i64) {
+pub fn settle(pilot: &mut Pilot, price: i64) {
     pilot.reserves.fuel.now = pilot.reserves.fuel.max;
     pilot.cash = pilot.cash.saturating_sub(price);
 }

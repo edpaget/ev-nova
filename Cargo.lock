@@ -1536,6 +1536,7 @@ dependencies = [
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-combat",
+ "nova-sim-port",
  "nova-sim-state",
  "nova-sim-story",
  "serde",
@@ -1574,6 +1575,18 @@ dependencies = [
  "nova-sim-base",
  "nova-sim-catalog",
  "nova-sim-state",
+]
+
+[[package]]
+name = "nova-sim-port"
+version = "0.1.0"
+dependencies = [
+ "nova-sim-ai",
+ "nova-sim-base",
+ "nova-sim-catalog",
+ "nova-sim-combat",
+ "nova-sim-state",
+ "nova-sim-story",
 ]
 
 [[package]]

@@ -70,7 +70,7 @@ impl ShownTons {
 
 /// An item's roll for the day, by its `BuyRandom` or `HireRandom`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Roll {
+pub enum Roll {
     /// Never on offer.
     Never,
     /// Always on offer.
@@ -97,7 +97,7 @@ impl Roll {
 /// ([`DayRolls::draw`]), or else the first time it is asked, and kept
 /// until drawn again or cleared.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DayRolls<K>(BTreeMap<K, bool>);
+pub struct DayRolls<K>(BTreeMap<K, bool>);
 
 impl<K> Default for DayRolls<K> {
     fn default() -> Self {
@@ -109,7 +109,7 @@ impl<K: Ord> DayRolls<K> {
     /// Whether `key`'s item, rolling `roll`, is on offer today: never and
     /// always draw nothing; a chance is the answer kept, or else drawn on
     /// `chance` and kept.
-    pub(crate) fn today(&mut self, key: K, roll: Roll, chance: &mut dyn Chance) -> bool {
+    pub fn today(&mut self, key: K, roll: Roll, chance: &mut dyn Chance) -> bool {
         match roll {
             Roll::Never => false,
             Roll::Always => true,
@@ -119,12 +119,12 @@ impl<K: Ord> DayRolls<K> {
 
     /// Holds `key`'s item on offer for the rest of the stay, whatever a
     /// chance would draw; a roll of never still never is.
-    pub(crate) fn hold(&mut self, key: K) {
+    pub fn hold(&mut self, key: K) {
         self.0.insert(key, true);
     }
 
     /// Forgets `key`'s roll, so it is drawn again when next asked.
-    pub(crate) fn redraw(&mut self, key: &K) {
+    pub fn redraw(&mut self, key: &K) {
         self.0.remove(key);
     }
 
@@ -138,7 +138,7 @@ impl<K: Ord> DayRolls<K> {
     }
 
     /// Forgets every roll.
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.0.clear();
     }
 }
@@ -149,7 +149,7 @@ impl<K: Ord> DayRolls<K> {
 /// hire roll and buy roll) by ascending ID draws its `hire` roll and then
 /// its `buy` roll, and then each outfit of `items` by ascending ID its
 /// `outfits` roll. Only a chance draws (see [`DayRolls::draw`]).
-pub(crate) fn draw_day(
+pub fn draw_day(
     hire: &mut DayRolls<ShipId>,
     buy: &mut DayRolls<ShipId>,
     outfits: &mut DayRolls<OutfitId>,

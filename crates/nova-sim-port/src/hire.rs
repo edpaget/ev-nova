@@ -369,41 +369,42 @@ pub enum PayNote {
 }
 
 /// Everything the hire list reads about the bar and the player.
-pub(crate) struct Bar<'a> {
+pub struct Bar<'a> {
     /// Every `shïp`.
-    pub(crate) ships: &'a [ShipRecord],
+    pub ships: &'a [ShipRecord],
     /// The stellar landed on.
-    pub(crate) site: &'a LandingSite,
+    pub site: &'a LandingSite,
     /// The `Contribute` bits of the player's ship and outfits.
-    pub(crate) contributed: u64,
+    pub contributed: u64,
     /// The player's credits.
-    pub(crate) cash: i64,
+    pub cash: i64,
     /// Whether the fleet has room for another escort.
-    pub(crate) room: bool,
+    pub room: bool,
     /// Whether the system has a ship-table slot for it, or the hire may
     /// go on without one ([`RuleKey::HireNoSlot`]).
-    pub(crate) slot: bool,
+    pub slot: bool,
     /// The fee and wage.
-    pub(crate) terms: &'a dyn HireTerms,
+    pub terms: &'a dyn HireTerms,
     /// The ranks' price multiplier the fee reads, `_priceFluxMult[1]`.
-    pub(crate) rank_mult: f32,
+    pub rank_mult: f32,
     /// The control-bit test.
-    pub(crate) control_bits: &'a dyn ControlBits,
+    pub control_bits: &'a dyn ControlBits,
     /// What the control-bit test reads about the player.
-    pub(crate) pilot: &'a dyn PilotFacts,
+    pub pilot: &'a dyn PilotFacts,
     /// How each disputed rule reads: among them whether `Require` gates
     /// hiring ([`RuleKey::HireRequire`]).
-    pub(crate) rules: Rulebook,
+    pub rules: Rulebook,
     /// Every ship class's stock weapons, which the Info's Space reads.
-    pub(crate) arsenal: &'a Arsenal,
+    pub arsenal: &'a Arsenal,
     /// Every `oütf`, which the Info's Space weighs.
-    pub(crate) outfits: &'a [OutfitRecord],
+    pub outfits: &'a [OutfitRecord],
 }
 
 /// How a ship class of `hire_random` rolls for hire each day: 0 or less
 /// never, [`MAX_HIRE_RANDOM`] or more always, and any other a
 /// `HireRandom` % chance. The bar's list and the day's draw share it.
-pub(crate) fn hire_roll(hire_random: i16) -> Roll {
+#[must_use]
+pub fn hire_roll(hire_random: i16) -> Roll {
     Roll::of(hire_random)
 }
 
@@ -420,7 +421,7 @@ impl Bar<'_> {
     /// The list, each class's roll of so many percent answered by
     /// `rolled`, asked by ascending ID and only for a class that passes
     /// its tech level and is neither never nor always for hire.
-    pub(crate) fn list(&self, mut rolled: impl FnMut(ShipId, u8) -> bool) -> HireList {
+    pub fn list(&self, mut rolled: impl FnMut(ShipId, u8) -> bool) -> HireList {
         let mut sorted: Vec<&ShipRecord> = self.ships.iter().collect();
         sorted.sort_by_key(|ship| ship.id);
         let mut sweep = HideHigher::default();

@@ -361,7 +361,7 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll, ShownTons};
 
-pub(crate) use crate::catalog::outfit_mods;
+pub use crate::catalog::outfit_mods;
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
 #[derive(Clone, Copy, Debug)]
@@ -1744,7 +1744,8 @@ fn cap_reported(asked: &RowOutfit) -> i16 {
 /// clamps it to 0-100, @0x78b8d-0x78ba6, and `_SetupPortAvailableItems`
 /// sells only above 0, @0xc07a); by the Bible, below 1 or above 100
 /// always. Any other is a `BuyRandom` % chance.
-pub(crate) fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
+#[must_use]
+pub fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
     match source {
         RuleSource::Bible if !(1..=ALWAYS_RANDOM).contains(&buy_random) => Roll::Always,
         _ => Roll::of(buy_random),
@@ -1961,7 +1962,7 @@ impl Bought {
     /// mod (@0x44ecc-0x44f8b). Unlike [`opening_limit`], an ammunition or
     /// cargo mod plays no part.
     #[must_use]
-    pub(crate) fn after_buying(record: &OutfitRecord) -> Self {
+    pub fn after_buying(record: &OutfitRecord) -> Self {
         let has = |kind: i16| record.mods.iter().any(|&(mod_type, _)| mod_type == kind);
         let map = has(EXPLORES_MAP);
         Self {
@@ -1993,7 +1994,7 @@ impl Bought {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutfitVisit {
     /// The once-an-opening flags (`_boughtMap`, `_boughtID`).
-    pub(crate) bought: Bought,
+    pub bought: Bought,
     /// How many of each outfit the player owned when the outfitter
     /// opened, as `_DoOutfitDialog` copies them on entry
     /// (@0x5badd-0x5bafa).
@@ -2004,7 +2005,7 @@ impl OutfitVisit {
     /// A visit opened over `owned`: the flags clear and the counts
     /// copied.
     #[must_use]
-    pub(crate) fn open(owned: &BTreeMap<OutfitId, u16>) -> Self {
+    pub fn open(owned: &BTreeMap<OutfitId, u16>) -> Self {
         Self {
             bought: Bought::default(),
             opened_with: owned.clone(),
@@ -2013,7 +2014,7 @@ impl OutfitVisit {
 
     /// `record` is bought: the flags are set afresh
     /// ([`Bought::after_buying`]); the counts on entry stay.
-    pub(crate) fn bought(&mut self, record: &OutfitRecord) {
+    pub fn bought(&mut self, record: &OutfitRecord) {
         self.bought = Bought::after_buying(record);
     }
 
@@ -2088,7 +2089,7 @@ fn mass_of(
 /// out), carrying `owned`, each outfit weighed as `rules` says
 /// ([`RuleKey::ScaledMass`]; `_ShipFreeMass` @0xb4c1-0xb4ed).
 #[must_use]
-pub(crate) fn free_mass(
+pub fn free_mass(
     fields: ShipFields,
     standard: &BTreeMap<OutfitId, u16>,
     owned: &BTreeMap<OutfitId, u16>,
@@ -2182,7 +2183,8 @@ fn raised(
 /// is at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), so a `Max` of 0 or less
 /// stays so. The engine's sums and product are 16-bit (`addw`/`imulw`)
 /// and wrap; here they are wide and saturate.
-pub(crate) fn raised_max(
+#[must_use]
+pub fn raised_max(
     record: &OutfitRecord,
     owned: &BTreeMap<OutfitId, u16>,
     records: &[OutfitRecord],
@@ -2359,48 +2361,48 @@ pub const FIRST_OUTFIT: OutfitId = OutfitId(128);
 pub const LIST_SLOTS: u32 = 512;
 
 /// Everything the outfitter rules read about the ship and where it is.
-pub(crate) struct Shop<'a> {
+pub struct Shop<'a> {
     /// Every `oütf`.
-    pub(crate) records: &'a [OutfitRecord],
+    pub records: &'a [OutfitRecord],
     /// Every `crön`, whose running ones contribute bits.
-    pub(crate) crons: &'a [CronRecord],
+    pub crons: &'a [CronRecord],
     /// Every `ränk`, whose active ones contribute bits.
-    pub(crate) ranks: &'a [RankRecord],
+    pub ranks: &'a [RankRecord],
     /// The ship's fields.
-    pub(crate) fields: ShipFields,
+    pub fields: ShipFields,
     /// The ship's standard equipment: its default items, and its stock
     /// weapons and their ammunition as outfits.
-    pub(crate) standard: &'a BTreeMap<OutfitId, u16>,
+    pub standard: &'a BTreeMap<OutfitId, u16>,
     /// The stellar landed on.
-    pub(crate) site: &'a LandingSite,
+    pub site: &'a LandingSite,
     /// For every ammunition outfit of a fighter bay, the fighters the
     /// ship's bays can still take (see [`bay`](crate::bay)).
-    pub(crate) fighter_room: &'a BTreeMap<OutfitId, u32>,
+    pub fighter_room: &'a BTreeMap<OutfitId, u32>,
     /// For every ammunition outfit whose first mod is `ModType` 3 naming
     /// a weapon of `MaxAmmo` above 0, the most of it the player may own:
     /// that `MaxAmmo` times the player's launchers of the weapon, as a
     /// 16-bit product (`_HasMaxOfItem` @0x457e-0x45e4; see the module
     /// docs).
-    pub(crate) ammo_caps: &'a BTreeMap<OutfitId, i16>,
+    pub ammo_caps: &'a BTreeMap<OutfitId, i16>,
     /// The ship class's `MaxGun` and `MaxTur`.
-    pub(crate) hardpoints: Hardpoints,
+    pub hardpoints: Hardpoints,
     /// The ship's own free cargo: its cargo space less every ton held,
     /// below zero when more is held than it has space for
     /// (`_ShipTotalHolds() - _TotalCargo(player)`, @0x4e980-0x4e9a8).
-    pub(crate) free_cargo: i64,
+    pub free_cargo: i64,
     /// Each launcher outfit, with the ammunition it holds.
-    pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
+    pub launchers: &'a BTreeMap<OutfitId, Launcher>,
     /// The visit: the once-an-opening flags as they stand, which the
     /// outfitter's `once an opening` check reads as
     /// [`RuleKey::OutfitLimit`] says, and the counts owned on entry.
-    pub(crate) visit: &'a OutfitVisit,
+    pub visit: &'a OutfitVisit,
     /// The control-bit test of an outfit's `Availability`.
-    pub(crate) gate: Gate<'a>,
+    pub gate: Gate<'a>,
     /// The ranks' factor the buy price takes: 1.0 by the engine's reading
     /// of [`RuleKey::RankPriceScope`], `_priceFluxMult[1]` by the other.
-    pub(crate) price_mult: f32,
+    pub price_mult: f32,
     /// How each disputed rule reads ([`Rulebook::source_for`]).
-    pub(crate) rules: Rulebook,
+    pub rules: Rulebook,
 }
 
 impl Shop<'_> {
@@ -2426,7 +2428,7 @@ impl Shop<'_> {
     /// `_OutfitFilter` @0x5806f-0x580ca; see
     /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) and
     /// [`RuleKey::RelistedSelection`]).
-    pub(crate) fn outfitter_with(
+    pub fn outfitter_with(
         &self,
         pilot: &Pilot,
         rolls: &mut DayRolls<OutfitId>,
@@ -2754,7 +2756,7 @@ fn bible_multiplier(offer: &Offer) -> i64 {
 /// price, the outfit then going through the session's grant path (see
 /// the module docs); a sale is paid `amount`, the [`refund`], and removes
 /// one.
-pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, amount: i64) {
+pub fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, amount: i64) {
     match direction {
         Direction::Buy => pilot.cash = pilot.cash.saturating_sub(amount),
         Direction::Sell => {
