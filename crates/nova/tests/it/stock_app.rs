@@ -282,7 +282,7 @@ fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
     );
 }
 
-/// A new pilot starts in Kania (128) on 23 June 1177, and a click on
+/// A new pilot starts in Kania (128) on 23 June 1177, and a Shift-click on
 /// Tichel (129) on flight's map plots a course one jump long.
 #[test]
 fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
@@ -321,6 +321,13 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
             px: (f64::from(at.x), f64::from(at.y)),
         },
     );
+    // A Shift-click adds the hop, as `_DoSystemMap` builds a course.
+    let shift = |pressed| WindowEvent::Key {
+        key: Key::Shift,
+        pressed,
+        repeat: false,
+    };
+    send(&mut app, shift(true));
     for pressed in [true, false] {
         let event = WindowEvent::PointerButton {
             button: MouseButton::Left,
@@ -328,6 +335,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
         };
         send(&mut app, event);
     }
+    send(&mut app, shift(false));
     let flight = app.screen().flight_view().expect("flying");
     let course = flight.session().expect("flying").course();
     assert_eq!(course, [SystemId(129)]);
