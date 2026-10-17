@@ -2,8 +2,9 @@
 //! `Accel` / the [`RuleValue::ThrustDivisor`] and the
 //! [`RuleKey::SpeedCap`] reading, read from the session's rules at each
 //! use ([`Session::flight_rules`]) for the player and, through the
-//! traffic's world, for every NPC; and the pushes' clamp, which
-//! [`Session::with_rules`] hands the fight.
+//! traffic's world, for every NPC; the pushes' clamp, which
+//! [`Session::with_rules`] hands the fight; and an escort of an immobile
+//! class, which no push moves.
 #![allow(clippy::float_cmp)]
 
 use super::*;
@@ -157,4 +158,65 @@ fn the_rules_hand_the_fight_the_speed_caps_reading() {
     assert_ne!(circled.combat, expected);
     expected.set_speed_cap(RuleSource::Bible);
     assert_eq!(circled.combat, expected);
+}
+
+/// A class of no `Speed` and no `Accel`, ship 204.
+fn immobile_class() -> crate::catalog::ShipRecord {
+    crate::testkit::ship(
+        204,
+        crate::handling::ShipFields {
+            speed: 0,
+            accel: 0,
+            ..crate::testkit::FAST
+        },
+    )
+}
+
+#[test]
+fn an_escort_of_a_class_of_no_speed_and_no_accel_flies_immobile_and_stays_put() {
+    let shoved = |record: crate::catalog::ShipRecord| {
+        let mut catalog = crate::testkit::catalog();
+        let ship = record.id;
+        catalog.ship_records.push(record);
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.escorts = vec![crate::pilot::Escort {
+            ship,
+            reserves: crate::reserves::Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }];
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        // The first tick places it on its slot.
+        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        let npc = session
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.ship == ship)
+            .expect("the escort");
+        let (id, immobile, at) = (npc.id, npc.immobile, npc.state.position);
+        // Held, so the push alone could move it.
+        npc.goal = Goal::Hold;
+        npc.state.velocity = Vec2::new(3.0, -1.0);
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        }
+        let state = session.npc(id).expect("there").state;
+        (immobile, at, state)
+    };
+    let (immobile, at, state) = shoved(immobile_class());
+    assert!(immobile, "its class's");
+    assert_eq!(state.position, at, "a push moves it not at all");
+    assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+    let (immobile, at, state) = shoved(crate::testkit::ship(
+        204,
+        crate::handling::ShipFields {
+            speed: 0,
+            ..crate::testkit::FAST
+        },
+    ));
+    assert!(!immobile, "it can thrust");
+    assert_ne!(state.position, at, "a push moves it");
 }

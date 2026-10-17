@@ -1902,6 +1902,36 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_of_a_class_of_no_speed_and_no_accel_comes_immobile_and_stays_put() {
+        let shoved = |fields| {
+            let mut kinds = table(1);
+            let record = nova_sim_catalog::fixture::ship(200, fields);
+            let arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
+            kinds
+                .ships
+                .insert(ShipId(200), table::kind(&record, &[], &arsenal));
+            let mut traffic = Traffic::new();
+            traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
+            let immobile = traffic.npcs[0].immobile;
+            traffic.npcs[0].state.velocity = Vec2::new(3.0, -1.0);
+            ticked(&mut traffic, &World::new(&[]), 3);
+            (immobile, traffic.npcs()[0].state)
+        };
+        let still = crate::handling::ShipFields {
+            speed: 0,
+            accel: 0,
+            ..FAST
+        };
+        let (immobile, state) = shoved(still);
+        assert!(immobile, "its class's");
+        assert_eq!(state.position, Vec2::ZERO, "a push moves it not at all");
+        assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+        let (immobile, state) = shoved(crate::handling::ShipFields { speed: 0, ..FAST });
+        assert!(!immobile, "it can thrust");
+        assert_ne!(state.position, Vec2::ZERO, "a push moves it");
+    }
+
+    #[test]
     fn the_ship_types_are_the_tables() {
         let mut traffic = Traffic::new();
         traffic.enter(table(0), &mut Draws::of(&[]));

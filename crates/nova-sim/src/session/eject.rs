@@ -971,6 +971,47 @@ mod tests {
         assert_eq!(mounted, [(WeaponId(128), 1)]);
     }
 
+    #[test]
+    fn the_hulk_of_a_class_of_no_speed_and_no_accel_is_immobile_and_stays_put() {
+        let left = |fields: ShipFields| {
+            let mut catalog = ejecting(100);
+            for record in &mut catalog.ship_records {
+                if record.id == ShipId(128) {
+                    record.fields = ShipFields {
+                        speed: fields.speed,
+                        accel: fields.accel,
+                        ..record.fields
+                    };
+                }
+            }
+            let mut session = flying(&catalog, &[POD]);
+            let at = Vec2::new(10.0, 20.0);
+            session.player = crate::flight::ShipState {
+                position: at,
+                velocity: Vec2::new(3.0, 4.0),
+                heading: 90.0,
+            };
+            session.condition = Condition::Disabled;
+            assert_eq!(fight(&mut session, true).0, EJECTED);
+            let immobile = hulk(&session).immobile;
+            for _ in 0..3 {
+                session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+            }
+            (immobile, at, hulk(&session).state)
+        };
+        let (immobile, at, state) = left(ShipFields {
+            speed: 0,
+            accel: 0,
+            ..FAST
+        });
+        assert!(immobile, "its class's");
+        assert_eq!(state.position, at, "the player's drift moves it not at all");
+        assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+        let (immobile, at, state) = left(FAST);
+        assert!(!immobile);
+        assert_ne!(state.position, at, "it drifts on");
+    }
+
     /// A braking pre-jump to 131.
     const BRAKING: crate::session::Jump = crate::session::Jump::PreJump {
         to: crate::catalog::SystemId(131),

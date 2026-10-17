@@ -733,6 +733,42 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_of_a_class_of_no_speed_and_no_accel_launches_immobile_and_stays_put() {
+        let launched = |fields| {
+            let mut catalog = carrying();
+            let viper = catalog
+                .ship_records
+                .iter_mut()
+                .find(|record| record.id == VIPER)
+                .expect("the Viper's");
+            viper.fields = fields;
+            let mut session = flying(&catalog, pilot(&catalog, 1, Vec::new()), RuleSource::Engine);
+            launch(&mut session);
+            let fighter = fleet_npcs(&session)[0].clone();
+            assert_ne!(fighter.state.velocity, Vec2::ZERO, "pushed out by the bay");
+            let npc = session.npc_mut(fighter.id).expect("there");
+            // Held, so the push alone could move it.
+            npc.goal = Goal::Hold;
+            for _ in 0..3 {
+                session.tick_traffic(&catalog, &Sitting, &mut NeverFires);
+            }
+            let state = session.npc(fighter.id).expect("there").state;
+            (fighter.immobile, fighter.state.position, state)
+        };
+        let (immobile, at, state) = launched(ShipFields {
+            speed: 0,
+            accel: 0,
+            ..VIPER_FIELDS
+        });
+        assert!(immobile, "its class's");
+        assert_eq!(state.position, at, "the bay's push moves it not at all");
+        assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+        let (immobile, at, state) = launched(VIPER_FIELDS);
+        assert!(!immobile);
+        assert_ne!(state.position, at, "the bay's push moves it");
+    }
+
+    #[test]
     fn firing_the_bay_launches_a_fighter_into_the_fleet_beside_the_player() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);

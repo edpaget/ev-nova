@@ -2429,14 +2429,30 @@ mod tests {
         ] {
             let mut ship = npc(FAST, goal, at(10.0, 20.0, 3.0, -1.0, 45.0));
             ship.immobile = true;
-            for _ in 0..30 {
+            let mut thrust: f32 = 0.0;
+            for tick in 0..30 {
+                // A ship that may move, at rest where this one is: its
+                // velocity after a tick is only that tick's thrust.
+                let mut at_rest = ship.clone();
+                at_rest.immobile = false;
+                at_rest.state.velocity = Vec2::ZERO;
+                fly(&mut at_rest, &sites, Some(&lead));
                 assert_eq!(fly(&mut ship, &sites, Some(&lead)), Outcome::Flying);
                 assert_eq!(ship.state.position, Vec2::new(10.0, 20.0), "{goal:?}");
+                assert_eq!(
+                    ship.state.velocity, at_rest.state.velocity,
+                    "{goal:?} {tick}: the velocity is set to none before the thrust"
+                );
+                if matches!(goal, Goal::Hold | Goal::Idle) {
+                    assert_eq!(ship.state.velocity, Vec2::ZERO, "{goal:?} {tick}");
+                }
+                thrust = thrust.max(ship.state.velocity.length());
+                // A shove lasts only until its next tick.
+                ship.state.velocity = ship.state.velocity + Vec2::new(5.0, 5.0);
             }
-            // A shove lasts only until its next tick.
-            ship.state.velocity = Vec2::new(5.0, 5.0);
-            fly(&mut ship, &sites, Some(&lead));
-            assert_eq!(ship.state.position, Vec2::new(10.0, 20.0), "{goal:?}");
+            if matches!(goal, Goal::Land(_) | Goal::Follow(_)) {
+                assert!(thrust > 0.0, "{goal:?} thrusts from rest");
+            }
         }
         let mut drifting = npc(FAST, Goal::Hold, at(10.0, 20.0, 3.0, -1.0, 45.0));
         fly(&mut drifting, &[], None);
