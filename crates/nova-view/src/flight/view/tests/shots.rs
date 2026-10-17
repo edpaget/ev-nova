@@ -148,3 +148,94 @@ fn a_shot_far_from_the_player_in_a_murky_system_is_darkened() {
     );
     assert_eq!(draws[0], Some((Color::WHITE, false)), "beside the player");
 }
+
+#[test]
+fn a_flying_shot_leaves_a_trail_of_particles_at_its_tail() {
+    let catalog = with_blaster(|look| {
+        look.particles = 3;
+        look.part_vel = 100;
+        look.part_life = (20, 20);
+        look.part_color = 0x0010_40FF;
+    });
+    let (effects, effects_chance) = scripted(&[]);
+    let mut view = fighting(catalog, &[]).with_effects_chance(effects_chance);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    assert_eq!(view.effects().particles().len(), 3, "a burst of 3");
+    let asked = effects.borrow().asked.clone();
+    assert_eq!(
+        &asked[..10],
+        [81, 81, 81, 81, 81, 81, 81, 81, 8, 8],
+        "the table, then the picks"
+    );
+    view.tick(TICK);
+    assert_eq!(view.effects().particles().len(), 6, "a burst a tick");
+    let session = view.session().expect("flying");
+    let shot = session.shots()[0];
+    let newest = view.effects().particles()[5];
+    // The blaster's sheet is no pixels wide here: the trail leaves from
+    // the shot's whole pixel, where it moved this tick, and flies from
+    // the next.
+    let start = crate::flight::trails::trail_start(shot.position, shot.heading, 0);
+    assert_eq!(newest.at, Point::new(start.x, start.y));
+    assert_eq!(newest.life, 20);
+}
+
+#[test]
+fn a_smoking_shot_leaves_puffs_that_landing_clears() {
+    let catalog = with_blaster(|look| {
+        look.flags = crate::flight::smoke::SMALL_SMOKE;
+        look.smoke_set = 1;
+    });
+    let mut view = fighting(catalog, &[]);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    view.tick(TICK);
+    let puffs = |view: &View| {
+        sprites(&drawn(view))
+            .into_iter()
+            .filter(|(image, _)| {
+                image.kind == crate::image::ImageKind::Icon && (1008..1016).contains(&image.id)
+            })
+            .count()
+    };
+    assert_eq!(puffs(&view), 2, "a puff a tick, from set 1's cicns");
+}
+
+#[test]
+fn landing_and_arriving_free_the_smoke() {
+    let smoking = |mut catalog: FakeCatalog| {
+        let (_, look) = catalog
+            .looks
+            .iter_mut()
+            .find(|(id, _)| *id == BLASTER.0)
+            .expect("the blaster's look");
+        let look = look.as_mut().expect("read");
+        look.flags = crate::flight::smoke::SMALL_SMOKE | crate::flight::smoke::LINGERING_SMOKE;
+        catalog
+    };
+    let fire = |view: &mut View| {
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        assert!(!view.shot_looks.smoke().puffs().is_empty(), "smoking");
+    };
+    let mut catalog = smoking(armed(0, &[BLASTER]));
+    catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+    let mut view = fighting(catalog, &[]);
+    fire(&mut view);
+    land_now(&mut view);
+    assert!(view.take_landing().is_some());
+    assert_eq!(view.shot_looks.smoke().puffs(), [], "landed");
+
+    let mut view = fighting(smoking(armed(0, &[BLASTER])), &[]);
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    fire(&mut view);
+    jump_now(&mut view);
+    arrive_now(&mut view);
+    assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    assert_eq!(view.shot_looks.smoke().puffs(), [], "arrived");
+}

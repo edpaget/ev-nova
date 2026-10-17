@@ -33,10 +33,12 @@
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent
 //!   one is added to what is under it ([`ShotShade`](shot_fade::ShotShade)).
+//! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
 //! - [`target`]: the target panel and the secondary weapon's line.
+//! - [`trails`]: the particle trail a shot leaves at its tail.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
 //!   it.
 //! - [`weapons`]: drawing shots and beams.
@@ -59,9 +61,11 @@ pub mod murk;
 mod pen;
 pub mod radar;
 pub mod shot_fade;
+pub mod smoke;
 pub mod spin;
 pub mod sprite;
 pub mod target;
+pub mod trails;
 pub mod view;
 pub mod weapons;
 

@@ -280,6 +280,11 @@ impl<
         self.draw_sprites(list, &camera);
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
+        if let Ok(session) = &self.session {
+            let viewer = session.player().position;
+            let murk = session.effective_murk();
+            self.shot_looks.draw_smoke(list, &camera, viewer, murk);
+        }
         self.draw_brackets(list, scene, &camera);
         self.draw_red_alert(list);
         if self.session.as_ref().is_ok_and(Session::double_time) {

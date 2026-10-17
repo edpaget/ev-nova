@@ -367,8 +367,9 @@ impl Effects {
     }
 
     /// Throws off `burst`'s particles, under the `caps` or not (see the
-    /// module docs).
-    fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
+    /// module docs): a fight's burst, or a shot's trail
+    /// ([`trails`](super::trails)).
+    pub fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
         let at = point(burst.at);
         let color = particle_color(burst.color);
         let (least, most) = burst.life;

@@ -496,7 +496,8 @@ impl<
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
                     show_combat(session, &scene, shown, &self.looks, chance);
-                    self.shot_looks.step(session, &self.looks, chance);
+                    let effects = (&mut self.effects, scene.caps);
+                    self.shot_looks.step(session, &self.looks, effects, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {

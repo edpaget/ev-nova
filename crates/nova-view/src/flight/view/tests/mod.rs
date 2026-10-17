@@ -773,7 +773,8 @@ impl ShipSprites for FakeCatalog {
 }
 
 /// The looks, cards and codes given; any other weapon cannot be read,
-/// and there is no other explosion type.
+/// and there is no other explosion type. Smoke sets 0 and 1 have their
+/// sprites.
 impl CombatLooks for FakeCatalog {
     fn weapon_look(&self, id: nova_sim::WeaponId) -> Result<WeaponLook, String> {
         self.looks
@@ -834,8 +835,10 @@ impl CombatLooks for FakeCatalog {
         self.cursor_sheet.clone()
     }
 
-    fn smoke_sheet(&self, _set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
-        None
+    fn smoke_sheet(&self, set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
+        (set < 2).then(|| crate::flight::catalog::SmokeSheet {
+            first_icon: 1000 + 8 * i16::from(set),
+        })
     }
 }
 
