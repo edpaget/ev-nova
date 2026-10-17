@@ -2666,6 +2666,132 @@ mod tests {
         assert_eq!(goods.abbrev(JunkId(999)), None);
     }
 
+    #[test]
+    fn a_goods_name_is_read_by_number_or_id() {
+        let goods = goods();
+        assert_eq!(goods.name(Good::Commodity(0)), Some("Food"));
+        assert_eq!(goods.name(Good::Commodity(5)), Some("Equipment"));
+        assert_eq!(goods.name(Good::Commodity(6)), None);
+        assert_eq!(goods.name(Good::Junk(JunkId(146))), Some("Opals"));
+        assert_eq!(goods.name(Good::Junk(JunkId(134))), Some("Water"));
+        assert_eq!(goods.name(Good::Junk(JunkId(999))), None);
+    }
+
+    #[test]
+    fn the_junk_records_are_kept_as_given() {
+        assert_eq!(goods().junk(), junk());
+    }
+
+    /// A catalog holding the stock commodity strings, [`junk`] and
+    /// [`disasters`], and these stellars' `Flags`: the [`PilotCatalog`]
+    /// port's fake, answering only what [`Goods::read`] asks.
+    struct Trading(Vec<(StellarId, u32)>);
+
+    impl PilotCatalog for Trading {
+        fn first_character(
+            &self,
+        ) -> Result<crate::catalog::CharacterStart, crate::catalog::StartError> {
+            unreachable!("Goods::read reads no character")
+        }
+        fn ship_fields(
+            &self,
+            _: crate::catalog::ShipId,
+        ) -> Result<crate::handling::ShipFields, String> {
+            unreachable!("Goods::read reads no ship")
+        }
+        fn default_outfits(
+            &self,
+            _: crate::catalog::ShipId,
+        ) -> Vec<(crate::catalog::OutfitId, u16)> {
+            unreachable!("Goods::read reads no ship")
+        }
+        fn outfits(&self) -> Vec<crate::catalog::OutfitRecord> {
+            unreachable!("Goods::read reads no outfit")
+        }
+        fn ships(&self) -> Vec<crate::catalog::ShipRecord> {
+            unreachable!("Goods::read reads no ship")
+        }
+        fn system_exists(&self, _: crate::catalog::SystemId) -> bool {
+            unreachable!("Goods::read reads no system")
+        }
+        fn landing_sites(&self, _: crate::catalog::SystemId) -> Vec<crate::catalog::LandingSite> {
+            unreachable!("Goods::read reads no system")
+        }
+        fn star_map(&self) -> Vec<crate::catalog::StarSystem> {
+            unreachable!("Goods::read reads no system")
+        }
+        fn commodity_strings(&self) -> CommodityStrings {
+            stock()
+        }
+        fn string_patch(&self, _: i16) -> StringPatch {
+            unreachable!("Goods::read reads its strings whole")
+        }
+        fn buoy_strings(&self) -> Vec<String> {
+            unreachable!("Goods::read reads no buoy")
+        }
+        fn junk(&self) -> Vec<JunkRecord> {
+            junk()
+        }
+        fn disasters(&self) -> Vec<DisasterRecord> {
+            disasters()
+        }
+        fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            self.0.clone()
+        }
+        fn date_affixes(&self) -> crate::catalog::DateAffixes {
+            unreachable!("Goods::read reads no date")
+        }
+        fn gate_sites(&self) -> Vec<crate::catalog::GateSite> {
+            unreachable!("Goods::read reads no gate")
+        }
+        fn stellar_lives(&self) -> Vec<crate::catalog::StellarLife> {
+            unreachable!("Goods::read reads no stellar's life")
+        }
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            unreachable!("Goods::read reads no graphic")
+        }
+        fn missions(&self) -> Vec<crate::catalog::MissionRecord> {
+            unreachable!("Goods::read reads no mission")
+        }
+        fn mission_texts(&self) -> Vec<crate::catalog::MissionTexts> {
+            unreachable!("Goods::read reads no mission")
+        }
+        fn listed_stellars(&self) -> Vec<crate::catalog::ListedStellar> {
+            unreachable!("Goods::read reads no listing")
+        }
+        fn system_visibility(&self) -> Vec<crate::catalog::SystemVisibility> {
+            unreachable!("Goods::read reads no system")
+        }
+        fn place_names(&self) -> crate::catalog::PlaceNames {
+            unreachable!("Goods::read reads no name")
+        }
+        fn stellar_marks(&self) -> Vec<crate::catalog::StellarMark> {
+            unreachable!("Goods::read reads no mark")
+        }
+        fn crons(&self) -> Vec<crate::catalog::CronRecord> {
+            unreachable!("Goods::read reads no crön")
+        }
+        fn ranks(&self) -> Vec<crate::catalog::RankRecord> {
+            unreachable!("Goods::read reads no rank")
+        }
+        fn nebulae(&self) -> Vec<crate::catalog::NebulaRecord> {
+            unreachable!("Goods::read reads no nebula")
+        }
+    }
+
+    #[test]
+    fn goods_are_read_from_the_catalogs_strings_junk_events_and_stellars() {
+        let stellars = vec![
+            (StellarId(141), 0),
+            (StellarId(140), StellarFlags::UNINHABITED),
+            (StellarId(128), 0x01),
+        ];
+        assert_eq!(
+            Goods::read(&Trading(stellars.clone())),
+            Goods::new(&stock(), junk(), disasters()).with_stellars(&stellars)
+        );
+    }
+
     /// A pilot at the exchange: the [`Trader`] port's fake.
     #[derive(Debug, Default)]
     struct FakePilot {
