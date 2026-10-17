@@ -260,6 +260,42 @@ fn the_open_maps_panel_follows_a_system_explored_between_frames() {
     );
 }
 
+#[test]
+fn the_open_maps_panel_follows_a_system_charted_between_frames() {
+    // Sol, explored at level 1 by the new pilot, lists Earth with food.
+    let earth = StellarFlags::CAN_LAND | 0x0002 | 0x0004 | 0x1000_0000;
+    let mut view = FlightView::new(FakeCatalog {
+        sites: vec![site(128, (0.0, 0.0), earth)],
+        sol_navs: vec![Some((earth, 0))],
+        ..catalog()
+    });
+    land_now(&mut view);
+    view.open_bar_map();
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    let goods = |view: &View| match &view.course_map().panel().expect("taken").column.body {
+        nova_sim::map_panel::ColumnBody::Inhabited { goods, .. } => goods.clone(),
+        body => panic!("{body:?}"),
+    };
+    assert_eq!(
+        goods(&view),
+        nova_sim::map_panel::Listing::Unknown,
+        "level 1"
+    );
+    assert!(view.transact(|pilot| {
+        pilot.chart(SystemId(130));
+    }));
+    assert_eq!(
+        goods(&view),
+        nova_sim::map_panel::Listing::Unknown,
+        "not yet"
+    );
+    view.tick(TICK);
+    assert!(
+        matches!(goods(&view), nova_sim::map_panel::Listing::Items(_)),
+        "level 2, the next frame"
+    );
+}
+
 // The exchange and the day's chances.
 
 #[test]
