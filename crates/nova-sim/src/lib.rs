@@ -371,6 +371,7 @@ pub use nova_sim_base::reserves;
 pub use nova_sim_base::rule_values;
 pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
+pub use nova_sim_base::speed_cap;
 pub use nova_sim_combat::sabotage;
 pub mod save;
 pub mod saves;

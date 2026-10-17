@@ -32,6 +32,8 @@
 //!   [`Rulebook`]) or drawing on the chance in rule order, and each
 //!   described by a [`Descriptor`](rules::Descriptor) tools list without
 //!   running it.
+//! - [`speed_cap`]: the original's per-axis speed caps, `_AdjustedAccel`
+//!   and `_SpeedLimit`, which flight, launches and knockback share.
 //! - [`trig`]: the original's table trigonometry in whole degrees.
 //!
 //! A doc here links only to items of this crate. An item of a crate above
@@ -51,6 +53,7 @@ pub mod reserves;
 pub mod rule_values;
 pub mod rulebook;
 pub mod rules;
+pub mod speed_cap;
 pub mod trig;
 
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};

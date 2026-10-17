@@ -73,6 +73,7 @@
 use super::ShipRef;
 use crate::bay::launch_velocity;
 use crate::geometry::Vec2;
+pub use crate::speed_cap::speed_limit;
 use crate::trig::intercept_angle;
 
 /// How near, in pixels on an axis, the gates of the impact block and the
@@ -182,16 +183,6 @@ pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32) -> Tractor
     }
     let bearing = f32::from(intercept_angle(target.position, start));
     Tractor::Pulls(Some(pulled(firer, bearing, impact)))
-}
-
-/// `velocity` with each axis clamped to `top_speed` either way
-/// (`_SpeedLimit` @0x2af91).
-#[must_use]
-pub fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
-    // Down to the top speed first, then up to its negative, as the
-    // original tests them; `f32::clamp` would panic on a negative one.
-    let clamp = |axis: f32| axis.min(top_speed).max(-top_speed);
-    Vec2::new(clamp(velocity.x), clamp(velocity.y))
 }
 
 /// Whether a push can move `body`: a class of some `Mass`, not
@@ -337,18 +328,6 @@ mod tests {
         assert!(
             push(&ship, point, 50.0, source(0.0, 0.0)).is_some(),
             "a positive impact is never gated"
-        );
-    }
-
-    #[test]
-    fn a_speed_limit_clamps_each_axis_either_way() {
-        assert_eq!(
-            speed_limit(Vec2::new(12.0, -15.0), 10.0),
-            Vec2::new(10.0, -10.0)
-        );
-        assert_eq!(
-            speed_limit(Vec2::new(3.0, -4.0), 10.0),
-            Vec2::new(3.0, -4.0)
         );
     }
 

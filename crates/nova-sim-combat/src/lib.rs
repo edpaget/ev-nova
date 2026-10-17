@@ -70,7 +70,7 @@
 // `nova-sim-base`, `nova-sim-catalog` and `nova-sim-state`.
 #[allow(unused_imports)]
 use nova_sim_base::{
-    RuleKey, chance, flight, fuel, geometry, handling, reserves, rulebook, rules, trig,
+    RuleKey, chance, flight, fuel, geometry, handling, reserves, rulebook, rules, speed_cap, trig,
 };
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, buoy, catalog, control};

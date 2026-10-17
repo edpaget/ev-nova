@@ -61,8 +61,8 @@
 //! fighter back aboard.
 
 use crate::combat::ShipRef;
-use crate::flight::facing;
 use crate::geometry::Vec2;
+use crate::speed_cap::adjusted_accel;
 
 /// The `wëap` `Guidance` of a fighter bay.
 pub const FIGHTER_BAY: i16 = 99;
@@ -115,27 +115,10 @@ pub fn dock_window(maneuver: i16) -> f32 {
 
 /// The velocity of a fighter launched along `heading` from a carrier
 /// moving at `carrier`, pushed `push` pixels a tick, of `top_speed`:
-/// `_AdjustedAccel` (@0x2ae4b-0x2af43). On each axis the push's share is
-/// added while the velocity is short of the top speed's share, when both
-/// shares are above none or both below; when they differ in sign, or one
-/// is none, it is added whatever the velocity (@0x2aecd-0x2aeee), so a
-/// negative push always pulls.
+/// `_AdjustedAccel` (@0x2ae4b-0x2af43, [`adjusted_accel`]).
 #[must_use]
 pub fn launch_velocity(carrier: Vec2, heading: f32, push: f32, top_speed: f32) -> Vec2 {
-    let along = facing(heading);
-    let gain = |velocity: f32, share: f32| {
-        let push = share * push;
-        let top = share * top_speed;
-        let past = if push > 0.0 && top > 0.0 {
-            velocity >= top
-        } else if push < 0.0 && top < 0.0 {
-            velocity <= top
-        } else {
-            false
-        };
-        if past { velocity } else { velocity + push }
-    };
-    Vec2::new(gain(carrier.x, along.x), gain(carrier.y, along.y))
+    adjusted_accel(carrier, heading, push, top_speed)
 }
 
 /// How many fighters `bays` bays of `MaxAmmo` `max_ammo` hold, with
@@ -174,71 +157,17 @@ mod tests {
     }
 
     #[test]
-    fn a_carrier_at_rest_gives_the_fighter_the_push_along_its_heading() {
-        let up = launch_velocity(Vec2::ZERO, 0.0, 4.0, 10.0);
-        assert_eq!(up, facing(0.0) * 4.0);
-        let right = launch_velocity(Vec2::ZERO, 90.0, 4.0, 10.0);
-        assert!((right - Vec2::new(4.0, 0.0)).length() < 1e-5, "{right:?}");
-    }
-
-    #[test]
-    fn an_axis_at_or_past_the_top_speed_gains_nothing_and_the_other_still_gains() {
-        // Heading 45: the push is (2.83, -2.83), the top speed's share
-        // (7.07, -7.07).
-        let push = facing(45.0) * 4.0;
-        let top = facing(45.0) * 10.0;
-        let fast_x = launch_velocity(Vec2::new(8.0, 0.0), 45.0, 4.0, 10.0);
-        assert_eq!(fast_x, Vec2::new(8.0, push.y), "x past its share");
-        let at_y = launch_velocity(Vec2::new(0.0, top.y), 45.0, 4.0, 10.0);
-        assert_eq!(at_y, Vec2::new(push.x, top.y), "y at its share");
-        let backwards = launch_velocity(Vec2::new(-20.0, 20.0), 45.0, 4.0, 10.0);
-        assert_eq!(
-            backwards,
-            Vec2::new(-20.0 + push.x, 20.0 + push.y),
-            "moving the other way, both gain"
-        );
-        let down = launch_velocity(Vec2::new(0.0, 12.0), 180.0, 4.0, 10.0);
-        assert_eq!(down.y, 12.0, "downwards past its share");
-        let down = launch_velocity(Vec2::new(0.0, 9.0), 180.0, 4.0, 10.0);
-        assert!((down.y - 13.0).abs() < 1e-5, "{down:?}");
-    }
-
-    #[test]
-    fn a_push_against_the_top_speeds_share_always_gains() {
-        // `_AdjustedAccel` @0x2aec2-0x2aeee tests an axis only while its
-        // push and its share of the top speed point the same way: a
-        // negative push (a recoil below -1) gains whatever the velocity.
-        let push = facing(0.0) * -4.0;
-        let fast = launch_velocity(Vec2::new(0.0, 30.0), 0.0, -4.0, 10.0);
-        assert!((fast.y - (30.0 + push.y)).abs() < 1e-5, "{fast:?}");
-        let slow = launch_velocity(Vec2::new(0.0, -30.0), 0.0, -4.0, 10.0);
-        assert!((slow.y - (-30.0 + push.y)).abs() < 1e-5, "{slow:?}");
-    }
-
-    #[test]
-    fn a_push_that_crosses_the_top_speed_is_not_clamped() {
-        let v = launch_velocity(Vec2::new(0.0, -8.0), 0.0, 4.0, 10.0);
-        assert!((v.y + 12.0).abs() < 1e-5, "{v:?}");
-        assert!(v.x.abs() < 1e-5);
-    }
-
-    #[test]
-    fn a_push_against_the_top_speeds_sign_is_added_whatever_the_velocity() {
-        // A negative push with a positive top speed: the signs differ on
-        // each axis, so `_AdjustedAccel` adds it unchecked (@0x2aecd-0x2aeee).
-        let pulled = launch_velocity(Vec2::ZERO, 90.0, -0.5, 2.0);
-        assert!(
-            (pulled - Vec2::new(-0.5, 0.0)).length() < 1e-5,
-            "{pulled:?}"
-        );
-        let further = launch_velocity(Vec2::new(-5.0, 0.0), 90.0, -0.5, 2.0);
-        assert!((further.x + 5.5).abs() < 1e-5, "{further:?}");
-        // A negative push with no top speed: added too.
-        let stopped = launch_velocity(Vec2::new(-1.0, 0.0), 90.0, -0.5, 0.0);
-        assert!((stopped.x + 1.5).abs() < 1e-5, "{stopped:?}");
-        // A positive push with no top speed: added too.
-        let unbounded = launch_velocity(Vec2::new(3.0, 0.0), 90.0, 0.5, 0.0);
-        assert!((unbounded.x - 3.5).abs() < 1e-5, "{unbounded:?}");
+    fn a_launch_is_adjusted_accel() {
+        for (carrier, heading, push, top) in [
+            (Vec2::ZERO, 0.0, 4.0, 10.0),
+            (Vec2::new(8.0, 0.0), 45.0, 4.0, 10.0),
+            (Vec2::new(0.0, 30.0), 0.0, -4.0, 10.0),
+        ] {
+            assert_eq!(
+                launch_velocity(carrier, heading, push, top),
+                adjusted_accel(carrier, heading, push, top)
+            );
+        }
     }
 
     #[test]
