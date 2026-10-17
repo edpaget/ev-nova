@@ -233,6 +233,25 @@ fn tab_on_the_hypergate_map_redraws_item_3_as_it_picks() {
     assert_eq!(view.course_map().update(), Some(MapUpdate::Full));
 }
 
+/// The map opens only for a gate with a link that counts, and the cycle
+/// counts the same links (a link no system lists, as 999, still counts, as
+/// a `None` destination), so the gate's links are dropped behind the open
+/// map to leave the cycle empty.
+#[test]
+fn tab_on_a_hypergate_map_with_nothing_to_pick_redraws_nothing() {
+    let mut view = FlightView::new(gated());
+    land_now(&mut view);
+    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+    view.catalog.gates[0].links = [None; 8];
+    jiggle_map(&mut view);
+    tap(&mut view, Key::Tab);
+    assert_eq!(
+        view.course_map().update(),
+        Some(MapUpdate::Partial),
+        "no destination: nothing invalidated (`jle` @0x13daf)"
+    );
+}
+
 #[test]
 fn tab_on_the_bars_map_redraws_nothing() {
     let mut view = in_the_bar(None);
