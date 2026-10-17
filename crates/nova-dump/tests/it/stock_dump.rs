@@ -8,7 +8,7 @@
 //! files against the store's own view of the data, collecting every
 //! problem before asserting.
 
-mod common;
+use crate::common;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
