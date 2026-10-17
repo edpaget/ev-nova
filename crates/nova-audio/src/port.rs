@@ -37,6 +37,36 @@ impl Default for Volume {
     }
 }
 
+/// How much a sound matters when the voices are full: the `AmbrosiaTools` library's
+/// `ST_PlaySoundParam` (@0xe3dc2) keeps its voice list in order by
+/// priority and loudness, and a sound goes before the first voice it
+/// matches or beats on both (see [`crate::voices`]).
+///
+/// The original's callers use 1 (most beeps) to 32000 (the warp-up and
+/// the spaceport ambient's param blocks); [`crate::priority`] holds each
+/// event's. A priority of 0 is 1, as `ST_PlaySoundParam` makes it
+/// (@0xe3df1-0xe3df8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Priority(u16);
+
+impl Priority {
+    /// Priority `priority`, with 0 taken as 1.
+    #[must_use]
+    pub const fn new(priority: u16) -> Self {
+        if priority == 0 {
+            Self(1)
+        } else {
+            Self(priority)
+        }
+    }
+
+    /// The number, 1 and up.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
 /// One thing for the audio device to do.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AudioCommand {
@@ -150,6 +180,22 @@ mod tests {
         assert_eq!(Volume::FULL.amplitude(), 1.0);
         assert_eq!(Volume::SILENT.amplitude(), 0.0);
         assert_eq!(Volume::default(), Volume::FULL);
+    }
+
+    #[test]
+    fn a_priority_of_0_is_1_as_st_play_sound_param_makes_it() {
+        assert_eq!(Priority::new(0).get(), 1);
+        assert_eq!(Priority::new(0), Priority::new(1));
+        assert_eq!(Priority::new(1).get(), 1);
+        assert_eq!(Priority::new(4).get(), 4);
+        assert_eq!(Priority::new(32_000).get(), 32_000);
+        assert_eq!(Priority::new(u16::MAX).get(), u16::MAX);
+    }
+
+    #[test]
+    fn priorities_order_by_their_number() {
+        assert!(Priority::new(5) > Priority::new(4));
+        assert!(Priority::new(1) < Priority::new(32_000));
     }
 
     #[test]

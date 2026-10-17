@@ -7,6 +7,9 @@
 //!   [`Volume`]).
 //! - [`table`]: the [`SoundTable`] of which `snd ` each event plays, and
 //!   the original game's, [`SoundTable::ORIGINAL`].
+//! - [`voices`]: the [`VoiceList`](voices::VoiceList), which decides which
+//!   sounds play when more are asked for than there are voices, by the
+//!   original's priority and loudness.
 //! - [`settings`]: the player's [`AudioSettings`] (sound and music on or
 //!   off, and their separate volumes), and the [`SettingsStore`] port
 //!   settings are saved through. The keeper that reads and saves them,
@@ -33,6 +36,7 @@ pub mod port;
 pub mod recording;
 pub mod settings;
 pub mod table;
+pub mod voices;
 
 pub use crate::core::{AudioCore, music_fade};
 pub use crate::file::FileSettings;
