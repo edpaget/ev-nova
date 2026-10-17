@@ -111,6 +111,18 @@ impl Session {
     pub fn take_board_line(&mut self) -> Option<MissionBoardLine> {
         self.board_line.take()
     }
+
+    /// Puts the player's ship over NPC `id`, at its place, velocity and
+    /// heading, and targets it, for
+    /// [`fixture::put_player_over`](crate::fixture::put_player_over). An
+    /// NPC not in the system changes nothing.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn put_player_over(&mut self, id: NpcId) {
+        if let Some(state) = self.npc(id).map(|npc| npc.state) {
+            self.player = state;
+            self.target = Some(id);
+        }
+    }
 }
 
 /// Whether boarding `npc` calls the Good Samaritans: unless a person
@@ -489,6 +501,21 @@ mod tests {
             Ok(Boarding::MissionShip(Some(MissionBoardLine::Boarded)))
         );
         assert_eq!(session.take_board_line(), None, "said by the boarding");
+    }
+
+    #[test]
+    fn put_over_a_ship_the_player_targets_it_at_its_place_speed_and_heading() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.target = None;
+        session.player.position = Vec2::new(300.0, -40.0);
+        session.player.heading = 90.0;
+        let police = session.npcs()[1].clone();
+        session.put_player_over(police.id);
+        assert_eq!(session.target().map(|npc| npc.id), Some(police.id));
+        assert_eq!(*session.player(), police.state);
+        session.put_player_over(crate::traffic::npc::NpcId(99));
+        assert_eq!(*session.player(), police.state, "no such ship");
     }
 
     #[test]

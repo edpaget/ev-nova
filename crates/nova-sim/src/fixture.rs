@@ -5,6 +5,7 @@
 //! [`bits_allowing`], the control bits that make a test hold, for setting
 //! a pilot up directly; [`disable`], for disabling a ship directly;
 //! [`set_player_condition`], for downing or repairing the player directly;
+//! [`put_player_over`], for bringing the player over a ship to board it;
 //! [`cloak`], for setting a ship's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
@@ -47,6 +48,13 @@ pub fn disable(session: &mut Session, id: NpcId) {
 /// without a fight.
 pub fn set_player_condition(session: &mut Session, to: Condition) {
     session.set_player_condition(to);
+}
+
+/// Puts the player's ship in `session` over NPC `id`, at its place,
+/// velocity and heading, and targets it, if it is in the system: for a
+/// test that boards a ship without flying to it.
+pub fn put_player_over(session: &mut Session, id: NpcId) {
+    session.put_player_over(id);
 }
 
 /// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:
