@@ -9,7 +9,7 @@
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
 //! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
-//! [`map_panel`], [`map_search`], [`pre_jump`], [`rating`],
+//! [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
 //! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
 //! with the test support in `fixture`.
 //!
@@ -173,6 +173,9 @@
 //!   system selected, as `_MapDialogUpdate` decides it: the ports, the
 //!   hazards, the title, and the explored level's goods and services
 //!   ([`map_panel::map_panel`]).
+//! - [`map_route`]: how a Shift-click on the course map writes the
+//!   course, as `_DoSystemMap` cuts, wraps and appends it
+//!   ([`map_route::shift_click`]).
 //! - [`map_search`]: the galaxy map's Find, as `_DoSystemSearch` matches a
 //!   typed name against the systems' names ([`map_search::search`]).
 //! - [`market`]: the commodity exchange: what a stellar trades and at
@@ -344,6 +347,7 @@ pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
 pub mod map_panel;
+pub mod map_route;
 pub mod map_search;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
