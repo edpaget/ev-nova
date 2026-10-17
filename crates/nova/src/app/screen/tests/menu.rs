@@ -1436,3 +1436,45 @@ fn the_course_maps_zoom_carries_into_the_next_pilot_new_or_opened() {
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(flight(&screen).course_map_zoom(), Some(again), "Open Pilot");
 }
+
+/// Opens the flight's course map, flips its borders with B and closes it.
+fn flip_the_borders(screen: &mut AppScreen) {
+    for k in [MAP, Key::Char('b'), MAP] {
+        screen.input(&key(k, true));
+        screen.input(&key(k, false));
+    }
+    assert!(!flight(screen).map_open());
+}
+
+#[test]
+fn the_borders_setting_reaches_each_flight_and_a_change_carries_into_the_next_pilot() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store).with_map_borders(false);
+    create(&mut screen, "Ada");
+    assert!(!flight(&screen).map_borders_shown(), "the setting given");
+    flip_the_borders(&mut screen);
+    assert_eq!(
+        screen.take_map_borders_save(),
+        Some(true),
+        "the flight's, forwarded"
+    );
+    assert_eq!(screen.take_map_borders_save(), None, "taken");
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    create(&mut screen, "Bea");
+    assert!(flight(&screen).map_borders_shown(), "New Pilot");
+    flip_the_borders(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    open_first(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert!(!flight(&screen).map_borders_shown(), "Open Pilot");
+}
+
+#[test]
+fn the_borders_are_on_for_a_router_given_no_setting() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    assert!(flight(&screen).map_borders_shown());
+    assert_eq!(screen.take_map_borders_save(), None);
+}

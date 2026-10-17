@@ -245,7 +245,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
-    /// them), each when there is one; a failed save is kept as a warning.
+    /// them), each when there is one; then a galaxy map borders setting
+    /// its map's close reports ([`Screen::take_map_borders_save`]) is
+    /// saved through the keeper with the other settings as they are. A
+    /// failed save is kept as a warning.
     ///
     /// Then, unless the core is still waiting on a keyed click (its 600
     /// playing, [`AudioCore::click_waiting`]), the screen is told the
@@ -272,6 +275,17 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             if let Some(keeper) = &mut self.settings
                 && let Err(warning) = keeper.change(settings)
             {
+                self.warnings.push(warning);
+            }
+        }
+        if let Some(map_borders) = self.screen.take_map_borders_save()
+            && let Some(keeper) = &mut self.settings
+        {
+            let settings = GameSettings {
+                map_borders,
+                ..keeper.settings()
+            };
+            if let Err(warning) = keeper.change(settings) {
                 self.warnings.push(warning);
             }
         }
@@ -2101,6 +2115,7 @@ mod tests {
                 audio: AudioSettings::default().with_prefs(effects_at(4).sound),
                 hyperspace_effects: false,
                 quicktime_movies: true,
+                map_borders: true,
             }
         );
         let saved: serde_json::Value =
@@ -2251,6 +2266,81 @@ mod tests {
         app.handle(key(Key::Space, true), &mut window, &mut gpu);
         assert_eq!(app.take_warnings(), Vec::<String>::new(), "saved");
         assert_eq!(store.writes(), 1);
+    }
+
+    /// Reports a borders save and a change of prefs, each once, as a test
+    /// sets them.
+    struct BordersScreen {
+        save: Option<bool>,
+        prefs: Option<Prefs>,
+    }
+
+    impl Screen for BordersScreen {
+        fn input(&mut self, _input: &Input) -> ScreenAction {
+            ScreenAction::None
+        }
+
+        fn tick(&mut self, _dt: Duration) {}
+
+        fn draw(&self, _list: &mut DrawList) {}
+
+        fn take_prefs(&mut self) -> Option<Prefs> {
+            self.prefs.take()
+        }
+
+        fn take_map_borders_save(&mut self) -> Option<bool> {
+            self.save.take()
+        }
+    }
+
+    fn borders_app(window: &FakeWindow, store: &MemorySettings) -> App<NoImages, BordersScreen> {
+        let screen = BordersScreen {
+            save: None,
+            prefs: None,
+        };
+        App::new(window, NoImages, screen).with_settings(keeper(store))
+    }
+
+    fn saved_json(store: &MemorySettings) -> serde_json::Value {
+        serde_json::from_str(&store.text().expect("saved")).expect("JSON")
+    }
+
+    #[test]
+    fn a_borders_save_is_written_with_the_other_settings_kept() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::holding(r#"{"music": false}"#);
+        let mut app = borders_app(&window, &store);
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 0, "none reported, none written");
+        app.screen.save = Some(false);
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 1);
+        assert_eq!(saved_json(&store)["show_map_borders"], false);
+        assert_eq!(saved_json(&store)["music"], false, "kept");
+        app.screen.prefs = Some(effects_at(4));
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 2);
+        assert_eq!(
+            saved_json(&store)["show_map_borders"],
+            false,
+            "a later Preferences change keeps it"
+        );
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_borders_save_is_a_warning() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = borders_app(&window, &store);
+        store.fail_writes(true);
+        app.screen.save = Some(false);
+        app.handle(key(Key::Space, true), &mut window, &mut RecordingGpu::new());
+        assert_eq!(
+            app.take_warnings(),
+            ["nova: cannot save the settings: the disk is full".to_owned()]
+        );
     }
 
     #[test]

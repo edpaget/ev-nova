@@ -297,6 +297,15 @@ impl Screen for AppScreen {
         self.prefs_change.take()
     }
 
+    /// The flight's borders setting to save, once after an undocked close
+    /// of its map that changed it
+    /// ([`FlightView::take_map_borders_save`](nova_view::flight::FlightView::take_map_borders_save)).
+    fn take_map_borders_save(&mut self) -> Option<bool> {
+        self.flight
+            .as_mut()
+            .and_then(nova_view::flight::FlightView::take_map_borders_save)
+    }
+
     fn now_showing(&self) -> Option<Showing> {
         Some(self.showing())
     }

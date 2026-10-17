@@ -11,8 +11,15 @@
 //!   somewhere to save.
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
-//! `music_volume`, `hyperspace_effects` and `quicktime_movies`; files
-//! saved before the last two existed load unchanged, with them on.
+//! `music_volume`, `hyperspace_effects`, `quicktime_movies` and
+//! `show_map_borders`; files saved before the last three existed load
+//! unchanged, with them on.
+//!
+//! `show_map_borders` is the original's `ShowMapBorders`: whether the
+//! galaxy map shades government borders, on when absent (`_LoadPrefs`
+//! @0xced57-0xced93). The Preferences dialog never carries it, as
+//! `_SavePrefs` never writes it: the map's close saves it
+//! (`nova_view::flight::FlightView::take_map_borders_save`).
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
 use nova_view::Prefs;
@@ -29,16 +36,20 @@ pub struct GameSettings {
     /// Whether a `dësc`'s movie plays: the original's QuickTime Movies
     /// preference.
     pub quicktime_movies: bool,
+    /// Whether the galaxy map shades government borders: the original's
+    /// `ShowMapBorders`.
+    pub map_borders: bool,
 }
 
 impl Default for GameSettings {
-    /// The default sound settings, with the hyperspace effects and the
-    /// movies on.
+    /// The default sound settings, with the hyperspace effects, the
+    /// movies and the map's borders on.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
             hyperspace_effects: true,
             quicktime_movies: true,
+            map_borders: true,
         }
     }
 }
@@ -55,13 +66,15 @@ impl GameSettings {
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
-    /// at its chosen level as [`AudioSettings::with_prefs`] does.
+    /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
+    /// map's borders, which the prefs don't carry.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
             audio: self.audio.with_prefs(prefs.sound),
             hyperspace_effects: prefs.hyperspace_effects,
             quicktime_movies: prefs.quicktime_movies,
+            ..self
         }
     }
 }
@@ -79,6 +92,7 @@ struct Saved {
     music_volume: f32,
     hyperspace_effects: bool,
     quicktime_movies: bool,
+    show_map_borders: bool,
     #[serde(flatten)]
     others: Others,
 }
@@ -102,6 +116,7 @@ impl From<GameSettings> for Saved {
             music_volume: audio.music_volume.amplitude(),
             hyperspace_effects: settings.hyperspace_effects,
             quicktime_movies: settings.quicktime_movies,
+            show_map_borders: settings.map_borders,
             others: Others::new(),
         }
     }
@@ -122,6 +137,7 @@ impl From<Saved> for GameSettings {
             .capped(),
             hyperspace_effects: saved.hyperspace_effects,
             quicktime_movies: saved.quicktime_movies,
+            map_borders: saved.show_map_borders,
         }
     }
 }
@@ -266,6 +282,7 @@ mod tests {
             audio,
             hyperspace_effects: false,
             quicktime_movies: true,
+            map_borders: true,
         }
     }
 
@@ -281,6 +298,7 @@ mod tests {
                 audio: AudioSettings::default(),
                 hyperspace_effects: true,
                 quicktime_movies: true,
+                map_borders: true,
             }
         );
     }
@@ -345,6 +363,7 @@ mod tests {
                 },
                 hyperspace_effects: true,
                 quicktime_movies: true,
+                map_borders: true,
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -365,6 +384,7 @@ mod tests {
                 },
                 hyperspace_effects: true,
                 quicktime_movies: true,
+                map_borders: true,
             }
         );
     }
@@ -392,6 +412,47 @@ mod tests {
             ..Prefs::default()
         });
         assert!(!movies_on.quicktime_movies, "the prefs choose it");
+    }
+
+    #[test]
+    fn the_map_borders_start_on_and_a_file_without_them_has_them_on() {
+        assert!(GameSettings::default().map_borders);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(
+            keeper.settings().map_borders,
+            "ShowMapBorders' default, YES"
+        );
+    }
+
+    #[test]
+    fn the_map_borders_off_are_saved_and_read_back() {
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                map_borders: false,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["show_map_borders"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert!(!restarted.settings().map_borders);
+    }
+
+    #[test]
+    fn the_prefs_keep_the_map_borders() {
+        let off = GameSettings {
+            map_borders: false,
+            ..GameSettings::default()
+        };
+        let changed = off.with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        assert!(!changed.map_borders, "the Preferences dialog never has it");
+        assert!(!changed.hyperspace_effects);
     }
 
     #[test]
@@ -431,6 +492,7 @@ mod tests {
                 "music_volume": 0.5,
                 "hyperspace_effects": false,
                 "quicktime_movies": true,
+                "show_map_borders": true,
             })
         );
     }
@@ -483,6 +545,7 @@ mod tests {
                 audio: quiet(),
                 hyperspace_effects: true,
                 quicktime_movies: true,
+                map_borders: true,
             })
             .expect("saves");
         keeper
@@ -594,6 +657,7 @@ mod tests {
             },
             hyperspace_effects: false,
             quicktime_movies: true,
+            map_borders: true,
         };
         assert_eq!((settings, warning), (expected, None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");

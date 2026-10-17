@@ -28,6 +28,7 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_view::flight::radar::IRect;
 use nova_view::galaxy::NEUTRAL;
+use nova_view::galaxy::borders::draw_cells;
 use nova_view::galaxy::map::{BUTTON, ENTER_BUTTON, SYSTEM_INSET};
 use nova_view::galaxy::nebulae::{NebulaFrame, nebula_rect};
 use nova_view::oval::{oval_fill_pixels, oval_frame_pixels, runs};
@@ -296,7 +297,7 @@ fn rgba(color: nova_view::Color) -> [f32; 4] {
 
 #[test]
 fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
-    let (harness, frame) = Harness::open_map();
+    let (mut harness, frame) = Harness::open_map();
     let shape: Vec<(&str, usize)> = frame
         .batches
         .iter()
@@ -306,14 +307,26 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
             Batch::Text(runs) => ("text", runs.len()),
         })
         .collect();
-    // The nebula; 2 links and each system's oval, a row at a time, its
-    // black fill then its frame; the 3 names, twice; the panel's background
-    // and separator; the panel's 3 lines and the router's hint.
+    // The borders' cells, one rect each; the nebula; 2 links and each
+    // system's oval, a row at a time, its black fill then its frame; the 3
+    // names, twice; the panel's background and separator; the panel's 3
+    // lines and the router's hint.
     let oval = IRect::new(0, 0, 2 * SYSTEM_INSET, 2 * SYSTEM_INSET);
     let rows = runs(&oval_fill_pixels(oval)).len() + runs(&oval_frame_pixels(oval, 1)).len();
+    let map = harness.app.screen().galaxy_map();
+    let mut cells = nova_view::DrawList::new();
+    draw_cells(
+        &mut cells,
+        map.border_cells(),
+        (0, 0),
+        IRect::new(0, 0, 1024, 608),
+        map.model().govt_colors(),
+    );
+    assert!(!cells.is_empty(), "the viewer's borders, on by default");
     assert_eq!(
         shape,
         [
+            ("solid", cells.len()),
             ("sprites", 1),
             ("solid", 2 + 3 * rows),
             ("text", 6),
@@ -321,6 +334,9 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
             ("text", 4)
         ]
     );
+    // The rest is the map's own drawing: the borders off.
+    harness.press(Key::Char('b'));
+    let frame = harness.frame();
 
     // 600 x 300 fits at 133%; the nebula fills its scaled rectangle,
     // truncated as `_MapDialogUpdate` truncates it, with `addMax`.
@@ -369,7 +385,10 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
 
 #[test]
 fn keys_reach_the_map() {
-    let (mut harness, before) = Harness::open_map();
+    let (mut harness, _) = Harness::open_map();
+    // The borders off, so that the black fills are the systems' ovals.
+    harness.press(Key::Char('b'));
+    let before = harness.frame();
 
     harness.press(Key::Right);
     let after = harness.frame();

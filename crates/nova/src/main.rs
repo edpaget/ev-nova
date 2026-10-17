@@ -101,6 +101,18 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
 use winit::event_loop::EventLoop;
 
+/// Nanoseconds since 1970, wrapped: a different seed each run.
+fn run_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            since
+                .as_secs()
+                .wrapping_mul(1_000_000_000)
+                .wrapping_add(u64::from(since.subsec_nanos()))
+        })
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let dir = match cli::data_dir(&args, std::env::var_os("NOVA_DATA")) {
@@ -148,27 +160,20 @@ fn main() -> ExitCode {
     if pilots.is_none() {
         eprintln!("nova: there is nowhere to save pilots (no home directory); saving nothing");
     }
-    // Nanoseconds since 1970, wrapped: a different seed each run.
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            since
-                .as_secs()
-                .wrapping_mul(1_000_000_000)
-                .wrapping_add(u64::from(since.subsec_nanos()))
-        });
+    let seed = run_seed();
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     // The effects' own: drawing on it never changes the simulation's draws.
     let effects: Rc<RefCell<dyn Chance>> =
         Rc::new(RefCell::new(SplitMix::new(seed.wrapping_add(1))));
-    let screen = start_screen(Rc::clone(&data))
+    let mut screen = start_screen(Rc::clone(&data))
         .with_prefs(settings.prefs())
+        .with_map_borders(settings.map_borders)
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
-        .with_flight_overlays(overlays);
-    // Every disputed rule as the settings' rulebook chooses.
-    let mut screen = screen.with_rulebook(&rulebook);
+        .with_flight_overlays(overlays)
+        // Every disputed rule as the settings' rulebook chooses.
+        .with_rulebook(&rulebook);
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

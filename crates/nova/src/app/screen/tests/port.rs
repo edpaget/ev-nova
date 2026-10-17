@@ -705,6 +705,27 @@ fn in_the_bar_by(rules: Rulebook) -> AppScreen {
 }
 
 #[test]
+fn the_bars_map_ticks_its_borders_and_saves_no_change() {
+    use nova_sim::map_borders::Next;
+    let mut screen = in_the_bar();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert_eq!(screen.showing(), Showing::FlightMap);
+    let passes = || flight(&screen).course_map().border_passes().next();
+    assert_eq!(passes(), Next::Unstarted, "the open's coarse pass");
+    screen.tick(Duration::from_millis(16));
+    let passes = flight(&screen).course_map().border_passes().next();
+    assert_eq!(passes, Next::Idle, "the router ticks the flight under it");
+    for k in [Key::Char('b'), MAP] {
+        screen.input(&key(k, true));
+        screen.input(&key(k, false));
+    }
+    assert!(!flight(&screen).map_open());
+    assert!(!flight(&screen).map_borders_shown());
+    assert_eq!(screen.take_map_borders_save(), None, "docked");
+}
+
+#[test]
 fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
     let mut screen = in_the_bar();
     screen.input(&key(MAP, true));

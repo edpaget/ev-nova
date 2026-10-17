@@ -286,8 +286,8 @@ impl AppScreen {
     }
 
     /// Drops the flight, if any, keeping its ship slots' draw-layer and
-    /// cloned-frame history, and its course map's zoom, for the next
-    /// flight in this run.
+    /// cloned-frame history, its course map's zoom and whether the map
+    /// shows the borders, for the next flight in this run.
     fn put_away_flight(&mut self) {
         let Some(flight) = self.flight.take() else {
             return;
@@ -298,6 +298,7 @@ impl AppScreen {
         if let Some(zoom) = flight.course_map_zoom() {
             self.course_map_zoom = Some(zoom);
         }
+        self.map_borders = flight.map_borders_shown();
     }
 
     /// Where pilots are kept, if anywhere.

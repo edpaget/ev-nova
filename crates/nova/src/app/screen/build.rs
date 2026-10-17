@@ -47,6 +47,7 @@ impl AppScreen {
             flight: None,
             slot_sprites: SlotSprites::default(),
             course_map_zoom: None,
+            map_borders: true,
             dialogs: None,
             about: None,
             about_text: ABOUT_TEXT,
@@ -312,7 +313,8 @@ impl AppScreen {
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
             .with_sound_prefs(self.prefs.sound)
             .with_double_time(self.double_time)
-            .with_find(self.find_template(), self.data.button_style());
+            .with_find(self.find_template(), self.data.button_style())
+            .with_map_borders(self.map_borders);
         let flight = match self.course_map_zoom {
             Some(zoom) => flight.with_course_map_zoom(zoom),
             None => flight,
@@ -451,6 +453,16 @@ impl AppScreen {
                 metrics,
             }),
             galaxy,
+            ..self
+        }
+    }
+
+    /// The router with each flight's course map showing the borders or
+    /// not, as the player's `ShowMapBorders` setting says.
+    #[must_use]
+    pub fn with_map_borders(self, map_borders: bool) -> Self {
+        Self {
+            map_borders,
             ..self
         }
     }

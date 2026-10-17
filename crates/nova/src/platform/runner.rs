@@ -382,6 +382,7 @@ mod tests {
             },
             hyperspace_effects: false,
             quicktime_movies: true,
+            map_borders: true,
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);
