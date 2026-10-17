@@ -1274,7 +1274,7 @@ pub fn ship_blink(data: &GameData, id: i16) -> Blink {
     }
 }
 
-/// A `shïp`'s handling, reserve, cargo and mass fields.
+/// A `shïp`'s handling, reserve, cargo and mass fields, and its flags.
 fn ship_fields(ship: &Ship) -> ShipFields {
     ShipFields {
         speed: ship.speed,
@@ -1290,6 +1290,7 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
         armor_rech: ship.armor_rech,
+        flags: ship.flags.bits(),
         flags2: ship.flags2.bits(),
     }
 }
@@ -1667,6 +1668,14 @@ mod tests {
     }
 
     #[test]
+    fn a_ships_fields_include_its_flags() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x4A, &[0x0018]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags), Ok(0x0018));
+    }
+
+    #[test]
     fn a_ships_fields_include_its_flags2() {
         let mut bytes = ship(1, 2, 3);
         put_i16s(&mut bytes, 0x62, &[0x4021]);
@@ -1780,6 +1789,7 @@ mod tests {
                 free_mass: 12,
                 mass: 30,
                 contribute: 0x10,
+                flags: 0x8012,
                 ..ShipFields::default()
             },
             defaults: vec![(OutfitId(200), 2), (OutfitId(201), 0), (OutfitId(202), 1)],

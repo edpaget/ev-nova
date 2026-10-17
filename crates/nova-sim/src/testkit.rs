@@ -264,8 +264,9 @@ pub(crate) fn arriving(draws: &[u32]) -> Draws {
     Draws::of(&table.chain(draws.iter().copied()).collect::<Vec<_>>())
 }
 
-/// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
-/// arrives slow enough to land, over planet 140 at 131's edge.
+/// A slow ship, 1 pixel a tick at most, gaining a unit a tick (its
+/// `Flags` 0x0008 letting its hull regenerate): it arrives slow enough to
+/// land, over planet 140 at 131's edge.
 pub(crate) fn edge_lander() -> FakePilotCatalog {
     FakePilotCatalog {
         ships: vec![(
@@ -273,6 +274,7 @@ pub(crate) fn edge_lander() -> FakePilotCatalog {
             Ok(ShipFields {
                 speed: 100,
                 fuel_regen: 1,
+                flags: crate::stats::FUEL_REGEN_HULL,
                 ..FAST
             }),
         )],

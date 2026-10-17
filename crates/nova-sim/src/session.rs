@@ -1821,7 +1821,7 @@ impl Session {
 
     /// The ship's stats with the outfits the pilot owns.
     fn current_stats(&self) -> ShipStats {
-        ShipStats::new(
+        ShipStats::for_player(
             self.fields,
             &outfit_mods(&self.pilot.outfits, &self.outfits),
         )
@@ -8002,18 +8002,32 @@ pub(super) mod tests {
     }
 
     /// The catalog with ship 128 regenerating a unit of fuel every
-    /// `regen` ticks.
+    /// `regen` ticks, its `Flags` holding 0x0008 so its hull does.
     fn regenerating(regen: i16) -> FakePilotCatalog {
         FakePilotCatalog {
             ships: vec![(
                 ShipId(128),
                 Ok(ShipFields {
                     fuel_regen: regen,
+                    flags: crate::stats::FUEL_REGEN_HULL,
                     ..FAST
                 }),
             )],
             ..catalog()
         }
+    }
+
+    #[test]
+    fn a_hull_without_flags_0x0008_regenerates_no_fuel_from_its_fuel_regen() {
+        let mut catalog = regenerating(2);
+        catalog.ships[0].1.as_mut().expect("fields").flags = 0;
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.fuel_regen_per_tick(), 0.0);
+        jump(&mut session, &catalog, 131);
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.reserves().fuel.now, 200.0);
     }
 
     #[test]
@@ -13585,11 +13599,13 @@ pub(super) mod tests {
     use crate::testkit::ship;
 
     /// Ship 129: faster, with more shield, 15 tons of cargo space and 12
-    /// free, of mass 25, regenerating a unit of fuel every 5 ticks.
+    /// free, of mass 25, regenerating a unit of fuel every 5 ticks (its
+    /// `Flags` 0x0008 letting its hull regenerate).
     const HEAVY: ShipFields = ShipFields {
         speed: 900,
         shield: 80,
         fuel_regen: 5,
+        flags: crate::stats::FUEL_REGEN_HULL,
         holds: 15,
         free_mass: 12,
         mass: 25,

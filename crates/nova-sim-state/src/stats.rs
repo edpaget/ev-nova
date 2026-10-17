@@ -20,7 +20,9 @@
 //!   [`cargo_capacity`] says: the ship's own space, which the fleet's
 //!   ([`fleet_holds`](crate::market::fleet_holds)) builds on.
 //! - [`FUEL_SCOOP`](crate::fuel::FUEL_SCOOP) (18) regenerates fuel, as
-//!   [`fuel_regen_per_tick`] says.
+//!   [`fuel_regen_per_tick`] says. The `shïp`'s own `FuelRegen` counts
+//!   for the player's ship only when its `Flags` hold [`FUEL_REGEN_HULL`]
+//!   ([`ShipStats::for_player`]).
 //! - [`HYPERSPACE_DAYS`] (22) adds days to each jump's
 //!   [`base_jump_days`], from the hull's `Mass`, and the total never goes
 //!   below one (the Bible: "still can't go below 1 day/jump").
@@ -48,6 +50,10 @@ use crate::fuel::{OutfitMod, fuel_regen_per_tick};
 use crate::handling::{Handling, ShipFields};
 use crate::market::cargo_capacity;
 use crate::reserves::{Reserves, shield_points};
+
+/// `shïp` `Flags`: the player's hull regenerates fuel by its `FuelRegen`
+/// (`_ShipFuelGenRate` @0x3043). An NPC's does without it.
+pub const FUEL_REGEN_HULL: u16 = 0x0008;
 
 /// How far from the system's centre, in pixels, a ship must be to jump
 /// unless its outfits say otherwise (the Bible: "Jump Distance 1000
@@ -213,6 +219,27 @@ impl ShipStats {
         }
     }
 
+    /// The stats of the player's ship with `fields`, carrying `outfits`:
+    /// as [`ShipStats::new`], but its hull's `FuelRegen` counts only when
+    /// its `Flags` hold [`FUEL_REGEN_HULL`], while its fuel scoops always
+    /// count (`_ShipFuelGenRate` @0x3043-0x3057, which counts it for any
+    /// other ship whatever its flags).
+    #[must_use]
+    pub fn for_player(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
+        let fuel_regen = if fields.flags & FUEL_REGEN_HULL == 0 {
+            0
+        } else {
+            fields.fuel_regen
+        };
+        Self::new(
+            ShipFields {
+                fuel_regen,
+                ..fields
+            },
+            outfits,
+        )
+    }
+
     /// A ship's reserves with these stats, full.
     #[must_use]
     pub fn full(&self) -> Reserves {
@@ -245,6 +272,7 @@ mod tests {
         contribute: 1,
         shield_rech: 10,
         armor_rech: 0,
+        flags: 0,
         flags2: 0,
     };
 
@@ -332,6 +360,39 @@ mod tests {
         );
         assert_eq!(stats.capacity, 20);
         assert_eq!(stats.full().fuel, Gauge::full(400.0));
+    }
+
+    #[test]
+    fn the_players_hull_regenerates_fuel_only_with_flags_0x0008() {
+        let scoops = [outfit(FUEL_SCOOP, 4, 2)];
+        let without = ShipStats::for_player(AVERAGE, &[]);
+        assert_eq!(without.fuel_regen, 0.0, "FuelRegen 8 but no 0x0008");
+        let scooping = ShipStats::for_player(AVERAGE, &scoops);
+        assert_eq!(scooping.fuel_regen, 0.5, "its scoops still count");
+        let flagged = ShipFields {
+            flags: FUEL_REGEN_HULL | 0x0010,
+            ..AVERAGE
+        };
+        assert_eq!(ShipStats::for_player(flagged, &[]).fuel_regen, 0.125);
+        assert_eq!(
+            ShipStats::for_player(flagged, &scoops).fuel_regen,
+            0.125 + 0.5
+        );
+        assert_eq!(FUEL_REGEN_HULL, 0x0008);
+        assert_eq!(
+            ShipStats::for_player(AVERAGE, &scoops),
+            ShipStats {
+                fuel_regen: 0.5,
+                ..ShipStats::new(AVERAGE, &scoops)
+            },
+            "nothing else changes"
+        );
+    }
+
+    #[test]
+    fn any_other_ships_hull_regenerates_fuel_without_flags_0x0008() {
+        assert_eq!(AVERAGE.flags, 0);
+        assert_eq!(ShipStats::new(AVERAGE, &[]).fuel_regen, 0.125);
     }
 
     #[test]

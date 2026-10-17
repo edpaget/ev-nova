@@ -238,6 +238,7 @@ const FIELDS: ShipFields = ShipFields {
     contribute: 1,
     shield_rech: 0,
     armor_rech: 0,
+    flags: 0,
     flags2: 0,
 };
 

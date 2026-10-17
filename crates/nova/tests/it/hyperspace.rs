@@ -128,11 +128,12 @@ fn ship() -> Vec<u8> {
 }
 
 /// [`ship`], with a `FuelRegen` of `regen`: a unit of fuel every `regen`
-/// ticks.
+/// ticks, its `Flags` 0x0008 letting the player's hull regenerate.
 fn ship_with_regen(regen: i16) -> Vec<u8> {
     let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, 300]);
     put_i16s(&mut bytes, 0x0E, &[45]);
+    put_i16s(&mut bytes, 0x4A, &[0x0008]);
     put_i16s(&mut bytes, 0x5E, &[regen]);
     bytes
 }
