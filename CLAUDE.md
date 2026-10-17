@@ -79,6 +79,45 @@ is drawn, a dialog opens, a landing or jump completes, or the pilot is saved.
   player never sees, isn't filed. Note it in the doc comment of the code that
   defers.
 
+### Unknowns become investigations, not questions
+
+When a phase depends on what the original does (a rate, a formula, a format,
+a roll's timing), don't ask the user and don't leave it open. Make it step 1
+of the phase: find it in the binary (`EV Nova.app`, i386 with symbols), record
+the finding and its addresses in the phase body, and branch the later steps on
+the answer. Before disassembling a function, run `rdm search <symbol>
+--project ev-nova`: earlier phases record what they found, with addresses.
+
+### When the original and another reading disagree
+
+- If the engine's behaviour has an obvious alternative (the Nova Bible
+  disagrees, the engine has a quirk, or our plan said otherwise), add a
+  `Rulebook` key (`crates/nova-sim/src/rulebook.rs`). The engine's reading is
+  the default, and tests cover both readings. Ask the user only when the
+  alternative isn't obvious, the scope grows, or the change alters a control
+  everyone uses.
+- If the engine has a bug that breaks stock missions, crons or storylines,
+  make the intended behaviour the default and the bug the opt-in reading.
+  Check the stock data before calling something broken.
+- Don't replicate integer widths, wraps or overflows (16-bit cargo, 32-bit
+  cash). Use wider numbers. Mention the width in the finding, but don't file
+  a phase or key for it.
+- If a difference is practically unobservable (sub-second timing, say),
+  offer "record only" beside "build it". Don't assume either answer: the
+  user has chosen each.
+
+### Where new findings go
+
+File every divergence the binary shows, however niche.
+
+- If it serves the roadmap's goal, add it as a new phase of that roadmap.
+- On a feature roadmap, a finding that doesn't block playing the stock
+  storyline goes to `<slug>-fidelity` instead. Create that roadmap, depending
+  on the feature roadmap, the first time it's needed.
+- If the roadmap is finished, file a task, not a phase.
+- If a nearly finished roadmap blocks others, ask whether new findings
+  should go to a follow-up roadmap so it can finish.
+
 ## Testing with hand-written mocks
 
 - Test core logic through its ports. In each test module, write small mocks or
@@ -118,6 +157,29 @@ leaves the developer's machine exactly as it found it.
 - Set up any state a test needs inside the test itself, so it passes on a clean
   checkout.
 
+## Large files
+
+`crates/nova-sim/src/session.rs`, `crates/nova-sim/src/combat/mod.rs` and
+`crates/nova-sim/src/rulebook.rs` run to thousands of lines. Agents read them thousands of times a week.
+
+- Find the code first with `grep -n` or LSP symbols, then read only that range
+  with the `Read` tool (`offset`/`limit`).
+- Read with `Read`, not `sed`, `cat` or `head`: `Edit` refuses a file that
+  `Read` hasn't seen, so a `sed` read costs a second read before any edit.
+
+Files grow large one sensible append at a time, so decide where new code goes
+before writing it:
+
+- When a change adds a new concern (a dialog, a routine of the original, a
+  subsystem), put it in a new sibling module with its own tests. Don't append
+  it to an existing large file because similar code lives there.
+- If a file you're editing is over about 5,000 lines, don't split it in this
+  change: a split mixed into other work is hard to review and conflicts with
+  every branch that touches the file. Check for an rdm split task
+  (`rdm search split --type task --project ev-nova`) and file one if there
+  isn't one, naming the concerns that could come out. A project hook
+  (`.claude/hooks/large-file-reminder.sh`) reminds you when you edit one.
+
 ## Verification runs through cargo
 
 Write all checks and verifiers as Rust tests (unit tests, integration tests
@@ -141,38 +203,35 @@ under `tests/`, or doctests) so `cargo` runs them.
   anyway, so the gate would run twice.
 - Keep `mise` tasks as one-line `cargo` invocations. When a check needs logic,
   write it in Rust.
+- Integration tests live in `tests/it/`, as modules of one test binary per
+  crate. Add a new `tests/it/<name>.rs` and a `mod <name>;` line in
+  `tests/it/main.rs`, never a new `tests/*.rs` file: each of those is another
+  binary to link on every build.
 
 ### Stock-data tests
 
-Tests over the original game's data (`stock_*.rs` under each crate's `tests/`)
-skip, passing, unless `NOVA_DATA` points at a `Nova Files` folder. CI and
-`mise run ci` don't set it, so these tests can break without anyone noticing.
-When a change touches anything those tests cover, run them with the data:
+Tests over the original game's data (the `stock_*` modules under each crate's
+`tests/it/`, in `tests/it/stock_*.rs`) skip, passing, unless `NOVA_DATA`
+points at a `Nova Files` folder. CI and `mise run ci` don't set it, so these
+tests can break without anyone noticing. When a change touches anything those
+tests cover, run them with the data:
 
 ```sh
-NOVA_DATA="/path/to/Nova Files" cargo nextest run --workspace
+NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run --workspace
 ```
+
+That folder (inside the gitignored app bundle in the primary checkout) holds
+the `*.ndat` files the loader reads. Other `Nova Files` folders on this
+machine (the classic resource-fork copy, `windows-data/`) load nothing.
 
 When a change to behaviour breaks a stock test on purpose, update the test in
 the same commit. Don't leave the test failing for later.
 
-### Slow or timing-out tests: check the target directory first
+### Slow or timing-out tests
 
-When the `nova-render::wgpu_offscreen` tests (or any other wgpu test) run for
-seconds each or hit nextest's timeout, check how many files are in
-`target/debug/deps` before you blame machine load or the code:
-
-```sh
-ls target/debug/deps | wc -l
-```
-
-A healthy count is a few thousand, and then the 23 offscreen tests take about
-a second in parallel. Repeated `cargo-mutants` and stock runs can grow it to
-hundreds of thousands. wgpu's Metal adapter setup reads the test binary's
-directory, and nextest starts a new process for each test, so every test pays
-that cost again. Run `cargo clean` in that worktree to fix it. Don't run the
-tests serially or raise the timeouts to work around it. Long autopilot or
-mutants sessions should clean the target directory now and then.
+When wgpu tests (or any tests) run for seconds each or time out, read
+`.claude/rules/slow-tests.md` before blaming load or the code. The usual
+cause is a bloated `target/debug/deps`, and the fix is `cargo clean`.
 
 Give a `git bisect` (or any second checkout) its own `CARGO_TARGET_DIR`.
 Sharing the main worktree's target directory can leave stale build artifacts
@@ -191,26 +250,11 @@ down, stay links.
 
 ## Mutation testing
 
-Use `cargo-mutants` to check that tests actually catch broken code. Let the
-tool generate and run the mutants rather than editing source by hand.
-
-- After finishing a piece of work, run mutants once over everything on the
-  branch: `mise run mutants -- --in-diff <(git diff main)`. Prefer this to
-  repeated `--file` runs; rerun with `--file <path>` only to confirm the
-  fixes for missed mutants.
-- Add `--baseline=skip` when the gate has just passed: the baseline only
-  rechecks that the unmutated tests pass.
-- Start the run with `run_in_background` and wait for its completion
-  notification. Don't poll it with `sleep` or `until` loops.
-- Run one mutants session at a time across all worktrees. They share the
-  machine's cores, and two at once slow both. `mise.toml` sets
-  `CARGO_MUTANTS_JOBS=2`; pass `-j` to change it for one run.
-- For each `MISSED` mutant, write a test that fails against that mutant, then
-  rerun to confirm it is `caught`.
-- For a mutant that genuinely can't change observable behaviour, add a pattern
-  for it to `exclude_re` in `.cargo/mutants.toml` with a comment explaining why.
-- Results are written to `mutants.out/` (gitignored). `missed.txt` lists the
-  survivors.
+After finishing a piece of work, run `cargo-mutants` once over the branch
+(`mise run mutants -- --in-diff <(git diff main...HEAD)`) to check that the tests
+catch broken code. Read `.claude/rules/mutants.md` before starting a run: it
+covers flags, running in the background, one session at a time, and what to
+do with missed mutants.
 
 ## Conventional commits
 
@@ -228,5 +272,33 @@ Format every commit message as a [Conventional Commit](https://www.conventionalc
 - Scope is usually the crate name without the `nova-` prefix: `rsrc`, `data`, `nova`.
 - Mark breaking changes with `!` after the type/scope, or with a
   `BREAKING CHANGE:` footer.
-- Put rdm footers such as `Done: <roadmap-slug>/<phase-stem>` or
-  `Done: task/<slug>` in the footer section.
+- Don't add `Done:` footers, and don't make one a requirement in a plan,
+  acceptance criterion or subagent prompt. Landing marks items done. This
+  overrides the global rdm instructions that say to add them.
+
+## Working with rdm here
+
+These hold for every session and every dispatched agent.
+
+- **Landing.** Rebase the branch on `main`. If the rebase is clean, run the
+  gate and `merge --ff-only`. If it conflicts, abort, merge `main` into the
+  branch, resolve, run the gate and `merge --no-ff`. Landing runs the gate and
+  the stock tests, not mutants. Mutants belong in the phase's own work.
+- **Task bodies.** Keep checks that can only pass after landing (a `main` CI
+  run, a release job) out of the acceptance criteria. Put them under
+  `## After landing (not an acceptance criterion)`. The code review grades
+  every criterion it finds.
+- **Plan reviews.** The persisted review is the record, so don't append round
+  notes to the item body. When a review suggests splitting a phase, propose it
+  in chat with your own view and wait for the user. Don't file a plan-review
+  task for it. The user usually keeps a phase whole when the only reason to
+  split is size, but accepts a split by distinct source routine.
+- **Moving phases.** Never run `rdm roadmap split` on a roadmap with in-flight
+  phases: it renumbers stems and breaks plans, reviews and runs. Move a phase
+  with `phase create` plus `phase remove`.
+- **Lost review anchors.** If a code review's persist step asks to park over a
+  lost anchor that is a false positive (the quote joined wrapped comment
+  lines, say), triage the comment as whole-document feedback and carry on.
+  Park only when the path doesn't exist at HEAD, the quote matches nothing even
+  ignoring wraps and comment prefixes, or a blocking finding's anchor is
+  really lost.

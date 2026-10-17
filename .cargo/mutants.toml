@@ -247,7 +247,7 @@ exclude_re = [
     # A run-out shield flash is dropped from the view's map: with `>=` it
     # is kept at none, which `FlightView::shield_flash` reads as no flash
     # all the same, and the next hit sets it afresh either way.
-    "view.rs:.*replace > with >= in step_flashes",
+    "flight/view/mod.rs:.*replace > with >= in step_flashes",
     # A simultaneous fuel weapon's copies at its burst end: with no fuel
     # (`fuel.now` exactly 0) the whole shots paid are `trunc(0 / cost)`,
     # none, the same as the `else` branch's none.

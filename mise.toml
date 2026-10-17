@@ -10,9 +10,10 @@ pkl = "0.32.1"
 [env]
 RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
 RDM_PROJECT = "ev-nova"
-# Build and test two mutants at once. A flag passed after `--` (`-j`) still
-# wins.
-CARGO_MUTANTS_JOBS = "2"
+# Build and test four mutants at once: a mutant's build is mostly one crate
+# and its links, which leaves most of the 18 cores idle at two. A flag passed
+# after `--` (`-j`) still wins.
+CARGO_MUTANTS_JOBS = "4"
 
 [tasks.fmt]
 description = "Check formatting"
