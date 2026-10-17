@@ -380,6 +380,7 @@ mod hover;
 mod jump_collapse;
 mod map;
 mod map_panel;
+mod map_search;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_screens;
