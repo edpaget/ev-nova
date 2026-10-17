@@ -136,10 +136,11 @@
 //!
 //! **Left out.** The floating map's preselect
 //! (`_ShowFloatingMap` @0x11488), which only its names would read (the
-//! galaxy-map-fidelity roadmap's); the map panel's titles by the mode
-//! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
+//! galaxy-map-fidelity roadmap's); and the destroyed player's and the ship swap's per-frame clears
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). Mode 4, the hypergate map's, is
-//! never drawn.
+//! never drawn. The map panel's title reads the mode
+//! (`_MapDialogUpdate` @0x10b68-0x10c76; see the
+//! [`map_panel`](crate::map_panel) module).
 //!
 //! Of the landed `M`:
 //!
