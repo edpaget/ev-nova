@@ -6,21 +6,27 @@
 //!
 //! - A shot starts at its firer's position with its firer's velocity,
 //!   heading as it was aimed, and adds its speed along its heading. A
-//!   homing shot never carries its firer's velocity. A bomb or a rocket
+//!   homing shot never carries its firer's velocity. Every push along a
+//!   heading, at launch and in flight, is `_Accel`'s along the whole degree
+//!   `trunc(heading)` ([`trig::accel`]; `_SpawnShot` @0x3eeea,
+//!   `_HandleShotGuidance` @0x32502, @0x326f1, @0x3296b). A bomb or a rocket
 //!   goes as [`BombLaunch`] says: an NPC's as any other shot by the
 //!   engine, the player's, and every ship's by the Bible, with no speed
 //!   added, a freefall bomb with [`BOMB_LAUNCH`] of the velocity.
 //! - Each tick an unguided shot keeps its velocity. A rocket's velocity
 //!   becomes [`ROCKET_KEEP`] of itself and [`ROCKET_PUSH`] of its top
-//!   speed along its heading, so it closes on its top speed. A bomb keeps
+//!   speed along its heading, so it closes on its top speed
+//!   ([`rocket_push`]). A bomb keeps
 //!   its velocity and turns its heading a whole degree ([`BOMB_TURN`]) a
 //!   tick towards the table's bearing of it while its truncated heading
 //!   is off it, towards up at rest (see `Shot::weathervane`).
 //! - A homing shot flies at its speed along its heading every tick. Once
 //!   it has flown [`HOMING_DELAY`] ticks it steers at its target, turning
-//!   `GuidedTurn` a tick the short way while the target's bearing is
-//!   further off than that, and keeping its heading otherwise, a target
-//!   breaking up included. One fired with no target flies straight.
+//!   `GuidedTurn` a tick while the table's whole-degree bearing of it is
+//!   further off its truncated heading than the truncated turn, the way
+//!   [`homing_turn`] says, and keeping its heading otherwise, a target
+//!   breaking up included; the heading is then taken round once
+//!   ([`wrap_turned`]). One fired with no target flies straight.
 //!   Before it turns, `_HandleShotGuidance` (@0x320dc-0x32aa4) tests it,
 //!   in this order, every tick:
 //!   - **Jamming** ([`jamming`](super::jamming)): it rolled each jamming
@@ -36,8 +42,9 @@
 //!     under 0x8000 turns on its firer at one in
 //!     [`BLINDED_TURNS_ON_FIRER`].
 //!   - **`Seeker` 0x4000**: within [`LOCK_BOX`] of its target on each
-//!     axis, it loses its lock when the target is more than [`LOCK_CONE`]
-//!     off ahead, as [`LockAngle`] measures it.
+//!     axis, it loses its lock when the table's bearing of the target
+//!     less its heading, truncated, is more than [`LOCK_CONE`] off ahead,
+//!     as [`LockAngle`] measures it.
 //!
 //!   A shot turned on its firer is aimed at it and launched by no ship
 //!   ([`Source::Other`]). On the tick of a retarget or a lost lock it
@@ -79,7 +86,6 @@
 //!   set off by other ships (`Flags2` 0x0008), and nothing once lost.
 
 use super::ShipRef;
-use super::aim::bearing;
 use super::damage::Blast;
 use super::hull::Condition;
 use super::jamming::{JAMMING_TYPES, Jamming};
@@ -91,7 +97,7 @@ use super::weapon::{
 use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
 use crate::cloak::{self, Observer};
-use crate::flight::{ShipState, facing, normalized, shortest_turn};
+use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::trig;
@@ -102,6 +108,10 @@ pub const BOMB_LAUNCH: f32 = 0.8;
 pub const ROCKET_KEEP: f32 = 0.95;
 /// The share of its top speed a rocket gains each tick.
 pub const ROCKET_PUSH: f32 = 0.05;
+/// [`ROCKET_KEEP`] as the original multiplies it, in hundredths (0xdd678).
+const ROCKET_KEEP_PER_CENT: f32 = 95.0;
+/// [`ROCKET_PUSH`] as the original multiplies it, in hundredths (0xdd67c).
+const ROCKET_PUSH_PER_CENT: f32 = 5.0;
 /// How far a bomb turns into the wind each tick, in degrees.
 pub const BOMB_TURN: f32 = 1.0;
 /// How many ticks a homing shot flies straight before it steers.
@@ -578,7 +588,8 @@ impl BombLaunch {
 /// a homing missile its `Speed` along `heading`, and any other, a thrown
 /// bomb or rocket too, its `Speed` along `heading` on top of the ship's
 /// velocity. A broadside shot is sent to the side this way, facing ahead
-/// (see [`exits`](super::exits)).
+/// (see [`exits`](super::exits)). The push is `_Accel`'s along the whole
+/// degree `trunc(heading)` ([`trig::accel`], @0x3eeea-0x3eef3).
 #[must_use]
 pub fn launch_velocity(
     weapon: &WeaponSpec,
@@ -589,8 +600,69 @@ pub fn launch_velocity(
     match (weapon.guidance, launch) {
         (Guidance::FreefallBomb, BombLaunch::Dropped) => from.velocity * BOMB_LAUNCH,
         (Guidance::Rocket, BombLaunch::Dropped) => from.velocity,
-        (Guidance::Homing, _) => facing(heading) * weapon.speed,
-        _ => from.velocity + facing(heading) * weapon.speed,
+        (Guidance::Homing, _) => trig::accel(trig::whole(heading), weapon.speed),
+        _ => from.velocity + trig::accel(trig::whole(heading), weapon.speed),
+    }
+}
+
+/// A rocket's velocity after a tick's push (`_HandleShotGuidance`
+/// @0x32940-0x329dc): `_Accel(trunc(heading), speed)` from rest, then
+/// `(velocity × 95 + push × 5)` in `f32` (0xdd678, 0xdd67c), times 0.01 in
+/// doubles (0xdd098), rounded to `f32`: [`ROCKET_KEEP`] of the velocity
+/// and [`ROCKET_PUSH`] of the push.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn rocket_push(velocity: Vec2, heading: f32, speed: f32) -> Vec2 {
+    let push = trig::accel(trig::whole(heading), speed);
+    let mix = |v: f32, p: f32| {
+        (f64::from(v * ROCKET_KEEP_PER_CENT + p * ROCKET_PUSH_PER_CENT) * 0.01) as f32
+    };
+    Vec2::new(mix(velocity.x, push.x), mix(velocity.y, push.y))
+}
+
+/// A homing shot's heading after its turn of `turn` at the whole-degree
+/// `wanted` (`_HandleShotGuidance` @0x323f3-0x3248d): it turns only while
+/// `|_AngularDifference(wanted, trunc(heading))|` is above `|trunc(turn)|`,
+/// back when `wanted − trunc(heading)`, taken into 0..359 in 16 bits, is
+/// above 180, and on otherwise, half round included. A negative turn, a
+/// jammed 0x0010 shot's, turns the other way. The original multiplies the
+/// turn by `_gSpeedMult`, 1.0 here, in doubles, which rounds as the `f32`
+/// sum does.
+#[must_use]
+pub fn homing_turn(heading: f32, wanted: i16, turn: f32) -> f32 {
+    let facing = trig::whole(heading);
+    let off = i32::from(trig::angular_difference(wanted, facing)).abs();
+    if off <= i32::from(trig::whole(turn)).abs() {
+        return heading;
+    }
+    let mut ahead = i32::from(wanted) - i32::from(facing);
+    if ahead >= 360 {
+        ahead -= 360;
+    }
+    if ahead <= -1 {
+        ahead += 360;
+    }
+    if ahead > 180 {
+        heading - turn
+    } else {
+        heading + turn
+    }
+}
+
+/// A turned heading taken round once each way, as `_HandleShotGuidance`
+/// wraps a homing or interfered shot's every tick (`≥ 360` → −360, then
+/// `< 0` → +360; @0x32492-0x324d4, @0x32685-0x326c6).
+#[must_use]
+pub fn wrap_turned(heading: f32) -> f32 {
+    let heading = if heading >= 360.0 {
+        heading - 360.0
+    } else {
+        heading
+    };
+    if heading < 0.0 {
+        heading + 360.0
+    } else {
+        heading
     }
 }
 
@@ -645,8 +717,7 @@ impl Shot {
         match self.weapon.guidance {
             Guidance::Homing => self.home(guide, chance),
             Guidance::Rocket => {
-                self.velocity = self.velocity * ROCKET_KEEP
-                    + facing(self.heading) * (self.weapon.speed * ROCKET_PUSH);
+                self.velocity = rocket_push(self.velocity, self.heading, self.weapon.speed);
             }
             Guidance::FreefallBomb => self.weathervane(),
             _ => {}
@@ -746,7 +817,7 @@ impl Shot {
                 .find(|target| target.ship == ship && target.condition.active())
         });
         if let Some(target) = target.filter(|_| self.age >= HOMING_DELAY) {
-            let wanted = bearing(self.position, target.position);
+            let wanted = trig::intercept_angle(self.position, target.position);
             let mut turn = self.weapon.turn;
             self.jammed(target.ship, &mut turn, guide, chance);
             self.blinded(target, &mut turn, guide, chance);
@@ -754,13 +825,10 @@ impl Shot {
                 self.target = None;
                 self.aimed_at = None;
             }
-            // A negative turn, a jammed 0x0010 shot's, turns away.
-            let off = shortest_turn(self.heading, wanted);
-            if off.abs() > turn.abs() {
-                self.heading = normalized(self.heading + turn * off.signum());
-            }
+            self.heading = homing_turn(self.heading, wanted, turn);
         }
-        self.velocity = facing(self.heading) * self.weapon.speed;
+        self.heading = wrap_turned(self.heading);
+        self.velocity = trig::accel(trig::whole(self.heading), self.weapon.speed);
     }
 
     /// The jam test (@0x321b7-0x32275): when `target`'s jamming jams the
@@ -840,7 +908,8 @@ impl Shot {
         if off.x.trunc().abs() > LOCK_BOX || off.y.trunc().abs() > LOCK_BOX {
             return true;
         }
-        let angle = (bearing(self.position, target.position) - self.heading).trunc();
+        let bearing = trig::intercept_angle(self.position, target.position);
+        let angle = (f32::from(bearing) - self.heading).trunc();
         guide.lock_angle.off_ahead(angle) <= LOCK_CONE
     }
 
@@ -855,13 +924,14 @@ impl Shot {
         if self.age >= HOMING_DELAY {
             let turn = self.weapon.turn;
             let back = frame % CIRCLE_FRAMES <= CIRCLE_BACK;
-            self.heading = normalized(if back {
+            self.heading = if back {
                 self.heading - turn
             } else {
                 self.heading + turn
-            });
+            };
         }
-        self.velocity = facing(self.heading) * self.weapon.speed;
+        self.heading = wrap_turned(self.heading);
+        self.velocity = trig::accel(trig::whole(self.heading), self.weapon.speed);
         if self.weapon.seeks(TURNS_ON_FIRER)
             && chance.below(BLINDED_TURNS_ON_FIRER) == 0
             && matches!(self.source, Source::Ship(_))
@@ -1103,6 +1173,7 @@ mod tests {
     use crate::combat::fixture::among;
     use crate::combat::sides::PassThrough;
     use crate::combat::weapon::{LOSES_LOCK_OFF_AHEAD, TURNS_AWAY_JAMMED, TURNS_ON_FIRER};
+    use crate::flight::facing;
     use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::{govt, weapon};
@@ -3107,7 +3178,9 @@ mod tests {
 
     #[test]
     fn the_lock_holds_within_45_degrees_of_ahead() {
-        for (bearing, kept) in [(135.5, true), (136.5, false), (44.5, true), (43.5, false)] {
+        // The table's bearings: 135.0 reads 134 and 135.5 reads 136 (no
+        // whole degree reads 135 there), 45.0 reads 46 and 44.5 reads 44.
+        for (bearing, kept) in [(135.0, true), (135.5, false), (45.0, true), (44.5, false)] {
             let mut shot = locked(90.0, 0);
             guided(
                 &mut shot,
@@ -3245,6 +3318,124 @@ mod tests {
         let mut never = Ranged::of(&[(1000, 0)]);
         at_frame(&mut plain, 0, &[below()], &mut never);
         assert!(!never.was_asked(1000));
+    }
+
+    #[test]
+    fn a_shots_velocity_goes_along_its_truncated_heading() {
+        let from = state(0.0, 0.0, 1.0, -2.0, 0.0);
+        let blaster = spec(-1, 1500, 13);
+        let velocity = launch_velocity(&blaster, &from, 45.9, BombLaunch::Thrown);
+        assert_eq!(velocity, from.velocity + trig::accel(45, 15.0));
+        let homing = spec(1, 1500, 13);
+        let velocity = launch_velocity(&homing, &from, 359.99, BombLaunch::Thrown);
+        assert_eq!(velocity, trig::accel(359, 15.0), "from rest");
+        let shot = Shot::launch(blaster, FIRER, FIRER, &from, 45.9);
+        assert_eq!(shot.velocity, from.velocity + trig::accel(45, 15.0));
+    }
+
+    #[test]
+    fn a_rockets_push_goes_along_its_truncated_heading_rounded_as_the_original() {
+        let mut rocket = Shot::launch(
+            spec(6, 1000, 120),
+            FIRER,
+            FIRER,
+            &state(0.0, 0.0, 3.0, 1.0, 0.0),
+            45.7,
+        );
+        step(&mut rocket, &[]);
+        let push = trig::accel(45, 10.0);
+        let mixed = |v: f32, p: f32| (f64::from(v * 95.0 + p * 5.0) * 0.01) as f32;
+        assert_eq!(
+            rocket.velocity,
+            Vec2::new(mixed(3.0, push.x), mixed(1.0, push.y))
+        );
+    }
+
+    #[test]
+    fn a_homing_shot_steers_at_the_tables_bearing_against_its_truncated_heading() {
+        // Ship 2 is 91.43 degrees off; the table reads 91. A turn of 0.9
+        // truncates to 0, so a whole degree off is enough to turn.
+        let ahead = [target(2, 1000.0, 25.0, Condition::Intact)];
+        let mut shot = Shot {
+            age: HOMING_DELAY,
+            heading: 90.9,
+            ..homing(
+                WeaponSpec {
+                    turn: 0.9,
+                    ..missile(0)
+                },
+                Some(TARGET),
+            )
+        };
+        step(&mut shot, &ahead);
+        assert!((shot.heading - 91.8).abs() < 1e-4, "{shot:?}");
+        assert_eq!(shot.velocity, trig::accel(91, 10.0));
+        // On the bearing's whole degree, it holds.
+        let mut on = Shot {
+            age: HOMING_DELAY,
+            heading: 91.95,
+            ..homing(missile(0), Some(TARGET))
+        };
+        step(&mut on, &ahead);
+        assert_eq!(on.heading, 91.95);
+        assert_eq!(on.velocity, trig::accel(91, 10.0));
+    }
+
+    #[test]
+    fn a_homing_shot_turns_on_at_half_round_and_back_past_it() {
+        // Straight left of a shot heading right: 180 off, turned on.
+        let left = [target(2, -1000.0, 0.0, Condition::Intact)];
+        let mut shot = Shot {
+            age: HOMING_DELAY,
+            ..homing(missile(0), Some(TARGET))
+        };
+        step(&mut shot, &left);
+        assert!((shot.heading - 97.0).abs() < 1e-4, "{shot:?}");
+        // 181 on (the table's 271 from 90) is back.
+        let mut back = Shot {
+            age: HOMING_DELAY,
+            heading: 90.0,
+            ..homing(missile(0), Some(TARGET))
+        };
+        let past = [target(2, -1000.0, -20.0, Condition::Intact)];
+        assert_eq!(trig::intercept_angle(Vec2::ZERO, past[0].position), 271);
+        step(&mut back, &past);
+        assert!((back.heading - 83.0).abs() < 1e-4, "{back:?}");
+    }
+
+    #[test]
+    fn a_homing_shots_turn_wraps_its_heading_once() {
+        let right = [target(2, 1000.0, 0.0, Condition::Intact)];
+        let mut shot = Shot {
+            age: HOMING_DELAY,
+            heading: 358.5,
+            ..homing(missile(0), Some(TARGET))
+        };
+        step(&mut shot, &right);
+        assert!((shot.heading - 5.5).abs() < 1e-4, "{shot:?}");
+        assert_eq!(shot.velocity, trig::accel(5, 10.0));
+    }
+
+    #[test]
+    fn the_lock_angle_is_the_tables_bearing_less_the_heading_truncated() {
+        // 135.6 degrees by float, 136 by the table: 46 off a heading of 90.
+        let near = [target(2, 290.0, 143.0, Condition::Intact)];
+        let mut shot = locked(90.0, 0);
+        step(&mut shot, &near);
+        assert_eq!((shot.target, shot.aimed_at), (None, None), "lost");
+    }
+
+    #[test]
+    fn an_interfered_missiles_velocity_goes_along_its_truncated_heading() {
+        let mut shot = interfered(0, HOMING_DELAY);
+        shot.heading = 90.5;
+        at_frame(&mut shot, 0, &[below()], &mut NeverFires);
+        assert!((shot.heading - 83.5).abs() < 1e-4, "{shot:?}");
+        assert_eq!(shot.velocity, trig::accel(83, 10.0));
+        let mut young = interfered(0, 3);
+        young.heading = 45.5;
+        at_frame(&mut young, 0, &[below()], &mut NeverFires);
+        assert_eq!(young.velocity, trig::accel(45, 10.0), "before it circles");
     }
 
     #[test]

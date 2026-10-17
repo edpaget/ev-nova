@@ -144,6 +144,7 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, normalized};
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
+use crate::trig;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -599,6 +600,18 @@ impl Launch {
     #[must_use]
     pub fn heading_from(&self, origin: &ShipState) -> f32 {
         normalized(self.pointing.heading_from(origin) + self.inaccuracy)
+    }
+
+    /// The heading a shot of it leaves `origin` along, as `_SpawnShot`
+    /// sets it: its pointing's whole degree from there
+    /// ([`Pointing::whole_from`]), turned by its whole-degree inaccuracy
+    /// in `f32` and taken round once each way ([`trig::wrap_once`],
+    /// @0x3ed44-0x3edc1; point defence's @0x39807-0x3986e). A bomb's
+    /// inaccuracy comes after its velocity is set (@0x3ef0a-0x3efed), so
+    /// the fight sends its velocity along [`Pointing::whole_from`] alone.
+    #[must_use]
+    pub fn shot_heading(&self, origin: &ShipState) -> f32 {
+        trig::wrap_once(f32::from(self.pointing.whole_from(origin)) + self.inaccuracy)
     }
 }
 

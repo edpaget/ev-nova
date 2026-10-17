@@ -101,7 +101,7 @@ pub fn fly(
             .find(|mount| mount.spec.id == gun)
     });
     let wanted = match (last_gun, lead) {
-        (Some(gun), RuleSource::Engine) => fire::lead_with(npc, target, gun.spec.speed),
+        (Some(gun), RuleSource::Engine) => fire::lead_with(npc, target, Some(&gun.spec)),
         _ => heading_of(state.velocity * -1.0),
     };
     Controls {
@@ -237,11 +237,13 @@ mod tests {
     fn moving_with_a_last_gun_it_turns_to_the_lead_and_thrusts_by_the_engine_and_to_its_retro_heading_by_the_other_reading()
      {
         // Moving down at 2, its target 300 to the right at rest: its gun
-        // (10 a tick) leads it at (300, -60), 78.69; its retro heading is
-        // up, 0.
+        // (10 a tick) leads it at (300, -60), 79 by the table (78.69 by
+        // float); its retro heading is up, 0.
         let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
         let npc = having_fired(sniper(at(0.0, 0.0, 0.0, 2.0, 76.0)));
-        assert!((fire::lead_with(&npc, &target, 10.0) - 78.69).abs() < 0.01);
+        let gun = npc.armament.mounts()[0].spec;
+        assert_eq!(gun.speed, 10.0);
+        assert_eq!(fire::lead_with(&npc, &target, Some(&gun)), 79.0);
         let mut engine = npc.clone();
         let controls = fly(
             &mut engine,

@@ -21,14 +21,17 @@
 //!   they can hit, as `_FindNearestValidShotTarget` (@0x6a3a-0x6af3) asks
 //!   `_ShotCanHitShip` of every active ship, the player's included, with
 //!   no target of their own (@0x3f3c3); or else the given target, and
-//!   head at its bearing; otherwise they take the given target and the
+//!   head at the table's whole-degree bearing to it (`_CalcInterceptAngle`
+//!   @0x3f421-0x3f42b); otherwise they take the given target and the
 //!   parent's heading.
 //! - A positive `SubTheta` turns each by `θ - below(2θ + 1)`, within θ
 //!   either way; a negative one spreads them in a starburst |θ| apart,
 //!   centred on the heading less half the spread in whole degrees
 //!   (`|θ|·(count − 1) / 2` in integers, @0x3f49c-0x3f4da), so an odd
-//!   spread leans half a degree clockwise.
-//! - Each takes its `Speed` along its heading from rest, a bomb's (5) too,
+//!   spread leans half a degree clockwise. The heading is then taken
+//!   round once each way (@0x3f50f-0x3f54f).
+//! - Each takes its `Speed` along its truncated heading from rest
+//!   (`_Accel(trunc(heading))` @0x3f597), a bomb's (5) too,
 //!   whoever fired the parent; a rocket's (6) starts with its parent's
 //!   velocity instead, with no speed added (@0x3f55c-0x3f5a5).
 //! - None carries a turret miss roll ([`Shot::miss_roll`]), so none is
@@ -45,13 +48,13 @@
 //! [`Submunitions`]: super::weapon::Submunitions
 
 use super::ShipRef;
-use super::aim::bearing;
 use super::projectile::{Shot, Target};
 use super::sides::Sides;
 use super::weapon::{Guidance, WeaponSpec};
 use crate::chance::Chance;
-use crate::flight::{ShipState, facing};
+use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::trig;
 
 /// The sub-munitions of `sub` that `parent` releases, aimed at `target`
 /// (the ship it hit, or its own target) among the ships of `sides`, their
@@ -96,7 +99,7 @@ pub fn release(
         let heading = target
             .and_then(|target| targets.iter().find(|ship| ship.ship == target))
             .map_or(parent.heading, |ship| {
-                bearing(parent.position, ship.position)
+                f32::from(trig::intercept_angle(parent.position, ship.position))
             });
         (target, heading)
     } else {
@@ -114,27 +117,25 @@ pub fn release(
             } else {
                 (spread * n) as f32 - centred as f32
             };
-            let shot = Shot {
+            // Wrapped once (@0x3f50f-0x3f54f).
+            let heading = trig::wrap_once(heading + offset);
+            // A rocket keeps its parent's velocity; any other, a bomb too,
+            // takes its `Speed` along its truncated heading from rest
+            // (@0x3f55c-0x3f5a5).
+            let velocity = if sub.guidance == Guidance::Rocket {
+                parent.velocity
+            } else {
+                trig::accel(trig::whole(heading), sub.speed)
+            };
+            Shot {
                 target,
                 aimed_at: target,
                 generation: unaimed.generation,
                 source: parent.source,
-                ..Shot::launch(
-                    *sub,
-                    parent.firer,
-                    parent.fleet,
-                    &launcher,
-                    heading + offset,
-                )
-            };
-            // A rocket keeps its parent's velocity; any other, a bomb too,
-            // takes its `Speed` along its heading from rest (@0x3f55c-0x3f5a5).
-            let velocity = if sub.guidance == Guidance::Rocket {
-                parent.velocity
-            } else {
-                facing(shot.heading) * sub.speed
-            };
-            Shot { velocity, ..shot }
+                heading,
+                velocity,
+                ..unaimed
+            }
         })
         .collect()
 }
@@ -151,6 +152,7 @@ mod tests {
     use crate::combat::sides::Ties;
     use crate::flight::{ShipState, facing};
     use crate::geometry::Vec2;
+    use crate::trig;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -514,13 +516,46 @@ mod tests {
     }
 
     #[test]
+    fn a_seeking_sub_munition_heads_at_the_tables_bearing() {
+        // 135 degrees by float, 134 by the table.
+        let targets = [ship(NEAR, 200.0, 150.0)];
+        let subs = release(
+            &parent(-1, 1, 0, 0, 0x0010),
+            &sub(-1),
+            None,
+            &among(&targets),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(headings(&subs), [134.0]);
+        assert_eq!(subs[0].velocity, trig::accel(134, 13.0));
+    }
+
+    #[test]
+    fn a_sub_munition_flies_along_its_truncated_heading_wrapped_once() {
+        let turned = Shot {
+            heading: 359.5,
+            ..parent(-1, 1, 5, 0, 0)
+        };
+        // θ − below(11) with a draw of 0: 359.5 + 5, taken round once.
+        let subs = release(&turned, &sub(-1), None, &among(&[]), &mut Draws::of(&[0]));
+        assert_eq!(headings(&subs), [4.5]);
+        assert_eq!(subs[0].velocity, trig::accel(4, 13.0));
+        let bomb = release(&turned, &sub(5), None, &among(&[]), &mut Draws::of(&[0]));
+        assert_eq!(
+            bomb[0].velocity,
+            trig::accel(4, 13.0),
+            "a bomb from rest too"
+        );
+    }
+
+    #[test]
     fn rockets_keep_their_parents_velocity_and_others_start_from_rest() {
         let parent = parent(-1, 1, 0, 0, 0);
-        assert_eq!(parent.velocity, Vec2::new(5.0, 5.0));
+        assert_eq!(parent.velocity, Vec2::new(0.0, 5.0) + trig::accel(90, 5.0));
         let subs = release(&parent, &sub(6), None, &among(&[]), &mut Draws::of(&[]));
         assert_eq!(subs[0].velocity, parent.velocity);
         let unguided = release(&parent, &sub(-1), None, &among(&[]), &mut Draws::of(&[]));
-        assert!((unguided[0].velocity - facing(90.0) * 13.0).length() < 1e-4);
+        assert_eq!(unguided[0].velocity, trig::accel(90, 13.0));
     }
 
     #[test]

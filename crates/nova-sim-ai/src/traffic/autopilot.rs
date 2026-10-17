@@ -2510,9 +2510,10 @@ mod tests {
 
     #[test]
     fn dogfighting_within_165_it_thrusts_within_a_turn_and_15_degrees() {
-        // 3 + 15: within 18 of the target 165 above.
+        // 3 + 15: within 18 of the target 165 above, which the table
+        // bears at 46, its diagonal a degree past 45.
         let target = at(165.0, -165.0, 0.0, 0.0, 0.0);
-        let bearing = 45.0;
+        let bearing = 46.0;
         let thrusting = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.0), &target);
         assert!(thrusting.thrust);
         let turning = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.1), &target);
@@ -2536,16 +2537,20 @@ mod tests {
             }),
             1,
         )]);
-        // 1000 above crossing right at 10 a tick: led 1000 to the right,
-        // 45 degrees.
+        // 1000 above crossing right at 10 a tick: led about 1000 to the
+        // right, near 45 degrees, in whole degrees as the ship moves.
         let crossing = at(0.0, -1000.0, 10.0, 0.0, 0.0);
         let mut flown = ship.clone();
         for _ in 0..30 {
             fly(&mut flown, &[], Some(&crossing));
         }
+        let wanted = fire::wanted_heading(&flown, &crossing);
+        assert_eq!(wanted, wanted.trunc(), "a whole degree");
+        assert!((wanted - 45.0).abs() < 3.0, "{wanted}");
+        let half_turn = flown.stats.handling.turn_rate / 2.0;
         assert!(
-            (flown.state.heading - 45.0).abs() < 3.0,
-            "{:?}",
+            shortest_turn(flown.state.heading, wanted).abs() <= half_turn,
+            "{:?} {wanted}",
             flown.state
         );
     }

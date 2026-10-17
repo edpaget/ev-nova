@@ -1847,7 +1847,15 @@ mod tests {
                         hit_radius: 9.0,
                         ..HullSpec::default()
                     },
-                    armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
+                    // A gun with a speed to lead by: `_CalcLeadAngle` at
+                    // speed 0 aims at infinity (`trig::lead_angle`).
+                    armament: Armament::new([(
+                        WeaponSpec::new(&crate::catalog::WeaponRecord {
+                            speed: 1000,
+                            ..weapon(128)
+                        }),
+                        2,
+                    )]),
                     rounds: LauncherRounds::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),

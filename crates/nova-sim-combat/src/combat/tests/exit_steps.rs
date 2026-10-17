@@ -182,8 +182,8 @@ fn nearest_exit_point_defence_fires_from_the_exit_nearest_its_missile() {
         assert_eq!(fired.len(), 1, "{source:?}: {:?}", combat.shots());
         let (at, heading) = fired[0];
         assert!(close_to(at, Vec2::new(40.0, 0.0)), "{source:?}: {at:?}");
-        let bearing = aim::bearing(at, Vec2::new(150.0, 100.0));
-        assert!((heading - bearing).abs() < 1e-3, "{source:?}: {heading}");
+        let bearing = crate::trig::intercept_angle(at, Vec2::new(150.0, 100.0));
+        assert_eq!(heading, f32::from(bearing), "{source:?}");
         assert_eq!(
             ships[0].armament.exit_cursors().next(ExitKind::Turret),
             0,

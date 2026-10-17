@@ -53,6 +53,7 @@ use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
 pub use crate::catalog::{BOOM_TYPES, EXTRA_EXPLOSIONS, Explosion, FIRST_BOOM};
 use crate::catalog::{FrameSize, ShipId, WeaponId, WeaponRecord};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
+use crate::trig::LeadShot;
 
 /// How a weapon's shots fly, from its `Guidance`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -646,6 +647,27 @@ impl WeaponSpec {
         index <= MAX_SHOT_INDEX && graphic <= MAX_SHOT_INDEX
     }
 
+    /// The shot `_CalcLeadAngle` leads with for it: its speed, by its
+    /// guidance's gate of -1, 4, 6, 7, 8 and 9 (@0x2b077-0x2b0a3), a rocket
+    /// (6) closing on its speed; none for any other, which gets the table
+    /// bearing ([`lead_angle`](crate::trig::lead_angle)).
+    #[must_use]
+    pub fn lead_shot(&self) -> Option<LeadShot> {
+        matches!(
+            self.guidance,
+            Guidance::Unguided
+                | Guidance::Turret
+                | Guidance::Rocket
+                | Guidance::FrontTurret
+                | Guidance::RearTurret
+                | Guidance::PointDefence
+        )
+        .then_some(LeadShot {
+            speed: self.speed,
+            rocket: self.guidance == Guidance::Rocket,
+        })
+    }
+
     /// Whether it fires beams: guidance 0, 3 and 10.
     #[must_use]
     pub fn is_beam(&self) -> bool {
@@ -898,6 +920,35 @@ mod tests {
         assert_eq!(spec.inaccuracy, 9);
         assert_eq!((spec.prox_radius, spec.blast_radius), (5.0, 6.0));
         assert_eq!(spec.id, WeaponId(128));
+    }
+
+    #[test]
+    fn only_guidance_minus_1_4_6_7_8_and_9_leads_and_6_as_a_rocket() {
+        let lead = |guidance: i16| {
+            WeaponSpec::new(&WeaponRecord {
+                guidance,
+                speed: 1500,
+                ..weapon(128)
+            })
+            .lead_shot()
+        };
+        let plain = Some(LeadShot {
+            speed: 15.0,
+            rocket: false,
+        });
+        for guidance in [-1, 4, 7, 8, 9] {
+            assert_eq!(lead(guidance), plain, "{guidance}");
+        }
+        assert_eq!(
+            lead(6),
+            Some(LeadShot {
+                speed: 15.0,
+                rocket: true
+            })
+        );
+        for guidance in [0, 1, 3, 5, 10, 99] {
+            assert_eq!(lead(guidance), None, "{guidance}");
+        }
     }
 
     #[test]

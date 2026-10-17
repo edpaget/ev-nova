@@ -56,8 +56,9 @@
 //! - **Its manoeuvre** ([`Manoeuvre`]): attacking, it approaches outside
 //!   [`DOGFIGHT_BOX`] on either axis and dogfights within it; it snipes;
 //!   or it flees.
-//! - **The heading it wants** ([`wanted_heading`]): the lead angle for its
-//!   first forward gun's speed, or the plain bearing with none.
+//! - **The heading it wants** ([`wanted_heading`]): the whole-degree lead
+//!   angle for its first forward gun (`_CalcLeadAngle`), or the table
+//!   bearing with none.
 //! - **A gun** (guidance -1, 0 and 6; a homing weapon only while no other
 //!   gun of the target's planet-type has its ammunition, @0x7ffaa-0x8001c,
 //!   @0x80243): none at a target the shooter does not see
@@ -145,18 +146,16 @@ use crate::ai::PlayerSide;
 use crate::ai::{Goal, Surroundings};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
-use crate::combat::aim::{
-    FRONT_ARC, angle_off, bearing, blind, lead, quadrant_off, quadrant_reference,
-};
+use crate::combat::aim::{FRONT_ARC, angle_off, blind_spot, quadrant_off};
 #[cfg(doc)]
 use crate::combat::armament::Armament;
 use crate::combat::armament::{Arsenal, GUN_RANGE_MARGIN, Mount, Shooter, Trigger};
-use crate::combat::projectile::Target;
 use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 use crate::traffic::snipe;
+use crate::trig;
 
 /// How near, in pixels on either axis, an attacker dogfights rather than
 /// approaches (165.0 @0xdda24).
@@ -241,37 +240,33 @@ fn forward(spec: &WeaponSpec) -> bool {
 }
 
 /// The heading `npc` wants to face to fire at a ship at `at` (see the
-/// module docs).
+/// module docs): [`lead_with`] its first forward gun.
 #[must_use]
 pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
-    let speed = npc
+    let gun = npc
         .armament
         .mounts()
         .iter()
         .find(|mount| forward(&mount.spec))
-        .map_or(0.0, |mount| mount.spec.speed);
-    lead_with(npc, at, speed)
+        .map(|mount| &mount.spec);
+    lead_with(npc, at, gun)
 }
 
-/// The lead angle from `npc` to a ship at `at` for a shot of `speed`
-/// pixels a tick ([`lead`]), as `_CalcLeadAngle` aims.
+/// The whole-degree lead angle from `npc`'s centre to a ship at `at` for
+/// a shot of `weapon`, as `_LowLevelAIHandler` sets the heading it wants
+/// with `_CalcLeadAngle(self, target, weap, &self.pos)` (@0x85e99,
+/// @0x85ed9, @0x86858, @0x871a4; [`trig::lead_angle`]): the table bearing
+/// with no weapon, or one outside the lead's guidance gate
+/// ([`WeaponSpec::lead_shot`]), so the steering, the facing tests and the
+/// shots share one lead.
 #[must_use]
-pub fn lead_with(npc: &Npc, at: &ShipState, speed: f32) -> f32 {
-    // The lead reads only where it is and how it moves.
-    let target = Target {
-        ship: ShipRef::Player,
-        ship_type: crate::catalog::ShipId(0),
-        fleet: ShipRef::Player,
-        ties: crate::combat::sides::Ties::default(),
-        position: at.position,
-        velocity: at.velocity,
-        radius: 0.0,
-        sprite_x: 0.0,
-        sheet: true,
-        condition: crate::combat::hull::Condition::Intact,
-        miss_class: crate::combat::hull::HEAVY_MISS_CLASS,
-    };
-    lead(&npc.state, &target, speed)
+pub fn lead_with(npc: &Npc, at: &ShipState, weapon: Option<&WeaponSpec>) -> f32 {
+    f32::from(trig::lead_angle(
+        npc.state.position,
+        npc.state.velocity,
+        (at.position, at.velocity),
+        weapon.and_then(WeaponSpec::lead_shot),
+    ))
 }
 
 /// Whether a stock weapon of `npc`'s class reaches a ship at `at`: within
@@ -839,23 +834,21 @@ impl Sight<'_> {
             return None;
         }
         let heading = self.npc.state.heading;
-        let bearing = bearing(self.npc.state.position, self.at.position);
-        // Blind spots take the folded angle, as `_TurretBlindSpot` folds
-        // (@0xb35a-0xb387).
-        let bearing_off = angle_off(heading, bearing);
+        // The table's angle (@0x80c4d), against the truncated heading for
+        // the arcs and `_TurretBlindSpot` (@0x80d0b).
+        let angle = trig::intercept_angle(self.npc.state.position, self.at.position);
         self.best(|mount| {
             let spec = &mount.spec;
             let in_arc = match spec.guidance {
                 Guidance::TurretBeam | Guidance::Turret => true,
                 Guidance::FrontTurret | Guidance::RearTurret => {
-                    let reference = quadrant_reference(spec.guidance, heading);
-                    quadrant_off(reference, bearing, self.quadrant_arc) <= FRONT_ARC
+                    quadrant_off(spec.guidance, heading, angle, self.quadrant_arc) <= FRONT_ARC
                 }
                 _ => false,
             };
             in_arc
                 && spec.planet_type() == self.planet_type
-                && !blind(spec.flags | self.npc.hull.blind_spots, bearing_off)
+                && !blind_spot(spec.flags | self.npc.hull.blind_spots, heading, angle)
                 && self.ready(mount)
                 && self.reaches(spec)
         })
@@ -1430,11 +1423,21 @@ mod tests {
             heading: 0.0,
         };
         // 100 pixels at 10 a tick: 10 ticks, 50 to the right of it,
-        // relative to the shooter's own motion.
-        let expected = bearing(Vec2::ZERO, Vec2::new(50.0, -100.0));
-        assert!((wanted_heading(&npc, &crossing) - expected).abs() < 1e-3);
+        // relative to the shooter's own motion, by the table: 26, not
+        // 26.57 (`_CalcLeadAngle` @0x85e99).
+        let expected = trig::table_arctan(-50.0, 100.0);
+        assert_eq!(expected, 26);
+        assert_eq!(wanted_heading(&npc, &crossing), f32::from(expected));
         npc.armament = Armament::new([(WeaponSpec::new(&missile(131)), 1)]);
         assert_eq!(wanted_heading(&npc, &crossing), 0.0, "the bearing");
+        // A beam is outside `_CalcLeadAngle`'s gate: the table bearing.
+        let beam = WeaponSpec::new(&WeaponRecord {
+            guidance: 0,
+            speed: 1000,
+            ..weapon(140)
+        });
+        npc.armament = Armament::new([(beam, 1)]);
+        assert_eq!(wanted_heading(&npc, &crossing), 0.0, "ungated");
     }
 
     #[test]
@@ -1570,16 +1573,19 @@ mod tests {
             None,
             "blind both ways"
         );
+        // The table's angles: (99, -100) reads 44 off the nose and the
+        // diagonal 46, a degree past its 45; (99, 100) reads 136, 44 off
+        // the tail, and its diagonal 134.
         let front = shooter(&[guided(130, 7)], Goal::Flee(ShipRef::Player));
         assert_eq!(
-            fired(&front, 100.0, -100.0, 50.0),
+            fired(&front, 99.0, -100.0, 50.0),
             id(130),
-            "45 off the nose"
+            "44 off the nose"
         );
-        assert_eq!(fired(&front, 100.1, -100.0, 50.0), None);
+        assert_eq!(fired(&front, 100.0, -100.0, 50.0), None, "46");
         let rear = shooter(&[guided(130, 8)], Goal::Flee(ShipRef::Player));
-        assert_eq!(fired(&rear, 100.0, 100.0, 50.0), id(130), "45 off the tail");
-        assert_eq!(fired(&rear, 100.1, 100.0, 50.0), None);
+        assert_eq!(fired(&rear, 99.0, 100.0, 50.0), id(130), "44 off the tail");
+        assert_eq!(fired(&rear, 100.0, 100.0, 50.0), None, "46");
         assert_eq!(fired(&npc, 0.0, 232.1, 50.0), None, "out of range");
     }
 
@@ -2543,17 +2549,17 @@ mod tests {
             npc.state.heading = heading;
             npc
         };
-        assert!(
-            (wanted_heading(
+        assert_eq!(
+            wanted_heading(
                 &sniper(0.0),
                 &ShipState {
                     position: SHOOTER + Vec2::new(0.0, -100.0),
                     velocity: Vec2::new(5.0, 0.0),
                     heading: 0.0,
                 }
-            ) - 26.57)
-                .abs()
-                < 0.01
+            ),
+            26.0,
+            "the table's lead"
         );
         assert_eq!(fired_at_crossing(&sniper(26.57)), None, "facing the lead");
         assert_eq!(fired_at_crossing(&sniper(8.99)), id(128));

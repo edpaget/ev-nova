@@ -1491,10 +1491,12 @@ impl Combat {
     ///
     /// - A weapon of `Flags3` 0x0010 takes the exit nearest the ship its
     ///   damage is aimed at, `_SpawnShot`'s and `_SpawnBeam`'s target.
-    /// - A shot's heading is worked out once, from where it leaves
-    ///   ([`Launch::heading_from`]): a turret that leads its target (4, 7
-    ///   and 8) leads it from the exit (`_CalcLeadAngle` @0x3ecdc), turned
-    ///   by its inaccuracy. A fighter's is from the centre. A beam takes
+    /// - A shot's heading is worked out once, from where it leaves, in
+    ///   whole degrees ([`Launch::shot_heading`]): the ship's truncated
+    ///   heading (@0x3e677), or for a turret that leads its target (4, 7
+    ///   and 8) the lead angle from the exit (`_CalcLeadAngle` @0x3ecdc),
+    ///   turned by its inaccuracy and wrapped once (@0x3ed44-0x3edc1). A
+    ///   fighter's is from the centre, unwrapped ([`Launch::heading_from`]). A beam takes
     ///   neither its launch's heading nor its inaccuracy: it points anew
     ///   each tick ([`Beam::follow`]), as `_SpawnBeam` never reads the
     ///   angle it is given.
@@ -1517,7 +1519,7 @@ impl Combat {
     ///   under `Flags3` 0x0010 takes the exit nearest it (kind -1,
     ///   @0x398fb-0x3990a).
     /// - A shot's velocity is [`projectile::launch_velocity`]'s along its
-    ///   heading, a bomb's or rocket's as the fight's [`BombLaunch`] reading
+    ///   truncated heading (`_Accel` @0x3eeea), a bomb's or rocket's as the fight's [`BombLaunch`] reading
     ///   gives for its ship: an NPC's, an escort's too, thrown at the ship's
     ///   velocity and its `Speed` by the engine, the player's dropped
     ///   (`_SpawnShot` @0x3e73a-0x3e783, @0x3ede8-0x3ee0a). A bomb's
@@ -1611,12 +1613,12 @@ impl Combat {
                 position: start,
                 ..from
             };
-            let heading = launch.heading_from(&leaving);
+            let heading = launch.shot_heading(&leaving);
             let thrown = BombLaunch::of(ship != ShipRef::Player, self.bomb_launch);
-            // A bomb flies along its aim, its inaccuracy turning only its
-            // facing, after its velocity is set (@0x3ef0a-0x3efed).
+            // A bomb flies along its whole-degree aim, its inaccuracy turning
+            // only its facing, after its velocity is set (@0x3ef0a-0x3efed).
             let along = if weapon.guidance == Guidance::FreefallBomb {
-                normalized(launch.pointing.heading_from(&leaving))
+                f32::from(launch.pointing.whole_from(&leaving))
             } else {
                 heading
             };
@@ -3404,6 +3406,7 @@ mod tests {
     use crate::combat::weapon::{
         LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_ON_FIRER, WeaponSpec,
     };
+    use crate::trig;
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::weapon;
 
@@ -8755,14 +8758,11 @@ mod tests {
             position,
             ..ShipState::default()
         };
-        let speed = WeaponSpec::new(&turret).speed;
-        let from_exit = aim::lead(&from(Vec2::new(60.0, 0.0)), &target, speed);
-        let from_centre = aim::lead(&from(Vec2::ZERO), &target, speed);
+        let spec = WeaponSpec::new(&turret);
+        let from_exit = lead_from(&from(Vec2::new(60.0, 0.0)), &target, &spec);
+        let from_centre = lead_from(&from(Vec2::ZERO), &target, &spec);
         assert!(close_to(start(shot), Vec2::new(60.0, 0.0)), "{shot:?}");
-        assert!(
-            (shot.heading - from_exit).abs() < 1e-3,
-            "{shot:?} {from_exit}"
-        );
+        assert_eq!(shot.heading, from_exit, "{shot:?}");
         assert!(
             (from_exit - from_centre).abs() > 1.0,
             "{from_exit} {from_centre}"
@@ -8822,21 +8822,20 @@ mod tests {
         let velocity = combat.shots()[0].velocity;
         // 45.5 - 90 wraps to 315.5 in float (@0x3ee7e-0x3eea4), then
         // `cvttss2si` (@0x3eeb8) takes 315, not trunc(-44.5) + 360 = 316.
-        let along = crate::flight::facing(315.0) * 10.0;
-        assert!(close_to(velocity, along), "{velocity:?} {along:?}");
+        assert_eq!(velocity, trig::accel(315, 10.0));
     }
 
     #[test]
-    fn a_gun_of_no_broadside_fires_from_a_side_exit_along_its_aim_untruncated() {
+    fn a_gun_of_no_broadside_fires_from_a_side_exit_along_its_truncated_aim() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0)
             .armed(gun())
             .facing(45.5)
             .of(exits_at(0, [(3, 10); 4]))];
         tick(&mut combat, &mut ships, &NovaDisable);
-        let velocity = combat.shots()[0].velocity;
-        let along = crate::flight::facing(45.5) * 10.0;
-        assert!(close_to(velocity, along), "{velocity:?} {along:?}");
+        let shot = combat.shots()[0];
+        assert_eq!(shot.heading, 45.0, "trunc(45.5) (@0x3e677)");
+        assert_eq!(shot.velocity, trig::accel(45, 10.0));
     }
 
     /// The velocity and heading of the shot of `guidance` and `inaccuracy`
@@ -8907,10 +8906,9 @@ mod tests {
             .iter()
             .find(|shot| shot.weapon.guidance == Guidance::PointDefence)
             .expect("a point-defence shot");
-        let bearing = aim::bearing(start(shot), Vec2::new(150.0, 100.0));
-        assert!((shot.heading - bearing).abs() < 1e-3, "{shot:?} {bearing}");
-        let along = crate::flight::facing(bearing) * 10.0;
-        assert!(close_to(shot.velocity, along), "not sideways: {shot:?}");
+        let bearing = trig::intercept_angle(start(shot), Vec2::new(150.0, 100.0));
+        assert_eq!(shot.heading, f32::from(bearing), "{shot:?}");
+        assert_eq!(shot.velocity, trig::accel(bearing, 10.0), "not sideways");
     }
 
     /// A beam weapon of `guidance` firing from its ship's beam exits for
@@ -9092,8 +9090,8 @@ mod tests {
             close_to(at, Vec2::new(20.0, 0.0)),
             "the second exit: {at:?}"
         );
-        let bearing = aim::bearing(at, Vec2::new(150.0, 100.0));
-        assert!((heading - bearing).abs() < 1e-3, "{heading} {bearing}");
+        let bearing = trig::intercept_angle(at, Vec2::new(150.0, 100.0));
+        assert_eq!(heading, f32::from(bearing), "the table's (@0x39790)");
         assert_eq!(
             ships[0].armament.exit_cursors().next(ExitKind::Turret),
             2,
@@ -10267,6 +10265,66 @@ mod tests {
         assert_eq!(facing, 94.0, "the player's facing takes it too");
     }
 
+    #[test]
+    fn a_shot_leaves_on_its_ships_truncated_heading_and_flies_along_it() {
+        let mut combat = Combat::default();
+        let mut ships = [Ship {
+            state: ShipState {
+                position: Vec2::ZERO,
+                velocity: Vec2::new(1.0, 2.0),
+                heading: 45.5,
+            },
+            ..Ship::at(1, 0.0, 0.0).armed(gun())
+        }];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shot = combat.shots()[0];
+        assert_eq!(shot.heading, 45.0, "trunc(45.5) (@0x3e677)");
+        assert_eq!(
+            shot.velocity,
+            Vec2::new(1.0, 2.0) + trig::accel(45, 10.0),
+            "_Accel(trunc(heading)) (@0x3eeea)"
+        );
+    }
+
+    #[test]
+    fn a_turret_at_a_resting_target_fires_at_its_table_bearing_turned_and_wrapped() {
+        // B reads 0 by the table from A; inaccuracy 9 draws below 18, less
+        // 9: 4 is -5, taken round to 355.
+        let wild = WeaponRecord {
+            inaccuracy: 9,
+            ..turret(4)
+        };
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(wild).targeting(B).facing(90.0),
+            Ship::at(2, 10.0, -1000.0),
+        ];
+        assert_eq!(
+            trig::intercept_angle(Vec2::ZERO, Vec2::new(10.0, -1000.0)),
+            0
+        );
+        let mut chance = nova_sim_base::fixture::Draws::of(&[4]);
+        tick_drawing(&mut combat, &mut ships, &mut chance);
+        let shot = combat.shots()[0];
+        assert_eq!(shot.heading, 355.0);
+        assert_eq!(shot.velocity, trig::accel(355, 20.0));
+    }
+
+    #[test]
+    fn an_npcs_thrown_bomb_flies_along_its_whole_degree_aim_before_its_inaccuracy() {
+        // Facing 90.7: along 90, then +5 turns its facing only.
+        let ship = Ship {
+            state: ShipState {
+                heading: 90.7,
+                ..ShipState::default()
+            },
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        let (bomb, facing) = launched(ship, Vec2::ZERO, dropping(5, 9), RuleSource::Engine, &[14]);
+        assert_eq!(bomb, trig::accel(90, 10.0), "along trunc(90.7)");
+        assert_eq!(facing, 94.0, "95, then a degree back into the wind");
+    }
+
     // Point defence against ships (`_HandleShipPointDefense`
     // @0x394ce-0x3969d).
 
@@ -10328,6 +10386,18 @@ mod tests {
         }
     }
 
+    /// The whole-degree lead angle from `from` at `target` for a shot of
+    /// `spec` (`_CalcLeadAngle`).
+    fn lead_from(from: &ShipState, target: &Target, spec: &WeaponSpec) -> f32 {
+        let at = (target.position, target.velocity);
+        f32::from(trig::lead_angle(
+            from.position,
+            from.velocity,
+            at,
+            spec.lead_shot(),
+        ))
+    }
+
     /// `ship` as point defence leads it.
     fn led_target(ship: &mut Ship) -> Target {
         ship.fighter().as_target()
@@ -10347,16 +10417,15 @@ mod tests {
         let fired = pd_shots(&combat);
         assert_eq!(fired.len(), 1, "{:?}", combat.shots());
         let shot = fired[0];
-        let lead = aim::lead(&from, &target, 20.0);
-        let bearing = aim::bearing(from.position, target.position);
+        let lead = lead_from(&from, &target, &WeaponSpec::new(&quad()));
+        let bearing = trig::intercept_angle(from.position, target.position);
+        assert_eq!(shot.heading, lead, "the whole-degree lead (@0x397c6)");
         assert!(
-            (shot.heading - lead).abs() < 1e-3,
-            "{} {lead}",
-            shot.heading
+            (lead - f32::from(bearing)).abs() > 3.0,
+            "the lead matters here"
         );
-        assert!((lead - bearing).abs() > 3.0, "the lead matters here");
-        let velocity = Vec2::new(1.0, 2.0) + crate::flight::facing(lead) * 20.0;
-        assert!(close_to(shot.velocity, velocity), "{:?}", shot.velocity);
+        let velocity = Vec2::new(1.0, 2.0) + trig::accel(trig::whole(lead), 20.0);
+        assert_eq!(shot.velocity, velocity);
         assert_eq!(
             (shot.target, shot.aimed_at),
             (None, None),
@@ -10477,13 +10546,10 @@ mod tests {
             position: at,
             ..ShipState::default()
         };
-        let lead = aim::lead(&leaving, &target, 20.0);
-        assert!(
-            (shot.heading - lead).abs() < 1e-3,
-            "{} {lead}",
-            shot.heading
-        );
-        let centre = aim::lead(&ShipState::default(), &target, 20.0);
+        let spec = WeaponSpec::new(&quad());
+        let lead = lead_from(&leaving, &target, &spec);
+        assert_eq!(shot.heading, lead);
+        let centre = lead_from(&ShipState::default(), &target, &spec);
         assert!((lead - centre).abs() > 1.0, "the exit matters here");
     }
 

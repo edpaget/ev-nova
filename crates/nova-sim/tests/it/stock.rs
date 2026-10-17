@@ -3087,7 +3087,8 @@ fn every_stock_turret_fires_at_its_target_outside_its_blind_spots() {
 }
 
 /// Each stock front-quadrant turret (7) fires at a target 30 degrees off
-/// its nose at the lead angle, and at one 90 degrees off straight ahead.
+/// its nose at the lead angle, the table's whole degree (119 for a ship at
+/// rest at 120), and at one 90 degrees off straight ahead.
 #[test]
 fn every_stock_front_quadrant_turret_leads_a_target_in_its_arc_and_otherwise_fires_ahead() {
     let Some(dir) = common::nova_data() else {
@@ -3100,7 +3101,9 @@ fn every_stock_front_quadrant_turret_leads_a_target_in_its_arc_and_otherwise_fir
     for spec in front {
         let id = spec.id.0;
         let in_arc = fires_at(&spec, HullSpec::default(), 120.0).expect("fires");
-        assert!((in_arc - 120.0).abs() < 1e-3, "{id}: {in_arc}");
+        let table = nova_sim::trig::intercept_angle(Vec2::ZERO, facing(120.0) * 100.0);
+        assert_eq!(table, 119, "{id}");
+        assert!((in_arc - f32::from(table)).abs() < 1e-3, "{id}: {in_arc}");
         let out = fires_at(&spec, HullSpec::default(), 180.0).expect("fires");
         assert!((out - 90.0).abs() < 1e-3, "{id}: {out}");
     }
@@ -6359,9 +6362,8 @@ fn defended_against(
 /// leads it from its exit, which matters at that speed, and a Quad shot
 /// strikes it.
 #[test]
+#[allow(clippy::float_cmp)]
 fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
-    use nova_sim::combat::aim::{bearing, lead};
-    use nova_sim::combat::projectile::Target;
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -6378,26 +6380,16 @@ fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
     let quad = stock_weapon(&data, 133);
     let (fired, strikes) = defended_against(&arsenal, &mut ships, 133, 40);
     let &(start, heading, viper) = fired.first().expect("the Quad fires");
-    let quarry = Target {
-        ship: QUARRY,
-        ship_type: ShipId(167),
-        fleet: QUARRY,
-        ties: nova_sim::combat::sides::Ties::default(),
-        position: viper.position,
-        velocity: viper.velocity,
-        radius: 0.0,
-        sprite_x: 0.0,
-        sheet: true,
-        condition: Condition::Intact,
-        miss_class: 0,
-    };
-    let from = ShipState {
-        position: start,
-        ..ShipState::default()
-    };
-    let led = lead(&from, &quarry, quad.speed);
-    assert!((heading - led).abs() < 1e-3, "{heading} led {led}");
-    let aimed = bearing(start, viper.position);
+    // The whole-degree lead from its exit (`_CalcLeadAngle` @0x397c6), the
+    // defender at rest.
+    let led = f32::from(nova_sim::trig::lead_angle(
+        start,
+        Vec2::ZERO,
+        (viper.position, viper.velocity),
+        quad.lead_shot(),
+    ));
+    assert_eq!(heading, led, "led {led}");
+    let aimed = f32::from(nova_sim::trig::intercept_angle(start, viper.position));
     assert!((led - aimed).abs() > 5.0, "the lead matters: {led} {aimed}");
     assert_ne!(start, Vec2::ZERO, "from its exit");
     assert!(

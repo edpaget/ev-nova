@@ -858,9 +858,12 @@ fn a_front_quadrant_turret_fires_at_a_trader_targeted_30_degrees_off_the_nose() 
     harness.key(Key::Space, true);
     harness.until(|harness| !chaingun_shots(harness).is_empty());
     harness.key(Key::Space, false);
-    let bearing = 50.0_f32.atan2(87.0).to_degrees();
+    // The table's whole-degree bearing (29, where the float one is
+    // 29.9), the trader at rest (`_CalcLeadAngle` @0x3ecdc).
+    let bearing = f32::from(nova_sim::trig::table_arctan(-50.0, 87.0));
     let shot = harness.session().shots()[0];
     assert!((shot.heading - bearing).abs() < 1e-3, "{shot:?}");
+    assert_eq!(bearing.to_bits(), 29.0_f32.to_bits());
     let first = sprites_of(&harness.frame(), SHOT);
     harness.frame();
     let second = sprites_of(&harness.frame(), SHOT);
