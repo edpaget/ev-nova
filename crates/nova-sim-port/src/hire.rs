@@ -494,7 +494,7 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::shipyard::StockLine;
     use nova_sim_base::fixture::FAST;
-    use nova_sim_catalog::fixture::{hull, outfit, planet, ship};
+    use nova_sim_catalog::fixture::{AllowAll, RefuseBits, hull, outfit, planet, ship};
 
     /// A site of tech level `tech`.
     fn site(tech: i16) -> LandingSite {
@@ -808,5 +808,169 @@ mod tests {
         let bible =
             specs(Rulebook::default().with_override(RuleKey::ShipInfoRounding, RuleSource::Bible));
         assert_eq!(bible.rounding, RuleSource::Bible);
+    }
+
+    /// Class `id` always for hire, of `Cost` 10,000 (a fee of 1,000 at a
+    /// tech level 7 bar), with no Info space to weigh.
+    fn for_hire(id: i16) -> ShipRecord {
+        ShipRecord {
+            hire_random: 100,
+            ..ship(id, FAST)
+        }
+    }
+
+    /// The hire list of `ships` at a tech level 7 bar, with `cash`,
+    /// fleet room `room`, a slot `slot`, the control bits `control_bits`
+    /// and `rules`.
+    fn hire_list(
+        ships: &[ShipRecord],
+        cash: i64,
+        (room, slot): (bool, bool),
+        control_bits: &dyn ControlBits,
+        rules: Rulebook,
+    ) -> HireList {
+        let at = site(7);
+        let arsenal = Arsenal::new(&[], Vec::new());
+        Bar {
+            ships,
+            site: &at,
+            contributed: 0x1,
+            cash,
+            room,
+            slot,
+            terms: &NovaHire::default(),
+            rank_mult: 1.0,
+            control_bits,
+            pilot: Gate::FRESH.pilot,
+            rules,
+            arsenal: &arsenal,
+            outfits: &[],
+        }
+        .list(|_, _| true)
+    }
+
+    fn listed_ids(list: &HireList) -> Vec<i16> {
+        list.rows.iter().map(|row| row.id.0).collect()
+    }
+
+    #[test]
+    fn a_class_for_hire_is_refused_by_the_first_check_that_fails() {
+        let ships = [for_hire(129)];
+        let refused = |cash, room_slot| {
+            hire_list(&ships, cash, room_slot, &AllowAll, Rulebook::default()).check(ShipId(129))
+        };
+        assert_eq!(refused(1000, (true, true)), Ok(()), "the fee exactly");
+        assert_eq!(refused(5000, (true, true)), Ok(()), "more than the fee");
+        assert_eq!(refused(999, (true, true)), Err(HireRefusal::CannotAfford));
+        assert_eq!(refused(5000, (true, false)), Err(HireRefusal::NoSlot));
+        assert_eq!(refused(0, (true, false)), Err(HireRefusal::NoSlot));
+        assert_eq!(refused(5000, (false, true)), Err(HireRefusal::FleetFull));
+        assert_eq!(refused(0, (false, false)), Err(HireRefusal::FleetFull));
+    }
+
+    #[test]
+    fn a_class_whose_availability_is_refused_is_listed_but_not_for_hire() {
+        let ships = [
+            ShipRecord {
+                availability: Test::parse("b7"),
+                ..for_hire(129)
+            },
+            ShipRecord {
+                availability: Test::parse("b8"),
+                ..for_hire(130)
+            },
+        ];
+        let list = hire_list(
+            &ships,
+            5000,
+            (false, false),
+            &RefuseBits(&[7]),
+            Rulebook::default(),
+        );
+        assert_eq!(listed_ids(&list), [129, 130]);
+        assert_eq!(
+            list.check(ShipId(129)),
+            Err(HireRefusal::NotForHire),
+            "ahead of the fleet's room"
+        );
+        assert_eq!(list.check(ShipId(130)), Err(HireRefusal::FleetFull));
+        let open = hire_list(
+            &ships,
+            5000,
+            (true, true),
+            &RefuseBits(&[7]),
+            Rulebook::default(),
+        );
+        assert_eq!(open.check(ShipId(129)), Err(HireRefusal::NotForHire));
+        assert_eq!(open.check(ShipId(130)), Ok(()), "another bit holds");
+    }
+
+    #[test]
+    fn require_gates_hiring_only_by_the_bible() {
+        // The bar's `Contribute` is 0x1.
+        let ships = [
+            ShipRecord {
+                require: 0x2,
+                ..for_hire(129)
+            },
+            ShipRecord {
+                require: 0x1,
+                ..for_hire(130)
+            },
+        ];
+        let checks = |rules| {
+            let list = hire_list(&ships, 5000, (true, true), &AllowAll, rules);
+            (list.check(ShipId(129)), list.check(ShipId(130)))
+        };
+        assert_eq!(checks(Rulebook::default()), (Ok(()), Ok(())), "the engine");
+        assert_eq!(
+            checks(Rulebook::default().with_override(RuleKey::HireRequire, RuleSource::Bible)),
+            (Err(HireRefusal::NotForHire), Ok(())),
+            "the Bible"
+        );
+    }
+
+    #[test]
+    fn a_hidden_class_is_not_listed() {
+        let ships = [
+            ShipRecord {
+                flags3: ShipFlags3::HIDE_UNLESS_AVAILABLE,
+                availability: Test::parse("b7"),
+                ..for_hire(129)
+            },
+            ShipRecord {
+                flags3: ShipFlags3::HIDE_UNLESS_REQUIRED,
+                require: 0x2,
+                ..for_hire(130)
+            },
+            for_hire(131),
+        ];
+        let list = hire_list(
+            &ships,
+            5000,
+            (true, true),
+            &RefuseBits(&[7]),
+            Rulebook::default(),
+        );
+        assert_eq!(listed_ids(&list), [131]);
+    }
+
+    #[test]
+    fn only_a_hide_higher_class_takes_higher_classes_of_its_weight_off_hire() {
+        let at_5 = |id, flags3| ShipRecord {
+            disp_weight: 5,
+            flags3,
+            ..for_hire(id)
+        };
+        let plain = [at_5(129, 0), at_5(130, 0), at_5(131, 0)];
+        let list = hire_list(&plain, 5000, (true, true), &AllowAll, Rulebook::default());
+        assert_eq!(listed_ids(&list), [129, 130, 131], "no hider");
+        let hiding = [
+            at_5(129, 0),
+            at_5(130, ShipFlags3::HIDE_HIGHER),
+            at_5(131, 0),
+        ];
+        let list = hire_list(&hiding, 5000, (true, true), &AllowAll, Rulebook::default());
+        assert_eq!(listed_ids(&list), [129, 130]);
     }
 }
