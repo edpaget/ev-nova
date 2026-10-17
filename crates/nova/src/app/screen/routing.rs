@@ -352,10 +352,11 @@ impl AppScreen {
     /// (@0x11dd1): flight's course map, the bar's map over the spaceport,
     /// or the galaxy viewer.
     fn map_takes_every_key(&self) -> bool {
-        let flight_finding = self.flight.as_ref().is_some_and(FlightView::map_finding);
         match self.side {
-            Side::Flight => flight_finding,
-            Side::Spaceport => self.port_map_open() && flight_finding,
+            // In port, flight's map is open only as the bar's map.
+            Side::Flight | Side::Spaceport => {
+                self.flight.as_ref().is_some_and(FlightView::map_finding)
+            }
             Side::Galaxy => self.galaxy.system().is_none() && self.galaxy.map().finding(),
             Side::MainMenu | Side::Ships => false,
         }

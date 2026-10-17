@@ -132,3 +132,47 @@ fn the_flights_find_is_laid_out_in_the_datas_button_style() {
         DrawCommand::Text { text, font, .. } if text == "Find" && *font == style.font
     )));
 }
+
+/// [`Dialogs`] with a `DLOG` 3005 whose Cancel reads "Never mind".
+struct FindDialogs;
+
+impl DialogResources for FindDialogs {
+    fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+        if id != nova_view::galaxy::find::FIND_DIALOG {
+            return Dialogs.dialog_template(id);
+        }
+        let mut template = nova_view::galaxy::find::fallback();
+        template.items[nova_view::galaxy::find::CANCEL_ITEM - 1].kind =
+            ItemSpec::Button("Never mind".to_owned());
+        Ok(template)
+    }
+}
+
+fn texts_of(map: &GalaxyMap) -> Vec<String> {
+    let mut list = DrawList::new();
+    map.draw(&mut list);
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn flight_and_the_viewer_lay_find_out_from_the_dialogs_dlog_3005() {
+    let mut screen =
+        AppScreen::new(data()).with_dialogs(Rc::new(FindDialogs), Rc::new(MonoMetrics));
+    screen.input(&key(Key::Tab, true));
+    screen.input(&key(Key::Tab, false));
+    type_in(&mut screen, "s");
+    assert!(texts_of(screen.galaxy_map()).contains(&"Never mind".to_owned()));
+    screen.input(&key(Key::Enter, true));
+    type_in(&mut screen, "f");
+    assert_eq!(screen.showing(), Showing::Flight);
+    type_in(&mut screen, "m");
+    type_in(&mut screen, "f");
+    let map = flight(&screen).course_map();
+    assert!(map.finding());
+    assert!(texts_of(map).contains(&"Never mind".to_owned()));
+}

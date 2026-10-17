@@ -1439,9 +1439,6 @@ impl Screen for GalaxyMap {
                     }
                 }
             }
-            Input::Key {
-                key: Key::Shift, ..
-            } => {}
             // Once, on key-down, as `_MapFilter` takes Space (@0x140e0).
             Input::Key {
                 key: Key::Space,
