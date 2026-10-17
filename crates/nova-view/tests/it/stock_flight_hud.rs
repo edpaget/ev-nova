@@ -12,7 +12,7 @@
 // The stock areas are small whole numbers, exact in floating point.
 #![allow(clippy::float_cmp)]
 
-mod common;
+use crate::common;
 
 use nova_data::records::interface::Interface;
 use nova_data::records::stellar::Stellar;

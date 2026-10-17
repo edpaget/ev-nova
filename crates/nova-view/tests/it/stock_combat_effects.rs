@@ -3,7 +3,7 @@
 //! about its main explosion through the stock looks. Skips, passing, when
 //! `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use nova_data::GameData;
 use nova_sim::combat::weapon::WeaponSpec;

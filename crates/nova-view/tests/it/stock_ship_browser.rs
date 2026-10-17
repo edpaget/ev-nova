@@ -1,7 +1,7 @@
 //! The ship browser over the stock data: every ship, browsed by keyboard.
 //! Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 use std::time::Duration;

@@ -2,7 +2,7 @@
 //! nebula, and every system selectable by clicking. Skips, passing, when
 //! `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::{BTreeMap, BTreeSet};
 

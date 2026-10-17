@@ -5,7 +5,7 @@
 // Positions here are small whole numbers, exact in floating point.
 #![allow(clippy::float_cmp)]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 

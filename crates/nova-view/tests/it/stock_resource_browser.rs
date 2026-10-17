@@ -4,7 +4,7 @@
 //! Skips, passing, when `NOVA_DATA` is unset. Every loop is bounded by the
 //! store's own resource count.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 

@@ -5,7 +5,7 @@
 
 #![allow(clippy::float_cmp)]
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
