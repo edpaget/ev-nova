@@ -426,14 +426,36 @@ fn launches(npc: &Npc, around: &Surroundings) -> bool {
     npc.goal.attacking().is_some_and(|ship| around.live(ship))
 }
 
+/// The part of `npc`'s trigger the fight fires: all of it, but while its
+/// AI wait runs ([`Npc::wait_running`]) only its fighter bays and its
+/// point defence, its pick kept. `_HandleShip` jumps past its thrust and
+/// its whole fire block while +0x4c is above 0 (@0x34a54-0x34a72 →
+/// @0x3501f), so the pick is neither fired nor cleared (@0x35012); the
+/// point defence (`_AIFireTurret` → `_HandleShipPointDefense` @0x80b0d)
+/// and `_AILaunchFighter` are the AI's, which the gate does not stop.
+#[must_use]
+pub fn gated(npc: &Npc) -> Trigger {
+    let trigger = npc.trigger;
+    if !npc.wait_running() {
+        return trigger;
+    }
+    Trigger {
+        bays: trigger.bays,
+        point_defence: trigger.point_defence,
+        keep: trigger.keep,
+        ..Trigger::default()
+    }
+}
+
 /// What `_HandleShip` does with `npc`'s pick once the fight has fired it
 /// (@0x34fcb-0x3501f): a pick fired ([`Trigger::only`]) of a weapon
 /// without `Flags` 0x0002 is cleared, flag and pick alike, whether or not
 /// anything spawned; a secondary's stays, so it fires again on the next
 /// tick its AI sets no flag of its own (its gun pass keeps it). A pick it
-/// doesn't carry is cleared too.
+/// doesn't carry is cleared too. While its wait runs nothing was fired
+/// ([`gated`]), so its pick stays.
 pub fn after_firing(npc: &mut Npc) {
-    let Some(fired) = npc.trigger.only else {
+    let Some(fired) = gated(npc).only else {
         return;
     };
     let secondary = npc
@@ -2342,5 +2364,65 @@ mod tests {
         assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
         ship.rounds = LauncherRounds::from([(WeaponId(150), 1)]);
         assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    // The wait gate.
+
+    /// A trigger with every part set.
+    const FULL: Trigger = Trigger {
+        primary: true,
+        secondary: Some(WeaponId(131)),
+        only: Some(WeaponId(128)),
+        turrets_only: true,
+        bays: true,
+        point_defence: true,
+        keep: Some(WeaponId(128)),
+    };
+
+    #[test]
+    fn a_waiting_npc_fires_nothing_but_its_point_defence_and_bays_and_keeps_its_pick() {
+        use crate::catalog::StellarId;
+        use crate::traffic::npc::Mode;
+        let mut npc = shooter(&[gun(128, 1, 1)], ATTACK);
+        npc.trigger = FULL;
+        let waits = [
+            Mode::Emerging { ticks_left: 5 },
+            Mode::HeldAtGate { ticks_left: 5 },
+            Mode::Coasting { ticks_left: 5 },
+            Mode::EnteringGate {
+                gate: StellarId(128),
+                ticks_left: 5,
+            },
+        ];
+        for mode in waits {
+            npc.mode = mode;
+            assert_eq!(
+                gated(&npc),
+                Trigger {
+                    bays: true,
+                    point_defence: true,
+                    keep: Some(WeaponId(128)),
+                    ..Trigger::default()
+                },
+                "{mode:?}"
+            );
+        }
+        for mode in [
+            Mode::Flying,
+            Mode::LeavingGate { tick: 1 },
+            Mode::JumpingIn { tick: 1 },
+        ] {
+            npc.mode = mode;
+            assert_eq!(gated(&npc), FULL, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn after_firing_leaves_a_waiting_npcs_pick() {
+        let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
+        npc.trigger.only = id(128);
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 3 };
+        after_firing(&mut npc);
+        assert_eq!(npc.pick, id(128), "nothing fired");
     }
 }

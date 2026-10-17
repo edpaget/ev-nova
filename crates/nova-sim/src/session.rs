@@ -370,6 +370,8 @@ mod escorts;
 mod events;
 mod explored;
 mod fighters;
+#[cfg(test)]
+mod fire_gates;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
@@ -562,6 +564,9 @@ impl FightTerms {
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let cloak_device = npc.cloak_gear.device;
+        // A waiting ship's fire block is skipped (`_HandleShip`
+        // @0x34a54-0x34a72).
+        let trigger = crate::ai::fire::gated(npc);
         let Npc {
             id,
             ship,
@@ -570,7 +575,6 @@ impl FightTerms {
             stats,
             state,
             hull,
-            trigger,
             target,
             reserves,
             condition,
@@ -592,7 +596,7 @@ impl FightTerms {
             hull: *hull,
             shield_regen: stats.shield_regen,
             armor_regen: stats.armor_regen,
-            trigger: *trigger,
+            trigger,
             target: *target,
             reserves,
             condition,
