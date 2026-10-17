@@ -443,10 +443,12 @@ fn the_players_gun_breaks_an_asteroid_and_the_scoop_takes_its_box_into_the_hold(
         }
         session.tick_combat(Rules::default(), &mut NeverFires);
     }
+    // The ship may reach two boxes dropped together in the same tick.
+    let scooped = before - scoopable(&session);
+    assert!(scooped >= 1, "a box scooped is gone");
     assert_eq!(
         session.pilot().held(Good::Commodity(2)),
-        1,
-        "a ton of the röid's YieldType"
+        u32::try_from(scooped).expect("few"),
+        "a ton of the röid's YieldType for each box"
     );
-    assert_eq!(scoopable(&session), before - 1, "the box scooped is gone");
 }

@@ -34,7 +34,9 @@
 //! or thrust skips the brake, so no hull is held in a stage it can never
 //! finish. `slow_down` false skips the brake, as a fast jump does.
 
-use crate::flight::{Controls, ShipState, heading_of, shortest_turn, step, turn_toward};
+use crate::flight::{
+    Controls, FlightRules, ShipState, heading_of, shortest_turn, step, turn_toward,
+};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 
@@ -87,13 +89,14 @@ pub fn stage(
     }
 }
 
-/// Flies `ship` one tick of the stage it is in (see [`stage`]), and gives
-/// whether it thrust. A ready ship does not move.
+/// Flies `ship` one tick of the stage it is in (see [`stage`]) under
+/// `flight`, and gives whether it thrust. A ready ship does not move.
 pub fn fly(
     ship: &mut ShipState,
     handling: &Handling,
     bearing: Option<f32>,
     slow_down: bool,
+    flight: FlightRules,
 ) -> bool {
     match stage(ship, handling, bearing, slow_down) {
         PreJump::Brake => {
@@ -105,14 +108,14 @@ pub fn fly(
                 reverse: true,
                 ..Controls::default()
             };
-            step(ship, handling, controls);
+            step(ship, handling, controls, flight);
             thrust
         }
         PreJump::Turn => {
             if let Some(bearing) = bearing {
                 ship.heading = turn_toward(ship.heading, bearing, handling.turn_rate);
             }
-            step(ship, handling, Controls::default());
+            step(ship, handling, Controls::default(), flight);
             false
         }
         PreJump::Ready => false,
@@ -237,7 +240,10 @@ mod tests {
         for k in 1..=30 {
             assert_eq!(stage(&state, &SHIP, EAST, true), PreJump::Turn, "tick {k}");
             let before = state;
-            assert!(!fly(&mut state, &SHIP, EAST, true), "no thrust");
+            assert!(
+                !fly(&mut state, &SHIP, EAST, true, FlightRules::default()),
+                "no thrust"
+            );
             assert!(state.heading <= 90.0, "never overshoots: {state:?}");
             assert_eq!(
                 state.heading,
@@ -254,10 +260,10 @@ mod tests {
     #[test]
     fn a_turn_goes_the_short_way_round() {
         let mut state = ship(Vec2::ZERO, 180.0);
-        fly(&mut state, &SHIP, EAST, true);
+        fly(&mut state, &SHIP, EAST, true, FlightRules::default());
         assert_eq!(state.heading, 177.0);
         let mut state = ship(Vec2::ZERO, 350.0);
-        fly(&mut state, &SHIP, Some(10.0), true);
+        fly(&mut state, &SHIP, Some(10.0), true, FlightRules::default());
         assert_eq!(state.heading, 353.0);
     }
 
@@ -265,7 +271,7 @@ mod tests {
     fn a_ready_ship_does_not_move() {
         let ready = ship(Vec2::new(1.0, 1.0), 90.0);
         let mut state = ready;
-        assert!(!fly(&mut state, &SHIP, EAST, true));
+        assert!(!fly(&mut state, &SHIP, EAST, true, FlightRules::default()));
         assert_eq!(state, ready);
     }
 
@@ -274,7 +280,7 @@ mod tests {
     /// motion).
     fn brakes_at(handling: &Handling, off: f32) -> bool {
         let mut state = ship(Vec2::new(0.0, -3.0), 180.0 + off);
-        fly(&mut state, handling, EAST, true)
+        fly(&mut state, handling, EAST, true, FlightRules::default())
     }
 
     #[test]
@@ -315,7 +321,7 @@ mod tests {
             }
             let off = shortest_turn(state.heading, 180.0).abs();
             let speed = state.velocity.length();
-            let thrust = fly(&mut state, &SHIP, EAST, true);
+            let thrust = fly(&mut state, &SHIP, EAST, true, FlightRules::default());
             assert_eq!(thrust, off < BRAKE_THRUST_ARC, "tick {k}: {state:?}");
             if thrust {
                 thrust_began.get_or_insert(k);
@@ -337,7 +343,7 @@ mod tests {
     #[test]
     fn a_ship_that_need_not_slow_down_turns_while_it_coasts() {
         let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
-        assert!(!fly(&mut state, &SHIP, EAST, false));
+        assert!(!fly(&mut state, &SHIP, EAST, false, FlightRules::default()));
         assert_eq!(state.heading, 3.0);
         assert_eq!(state.velocity, Vec2::new(0.0, -6.0));
     }

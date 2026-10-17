@@ -436,7 +436,7 @@ pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
 };
-pub use flight::{Controls, ShipState, Turn, step};
+pub use flight::{Controls, FlightRules, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;

@@ -4,9 +4,10 @@ use std::num::NonZeroU16;
 use crate::system::camera::VIEW_CENTER;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats,
-    SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, FlightRules, GateSite, Handling,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
+    ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
+    step,
 };
 
 use super::*;
@@ -912,7 +913,7 @@ fn reserves(view: &View) -> Reserves {
 /// `state` after `ticks` steps under `controls`.
 fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
     for _ in 0..ticks {
-        step(&mut state, &handling(), controls);
+        step(&mut state, &handling(), controls, FlightRules::default());
     }
     state
 }

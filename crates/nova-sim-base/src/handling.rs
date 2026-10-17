@@ -3,10 +3,17 @@
 //!
 //! The simulation measures space in pixels, as Nova does (the Bible:
 //! "Jump Distance 1000 pixels"; a `spöb`'s position is in pixels from the
-//! system's centre), and time in ticks of 1/30 s (see [`crate::clock`]).
-//! Every conversion from the record's numbers is a named constant here.
-//! They are chosen so flight feels like Nova, not to match the original
-//! number for number.
+//! system's centre), and time in ticks of 1/30 s (see [`crate::clock`]),
+//! the original's frame at a `_gSpeedMult` of 1.0 (`_HandleTimeAdjustment`
+//! @0x333e1). Every conversion from the record's numbers is a named
+//! constant here. The thrust is the original's, `Accel` /
+//! [`ORIGINAL_THRUST_DIVISOR`], and a setting can change it
+//! ([`Handling::thrust_under`],
+//! [`RuleValue::ThrustDivisor`]).
+
+use core::num::NonZeroU32;
+
+use crate::rule_values::RuleValue;
 
 /// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel`,
 /// `FuelRegen`, `Holds`, `Mass`, `FreeMass`, `Contribute`, `ShieldRech`,
@@ -65,10 +72,13 @@ impl ShipFields {
 /// average ship (300) tops out at 3 pixels a tick, 90 a second.
 pub const SPEED_PER_PIXEL_PER_TICK: f32 = 100.0;
 
-/// `Accel` per pixel a tick, per tick: the speed scale over a second's
-/// ticks, so a ship whose `Accel` equals its `Speed` reaches top speed from
-/// rest in about a second.
-pub const ACCEL_PER_PIXEL_PER_TICK_SQUARED: f32 = SPEED_PER_PIXEL_PER_TICK * 30.0;
+/// `Accel` per pixel a tick, per tick, as the original thrusts:
+/// `_ShipAccelRate` (@0x353b) takes `Accel` / 10000 (`_LoadObjectData`
+/// @0x7a0b3-0x7a0c7) and doubles it (@0x35f8, @0x3667), so a ship whose
+/// `Accel` equals its `Speed` reaches top speed from rest in 50 ticks,
+/// about 5/3 of a second. The settings may set another divisor
+/// ([`Handling::thrust_under`]).
+pub const ORIGINAL_THRUST_DIVISOR: f32 = 5000.0;
 
 /// `Maneuver` per degree a tick. The Bible: "10 is about 30°/s", which is
 /// 1° a tick at 30 ticks a second.
@@ -95,8 +105,24 @@ impl Handling {
         let positive = |total: i64| total.max(0) as f32;
         Self {
             max_speed: positive(speed) / SPEED_PER_PIXEL_PER_TICK,
-            accel: positive(accel) / ACCEL_PER_PIXEL_PER_TICK_SQUARED,
+            accel: positive(accel) / ORIGINAL_THRUST_DIVISOR,
             turn_rate: maneuver.max(0.0) / MANEUVER_PER_DEGREE_PER_TICK,
+        }
+    }
+
+    /// This handling with its thrust worked out under `divisor` in place of
+    /// [`ORIGINAL_THRUST_DIVISOR`]: `Accel` / `divisor`. At the original's
+    /// divisor it is this handling, bit for bit.
+    #[must_use]
+    pub fn thrust_under(self, divisor: NonZeroU32) -> Self {
+        if divisor == RuleValue::ThrustDivisor.default_value() {
+            return self;
+        }
+        let rescaled =
+            f64::from(self.accel) * f64::from(ORIGINAL_THRUST_DIVISOR) / f64::from(divisor.get());
+        Self {
+            accel: rescaled as f32,
+            ..self
         }
     }
 }
@@ -110,29 +136,71 @@ mod tests {
         Handling::from_totals(speed.into(), accel.into(), maneuver.into())
     }
 
+    fn divisor(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).unwrap()
+    }
+
     #[test]
-    fn an_average_ship_tops_out_at_3_pixels_a_tick_in_a_second() {
+    fn an_average_ship_tops_out_at_3_pixels_a_tick_in_50_ticks() {
         let average = handling(300, 300, 10);
         assert_eq!(average.max_speed, 3.0);
-        assert_eq!(average.accel, 0.1);
+        assert_eq!(average.accel, 0.06);
         assert_eq!(average.turn_rate, 1.0);
-        assert!((average.max_speed / average.accel - 30.0).abs() < 1e-4);
+        assert!((average.max_speed / average.accel - 50.0).abs() < 1e-4);
     }
 
     #[test]
     fn each_field_converts_on_its_own_scale() {
         let fast = handling(1000, 600, 30);
         assert_eq!(fast.max_speed, 10.0);
-        assert_eq!(fast.accel, 0.2);
+        assert_eq!(fast.accel, 0.12);
         assert_eq!(fast.turn_rate, 3.0);
         assert_eq!(
             (
                 SPEED_PER_PIXEL_PER_TICK,
-                ACCEL_PER_PIXEL_PER_TICK_SQUARED,
+                ORIGINAL_THRUST_DIVISOR,
                 MANEUVER_PER_DEGREE_PER_TICK
             ),
-            (100.0, 3000.0, 10.0)
+            (100.0, 5000.0, 10.0)
         );
+    }
+
+    #[test]
+    fn the_original_thrust_divisor_is_the_rulebooks_default() {
+        assert_eq!(
+            f64::from(RuleValue::ThrustDivisor.default_value().get()),
+            f64::from(ORIGINAL_THRUST_DIVISOR)
+        );
+    }
+
+    #[test]
+    fn thrust_under_the_default_divisor_is_unchanged() {
+        for accel in [1, 7, 300, 600, 1234, i16::MAX] {
+            let own = handling(300, accel, 10);
+            let under = own.thrust_under(RuleValue::ThrustDivisor.default_value());
+            assert_eq!(under, own, "{accel}");
+            assert_eq!(under.accel.to_bits(), own.accel.to_bits(), "{accel}");
+        }
+    }
+
+    #[test]
+    fn thrust_under_a_divisor_is_the_accel_total_over_it() {
+        for accel in [1_i16, 7, 300, 600, 1234, i16::MAX] {
+            let own = handling(300, accel, 10);
+            for by in [1, 3000, 7919, 5001, u32::MAX] {
+                let under = own.thrust_under(divisor(by));
+                let expected = f64::from(accel) / f64::from(by);
+                let off = (f64::from(under.accel) - expected).abs() / expected;
+                assert!(off < 1e-6, "{accel} / {by}: {under:?}");
+                assert_eq!(
+                    (under.max_speed, under.turn_rate),
+                    (own.max_speed, own.turn_rate),
+                    "only the thrust"
+                );
+            }
+        }
+        let stuck = handling(300, -5, 10).thrust_under(divisor(3000));
+        assert_eq!(stuck.accel, 0.0, "none stays none");
     }
 
     #[test]

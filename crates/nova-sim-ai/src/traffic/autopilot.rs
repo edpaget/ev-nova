@@ -1,7 +1,8 @@
 //! The NPC autopilot: each tick it turns an NPC's goal into [`Controls`]
 //! and flies them with the player's [`flight::step`], on the NPC's own
 //! handling at its top speed [`TopSpeeds::own`], its `_ShipMaxSpeed`
-//! ([`Npc::top_speed`]). It decides nothing (the [`ai`](crate::ai) does); it only
+//! ([`Npc::top_speed`]), its thrust under the world's
+//! [`FlightRules`]. It decides nothing (the [`ai`](crate::ai) does); it only
 //! flies the goal it is given.
 //!
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
@@ -137,7 +138,9 @@ use crate::combat::aim::bearing;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
-use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
+use crate::flight::{
+    self, AT_REST_SPEED, Controls, FlightRules, ShipState, Turn, heading_of, shortest_turn,
+};
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::hail::assist;
@@ -238,21 +241,23 @@ impl TopSpeeds {
 /// ship its goal is about (the lead it follows, the ship it fights or
 /// inspects) at `other`, when it is there, at its top speed
 /// `speeds.own`, its burst out of a gate or glide in capped at
-/// [`TopSpeeds::burst_cap`], the wait a leaderless ship takes after it
-/// rolled on `chance`.
+/// [`TopSpeeds::burst_cap`], under the flight rules `flight` (its thrust
+/// [`FlightRules::handling`]'s, which every plan here reads), the wait a
+/// leaderless ship takes after it rolled on `chance`.
 pub fn fly(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
     speeds: TopSpeeds,
+    flight: FlightRules,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let handling = Handling {
         max_speed: speeds.own,
-        ..npc.stats.handling
+        ..flight.handling(npc.stats.handling)
     };
-    if let Some(outcome) = unsteered(npc, &handling, speeds, chance) {
+    if let Some(outcome) = unsteered(npc, &handling, speeds, flight, chance) {
         return outcome;
     }
     hand_off(npc, sites);
@@ -282,7 +287,7 @@ pub fn fly(
             None => brake(&state, &handling),
         },
         Goal::Snipe(_) => match other {
-            Some(target) if state.velocity.length() <= AT_REST_SPEED => Controls {
+            Some(target) if state.velocity.length() <= flight.at_rest_speed() => Controls {
                 turn: steer(state.heading, fire::wanted_heading(npc, target), &handling),
                 ..Controls::default()
             },
@@ -323,21 +328,21 @@ pub fn fly(
                 let off = slot - state.position;
                 let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
                 if within(KEEP_FORMATION) {
-                    keep_formation(npc, leader, slot);
+                    keep_formation(npc, leader, slot, &handling);
                     return Outcome::Flying;
                 }
                 rejoin(&state, &handling, slot, leader.velocity)
             }
             _ => brake(&state, &handling),
         },
-        Goal::Dock(_) => match dock(npc, other, &handling) {
+        Goal::Dock(_) => match dock(npc, other, &handling, flight) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
         Goal::Idle => brake(&state, &handling),
         Goal::Hold => Controls::default(),
     };
-    flight::step(&mut npc.state, &handling, controls);
+    flight::step(&mut npc.state, &handling, controls, flight);
     Outcome::Flying
 }
 
@@ -380,12 +385,14 @@ fn enter_box(
 }
 
 /// How `npc` flies back to its carrier at `carrier` (see the module
-/// docs): the controls to fly outside its dock window, or braking with
-/// no carrier there; or, inside it, what became of it, having flown.
+/// docs), under `flight`: the controls to fly outside its dock window, or
+/// braking with no carrier there; or, inside it, what became of it,
+/// having flown.
 fn dock(
     npc: &mut Npc,
     carrier: Option<&ShipState>,
     handling: &Handling,
+    flight: FlightRules,
 ) -> Result<Controls, Outcome> {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
         return Ok(brake(&npc.state, handling));
@@ -406,7 +413,7 @@ fn dock(
             ship: npc.ship,
         });
     }
-    dock_in(npc, carrier, handling);
+    dock_in(npc, carrier, handling, flight);
     Err(Outcome::Flying)
 }
 
@@ -427,8 +434,8 @@ fn rejoin(state: &ShipState, handling: &Handling, to: Vec2, velocity: Vec2) -> C
 /// window (see the module docs): it turns at the carrier, thrusting
 /// within its turn rate and [`DOCK_TURN_SLACK`] of it, flies, and is
 /// pulled towards it on each axis farther off than
-/// [`FORMATION_NUDGE`] ticks' acceleration.
-fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling) {
+/// [`FORMATION_NUDGE`] ticks' acceleration, under `flight`.
+fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling, flight: FlightRules) {
     let wanted = bearing(npc.state.position, carrier.position);
     let controls = Controls {
         thrust: shortest_turn(npc.state.heading, wanted).abs()
@@ -436,7 +443,7 @@ fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling) {
         turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
     };
-    flight::step(&mut npc.state, handling, controls);
+    flight::step(&mut npc.state, handling, controls, flight);
     let pull = handling.accel * FORMATION_NUDGE;
     let towards = |at: f32, to: f32| {
         let off = to - at;
@@ -519,13 +526,14 @@ fn glide(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance 
 /// Flies `npc` one tick when it has no say in its flight: entering a
 /// gate or waiting at one, drifting while not intact, gliding in from
 /// hyperspace (intact or disabled), bursting out of a gate, or holding
-/// its course after either (see the module docs), on `handling`, its
-/// burst ending at `speeds`' [`burst_cap`](TopSpeeds::burst_cap) and its
-/// wait rolled on `chance`. What became of it, if it did.
+/// its course after either (see the module docs), on `handling` under
+/// `flight`, its burst ending at `speeds`' [`burst_cap`](TopSpeeds::burst_cap)
+/// and its wait rolled on `chance`. What became of it, if it did.
 fn unsteered(
     npc: &mut Npc,
     handling: &Handling,
     speeds: TopSpeeds,
+    flight: FlightRules,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
     match (npc.mode, npc.condition == Condition::Intact) {
@@ -551,7 +559,7 @@ fn unsteered(
             if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
                 flight::drag(&mut npc.state);
             }
-            flight::step(&mut npc.state, handling, Controls::default());
+            flight::step(&mut npc.state, handling, Controls::default(), flight);
         }
         (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, chance),
         (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, chance),
@@ -723,7 +731,9 @@ fn approach(state: &ShipState, handling: &Handling, target: Vec2) -> Controls {
 
 /// How far a ship at `state` travels while it turns to face against its
 /// motion and brakes to a stop; none at rest, and for ever when it cannot
-/// turn or thrust.
+/// turn or thrust. At rest is at or below [`AT_REST_SPEED`], the
+/// original's thrust's, whatever the thrust divisor: a threshold of the
+/// engine's own planning, not a flight rule.
 fn stopping_distance(state: &ShipState, handling: &Handling) -> f32 {
     let speed = state.velocity.length();
     if speed <= AT_REST_SPEED {
@@ -740,7 +750,8 @@ fn stopping_distance(state: &ShipState, handling: &Handling) -> f32 {
 }
 
 /// Turns to face against the ship's motion (Down) and thrusts once it
-/// does, until thrust would only push it the other way.
+/// does, until thrust would only push it the other way; nothing at or
+/// below [`AT_REST_SPEED`] (see [`stopping_distance`]).
 fn brake(state: &ShipState, handling: &Handling) -> Controls {
     let speed = state.velocity.length();
     if speed <= AT_REST_SPEED {
@@ -797,13 +808,14 @@ fn close_on(
 /// (`_AIMaintainFormation` @0x84f04): `npc` takes the leader's velocity
 /// and heading and moves with it, then each axis more than
 /// [`FORMATION_SLACK`] off the slot is nudged towards it by
-/// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it.
-fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2) {
+/// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it: the
+/// thrust `handling` flies it with.
+fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2, handling: &Handling) {
     let state = &mut npc.state;
     state.velocity = leader.velocity;
     state.heading = leader.heading;
     state.position = state.position + state.velocity;
-    let nudge = npc.stats.handling.accel * FORMATION_NUDGE;
+    let nudge = handling.accel * FORMATION_NUDGE;
     let towards = |at: f32, to: f32| {
         let off = to - at;
         if off.abs() > FORMATION_SLACK {
@@ -882,6 +894,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             speeds,
+            FlightRules::default(),
             &mut Draws::of(&[]),
         )
     }
@@ -970,23 +983,30 @@ mod tests {
             fly(&mut ship, &[], Some(&leader));
             ship.state.position - slot
         };
+        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
         assert_eq!(
             nudged(FAST, 8.0, -8.0),
             Vec2::new(8.0, -8.0),
             "within the slack"
         );
-        assert_eq!(
-            nudged(FAST, 9.0, -9.0),
-            Vec2::new(6.0, -6.0),
-            "0.3 x 10 a tick"
+        // FAST's 900 / 5000 is 0.18 a tick, ten ticks' 1.8.
+        let fast = nudged(FAST, 9.0, -9.0);
+        assert!(
+            near(fast, Vec2::new(7.2, -7.2)),
+            "0.18 x 10 a tick: {fast:?}"
         );
-        assert_eq!(
-            nudged(FAST, 9.0, 2.0),
-            Vec2::new(6.0, 2.0),
-            "each axis on its own"
+        let fast = nudged(FAST, 9.0, 2.0);
+        assert!(
+            near(fast, Vec2::new(7.2, 2.0)),
+            "each axis on its own: {fast:?}"
         );
-        assert_eq!(nudged(AVERAGE, -9.0, 0.0), Vec2::new(-8.0, 0.0), "0.1 x 10");
-        assert_eq!(nudged(FAST, 299.0, -300.0), Vec2::new(296.0, -297.0));
+        let average = nudged(AVERAGE, -9.0, 0.0);
+        assert!(
+            near(average, Vec2::new(-8.4, 0.0)),
+            "0.06 x 10: {average:?}"
+        );
+        let fast = nudged(FAST, 299.0, -300.0);
+        assert!(near(fast, Vec2::new(297.2, -298.2)), "{fast:?}");
         let strong = ShipFields {
             accel: 30_000,
             ..FAST
@@ -1577,6 +1597,7 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&player),
                 top,
+                FlightRules::default(),
                 &mut draws,
             );
             assert!(
@@ -1731,9 +1752,25 @@ mod tests {
             primary: true,
             ..Trigger::default()
         };
-        super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
+        super::fly(
+            &mut ship,
+            &sites,
+            &BTreeMap::new(),
+            None,
+            speeds,
+            FlightRules::default(),
+            draws,
+        );
         while let Mode::LeavingGate { .. } = ship.mode {
-            super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
+            super::fly(
+                &mut ship,
+                &sites,
+                &BTreeMap::new(),
+                None,
+                speeds,
+                FlightRules::default(),
+                draws,
+            );
         }
         ship
     }
@@ -1764,6 +1801,7 @@ mod tests {
                         &BTreeMap::new(),
                         None,
                         speeds,
+                        FlightRules::default(),
                         &mut draws
                     ),
                     Outcome::Flying
@@ -1785,6 +1823,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 speeds,
+                FlightRules::default(),
                 &mut draws,
             );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
@@ -1824,14 +1863,30 @@ mod tests {
             let mut ship = jumping_in(AVERAGE);
             let mut draws = Draws::of(&[draw]);
             while let Mode::JumpingIn { .. } = ship.mode {
-                super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
+                super::fly(
+                    &mut ship,
+                    &[],
+                    &BTreeMap::new(),
+                    None,
+                    speeds,
+                    FlightRules::default(),
+                    &mut draws,
+                );
             }
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: wait });
             assert_eq!(draws.asked, [30]);
             let along = flight::facing(180.0) * glide_speed(37);
             assert!((ship.state.velocity - along).length() < 1e-4);
             let before = ship.state;
-            super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
+            super::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                None,
+                speeds,
+                FlightRules::default(),
+                &mut draws,
+            );
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
             assert_eq!(ship.state.position, before.position + before.velocity);
         }
@@ -1922,7 +1977,15 @@ mod tests {
         widths: &BTreeMap<StellarId, TypeWidth>,
     ) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
-        super::fly(npc, sites, widths, None, speeds, &mut Draws::of(&[]))
+        super::fly(
+            npc,
+            sites,
+            widths,
+            None,
+            speeds,
+            FlightRules::default(),
+            &mut Draws::of(&[]),
+        )
     }
 
     #[test]
@@ -2548,7 +2611,9 @@ mod tests {
     #[test]
     fn sniping_it_brakes_to_a_stop_then_faces_its_target() {
         let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
-        let mut moving = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, -3.0, 0.0));
+        // Ten ticks of FAST's 0.18 thrust, so the brake comes to rest
+        // (rdm:task/brake-leaves-sub-thrust-drift).
+        let mut moving = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, -1.8, 0.0));
         for _ in 0..200 {
             fly(&mut moving, &[], Some(&target));
         }
@@ -2702,14 +2767,23 @@ mod tests {
     #[test]
     fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_thrust_on_each_axis_beyond_it() {
         let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        // At rest, facing away from the carrier at (-70, 2.5): FAST pulls
-        // 0.3 x 10 = 3 a tick, and y is within that.
-        let mut ship = docking(FAST, at(-70.0, 2.5, 0.0, 0.0, 270.0));
+        // At rest, facing away from the carrier at (-70, 1.5): FAST pulls
+        // 0.18 x 10 = 1.8 a tick, and y is within that.
+        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
+        let mut ship = docking(FAST, at(-70.0, 1.5, 0.0, 0.0, 270.0));
         fly(&mut ship, &[], Some(&carrier));
-        assert_eq!(ship.state.position, Vec2::new(-67.0, 2.5));
+        assert!(
+            near(ship.state.position, Vec2::new(-68.2, 1.5)),
+            "{:?}",
+            ship.state
+        );
         let mut both = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0));
         fly(&mut both, &[], Some(&carrier));
-        assert_eq!(both.state.position, Vec2::new(47.0, 57.0));
+        assert!(
+            near(both.state.position, Vec2::new(48.2, 58.2)),
+            "{:?}",
+            both.state
+        );
         // An axis exactly the pull off is within it, and stays.
         let pull = ShipStats::new(FAST, &[]).handling.accel * FORMATION_NUDGE;
         let mut edge = docking(FAST, at(-pull, 60.0, 0.0, 0.0, 135.0));

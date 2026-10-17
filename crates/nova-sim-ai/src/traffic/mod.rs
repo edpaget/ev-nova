@@ -340,6 +340,10 @@ pub struct World<'a> {
     /// leads: 1.5 for a pilot without Strict Play by the engine (see
     /// `nova_sim::top_speed`).
     pub led_speed: f32,
+    /// The flight rules every NPC flies by: the thrust's divisor, read
+    /// from the rules at each use as the led speed is (see
+    /// [`FlightRules`](crate::flight::FlightRules)).
+    pub flight: crate::flight::FlightRules,
     /// The damage the shots in flight aim at each ship
     /// ([`Surroundings::targeted`]).
     pub targeted: &'a BTreeMap<ShipRef, i32>,
@@ -370,7 +374,8 @@ pub static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
-    /// factor on the led ships' top speed, no damage aimed, no gate's
+    /// factor on the led ships' top speed, the original's flight rules,
+    /// no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], and no cloak scanner.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
@@ -384,6 +389,7 @@ impl<'a> World<'a> {
             persons: PersonWorld::NONE,
             escort_tons: 0,
             led_speed: 1.0,
+            flight: crate::flight::FlightRules::default(),
             targeted: bare.targeted,
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
@@ -935,6 +941,7 @@ impl Traffic {
                     world.type_widths,
                     other.as_ref(),
                     speeds,
+                    world.flight,
                     &mut *chance,
                 )
             })
@@ -2970,8 +2977,10 @@ mod tests {
         for _ in 0..60 {
             traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
         }
+        // A quarter turn at 3 degrees a tick, then 30 ticks of FAST's 0.18
+        // thrust: about 80 closer.
         assert!(
-            traffic.npcs()[0].state.position.x > -500.0,
+            traffic.npcs()[0].state.position.x > -530.0,
             "{:?}",
             traffic.npcs()[0].state
         );

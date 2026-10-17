@@ -160,7 +160,8 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
     view.tick(Duration::from_secs(1));
     let expected = stepped(start(), THRUST, 30);
     assert_eq!(player(&view), expected);
-    assert!(expected.position.y < -40.0, "{expected:?}");
+    // 0.06 more a tick for 30 ticks: 0.06 x 465 = 27.9 up.
+    assert!(expected.position.y < -27.0, "{expected:?}");
     assert_eq!(expected.position.x, 0.0);
     assert_eq!(view.camera().center(), view.shown_position());
     let shown = view.shown_position();
@@ -1273,6 +1274,9 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
+    // Coast a tick, so the arrival falls between the radar's refreshes and
+    // the test shows the arrival's own refresh.
+    view.tick(TICK);
     jump_now(&mut view);
     let leaving = view.session().expect("flying").system();
     for _ in 0..1000 {

@@ -408,6 +408,8 @@ mod stellars;
 mod story;
 mod takeoff_grace;
 mod target_panel;
+#[cfg(test)]
+mod thrust;
 mod tutorial;
 
 pub use hooks::HookRules;
@@ -469,7 +471,7 @@ use crate::combat::{
 };
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
-use crate::flight::{Controls, ShipState, step};
+use crate::flight::{Controls, FlightRules, ShipState, step};
 use crate::fuel::regenerate;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
@@ -1990,7 +1992,8 @@ impl Session {
                 if self.player_fate().row().drag {
                     crate::flight::drag(&mut self.player);
                 }
-                step(&mut self.player, &handling, controls);
+                let flight = self.flight_rules();
+                step(&mut self.player, &handling, controls, flight);
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
@@ -2001,8 +2004,14 @@ impl Session {
                 } else {
                     self.aim_at_jump(to);
                 }
-                let thrust =
-                    pre_jump::fly(&mut self.player, &handling, bearing, !self.stats.fast_jump);
+                let flight = self.flight_rules();
+                let thrust = pre_jump::fly(
+                    &mut self.player,
+                    &handling,
+                    bearing,
+                    !self.stats.fast_jump,
+                    flight,
+                );
                 self.thrust(thrust);
                 let warp = if again {
                     warp
@@ -2355,6 +2364,7 @@ impl Session {
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
             led_speed: self.led_speed(),
+            flight: self.flight_rules(),
             targeted: &targeted,
             type_widths: &type_widths,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
@@ -2419,6 +2429,7 @@ impl Session {
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
             led_speed: self.led_speed(),
+            flight: self.flight_rules(),
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
@@ -5304,12 +5315,20 @@ impl Session {
         top_speed::led_speed(&self.rules, self.pilot.strict_play())
     }
 
-    /// How the player's ship flies in flight: its own handling, at
-    /// [`Session::top_speed`].
+    /// The flight rules every ship flies by, read from the rules at each
+    /// use, as the led speed is: the thrust's divisor (see
+    /// [`FlightRules`]).
+    pub(crate) fn flight_rules(&self) -> FlightRules {
+        FlightRules::from_rulebook(&self.rules)
+    }
+
+    /// How the player's ship flies in flight: its own handling at
+    /// [`Session::top_speed`], its thrust under the flight rules
+    /// ([`FlightRules::handling`]).
     fn flying_handling(&self) -> Handling {
         Handling {
             max_speed: self.top_speed(),
-            ..self.stats.handling
+            ..self.flight_rules().handling(self.stats.handling)
         }
     }
 
@@ -6657,7 +6676,12 @@ pub(super) mod tests {
         let mut expected = *session.player();
         for _ in 0..5 {
             session.tick(controls);
-            step(&mut expected, &session.handling(), controls);
+            step(
+                &mut expected,
+                &session.handling(),
+                controls,
+                FlightRules::default(),
+            );
         }
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, ShipState::default());
@@ -6749,7 +6773,12 @@ pub(super) mod tests {
         assert_eq!(docked.velocity, Vec2::ZERO);
         session.tick(THRUST);
         let mut expected = docked;
-        step(&mut expected, &session.handling(), THRUST);
+        step(
+            &mut expected,
+            &session.handling(),
+            THRUST,
+            FlightRules::default(),
+        );
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, docked);
     }
@@ -14541,7 +14570,7 @@ pub(super) mod tests {
         };
         for _ in 0..200 {
             session.tick(THRUST);
-            step(&mut expected, &handling, THRUST);
+            step(&mut expected, &handling, THRUST, FlightRules::default());
         }
         assert_eq!(*session.player(), expected);
         assert!((session.player().velocity.length() - 13.5).abs() < 1e-3);

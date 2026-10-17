@@ -263,7 +263,7 @@ mod tests {
             stats.handling,
             Handling {
                 max_speed: 3.0,
-                accel: 0.1,
+                accel: 0.06,
                 turn_rate: 1.0,
             }
         );
@@ -301,7 +301,7 @@ mod tests {
             &[outfit(MORE_SPEED, 100, 2), outfit(MORE_ACCEL, 150, 2)],
         );
         assert_eq!(stats.handling.max_speed, 5.0);
-        assert_eq!(stats.handling.accel, 0.2);
+        assert_eq!(stats.handling.accel, 0.12);
         assert_eq!(stats.handling.turn_rate, 1.0);
     }
 

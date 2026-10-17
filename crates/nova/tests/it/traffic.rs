@@ -607,8 +607,9 @@ fn the_trader_flies_to_the_planet_lands_and_is_gone() {
     let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Land(StellarId(128)));
     // Starting at its top speed, it overshoots the planet and comes back
-    // to settle within the 8 x 8 planet's 4 pixels.
-    let last = harness.run(50);
+    // to settle within the 8 x 8 planet's 4 pixels, circling in on its
+    // 0.12 thrust for about a minute.
+    let last = harness.run(70);
     assert_eq!(harness.session().npcs(), [], "landed and gone");
     assert_eq!(traders(&last), []);
 }
@@ -616,23 +617,25 @@ fn the_trader_flies_to_the_planet_lands_and_is_gone() {
 #[test]
 fn the_routers_behaviour_decides_for_a_flight_entered_with_f() {
     let mut harness = Harness::flying(Some(Rc::new(Still)));
-    harness.run(3);
+    harness.run(4);
     let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Idle);
     assert_idle_braked_to_rest(&trader);
 }
 
 /// The trader, idling, has braked to rest from the top speed setup
-/// started it at, heading up from (100, -100): 441 pixels on.
+/// started it at, heading up from (100, -100): 501 pixels on, a half turn
+/// at its top speed of 6 and 50 ticks of its 0.12 thrust.
 fn assert_idle_braked_to_rest(trader: &Npc) {
     assert!(trader.state.velocity.length() < 1e-5, "{:?}", trader.state);
-    assert_eq!(trader.state.position, Vec2::new(100.0, -541.0));
+    let off = trader.state.position - Vec2::new(100.0, -601.0);
+    assert!(off.length() < 1e-3, "{:?}", trader.state);
 }
 
 #[test]
 fn the_routers_behaviour_decides_for_a_new_pilots_flight() {
     let mut harness = Harness::new_pilot(Rc::new(Still));
-    harness.run(3);
+    harness.run(4);
     let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Idle);
     assert_idle_braked_to_rest(&trader);

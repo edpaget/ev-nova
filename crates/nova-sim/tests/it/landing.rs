@@ -296,7 +296,9 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
         thrust: true,
         ..Controls::default()
     };
-    for _ in 0..15 {
+    // 25 ticks of `Accel` / 5000: the speed 15 of the port's former
+    // `Accel` / 3000 gave.
+    for _ in 0..25 {
         session.tick(thrust);
     }
     assert_eq!(session.land(), Ok(requested(false)));

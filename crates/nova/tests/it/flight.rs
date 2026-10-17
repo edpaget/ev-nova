@@ -603,22 +603,23 @@ fn the_hud_is_drawn_while_flying() {
 
     // Flying up moves the ovals down the radar, with the ship as drawn
     // when the radar last refreshed: within the last 8 ticks, 16 frames.
+    // 40 ticks of 0.06 more a tick take it 49 up, past a radar pixel's 32.
     harness.hold(&[Key::Up]);
     let mut shown = Vec::new();
     let mut flown = harness.frame();
-    for _ in 1..60 {
+    for _ in 1..80 {
         shown.push(harness.flight().shown_position());
         flown = harness.frame();
     }
     shown.push(harness.flight().shown_position());
-    assert!(shown[59].y < -40.0, "{shown:?}");
+    assert!(shown[79].y < -40.0, "{shown:?}");
     let moved = hud_solids(&flown);
     let now = ovals(&moved);
     assert!(now[0].y > ovals(&solids)[0].y, "moved down");
-    let refreshed = shown[44..]
+    let refreshed = shown[64..]
         .iter()
         .any(|&at| now == [on_radar(at, STELLARS[0]), on_radar(at, STELLARS[1])].concat());
-    assert!(refreshed, "{now:?} from none of {:?}", &shown[44..]);
+    assert!(refreshed, "{now:?} from none of {:?}", &shown[64..]);
     assert_eq!(moved[8..], solids[8..], "the player's pixel and the bars");
 }
 
@@ -632,10 +633,11 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
     harness.hold(&[Key::Up]);
     let thrust = harness.run(1.0);
     let ship = harness.ship();
-    assert!(ship.position.y < -40.0, "{ship:?}");
+    // 30 ticks of 0.06 more a tick: 0.06 x 465 = 27.9 up.
+    assert!(ship.position.y < -27.0, "{ship:?}");
     let camera = harness.flight().camera().center();
     assert_eq!(camera, harness.flight().shown_position());
-    assert!(camera.y < -40.0, "{camera:?}");
+    assert!(camera.y < -25.0, "{camera:?}");
     let moved = quads(&thrust);
     for (now, was) in moved.iter().zip(&start).take(2) {
         let (now, was) = (centre(now.dest), centre(was.dest));
