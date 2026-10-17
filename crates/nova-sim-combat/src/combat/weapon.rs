@@ -392,17 +392,18 @@ pub fn line_count(record: &WeaponRecord) -> Option<WeaponId> {
 pub const DEFAULT_FALLOFF: i16 = 16;
 
 /// A weapon's `Falloff` as `_LoadObjectData` loads it from the `wëap`'s
-/// `falloff`, `beam_length` and `li_density` (@0x795e2-0x79645): a beam
-/// (a `BeamLength` above none) of a `Falloff` of none or less takes
-/// [`DEFAULT_FALLOFF`], and a lightning beam (a `LiDensity` above none)
-/// none at all, whatever it says. Any other weapon's is kept. The view
-/// draws a beam's corona from it too.
+/// `falloff`, `beam_length` and `li_density` (@0x795e2-0x79645): a
+/// lightning weapon (a `LiDensity` above none) has none at all, whatever
+/// it says and whatever its `BeamLength` (@0x79625-0x79645); a beam (a
+/// `BeamLength` above none) of a `Falloff` of none or less takes
+/// [`DEFAULT_FALLOFF`] (@0x795e2-0x795f0). Any other weapon's is kept.
+/// The view draws a beam's corona and a shot's fade from it too.
 #[must_use]
 pub fn loaded_falloff(beam_length: i16, falloff: i16, li_density: i16) -> i16 {
-    if beam_length <= 0 {
-        falloff
-    } else if li_density > 0 {
+    if li_density > 0 {
         0
+    } else if beam_length <= 0 {
+        falloff
     } else if falloff <= 0 {
         DEFAULT_FALLOFF
     } else {
@@ -1269,7 +1270,12 @@ mod tests {
         assert_eq!(falloff(400, 8, 3), 0, "a lightning beam has none");
         assert_eq!(falloff(400, 0, 1), 0);
         assert_eq!(falloff(0, 0, 0), 0, "a shot's is kept");
-        assert_eq!(falloff(0, 8, 3), 8);
+        assert_eq!(falloff(0, 8, 0), 8);
+        assert_eq!(falloff(0, -4, 0), -4, "a shot's fade-in is kept");
+        // @0x79625-0x79645 zeroes a lightning weapon's whatever its
+        // BeamLength.
+        assert_eq!(falloff(0, 2, 3), 0, "a lightning shot has none");
+        assert_eq!(falloff(-5, 8, 1), 0);
     }
 
     #[test]
