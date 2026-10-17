@@ -344,8 +344,7 @@ pub enum Condition {
 impl Condition {
     /// Whether it still stands: intact or disabled, neither breaking up
     /// nor destroyed. A homing shot loses a target that no longer stands,
-    /// a turreted beam lets go of it, the AI no longer aims at it, and
-    /// only a standing ship regenerates its shields.
+    /// a turreted beam lets go of it, and the AI no longer aims at it.
     #[must_use]
     pub fn standing(self) -> bool {
         matches!(self, Self::Intact | Self::Disabled)
