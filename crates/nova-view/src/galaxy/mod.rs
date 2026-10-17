@@ -11,9 +11,15 @@
 //!   clicking: colours, hyperlinks, nebula placement and hit-testing.
 //! - [`panel`]: the in-flight maps' two info panels, laid out at DITL
 //!   2000's offsets as `_MapDialogUpdate` draws them.
+//! - [`buttons`]: the in-flight maps' Done and Find buttons, until the
+//!   map is laid out as DITL 2000.
+//! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
+//!   opens it.
 
+pub mod buttons;
 pub mod catalog;
 pub mod data;
+pub mod find;
 pub mod map;
 pub mod model;
 pub mod panel;
@@ -23,6 +29,7 @@ pub use catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
     SystemEntry, SystemId,
 };
+pub use find::{FindDialog, FindOutcome};
 pub use map::{GalaxyMap, MapCycle, MapMarks, MapMode};
 pub use model::{GalaxyModel, MapSystem, NEUTRAL};
 pub use view::{MapView, Transform};

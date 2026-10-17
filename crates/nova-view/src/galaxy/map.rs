@@ -24,6 +24,13 @@
 //!   and a release both on it.
 //! - On the viewer, Tab is the app's router's and Escape the
 //!   navigator's.
+//! - Space (a press, not its repeats) on the course and hypergate maps
+//!   beeps ([`UiSound::MapCentred`]) and centres the map on the current
+//!   system, selected with no destination, as `_MapFilter` does on every
+//!   map (@0x140e0-0x14169). The viewer has no current system: there it
+//!   does nothing.
+//! - F or S (a press, any case, not its repeats) opens Find, as the Find
+//!   button does (@0x144b9-0x144d6; see "Find" below).
 //!
 //! The map has two modes ([`MapMode`]). The viewer ([`GalaxyMap::new`]),
 //! the developer path the app's Tab reaches, enters systems as above. The
@@ -45,7 +52,35 @@
 //! the original's `_DoSystemMap` in hypergate mode: a click selects one of
 //! the systems the gate offers and nothing else (@0x12f8f-0x13040). The
 //! owner takes the pick with [`GalaxyMap::take_gate_choice`], which
-//! returns the map to the course map.
+//! returns the map to the course map. The pick is kept apart from the
+//! selection, as the original's mode 4 and +0x6c are from `_selSystem`:
+//! a click on an offered system and the Tab cycle
+//! ([`GalaxyMap::select_gate`]) write both, while Space, Find and the
+//! preselect move only the selection, so a destination picked before
+//! them is still the one entered.
+//!
+//! # Find, Done and the buttons
+//!
+//! Find ([`find`](super::find), `DLOG` 3005) opens over the map from F,
+//! S or the Find button, laid out from the template
+//! [`GalaxyMap::with_find`] gives, measured by the map's metrics (without
+//! them it never opens). While it is open it takes every input: the
+//! arrows don't pan, Space types a space, and a click selects nothing.
+//! Find with an empty text, or Cancel, changes nothing and plays nothing.
+//! A text is matched as `_DoSystemSearch` does
+//! ([`map_search`](nova_sim::map_search)): the viewer searches every
+//! system in the data itself, and an in-flight map leaves the search to
+//! its owner ([`GalaxyMap::take_find`]), which answers with
+//! [`GalaxyMap::show_search`]: a system found is selected and centred on
+//! with [`UiSound::MapSystemFound`], and none found plays
+//! [`UiSound::MapSystemNotFound`]. The map's beeps are read with
+//! [`GalaxyMap::take_ui_sounds`], or as its screen sounds.
+//!
+//! The course and hypergate maps draw Done and Find
+//! ([`buttons`](super::buttons)) in the bottom panel until the map is
+//! laid out as DITL 2000. A click on Done asks to close the map, as
+//! Return does, and a click on Find opens Find; both are silent, as
+//! `_TrackMapButtons` is.
 //!
 //! # What the map draws
 //!
@@ -132,16 +167,22 @@ use nova_sim::Vec2;
 use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_panel::MapPanel;
+use nova_sim::map_search::{self, SearchOutcome};
 use nova_sim::story::OverlaidGalaxy;
 
+use super::buttons::{MapButton, MapButtons};
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
+use super::find::{FindDialog, FindOutcome};
 use super::model::{GalaxyModel, placement};
 use super::panel::{INFO_COLUMN, INFO_STRIP, PANEL_ORIGIN, draw_panel, placed};
 use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
 use crate::oval::{fill_pixels, oval_fill_pixels, oval_frame_pixels};
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
+use crate::ui::button::ButtonStyle;
+use crate::ui::dialog::DialogTemplate;
 use crate::{
     Color, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
 };
@@ -238,7 +279,7 @@ const ZOOM_TOP: f32 = 636.0;
 const STACK_TOP: f32 = 656.0;
 const PROBLEMS_TOP: f32 = 676.0;
 /// The help line.
-pub const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter";
+pub const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find";
 /// The "Enter system" button, in the panel's right column under the
 /// problems line; shown only while a system is selected.
 pub const ENTER_BUTTON: Bounds = Bounds {
@@ -467,6 +508,22 @@ pub struct GalaxyMap {
     shift: bool,
     /// A Tab, `\` or Return on an in-flight map, not yet taken.
     request: Option<Request>,
+    /// The hypergate map's pick, the original's mode 4 and +0x6c: what a
+    /// click on an offered system or the Tab cycle picked, which Space
+    /// and Find, writing `_selSystem` alone, leave alone.
+    gate_pick: Option<SystemId>,
+    /// The Find dialog, while it is open.
+    find: Option<FindDialog>,
+    /// What Find is laid out from: `None` for its fallback.
+    find_template: Option<DialogTemplate>,
+    /// How Find's buttons and the map's are labelled.
+    style: ButtonStyle,
+    /// A text Find confirmed on an in-flight map, not yet taken.
+    query: Option<String>,
+    /// The in-flight maps' Done and Find buttons.
+    buttons: MapButtons,
+    /// The beeps the map made, not yet taken.
+    sounds: Vec<UiSound>,
 }
 
 /// What a key on an in-flight map asks its owner for.
@@ -513,6 +570,13 @@ impl GalaxyMap {
             picture,
             shift: false,
             request: None,
+            gate_pick: None,
+            find: None,
+            find_template: None,
+            style: ButtonStyle::STOCK,
+            query: None,
+            buttons: MapButtons::new(),
+            sounds: Vec::new(),
         }
     }
 
@@ -536,6 +600,7 @@ impl GalaxyMap {
         self.mode = MapMode::Hypergate;
         self.offered = offered;
         self.selected = None;
+        self.gate_pick = None;
         self.destination = None;
     }
 
@@ -546,27 +611,33 @@ impl GalaxyMap {
         &self.offered
     }
 
-    /// The system picked on the hypergate map, if one is selected, and the
-    /// map goes back to the course map with nothing selected; `None`, and
-    /// nothing changes, when no gates are offered.
+    /// The system picked on the hypergate map, if one is, and the map goes
+    /// back to the course map with nothing selected or picked; `None`, and
+    /// nothing changes, when no gates are offered. The pick is what a
+    /// click on an offered system or the Tab cycle
+    /// ([`GalaxyMap::select_gate`]) picked last, the original's mode 4 and
+    /// +0x6c: not the selection as such, which Space, Find and the
+    /// preselect move without picking, as they write `_selSystem` alone.
+    /// Only an offered system is taken.
     pub fn take_gate_choice(&mut self) -> Option<SystemId> {
         if self.mode != MapMode::Hypergate {
             return None;
         }
         self.mode = MapMode::Course;
         let offered = std::mem::take(&mut self.offered);
-        self.selected
-            .take()
-            .filter(|selected| offered.contains(selected))
+        self.selected = None;
+        self.gate_pick.take().filter(|pick| offered.contains(pick))
     }
 
-    /// Selects `pick` on the hypergate map, the pick its Tab / `\` cycle
-    /// made ([`MapCycle`]), as it is: a system the map doesn't draw, such
-    /// as a hidden one, or none, stays selected, so the next press steps
-    /// on from it, as `_MapFilter` writes `_selSystem` (@0x13dfd).
-    /// [`GalaxyMap::take_gate_choice`] still takes only an offered system.
+    /// Selects and picks `pick` on the hypergate map, the pick its Tab /
+    /// `\` cycle made ([`MapCycle`]), as it is: a system the map doesn't
+    /// draw, such as a hidden one, or none, stays selected, so the next
+    /// press steps on from it, as `_MapFilter` writes `_selSystem` and
+    /// +0x6c (@0x13dfd). [`GalaxyMap::take_gate_choice`] still takes only
+    /// an offered system.
     pub fn select_gate(&mut self, pick: Option<SystemId>) {
         self.selected = pick;
+        self.gate_pick = pick;
         self.clicked = false;
     }
 
@@ -631,9 +702,10 @@ impl GalaxyMap {
 
     /// Selects `system`, as the map selects as it opens (`_DoSystemMap`
     /// @0x124ac-0x124ff), when it is on the map, and nothing otherwise. It
-    /// records no destination, and a click at its place is a first click,
-    /// selecting the first system there: the original's click never reads
-    /// the selection (@0x12dd4-0x1314b).
+    /// records no destination and picks no hypergate destination, and a
+    /// click at its place is a first click, selecting the first system
+    /// there: the original's click never reads the selection
+    /// (@0x12dd4-0x1314b).
     pub fn preselect(&mut self, system: Option<SystemId>) {
         self.selected = system.filter(|&id| self.model.system(id).is_some());
         self.clicked = false;
@@ -664,13 +736,74 @@ impl GalaxyMap {
         self.panel.as_ref()
     }
 
-    /// The map with its panels' text measured by `metrics`.
+    /// The map with its panels' text measured by `metrics`. Find needs
+    /// them: without them it never opens.
     #[must_use]
     pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
         Self {
             metrics: Some(MapMetrics(metrics)),
             ..self
         }
+    }
+
+    /// The map with Find laid out from `template` (stock `DLOG` 3005), or
+    /// from its fallback for `None` or a template it can't be laid out
+    /// from, and its buttons and the map's labelled in `style`.
+    #[must_use]
+    pub fn with_find(self, template: Option<DialogTemplate>, style: ButtonStyle) -> Self {
+        Self {
+            find_template: template,
+            style,
+            ..self
+        }
+    }
+
+    /// Whether Find is open: while it is, it takes every input.
+    #[must_use]
+    pub fn finding(&self) -> bool {
+        self.find.is_some()
+    }
+
+    /// The Find dialog, while it is open.
+    #[must_use]
+    pub fn find_dialog(&self) -> Option<&FindDialog> {
+        self.find.as_ref()
+    }
+
+    /// Closes Find, if it is open, with nothing searched, as the map
+    /// closes: a map closed some other way reopens without it.
+    pub fn close_find(&mut self) {
+        self.find = None;
+    }
+
+    /// The text Find confirmed on an in-flight map since this was last
+    /// taken, not empty, for the owner to search
+    /// (`nova_sim::Session::find_map_system`) and answer with
+    /// [`GalaxyMap::show_search`]; taking it clears it. The viewer
+    /// searches by itself, and never asks.
+    pub fn take_find(&mut self) -> Option<String> {
+        self.query.take()
+    }
+
+    /// Shows what a search found, as `_DoSystemSearch` does
+    /// (@0x1205c-0x120f3): a system found is selected, not as a
+    /// destination or a hypergate pick, and the map centres on it
+    /// (`_selSystem` and `_mapScroll`), with [`UiSound::MapSystemFound`];
+    /// none found changes nothing, with [`UiSound::MapSystemNotFound`].
+    pub fn show_search(&mut self, outcome: SearchOutcome) {
+        match outcome {
+            SearchOutcome::Found(id) => {
+                self.select_and_centre(id);
+                self.sounds.push(UiSound::MapSystemFound);
+            }
+            SearchOutcome::NotFound => self.sounds.push(UiSound::MapSystemNotFound),
+        }
+    }
+
+    /// The beeps the map made since they were last taken, in order:
+    /// Space's and Find's. Taking them empties the list.
+    pub fn take_ui_sounds(&mut self) -> Vec<UiSound> {
+        std::mem::take(&mut self.sounds)
     }
 
     /// The system the player is in, as last shown.
@@ -733,6 +866,86 @@ impl GalaxyMap {
         }
     }
 
+    /// Selects `id`, as no click did, and centres the view on it.
+    fn select_and_centre(&mut self, id: SystemId) {
+        self.selected = Some(id);
+        self.clicked = false;
+        if let Some(at) = self.model.position(id) {
+            self.view.centre_on(at);
+        }
+    }
+
+    /// Space on an in-flight map (`_MapFilter` @0x140e0-0x14169): the
+    /// beep first, then the map centred on the current system, selected
+    /// with no destination or hypergate pick. The viewer has no current
+    /// system: there Space does nothing.
+    fn centre_on_current(&mut self) {
+        if self.mode == MapMode::Viewer {
+            return;
+        }
+        self.sounds.push(UiSound::MapCentred);
+        if let Some(current) = self.current {
+            self.select_and_centre(current);
+        }
+    }
+
+    /// Opens Find, abandoning any press on the map, when the map has text
+    /// metrics to lay it out with; the key that opened it types nothing
+    /// into it.
+    fn open_find(&mut self) {
+        let Some(MapMetrics(metrics)) = &self.metrics else {
+            return;
+        };
+        let mut dialog = self
+            .find_template
+            .as_ref()
+            .and_then(|template| FindDialog::new(template, self.style, Rc::clone(metrics)).ok())
+            .unwrap_or_else(|| FindDialog::fallback(self.style, Rc::clone(metrics)));
+        dialog.flush_typed_key();
+        self.find = Some(dialog);
+        self.press = None;
+        self.armed = false;
+        self.buttons.cancel_pointer();
+    }
+
+    /// Find's input while it is open: it closes on Find or Cancel, and a
+    /// text found is searched.
+    fn find_input(&mut self, input: &Input) {
+        let Some(dialog) = &mut self.find else {
+            return;
+        };
+        dialog.input(input);
+        let Some(outcome) = dialog.take_outcome() else {
+            return;
+        };
+        self.find = None;
+        if let FindOutcome::Search(text) = outcome {
+            self.searched(text);
+        }
+    }
+
+    /// A text Find confirmed (`_DoSystemSearch` @0x11e26-0x12056): an
+    /// empty one does nothing and plays nothing; on the viewer the map
+    /// searches every system in the data, active or not, known or not,
+    /// explored or not, as it has no session; an in-flight map asks its
+    /// owner ([`GalaxyMap::take_find`]).
+    fn searched(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        if self.mode != MapMode::Viewer {
+            self.query = Some(text);
+            return;
+        }
+        let candidates = self
+            .model
+            .catalog_systems()
+            .iter()
+            .map(|system| (system.entry.id, system.entry.name.as_str()));
+        let outcome = map_search::search(&text, candidates);
+        self.show_search(outcome);
+    }
+
     /// Asks to enter the selected system, if there is one and the map
     /// enters systems.
     fn enter(&mut self) {
@@ -761,6 +974,7 @@ impl GalaxyMap {
             if self.mode == MapMode::Hypergate {
                 if clicked.is_some_and(|id| self.offered.contains(&id)) {
                     self.selected = clicked;
+                    self.gate_pick = clicked;
                     self.clicked = true;
                 }
                 return;
@@ -1061,9 +1275,12 @@ impl GalaxyMap {
                 Color::WHITE,
             );
         }
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if !viewer && let Some(panel) = &self.panel {
-            let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
             draw_panel(list, panel, PANEL_ORIGIN, metrics);
+        }
+        if !viewer {
+            self.buttons.draw(&self.style, metrics, list);
         }
     }
 }
@@ -1185,8 +1402,28 @@ impl std::fmt::Debug for MapMetrics {
 }
 
 impl Screen for GalaxyMap {
-    /// Never quits: Escape is the navigator's.
+    /// Never quits: Escape is the navigator's. While Find is open, it
+    /// takes every input.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Shift,
+            pressed,
+            ..
+        } = *input
+        {
+            self.shift = pressed;
+        }
+        if self.finding() {
+            self.find_input(input);
+            return ScreenAction::None;
+        }
+        if self.mode != MapMode::Viewer {
+            match self.buttons.input(input) {
+                Some(MapButton::Done) => self.request = Some(Request::Close),
+                Some(MapButton::Find) => self.open_find(),
+                None => {}
+            }
+        }
         match *input {
             // Return enters once, however long it is held.
             Input::Key {
@@ -1203,10 +1440,25 @@ impl Screen for GalaxyMap {
                 }
             }
             Input::Key {
-                key: Key::Shift,
-                pressed,
-                ..
-            } => self.shift = pressed,
+                key: Key::Shift, ..
+            } => {}
+            // Once, on key-down, as `_MapFilter` takes Space (@0x140e0).
+            Input::Key {
+                key: Key::Space,
+                pressed: true,
+                repeat,
+            } => {
+                if !repeat {
+                    self.centre_on_current();
+                }
+            }
+            // F and S, any case, on key-down: the Find button
+            // (@0x144b9-0x144d6).
+            Input::Key {
+                key: Key::Char('f' | 's' | 'F' | 'S'),
+                pressed: true,
+                repeat: false,
+            } => self.open_find(),
             // Repeats too: holding a key keeps panning or zooming.
             Input::Key {
                 key, pressed: true, ..
@@ -1245,17 +1497,30 @@ impl Screen for GalaxyMap {
     /// The map does not animate.
     fn tick(&mut self, _dt: Duration) {}
 
+    /// The map, its panel, then Find over them while it is open.
     fn draw(&self, list: &mut DrawList) {
         self.draw_map(list);
         self.draw_panel(list);
+        if let Some(dialog) = &self.find {
+            dialog.draw(list);
+        }
     }
 
     /// Forgets the left-button press, if any: the map stops dragging and the
-    /// release, wherever it ends up, is not a click, on the map or on the
-    /// "Enter system" button.
+    /// release, wherever it ends up, is not a click, on the map, on the
+    /// "Enter system" button, on Done or Find, or in Find.
     fn cancel_pointer(&mut self) {
         self.press = None;
         self.armed = false;
+        self.buttons.cancel_pointer();
+        if let Some(dialog) = &mut self.find {
+            dialog.cancel_pointer();
+        }
+    }
+
+    /// Space's and Find's beeps ([`GalaxyMap::take_ui_sounds`]).
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.take_ui_sounds().into_iter().map(Sound::Ui).collect()
     }
 
     /// Forgets Shift as held.
@@ -2247,7 +2512,7 @@ mod tests {
     fn the_help_line_mentions_return() {
         assert_eq!(
             HELP,
-            "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter"
+            "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find"
         );
     }
 
@@ -3333,5 +3598,382 @@ mod tests {
         click_on(&mut viewer, 129);
         click(&mut viewer, column);
         assert_eq!(viewer.selected(), None);
+    }
+
+    // Space, Find and the Done and Find buttons.
+
+    use crate::galaxy::buttons::MapButtons;
+    use crate::galaxy::find::{FIND_ITEM, PROMPT};
+    use crate::sound::{Sound, UiSound};
+    use nova_sim::map_search::SearchOutcome;
+
+    fn measured(map: GalaxyMap) -> GalaxyMap {
+        map.with_metrics(Rc::new(MonoMetrics))
+    }
+
+    /// The course map with the player in Beta (129), measured.
+    fn flown_map() -> GalaxyMap {
+        let mut map = measured(course_map());
+        map.show_course(SystemId(129), &[]);
+        map
+    }
+
+    /// The hypergate map, from Alpha (128) offering 129 and 130, measured.
+    fn measured_gate_map() -> GalaxyMap {
+        measured(gate_map())
+    }
+
+    /// Types `text` as the platform sends it: each key, then its
+    /// character.
+    fn type_in(map: &mut GalaxyMap, text: &str) {
+        for c in text.chars() {
+            let key = if c == ' ' {
+                Key::Space
+            } else {
+                Key::Char(c.to_ascii_lowercase())
+            };
+            map.input(&press(key));
+            map.input(&Input::Text(c));
+        }
+    }
+
+    /// Opens Find with S, types `text` and confirms it with Return.
+    fn find(map: &mut GalaxyMap, text: &str) {
+        map.input(&press(Key::Char('s')));
+        map.input(&Input::Text('s'));
+        assert!(map.finding(), "Find opened");
+        type_in(map, text);
+        map.input(&press(Key::Enter));
+        assert!(!map.finding(), "Find closed");
+    }
+
+    /// Where system `id` is in the world.
+    fn place(map: &GalaxyMap, id: i16) -> Point {
+        map.model().position(SystemId(id)).expect("a system")
+    }
+
+    fn ui(sounds: &[UiSound]) -> Vec<Sound> {
+        sounds.iter().copied().map(Sound::Ui).collect()
+    }
+
+    #[test]
+    fn space_centres_the_course_map_on_the_current_system_and_selects_it() {
+        let mut map = flown_map();
+        click_on(&mut map, 130);
+        assert_eq!(map.take_destination(), Some(SystemId(130)));
+        map.input(&press(Key::Space));
+        assert_eq!(map.view().center(), place(&map, 129));
+        assert_eq!(map.selected(), Some(SystemId(129)));
+        assert_eq!(map.take_destination(), None, "not a destination");
+        assert_eq!(map.take_ui_sounds(), [UiSound::MapCentred]);
+        assert_eq!(map.take_ui_sounds(), [], "taken");
+        click_on(&mut map, 129);
+        assert_eq!(
+            map.selected(),
+            Some(SystemId(129)),
+            "a first click at its place"
+        );
+    }
+
+    #[test]
+    fn a_space_repeat_or_release_does_nothing() {
+        let mut map = flown_map();
+        click_on(&mut map, 130);
+        let view = *map.view();
+        map.input(&held(Key::Space));
+        map.input(&release(Key::Space));
+        assert_eq!((*map.view(), map.selected()), (view, Some(SystemId(130))));
+        assert_eq!(map.take_ui_sounds(), []);
+    }
+
+    #[test]
+    fn space_on_the_hypergate_map_selects_the_current_system_and_keeps_the_pick() {
+        let mut map = measured_gate_map();
+        click_on(&mut map, 130);
+        map.input(&press(Key::Space));
+        assert_eq!(map.selected(), Some(SystemId(128)));
+        assert_eq!(map.view().center(), place(&map, 128));
+        assert_eq!(map.take_ui_sounds(), [UiSound::MapCentred]);
+        assert_eq!(map.take_gate_choice(), Some(SystemId(130)));
+    }
+
+    #[test]
+    fn space_on_the_viewer_does_nothing() {
+        let mut map = measured(map());
+        click_on(&mut map, 130);
+        let view = *map.view();
+        map.input(&press(Key::Space));
+        assert_eq!((*map.view(), map.selected()), (view, Some(SystemId(130))));
+        assert_eq!(map.take_ui_sounds(), []);
+    }
+
+    #[test]
+    fn f_and_s_open_find_on_the_in_flight_maps_but_not_their_repeats() {
+        for (name, build) in [
+            ("course", flown_map as fn() -> GalaxyMap),
+            ("hypergate", measured_gate_map),
+        ] {
+            for key in ['f', 's', 'F', 'S'] {
+                let mut map = build();
+                map.input(&held(Key::Char(key)));
+                assert!(!map.finding(), "{name}: a repeat of {key}");
+                map.input(&press(Key::Char(key)));
+                assert!(map.finding(), "{name}: {key}");
+            }
+            let mut shifted = build();
+            shifted.input(&press(Key::Shift));
+            shifted.input(&press(Key::Char('f')));
+            assert!(shifted.finding(), "{name}: Shift-F");
+        }
+    }
+
+    #[test]
+    fn s_opens_find_on_the_viewer() {
+        let mut map = measured(map());
+        map.input(&press(Key::Char('s')));
+        assert!(map.finding());
+    }
+
+    #[test]
+    fn without_metrics_find_does_not_open() {
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        map.input(&press(Key::Char('f')));
+        assert!(!map.finding());
+        let done = MapButtons::new();
+        let find = done.find().rect.center();
+        click(&mut map, find);
+        assert!(!map.finding(), "the button");
+    }
+
+    #[test]
+    fn find_opens_empty_dropping_the_key_that_opened_it() {
+        let mut map = flown_map();
+        map.input(&press(Key::Char('f')));
+        map.input(&Input::Text('f'));
+        let dialog = map.find_dialog().expect("open");
+        assert_eq!(dialog.field().text(), "");
+        let list = drawn(&map);
+        assert!(
+            texts(&list).contains(&PROMPT.to_owned()),
+            "drawn over the map"
+        );
+        map.input(&Input::Text('S'));
+        assert_eq!(map.find_dialog().expect("open").field().text(), "S");
+    }
+
+    #[test]
+    fn find_takes_every_input_while_it_is_open() {
+        let mut map = flown_map();
+        click_on(&mut map, 130);
+        map.take_destination();
+        map.input(&press(Key::Char('f')));
+        let view = *map.view();
+        for key in [
+            Key::Left,
+            Key::Up,
+            Key::Char('='),
+            Key::Tab,
+            Key::Char('\\'),
+        ] {
+            map.input(&press(key));
+        }
+        assert_eq!(*map.view(), view, "no pan or zoom");
+        assert_eq!(map.take_cycle(), None, "no cycle");
+        type_in(&mut map, " m");
+        assert_eq!(map.find_dialog().expect("open").field().text(), " m");
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(130)), "no click on the map");
+        assert_eq!(map.take_destination(), None);
+        assert_eq!(map.take_ui_sounds(), [], "no Space beep");
+        map.input(&press(Key::Enter));
+        assert!(!map.finding(), "Return confirms");
+        assert!(!map.take_close(), "and closes only Find");
+    }
+
+    #[test]
+    fn the_viewer_searches_every_system_itself() {
+        let mut map = measured(map());
+        find(&mut map, "gam");
+        assert_eq!(map.selected(), Some(SystemId(130)));
+        assert_eq!(map.view().center(), place(&map, 130));
+        assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemFound]);
+        assert_eq!(map.take_find(), None, "nothing asked of an owner");
+        find(&mut map, "alpha r");
+        assert_eq!(map.selected(), Some(SystemId(131)));
+        map.take_ui_sounds();
+        let view = *map.view();
+        find(&mut map, "zzz");
+        assert_eq!((map.selected(), *map.view()), (Some(SystemId(131)), view));
+        assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemNotFound]);
+    }
+
+    #[test]
+    fn an_empty_text_and_cancel_change_nothing_and_say_nothing() {
+        for mut map in [measured(map()), flown_map()] {
+            click_on(&mut map, 129);
+            map.take_destination();
+            let view = *map.view();
+            find(&mut map, "");
+            map.input(&press(Key::Char('s')));
+            type_in(&mut map, "gamma");
+            let cancel = map
+                .find_dialog()
+                .expect("open")
+                .dialog()
+                .item_bounds(crate::galaxy::find::CANCEL_ITEM)
+                .expect("Cancel")
+                .center();
+            click(&mut map, cancel);
+            assert!(!map.finding(), "Cancel closes it");
+            assert_eq!((map.selected(), *map.view()), (Some(SystemId(129)), view));
+            assert_eq!(map.take_ui_sounds(), []);
+            assert_eq!(map.take_find(), None);
+        }
+    }
+
+    #[test]
+    fn an_in_flight_map_asks_its_owner_to_search() {
+        let mut map = flown_map();
+        find(&mut map, "Sol ");
+        assert_eq!(map.take_find(), Some("Sol ".to_owned()), "as typed");
+        assert_eq!(map.take_find(), None, "taken");
+        assert_eq!(map.take_ui_sounds(), [], "the owner's answer beeps");
+        assert_eq!(map.selected(), None);
+    }
+
+    #[test]
+    fn a_search_found_selects_and_centres_and_one_not_found_keeps_the_map() {
+        let mut map = flown_map();
+        map.show_search(SearchOutcome::Found(SystemId(130)));
+        assert_eq!(map.selected(), Some(SystemId(130)));
+        assert_eq!(map.take_destination(), None, "not a destination");
+        assert_eq!(map.view().center(), place(&map, 130));
+        assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemFound]);
+        click_on(&mut map, 128);
+        let view = *map.view();
+        map.show_search(SearchOutcome::NotFound);
+        assert_eq!((map.selected(), *map.view()), (Some(SystemId(128)), view));
+        assert_eq!(map.take_ui_sounds(), [UiSound::MapSystemNotFound]);
+    }
+
+    #[test]
+    fn a_search_found_on_the_hypergate_map_keeps_the_pick() {
+        let mut map = measured_gate_map();
+        click_on(&mut map, 129);
+        map.show_search(SearchOutcome::Found(SystemId(131)));
+        assert_eq!(map.selected(), Some(SystemId(131)));
+        assert_eq!(map.take_gate_choice(), Some(SystemId(129)));
+    }
+
+    #[test]
+    fn the_hypergate_pick_is_kept_apart_from_the_selection() {
+        let mut map = gate_map();
+        map.preselect(Some(SystemId(129)));
+        assert_eq!(map.selected(), Some(SystemId(129)));
+        assert_eq!(map.take_gate_choice(), None, "a preselect picks nothing");
+        let mut map = gate_map();
+        click_on(&mut map, 129);
+        map.offer_gates(ids(&[129, 130]));
+        assert_eq!(map.selected(), None);
+        assert_eq!(map.take_gate_choice(), None, "offering clears the pick");
+        let mut map = gate_map();
+        click_on(&mut map, 129);
+        map.select_gate(Some(SystemId(130)));
+        map.preselect(Some(SystemId(129)));
+        assert_eq!(map.take_gate_choice(), Some(SystemId(130)), "the cycle's");
+        assert_eq!(map.selected(), None);
+        assert_eq!(map.take_gate_choice(), None, "taken");
+    }
+
+    #[test]
+    fn closing_find_drops_the_dialog_and_its_text() {
+        let mut map = flown_map();
+        map.input(&press(Key::Char('f')));
+        type_in(&mut map, "sol");
+        map.close_find();
+        assert!(!map.finding());
+        assert_eq!(map.take_find(), None);
+        map.input(&press(Key::Char('f')));
+        assert_eq!(map.find_dialog().expect("open").field().text(), "");
+    }
+
+    #[test]
+    fn the_map_reports_its_beeps_as_screen_sounds() {
+        let mut map = flown_map();
+        map.input(&press(Key::Space));
+        map.show_search(SearchOutcome::NotFound);
+        assert_eq!(
+            map.take_sounds(),
+            ui(&[UiSound::MapCentred, UiSound::MapSystemNotFound])
+        );
+        assert_eq!(map.take_sounds(), []);
+        assert_eq!(map.take_ui_sounds(), []);
+    }
+
+    #[test]
+    fn a_click_on_done_asks_to_close_and_on_find_opens_find_silently() {
+        for build in [flown_map as fn() -> GalaxyMap, measured_gate_map] {
+            let buttons = MapButtons::new();
+            let (done, find) = (buttons.done().rect.center(), buttons.find().rect.center());
+            let mut map = build();
+            click(&mut map, done);
+            assert!(map.take_close(), "Done, as Return");
+            click(&mut map, find);
+            assert!(map.finding());
+            assert_eq!(map.take_sounds(), [], "silent");
+            map.close_find();
+            map.input(&button(MouseButton::Left, true, done));
+            map.input(&button(MouseButton::Left, false, find));
+            assert!(!map.take_close() && !map.finding(), "released off it");
+            map.input(&button(MouseButton::Left, true, done));
+            map.cancel_pointer();
+            map.input(&button(MouseButton::Left, false, done));
+            assert!(!map.take_close(), "cancelled");
+        }
+    }
+
+    #[test]
+    fn the_buttons_are_drawn_on_the_in_flight_maps_alone() {
+        let labels = |map: &GalaxyMap| {
+            let texts = texts(&drawn(map));
+            ["Done", "Find"].map(|label| texts.contains(&label.to_owned()))
+        };
+        assert_eq!(labels(&flown_map()), [true, true]);
+        assert_eq!(labels(&measured_gate_map()), [true, true]);
+        assert_eq!(labels(&course_map()), [true, true], "unmeasured too");
+        let mut viewer = measured(map());
+        assert_eq!(labels(&viewer), [false, false]);
+        let buttons = MapButtons::new();
+        click(&mut viewer, buttons.done().rect.center());
+        click(&mut viewer, buttons.find().rect.center());
+        assert!(!viewer.take_close() && !viewer.finding(), "nor hit");
+    }
+
+    #[test]
+    fn find_is_laid_out_from_the_template_given_in_the_style_given() {
+        let mut template = crate::galaxy::find::fallback();
+        template.items[FIND_ITEM - 1].kind = crate::ui::dialog::ItemSpec::Button("Seek".to_owned());
+        let style = ButtonStyle {
+            size: 20.0,
+            ..ButtonStyle::STOCK
+        };
+        let mut map = flown_map().with_find(Some(template), style);
+        map.input(&press(Key::Char('f')));
+        let list = drawn(&map);
+        assert!(texts(&list).contains(&"Seek".to_owned()));
+        assert!(
+            list.iter().any(|command| matches!(
+                command,
+                DrawCommand::Text { text, size, .. } if text == "Done" && *size == 20.0
+            )),
+            "the buttons in the style too"
+        );
+        let mut broken = crate::galaxy::find::fallback();
+        broken.items.truncate(2);
+        let mut map = flown_map().with_find(Some(broken), ButtonStyle::STOCK);
+        map.input(&press(Key::Char('f')));
+        assert!(map.finding(), "a broken template falls back");
+        assert!(format!("{map:?}").contains("FindDialog"));
     }
 }

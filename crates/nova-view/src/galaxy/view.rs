@@ -184,6 +184,15 @@ impl MapView {
         let moved = Point::new(self.center.x + dx / scale, self.center.y + dy / scale);
         self.center = self.limits.clamp(moved);
     }
+
+    /// Centres the view on the world point `at`, stopping at the edge of
+    /// the galaxy's bounds and keeping the zoom, as Space and Find set the
+    /// original's `_mapScroll` to a system's position (`_MapFilter`
+    /// @0x1411e-0x14153, `_DoSystemSearch` @0x12080-0x120aa). A system is
+    /// always inside the bounds.
+    pub fn centre_on(&mut self, at: Point) {
+        self.center = self.limits.clamp(at);
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +372,17 @@ mod tests {
             assert!(close(view.world_to_screen(p), before), "zoom {zoom}");
             view.zoom_in();
         }
+    }
+
+    #[test]
+    fn centring_on_a_point_keeps_the_zoom_and_stops_at_the_galaxys_edges() {
+        let mut view = MapView::fit(Some(stock()));
+        view.zoom_in();
+        let zoom = view.zoom();
+        view.centre_on(at(-100.0, 250.0));
+        assert_eq!((view.center(), view.zoom()), (at(-100.0, 250.0), zoom));
+        view.centre_on(at(1000.0, -1000.0));
+        assert_eq!(view.center(), at(587.0, -330.0), "clamped");
     }
 
     #[test]
