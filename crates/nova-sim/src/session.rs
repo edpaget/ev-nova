@@ -16275,9 +16275,9 @@ pub(super) mod tests {
             ship: ShipRef::Player,
             weapon: WeaponId(128),
             at: Vec2::ZERO,
-            sound: Some(crate::combat::FireSound {
-                priority: Some(crate::combat::PLAYER_FIRE_PRIORITY),
-            }),
+            sound: Some(crate::combat::FireSound::at(
+                crate::combat::PLAYER_FIRE_PRIORITY
+            )),
         }));
         assert_eq!(session.npcs().len(), 1, "disabled, and still alive");
         for _ in 0..60 {
@@ -16334,7 +16334,9 @@ pub(super) mod tests {
             ship: ShipRef::Npc(NpcId(0)),
             weapon: WeaponId(128),
             at: Vec2::new(0.0, -100.0),
-            sound: Some(crate::combat::FireSound::UNPORTED),
+            sound: Some(crate::combat::FireSound::at(
+                crate::combat::AI_FIRE_PRIORITY
+            )),
         }));
         assert!(
             session.reserves().shield.now < 30.0,
@@ -21699,7 +21701,9 @@ pub(super) mod tests {
                 ship: ShipRef::Npc(NpcId(0)),
                 weapon: WeaponId(134),
                 at: Vec2::new(0.0, -200.0),
-                sound: Some(crate::combat::FireSound::UNPORTED),
+                sound: Some(crate::combat::FireSound::at(
+                    crate::combat::AI_FIRE_PRIORITY
+                )),
             }),
             "{events:?}"
         );

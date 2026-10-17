@@ -1155,7 +1155,7 @@ mod tests {
             } else {
                 NPC_AT
             },
-            sound: Some(FireSound::UNPORTED),
+            sound: Some(FireSound::at(4)),
         }
     }
 
@@ -1171,7 +1171,7 @@ mod tests {
             at: NPC_AT,
             sound,
         };
-        let first = Some(FireSound { priority: Some(4) });
+        let first = Some(FireSound::at(4));
         for event in [pick(first), pick(None), pick(None)] {
             effects.apply(&event, &scene(), &looks(), &mut chance);
         }
@@ -1198,7 +1198,7 @@ mod tests {
                 ship: NPC,
                 weapon: WeaponId(128),
                 at: Vec2::new(-5.0, 7.0),
-                sound: Some(FireSound::UNPORTED),
+                sound: Some(FireSound::at(4)),
             },
         ] {
             effects.apply(&event, &scene(), &looks(), &mut chance);

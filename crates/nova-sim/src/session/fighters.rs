@@ -791,8 +791,11 @@ mod tests {
                 ship: ShipRef::Player,
                 weapon: BAY,
                 at: session.player().position,
+                // `_FirePlayerWeapon`'s looped test (@0x62d98-0x62dbf)
+                // gates its bay branch too (@0x62e40-0x62e44).
                 sound: Some(crate::combat::FireSound {
-                    priority: Some(crate::combat::PLAYER_SECONDARY_FIRE_PRIORITY),
+                    priority: crate::combat::PLAYER_SECONDARY_FIRE_PRIORITY,
+                    unless_playing: true,
                 }),
             }),
             "the bay's sound is heard"

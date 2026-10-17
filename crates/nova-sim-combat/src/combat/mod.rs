@@ -365,9 +365,10 @@ pub enum CombatEvent {
         weapon: WeaponId,
         /// Where it was fired from: the ship, or the shot releasing them.
         at: Vec2,
-        /// How its weapon's `Sound` plays for it, if at all: none for an
-        /// NPC pick's later copies in one call, which the original plays
-        /// once after them all.
+        /// How its weapon's `Sound` plays for it, if at all: its priority,
+        /// and whether a looped sound waits while it plays anywhere. None
+        /// for a call's later copies, which the original plays once after
+        /// them all.
         sound: Option<FireSound>,
     },
     /// Point defence destroyed a missile.
@@ -470,15 +471,28 @@ pub enum CombatEvent {
 /// the function that fires it gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FireSound {
-    /// The priority it plays at; none where the function firing it isn't
-    /// ported yet: an NPC's bay launch with [`Trigger::bays`] and an
-    /// escort's formation trigger ([`Armament::fire`]).
-    pub priority: Option<u8>,
+    /// The priority it plays at (`_PlaySoundDistance`'s third argument):
+    /// how much it matters when the audio side's voices are full.
+    pub priority: u8,
+    /// Whether the function firing it skips a looped weapon's sound
+    /// (`Flags` 0x0010) while that `snd ` plays on any voice
+    /// (`ST_IsSoundPlaying`), as `_FireAIShipWeapon` (@0x88e00-0x88e1d),
+    /// `_FirePlayerWeapon` (@0x62d98-0x62dbf), `_HandleShipPointDefense`
+    /// (@0x39981-0x3999e) and `_SpawnShotSubmunitions` (@0x3f25b-0x3f26c)
+    /// do. `_AILaunchFighter` tests nothing (@0x81429-0x81466). The view or
+    /// the audio side applies the test.
+    pub unless_playing: bool,
 }
 
 impl FireSound {
-    /// A sound whose firing function isn't ported yet: no priority.
-    pub const UNPORTED: Self = Self { priority: None };
+    /// A sound at `priority`, skipped while a looped one plays.
+    #[must_use]
+    pub const fn at(priority: u8) -> Self {
+        Self {
+            priority,
+            unless_playing: true,
+        }
+    }
 }
 
 /// The priority an NPC's pick plays its weapon's sound at, once a call
@@ -487,12 +501,17 @@ impl FireSound {
 /// (@0xe007) never reads.
 pub const AI_FIRE_PRIORITY: u8 = 4;
 
+/// The priority an NPC's fighter bay plays its sound at, once each
+/// fighter launched (`_AILaunchFighter` @0x81433, played @0x81466 after
+/// `_LaunchFighter` succeeds @0x8141c-0x81423), with no looped test.
+pub const BAY_LAUNCH_PRIORITY: u8 = 5;
+
 /// The priority a shot's released sub-munitions play their weapon's sound
 /// at, once a release, at the parent (`_SpawnShotSubmunitions` @0x3f23b-0x3f2f2,
 /// `_PlaySoundDistance(-1, snd, 4, …)`). Under the sub-munition's `Flags`
 /// 0x0010 the original plays it only when that sound is not already
-/// playing (`_ST_IsSoundPlaying` @0x3f264), which weapons-fidelity phase 19
-/// owns.
+/// playing (`_ST_IsSoundPlaying` @0x3f264), which the view or the audio
+/// side applies ([`FireSound::unless_playing`]).
 pub const SUBMUNITION_PRIORITY: u8 = 4;
 
 /// The priority point defence plays its weapon's sound at, for a shot or
@@ -500,8 +519,8 @@ pub const SUBMUNITION_PRIORITY: u8 = 4;
 /// `_PlaySoundDistance(-1, snd, 3, …)`): `snd ` 200 + `Sound`, 212 for
 /// the stock Quad Light Blaster Turret and 223 for the Storm Chaingun.
 /// Under `Flags` 0x0010 the original plays it only when that sound is not
-/// already playing (@0x39981-0x3999e), which weapons-fidelity phase 19
-/// owns.
+/// already playing (@0x39981-0x3999e), which the view or the audio side
+/// applies ([`FireSound::unless_playing`]).
 pub const PD_FIRE_PRIORITY: u8 = 3;
 
 /// A burst of particles: `_SpawnParticles`' arguments (@0x44b70-0x44d4e),
@@ -1719,7 +1738,8 @@ impl Combat {
     /// An NPC launches its fighters with [`Trigger::bays`] and fires an
     /// escort's formation trigger through [`Armament::fire`], its quadrant
     /// turrets testing their blind spots as the original's AI picks them
-    /// (`_AIFireTurret` @0x80d0b), then fires its pick
+    /// (`_AIFireTurret` @0x80d0b), each launch sounding as
+    /// [`trigger_sound`] says, then fires its pick
     /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
     /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
     /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
@@ -1760,8 +1780,8 @@ impl Combat {
                 &mut self.reports,
                 &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
             );
-            let unported = |_| Some(FireSound::UNPORTED);
-            self.launch_volley(fighter, &launches, unported, targets, chance);
+            let sound = |copy: usize| Some(trigger_sound(&launches[copy]));
+            self.launch_volley(fighter, &launches, sound, targets, chance);
             let Some(pick) = fighter.trigger.only else {
                 continue;
             };
@@ -1966,9 +1986,7 @@ impl Combat {
                     &mut muzzle,
                     &launch,
                     (Some(quarry), aimed_at),
-                    Some(FireSound {
-                        priority: Some(PD_FIRE_PRIORITY),
-                    }),
+                    Some(FireSound::at(PD_FIRE_PRIORITY)),
                     targets,
                     chance,
                 );
@@ -2712,9 +2730,7 @@ impl Combat {
             ship: parent.firer,
             weapon: sub.id,
             at: parent.position,
-            sound: Some(FireSound {
-                priority: Some(SUBMUNITION_PRIORITY),
-            }),
+            sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         });
         for mut shot in shots {
             if self.capped && self.shots.len() + self.ended_shots >= MAX_SHOTS {
@@ -3067,10 +3083,25 @@ fn self_destructs(launch: &Launch, shot: bool) -> bool {
 /// A volley's sounds: its first copy's at `priority`, its later copies
 /// none.
 fn first_copy_sounds_at(priority: u8) -> impl Fn(usize) -> Option<FireSound> {
-    move |copy| {
-        (copy == 0).then_some(FireSound {
-            priority: Some(priority),
-        })
+    move |copy| (copy == 0).then_some(FireSound::at(priority))
+}
+
+/// How an NPC's `launch` through [`Armament::fire`] sounds: a fighter
+/// bay's at [`BAY_LAUNCH_PRIORITY`], with no looped test, as
+/// `_AILaunchFighter` sounds each `_LaunchFighter`; any other weapon's at
+/// [`AI_FIRE_PRIORITY`], as `_FireAIShipWeapon` sounds once a call. Each
+/// weapon launches at most once a call, its copies as one. The engine
+/// fires every ready turret of an escort's formation trigger, where the
+/// original fires `_AIFireTurret`'s one pick
+/// (rdm:phase/escort-fleet-fidelity/phase-1-formation-fire-unprovoked).
+fn trigger_sound(launch: &Launch) -> FireSound {
+    if launch.weapon.guidance_99() {
+        FireSound {
+            priority: BAY_LAUNCH_PRIORITY,
+            unless_playing: false,
+        }
+    } else {
+        FireSound::at(AI_FIRE_PRIORITY)
     }
 }
 
@@ -3845,7 +3876,9 @@ mod tests {
                 ship: A,
                 weapon: WeaponId(128),
                 at: Vec2::ZERO,
-                sound: Some(crate::combat::FireSound::UNPORTED),
+                sound: Some(crate::combat::FireSound::at(
+                    crate::combat::AI_FIRE_PRIORITY
+                )),
             }]
         );
         assert_eq!(combat.take_events(), [], "taken");
@@ -7175,9 +7208,7 @@ mod tests {
                 ship: A,
                 weapon: WeaponId(148),
                 at,
-                sound: Some(FireSound {
-                    priority: Some(SUBMUNITION_PRIORITY)
-                }),
+                sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
             })
         );
         let (shell, arsenal) = cluster(0x0020);
@@ -7227,9 +7258,7 @@ mod tests {
             ship: A,
             weapon: WeaponId(148),
             at,
-            sound: Some(FireSound {
-                priority: Some(SUBMUNITION_PRIORITY)
-            }),
+            sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         }));
         assert_eq!(SUBMUNITION_PRIORITY, 4);
     }
@@ -7753,11 +7782,9 @@ mod tests {
 
     // Fighter bays.
 
-    /// Ship A at (10, 20), moving (1, 2) and facing right, its secondary
-    /// trigger on a fighter bay, 149, of ship 144, 10 degrees inaccurate,
-    /// holding 2 fighters, and targeting B, which is at (300, 0).
-    fn carrier() -> [Ship; 2] {
-        let bay = WeaponRecord {
+    /// The carrier's fighter bay, 149, of ship 144, 10 degrees inaccurate.
+    fn carrier_bay() -> WeaponRecord {
+        WeaponRecord {
             guidance: 99,
             ammo_type: 144,
             flags: 0x0002,
@@ -7765,8 +7792,14 @@ mod tests {
             reload: 60,
             speed: 400,
             ..weapon(149)
-        };
-        let mut carrier = Ship::at(1, 10.0, 20.0).armed(bay);
+        }
+    }
+
+    /// Ship A at (10, 20), moving (1, 2) and facing right, its secondary
+    /// trigger on a fighter bay, 149, of ship 144, 10 degrees inaccurate,
+    /// holding 2 fighters, and targeting B, which is at (300, 0).
+    fn carrier() -> [Ship; 2] {
+        let mut carrier = Ship::at(1, 10.0, 20.0).armed(carrier_bay());
         carrier.state.velocity = Vec2::new(1.0, 2.0);
         carrier.trigger = Trigger {
             secondary: Some(WeaponId(149)),
@@ -7791,10 +7824,14 @@ mod tests {
                 ship: A,
                 weapon: WeaponId(149),
                 at: Vec2::new(10.0, 20.0),
-                sound: Some(crate::combat::FireSound::UNPORTED),
+                sound: Some(FireSound {
+                    priority: BAY_LAUNCH_PRIORITY,
+                    unless_playing: false,
+                }),
             }],
-            "heard at the carrier"
+            "heard at the carrier, at _AILaunchFighter's 5 with no looped test"
         );
+        assert_eq!(BAY_LAUNCH_PRIORITY, 5);
         assert_eq!(
             combat.take_sorties(),
             [Sortie {
@@ -7820,6 +7857,28 @@ mod tests {
         let sorties = combat.take_sorties();
         assert_eq!(sorties.len(), 1);
         assert_eq!(sorties[0].target, None);
+    }
+
+    #[test]
+    fn an_npcs_trigger_sounds_each_weapon_once_a_volley_at_priority_4() {
+        let mut combat = Combat::default();
+        let other = WeaponRecord {
+            id: WeaponId(131),
+            ..turret(4)
+        };
+        let mut firer = Ship::at(1, 0.0, 0.0).armed(turret(4)).targeting(B);
+        firer.armament = Armament::new([
+            (WeaponSpec::new(&turret(4)), 3),
+            (WeaponSpec::new(&other), 1),
+        ]);
+        let mut ships = [firer, Ship::at(2, -150.0, 0.0)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let heard = Some(FireSound::at(AI_FIRE_PRIORITY));
+        assert_eq!(
+            sounds(&combat.take_events()),
+            [(WeaponId(130), heard), (WeaponId(131), heard)],
+            "once per weapon, its 3 copies firing as one, as _FireAIShipWeapon sounds once a call"
+        );
     }
 
     // An NPC's pick (`_FireAIShipWeapon`).
@@ -7866,11 +7925,7 @@ mod tests {
                 .into_iter()
                 .filter(|&(weapon, _)| weapon == id)
                 .collect();
-            assert_eq!(
-                heard,
-                [(id, Some(FireSound { priority: Some(3) }))],
-                "{id:?}"
-            );
+            assert_eq!(heard, [(id, Some(FireSound::at(3)))], "{id:?}");
         }
         assert_eq!(PD_FIRE_PRIORITY, 3);
     }
@@ -7955,9 +8010,7 @@ mod tests {
         ship.armament = Armament::new([(WeaponSpec::new(&together), 3)]);
         let mut combat = Combat::default();
         tick(&mut combat, &mut [ship], &NovaDisable);
-        let npc = Some(FireSound {
-            priority: Some(AI_FIRE_PRIORITY),
-        });
+        let npc = Some(FireSound::at(AI_FIRE_PRIORITY));
         assert_eq!(
             sounds(&combat.take_events()),
             [
@@ -7976,12 +8029,7 @@ mod tests {
         tick(&mut combat, &mut [player], &NovaDisable);
         assert_eq!(
             sounds(&combat.take_events()),
-            [(
-                WeaponId(128),
-                Some(FireSound {
-                    priority: Some(PLAYER_FIRE_PRIORITY)
-                })
-            )]
+            [(WeaponId(128), Some(FireSound::at(PLAYER_FIRE_PRIORITY)))]
         );
         assert_eq!(AI_FIRE_PRIORITY, 4);
     }
@@ -10321,12 +10369,7 @@ mod tests {
             tick(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(
                 sounds(&combat.take_events()),
-                [(
-                    id,
-                    Some(FireSound {
-                        priority: Some(PD_FIRE_PRIORITY)
-                    })
-                )],
+                [(id, Some(FireSound::at(PD_FIRE_PRIORITY)))],
                 "{id:?}"
             );
             let mount = ships[0].armament.mounts()[0];
@@ -12193,7 +12236,7 @@ mod tests {
             tick(&mut combat, &mut ships, &NovaDisable);
             sounds(&combat.take_events())
                 .into_iter()
-                .map(|(_, sound)| sound.and_then(|sound| sound.priority))
+                .map(|(_, sound)| sound.map(|sound| sound.priority))
                 .collect()
         };
         let together = WeaponRecord {
@@ -12655,7 +12698,7 @@ mod tests {
             assert_eq!(combat.shots().len(), MAX_SHOTS, "{id:?}: nothing flies");
             let heard = sounds(&combat.take_events());
             assert_eq!(heard.len(), 1, "{id:?}: still heard");
-            assert!(heard[0].1.is_some_and(|sound| sound.priority.is_some()));
+            assert!(heard[0].1.is_some(), "{id:?}: sounded");
             let rounds = &ships[0].rounds;
             let left = rounds.slot(WeaponId(128)) + rounds.slot(WeaponId(138));
             assert_eq!(left, 9, "{id:?}: still spent");
