@@ -4,7 +4,7 @@
 //! location from `common`, the only place `NOVA_DATA` is read, and skips,
 //! passing, when it is unset.
 
-mod common;
+use crate::common;
 
 use nova_data::store::GameData;
 use nova_data::{EXPR_FIELDS, ExprKind, check_expressions};

@@ -4,7 +4,7 @@
 //! location from `common`, the only place `NOVA_DATA` (the `Nova Files`
 //! directory) is read, and skip, passing, when it is unset.
 
-mod common;
+use crate::common;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

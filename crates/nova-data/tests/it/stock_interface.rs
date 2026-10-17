@@ -14,7 +14,7 @@
 //! [`GraphicsError::UnsupportedOpcode`], and the number that decode is
 //! pinned.
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 

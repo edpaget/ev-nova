@@ -6,7 +6,7 @@
 //! ships Charcoal as a loose Apple TrueType file in `Fonts/` beside
 //! `Nova Files`; the Windows Community Edition ships none.
 
-mod common;
+use crate::common;
 
 use nova_data::fonts::{FontError, charcoal_path, open_charcoal};
 

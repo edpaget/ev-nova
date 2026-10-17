@@ -8,7 +8,7 @@
 //! sorted order, and the Windows store must equal the Mac one. Each test
 //! collects every failure before asserting.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -6,7 +6,7 @@
 //! are read straight from each resource's bytes here, independently of the
 //! decoder, and every problem is collected before asserting.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::path::Path;

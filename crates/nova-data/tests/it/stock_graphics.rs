@@ -7,7 +7,7 @@
 //! independently of the decoders. Each test collects every failure before
 //! asserting.
 
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 use std::path::Path;
