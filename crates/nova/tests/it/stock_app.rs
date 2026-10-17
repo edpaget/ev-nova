@@ -127,9 +127,9 @@ fn the_ship_browser_draws_stock_ships() {
     assert!(selected(&app).1.contains(&redraw(&mut app)));
 }
 
-/// Tab opens the galaxy map, whose first frame draws every nebula picture
-/// (each decoded and packed without failing) before every hyperlink and
-/// system, and a click on Sol selects it.
+/// Tab opens the galaxy map, whose first frame draws the borders' cells,
+/// then every nebula picture (each decoded and packed without failing)
+/// before every hyperlink and system, and a click on Sol selects it.
 #[test]
 fn the_galaxy_map_draws_the_stock_galaxy() {
     let Some(dir) = common::nova_data() else {
@@ -157,12 +157,21 @@ fn the_galaxy_map_draws_the_stock_galaxy() {
     send(&mut app, &mut gpu, redraw);
     assert_eq!(app.take_failures(), []);
     let frame = (*gpu.submits().last().expect("a frame")).clone();
-    let Some(Batch::Sprites { quads: nebulae, .. }) = frame.batches.first() else {
-        panic!("the nebulae first: {:?}", frame.batches.first());
+    let cells = app.screen().galaxy_map().border_cells().len();
+    let Some(Batch::Solid(borders)) = frame.batches.first() else {
+        panic!("the borders first: {:?}", frame.batches.first());
+    };
+    assert!(
+        cells > 0 && borders.len() <= cells,
+        "{} of {cells}",
+        borders.len()
+    );
+    let Some(Batch::Sprites { quads: nebulae, .. }) = frame.batches.get(1) else {
+        panic!("then the nebulae: {:?}", frame.batches.get(1));
     };
     assert_eq!(nebulae.len(), 4);
-    let Some(Batch::Solid(shapes)) = frame.batches.get(1) else {
-        panic!("then the map's shapes: {:?}", frame.batches.get(1));
+    let Some(Batch::Solid(shapes)) = frame.batches.get(2) else {
+        panic!("then the map's shapes: {:?}", frame.batches.get(2));
     };
     assert!(shapes.len() >= 930 + 545, "{} solid quads", shapes.len());
 

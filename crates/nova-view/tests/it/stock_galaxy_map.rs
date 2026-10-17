@@ -11,6 +11,8 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record};
 use nova_sim::RuleSource;
+use nova_view::flight::radar::IRect;
+use nova_view::galaxy::borders::draw_cells;
 use nova_view::galaxy::map::{LESS_DARK_GREY, NAME_SIZE};
 use nova_view::galaxy::view::Bounds;
 use nova_view::galaxy::{GalaxyCatalog, GalaxyMap, NEUTRAL, SystemId};
@@ -82,6 +84,21 @@ fn the_stock_map_fits_at_75_percent_with_every_nebula_behind_the_systems() {
     assert_eq!(map.problems(), [] as [String; 0]);
     assert_eq!(map.view().expect("the viewer").zoom(), 2, "75%");
     let list = drawn(&map);
+    // The borders' cells first, one rect each, then the nebulae.
+    let mut cells = DrawList::new();
+    draw_cells(
+        &mut cells,
+        map.border_cells(),
+        (0, 0),
+        IRect::new(0, 0, 1024, 608),
+        map.model().govt_colors(),
+    );
+    let borders = cells.len();
+    assert!(borders > 0);
+    assert_eq!(
+        list.iter().take(borders).collect::<Vec<_>>(),
+        cells.iter().collect::<Vec<_>>()
+    );
     let pictures: Vec<usize> = list
         .iter()
         .enumerate()
@@ -90,9 +107,11 @@ fn the_stock_map_fits_at_75_percent_with_every_nebula_behind_the_systems() {
         .collect();
     let first_shape = list
         .iter()
-        .position(|c| matches!(c, DrawCommand::Line { .. }));
-    assert_eq!(pictures, [0, 1, 2, 3]);
-    assert_eq!(first_shape, Some(4));
+        .skip(borders)
+        .position(|c| matches!(c, DrawCommand::Line { .. }))
+        .map(|at| at + borders);
+    assert_eq!(pictures, (borders..borders + 4).collect::<Vec<_>>());
+    assert_eq!(first_shape, Some(borders + 4));
 }
 
 /// The `PICT` a nebula is drawn from, when `command` is a nebula: a max
