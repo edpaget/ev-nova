@@ -372,6 +372,7 @@ mod tests {
         );
         list.retain(|voice| voice.handle != 2);
         assert_eq!(handles(&list), [1, 3]);
+        assert!(!list.is_empty());
         let cleared = list.clear();
         assert_eq!(
             cleared.iter().map(|voice| voice.handle).collect::<Vec<_>>(),

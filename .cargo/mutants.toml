@@ -16,6 +16,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `open_audio` (nova's `main.rs`) opens the default audio device
+    # through cpal and reads the soundtrack from disk: the program's edge,
+    # which no hermetic test may run. Its decisions are tested on their
+    # own (`music_warning`, `voice_limit`, `game_audio`).
+    "nova/src/main.rs:.*replace open_audio -> ",
     # `fitted` scales a movie box down only when the window is smaller
     # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
     # `<=` gives the same size.
