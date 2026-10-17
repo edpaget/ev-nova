@@ -61,3 +61,40 @@ impl Chance for Scripted {
         NeverFires.below(n)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_script_answers_in_order_then_no_recording_each_percent() {
+        let mut chance = Scripted::answering(&[true, false, true]);
+        let answers = [10, 20, 30, 40].map(|percent| chance.fires(percent));
+        assert_eq!(answers, [true, false, true, false]);
+        assert_eq!(chance.asked, [10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn a_script_rolls_in_order_then_0_recording_each_number_of_sides() {
+        let mut chance = Scripted::rolling(&[3, 5]);
+        let rolls = [6, 8, 10].map(|sides| chance.roll(sides));
+        assert_eq!(rolls, [3, 5, 0]);
+        assert_eq!(chance.sides_asked, [6, 8, 10]);
+    }
+
+    #[test]
+    fn an_answering_script_can_roll_too() {
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[4, 2]);
+        assert!(chance.fires(50));
+        assert_eq!(chance.roll(6), 4);
+        assert_eq!(chance.roll(6), 2);
+        assert!(!chance.fires(50));
+    }
+
+    #[test]
+    fn a_script_draws_the_last_outcome() {
+        let mut chance = Scripted::default();
+        assert_eq!(chance.below(10), 9);
+        assert_eq!(chance.below(1), 0);
+    }
+}

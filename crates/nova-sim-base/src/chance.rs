@@ -150,6 +150,25 @@ mod tests {
         assert_eq!(roll(&mut Drawn, 360), 358);
     }
 
+    /// Draws past every roll's outcomes, as no well-behaved source does.
+    struct Unbounded;
+
+    impl Chance for Unbounded {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            u32::MAX
+        }
+    }
+
+    #[test]
+    fn a_default_roll_past_its_outcomes_is_the_last_outcome() {
+        assert_eq!(roll(Unbounded, 8), 7);
+        assert_eq!(roll(Unbounded, 360), 359);
+    }
+
     fn draw(mut chance: impl Chance, n: u32) -> u32 {
         chance.below(n)
     }
