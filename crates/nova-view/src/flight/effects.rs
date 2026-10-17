@@ -74,11 +74,15 @@
 //!   varied as `speed × (100 + Rand(2v + 1) − v) / 100` for a variation
 //!   `v` of 1-99, and lives `min + Rand(max − min + 1)` ticks, or `min`
 //!   when `min` is at or above `max`; it takes on no source's velocity,
-//!   and is a dot of the burst's `00RRGGBB` colour, opaque. Left out: the
-//!   original's eighth argument, which `_NewParticle` reads, and how the
-//!   original draws a particle. Every burst the fight raises passes 0x20,
-//!   drawn opaque; only a shot's trail (@0x35ea6) passes another, and
-//!   rdm:phase/weapons-fidelity/phase-24-shots-and-beams-drawn owns it.
+//!   and is a dot of the burst's `00RRGGBB` colour.
+//! - Every particle, a burst's, a trail's or debris, is drawn opaque and
+//!   then fades over its last 32 ticks of life, at `life`/32
+//!   ([`particle_alpha`]), as `_DrawParticlesOffscreen` blends it
+//!   (`_Trans16Bit(colour, dst, life)` @0xc5c26-0xc5c95). The
+//!   original's argument after the colour, which `_NewParticle` stores
+//!   (+0x24, @0xc50de), is only ever tested against 0x20 by the drawing
+//!   (@0xc5a61, @0xc5b2b), and both its paths draw the same: it changes
+//!   nothing, so a burst carries none.
 //!
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
@@ -95,6 +99,20 @@ use super::weapons::{LOOPED_SOUND, translucent};
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, ImageKey, Point};
+
+/// The ticks of life over which a particle fades out
+/// (`_DrawParticlesOffscreen` @0xc5c26-0xc5c95).
+pub const PARTICLE_FADE: u32 = 32;
+
+/// The alpha of a particle with `life` ticks left, as
+/// `_DrawParticlesOffscreen` blends it (@0xc5c26-0xc5c95,
+/// `_Trans16Bit(colour, dst, life)` @0xc2c2c): opaque above
+/// [`PARTICLE_FADE`] ticks, then `life`/32, rounded.
+#[must_use]
+pub fn particle_alpha(life: u32) -> u8 {
+    let shown = life.min(PARTICLE_FADE);
+    u8::try_from((shown * 255 + PARTICLE_FADE / 2) / PARTICLE_FADE).unwrap_or(u8::MAX)
+}
 
 /// The most explosions shown at once under the caps (`_SpawnExplod`
 /// @0x3f615-0x3f68e).
@@ -548,7 +566,11 @@ impl Effects {
             }
         }
         for piece in &self.particles {
-            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, piece.color);
+            let color = Color {
+                a: particle_alpha(piece.life),
+                ..piece.color
+            };
+            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, color);
         }
     }
 
@@ -1722,9 +1744,41 @@ mod tests {
             DrawCommand::Dot {
                 center: camera.world_to_screen(at(200.0, 100.0)),
                 size: DEBRIS_SIZE,
-                color: DEBRIS_COLOR,
-            }
+                color: Color {
+                    a: particle_alpha(15),
+                    ..DEBRIS_COLOR
+                },
+            },
+            "15 ticks of life: fading"
         );
+    }
+
+    #[test]
+    fn a_particle_fades_over_its_last_32_ticks() {
+        assert_eq!(particle_alpha(40), 255, "opaque above 32");
+        assert_eq!(particle_alpha(33), 255);
+        assert_eq!(particle_alpha(32), 255, "full at 32");
+        assert_eq!(particle_alpha(16), 128, "half");
+        assert_eq!(particle_alpha(1), 8, "a 32nd");
+        assert_eq!(particle_alpha(0), 0);
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[0, 0, 0]);
+        effects.apply(&burst(1, 0, (40, 40), 0.0), &scene(), &looks(), &mut chance);
+        let alphas = |effects: &Effects| {
+            let mut list = DrawList::new();
+            effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+            list.iter()
+                .filter_map(|command| match *command {
+                    DrawCommand::Dot { color, .. } => Some(color.a),
+                    _ => None,
+                })
+                .collect::<Vec<u8>>()
+        };
+        assert_eq!(alphas(&effects), [255], "40 ticks left");
+        steps(&mut effects, 24);
+        assert_eq!(alphas(&effects), [128], "16 left");
+        steps(&mut effects, 15);
+        assert_eq!(alphas(&effects), [8], "1 left");
     }
 
     /// A burst of `count` at (10, 20), 2 pixels a tick varied by

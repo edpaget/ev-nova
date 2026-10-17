@@ -555,11 +555,12 @@ pub const PD_FIRE_PRIORITY: u8 = 3;
 /// tick count from `life`'s first to its second. None takes on any
 /// source's velocity.
 ///
-/// Left out: the original's argument after the colour (0x1c(%esp)),
-/// passed straight on to `_NewParticle` and not read here. Every burst
-/// the fight raises passes the constant 0x20, which the view draws
-/// opaque; only a shot's trail (@0x35ea6) passes another, and it is
-/// rdm:phase/weapons-fidelity/phase-24-shots-and-beams-drawn's.
+/// It carries no alpha: the original's argument after the colour
+/// (0x1c(%esp)), passed straight on to `_NewParticle` (+0x24, @0xc50de),
+/// is only tested against 0x20 by `_DrawParticlesOffscreen` (@0xc5a61,
+/// @0xc5b2b), whose paths draw the same either way, every particle opaque
+/// and then fading over its last 32 ticks of life. A shot's trail
+/// (@0x35ea6), the only caller passing another, is the view's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParticleBurst {
     /// Where it goes off.
