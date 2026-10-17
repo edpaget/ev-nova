@@ -335,6 +335,14 @@ pub struct Npc {
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
     pub self_repair: bool,
+    /// Whether its ship class is immobile, a `Speed` and `Accel` of 0
+    /// ([`ShipKind::immobile`](crate::traffic::table::ShipKind)): each
+    /// tick `_HandleShip` sets its velocity to none and skips its move
+    /// (@0x34209-0x3423b), so a push lasts only until the next tick and
+    /// it never moves (see the [`autopilot`](crate::traffic::autopilot)).
+    /// No stock class is; the player's ship never is (`_HandlePlayer` has
+    /// no such test).
+    pub immobile: bool,
     /// What it was, while it is a former escort of the player's: disabled
     /// or breaking up as one, it left the fleet with this record (the
     /// original's +0xc8de). It forgets once intact, boarded or taken into

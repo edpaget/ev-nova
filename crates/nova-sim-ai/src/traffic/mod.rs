@@ -1663,6 +1663,7 @@ impl Traffic {
                     Entry::Placed | Entry::JumpingIn => None,
                 },
                 self_repair: kind.self_repair,
+                immobile: kind.immobile,
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
@@ -1787,6 +1788,7 @@ mod tests {
                     self_repair: false,
                     holds: 0,
                     base_armor: 45.0,
+                    immobile: false,
                 },
             )]),
             ..SpawnTable::default()

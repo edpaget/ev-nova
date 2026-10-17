@@ -388,6 +388,7 @@ impl Session {
             led_out: false,
             emerges_from: None,
             self_repair: kind.self_repair,
+            immobile: kind.immobile,
             former: None,
             tractor: None,
             ion: Ion::default(),

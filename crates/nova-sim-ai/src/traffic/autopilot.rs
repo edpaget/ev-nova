@@ -250,7 +250,31 @@ impl TopSpeeds {
 /// [`TopSpeeds::burst_cap`], under the flight rules `flight` (its thrust
 /// [`FlightRules::handling`]'s, which every plan here reads), the wait a
 /// leaderless ship takes after it rolled on `chance`.
+///
+/// An [`immobile`](Npc::immobile) ship's velocity is set to none before
+/// it flies and its move is undone after, as `_HandleShip` zeroes it and
+/// skips the move (@0x34209-0x3423b) before the AI and the thrust run.
 pub fn fly(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    type_widths: &BTreeMap<StellarId, TypeWidth>,
+    other: Option<&ShipState>,
+    speeds: TopSpeeds,
+    flight: FlightRules,
+    chance: &mut (impl Chance + ?Sized),
+) -> Outcome {
+    if !npc.immobile {
+        return fly_mobile(npc, sites, type_widths, other, speeds, flight, chance);
+    }
+    let at = npc.state.position;
+    npc.state.velocity = Vec2::ZERO;
+    let outcome = fly_mobile(npc, sites, type_widths, other, speeds, flight, chance);
+    npc.state.position = at;
+    outcome
+}
+
+/// [`fly`] for a ship that may move.
+fn fly_mobile(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
@@ -2390,6 +2414,37 @@ mod tests {
         fly(&mut ship, &[], None);
         fly(&mut idle, &[], None);
         assert_eq!(ship.state, idle.state, "gone, from afar");
+    }
+
+    #[test]
+    fn an_immobile_ship_given_a_velocity_stays_where_it_is() {
+        let sites = [planet(140, 300.0, 0.0)];
+        let lead = at(500.0, 0.0, 2.0, 0.0, 90.0);
+        for goal in [
+            Goal::Hold,
+            Goal::Idle,
+            Goal::JumpOut,
+            Goal::Land(StellarId(140)),
+            Goal::Follow(NpcId(0)),
+        ] {
+            let mut ship = npc(FAST, goal, at(10.0, 20.0, 3.0, -1.0, 45.0));
+            ship.immobile = true;
+            for _ in 0..30 {
+                assert_eq!(fly(&mut ship, &sites, Some(&lead)), Outcome::Flying);
+                assert_eq!(ship.state.position, Vec2::new(10.0, 20.0), "{goal:?}");
+            }
+            // A shove lasts only until its next tick.
+            ship.state.velocity = Vec2::new(5.0, 5.0);
+            fly(&mut ship, &sites, Some(&lead));
+            assert_eq!(ship.state.position, Vec2::new(10.0, 20.0), "{goal:?}");
+        }
+        let mut drifting = npc(FAST, Goal::Hold, at(10.0, 20.0, 3.0, -1.0, 45.0));
+        fly(&mut drifting, &[], None);
+        assert_eq!(
+            drifting.state.position,
+            Vec2::new(13.0, 19.0),
+            "not immobile"
+        );
     }
 
     #[test]

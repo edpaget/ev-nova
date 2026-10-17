@@ -55,6 +55,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         led_out: false,
         emerges_from: None,
         self_repair: false,
+        immobile: false,
         former: None,
         tractor: None,
         ion: Ion::default(),

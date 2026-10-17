@@ -271,6 +271,11 @@ pub struct ShipKind {
     /// A person's fitted ship keeps its ship type's, unscaled by its
     /// `ShieldMod` (+0x76 → +0x60).
     pub base_armor: f32,
+    /// Whether its class is immobile: a raw `Speed` and `Accel` of 0
+    /// (class +0x40 and +0x3c, which `_LoadObjectData` doesn't floor,
+    /// @0x7a0b3-0x7a0ef), which `_HandleShip` holds still every frame
+    /// (@0x34209-0x3423b; see [`Npc::immobile`](crate::traffic::npc::Npc::immobile)).
+    pub immobile: bool,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -558,6 +563,7 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         self_repair: self_repair::has_gear(&defaults, outfits),
         holds: crate::market::hold_tons(record.fields.holds),
         base_armor: f32::from(record.fields.armor.max(0)),
+        immobile: record.fields.speed == 0 && record.fields.accel == 0,
     }
 }
 
@@ -1265,6 +1271,27 @@ mod tests {
             EscortClass::Medium,
             "by its mass"
         );
+    }
+
+    #[test]
+    fn a_kind_of_a_class_of_no_speed_and_no_accel_is_immobile() {
+        let of = |speed, accel| {
+            let record = ShipRecord {
+                fields: ShipFields {
+                    speed,
+                    accel,
+                    ..FAST
+                },
+                ..ship(204, FAST)
+            };
+            kind(&record, &[], &arsenal()).immobile
+        };
+        assert!(of(0, 0), "both none");
+        assert!(!of(0, 10), "it can thrust");
+        assert!(!of(10, 0), "it has a speed");
+        assert!(!of(-5, 0), "a negative Speed is no 0 (not floored)");
+        assert!(!of(0, -5), "nor a negative Accel");
+        assert!(!of(600, 900));
     }
 
     #[test]
