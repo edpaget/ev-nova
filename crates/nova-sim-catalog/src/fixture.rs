@@ -1,10 +1,13 @@
 //! Test support for the catalog layer's tests and the nova-sim crates'
 //! above, behind the `fixture` feature: builders for the catalog's
 //! records, each a plain record that tests change with struct-update
-//! syntax, and mocks of the [`ControlBits`] port.
+//! syntax; mocks of the [`ControlBits`] port; and [`bits_allowing`], the
+//! control bits that make a test hold, for setting a pilot up directly.
 
+mod bits;
 mod pilot_catalog;
 
+pub use bits::bits_allowing;
 pub use pilot_catalog::{FakePilotCatalog, START, catalog, starting};
 
 use std::collections::BTreeMap;

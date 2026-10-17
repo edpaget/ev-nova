@@ -10,13 +10,11 @@
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites.
 
-mod bits;
 mod walker;
 
-pub use bits::bits_allowing;
-/// The listed stellars a fake catalog gives, from the catalog crate's
-/// test support.
-pub use nova_sim_catalog::fixture::{list_also, listed_stellars};
+/// The control bits that make a test hold, and the listed stellars a fake
+/// catalog gives, from the catalog crate's test support.
+pub use nova_sim_catalog::fixture::{bits_allowing, list_also, listed_stellars};
 pub use walker::{
     Became, Done, Fault, Looked, Step, StoryWalker, WalkFailure, Walked, candidates, expected_bits,
     expected_pay,

@@ -2,6 +2,17 @@
 //! the simulation takes the player's controls and advances the game state
 //! one fixed step at a time.
 //!
+//! This crate is the session layer and the facade over the layered
+//! crates below it, bottom to top: `nova-sim-base`, `nova-sim-catalog`,
+//! `nova-sim-state`, `nova-sim-combat`, `nova-sim-ai`, `nova-sim-story` and
+//! `nova-sim-port`. Each of their modules is re-exported here at its old
+//! path, so a `nova_sim::…` path doesn't depend on which crate holds the
+//! code. The crate's own modules are the session layer's: [`session`],
+//! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
+//! [`pre_jump`], [`rating`], [`red_alert`], [`status_cargo`],
+//! [`target_panel`] and [`top_speed`], with the test support in
+//! `fixture`.
+//!
 //! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
 //!   [`Goal`] from its [`Surroundings`] and answers hits; [`Peaceful`],
 //!   traffic that never fights; and [`NovaAi`], Nova's combat AI, routing

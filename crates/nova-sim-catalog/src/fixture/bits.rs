@@ -70,8 +70,7 @@ fn clashes(bits: &[(Bit, bool)]) -> bool {
 mod tests {
     use super::*;
     use crate::catalog::{OutfitId, SystemId};
-    use crate::control::{ControlBitSet, Gate, PilotFacts};
-    use crate::pilot::Gender;
+    use crate::control::{ControlBitSet, Gate, Gender, PilotFacts};
 
     fn bit(n: u16) -> Bit {
         Bit::new(n).expect("a bit")
