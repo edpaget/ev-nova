@@ -66,6 +66,7 @@ mod escorts;
 mod flying;
 mod hyperspace;
 mod landing;
+mod map_find;
 mod maps;
 mod missions;
 mod nav;
@@ -1658,7 +1659,11 @@ fn port() -> FakeCatalog {
 /// engine's reading (as [`docked_at_earth`]), with `course` plotted
 /// in flight first if given, and the bar opened.
 fn in_the_bar(course: Option<i16>) -> View {
-    let mut catalog = port();
+    in_the_bar_of(port(), course)
+}
+
+/// [`in_the_bar`] over `catalog`, a [`port`] changed.
+fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
     catalog.sites[0].flags |= StellarFlags::BAR;
     let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
     let mut view = FlightView::new(catalog).with_rules(rules);

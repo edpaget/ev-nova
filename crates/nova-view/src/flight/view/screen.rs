@@ -77,7 +77,8 @@ impl<
             return self.refuse_player_info();
         }
         if self.map_open {
-            if press == Some(MAP_KEY) {
+            // M types into Find while it is open.
+            if press == Some(MAP_KEY) && !self.map.finding() {
                 self.close_map();
             } else {
                 self.map_input(input);
@@ -330,8 +331,8 @@ impl<
 
     /// The session's sounds (thrust, landing, taking off and jumping),
     /// then the interface's (the escort menu's, the floating map's zooms,
-    /// the player info refused), then the fight's. The course map has no
-    /// buttons that sound.
+    /// the player info refused, the course map's beeps), then the fight's.
+    /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session

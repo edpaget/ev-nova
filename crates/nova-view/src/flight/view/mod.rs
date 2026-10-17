@@ -254,7 +254,14 @@
 //!   active and explored, rebuilt on the frame after each change to it;
 //!   its panel's course line is the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
-//!   for it.
+//!   for it. Space centres it on the current system and selects it
+//!   ([`UiSound::MapCentred`]), and Done closes it as Return does. F, S
+//!   or its Find button open Find, which takes every input while it is
+//!   open, M and Escape included; the session searches what the
+//!   original's `_DoSystemSearch` does ([`Session::find_map_system`]),
+//!   and the map selects and centres on a system found
+//!   ([`UiSound::MapSystemFound`], or [`UiSound::MapSystemNotFound`]).
+//!   Closing the map drops an open Find.
 //! - The HUD's nav area shows the session's nav mode and its selection
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original

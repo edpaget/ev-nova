@@ -5,7 +5,7 @@
 //! Done is DITL 2000's item 1 and Find its item 10, each placed from the
 //! panels' temporary [`PANEL_ORIGIN`], so both sit in the bottom panel
 //! under the info strip and right of the map's own lines. Their labels
-//! are stock `STR#` 150's [4] "Done" and [59] "Find" (0-based), and both
+//! are stock `STR#` 150's `[4]` "Done" and `[59]` "Find" (0-based), and both
 //! are always enabled (`_DrawMapButtons` @0x2a990-0x2a9d5).
 //!
 //! `_TrackMapButtons` (@0x2aafa) arms the enabled button under a press,
@@ -29,9 +29,9 @@ pub const DONE_ITEM: IRect = IRect::new(483, 483, 582, 508);
 /// DITL 2000 item 10, Find, in dialog coordinates (t 483, l 288, b 508,
 /// r 387).
 pub const FIND_ITEM: IRect = IRect::new(288, 483, 387, 508);
-/// Done's label, stock `STR#` 150 [4].
+/// Done's label, stock `STR#` 150 `[4]`.
 pub const DONE_LABEL: &str = "Done";
-/// Find's label, stock `STR#` 150 [59].
+/// Find's label, stock `STR#` 150 `[59]`.
 pub const FIND_LABEL: &str = "Find";
 
 /// Which button a click activated.

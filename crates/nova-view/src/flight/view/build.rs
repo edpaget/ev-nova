@@ -29,6 +29,8 @@ use crate::flight::hud::{self};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::catalog::SystemCatalog;
 use crate::text::TextMetrics;
+use crate::ui::button::ButtonStyle;
+use crate::ui::dialog::DialogTemplate;
 use crate::{Diagnostic, Key, ScreenAction, SoundPrefs};
 
 use super::{
@@ -318,6 +320,17 @@ impl<
         Self {
             map: self.map.with_metrics(Rc::clone(&metrics)),
             metrics: Some(Metrics(metrics)),
+            ..self
+        }
+    }
+
+    /// The flight with the course map's Find laid out from `template`
+    /// (stock `DLOG` 3005), or its fallback for `None`, and the map's
+    /// buttons labelled in `style` ([`GalaxyMap::with_find`]).
+    #[must_use]
+    pub fn with_find(self, template: Option<DialogTemplate>, style: ButtonStyle) -> Self {
+        Self {
+            map: self.map.with_find(template, style),
             ..self
         }
     }

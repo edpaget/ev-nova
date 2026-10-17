@@ -42,6 +42,13 @@ impl<C> FlightView<C> {
         self.map_open
     }
 
+    /// Whether the course map is shown with its Find dialog open: while it
+    /// is, every input goes to it, M and Escape included.
+    #[must_use]
+    pub fn map_finding(&self) -> bool {
+        self.map_open && self.map.finding()
+    }
+
     /// The course map, shown or not.
     #[must_use]
     pub fn course_map(&self) -> &GalaxyMap {

@@ -225,16 +225,16 @@ impl<
     }
 
     /// The input to the map opened in port ([`FlightView::open_bar_map`]):
-    /// a press of [`MAP_KEY`] closes it ([`FlightView::close_map`]), and
-    /// anything else goes to the map, so flight's own keys and cursor stay
-    /// out of the port.
+    /// a press of [`MAP_KEY`] closes it ([`FlightView::close_map`]), unless
+    /// Find is open, where it types, and anything else goes to the map, so
+    /// flight's own keys and cursor stay out of the port.
     pub fn port_map_input(&mut self, input: &Input) {
         let closing = Input::Key {
             key: MAP_KEY,
             pressed: true,
             repeat: false,
         };
-        if *input == closing {
+        if *input == closing && !self.map.finding() {
             self.close_map();
         } else {
             self.map_input(input);
@@ -253,9 +253,17 @@ impl<
     ///   the map then shows, with the hop it cues as the system selected
     ///   in nav mode 3.
     /// - Tab or `\` cycles the selection ([`FlightView::cycle_map`]).
-    /// - Return closes the map ([`FlightView::close_map`]): with the close
-    ///   beep and the cue in flight, entering or cancelling the hypergate
-    ///   silently, and putting back the bar's nav in port, as M does.
+    /// - Return, or a click on Done, closes the map
+    ///   ([`FlightView::close_map`]): with the close beep and the cue in
+    ///   flight, entering or cancelling the hypergate silently, and putting
+    ///   back the bar's nav in port, as M does.
+    /// - A text Find confirmed is searched as the in-flight map's Find
+    ///   searches ([`Session::find_map_system`]), and the map shows what it
+    ///   found ([`GalaxyMap::show_search`](crate::galaxy::GalaxyMap::show_search)).
+    /// - The map's beeps (Space's and Find's) join the flight's.
+    ///
+    /// While Find is open every input goes to the map, which gives it to
+    /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
     pub(super) fn map_input(&mut self, input: &Input) {
         let selected = self.map.selected();
         self.map_input_taken(input);
@@ -286,12 +294,21 @@ impl<
             repeat: false,
         } = *input
             && self.map_key_held
+            && !self.map.finding()
             && !self.map_filter_takes(key)
         {
             self.close_map();
             return;
         }
         self.map.input(input);
+        self.ui_sounds.extend(self.map.take_ui_sounds());
+        if let Some(query) = self.map.take_find()
+            && let Ok(session) = &self.session
+        {
+            let found = session.find_map_system(&query);
+            self.map.show_search(found);
+            self.ui_sounds.extend(self.map.take_ui_sounds());
+        }
         if let Some(destination) = self.map.take_destination()
             && let Ok(session) = &mut self.session
         {
@@ -1208,6 +1225,7 @@ impl<
     pub fn close_map(&mut self) {
         self.map.cancel_pointer();
         self.map.release_keys();
+        self.map.close_find();
         self.map_open = false;
         self.map_key_held = false;
         let bar_map = std::mem::take(&mut self.bar_map);
