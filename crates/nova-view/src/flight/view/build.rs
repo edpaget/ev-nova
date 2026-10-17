@@ -75,15 +75,14 @@ impl<
     }
 
     /// Begins a new pilot's game as [`Session::begin`] does, on the
-    /// flight's chance, and shows on the course map any system it
-    /// explored: for a pilot just created, before its first save. The
+    /// flight's chance: for a pilot just created, before its first save.
+    /// The
     /// ship, which the beginning puts at (50, 50), is drawn there from the
     /// first frame, not on its way from where the view was read. A
     /// session that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
-            self.map.show_explored(session.pilot().explored());
             self.place_ship();
         }
     }
@@ -131,7 +130,6 @@ impl<
         if let Ok(session) = &session {
             map.show_galaxy(session.galaxy());
             map.show_course(session.system(), &session.course_shown());
-            map.show_explored(session.pilot().explored());
         }
         let looks = match &session {
             Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
@@ -313,10 +311,12 @@ impl<
         }
     }
 
-    /// The flight with the HUD's text measured by `metrics`.
+    /// The flight with the HUD's text, and the course map's panels',
+    /// measured by `metrics`.
     #[must_use]
     pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
         Self {
+            map: self.map.with_metrics(Rc::clone(&metrics)),
             metrics: Some(Metrics(metrics)),
             ..self
         }

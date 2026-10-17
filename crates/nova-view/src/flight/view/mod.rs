@@ -242,11 +242,14 @@
 //!   `_DrawMap` draws of the known and explored systems, coloured by
 //!   `_ColorCodeSystem`, with the mission systems taken as it opens
 //!   ([`Session::map_mission_systems`]), taken again on the frame after
-//!   the galaxy, the explored or known systems, the course or the nav
-//!   change, and after a plot, a Tab or a hypergate map click. A system
-//!   clicked on the map becomes the destination: the session plots the
-//!   course there and the map shows it, and the hop it cues as the
-//!   selected link. The panel says which systems are unexplored. The
+//!   the galaxy, the explored, charted or known systems, the course or
+//!   the nav change, and after a plot, a Tab or a hypergate map click. A
+//!   system clicked on the map becomes the destination: the session plots
+//!   the course there and the map shows it, and the hop it cues as the
+//!   selected link. Its info panels are the session's for the system it
+//!   selects ([`Session::map_panel`], [`GalaxyMap::show_panel`]), taken
+//!   with each drawing and whenever a click, a Tab or a gate pick changes
+//!   the selection, measured by the flight's text metrics. The
 //!   map's nebulae are the session's galaxy's ([`Session::galaxy`]),
 //!   active and explored, rebuilt on the frame after each change to it;
 //!   its panel's course line is the course as it is flown
@@ -855,6 +858,7 @@ impl NavFlash {
 struct MapSeen {
     system: SystemId,
     explored: Vec<SystemId>,
+    charted: Vec<SystemId>,
     known: BTreeSet<SystemId>,
     course: Vec<SystemId>,
     nav: NavMode,
@@ -866,6 +870,7 @@ impl MapSeen {
         Self {
             system: session.system(),
             explored: session.pilot().explored().collect(),
+            charted: session.pilot().charted().collect(),
             known: session.known().clone(),
             course: session.course().to_vec(),
             nav: session.nav_mode(),

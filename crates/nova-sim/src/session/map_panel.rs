@@ -53,7 +53,10 @@ impl Session {
             .map(|(_, commodity)| commodity.name)
             .collect();
         let date = self.med_date_text();
-        let facts = selected.map(|system| self.panel_facts(catalog, system));
+        // An unexplored system's panel reads nothing more of it.
+        let facts = selected
+            .filter(|&system| self.pilot.explored_level(system) > ExploredLevel::Unexplored)
+            .map(|system| self.panel_facts(catalog, system));
         let facts = facts.as_ref();
         let input = PanelInput {
             words: &words,

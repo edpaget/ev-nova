@@ -107,7 +107,18 @@ fn opening_the_map_selects_the_current_system_when_nothing_is_selected_in_mode_3
     let mut view = flight();
     tap(&mut view, MAP);
     assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    assert!(texts(&drawn(&view)).contains(&"Sol (sÿst 130)".to_owned()));
+    // The panel is Sol's: its ports are Earth and the Moon.
+    assert!(
+        matches!(
+            view.course_map().panel().map(|panel| &panel.strip),
+            Some(nova_sim::map_panel::Strip::Info {
+                ports: nova_sim::map_panel::Ports::Listed(names),
+                ..
+            }) if names.len() == 2
+        ),
+        "{:?}",
+        view.course_map().panel()
+    );
     assert_eq!(hyper_selected_links(&view), []);
     tap(&mut view, MAP);
     plot(&mut view, 131);
@@ -139,7 +150,11 @@ fn opening_the_map_selects_and_draws_the_system_hyper_selected() {
         hyper_selected_links(&view),
         [(on_map(&view, 130), on_map(&view, 132))]
     );
-    assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
+    assert_eq!(
+        map.panel().map(|panel| panel.column.body.clone()),
+        Some(nova_sim::map_panel::ColumnBody::Unknown),
+        "the panel is Barnard's, unexplored"
+    );
 }
 
 #[test]

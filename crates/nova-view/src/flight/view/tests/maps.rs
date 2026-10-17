@@ -1486,3 +1486,213 @@ fn the_course_map_draws_the_sessions_known_and_explored_systems() {
         .collect();
     assert_eq!(ids, [130, 131, 132], "explored while the map is open");
 }
+
+// The map panel (`_MapDialogUpdate`): the session's panels, drawn from
+// `PANEL_ORIGIN` (422, 180), so the strip's left is 430 and top 616, and
+// the column's left is 896 and top 188.
+
+/// `STR#` 2002 with the panel's words, every other string empty.
+fn panel_strings() -> (i16, Vec<String>) {
+    let mut list = vec![String::new(); 400];
+    for (n, word) in [
+        (308, "Pick a destination"),
+        (309, "Ports:"),
+        (310, "<Unknown>"),
+        (327, "Goods Traded:"),
+        (328, "Services:"),
+        (329, "Trading"),
+        (330, "Outfitting"),
+        (331, "Shipyard"),
+        (335, "None"),
+        (337, "Current System:"),
+        (338, "Selected System:"),
+        (339, "Destination System:"),
+        (340, "Hypergate Destination:"),
+    ] {
+        list[n - 1] = word.to_owned();
+    }
+    (nova_sim::news::MISC_STRINGS, list)
+}
+
+/// `view` with the panel's words among its string lists.
+fn worded(view: View) -> View {
+    let strings = FakeCatalog {
+        strings: vec![panel_strings()],
+        ..catalog()
+    };
+    view.with_strings(Rc::new(strings))
+}
+
+/// The Geneva 9 text drawn with its baseline at (`x`, `baseline`), if
+/// any: the panels' lines.
+fn panel_text(list: &DrawList, (x, baseline): (f32, f32)) -> Option<String> {
+    list.iter().find_map(|command| match command {
+        DrawCommand::Text {
+            text, origin, size, ..
+        } if *size == 9.0 && *origin == Point::new(x, baseline - 9.0) => Some(text.clone()),
+        _ => None,
+    })
+}
+
+/// Where the column's title, the Ports list, the first goods row and the
+/// first two services rows are drawn.
+const TITLE_AT: (f32, f32) = (906.0, 200.0);
+const PORTS_AT: (f32, f32) = (475.0, 628.0);
+const GOODS_AT: (f32, f32) = (911.0, 356.0);
+const SERVICES_AT: (f32, f32) = (911.0, 451.0);
+const SECOND_SERVICE_AT: (f32, f32) = (911.0, 463.0);
+
+fn title(view: &View) -> Option<String> {
+    panel_text(&drawn(view), TITLE_AT)
+}
+
+#[test]
+fn the_course_maps_panel_lists_a_landable_stellar_and_leaves_out_an_uninhabited_and_an_unlandable_one()
+ {
+    // Phase 15: `_MapDialogUpdate` @0x10373-0x10504.
+    let mut place_names = nova_sim::catalog::PlaceNames::default();
+    for (id, name) in [(128, "Earth"), (129, "Jupiter"), (150, "Rock")] {
+        place_names.stellars.insert(StellarId(id), name.to_owned());
+    }
+    let mut view = worded(FlightView::new(FakeCatalog {
+        sites: vec![
+            site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
+            site(
+                129,
+                (300.0, -200.0),
+                StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ),
+            site(150, (-300.0, 0.0), 0),
+        ],
+        place_names,
+        ..catalog()
+    }));
+    tap(&mut view, MAP);
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    let list = drawn(&view);
+    assert_eq!(panel_text(&list, (440.0, 628.0)).as_deref(), Some("Ports:"));
+    assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("Earth"));
+    let texts = texts(&list);
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text.contains("Jupiter") || text.contains("Rock")),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn the_course_maps_panel_titles_the_current_destination_and_selected_systems_and_follows_a_click() {
+    // Phase 16: `_MapDialogUpdate` @0x10b3f-0x10c76.
+    let mut view = worded(FlightView::new(FakeCatalog { ..catalog() }));
+    tap(&mut view, MAP);
+    assert_eq!(nav_mode(&view), NavMode::Off);
+    assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    assert_eq!(
+        panel_text(&drawn(&view), PORTS_AT).as_deref(),
+        Some(", "),
+        "Sol's two unnamed ports"
+    );
+    // A click plots the course and selects its hop in mode 3.
+    let alpha = on_map(&view, 131);
+    click(&mut view, alpha);
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+    assert_eq!(title(&view).as_deref(), Some("Destination System:"));
+    assert_eq!(
+        panel_text(&drawn(&view), PORTS_AT).as_deref(),
+        Some("<Unknown>"),
+        "the panel follows the click to unexplored Alpha Centauri"
+    );
+    // Off mode 3, any other system is the selected one.
+    tap(&mut view, MAP);
+    tap(&mut view, NAV_OFF_KEY);
+    tap(&mut view, MAP);
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    let barnard = on_map(&view, 132);
+    click(&mut view, barnard);
+    assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+    assert_eq!(nav_mode(&view), NavMode::Off, "no route to Barnard");
+    assert_eq!(title(&view).as_deref(), Some("Selected System:"));
+}
+
+#[test]
+fn the_hypergate_maps_panel_prompts_then_titles_a_destination_its_owner_offers() {
+    // Phase 16: `_MapDialogUpdate` @0x10213-0x102cd and @0x10ba2-0x10c34.
+    // Gate 300 links to 310, listed by Alpha Reborn (133), shadowed at
+    // Alpha Centauri's place, and by Proxima Near (134): its owner is 134,
+    // not its lowest lister, 133.
+    let mut view = worded(FlightView::new(FakeCatalog {
+        reborn: true,
+        near: true,
+        gates: vec![
+            gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
+            gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
+        ],
+        gate_listers: vec![
+            (SystemId(133), StellarId(310)),
+            (SystemId(134), StellarId(310)),
+        ],
+        ..gated()
+    }));
+    land_now(&mut view);
+    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+    assert_eq!(view.course_map().offered(), [SystemId(134)]);
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    // The prompt at 430 + 594 / 2, unmeasured, on the strip's top + 24.
+    let list = drawn(&view);
+    assert_eq!(
+        panel_text(&list, (727.0, 640.0)).as_deref(),
+        Some("Pick a destination")
+    );
+    assert_eq!(panel_text(&list, PORTS_AT), None, "the prompt alone");
+    assert_eq!(title(&view).as_deref(), Some("Current System:"));
+    let near = on_map(&view, 134);
+    click(&mut view, near);
+    assert_eq!(view.course_map().selected(), Some(SystemId(134)));
+    assert_eq!(title(&view).as_deref(), Some("Hypergate Destination:"));
+}
+
+#[test]
+fn the_course_maps_panel_shows_a_level_1_systems_goods_and_services_unknown_and_a_level_2_systems_listed()
+ {
+    // Phase 21: `_MapDialogUpdate` @0x10f34, @0x1107d.
+    let earth = StellarFlags::CAN_LAND | 0x0002 | 0x0004 | 0x1000_0000;
+    let mut view = worded(FlightView::new(FakeCatalog {
+        sites: vec![site(128, (0.0, 0.0), earth)],
+        sol_navs: vec![Some((earth, 0))],
+        commodities: CommodityStrings {
+            names: [
+                "Food",
+                "Industrial",
+                "Medical",
+                "Luxury",
+                "Metal",
+                "Equipment",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            ..CommodityStrings::default()
+        },
+        ..catalog()
+    }));
+    tap(&mut view, MAP);
+    let list = drawn(&view);
+    assert_eq!(panel_text(&list, GOODS_AT).as_deref(), Some("<Unknown>"));
+    assert_eq!(panel_text(&list, SERVICES_AT).as_deref(), Some("<Unknown>"));
+    tap(&mut view, MAP);
+    land_now(&mut view);
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    // Past the take-off's grace, which refuses the map key.
+    ticks(&mut view, 60);
+    tap(&mut view, MAP);
+    assert!(view.map_open());
+    let list = drawn(&view);
+    assert_eq!(panel_text(&list, GOODS_AT).as_deref(), Some("Food"));
+    assert_eq!(panel_text(&list, SERVICES_AT).as_deref(), Some("Trading"));
+    assert_eq!(
+        panel_text(&list, SECOND_SERVICE_AT).as_deref(),
+        Some("Outfitting")
+    );
+}

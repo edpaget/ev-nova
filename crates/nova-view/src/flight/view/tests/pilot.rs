@@ -35,9 +35,10 @@ fn after_a_move_resync_lays_out_the_new_system() {
     assert_eq!(view.course_map().current(), Some(SystemId(131)));
     assert_eq!(view.course_map().route(), []);
     assert!(
-        view.course_map()
-            .explored()
-            .is_some_and(|explored| explored.contains(&SystemId(131)))
+        view.session()
+            .expect("flying")
+            .pilot()
+            .has_explored(SystemId(131))
     );
     assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
     assert_eq!(view.message(), None, "no arrival message");
@@ -195,39 +196,66 @@ fn a_view_that_cannot_fly_has_no_pilot_and_saves_nothing() {
 }
 
 #[test]
-fn the_course_map_shows_the_explored_systems_and_arriving_explores() {
+fn arriving_explores_and_the_course_maps_panel_shows_it() {
     let mut view = flight();
-    let explored = |view: &View| {
-        view.course_map()
-            .explored()
-            .map(|set| set.iter().copied().collect::<Vec<_>>())
+    let explored = |view: &View| -> Vec<SystemId> {
+        view.session().expect("flying").pilot().explored().collect()
     };
-    assert_eq!(explored(&view), Some(vec![SystemId(130)]));
+    assert_eq!(explored(&view), [SystemId(130)]);
     plot(&mut view, 131);
     fly_out(&mut view);
     view.input(&key(JUMP, true));
     arrive_now(&mut view);
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
-    assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
+    assert_eq!(explored(&view), [SystemId(130), SystemId(131)]);
+    tap(&mut view, MAP);
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+    let panel = view.course_map().panel().expect("taken as the map opens");
+    assert_ne!(panel.column.body, nova_sim::map_panel::ColumnBody::Unknown);
 }
 
 #[test]
-fn the_course_map_shows_systems_explored_between_frames() {
+fn the_open_maps_panel_follows_a_system_explored_between_frames() {
     let centred = FakeCatalog {
         sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
         ..catalog()
     };
     let mut view = FlightView::new(centred);
     land_now(&mut view);
+    view.open_bar_map();
+    let at = on_map(&view, 131);
+    view.port_map_input(&Input::PointerButton {
+        button: crate::MouseButton::Left,
+        pressed: true,
+        at,
+    });
+    view.port_map_input(&Input::PointerButton {
+        button: crate::MouseButton::Left,
+        pressed: false,
+        at,
+    });
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+    let body = |view: &View| {
+        view.course_map()
+            .panel()
+            .expect("taken")
+            .column
+            .body
+            .clone()
+    };
+    assert_eq!(body(&view), nova_sim::map_panel::ColumnBody::Unknown);
     assert!(view.transact(|pilot| {
         pilot.explore(SystemId(131));
     }));
-    let shown = |view: &View| view.course_map().explored().cloned();
-    assert_eq!(shown(&view), Some([SystemId(130)].into()), "not yet");
-    view.tick(TICK);
     assert_eq!(
-        shown(&view),
-        Some([SystemId(130), SystemId(131)].into()),
+        body(&view),
+        nova_sim::map_panel::ColumnBody::Unknown,
+        "not yet"
+    );
+    view.tick(TICK);
+    assert_ne!(
+        body(&view),
+        nova_sim::map_panel::ColumnBody::Unknown,
         "the next frame"
     );
 }

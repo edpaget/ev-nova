@@ -421,7 +421,7 @@ impl PilotCatalog for FakeCatalog {
         match system.0 {
             130 => self.sites.clone(),
             131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
-            132 if self.onward => Vec::new(),
+            132 if self.onward || self.fan => Vec::new(),
             133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
             128 if self.home => Vec::new(),
             134 if self.near => Vec::new(),

@@ -1630,7 +1630,7 @@ fn in_flight_the_gauges_stay_live_by_the_engine() {
 }
 
 #[test]
-fn beginning_runs_on_start_once_and_the_map_shows_what_it_explored() {
+fn beginning_runs_on_start_once_and_explores_what_it_sets() {
     let catalog = starting_with("R(b5 b6) ^b7 X131");
     let pilot = Pilot::new(&catalog, "Ada").expect("starts");
     let mut view = FlightView::with_pilot(catalog, pilot).with_chance(rolling_one());
@@ -1638,11 +1638,8 @@ fn beginning_runs_on_start_once_and_the_map_shows_what_it_explored() {
     view.begin();
     assert!(bit_set(&view, 5), "on the flight's chance");
     assert!(bit_set(&view, 7), "once");
-    let explored = view
-        .course_map()
-        .explored()
-        .map(|set| set.iter().copied().collect::<Vec<_>>());
-    assert_eq!(explored, Some(vec![SystemId(130), SystemId(131)]));
+    let explored: Vec<SystemId> = view.session().expect("flying").pilot().explored().collect();
+    assert_eq!(explored, [SystemId(130), SystemId(131)]);
     let broken = FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..starting_with("b5")

@@ -1,5 +1,5 @@
 //! The galaxy map screen: every system, hyperlink and nebula, which pans
-//! and zooms, and an info panel listing the selected system's stellars.
+//! and zooms, and an info panel about the selected system.
 //!
 //! The screen reads the galaxy once, through the [`GalaxyCatalog`] port,
 //! when it is built; drawing and input never read anything. The course
@@ -108,26 +108,40 @@
 //! not squared off; and an oval is [`oval`](crate::oval)'s approximation,
 //! drawn one run a row.
 //!
-//! A map shown the systems the pilot has explored
-//! ([`GalaxyMap::show_explored`], the course map in flight) says
-//! [`UNEXPLORED_TEXT`] in its panel instead of listing an unexplored
-//! system's stellars. A map never shown them, the viewer, shows
-//! everything.
+//! # The panel
+//!
+//! The course and hypergate maps draw the session's info panels
+//! ([`GalaxyMap::show_panel`], `nova_sim`'s
+//! [`map_panel`](nova_sim::map_panel) decides them, the
+//! [`panel`](super::panel) module lays them out), measured by the
+//! flight's text metrics ([`GalaxyMap::with_metrics`]), from
+//! [`PANEL_ORIGIN`](super::panel::PANEL_ORIGIN) until the map is laid out
+//! as DITL 2000. Their own lines (help, zoom, the stack line, problems and
+//! the course line) sit in the bottom panel's left column, and a click in
+//! the right column selects nothing.
+//!
+//! The viewer keeps its own panel, unfiltered: every stellar of the
+//! system selected, landable or not, inhabited or not, with no title, no
+//! explored level and nothing unexplored, and its lines in the right
+//! column.
 
-use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::Vec2;
 use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
 use nova_sim::iff::SystemColorCode;
+use nova_sim::map_panel::MapPanel;
 use nova_sim::story::OverlaidGalaxy;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
+use super::panel::{INFO_COLUMN, INFO_STRIP, PANEL_ORIGIN, draw_panel, placed};
 use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
 use crate::oval::{fill_pixels, oval_fill_pixels, oval_frame_pixels};
+use crate::text::TextMetrics;
 use crate::{
     Color, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
 };
@@ -199,9 +213,6 @@ pub const ZOOMED: f64 = 0.5;
 /// the selection's (1.1, 0xdd1b0).
 pub const NAMED: f64 = 1.1;
 
-/// What the panel says of an unexplored system, in place of its stellars.
-pub const UNEXPLORED_TEXT: &str = "Unexplored";
-
 /// The bottom of the screen, where the info panel ends.
 const SCREEN_HEIGHT: f32 = 768.0;
 /// The info panel's background.
@@ -249,11 +260,16 @@ pub const COURSE_HELP: &str =
 /// The panel's course line, in the right column where the viewer's
 /// "Enter system" button goes.
 const COURSE_TOP: f32 = 712.0;
+/// How wide the in-flight maps' own lines run in the left column, clear
+/// of the info strip.
+const IN_FLIGHT_WRAP: f32 = 400.0;
 
 // The two columns stay on screen and apart.
 const _: () = assert!(LEFT + LEFT_WRAP <= RIGHT);
 const _: () = assert!(RIGHT + RIGHT_WRAP <= MAP_WIDTH);
 const _: () = assert!(TITLE_TOP > MAP_HEIGHT && HELP_TOP > MAP_HEIGHT);
+// The in-flight maps' lines stay left of the info strip.
+const _: () = assert!(LEFT + IN_FLIGHT_WRAP <= PANEL_ORIGIN.x + INFO_STRIP.left as f32);
 
 /// A left-button press that has not been released yet.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -438,9 +454,10 @@ pub struct GalaxyMap {
     current: Option<SystemId>,
     /// The course from it, as last shown.
     route: Vec<SystemId>,
-    /// The systems explored, once shown; `None` shows every system as
-    /// explored.
-    explored: Option<BTreeSet<SystemId>>,
+    /// The info panels an in-flight map draws, once shown.
+    panel: Option<MapPanel>,
+    /// What the panels' text is measured by, if anything.
+    metrics: Option<MapMetrics>,
     /// The systems a hypergate offers, on the hypergate map.
     offered: Vec<SystemId>,
     /// What the map draws: the viewer's from the start, an in-flight
@@ -490,7 +507,8 @@ impl GalaxyMap {
             destination: None,
             current: None,
             route: Vec::new(),
-            explored: None,
+            panel: None,
+            metrics: None,
             offered: Vec::new(),
             picture,
             shift: false,
@@ -631,23 +649,28 @@ impl GalaxyMap {
         self.selected = self.selected.filter(|&id| self.model.system(id).is_some());
     }
 
-    /// Shows `explored` as the systems the pilot has explored, in place of
-    /// any shown before: the panel says any other is unexplored.
-    pub fn show_explored(&mut self, explored: impl IntoIterator<Item = SystemId>) {
-        self.explored = Some(explored.into_iter().collect());
+    /// Shows `panel`, the session's ([`Session::map_panel`]), as the info
+    /// panels an in-flight map draws, in place of any shown before. The
+    /// viewer never draws it.
+    ///
+    /// [`Session::map_panel`]: nova_sim::Session::map_panel
+    pub fn show_panel(&mut self, panel: MapPanel) {
+        self.panel = Some(panel);
     }
 
-    /// The systems shown as explored, once shown.
+    /// The info panels shown, once shown.
     #[must_use]
-    pub fn explored(&self) -> Option<&BTreeSet<SystemId>> {
-        self.explored.as_ref()
+    pub fn panel(&self) -> Option<&MapPanel> {
+        self.panel.as_ref()
     }
 
-    /// Whether the panel shows system `id` as explored.
-    fn is_explored(&self, id: SystemId) -> bool {
-        self.explored
-            .as_ref()
-            .is_none_or(|explored| explored.contains(&id))
+    /// The map with its panels' text measured by `metrics`.
+    #[must_use]
+    pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
+        Self {
+            metrics: Some(MapMetrics(metrics)),
+            ..self
+        }
     }
 
     /// The system the player is in, as last shown.
@@ -732,7 +755,7 @@ impl GalaxyMap {
         let Some(press) = self.press.take() else {
             return;
         };
-        if press.travelled <= CLICK_SLOP && in_map(at) {
+        if press.travelled <= CLICK_SLOP && self.in_map(at) {
             let from = self.selected.filter(|_| self.clicked);
             let clicked = self.model.click(at, &self.view, from);
             if self.mode == MapMode::Hypergate {
@@ -965,29 +988,31 @@ impl GalaxyMap {
             SEPARATOR,
         );
         let selected = self.selected.and_then(|id| self.model.system(id));
-        if self.has_enter_button() {
-            fill_rect(list, ENTER_BUTTON, BUTTON);
-        }
-        match selected {
-            Some(system) => draw_system(&system.entry, self.is_explored(system.entry.id), list),
-            None => {
-                list.text(
-                    "Click a system to see its stellars",
-                    Point::new(LEFT, TITLE_TOP),
-                    STELLAR_SIZE,
-                    Some(LEFT_WRAP),
-                    Color::DIM,
-                );
+        let viewer = self.mode == MapMode::Viewer;
+        if viewer {
+            if self.has_enter_button() {
+                fill_rect(list, ENTER_BUTTON, BUTTON);
+            }
+            match selected {
+                Some(system) => draw_system(&system.entry, list),
+                None => {
+                    list.text(
+                        "Click a system to see its stellars",
+                        Point::new(LEFT, TITLE_TOP),
+                        STELLAR_SIZE,
+                        Some(LEFT_WRAP),
+                        Color::DIM,
+                    );
+                }
             }
         }
+        let (column, wrap) = if viewer {
+            (RIGHT, RIGHT_WRAP)
+        } else {
+            (LEFT, IN_FLIGHT_WRAP)
+        };
         let right = |list: &mut DrawList, text: String, top: f32, color: Color| {
-            list.text(
-                text,
-                Point::new(RIGHT, top),
-                RIGHT_SIZE,
-                Some(RIGHT_WRAP),
-                color,
-            );
+            list.text(text, Point::new(column, top), RIGHT_SIZE, Some(wrap), color);
         };
         let help = match self.mode {
             MapMode::Viewer => HELP,
@@ -1036,6 +1061,10 @@ impl GalaxyMap {
                 Color::WHITE,
             );
         }
+        if !viewer && let Some(panel) = &self.panel {
+            let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+            draw_panel(list, panel, PANEL_ORIGIN, metrics);
+        }
     }
 }
 
@@ -1060,9 +1089,9 @@ impl GalaxyMap {
     }
 }
 
-/// The system's name and ID, then its stellars, or that it is unexplored
-/// when it is not `explored`.
-fn draw_system(system: &SystemEntry, explored: bool, list: &mut DrawList) {
+/// The viewer's panel: the system's name and ID, then every one of its
+/// stellars.
+fn draw_system(system: &SystemEntry, list: &mut DrawList) {
     list.text(
         format!("{} (sÿst {})", system.name, system.id.0),
         Point::new(LEFT, TITLE_TOP),
@@ -1070,9 +1099,7 @@ fn draw_system(system: &SystemEntry, explored: bool, list: &mut DrawList) {
         Some(LEFT_WRAP),
         Color::WHITE,
     );
-    let names: Vec<&str> = if !explored {
-        vec![UNEXPLORED_TEXT]
-    } else if system.stellars.is_empty() {
+    let names: Vec<&str> = if system.stellars.is_empty() {
         vec!["No stellars"]
     } else {
         system.stellars.iter().map(|s| s.name.as_str()).collect()
@@ -1134,9 +1161,27 @@ fn icon(list: &mut DrawList, id: i16, top_left: (i32, i32)) {
     list.sprite(ImageKey::icon(id), center, Color::WHITE);
 }
 
-/// Whether `at` is in the map area rather than the panel.
-fn in_map(at: Point) -> bool {
-    at.y < MAP_HEIGHT
+/// The info column an in-flight map draws over the map's right edge.
+fn info_column() -> Bounds {
+    placed(INFO_COLUMN, PANEL_ORIGIN)
+}
+
+impl GalaxyMap {
+    /// Whether `at` is in the map area rather than a panel: on an
+    /// in-flight map, not in the info column over the map's right edge.
+    fn in_map(&self, at: Point) -> bool {
+        at.y < MAP_HEIGHT && (self.mode == MapMode::Viewer || !info_column().contains(at))
+    }
+}
+
+/// Text metrics, shared.
+#[derive(Clone)]
+struct MapMetrics(Rc<dyn TextMetrics>);
+
+impl std::fmt::Debug for MapMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MapMetrics")
+    }
 }
 
 impl Screen for GalaxyMap {
@@ -1182,7 +1227,7 @@ impl Screen for GalaxyMap {
                 } else {
                     // Replaces any button press whose release was lost.
                     self.armed = false;
-                    if in_map(at) {
+                    if self.in_map(at) {
                         // Replaces any press whose release was lost.
                         self.press = Some(Press {
                             last: at,
@@ -1231,6 +1276,7 @@ mod tests {
     };
     use crate::galaxy::model::{NEUTRAL, placement, star_system};
     use crate::galaxy::view::{MAP_CENTER, SCALES};
+    use crate::text::fixture::MonoMetrics;
     use crate::{DrawCommand, Font, ImageKey, Key, MouseButton};
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
@@ -1824,24 +1870,6 @@ mod tests {
     /// engine's `HyperlinkRule` the ship jumps along it one way only.
 
     #[test]
-    fn an_unexplored_system_shows_its_name_but_not_its_stellars() {
-        let mut map = map();
-        map.show_explored([SystemId(129)]);
-        click_on(&mut map, 128);
-        let list = drawn(&map);
-        let texts = texts(&list);
-        assert!(texts.contains(&"Alpha (sÿst 128)".to_owned()), "{texts:?}");
-        assert_eq!(origin(&list, UNEXPLORED_TEXT), at(LEFT, STELLARS_TOP));
-        assert!(
-            !texts.iter().any(|t| t.starts_with("Alpha Prime")),
-            "{texts:?}"
-        );
-        assert_eq!(UNEXPLORED_TEXT, "Unexplored");
-        click_on(&mut map, 129);
-        assert_eq!(origin(&drawn(&map), "No stellars"), at(LEFT, STELLARS_TOP));
-    }
-
-    #[test]
     fn the_panel_covers_the_bottom_of_the_screen_under_a_separator_then_its_text() {
         let list = drawn(&map());
         assert_eq!(
@@ -2266,11 +2294,12 @@ mod tests {
             DrawCommand::Text {
                 text: COURSE_HELP.to_owned(),
                 font: Font::Geneva,
-                origin: at(RIGHT, HELP_TOP),
+                origin: at(LEFT, HELP_TOP),
                 size: RIGHT_SIZE,
-                wrap_width: Some(RIGHT_WRAP),
+                wrap_width: Some(IN_FLIGHT_WRAP),
                 color: Color::DIM,
-            }
+            },
+            "the in-flight maps' lines sit in the left column"
         );
         assert_eq!(
             COURSE_HELP,
@@ -2316,17 +2345,18 @@ mod tests {
     /// The panel's course line, if any.
     fn course_line(list: &DrawList) -> Option<DrawCommand> {
         list.iter()
-            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == at(RIGHT, COURSE_TOP)))
+            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == at(LEFT, COURSE_TOP)))
             .cloned()
     }
 
+    /// The course map's course line, in the left column.
     fn panel_line(text: &str) -> DrawCommand {
         DrawCommand::Text {
             text: text.to_owned(),
             font: Font::Geneva,
-            origin: at(RIGHT, COURSE_TOP),
+            origin: at(LEFT, COURSE_TOP),
             size: RIGHT_SIZE,
-            wrap_width: Some(RIGHT_WRAP),
+            wrap_width: Some(IN_FLIGHT_WRAP),
             color: Color::WHITE,
         }
     }
@@ -2371,18 +2401,6 @@ mod tests {
 
     // The hyperspace selection.
 
-    /// The panel's title: the selected system's name, or the prompt.
-    fn title(list: &DrawList) -> String {
-        list.iter()
-            .find_map(|c| match c {
-                DrawCommand::Text { text, origin, .. } if *origin == at(LEFT, TITLE_TOP) => {
-                    Some(text.clone())
-                }
-                _ => None,
-            })
-            .expect("a title")
-    }
-
     #[test]
     fn the_preselect_selects_a_system_and_the_panel_shows_it() {
         let mut map = course_map();
@@ -2390,11 +2408,18 @@ mod tests {
         assert_eq!(map.selected(), Some(SystemId(129)));
         let list = drawn(&map);
         assert_eq!(rects(&list, BRIGHT_GREEN).len(), 8, "bracketed");
-        assert_eq!(title(&list), "Beta (sÿst 129)");
+        assert!(
+            !texts(&list).iter().any(|text| text.starts_with("Beta (")),
+            "the session's panel, not the viewer's"
+        );
         assert_eq!(map.take_destination(), None, "no destination");
         map.preselect(None);
         assert_eq!(map.selected(), None);
-        assert_eq!(title(&drawn(&map)), "Click a system to see its stellars");
+        assert!(
+            !texts(&drawn(&map))
+                .iter()
+                .any(|text| text.starts_with("Click a system"))
+        );
         map.preselect(Some(SystemId(999)));
         assert_eq!(map.selected(), None, "not on the map");
     }
@@ -3130,7 +3155,6 @@ mod tests {
     fn the_viewer_draws_every_system_link_and_name_in_the_data() {
         let mut map = map();
         // Nothing the viewer is told filters what it draws.
-        map.show_explored([SystemId(129)]);
         map.show_galaxy(&session_galaxy(|overlay| {
             overlay.set_visible(SystemId(130), Some(false));
         }));
@@ -3171,5 +3195,137 @@ mod tests {
 
     fn ids_of(list: &[i16]) -> Vec<SystemId> {
         list.iter().copied().map(SystemId).collect()
+    }
+
+    // The session's panel.
+
+    use nova_sim::map_panel::{Column, ColumnBody, MapPanel, PanelWords, Ports, Strip};
+
+    /// The stock titles, "<Unknown>" and "Unexplored"'s neighbours.
+    fn panel_words() -> PanelWords {
+        let mut list = vec![String::new(); 340];
+        list[309] = "<Unknown>".to_owned();
+        for (n, title) in [
+            (337, "Current System:"),
+            (338, "Selected System:"),
+            (339, "Destination System:"),
+            (340, "Hypergate Destination:"),
+        ] {
+            list[n - 1] = title.to_owned();
+        }
+        PanelWords::from_list(&list)
+    }
+
+    /// Every text drawn, the names' and the panel's at Geneva 9 among
+    /// them, with its origin.
+    fn every_text(list: &DrawList) -> Vec<(String, Point)> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } => Some((text.clone(), *origin)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where `text` is drawn, among [`every_text`].
+    fn every_origin(list: &DrawList, text: &str) -> Option<Point> {
+        every_text(list)
+            .into_iter()
+            .find_map(|(drawn, origin)| (drawn == text).then_some(origin))
+    }
+
+    /// An unexplored system's panel, titled "Selected System:".
+    fn unexplored_panel() -> MapPanel {
+        let words = panel_words();
+        MapPanel {
+            strip: Strip::Info {
+                ports: Ports::Unknown,
+                hazards: words.unknown.clone(),
+                date: "Jun 23, 1177".to_owned(),
+            },
+            column: Column {
+                title: words.selected.clone(),
+                body: ColumnBody::Unknown,
+            },
+            words,
+        }
+    }
+
+    #[test]
+    fn the_viewer_lists_an_uninhabited_unlandable_stellar_of_an_unexplored_system() {
+        // Beta's only stellar is a gas giant: uninhabited (`Flags` 0x20)
+        // and not landable. The viewer is never shown what is explored,
+        // and draws no session panel even when shown one.
+        let mut galaxy = galaxy();
+        galaxy.systems[1].stellars = vec![StellarEntry {
+            id: StellarId(150),
+            name: "Beta Giant".to_owned(),
+        }];
+        let mut map = GalaxyMap::new(&FakeCatalog::new(galaxy));
+        map.show_panel(unexplored_panel());
+        click_on(&mut map, 129);
+        let texts: Vec<String> = every_text(&drawn(&map))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(texts.contains(&"Beta Giant".to_owned()), "{texts:?}");
+        for hidden in [
+            "<Unknown>",
+            "Unexplored",
+            "Current System:",
+            "Selected System:",
+            "Destination System:",
+            "Hypergate Destination:",
+        ] {
+            assert!(!texts.contains(&hidden.to_owned()), "{hidden}: {texts:?}");
+        }
+    }
+
+    #[test]
+    fn an_in_flight_map_draws_the_panel_shown_from_the_panel_origin() {
+        let mut map = course_map().with_metrics(Rc::new(MonoMetrics));
+        assert!(map.panel().is_none());
+        let list = drawn(&map);
+        assert_eq!(every_origin(&list, "Selected System:"), None, "none yet");
+        map.show_panel(unexplored_panel());
+        assert_eq!(map.panel(), Some(&unexplored_panel()));
+        let list = drawn(&map);
+        // The column's title at (422 + 474 + 10, 180 + 8 + 12), its
+        // baseline; the date measured against the strip's right edge,
+        // 422 + 594 − 54 − 5.
+        assert_eq!(
+            every_origin(&list, "Selected System:"),
+            Some(at(906.0, 191.0))
+        );
+        assert_eq!(every_origin(&list, "Jun 23, 1177"), Some(at(957.0, 643.0)));
+        let course = GalaxyMap::course(&FakeCatalog::new(galaxy()));
+        let mut unmeasured = course;
+        unmeasured.show_panel(unexplored_panel());
+        assert_eq!(
+            every_origin(&drawn(&unmeasured), "Jun 23, 1177"),
+            Some(at(1011.0, 643.0)),
+            "without metrics"
+        );
+    }
+
+    #[test]
+    fn a_click_in_the_info_column_selects_nothing_on_an_in_flight_map() {
+        let column = at(950.0, 300.0);
+        let mut map = course_map();
+        map.preselect(Some(SystemId(129)));
+        click(&mut map, column);
+        assert_eq!(map.selected(), Some(SystemId(129)), "not a map click");
+        assert_eq!(map.take_destination(), None);
+        // Dragging from it doesn't pan either.
+        let before = map.view().transform();
+        map.input(&button(MouseButton::Left, true, column));
+        map.input(&Input::PointerMoved(at(900.0, 250.0)));
+        map.input(&button(MouseButton::Left, false, at(900.0, 250.0)));
+        assert_eq!(map.view().transform(), before);
+        // On the viewer the same click is in the map, on empty space.
+        let mut viewer = self::map();
+        click_on(&mut viewer, 129);
+        click(&mut viewer, column);
+        assert_eq!(viewer.selected(), None);
     }
 }

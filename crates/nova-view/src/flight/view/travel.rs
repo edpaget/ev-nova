@@ -174,7 +174,8 @@ impl<
     /// at a Tab, a click or the course map opened again before the next
     /// rebuild point, shows it, as the original's next `_MapDialogUpdate`
     /// does. What the drawing was taken from is noted after the mark
-    /// ([`MapSeen`]), so the mark itself doesn't take it again.
+    /// ([`MapSeen`]), so the mark itself doesn't take it again. The
+    /// panels are taken with it ([`FlightView::retake_map_panel`]).
     fn redraw_map(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -186,6 +187,20 @@ impl<
             session.mark_known(drawing.gate_arrows.iter().copied());
         }
         self.map_seen = Some(MapSeen::of(session));
+        self.retake_map_panel();
+    }
+
+    /// Takes the session's info panels onto the course map
+    /// ([`Session::map_panel`]) for the system it selects, as
+    /// `_MapDialogUpdate` draws them after `_DrawMap`: on the hypergate
+    /// map with the gate's offers, which title a destination.
+    fn retake_map_panel(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let offered = (self.map.mode() == MapMode::Hypergate).then(|| self.map.offered());
+        let panel = session.map_panel(&self.catalog, self.map.selected(), offered);
+        self.map.show_panel(panel);
     }
 
     /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
@@ -242,6 +257,19 @@ impl<
     ///   beep and the cue in flight, entering or cancelling the hypergate
     ///   silently, and putting back the bar's nav in port, as M does.
     pub(super) fn map_input(&mut self, input: &Input) {
+        let selected = self.map.selected();
+        self.map_input_taken(input);
+        // A click, a Tab cycle or a gate pick that changed the selection
+        // takes the panels again, as the original's next
+        // `_MapDialogUpdate` draws them for its `_selSystem`.
+        if self.map_open && self.map.selected() != selected {
+            self.retake_map_panel();
+        }
+    }
+
+    /// [`FlightView::map_input`]'s input, before the panels follow the
+    /// selection.
+    fn map_input_taken(&mut self, input: &Input) {
         if let Input::Key {
             key: MAP_KEY,
             pressed,
@@ -702,15 +730,6 @@ impl<
             self.map
                 .show_course(session.system(), &session.course_shown());
         }
-        // The explored set changes with no event: a rebuild point's share
-        // by place, `X` and a map grant between system changes.
-        if self
-            .map
-            .explored()
-            .is_none_or(|shown| !shown.iter().copied().eq(session.pilot().explored()))
-        {
-            self.map.show_explored(session.pilot().explored());
-        }
         let system = session.system();
         let reshown = redrawn.rebuilt
             && !redrawn.system
@@ -761,7 +780,7 @@ impl<
 
     /// Lays out `system`, the session's: its scene, read from the catalog
     /// with the stellars the session shows ([`shown_scene`]), the course
-    /// map's course and explored systems, and the ship drawn
+    /// map's course, and the ship drawn
     /// from where it is, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
         let Ok(session) = &self.session else {
@@ -773,7 +792,6 @@ impl<
             scene
         });
         self.map.show_course(system, &session.course_shown());
-        self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
         self.alpha = 0.0;
         self.npc_previous.clear();
