@@ -18,10 +18,15 @@ additional_cargo_args = ["--all-features"]
 exclude_re = [
     # `_AngularDifference`'s first fold (from 360 when the two lie either
     # side of 179, @0x649e-0x64f4) is undone or redone by its second (from
-    # 360 above 180) for every pair of 16-bit values, so flipping or
-    # loosening either comparison gives the same answer; the port keeps
-    # both as the original has them.
-    "trig.rs:[0-9]+:[0-9]+: replace (!=|>) with (==|>=|<) in angular_difference",
+    # 360 above 180) for every pair whose difference fits in 16 bits
+    # (checked exhaustively), so any mutant of its three comparisons
+    # (`!=` at column 18, `a > 179` at 11, `b > 179` at 24) gives the same
+    # answer; the port keeps the fold as the original has it. The second
+    # fold's `> 180` loosened to `>= 180` folds 180 to 180, the same; its
+    # `<` and `==` mutants are not equivalent and stay in.
+    "nova-sim-base/src/trig\\.rs:140:(11|24): replace > with (==|<|>=) in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:140:18: replace != with == in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:143:19: replace > with >= in angular_difference$",
     # `_TableArcTan`'s `180 + c` for a point below and left of the origin
     # (@0x25a64-0x25a6d) is taken round into 0..360 after, so `c - 180`
     # lands on the same heading.
