@@ -649,7 +649,8 @@ impl Npc {
     /// Every modelled caller of `_IsThreatToPlayer` asks this, and so do
     /// the readers of `_ExtendedIsThreatToPlayer` @0x81b70, whose target
     /// test has the same led clause (@0x81c2e-0x81c4a), but for the attack
-    /// quote's gate, which asks the whole of it
+    /// quote's gate and point defence (`_HandleShipPointDefense` @0x395fe),
+    /// which ask the whole of it
     /// ([`Npc::threatens_player_extended`]).
     #[must_use]
     pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
@@ -697,8 +698,10 @@ impl Npc {
     /// the gate, as every reader of the player's sight does.
     ///
     /// This is the predicate for `_AIMakeShipAttackPlayer`'s quote gate
-    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote));
-    /// the hail's and the ranks' readers still ask
+    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote))
+    /// and for point defence (`_HandleShipPointDefense` @0x395fe), which
+    /// `nova_sim::Session`'s fight terms feed with the player's sight of
+    /// the ship; the hail's and the ranks' readers still ask
     /// [`Npc::threatens_player_among`].
     #[must_use]
     pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {

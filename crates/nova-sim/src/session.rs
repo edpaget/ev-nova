@@ -2816,8 +2816,9 @@ impl Session {
     /// order, that the ship does not carry: whether it is held disabled
     /// ([`Session::mission_ship_held`]; the player never is), its class
     /// and top speeds, which every push is capped against, the heading it
-    /// was last drawn at, its own for a ship new to the fight, and how
-    /// strongly it jams.
+    /// was last drawn at, its own for a ship new to the fight, how
+    /// strongly it jams, and whether it threatens the player, as
+    /// `_ExtendedIsThreatToPlayer` asks it, with the player's sight of it.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
         let player = FightTerms {
@@ -2835,7 +2836,8 @@ impl Session {
             .iter()
             .map(|npc| FightTerms {
                 held_disabled: self.mission_ship_held(npc),
-                threatens_player: npc.threatens_player_among(self.traffic.npcs()),
+                threatens_player: npc
+                    .threatens_player_extended(self.traffic.npcs(), self.sees(npc)),
                 class_speed: self.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
@@ -21873,6 +21875,119 @@ pub(super) mod tests {
             !fires(0x0080, Goal::Attack(player)),
             "a player of no 0x0008"
         );
+    }
+
+    /// A session whose NPC 0 defends with weapon 133 against a player of
+    /// `Flags2` 0x0008, has taken `goal` and is then changed by `setup`
+    /// before the fight.
+    fn defending_session(goal: Goal, setup: fn(&mut Session)) -> Session {
+        let mut catalog = arming(blaster(), quad_133(), 0);
+        catalog.hulls[0].flags2 = 0x0088;
+        catalog.outfits.push(outfit(
+            260,
+            &[(crate::cloak::MOD_SCANNER, crate::cloak::SCAN_SCREEN)],
+        ));
+        let mut session = with_an_npc_at(&catalog, 750, 650, 180);
+        session.tick_traffic(&catalog, &Defending { goal }, &mut NeverFires);
+        setup(&mut session);
+        session
+    }
+
+    #[test]
+    fn an_npcs_point_defence_asks_the_whole_extended_threat_to_the_player() {
+        // `_ExtendedIsThreatToPlayer` (@0x81b70-0x81de5), clause by clause.
+        let fires = |goal: Goal, setup: fn(&mut Session)| {
+            let mut session = defending_session(goal, setup);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            quad_fired(&session.take_combat_events(), ShipRef::Npc(NpcId(0)))
+        };
+        let player = ShipRef::Player;
+        // The hit's target (@0x81be1).
+        assert!(
+            fires(Goal::Idle, |s| s.traffic.npcs_mut()[0].target =
+                Some(ShipRef::Player)),
+            "its target is the player"
+        );
+        // The wait (@0x81bed): point defence still fires in a wait, so only
+        // the threat stops it.
+        assert!(
+            !fires(Goal::Idle, |s| {
+                let npc = &mut s.traffic.npcs_mut()[0];
+                npc.target = Some(ShipRef::Player);
+                npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30 };
+            }),
+            "its target is the player, but its wait runs"
+        );
+        // A goal that spares the player (@0x81bf3-0x81c28).
+        assert!(
+            !fires(Goal::Inspect(player), |s| s.traffic.npcs_mut()[0].target =
+                Some(ShipRef::Player)),
+            "its target is the player, but it inspects"
+        );
+        // The escort clause (@0x81cdd-0x81dcc).
+        assert!(
+            fires(Goal::Idle, |s| {
+                s.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(NpcId(9)));
+                let wing = Npc {
+                    leader: Some(NpcId(0)),
+                    goal: Goal::Attack(ShipRef::Player),
+                    target: None,
+                    ..s.traffic.npcs()[0].clone()
+                };
+                s.traffic.add_npc(wing);
+            }),
+            "its escort attacks the player"
+        );
+        assert!(
+            !fires(Goal::Idle, |s| {
+                s.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(NpcId(9)));
+            }),
+            "it targets an NPC, with no escort"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_npc_unseen_by_the_player_is_no_extended_threat_to_it() {
+        // Unseen by the player (@0x81bc6). Point defence can't show it: a
+        // cloaked NPC's point defence holds fire even when the player's
+        // scanner sees it, so read the term.
+        let threat = |setup: fn(&mut Session)| {
+            defending_session(Goal::Attack(ShipRef::Player), setup)
+                .fight_terms()
+                .1[0]
+                .threatens_player
+        };
+        assert!(
+            !threat(|s| s.traffic.npcs_mut()[0].cloak = CLOAKED),
+            "cloaked, unseen"
+        );
+        assert!(
+            threat(|s| {
+                s.traffic.npcs_mut()[0].cloak = CLOAKED;
+                s.pilot.outfits.insert(OutfitId(260), 1);
+            }),
+            "cloaked, seen by the player's scanner"
+        );
+    }
+
+    #[test]
+    fn an_escort_of_the_player_is_no_extended_threat_to_it() {
+        // Led by the player (@0x81b9f). Point defence can't show it:
+        // `FightTerms::fighter` makes the player the escort's leader and
+        // `defence::choose_ship` never picks the guard's leader, so a player
+        // escort holds fire at the player under either reading. Read the term.
+        let threat = |escort: bool| {
+            let mut session = defending_session(Goal::Attack(ShipRef::Player), |_| {});
+            if escort {
+                session.traffic.npcs_mut()[0].escort = Some(EscortDuty {
+                    formation: FormationSlot::default(),
+                    order: None,
+                });
+            }
+            session.fight_terms().1[0].threatens_player
+        };
+        assert!(threat(false), "unled");
+        assert!(!threat(true), "the player's escort");
     }
 
     #[test]
