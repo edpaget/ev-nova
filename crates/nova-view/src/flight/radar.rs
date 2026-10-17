@@ -342,36 +342,15 @@ pub const ARROW_HEAD: f32 = 6.0;
 /// How far each head turns from the shaft, in degrees (`leal ±0x87`).
 pub const ARROW_HEAD_TURN: i16 = 135;
 
-pub use nova_sim::trig::table_arctan;
-
-/// `_BuildTrigTable`'s angle for whole degree `degrees` normalized to
-/// 0..360 as `_TableSin` and `_TableCos` do (@0x25913-0x25926): `(float)i
-/// × 0.01745329`, in doubles, rounded to `f32` (@0x2583b-0x2584c).
-fn table_radians(degrees: i16) -> f64 {
-    let index = f32::from(degrees.rem_euclid(360));
-    f64::from((f64::from(index) * 0.017_453_29) as f32)
-}
-
-/// `_TableSin` (@0x2590a): the `f32` sine of whole degree `degrees`.
-#[must_use]
-pub fn table_sin(degrees: i16) -> f32 {
-    table_radians(degrees).sin() as f32
-}
-
-/// `_TableCos` (@0x2593c): the `f32` cosine of whole degree `degrees`.
-#[must_use]
-pub fn table_cos(degrees: i16) -> f32 {
-    table_radians(degrees).cos() as f32
-}
+pub use nova_sim::trig::{table_arctan, table_cos, table_sin};
 
 /// `_Accel` (@0x2ade6): `point` moved `magnitude` along `angle`, x by
-/// `magnitude · sin` and y by `−magnitude · cos`, in `f32`.
+/// `magnitude · sin` and y by `−magnitude · cos`, in `f32`
+/// ([`nova_sim::trig::accel`]).
 #[must_use]
 pub fn accel(angle: i16, magnitude: f32, point: (f32, f32)) -> (f32, f32) {
-    (
-        magnitude * table_sin(angle) + point.0,
-        point.1 - magnitude * table_cos(angle),
-    )
+    let push = nova_sim::trig::accel(angle, magnitude);
+    (push.x + point.0, point.1 + push.y)
 }
 
 /// A line from one pixel to another, both ends drawn.
@@ -1201,20 +1180,6 @@ mod tests {
     }
 
     // The centre arrow's heading and geometry.
-
-    #[test]
-    fn sine_and_cosine_normalize_whole_degrees() {
-        for (a, b) in [(-45, 315), (405, 45), (360, 0), (-360, 0), (720, 0)] {
-            assert_eq!(table_sin(a), table_sin(b), "{a}");
-            assert_eq!(table_cos(a), table_cos(b), "{a}");
-        }
-        assert_eq!(table_sin(90), 1.0);
-        assert_eq!(table_cos(0), 1.0);
-        assert_eq!(table_sin(0), 0.0);
-        assert!(table_cos(90) > 0.0, "a float's 90 degrees is a hair short");
-        assert!(table_cos(90) < 1e-6);
-        assert!(table_sin(-90) < 0.0);
-    }
 
     #[test]
     fn accel_moves_along_the_angle_with_y_down() {
