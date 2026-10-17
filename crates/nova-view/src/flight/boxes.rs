@@ -15,8 +15,9 @@
 //! - Boxes draw in `_boxLayer`, over the stellars and under the ships and
 //!   the shots.
 //!
-//! Left out: `_HandleSpriteMurkiness` (@0x2e181), as no sprite is drawn
-//! murky here.
+//! Left out: `_HandleSpriteMurkiness` (@0x2e181): the view murks shots
+//! alone so far ([`murk`](super::murk)), and
+//! rdm:task/murk-other-sprites draws the boxes murky.
 
 use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
