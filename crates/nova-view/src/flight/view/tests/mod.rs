@@ -1955,6 +1955,7 @@ fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::W
         guidance,
         speed: 2000,
         ammo_type: -1,
+        graphic: 0,
         inaccuracy: 0,
         impact: 0,
         explod_type,

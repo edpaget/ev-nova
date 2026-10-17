@@ -130,6 +130,11 @@ pub const FIRST_AMMO_WEAPON: i16 = 128;
 pub const LAST_AMMO_TYPE: i16 = 255;
 /// The `AmmoType` from which down a weapon burns fuel.
 pub const FUEL_AMMO: i16 = -1000;
+/// The `wëap` ID of weapon index 0.
+const FIRST_WEAPON: i16 = 128;
+/// The highest weapon index and `Graphic` `_SpawnShot` places a shot of,
+/// both read unsigned (@0x3e56b, @0x3e59a).
+pub const MAX_SHOT_INDEX: u16 = 255;
 /// How many steps of `AmmoType` below [`FUEL_AMMO`] are a unit of fuel a
 /// shot (the Bible: "-1005 = 0.5 units per shot").
 pub const FUEL_AMMO_PER_UNIT: f32 = 10.0;
@@ -251,6 +256,9 @@ pub struct WeaponSpec {
     pub ammo_type: i16,
     /// How far off its heading a shot may leave, in degrees.
     pub inaccuracy: u32,
+    /// Its `Graphic`, raw, which `_SpawnShot` reads unsigned
+    /// ([`WeaponSpec::spawns_shot`]).
+    pub graphic: i16,
     /// The explosion where it hits or detonates, if any.
     pub explosion: Option<Explosion>,
     /// Whether a shot of it that ends its life without detonating fizzles
@@ -530,6 +538,7 @@ impl WeaponSpec {
             ammo,
             ammo_type: record.ammo_type,
             inaccuracy: count(record.inaccuracy),
+            graphic: record.graphic,
             explosion: Explosion::decode(record.explod_type),
             fizzles: record.explod_type > 0,
             prox_radius: ticks(record.prox_radius),
@@ -620,6 +629,21 @@ impl WeaponSpec {
             self.guidance,
             Guidance::FighterBay | Guidance::Other(FIGHTER_BAY)
         )
+    }
+
+    /// Whether `_SpawnShot` places a shot of it at all: not for a weapon
+    /// index (ID − 128) above 255, unsigned (@0x3e56b-0x3e57f), nor a
+    /// `Graphic` above 255, unsigned (@0x3e59a-0x3e5a1), which fail
+    /// quietly before the slot search, whatever the shot table holds.
+    #[must_use]
+    pub fn spawns_shot(&self) -> bool {
+        // The index and the graphic are read as unsigned 16-bit words.
+        #[allow(clippy::cast_sign_loss)]
+        let (index, graphic) = (
+            self.id.0.wrapping_sub(FIRST_WEAPON) as u16,
+            self.graphic as u16,
+        );
+        index <= MAX_SHOT_INDEX && graphic <= MAX_SHOT_INDEX
     }
 
     /// Whether it fires beams: guidance 0, 3 and 10.
@@ -874,6 +898,24 @@ mod tests {
         assert_eq!(spec.inaccuracy, 9);
         assert_eq!((spec.prox_radius, spec.blast_radius), (5.0, 6.0));
         assert_eq!(spec.id, WeaponId(128));
+    }
+
+    #[test]
+    fn a_shot_spawns_only_for_an_index_and_a_graphic_of_255_or_less() {
+        let spawns = |id: i16, graphic: i16| {
+            WeaponSpec::new(&WeaponRecord {
+                graphic,
+                ..weapon(id)
+            })
+            .spawns_shot()
+        };
+        assert!(spawns(128, 0));
+        assert!(spawns(128, 255), "Graphic 255");
+        assert!(!spawns(128, 256), "Graphic 256");
+        assert!(!spawns(128, -1), "Graphic -1 is 65535 unsigned");
+        assert!(spawns(383, 0), "index 255");
+        assert!(!spawns(384, 0), "index 256");
+        assert!(!spawns(127, 0), "index -1 is 65535 unsigned");
     }
 
     #[test]

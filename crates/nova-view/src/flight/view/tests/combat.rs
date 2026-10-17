@@ -806,6 +806,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         guidance: -1,
         speed: 1000,
         ammo_type: -1,
+        graphic: 0,
         inaccuracy: 0,
         impact: 5,
         explod_type: -1,

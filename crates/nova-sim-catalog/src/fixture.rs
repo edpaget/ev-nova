@@ -209,6 +209,7 @@ pub fn weapon(id: i16) -> WeaponRecord {
         guidance: -1,
         speed: 0,
         ammo_type: -1,
+        graphic: 0,
         inaccuracy: 0,
         impact: 0,
         explod_type: -1,

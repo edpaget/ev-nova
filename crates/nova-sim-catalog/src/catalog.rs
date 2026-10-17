@@ -1242,6 +1242,9 @@ pub struct WeaponRecord {
     pub speed: i16,
     /// Its `AmmoType`, encoded.
     pub ammo_type: i16,
+    /// Its `Graphic`: the `spïn` its shots are drawn from, less 3000
+    /// (`_SpawnShot` reads it at +0xa).
+    pub graphic: i16,
     /// Its `Inaccuracy`, in degrees.
     pub inaccuracy: i16,
     /// Its `Impact`.

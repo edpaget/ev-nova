@@ -1136,7 +1136,8 @@ impl Armament {
     /// any: the fight's [`Quarry`](super::defence::Quarry), a missile or a
     /// ship, which goes through the same tail either way (@0x39931). Nothing
     /// fires, and nothing is spent, when `pick` gives none, nor for a shot
-    /// (guidance 9) when the shot table has no `room`: `_SpawnShot` failing
+    /// (guidance 9) when the shot table has no `room` or its weapon places
+    /// no shot ([`WeaponSpec::spawns_shot`]): `_SpawnShot` failing
     /// returns before the reload, the ammunition, the sound and the burst
     /// (@0x396ea-0x396ee). A beam (10) never asks (`_SpawnBeam` @0x3992c
     /// is unchecked), so its tail runs whether or not it spawns. What it
@@ -1172,7 +1173,7 @@ impl Armament {
             .0;
         let mount = &mut self.mounts[index];
         let (pointing, quarry) = pick(&mount.spec)?;
-        if mount.spec.guidance == Guidance::PointDefence && !room {
+        if mount.spec.guidance == Guidance::PointDefence && !(room && mount.spec.spawns_shot()) {
             return None;
         }
         let inaccuracy = if mount.spec.guidance == Guidance::PointDefenceBeam {

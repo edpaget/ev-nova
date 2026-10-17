@@ -1540,7 +1540,8 @@ impl Combat {
     /// ([`Combat::shot_room`], [`Combat::beam_room`]) fails quietly, as
     /// `_SpawnShot` (@0x3e5d0) and `_SpawnBeam` (@0x452e2) return before
     /// they place it or step its exit: its firing is still heard, and
-    /// nothing flies. Whether a shot was put in flight, which an `AmmoType`
+    /// nothing flies. So does a shot of a weapon index or `Graphic` above
+    /// 255, capped or not ([`WeaponSpec::spawns_shot`], @0x3e56b-0x3e5a1). Whether a shot was put in flight, which an `AmmoType`
     /// of [`SELF_DESTRUCT`] reads; never for a beam or a fighter.
     #[allow(clippy::too_many_arguments)]
     fn launch(
@@ -1594,7 +1595,7 @@ impl Combat {
             self.beams.push(beam);
             false
         } else {
-            if !self.shot_room(ship) {
+            if !self.shot_room(ship) || !weapon.spawns_shot() {
                 return false;
             }
             let defended = quarry.and_then(|quarry| match quarry {
@@ -2693,7 +2694,8 @@ impl Combat {
     /// shots ended this tick, the parent among them, still holding theirs
     /// (`_SpawnShotSubmunitions` @0x3f32d-0x3f331): those already placed
     /// fly, and the release is heard all the same, its sound coming before
-    /// its loop.
+    /// its loop. A sub-munition whose weapon places no shot
+    /// ([`WeaponSpec::spawns_shot`]) ends it at the first, so none fly.
     fn release(
         &mut self,
         parent: &Shot,
@@ -2733,7 +2735,9 @@ impl Combat {
             sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         });
         for mut shot in shots {
-            if self.capped && self.shots.len() + self.ended_shots >= MAX_SHOTS {
+            // `_SpawnShot` failing ends the loop (@0x3f32d-0x3f331).
+            if !sub.spawns_shot() || self.capped && self.shots.len() + self.ended_shots >= MAX_SHOTS
+            {
                 break;
             }
             shot.id = self.next_id();
@@ -12807,6 +12811,110 @@ mod tests {
             assert_eq!(mount.burst, u32::from(!capped), "{capped}");
             assert_eq!(mount.reload > 0.0, !capped, "{capped}");
         }
+    }
+
+    #[test]
+    fn a_shot_of_a_graphic_or_index_above_255_fails_quietly_and_still_spends() {
+        let graphic = |graphic| WeaponRecord {
+            graphic,
+            ..launcher()
+        };
+        let index = WeaponRecord {
+            id: WeaponId(384),
+            ..launcher()
+        };
+        for record in [graphic(256), graphic(-1), index] {
+            let id = record.id;
+            for mut shooter in [
+                player_with(record),
+                Ship::at(1, 0.0, 0.0).armed(record).picking(id.0),
+            ] {
+                let ship = shooter.id;
+                shooter.rounds = LauncherRounds::from([(id, 5), (WeaponId(138), 5)]);
+                let mut combat = Combat::default();
+                let mut ships = [shooter];
+                tick(&mut combat, &mut ships, &NovaDisable);
+                assert_eq!(combat.shots(), [], "{ship:?} {record:?}: nothing flies");
+                let heard = sounds(&combat.take_events());
+                assert_eq!(heard.len(), 1, "{ship:?}: still heard");
+                let rounds = &ships[0].rounds;
+                assert_eq!(
+                    rounds.slot(id) + rounds.slot(WeaponId(138)),
+                    9,
+                    "{ship:?}: spent"
+                );
+                assert_eq!(ships[0].armament.mounts()[0].reload, 9.0, "{ship:?}");
+            }
+        }
+        let mut combat = Combat::default();
+        let drawn = WeaponRecord {
+            graphic: 255,
+            ..blaster()
+        };
+        tick(&mut combat, &mut [player_with(drawn)], &NovaDisable);
+        assert_eq!(combat.shots().len(), 1, "Graphic 255 flies");
+        let mut combat = Combat::default();
+        let last = WeaponRecord {
+            id: WeaponId(383),
+            ..blaster()
+        };
+        tick(&mut combat, &mut [player_with(last)], &NovaDisable);
+        assert_eq!(combat.shots().len(), 1, "index 255 flies");
+    }
+
+    #[test]
+    fn a_minus_999_shot_of_a_graphic_above_255_spares_its_firer() {
+        let mut ships = [player_with(self_destructing(WeaponRecord {
+            graphic: 256,
+            ..blaster()
+        }))];
+        tick(&mut Combat::default(), &mut ships, &NovaDisable);
+        assert_eq!(ships[0].reserves.armor.now, 30.0);
+    }
+
+    #[test]
+    fn point_defence_of_a_graphic_above_255_fires_and_spends_nothing() {
+        let launching = WeaponRecord {
+            ammo_type: 10,
+            graphic: 300,
+            ..quad()
+        };
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(launching);
+        ships[0].rounds = LauncherRounds::from([(WeaponId(133), 5)]);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let pd = sounds(&combat.take_events())
+            .into_iter()
+            .filter(|&(weapon, _)| weapon == WeaponId(133))
+            .count();
+        assert_eq!(pd, 0, "not heard");
+        assert_eq!(ships[0].rounds.slot(WeaponId(133)), 5, "not spent");
+        let mount = ships[0].armament.mounts()[0];
+        assert_eq!((mount.burst, mount.reload), (0, 0.0));
+    }
+
+    #[test]
+    fn a_release_whose_sub_munition_has_a_graphic_above_255_is_heard_and_releases_nothing() {
+        let (shell, arsenal) = cluster_of(WeaponRecord {
+            count: 50,
+            speed: 500,
+            graphic: 256,
+            ..weapon(148)
+        });
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        let mut events = Vec::new();
+        for _ in 0..4 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            ships[0].trigger = QUIET;
+            events.extend(combat.take_events());
+        }
+        assert_eq!(sub_shots(&combat), [] as [&Shot; 0], "none released");
+        let heard = sounds(&events)
+            .into_iter()
+            .filter(|&(weapon, _)| weapon == WeaponId(148))
+            .count();
+        assert_eq!(heard, 1, "the release is heard");
     }
 
     #[test]
