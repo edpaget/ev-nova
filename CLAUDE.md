@@ -202,13 +202,18 @@ under `tests/`, or doctests) so `cargo` runs them.
   anyway, so the gate would run twice.
 - Keep `mise` tasks as one-line `cargo` invocations. When a check needs logic,
   write it in Rust.
+- Integration tests live in `tests/it/`, as modules of one test binary per
+  crate. Add a new `tests/it/<name>.rs` and a `mod <name>;` line in
+  `tests/it/main.rs`, never a new `tests/*.rs` file: each of those is another
+  binary to link on every build.
 
 ### Stock-data tests
 
-Tests over the original game's data (`stock_*.rs` under each crate's `tests/`)
-skip, passing, unless `NOVA_DATA` points at a `Nova Files` folder. CI and
-`mise run ci` don't set it, so these tests can break without anyone noticing.
-When a change touches anything those tests cover, run them with the data:
+Tests over the original game's data (the `stock_*` modules under each crate's
+`tests/it/`, in `tests/it/stock_*.rs`) skip, passing, unless `NOVA_DATA`
+points at a `Nova Files` folder. CI and `mise run ci` don't set it, so these
+tests can break without anyone noticing. When a change touches anything those
+tests cover, run them with the data:
 
 ```sh
 NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run --workspace

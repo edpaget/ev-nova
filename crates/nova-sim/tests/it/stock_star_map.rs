@@ -19,7 +19,7 @@ use nova_sim::{
 };
 
 /// The stock links that stay one-way after allowing for replacement
-/// systems: a copy of `ONE_WAY_LINKS` in `crates/nova-data/tests/stock.rs`,
+/// systems: a copy of `ONE_WAY_LINKS` in `crates/nova-data/tests/it/stock.rs`,
 /// which another crate's test binary cannot import.
 const ONE_WAY_LINKS: &[(i16, i16)] = &[(558, 557), (561, 563), (584, 590), (585, 582), (625, 616)];
 

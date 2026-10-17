@@ -7,7 +7,7 @@
 //! the clock and prints. Run it by hand, in a release build:
 //!
 //! ```text
-//! cargo nextest run -p nova-render --release --test frame_cost --run-ignored only --no-capture
+//! cargo nextest run -p nova-render --release --test it --run-ignored only --no-capture frame_cost::
 //! ```
 //!
 //! Like the other offscreen tests it needs a GPU adapter and skips,
