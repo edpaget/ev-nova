@@ -235,7 +235,7 @@ behind, which cause false compile errors and test failures until you run
 ## Mutation testing
 
 After finishing a piece of work, run `cargo-mutants` once over the branch
-(`mise run mutants -- --in-diff <(git diff main)`) to check that the tests
+(`mise run mutants -- --in-diff <(git diff main...HEAD)`) to check that the tests
 catch broken code. Read `.claude/rules/mutants.md` before starting a run: it
 covers flags, running in the background, one session at a time, and what to
 do with missed mutants.
