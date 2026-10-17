@@ -314,3 +314,67 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         assert_eq!((layers[0].1, layers[0].2), (tint, true), "murk {murk}");
     }
 }
+
+/// The lines drawn in the lightning beam's colour.
+fn lightning_lines(view: &View) -> Vec<(Point, Point)> {
+    drawn(view)
+        .iter()
+        .filter_map(|command| match *command {
+            DrawCommand::Line {
+                from, to, color, ..
+            } if (color.r, color.g, color.b) == (0xAB, 0xCD, 0xEF) => Some((from, to)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_lightning_beam_zig_zags_the_same_through_a_step_and_anew_the_next() {
+    let mut catalog = armed(0, &[UNDER]);
+    catalog.weapons[4].beam_length = 400;
+    catalog.looks[4].1 = Ok(WeaponLook {
+        flags2: weapons::BEAM_UNDER_SHIPS,
+        beam_width: 1,
+        beam_color: 0x00AB_CDEF,
+        li_density: 3,
+        li_amplitude: 5,
+        ..WeaponLook::default()
+    });
+    let (_, effects_chance) = scripted(&[1, 2, 3, 4, 5, 6]);
+    let mut view = fighting(catalog, &[]).with_effects_chance(effects_chance);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    let first = lightning_lines(&view);
+    assert_eq!(first.len(), 11, "12 steps of 400 pixels at 3: 11 segments");
+    assert_eq!(lightning_lines(&view), first, "the same step, drawn again");
+    view.tick(TICK);
+    let second = lightning_lines(&view);
+    assert_eq!(second.len(), 11);
+    assert_ne!(second, first, "the next step draws anew");
+}
+
+#[test]
+fn by_the_engine_a_short_lightning_beam_draws_nothing_and_mended_one_line() {
+    let catalog = || {
+        let mut catalog = armed(0, &[UNDER]);
+        catalog.weapons[4].beam_length = 30;
+        catalog.looks[4].1 = Ok(WeaponLook {
+            beam_width: 1,
+            beam_color: 0x00AB_CDEF,
+            li_density: 2,
+            li_amplitude: 4,
+            ..WeaponLook::default()
+        });
+        catalog
+    };
+    let mut view = fighting(catalog(), &[]);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    assert_eq!(lightning_lines(&view), [], "under 50 pixels at 2");
+    let rules = Rulebook::default().with_override(RuleKey::LightningZigZag, RuleSource::Bible);
+    let mut mended = fighting(catalog(), &[]).with_rules(rules);
+    mended.input(&key(FIRE_KEY, true));
+    mended.tick(TICK);
+    assert_eq!(lightning_lines(&mended).len(), 1, "one straight line");
+}

@@ -20,23 +20,23 @@
 //!   `Falloff` as the original loads it (16 for none) plus the ticks it has
 //!   faded, its corona in `CoronaColor` at offsets ±(`BeamWidth` + j),
 //!   from alpha 16/32 down by that falloff/32 a line while above 2/32. A
-//!   lightning beam (`LiDensity`) is drawn as its plain core, a
-//!   placeholder for the original's random zig-zag, fading by its fade
-//!   over 32 ticks.
+//!   lightning beam (`LiDensity`) is drawn as its zig-zag, fading by its
+//!   fade over 32 ticks ([`lightning`](super::lightning)).
 //! - A beam whose weapon sets `Flags2` 0x2000 is drawn under the ships,
 //!   and every other beam over them.
 
 use std::num::NonZeroU16;
 
 use super::catalog::{Looks, WeaponId, WeaponLook};
+use super::lightning::{self, StepRolls};
 use super::murk::murk_tint;
 use super::shot_fade::{ShotShade, shot_shade};
 use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Color, DrawList, ImageKey, Point};
-use nova_sim::RuleSource;
 use nova_sim::combat::projectile::ShotId;
 use nova_sim::sprite_layer::SpriteLayer;
+use nova_sim::{Chance, RuleSource};
 
 /// `Flags`: the shot's frames spin with its age, not its heading.
 pub const SPINS: u16 = 0x0001;
@@ -135,16 +135,22 @@ pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook,
 /// colour, in drawing order: the corona, then the core out to in. The
 /// corona falls off by `Falloff` + `fade` and is drawn when that is above
 /// none (`_DrawBeam` @0xc3e00), so a fading beam grows one. A lightning
-/// beam has no corona, and its placeholder core is drawn at
-/// (32 − `fade`)/32 of its alpha, none below none (`_BeamDrawCallback`
-/// @0x37c75-0x37d62).
+/// beam (`LiDensity` above none) is its zig-zag instead
+/// ([`lightning::zig_zag`]), drawn on the `zig_zag` rolls by its rule's
+/// reading of [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag),
+/// at (32 − `fade`)/32 (`_BeamDrawCallback` @0x37c75-0x37d62).
 #[must_use]
 pub fn beam_strokes(
     start: Point,
     end: Point,
     look: &WeaponLook,
     fade: u32,
+    zig_zag: (RuleSource, &mut dyn Chance),
 ) -> Vec<(Point, Point, Color)> {
+    if look.li_density > 0 {
+        let (rule, rolls) = zig_zag;
+        return lightning::zig_zag(start, end, look, fade, rule, rolls);
+    }
     // A mostly vertical beam widens along x, any other along y.
     let along_x = (end.x - start.x).abs() < (end.y - start.y).abs();
     let line = |offset: i32, color: u32, alpha: i32| {
@@ -158,10 +164,9 @@ pub fn beam_strokes(
     };
     let width = i32::from(look.beam_width.max(1));
     let fade = i32::try_from(fade).unwrap_or(i32::MAX);
-    let lightning = look.li_density > 0;
     let mut strokes = Vec::new();
     let falloff = i32::from(look.falloff).saturating_add(fade);
-    if !lightning && falloff > 0 {
+    if falloff > 0 {
         // From the start down by the falloff a line, while above the end.
         let step = usize::try_from(falloff).unwrap_or(usize::MAX);
         let fading = (CORONA_END + 1..=CORONA_START).rev().step_by(step);
@@ -170,20 +175,14 @@ pub fn beam_strokes(
             strokes.push(line(out, look.corona_color, alpha));
         }
     }
-    let shown = if lightning {
-        ALPHA_STEPS.saturating_sub(fade).max(0)
-    } else {
-        ALPHA_STEPS
-    };
-    let core = |alpha: i32| alpha * shown / ALPHA_STEPS;
     for out in (1..width).rev() {
         let alpha = ALPHA_STEPS - CORE_FALLOFF * out;
         if alpha > 0 {
-            strokes.push(line(-out, look.beam_color, core(alpha)));
-            strokes.push(line(out, look.beam_color, core(alpha)));
+            strokes.push(line(-out, look.beam_color, alpha));
+            strokes.push(line(out, look.beam_color, alpha));
         }
     }
-    strokes.push(line(0, look.beam_color, core(ALPHA_STEPS)));
+    strokes.push(line(0, look.beam_color, ALPHA_STEPS));
     strokes
 }
 
@@ -295,13 +294,27 @@ pub struct BeamShown {
 }
 
 /// Draws those of `beams` drawn `under` the ships (`Flags2` 0x2000), or
-/// the others, as [`beam_strokes`]; a beam whose look was not read is a
-/// plain line in [`Color::ERROR`], over the ships.
-pub fn draw_beams(list: &mut DrawList, beams: &[BeamShown], looks: &Looks, under: bool) {
-    for beam in beams {
+/// the others, as [`beam_strokes`], the `n`-th's zig-zag, if it is
+/// lightning, on the step's rolls for its `n`-th beam
+/// ([`StepRolls::for_beam`]) by `rule`'s reading of
+/// [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag); a
+/// beam whose look was not read is a plain line in [`Color::ERROR`], over
+/// the ships.
+pub fn draw_beams(
+    list: &mut DrawList,
+    beams: &[BeamShown],
+    looks: &Looks,
+    under: bool,
+    (rule, rolls): (RuleSource, StepRolls),
+) {
+    for (n, beam) in beams.iter().enumerate() {
         match looks.weapon(beam.weapon) {
             Some(look) if (look.flags2 & BEAM_UNDER_SHIPS != 0) == under => {
-                for (from, to, color) in beam_strokes(beam.start, beam.end, look, beam.fade) {
+                let mut rolls = rolls.for_beam(n);
+                let zig_zag = (rule, &mut rolls as &mut dyn Chance);
+                for (from, to, color) in
+                    beam_strokes(beam.start, beam.end, look, beam.fade, zig_zag)
+                {
                     list.line(from, to, 1.0, color);
                 }
             }
@@ -328,6 +341,17 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    /// [`beam_strokes`] of a beam that is not lightning.
+    fn plain(start: Point, end: Point, look: &WeaponLook, fade: u32) -> Vec<(Point, Point, Color)> {
+        beam_strokes(
+            start,
+            end,
+            look,
+            fade,
+            (RuleSource::Engine, &mut StepRolls::default()),
+        )
     }
 
     #[test]
@@ -512,14 +536,14 @@ mod tests {
     fn a_beam_one_wide_is_one_opaque_line_in_its_colour() {
         let from = at(10.0, 20.0);
         let to = at(110.0, 30.0);
-        assert_eq!(beam_strokes(from, to, &beam(1, 0), 0), [(from, to, BEAM)]);
-        assert_eq!(beam_strokes(from, to, &beam(0, 0), 0), [(from, to, BEAM)]);
+        assert_eq!(plain(from, to, &beam(1, 0), 0), [(from, to, BEAM)]);
+        assert_eq!(plain(from, to, &beam(0, 0), 0), [(from, to, BEAM)]);
     }
 
     #[test]
     fn a_beam_two_wide_adds_half_alpha_lines_along_its_minor_axis() {
         // Mostly horizontal: offsets go down y.
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 10.0), &beam(2, 0), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 10.0), &beam(2, 0), 0);
         assert_eq!(
             strokes,
             [
@@ -529,7 +553,7 @@ mod tests {
             ]
         );
         // Mostly vertical: offsets go along x.
-        let strokes = beam_strokes(at(0.0, 0.0), at(10.0, -100.0), &beam(2, 0), 0);
+        let strokes = plain(at(0.0, 0.0), at(10.0, -100.0), &beam(2, 0), 0);
         assert_eq!(
             strokes,
             [
@@ -542,7 +566,7 @@ mod tests {
 
     /// Which axis `beam` widens along: x or y.
     fn widens(from: Point, to: Point) -> char {
-        let strokes = beam_strokes(from, to, &beam(2, 0), 0);
+        let strokes = plain(from, to, &beam(2, 0), 0);
         if strokes[0].0.x == from.x { 'y' } else { 'x' }
     }
 
@@ -556,20 +580,20 @@ mod tests {
     #[test]
     fn a_corona_line_at_two_32nds_is_left_out() {
         // 16, 9, then 2: not above 2.
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 7), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 7), 0);
         let alphas: Vec<u8> = strokes.iter().map(|(_, _, color)| color.a).collect();
         assert_eq!(alphas, [127, 127, 71, 71, 255]);
     }
 
     #[test]
     fn a_wide_beams_outer_core_lines_vanish() {
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(4, 0), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(4, 0), 0);
         assert_eq!(strokes.len(), 3, "±2 and ±3 are clear: {strokes:?}");
     }
 
     #[test]
     fn a_falloff_adds_a_corona_fading_by_it_a_line() {
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 8), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 8), 0);
         assert_eq!(
             strokes,
             [
@@ -580,21 +604,21 @@ mod tests {
                 (at(0.0, 0.0), at(100.0, 0.0), BEAM),
             ]
         );
-        let slow = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(2, 4), 0);
+        let slow = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(2, 4), 0);
         let alphas: Vec<u8> = slow.iter().map(|(_, _, color)| color.a).collect();
         // Corona at ±2 to ±5 (16, 12, 8 and 4 32nds: 4 is above 2), then
         // the core.
         assert_eq!(alphas, [127, 127, 95, 95, 63, 63, 31, 31, 127, 127, 255]);
         assert_eq!(slow[0].0, at(0.0, -2.0));
         assert_eq!(slow[6].0, at(0.0, -5.0));
-        let none = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 0), 0);
+        let none = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 0), 0);
         assert_eq!(none.len(), 1, "no falloff, no corona");
     }
 
     #[test]
     fn a_fading_beam_draws_its_corona_at_falloff_plus_its_fade() {
         let alphas = |look: &WeaponLook, fade| -> Vec<u8> {
-            beam_strokes(at(0.0, 0.0), at(100.0, 0.0), look, fade)
+            plain(at(0.0, 0.0), at(100.0, 0.0), look, fade)
                 .iter()
                 .map(|(_, _, color)| color.a)
                 .collect()
@@ -612,23 +636,72 @@ mod tests {
     }
 
     #[test]
-    fn a_fading_lightning_beam_draws_at_32_less_its_fade() {
-        let lightning = |beam_width| WeaponLook {
+    fn a_lightning_beam_is_its_zig_zag_on_the_rolls_given_and_has_no_corona() {
+        let lightning = WeaponLook {
             li_density: 3,
+            li_amplitude: 5,
             falloff: 8,
-            ..beam(beam_width, 8)
+            ..beam(1, 8)
         };
-        let alphas = |look: &WeaponLook, fade| -> Vec<u8> {
-            beam_strokes(at(0.0, 0.0), at(100.0, 0.0), look, fade)
-                .iter()
-                .map(|(_, _, color)| color.a)
-                .collect()
+        let (from, to) = (at(0.0, 0.0), at(300.0, 20.0));
+        let step = StepRolls::new(7);
+        for rule in [RuleSource::Engine, RuleSource::Bible] {
+            let mut rolls = step;
+            let mut again = step;
+            assert_eq!(
+                beam_strokes(from, to, &lightning, 16, (rule, &mut rolls)),
+                lightning::zig_zag(from, to, &lightning, 16, rule, &mut again),
+                "{rule:?}"
+            );
+        }
+        let mut rolls = step;
+        let lines = beam_strokes(from, to, &lightning, 0, (RuleSource::Engine, &mut rolls));
+        assert!(
+            lines.iter().all(|&(.., color)| color == BEAM),
+            "no corona: {lines:?}"
+        );
+        assert_eq!(lines.len(), 8, "9 steps: 8 segments, one line each");
+    }
+
+    #[test]
+    fn each_beams_zig_zag_takes_its_own_rolls_of_the_step() {
+        let lightning = WeaponLook {
+            li_density: 3,
+            li_amplitude: 5,
+            ..beam(1, 0)
         };
-        assert_eq!(alphas(&lightning(1), 0), [255], "no corona");
-        assert_eq!(alphas(&lightning(1), 16), [127]);
-        assert_eq!(alphas(&lightning(2), 16), [63, 63, 127]);
-        assert_eq!(alphas(&lightning(1), 32), [0]);
-        assert_eq!(alphas(&lightning(1), 40), [0], "never below none");
+        let looks = looks(&[(165, lightning.clone())]);
+        let shown = |y| BeamShown {
+            start: at(0.0, y),
+            end: at(300.0, y),
+            weapon: WeaponId(165),
+            fade: 0,
+        };
+        let step = StepRolls::new(11);
+        let mut list = DrawList::new();
+        draw_beams(
+            &mut list,
+            &[shown(0.0), shown(50.0)],
+            &looks,
+            false,
+            (RuleSource::Engine, step),
+        );
+        let mut expected = DrawList::new();
+        for (n, y) in [0.0, 50.0].into_iter().enumerate() {
+            let mut rolls = step.for_beam(n);
+            let beam = shown(y);
+            for (from, to, color) in lightning::zig_zag(
+                beam.start,
+                beam.end,
+                &lightning,
+                0,
+                RuleSource::Engine,
+                &mut rolls,
+            ) {
+                expected.line(from, to, 1.0, color);
+            }
+        }
+        assert_eq!(list, expected);
     }
 
     fn looks(weapons: &[(i16, WeaponLook)]) -> Looks {
@@ -827,7 +900,13 @@ mod tests {
         let beams = [shown(146), shown(147), shown(148)];
         let lines = |under| {
             let mut list = DrawList::new();
-            draw_beams(&mut list, &beams, &looks, under);
+            draw_beams(
+                &mut list,
+                &beams,
+                &looks,
+                under,
+                (RuleSource::Engine, StepRolls::default()),
+            );
             list.iter()
                 .map(|command| match *command {
                     DrawCommand::Line { color, width, .. } => (color, width),

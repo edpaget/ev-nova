@@ -25,6 +25,7 @@
 //!   and the screen fading to white and back.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
+//! - [`lightning`]: a lightning beam's zig-zag.
 //! - [`murk`]: how murky a shot is far from the player's ship in a murky
 //!   system, and the tint that darkens it.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
@@ -59,6 +60,7 @@ pub mod flash;
 pub mod floating;
 pub mod hud;
 pub mod jump;
+pub mod lightning;
 pub mod murk;
 mod pen;
 pub mod radar;

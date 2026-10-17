@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TargetPick,
-    TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, RuleKey, RuleSource, Session, Steps,
+    TargetPick, TrafficCatalog,
 };
 
 use crate::flight::alert;
@@ -276,9 +276,13 @@ impl<
         asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
         boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
         let beams = self.shown_beams(&camera);
-        weapons::draw_beams(list, &beams, &self.looks, true);
+        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::LightningZigZag)
+        });
+        let lightning = (zig_zag, self.shot_looks.lightning());
+        weapons::draw_beams(list, &beams, &self.looks, true, lightning);
         self.draw_sprites(list, &camera);
-        weapons::draw_beams(list, &beams, &self.looks, false);
+        weapons::draw_beams(list, &beams, &self.looks, false, lightning);
         self.effects.draw(list, &camera, &self.looks);
         if let Ok(session) = &self.session {
             let viewer = session.player().position;

@@ -1,7 +1,8 @@
 //! What the flight view keeps of the shots between steps, for drawing
 //! them as the original does: each spinning shot's start
-//! ([`SpinStarts`]), the weapons' trail tables ([`TrailTables`]) and the
-//! puffs of smoke ([`SmokePuffs`]). The simulation keeps none of it: it
+//! ([`SpinStarts`]), the weapons' trail tables ([`TrailTables`]), the
+//! puffs of smoke ([`SmokePuffs`]) and the step's lightning rolls
+//! ([`StepRolls`]). The simulation keeps none of it: it
 //! is the view's, drawn on the effects' chance, never the simulation's.
 
 use nova_sim::{Chance, Session, Vec2};
@@ -9,6 +10,7 @@ use nova_sim::{Chance, Session, Vec2};
 use crate::DrawList;
 use crate::flight::catalog::Looks;
 use crate::flight::effects::Effects;
+use crate::flight::lightning::StepRolls;
 use crate::flight::smoke::{SmokePuffs, smoke_kind};
 use crate::flight::spin::SpinStarts;
 use crate::flight::trails::TrailTables;
@@ -23,6 +25,8 @@ pub(super) struct ShotLooks {
     trails: TrailTables,
     /// The smoke the shots have left.
     smoke: SmokePuffs,
+    /// The rolls the step's lightning zig-zags are drawn on.
+    lightning: StepRolls,
 }
 
 impl ShotLooks {
@@ -59,6 +63,16 @@ impl ShotLooks {
             }
         }
         self.smoke.step();
+        let lightning = |id| looks.weapon(id).is_some_and(|look| look.li_density > 0);
+        if session.beams().iter().any(|beam| lightning(beam.weapon.id)) {
+            self.lightning = StepRolls::draw(chance);
+        }
+    }
+
+    /// The rolls this step's lightning zig-zags are drawn on, the same
+    /// for every frame drawn in the step ([`StepRolls`]).
+    pub(super) fn lightning(&self) -> StepRolls {
+        self.lightning
     }
 
     /// Draws the smoke where `camera` shows it, murked as seen from the
