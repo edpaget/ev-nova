@@ -316,13 +316,25 @@ impl Harness {
         *self.session().player()
     }
 
-    /// Plots a course to system `id` on flight's map: M, a click, M.
+    /// Plots a course to system `id` on flight's map: M, a click, M. The
+    /// map is panned first while the system is under the info column,
+    /// where a click is not a map click.
     fn plot(&mut self, id: i16) {
         self.frame();
         self.press(KeyCode::KeyM);
-        let map = self.flight().course_map();
-        let system = map.model().system(SystemId(id)).expect("on the map");
-        let at = map.view().world_to_screen(system.position());
+        let column = nova_view::galaxy::panel::placed(
+            nova_view::galaxy::panel::INFO_COLUMN,
+            nova_view::galaxy::panel::PANEL_ORIGIN,
+        );
+        let on_map = |game: &Self| {
+            let map = game.flight().course_map();
+            let system = map.model().system(SystemId(id)).expect("on the map");
+            map.view().world_to_screen(system.position())
+        };
+        while column.contains(on_map(self)) {
+            self.press(KeyCode::ArrowRight);
+        }
+        let at = on_map(self);
         self.click(at);
         self.press(KeyCode::KeyM);
         assert!(!self.flight().map_open());
