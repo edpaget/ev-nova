@@ -221,6 +221,7 @@ mod tests {
             "what borders skip on"
         );
         let during = drawn(&map);
+        assert_eq!(nebulae(&during).len(), 1, "the nebula, drawn partially");
         assert!(nebulae(&during).iter().all(|command| is_plain(command)));
         assert_eq!(
             during[..frame],
@@ -229,20 +230,22 @@ mod tests {
         );
         map.input(&left(false, at(EMPTY.x - 40.0, EMPTY.y)));
         assert_eq!(map.update(), Some(MapUpdate::Full), "the scroll moved");
-        assert!(nebulae(&drawn(&map)).iter().all(|command| is_max(command)));
+        let after = drawn(&map);
+        assert_eq!(nebulae(&after).len(), 1, "the nebula, drawn in full");
+        assert!(nebulae(&after).iter().all(|command| is_max(command)));
     }
 
     #[test]
     fn a_drag_ending_where_it_began_keeps_plain_copies_until_an_arrow() {
         let mut map = course_map();
         jiggle(&mut map);
-        assert!(
-            nebulae(&drawn(&map))
-                .iter()
-                .all(|command| is_plain(command))
-        );
+        let kept = drawn(&map);
+        assert_eq!(nebulae(&kept).len(), 1, "the nebula, drawn partially");
+        assert!(nebulae(&kept).iter().all(|command| is_plain(command)));
         map.input(&press(Key::Left));
-        assert!(nebulae(&drawn(&map)).iter().all(|command| is_max(command)));
+        let after = drawn(&map);
+        assert_eq!(nebulae(&after).len(), 1, "the nebula, drawn in full");
+        assert!(nebulae(&after).iter().all(|command| is_max(command)));
     }
 
     /// Something done to a map.
