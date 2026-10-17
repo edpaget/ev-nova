@@ -467,7 +467,7 @@ fn run_out(state: &ShipState, handling: &Handling) -> Controls {
 
 /// Turns from `heading` towards `wanted`, not at all within half a tick's
 /// turn, where turning would only overshoot.
-fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
+pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     let off = shortest_turn(heading, wanted);
     let half_turn = handling.turn_rate / 2.0;
     if off > half_turn {

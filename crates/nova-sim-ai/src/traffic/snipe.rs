@@ -34,9 +34,10 @@
 
 use crate::ai::fire::{self, GUN_FACING};
 use crate::combat::aim::{angle_off, bearing};
-use crate::flight::{Controls, ShipState, Turn, heading_of, shortest_turn};
+use crate::flight::{Controls, ShipState, heading_of, shortest_turn};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+use crate::traffic::autopilot::steer;
 use crate::traffic::npc::Npc;
 
 /// How fast, in pixels a tick on either axis, a sniper is moving (0.35
@@ -105,20 +106,6 @@ pub fn fly(
     }
 }
 
-/// Turns from `heading` towards `wanted`, not at all within half a tick's
-/// turn, as the autopilot steers.
-fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
-    let off = shortest_turn(heading, wanted);
-    let half_turn = handling.turn_rate / 2.0;
-    if off > half_turn {
-        Turn::Right
-    } else if off < -half_turn {
-        Turn::Left
-    } else {
-        Turn::None
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -130,6 +117,7 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::combat::report::Reports;
     use crate::combat::weapon::WeaponSpec;
+    use crate::flight::Turn;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use nova_sim_base::fixture::FAST;
