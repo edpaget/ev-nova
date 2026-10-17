@@ -729,6 +729,9 @@ impl GalaxyCatalog for FakeCatalog {
         if self.near {
             systems.push(entry(134, "Proxima Near", (40, 30), &[130]));
         }
+        if self.home {
+            systems.push(entry(128, "Home", (-300, 200), &[]));
+        }
         Galaxy {
             systems,
             ..Galaxy::default()

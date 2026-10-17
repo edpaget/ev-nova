@@ -132,6 +132,11 @@ impl<
         if let Ok(session) = &session {
             map.show_galaxy(session.galaxy());
             map.show_course(session.system(), &session.course_shown());
+            // Entering the game draws the floating map, and a new or
+            // loaded pilot sets `_mapScroll`, to the current system
+            // (`_EnterGameFromMainScreen` @0x19faa, `_DoNewPilot`
+            // @0x19054, `_LoadPilotData` @0x7537b).
+            map.recentre();
         }
         let looks = match &session {
             Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
@@ -320,6 +325,17 @@ impl<
         Self {
             map: self.map.with_metrics(Rc::clone(&metrics)),
             metrics: Some(Metrics(metrics)),
+            ..self
+        }
+    }
+
+    /// The flight with the course map at `zoom`, the run's: `_mapZoom` is
+    /// never reset, so a new or loaded pilot's map opens at the zoom the
+    /// last flight's was left at ([`GalaxyMap::with_zoom`]).
+    #[must_use]
+    pub fn with_course_map_zoom(self, zoom: f64) -> Self {
+        Self {
+            map: self.map.with_zoom(zoom),
             ..self
         }
     }

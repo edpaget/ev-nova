@@ -1724,3 +1724,177 @@ fn a_click_on_empty_space_takes_the_panel_for_no_selection() {
         Some("<Unknown>")
     );
 }
+
+// Where the in-flight maps look (`_mapZoom`, `_mapScroll`), and what is
+// drawn behind their dialog.
+
+/// The course map's zoom and scroll.
+fn map_place(view: &View) -> (f64, (i32, i32)) {
+    let place = view.course_map().place().expect("an in-flight map");
+    (place.zoom(), place.scroll())
+}
+
+/// Where system `id` is in the galaxy, as the course map's scroll holds
+/// it.
+fn scroll_of(view: &View, id: i16) -> (i32, i32) {
+    let at = view
+        .course_map()
+        .model()
+        .position(SystemId(id))
+        .expect("on the map");
+    (at.x as i32, at.y as i32)
+}
+
+#[test]
+fn a_fresh_flights_map_opens_on_the_current_system_at_0_5625() {
+    let mut pilot = nova_sim::Pilot::new(&catalog(), "Ada").expect("starts");
+    pilot.system = SystemId(131);
+    let mut view = FlightView::with_pilot(catalog(), pilot);
+    tap(&mut view, MAP);
+    assert!(view.map_open());
+    assert_eq!(map_place(&view), (0.5625, (600, 0)));
+    assert_eq!(view.course_map_zoom(), Some(0.5625));
+}
+
+#[test]
+fn the_maps_zoom_and_scroll_are_kept_between_opens() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    tap(&mut view, Key::Char('='));
+    tap(&mut view, Key::Right);
+    view.input(&held(Key::Right));
+    assert_eq!(map_place(&view), (0.421_875, (20, 0)));
+    tap(&mut view, MAP);
+    assert!(!view.map_open());
+    ticks(&mut view, 5);
+    tap(&mut view, MAP);
+    assert_eq!(map_place(&view), (0.421_875, (20, 0)), "where it was left");
+}
+
+#[test]
+fn a_zoom_given_to_the_flight_is_the_maps() {
+    let view = flight().with_course_map_zoom(1.777_776);
+    assert_eq!(view.course_map_zoom(), Some(1.777_776));
+    assert_eq!(map_place(&view).0, 1.777_776);
+}
+
+#[test]
+fn opening_the_map_guards_a_zoom_of_0_or_less() {
+    let mut view = flight().with_course_map_zoom(0.0);
+    tap(&mut view, MAP);
+    assert_eq!(map_place(&view).0, 1.0);
+}
+
+#[test]
+fn a_jumps_arrival_puts_the_scroll_back_on_the_current_system_keeping_the_zoom() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    tap(&mut view, MAP);
+    tap(&mut view, Key::Char('-'));
+    tap(&mut view, MAP);
+    view.map.centre_on_system(SystemId(132));
+    let zoom = map_place(&view).0;
+    fly_out(&mut view);
+    view.input(&key(JUMP, true));
+    arrive_now(&mut view);
+    assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    assert_eq!(map_place(&view), (zoom, scroll_of(&view, 131)));
+}
+
+#[test]
+fn a_hypergates_exit_puts_the_scroll_back_on_the_current_system() {
+    let mut view = FlightView::new(gated());
+    land_now(&mut view);
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    view.map.centre_on_system(SystemId(132));
+    tap(&mut view, MAP);
+    assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    assert_eq!(map_place(&view).1, scroll_of(&view, 131));
+}
+
+#[test]
+fn the_escape_pods_rescue_puts_the_scroll_back_on_the_current_system() {
+    let mut catalog = ejecting_in(100, &[188, 187]);
+    catalog.home = true;
+    let mut view = ejecting_view(catalog, &[]);
+    assert!(until_ejected(&mut view).0);
+    view.map.centre_on_system(SystemId(132));
+    for _ in 0..nova_sim::POD_TICKS {
+        view.tick(TICK);
+        if view.take_rescue_desc().is_some() {
+            break;
+        }
+    }
+    let system = view.session().expect("flying").system();
+    assert_eq!(map_place(&view).1, scroll_of(&view, system.0));
+}
+
+#[test]
+fn a_floating_map_show_puts_the_scroll_back_on_the_current_system() {
+    let mut view = flight();
+    view.map.centre_on_system(SystemId(131));
+    assert_eq!(map_place(&view).1, (600, 0));
+    view.input(&key(HYPERSPACE_MODE_KEY, true));
+    view.tick(TICK);
+    assert_eq!(floating_alpha(&view), Some(255), "the floating map up");
+    assert_eq!(map_place(&view).1, scroll_of(&view, 130));
+}
+
+#[test]
+fn the_bars_map_shows_the_scroll_the_flight_left() {
+    let mut view = in_the_bar(None);
+    view.map.centre_on_system(SystemId(132));
+    view.open_bar_map();
+    assert_eq!(map_place(&view).1, (0, 600));
+}
+
+#[test]
+fn the_hypergate_map_draws_the_dialog_with_clear_route_disabled() {
+    let mut view = FlightView::new(gated());
+    land_now(&mut view);
+    assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+    let list = drawn(&view);
+    let clear_route = list.iter().find_map(|command| match command {
+        DrawCommand::Text { text, color, .. } if text == "Clear Route" => Some(*color),
+        _ => None,
+    });
+    assert_eq!(
+        clear_route,
+        Some(crate::ui::button::ButtonStyle::STOCK.grey)
+    );
+}
+
+/// The index in `list` of the map's background, `PICT` 8509.
+fn background_at(list: &DrawList) -> Option<usize> {
+    list.iter().position(|command| {
+        matches!(command, DrawCommand::StretchedPicture { image, .. }
+            if *image == ImageKey::picture(crate::galaxy::dialog::BACKGROUND))
+    })
+}
+
+#[test]
+fn with_the_map_open_in_flight_the_paused_scene_is_drawn_behind_the_dialog() {
+    let mut view = flight();
+    let shut = drawn(&view);
+    tap(&mut view, MAP);
+    let list = drawn(&view);
+    let background = background_at(&list).expect("the dialog");
+    let sprite = list
+        .iter()
+        .position(|command| matches!(command, DrawCommand::Sprite { .. }))
+        .expect("the scene's sprites");
+    assert!(sprite < background, "{sprite} {background}");
+    // The frame shut, less the cursor, then the dialog.
+    let scene: Vec<&DrawCommand> = list.iter().take(background - 1).collect();
+    let before: Vec<&DrawCommand> = shut.iter().take(scene.len()).collect();
+    assert_eq!(scene, before);
+}
+
+#[test]
+fn in_port_the_map_is_drawn_alone() {
+    let mut view = in_the_bar(None);
+    view.open_bar_map();
+    let list = drawn(&view);
+    assert_eq!(background_at(&list), Some(1), "the dialog's black, then it");
+}

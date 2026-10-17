@@ -732,9 +732,18 @@ fn solids(frame: &Frame, color: nova_view::Color) -> Vec<SolidQuad> {
         .collect()
 }
 
-/// How many solid quads are in `color`.
-fn solids_in(frame: &Frame, color: nova_view::Color) -> usize {
-    solids(frame, color).len()
+/// How many solid quads of `color` `frame` draws inside the course map's
+/// item 3, the paused scene behind its dialog left out.
+fn solids_on_map(frame: &Frame, color: nova_view::Color) -> usize {
+    let area = map_area().grown(0.01);
+    solids(frame, color)
+        .iter()
+        .filter(|quad| {
+            quad.corners
+                .iter()
+                .all(|corner| area.contains(Point::new(corner.x, corner.y)))
+        })
+        .count()
 }
 
 /// The status bar's whole-jumps fuel colour, the fixture `ïntf`'s
@@ -817,7 +826,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert_eq!(harness.session().course(), [SystemId(129), SystemId(130)]);
     let map = harness.frame();
     assert_eq!(
-        solids_in(&map, BRIGHT_GREEN),
+        solids_on_map(&map, BRIGHT_GREEN),
         2 + 8,
         "a line for each jump, and the brackets' eight ticks round Gamma"
     );

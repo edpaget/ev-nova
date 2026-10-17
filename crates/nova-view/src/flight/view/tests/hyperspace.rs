@@ -21,7 +21,13 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     assert!(view.map_open());
     let mut map = DrawList::new();
     view.course_map().draw(&mut map);
-    assert_eq!(drawn(&view), map, "only the map");
+    let list = drawn(&view);
+    let over = list.len() - map.len();
+    assert_eq!(
+        list.iter().skip(over).collect::<Vec<_>>(),
+        map.iter().collect::<Vec<_>>(),
+        "the map over everything"
+    );
     // Holding M, or letting it go, keeps it open.
     view.input(&held(MAP));
     view.input(&key(MAP, false));

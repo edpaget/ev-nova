@@ -244,70 +244,28 @@ impl<
         self.advance_hud();
     }
 
+    /// The scene, its HUD and the cursor, then the fades. With the course
+    /// map open, the map's dialog over the paused scene as it would be
+    /// drawn shut, less the cursor, which the map hides; in port, where
+    /// the bar opens it, the dialog alone, for the app to draw over the
+    /// spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
+            let in_port = self
+                .session
+                .as_ref()
+                .is_ok_and(|session| session.landed().is_some());
+            if !in_port {
+                self.draw_scene(list);
+            }
             self.map.draw(list);
             self.draw_fades(list);
             return;
         }
-        let Some(scene) = &self.scene else {
-            let reason = self.session().err().unwrap_or_default();
-            list.text(
-                format!("Cannot start flight: {reason}"),
-                TITLE,
-                TITLE_SIZE,
-                None,
-                Color::ERROR,
-            );
-            self.draw_help(list);
-            return;
-        };
-        let camera = self.camera();
-        match self.jump.map(|effect| (effect, effect.phase())) {
-            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
-                starfield::draw_streaked(list, &camera, effect.direction(), effect.streak_length());
-            }
-            _ => starfield::draw(list, &camera),
+        if self.draw_scene(list) {
+            self.cursor.draw(list, &self.looks);
+            self.draw_fades(list);
         }
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if let Some(message) = self.message() {
-            hud::draw_message(list, message, metrics);
-        }
-        scene::draw_stellars(list, scene, &camera, self.elapsed);
-        asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
-        boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
-        let beams = self.shown_beams(&camera);
-        weapons::draw_beams(list, &beams, &self.looks, true);
-        self.draw_ships(list, &camera);
-        weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
-        weapons::draw_beams(list, &beams, &self.looks, false);
-        self.effects.draw(list, &camera, &self.looks);
-        self.draw_brackets(list, scene, &camera);
-        self.draw_red_alert(list);
-        if self.session.as_ref().is_ok_and(Session::double_time) {
-            alert::draw_double_time(list);
-        }
-        // `_PostDrawCallback`'s order: the floating map over the sprites
-        // and icons, under the escort menu (@0x38b95-0x38c72).
-        self.draw_floating_map(list);
-        self.escort_menu
-            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
-        if self.overlays.title {
-            list.text(
-                format!("{} (sÿst {})", scene.name(), scene.id().0),
-                TITLE,
-                TITLE_SIZE,
-                None,
-                Color::WHITE,
-            );
-        }
-        self.draw_help(list);
-        match &self.status_bar {
-            Ok(bar) => self.draw_bar(list, bar),
-            Err(reason) => hud::draw_unavailable(list, reason),
-        }
-        self.cursor.draw(list, &self.looks);
-        self.draw_fades(list);
     }
 
     /// Abandons any gesture on the course map, and forgets where the
@@ -361,5 +319,83 @@ impl<
             diagnostics.extend(sim.map(Diagnostic::Sim));
         }
         diagnostics
+    }
+}
+
+impl<
+    C: PilotCatalog
+        + TrafficCatalog
+        + CombatCatalog
+        + AsteroidCatalog
+        + CommCatalog
+        + CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks,
+> FlightView<C>
+{
+    /// Draws the scene and its HUD, the cursor and the fades left out:
+    /// whether there was a scene to draw, or only why flight could not
+    /// start.
+    fn draw_scene(&self, list: &mut DrawList) -> bool {
+        let Some(scene) = &self.scene else {
+            let reason = self.session().err().unwrap_or_default();
+            list.text(
+                format!("Cannot start flight: {reason}"),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::ERROR,
+            );
+            self.draw_help(list);
+            return false;
+        };
+        let camera = self.camera();
+        match self.jump.map(|effect| (effect, effect.phase())) {
+            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
+                starfield::draw_streaked(list, &camera, effect.direction(), effect.streak_length());
+            }
+            _ => starfield::draw(list, &camera),
+        }
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        if let Some(message) = self.message() {
+            hud::draw_message(list, message, metrics);
+        }
+        scene::draw_stellars(list, scene, &camera, self.elapsed);
+        asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
+        boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
+        let beams = self.shown_beams(&camera);
+        weapons::draw_beams(list, &beams, &self.looks, true);
+        self.draw_ships(list, &camera);
+        weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
+        weapons::draw_beams(list, &beams, &self.looks, false);
+        self.effects.draw(list, &camera, &self.looks);
+        self.draw_brackets(list, scene, &camera);
+        self.draw_red_alert(list);
+        if self.session.as_ref().is_ok_and(Session::double_time) {
+            alert::draw_double_time(list);
+        }
+        // `_PostDrawCallback`'s order: the floating map over the sprites
+        // and icons, under the escort menu (@0x38b95-0x38c72).
+        self.draw_floating_map(list);
+        self.escort_menu
+            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
+        if self.overlays.title {
+            list.text(
+                format!("{} (sÿst {})", scene.name(), scene.id().0),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::WHITE,
+            );
+        }
+        self.draw_help(list);
+        match &self.status_bar {
+            Ok(bar) => self.draw_bar(list, bar),
+            Err(reason) => hud::draw_unavailable(list, reason),
+        }
+        true
     }
 }

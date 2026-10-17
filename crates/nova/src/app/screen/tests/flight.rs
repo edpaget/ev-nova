@@ -268,9 +268,7 @@ fn tab_cycles_the_flight_maps_selection_and_f_and_i_do_nothing() {
 fn the_flight_map_is_drawn_without_the_hint() {
     let mut screen = AppScreen::new(data());
     open_flight_map(&mut screen);
-    let mut map = DrawList::new();
-    flight(&screen).course_map().draw(&mut map);
-    assert_eq!(drawn(&screen), map);
+    assert_eq!(drawn(&screen), drawn(flight(&screen)));
 }
 
 #[test]

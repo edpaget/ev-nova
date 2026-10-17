@@ -516,6 +516,10 @@ impl<C> FlightView<C> {
     /// a click and a zoom, each of which shows it again here).
     fn show_floating_map(&mut self) {
         self.floating.show(self.mac_now());
+        // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
+        // system as it draws (@0x11338-0x1136d), so the course map opens
+        // there next.
+        self.map.recentre();
         if let Ok(session) = &self.session {
             self.floating.preselect(session.floating_preselection());
             let missions = session.map_mission_systems();

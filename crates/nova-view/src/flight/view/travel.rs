@@ -158,6 +158,7 @@ impl<
     pub(super) fn open_map(&mut self) {
         self.held.clear();
         self.map_open = true;
+        self.map.opened();
         if let Ok(session) = &self.session {
             self.map.preselect(session.map_preselection());
             self.map_missions = session.map_mission_systems();
@@ -552,8 +553,10 @@ impl<
         }
         if rescued {
             // Laid out in the system the rescue took the pod to, from where
-            // it put the ship, before the frame is drawn.
+            // it put the ship, before the frame is drawn; the course map
+            // looking there too (`_HandlePlayer` @0x68fab).
             self.catch_up();
+            self.map.recentre();
         }
         self.say_messages();
         // The session may have populated its system afresh.
@@ -665,6 +668,11 @@ impl<
     /// replaces the arrival line's suffix too.
     fn arrived(&mut self) {
         self.catch_up();
+        // Every arrival sets `_mapScroll` to the system arrived in: a
+        // jump's (`_HandlePlayer` @0x6c073), a hypergate's
+        // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
+        // (`_PlayerEnterWormhole` @0x64307).
+        self.map.recentre();
         let Ok(session) = &mut self.session else {
             return;
         };

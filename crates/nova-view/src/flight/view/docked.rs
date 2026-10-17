@@ -55,6 +55,13 @@ impl<C> FlightView<C> {
         &self.map
     }
 
+    /// The course map's zoom, which the run keeps for the next flight
+    /// ([`FlightView::with_course_map_zoom`]).
+    #[must_use]
+    pub fn course_map_zoom(&self) -> Option<f64> {
+        self.map.zoom()
+    }
+
     /// The jump's effect, while it plays: the streak and the fade-out
     /// that hold flight, or else the arrival's fade-in (or flash) that
     /// flight goes on under.
