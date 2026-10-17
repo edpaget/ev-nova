@@ -126,7 +126,8 @@ struct Drag {
 
 /// What the in-flight maps keep of the dialog: where they look
 /// ([`MapPlace`]), the buttons' trackers, the borders setting their
-/// Borders button reads, and a drag in progress.
+/// Borders button reads, `showClearRouteButton`, which enables Clear
+/// Route, and a drag in progress.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MapDialog {
     place: MapPlace,

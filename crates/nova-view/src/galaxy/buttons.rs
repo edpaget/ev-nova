@@ -25,7 +25,9 @@
 //! nothing (@0x2acb5-0x2acb9), so nothing it is released over acts. It
 //! plays no sound, so the trackers' button sounds are dropped.
 //! `_MapFilter` maps the six to items 1, 4, 5, 8, 9 and 10
-//! (@0x1457a-0x145e6).
+//! (@0x1457a-0x145e6). What each does is the map's
+//! ([`GalaxyMap`](super::GalaxyMap)): Clear Route, like C, asks the
+//! owner to clear the route (item 8, `_DoSystemMap` @0x12c69-0x12dbf).
 
 use super::panel::placed;
 use super::view::Bounds;
