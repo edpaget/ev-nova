@@ -511,10 +511,10 @@ mod tests {
         session.player.position = Vec2::new(300.0, -40.0);
         session.player.heading = 90.0;
         let police = session.npcs()[1].clone();
-        session.put_player_over(police.id);
+        crate::fixture::put_player_over(&mut session, police.id);
         assert_eq!(session.target().map(|npc| npc.id), Some(police.id));
         assert_eq!(*session.player(), police.state);
-        session.put_player_over(crate::traffic::npc::NpcId(99));
+        crate::fixture::put_player_over(&mut session, crate::traffic::npc::NpcId(99));
         assert_eq!(*session.player(), police.state, "no such ship");
     }
 
