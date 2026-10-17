@@ -52,7 +52,8 @@ pub fn radius(zoom: f64, small: bool, step: i32) -> i32 {
     let base = if small { SMALL_RADIUS } else { RADIUS };
     #[allow(clippy::cast_possible_truncation)] // Grid cells.
     let r = (base / zoom).trunc() as i32;
-    if step > 1 { snap(r, step) } else { r }
+    // At step 1 the snap changes nothing.
+    snap(r, step.max(1))
 }
 
 /// What a cell `d2` (d²) from the source, within the radius squared
@@ -197,10 +198,9 @@ impl InfluenceGrid {
     ) -> bool {
         let step = step.max(1);
         let (mut cx, mut cy) = cell_of(source.pos, frame);
-        if step > 1 {
-            cx = snap(cx, step);
-            cy = snap(cy, step);
-        }
+        // The original snaps only at a step above 1, where it matters.
+        cx = snap(cx, step);
+        cy = snap(cy, step);
         let r = radius(frame.zoom, source.small, step);
         let (w, h) = frame.cells;
         if cx < -r || cx > r + w || cy < -r || cy > r + h {
@@ -605,6 +605,7 @@ mod tests {
             "129 an ally of 128, first: it becomes 128's"
         );
         assert_eq!(merged(cell, 128, 35), cell, "35 below 129's 40");
+        assert_eq!(merged(cell, 128, 40), cell, "equal: 129 keeps it");
     }
 
     #[test]

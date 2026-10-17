@@ -16,6 +16,9 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `run_seed` reads the clock for a different seed each run: no test
+    # can tell one seed from another.
+    "main.rs:.*replace run_seed -> u64 with",
     # `fitted` scales a movie box down only when the window is smaller
     # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
     # `<=` gives the same size.

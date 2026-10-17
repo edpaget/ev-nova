@@ -62,9 +62,9 @@ pub fn draw_cells(
         let top = origin.1 + 2 * cell.y;
         let side = 2 * cell.step;
         let (right, bottom) = (left + side, top + side);
-        if right < area.left || left > area.right || bottom < area.top || top > area.bottom {
-            continue;
-        }
+        // A square wholly outside is skipped (@0xe405-0xe433); clamped, it
+        // would be empty, as one only touching an edge is, so the one test
+        // below covers both.
         let (left, top) = (left.max(area.left), top.max(area.top));
         let (right, bottom) = (right.min(area.right), bottom.min(area.bottom));
         if left >= right || top >= bottom {
@@ -701,6 +701,27 @@ mod on_the_maps {
                 .iter()
                 .all(|cell| cell.govt == GovtId(128))
         );
+        let centre = map
+            .border_cells()
+            .iter()
+            .find(|cell| (cell.x, cell.y) == (114, 105))
+            .map(|cell| cell.value);
+        assert_eq!(
+            centre,
+            Some(255),
+            "Alpha at the scroll: 458 / 4, 420 / 4 in"
+        );
+        // One step out, 0.5625 × 1.333333, unclamped: r 40, so 1600 ×
+        // 0.2 × 0.7499998 = 239.99 at Alpha's own cell, and less, 237 or
+        // 236, at the cells a wrong offset would put it in.
+        map.input(&press(Key::Char('-')));
+        map.tick(TICK);
+        let centre = map
+            .border_cells()
+            .iter()
+            .find(|cell| (cell.x, cell.y) == (114, 105))
+            .map(|cell| cell.value);
+        assert_eq!(centre, Some(239));
     }
 
     #[test]
@@ -1185,6 +1206,11 @@ mod on_the_maps {
     fn the_viewer_counts_every_system_with_a_government() {
         let mut map = viewer();
         assert!(map.borders_shown(), "on by default");
+        assert_eq!(
+            map.border_passes().grid().size(),
+            (512, 304),
+            "2 pixels a cell"
+        );
         assert_eq!(steps(&map), [8], "the coarse pass as it is made");
         map.tick(TICK);
         assert_eq!(steps(&map), [1]);

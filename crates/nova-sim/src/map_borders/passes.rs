@@ -169,9 +169,9 @@ impl BorderPasses {
         for source in &sources.coarse {
             self.grid.add(source, frame, self.step, &sources.govts);
         }
-        if self.step > 1 {
-            self.grid.fill_blocks(self.step);
-        }
+        // The original fills only at a step above 1; at 1 each block is
+        // its own lattice cell, and the fill changes nothing.
+        self.grid.fill_blocks(self.step);
         self.cached = true;
     }
 

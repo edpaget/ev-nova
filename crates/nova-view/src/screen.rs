@@ -212,6 +212,11 @@ mod tests {
     }
 
     #[test]
+    fn a_screen_reports_no_map_borders_save_by_default() {
+        assert_eq!(Counter::default().take_map_borders_save(), None);
+    }
+
+    #[test]
     fn a_screen_is_driven_through_the_trait_object() {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
