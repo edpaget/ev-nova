@@ -35,7 +35,7 @@
 //! finish. `slow_down` false skips the brake, as a fast jump does.
 
 use crate::flight::{
-    Controls, FlightRules, ShipState, heading_of, shortest_turn, step, turn_toward,
+    Controls, FlightRules, Flyer, ShipState, heading_of, shortest_turn, step, turn_toward,
 };
 use crate::geometry::Vec2;
 use crate::handling::Handling;
@@ -108,14 +108,14 @@ pub fn fly(
                 reverse: true,
                 ..Controls::default()
             };
-            step(ship, handling, controls, flight);
+            step(ship, handling, controls, flight, Flyer::Player);
             thrust
         }
         PreJump::Turn => {
             if let Some(bearing) = bearing {
                 ship.heading = turn_toward(ship.heading, bearing, handling.turn_rate);
             }
-            step(ship, handling, Controls::default(), flight);
+            step(ship, handling, Controls::default(), flight, Flyer::Player);
             false
         }
         PreJump::Ready => false,

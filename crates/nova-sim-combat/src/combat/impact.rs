@@ -22,7 +22,10 @@
 //!   [`launch_velocity`]) against its class's top speed (class +0x40), and
 //!   `_SpeedLimit` ([`speed_limit`], @0x2af91) clamps each axis to its top
 //!   speed (`_ShipMaxSpeed`, @0x3ab6a-0x3ab7f). A negative `Impact` pulls
-//!   it toward the point.
+//!   it toward the point. Under the other reading of
+//!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap) the clamp is the
+//!   circle of the top speed instead ([`SpeedCap::Circle`]), for this push
+//!   and the tractor's self-pull alike.
 //!
 //! The player's top speed is 1.8 times its own there while its
 //! afterburner is on and no gravity source is present (@0x3ab19-0x3ab68);
@@ -73,6 +76,7 @@
 use super::ShipRef;
 use crate::bay::launch_velocity;
 use crate::geometry::Vec2;
+use crate::speed_cap::SpeedCap;
 pub use crate::speed_cap::speed_limit;
 use crate::trig::intercept_angle;
 
@@ -152,24 +156,32 @@ pub enum Tractor {
 }
 
 /// The velocity `impact` from `from` leaves `body` with, as `_DamageShip`'s
-/// impact block gives it (see the module docs); none when it is not
-/// pushed. `source` is the centre of the ship whose direct hit it is,
-/// which a negative `impact` is gated by; none for any other hit, or when
-/// that ship is no longer in the fight.
+/// impact block gives it (see the module docs), clamped to its top speed
+/// as `cap` reads ([`SpeedCap::clamp`]); none when it is not pushed.
+/// `source` is the centre of the ship whose direct hit it is, which a
+/// negative `impact` is gated by; none for any other hit, or when that
+/// ship is no longer in the fight.
 #[must_use]
-pub fn push(body: &Body, from: Vec2, impact: f32, source: Option<Vec2>) -> Option<Vec2> {
+pub fn push(
+    body: &Body,
+    from: Vec2,
+    impact: f32,
+    source: Option<Vec2>,
+    cap: SpeedCap,
+) -> Option<Vec2> {
     let gated = impact < 0.0 && source.is_some_and(|source| near_either(source, body.position));
     if gated || impact == 0.0 || body.jumping || !pushable(body) {
         return None;
     }
     let bearing = f32::from(intercept_angle(from, body.position));
-    Some(pulled(body, bearing, impact))
+    Some(pulled(body, bearing, impact, cap))
 }
 
 /// What a tractor beam of `impact` (below none) from `start`, fired by
-/// `firer`, does as it touches `target` (see the module docs).
+/// `firer`, does as it touches `target` (see the module docs), a self-pull
+/// clamped as `cap` reads.
 #[must_use]
-pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32) -> Tractor {
+pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32, cap: SpeedCap) -> Tractor {
     if !pushable(target) {
         return Tractor::Slips;
     }
@@ -182,7 +194,7 @@ pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32) -> Tractor
         return Tractor::Pulls(None);
     }
     let bearing = f32::from(intercept_angle(target.position, start));
-    Tractor::Pulls(Some(pulled(firer, bearing, impact)))
+    Tractor::Pulls(Some(pulled(firer, bearing, impact, cap)))
 }
 
 /// Whether a push can move `body`: a class of some `Mass`, not
@@ -197,10 +209,11 @@ fn near_either(a: Vec2, b: Vec2) -> bool {
 }
 
 /// `body`'s velocity pushed `impact` / its mass along `bearing`, soft-capped
-/// at its class speed and clamped to its top speed.
-fn pulled(body: &Body, bearing: f32, impact: f32) -> Vec2 {
+/// at its class speed and clamped to its top speed as `cap` reads: on each
+/// axis by the original's `_SpeedLimit`, or to the circle.
+fn pulled(body: &Body, bearing: f32, impact: f32, cap: SpeedCap) -> Vec2 {
     let pushed = launch_velocity(body.velocity, bearing, impact / body.mass, body.class_speed);
-    speed_limit(pushed, body.top_speed)
+    cap.clamp(pushed, body.top_speed)
 }
 
 #[cfg(test)]
@@ -211,6 +224,7 @@ mod tests {
     use crate::flight::facing;
 
     const X: ShipRef = ShipRef::Npc(NpcId(7));
+    const PER_AXIS: SpeedCap = SpeedCap::PerAxis;
 
     /// A ship of `mass` at (`x`, `y`), at rest, with a class and top speed
     /// of 100.
@@ -231,17 +245,17 @@ mod tests {
     #[test]
     fn a_ship_at_rest_gains_impact_over_mass_along_the_whole_degree_bearing() {
         let ship = body(10.0, 100.0, 100.0);
-        let pushed = push(&ship, Vec2::ZERO, 50.0, None).expect("pushed");
+        let pushed = push(&ship, Vec2::ZERO, 50.0, None, PER_AXIS).expect("pushed");
         // The table makes the diagonal 134, a degree short of 135.
         assert!(near(pushed, facing(134.0) * 5.0), "{pushed:?}");
         assert!(!near(pushed, facing(135.0) * 5.0));
-        let right = push(&body(200.0, 40.0, 0.0), Vec2::ZERO, 750.0, None);
+        let right = push(&body(200.0, 40.0, 0.0), Vec2::ZERO, 750.0, None, PER_AXIS);
         assert!(near(right.expect("pushed"), Vec2::new(3.75, 0.0)));
     }
 
     #[test]
     fn a_negative_impact_pulls_the_ship_toward_the_point() {
-        let pulled = push(&body(10.0, 40.0, 0.0), Vec2::ZERO, -50.0, None);
+        let pulled = push(&body(10.0, 40.0, 0.0), Vec2::ZERO, -50.0, None, PER_AXIS);
         assert!(near(pulled.expect("pulled"), Vec2::new(-5.0, 0.0)));
     }
 
@@ -254,7 +268,7 @@ mod tests {
         };
         // The share of the class speed on x is 5 x sin 134 = 3.6: x is
         // past it and gains nothing; y is short of its share and gains.
-        let pushed = push(&ship, Vec2::ZERO, 50.0, None).expect("pushed");
+        let pushed = push(&ship, Vec2::ZERO, 50.0, None, PER_AXIS).expect("pushed");
         assert_eq!(pushed.x, 4.0);
         assert!(
             (pushed.y - facing(134.0).y * 5.0).abs() < 1e-4,
@@ -268,7 +282,7 @@ mod tests {
             top_speed: 3.0,
             ..body(1.0, 100.0, 100.0)
         };
-        let pushed = push(&ship, Vec2::ZERO, 10.0, None).expect("pushed");
+        let pushed = push(&ship, Vec2::ZERO, 10.0, None, PER_AXIS).expect("pushed");
         assert_eq!(pushed, Vec2::new(3.0, 3.0), "longer than 3 on the diagonal");
         let back = Body {
             velocity: Vec2::new(-20.0, 9.0),
@@ -276,8 +290,60 @@ mod tests {
             top_speed: 8.0,
             ..body(100.0, 40.0, 0.0)
         };
-        let clamped = push(&back, Vec2::ZERO, 750.0, None).expect("pushed");
+        let clamped = push(&back, Vec2::ZERO, 750.0, None, PER_AXIS).expect("pushed");
         assert!(near(clamped, Vec2::new(-8.0, 8.0)), "{clamped:?}");
+    }
+
+    #[test]
+    fn under_the_circle_a_push_and_a_self_pull_are_clamped_to_the_top_speeds_circle() {
+        let back = Body {
+            velocity: Vec2::new(-20.0, 9.0),
+            class_speed: 20.0,
+            top_speed: 8.0,
+            ..body(100.0, 40.0, 0.0)
+        };
+        let boxed = push(&back, Vec2::ZERO, 750.0, None, PER_AXIS).expect("pushed");
+        let circled = push(&back, Vec2::ZERO, 750.0, None, SpeedCap::Circle).expect("pushed");
+        // -20 + 7.5 and 9: past 8 on both axes, so the box clamps both,
+        // while the circle keeps the direction at length 8.
+        assert!(near(boxed, Vec2::new(-8.0, 8.0)), "{boxed:?}");
+        let unclamped = Vec2::new(-12.5, 9.0);
+        let expected = unclamped * (8.0 / unclamped.length());
+        assert!(near(circled, expected), "{circled:?}");
+        let slow = push(
+            &body(10.0, 40.0, 0.0),
+            Vec2::ZERO,
+            50.0,
+            None,
+            SpeedCap::Circle,
+        );
+        assert_eq!(
+            slow,
+            push(&body(10.0, 40.0, 0.0), Vec2::ZERO, 50.0, None, PER_AXIS),
+            "under the top speed the two agree"
+        );
+
+        let target = body(15.0, 30.0, 200.0);
+        let firer = Body {
+            velocity: Vec2::new(0.0, 9.0),
+            top_speed: 6.0,
+            ..body(1.0, -10.0, 0.0)
+        };
+        let Tractor::Pulls(Some(boxed)) = tractor(&target, &firer, Vec2::ZERO, -5.0, PER_AXIS)
+        else {
+            panic!("pulled");
+        };
+        let Tractor::Pulls(Some(circled)) =
+            tractor(&target, &firer, Vec2::ZERO, -5.0, SpeedCap::Circle)
+        else {
+            panic!("pulled");
+        };
+        assert!(
+            boxed.y <= 6.0 + 1e-5 && boxed.x.abs() <= 6.0 + 1e-5,
+            "{boxed:?}"
+        );
+        assert!((circled.length() - 6.0).abs() < 1e-4, "{circled:?}");
+        assert!(boxed.length() > 6.0, "the box allows more: {boxed:?}");
     }
 
     #[test]
@@ -287,27 +353,27 @@ mod tests {
             top_speed: 10.0,
             ..body(10.0, 40.0, 0.0)
         };
-        assert_eq!(push(&fast, Vec2::ZERO, 0.0, None), None);
+        assert_eq!(push(&fast, Vec2::ZERO, 0.0, None, PER_AXIS), None);
     }
 
     #[test]
     fn a_massless_planet_type_or_jumping_ship_is_not_pushed() {
         let ship = body(10.0, 40.0, 0.0);
-        assert!(push(&ship, Vec2::ZERO, 50.0, None).is_some());
+        assert!(push(&ship, Vec2::ZERO, 50.0, None, PER_AXIS).is_some());
         let massless = Body { mass: 0.0, ..ship };
-        assert_eq!(push(&massless, Vec2::ZERO, 50.0, None), None);
+        assert_eq!(push(&massless, Vec2::ZERO, 50.0, None, PER_AXIS), None);
         let negative = Body { mass: -3.0, ..ship };
-        assert_eq!(push(&negative, Vec2::ZERO, 50.0, None), None);
+        assert_eq!(push(&negative, Vec2::ZERO, 50.0, None, PER_AXIS), None);
         let planet = Body {
             planet_type: true,
             ..ship
         };
-        assert_eq!(push(&planet, Vec2::ZERO, 50.0, None), None);
+        assert_eq!(push(&planet, Vec2::ZERO, 50.0, None, PER_AXIS), None);
         let jumping = Body {
             jumping: true,
             ..ship
         };
-        assert_eq!(push(&jumping, Vec2::ZERO, 50.0, None), None);
+        assert_eq!(push(&jumping, Vec2::ZERO, 50.0, None, PER_AXIS), None);
     }
 
     #[test]
@@ -315,18 +381,30 @@ mod tests {
         let ship = body(10.0, 300.0, 300.0);
         let point = Vec2::ZERO;
         let source = |dx: f32, dy: f32| Some(ship.position + Vec2::new(dx, dy));
-        assert_eq!(push(&ship, point, -50.0, source(30.0, 200.0)), None);
-        assert_eq!(push(&ship, point, -50.0, source(200.0, -30.0)), None);
-        assert_eq!(push(&ship, point, -50.0, source(-49.9, 200.0)), None);
-        let pulled = push(&ship, point, -50.0, source(200.0, 200.0)).expect("pulled");
+        assert_eq!(
+            push(&ship, point, -50.0, source(30.0, 200.0), PER_AXIS),
+            None
+        );
+        assert_eq!(
+            push(&ship, point, -50.0, source(200.0, -30.0), PER_AXIS),
+            None
+        );
+        assert_eq!(
+            push(&ship, point, -50.0, source(-49.9, 200.0), PER_AXIS),
+            None
+        );
+        let pulled = push(&ship, point, -50.0, source(200.0, 200.0), PER_AXIS).expect("pulled");
         assert!(
             near(pulled, facing(134.0) * -5.0),
             "toward the point: {pulled:?}"
         );
-        assert!(push(&ship, point, -50.0, source(50.0, -50.0)).is_some());
-        assert!(push(&ship, point, -50.0, None).is_some(), "no source");
+        assert!(push(&ship, point, -50.0, source(50.0, -50.0), PER_AXIS).is_some());
         assert!(
-            push(&ship, point, 50.0, source(0.0, 0.0)).is_some(),
+            push(&ship, point, -50.0, None, PER_AXIS).is_some(),
+            "no source"
+        );
+        assert!(
+            push(&ship, point, 50.0, source(0.0, 0.0), PER_AXIS).is_some(),
             "a positive impact is never gated"
         );
     }
@@ -335,27 +413,39 @@ mod tests {
     fn a_tractor_slips_off_a_massless_or_planet_type_target() {
         let firer = body(200.0, 0.0, 0.0);
         let target = body(100.0, 300.0, 300.0);
-        assert_ne!(tractor(&target, &firer, Vec2::ZERO, -5.0), Tractor::Slips);
+        assert_ne!(
+            tractor(&target, &firer, Vec2::ZERO, -5.0, PER_AXIS),
+            Tractor::Slips
+        );
         let massless = Body {
             mass: 0.0,
             ..target
         };
-        assert_eq!(tractor(&massless, &firer, Vec2::ZERO, -5.0), Tractor::Slips);
+        assert_eq!(
+            tractor(&massless, &firer, Vec2::ZERO, -5.0, PER_AXIS),
+            Tractor::Slips
+        );
         let planet = Body {
             planet_type: true,
             ..target
         };
-        assert_eq!(tractor(&planet, &firer, Vec2::ZERO, -5.0), Tractor::Slips);
+        assert_eq!(
+            tractor(&planet, &firer, Vec2::ZERO, -5.0, PER_AXIS),
+            Tractor::Slips
+        );
     }
 
     #[test]
     fn a_firer_of_three_quarters_the_targets_mass_holds_it() {
         let target = body(100.0, 300.0, 300.0);
         let heavy = body(75.0, 0.0, 0.0);
-        assert_eq!(tractor(&target, &heavy, Vec2::ZERO, -5.0), Tractor::Holds);
+        assert_eq!(
+            tractor(&target, &heavy, Vec2::ZERO, -5.0, PER_AXIS),
+            Tractor::Holds
+        );
         let light = body(74.0, 0.0, 0.0);
         assert!(matches!(
-            tractor(&target, &light, Vec2::ZERO, -5.0),
+            tractor(&target, &light, Vec2::ZERO, -5.0, PER_AXIS),
             Tractor::Pulls(_)
         ));
     }
@@ -367,14 +457,16 @@ mod tests {
             jumping: true,
             ..body(6.0, -10.0, 0.0)
         };
-        let Tractor::Pulls(Some(pulled)) = tractor(&target, &firer, Vec2::ZERO, -5.0) else {
+        let Tractor::Pulls(Some(pulled)) = tractor(&target, &firer, Vec2::ZERO, -5.0, PER_AXIS)
+        else {
             panic!("pulled");
         };
         assert!(near(pulled, Vec2::new(5.0 / 6.0, 0.0)), "{pulled:?}");
         // The bearing runs from the target to the start: (100, 100) off
         // the start, it is 314, and the pull runs back along it.
         let diagonal = body(15.0, 100.0, 100.0);
-        let Tractor::Pulls(Some(pulled)) = tractor(&diagonal, &firer, Vec2::ZERO, -6.0) else {
+        let Tractor::Pulls(Some(pulled)) = tractor(&diagonal, &firer, Vec2::ZERO, -6.0, PER_AXIS)
+        else {
             panic!("pulled");
         };
         assert!(near(pulled, facing(314.0) * -1.0), "{pulled:?}");
@@ -388,7 +480,8 @@ mod tests {
             class_speed: 2.0,
             ..body(6.0, -10.0, 0.0)
         };
-        let Tractor::Pulls(Some(past)) = tractor(&target, &capped, Vec2::ZERO, -5.0) else {
+        let Tractor::Pulls(Some(past)) = tractor(&target, &capped, Vec2::ZERO, -5.0, PER_AXIS)
+        else {
             panic!("pulled");
         };
         assert!(
@@ -399,7 +492,8 @@ mod tests {
             top_speed: 0.5,
             ..body(1.0, -10.0, 0.0)
         };
-        let Tractor::Pulls(Some(clamped)) = tractor(&target, &slow, Vec2::ZERO, -5.0) else {
+        let Tractor::Pulls(Some(clamped)) = tractor(&target, &slow, Vec2::ZERO, -5.0, PER_AXIS)
+        else {
             panic!("pulled");
         };
         assert!(near(clamped, Vec2::new(0.5, 0.0)), "{clamped:?}");
@@ -411,19 +505,19 @@ mod tests {
         let at = |x: f32, y: f32| body(15.0, x, y);
         let start = Vec2::ZERO;
         assert_eq!(
-            tractor(&at(30.0, -49.9), &firer, start, -5.0),
+            tractor(&at(30.0, -49.9), &firer, start, -5.0, PER_AXIS),
             Tractor::Pulls(None)
         );
         assert!(matches!(
-            tractor(&at(30.0, 200.0), &firer, start, -5.0),
+            tractor(&at(30.0, 200.0), &firer, start, -5.0, PER_AXIS),
             Tractor::Pulls(Some(_))
         ));
         assert!(matches!(
-            tractor(&at(-200.0, 30.0), &firer, start, -5.0),
+            tractor(&at(-200.0, 30.0), &firer, start, -5.0, PER_AXIS),
             Tractor::Pulls(Some(_))
         ));
         assert!(matches!(
-            tractor(&at(50.0, 0.0), &firer, start, -5.0),
+            tractor(&at(50.0, 0.0), &firer, start, -5.0, PER_AXIS),
             Tractor::Pulls(Some(_))
         ));
     }
@@ -432,7 +526,7 @@ mod tests {
     fn the_near_gate_is_measured_from_the_start_wherever_it_is_and_is_strict_on_each_axis() {
         let firer = body(6.0, 990.0, 1000.0);
         let start = Vec2::new(1000.0, 1000.0);
-        let at = |x: f32, y: f32| tractor(&body(15.0, x, y), &firer, start, -5.0);
+        let at = |x: f32, y: f32| tractor(&body(15.0, x, y), &firer, start, -5.0, PER_AXIS);
         assert_eq!(at(1030.0, 1049.9), Tractor::Pulls(None));
         assert!(
             matches!(at(1030.0, 1050.0), Tractor::Pulls(Some(_))),
@@ -453,7 +547,7 @@ mod tests {
         let target = body(15.0, 300.0, 0.0);
         let massless = body(0.0, -10.0, 0.0);
         assert_eq!(
-            tractor(&target, &massless, Vec2::ZERO, -5.0),
+            tractor(&target, &massless, Vec2::ZERO, -5.0, PER_AXIS),
             Tractor::Pulls(None)
         );
         let planet = Body {
@@ -461,7 +555,7 @@ mod tests {
             ..body(6.0, -10.0, 0.0)
         };
         assert_eq!(
-            tractor(&target, &planet, Vec2::ZERO, -5.0),
+            tractor(&target, &planet, Vec2::ZERO, -5.0, PER_AXIS),
             Tractor::Pulls(None)
         );
     }

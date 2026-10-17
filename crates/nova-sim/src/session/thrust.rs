@@ -1,13 +1,15 @@
-//! Tests of the thrust every ship flies with: `Accel` / the
-//! [`RuleValue::ThrustDivisor`], read from the session's rules at each use
-//! ([`Session::flight_rules`]) for the player and, through the traffic's
-//! world, for every NPC.
+//! Tests of the thrust every ship flies with and the cap on its speed:
+//! `Accel` / the [`RuleValue::ThrustDivisor`] and the
+//! [`RuleKey::SpeedCap`] reading, read from the session's rules at each
+//! use ([`Session::flight_rules`]) for the player and, through the
+//! traffic's world, for every NPC; and the pushes' clamp, which
+//! [`Session::with_rules`] hands the fight.
 #![allow(clippy::float_cmp)]
 
 use super::*;
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::chance::NeverFires;
-use crate::rulebook::RuleValue;
+use crate::rulebook::{RuleKey, RuleSource, RuleValue};
 use crate::session::tests::{arming, blaster, with_an_npc_at};
 use crate::traffic::npc::Npc;
 use core::num::NonZeroU32;
@@ -89,4 +91,70 @@ fn an_npc_gains_its_accel_over_the_divisor_a_tick_from_rest() {
         );
         assert!(npc.state.velocity.y > 0.0, "out from the centre");
     }
+}
+
+/// The rules with `speed_cap` read the other way: the circle.
+fn circle() -> Rulebook {
+    Rulebook::default().with_override(RuleKey::SpeedCap, RuleSource::Bible)
+}
+
+#[test]
+fn the_player_at_top_speed_turned_a_quarter_and_thrusting_ends_near_c_by_minus_c() {
+    let catalog = arming(blaster(), blaster(), 0);
+    for (rules, circled) in [(Rulebook::default(), false), (circle(), true)] {
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        let c = session.top_speed();
+        session.player.velocity = Vec2::new(c, 0.0);
+        session.player.heading = 0.0;
+        for _ in 0..200 {
+            session.tick(Controls {
+                thrust: true,
+                ..Controls::default()
+            });
+        }
+        let velocity = session.player().velocity;
+        if circled {
+            assert!((velocity.length() - c).abs() < 1e-4, "{velocity:?} at {c}");
+        } else {
+            assert!(
+                (velocity - Vec2::new(c, -c)).length() < 1e-4,
+                "{velocity:?} at {c}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_npc_coasting_past_its_top_speed_keeps_it_by_default_and_is_rescaled_under_the_circle() {
+    let catalog = arming(blaster(), blaster(), 0);
+    for (rules, circled) in [(Rulebook::default(), false), (circle(), true)] {
+        let mut session = with_an_npc_at(&catalog, 750, 850, 180).with_rules(rules);
+        let id = session.npcs()[0].id;
+        let npc = session.npc_mut(id).expect("there");
+        npc.goal = Goal::Hold;
+        let c = npc.top_speed(1.0);
+        npc.state.velocity = Vec2::new(-2.0 * c, 3.0 * c);
+        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+        let velocity = session.npc(id).expect("there").state.velocity;
+        if circled {
+            assert!((velocity.length() - c).abs() < 1e-4, "{velocity:?} at {c}");
+        } else {
+            assert_eq!(velocity, Vec2::new(-2.0 * c, 3.0 * c), "unclamped");
+        }
+    }
+}
+
+#[test]
+fn the_rules_hand_the_fight_the_speed_caps_reading() {
+    let catalog = arming(blaster(), blaster(), 0);
+    let engine = Session::start(&catalog)
+        .expect("starts")
+        .with_rules(Rulebook::default());
+    let circled = Session::start(&catalog)
+        .expect("starts")
+        .with_rules(circle());
+    let mut expected = engine.combat.clone();
+    assert_ne!(circled.combat, expected);
+    expected.set_speed_cap(RuleSource::Bible);
+    assert_eq!(circled.combat, expected);
 }

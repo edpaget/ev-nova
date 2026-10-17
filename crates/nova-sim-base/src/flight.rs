@@ -1,4 +1,5 @@
-//! Flight: one tick of the player ship's Newtonian motion.
+//! Flight: one tick of a ship's Newtonian motion, the player's or an
+//! NPC's ([`Flyer`]).
 //!
 //! Each [`step`]:
 //!
@@ -8,8 +9,18 @@
 //!    ship at rest has no velocity to turn from, so reverse does nothing;
 //!    one no faster than [`FlightRules::at_rest_speed`] counts as at rest.
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
-//!    its velocity.
-//! 3. Caps the speed at the ship's top speed, keeping the direction.
+//!    its velocity. By default ([`SpeedCap::PerAxis`], the original's), as
+//!    `_AdjustedAccel` adds it ([`adjusted_accel`], @0x2ae4b-0x2af43): on
+//!    each axis only while that axis is short of the top speed's share
+//!    along the heading. Under [`SpeedCap::Circle`] it is added whole.
+//! 3. Caps the speed. By default only the player's: its velocity is
+//!    clamped to the top speed on each axis, the box `_HandlePlayer`
+//!    clamps to before the move (@0x6d43f-0x6d4aa, [`speed_limit`]); an
+//!    NPC's isn't clamped (`_HandleShip` has no clamp), so nothing but its
+//!    own thrust slows a ship past its top speed, and one at top speed that
+//!    turns a quarter and thrusts ends near 1.41 times as fast. Under
+//!    [`SpeedCap::Circle`] every ship's speed is rescaled to its top speed,
+//!    keeping the direction ([`circle`]).
 //!    `step` adds no drag, so an intact ship coasts for ever. A disabled or
 //!    breaking-up ship is slowed by [`drag`] before its step, by its caller
 //!    (the session for the player, traffic for NPCs), as the original slows
@@ -25,7 +36,8 @@ use core::num::NonZeroU32;
 
 use crate::geometry::Vec2;
 use crate::handling::{Handling, ORIGINAL_THRUST_DIVISOR};
-use crate::rulebook::{RuleValue, Rulebook};
+use crate::rulebook::{RuleKey, RuleValue, Rulebook};
+use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
 
 /// The speed, in pixels a tick, at or below which reverse treats a ship as
 /// at rest under the original's thrust ([`at_rest_speed`] of
@@ -45,11 +57,14 @@ pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
 }
 
 /// The rules a ship flies by, read from the [`Rulebook`] at each use: the
-/// thrust's divisor ([`RuleValue::ThrustDivisor`]).
+/// thrust's divisor ([`RuleValue::ThrustDivisor`]) and the speed cap
+/// ([`RuleKey::SpeedCap`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlightRules {
     /// What a ship's `Accel` total is divided by to give its thrust.
     pub thrust_divisor: NonZeroU32,
+    /// How a ship's speed is capped.
+    pub speed_cap: SpeedCap,
 }
 
 impl FlightRules {
@@ -58,6 +73,7 @@ impl FlightRules {
     pub fn from_rulebook(rules: &Rulebook) -> Self {
         Self {
             thrust_divisor: rules.value_for(RuleValue::ThrustDivisor),
+            speed_cap: SpeedCap::from(rules.source_for(RuleKey::SpeedCap)),
         }
     }
 
@@ -94,6 +110,16 @@ pub fn drag(state: &mut ShipState) {
     state.velocity = state.velocity * DISABLED_DRAG;
 }
 
+/// Whose ship flies: the player's, which `_HandlePlayer` clamps to its
+/// top speed on each axis, or an NPC's, which `_HandleShip` doesn't.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flyer {
+    /// The player's ship.
+    Player,
+    /// An NPC.
+    Npc,
+}
+
 /// Which way the turn keys turn the ship.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Turn {
@@ -128,9 +154,15 @@ pub struct ShipState {
     pub heading: f32,
 }
 
-/// Advances `state` one tick under `controls`, flying as `handling` allows
-/// under `rules`.
-pub fn step(state: &mut ShipState, handling: &Handling, controls: Controls, rules: FlightRules) {
+/// Advances `state`, `flyer`'s ship, one tick under `controls`, flying as
+/// `handling` allows under `rules` (see the module docs).
+pub fn step(
+    state: &mut ShipState,
+    handling: &Handling,
+    controls: Controls,
+    rules: FlightRules,
+    flyer: Flyer,
+) {
     let rate = handling.turn_rate;
     state.heading = match controls.turn {
         Turn::Left => normalized(state.heading - rate),
@@ -140,15 +172,22 @@ pub fn step(state: &mut ShipState, handling: &Handling, controls: Controls, rule
         }
         Turn::None => state.heading,
     };
-    if controls.thrust {
-        state.velocity = state.velocity + facing(state.heading) * handling.accel;
-    }
-    let speed = state.velocity.length();
-    if speed > handling.max_speed {
-        // Divided first, so a velocity along an axis lands on the top speed
-        // exactly.
-        let direction = Vec2::new(state.velocity.x / speed, state.velocity.y / speed);
-        state.velocity = direction * handling.max_speed;
+    let top = handling.max_speed;
+    match rules.speed_cap {
+        SpeedCap::PerAxis => {
+            if controls.thrust {
+                state.velocity = adjusted_accel(state.velocity, state.heading, handling.accel, top);
+            }
+            if flyer == Flyer::Player {
+                state.velocity = speed_limit(state.velocity, top);
+            }
+        }
+        SpeedCap::Circle => {
+            if controls.thrust {
+                state.velocity = state.velocity + facing(state.heading) * handling.accel;
+            }
+            state.velocity = circle(state.velocity, top);
+        }
     }
     state.position = state.position + state.velocity;
 }
@@ -202,7 +241,7 @@ pub fn normalized(heading: f32) -> f32 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::rulebook::{RuleValue, Rulebook};
+    use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
     use core::num::NonZeroU32;
 
     /// An average ship: 3 pixels a tick at most, 0.1 more each tick, 3° a
@@ -249,10 +288,27 @@ mod tests {
 
     fn after(mut state: ShipState, controls: Controls, ticks: usize) -> ShipState {
         for _ in 0..ticks {
-            step(&mut state, &SHIP, controls, FlightRules::default());
+            step(
+                &mut state,
+                &SHIP,
+                controls,
+                FlightRules::default(),
+                Flyer::Player,
+            );
         }
         state
     }
+
+    const FLYERS: [Flyer; 2] = [Flyer::Player, Flyer::Npc];
+
+    /// The original's flight rules but the speed cap's other reading.
+    const CIRCLE: FlightRules = FlightRules {
+        thrust_divisor: match NonZeroU32::new(5000) {
+            Some(divisor) => divisor,
+            None => panic!(),
+        },
+        speed_cap: SpeedCap::Circle,
+    };
 
     fn under(divisor: u32) -> FlightRules {
         FlightRules::from_rulebook(
@@ -358,6 +414,7 @@ mod tests {
             &creep,
             turning(Turn::Left),
             FlightRules::default(),
+            Flyer::Player,
         );
         assert!((0.0..360.0).contains(&state.heading), "{state:?}");
     }
@@ -432,53 +489,210 @@ mod tests {
                 max_speed: velocity.length(),
                 ..SHIP
             };
-            let mut state = moving(velocity, 0.0);
-            step(
-                &mut state,
-                &at_top,
-                Controls::default(),
-                FlightRules::default(),
+            for flyer in FLYERS {
+                for rules in [FlightRules::default(), CIRCLE] {
+                    let mut state = moving(velocity, 0.0);
+                    step(&mut state, &at_top, Controls::default(), rules, flyer);
+                    assert_eq!(state.velocity, velocity, "{flyer:?} {rules:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn under_the_circle_speed_is_capped_at_the_top_speed_and_reaches_it_exactly() {
+        for flyer in FLYERS {
+            let mut state = heading(0.0);
+            for _ in 0..100 {
+                step(&mut state, &SHIP, THRUST, CIRCLE, flyer);
+                assert!(state.velocity.length() <= SHIP.max_speed, "{state:?}");
+            }
+            assert_eq!(state.velocity, Vec2::new(0.0, -3.0), "{flyer:?}");
+        }
+    }
+
+    #[test]
+    fn under_the_circle_turning_at_top_speed_swings_the_velocity_round_and_never_exceeds_it() {
+        for flyer in FLYERS {
+            let mut state = flown(heading(0.0), THRUST, 40, CIRCLE, flyer);
+            let carving = Controls {
+                thrust: true,
+                turn: Turn::Right,
+                reverse: false,
+            };
+            // While the heading is within a few turns of the velocity,
+            // thrust holds the ship at its top speed.
+            for _ in 0..10 {
+                step(&mut state, &SHIP, carving, CIRCLE, flyer);
+                let speed = state.velocity.length();
+                assert!((speed - SHIP.max_speed).abs() < 1e-5, "{speed}: {state:?}");
+            }
+            assert!(state.velocity.x > 0.0, "swinging right: {state:?}");
+            // Thrusting further round slows it, and nothing speeds it past
+            // the cap.
+            for _ in 0..60 {
+                step(&mut state, &SHIP, carving, CIRCLE, flyer);
+                assert!(
+                    state.velocity.length() <= SHIP.max_speed + 1e-5,
+                    "{state:?}"
+                );
+            }
+            assert!(state.velocity.length() < SHIP.max_speed - 0.1, "{state:?}");
+        }
+    }
+
+    // The per-axis cap.
+
+    /// `state` after `ticks` steps of `controls` by `flyer` under `rules`.
+    fn flown(
+        mut state: ShipState,
+        controls: Controls,
+        ticks: usize,
+        rules: FlightRules,
+        flyer: Flyer,
+    ) -> ShipState {
+        for _ in 0..ticks {
+            step(&mut state, &SHIP, controls, rules, flyer);
+        }
+        state
+    }
+
+    #[test]
+    fn by_default_a_ship_at_top_speed_turned_a_quarter_and_thrusting_ends_near_c_by_minus_c() {
+        // At top speed east, turned to face up the screen.
+        let east = moving(Vec2::new(3.0, 0.0), 0.0);
+        let player = flown(east, THRUST, 100, FlightRules::default(), Flyer::Player);
+        assert!(near(player.velocity, Vec2::new(3.0, -3.0)), "{player:?}");
+        assert!((player.velocity.length() - 3.0 * 2.0_f32.sqrt()).abs() < 1e-4);
+        let npc = flown(east, THRUST, 100, FlightRules::default(), Flyer::Npc);
+        assert!(
+            (npc.velocity - Vec2::new(3.0, -3.0)).length() <= SHIP.accel,
+            "the last push may carry it past: {npc:?}"
+        );
+        assert!(npc.velocity.length() > 3.0 * 1.41, "{npc:?}");
+        for flyer in FLYERS {
+            let circled = flown(east, THRUST, 100, CIRCLE, flyer);
+            assert!(
+                (circled.velocity.length() - 3.0).abs() < 1e-5,
+                "{flyer:?}: {circled:?}"
             );
-            assert_eq!(state.velocity, velocity, "not rescaled");
+            assert!(
+                circled.velocity.x < 0.5 && circled.velocity.y < -2.9,
+                "swung round toward the heading: {circled:?}"
+            );
         }
     }
 
     #[test]
-    fn speed_is_capped_at_the_top_speed_and_reaches_it_exactly() {
-        let mut state = heading(0.0);
-        for _ in 0..100 {
-            step(&mut state, &SHIP, THRUST, FlightRules::default());
-            assert!(state.velocity.length() <= SHIP.max_speed, "{state:?}");
+    fn an_npc_has_no_clamp_and_the_players_box_clamps_each_axis_to_the_top_speed() {
+        let coast = Controls::default();
+        for (velocity, boxed) in [
+            (Vec2::new(6.0, 0.0), Vec2::new(3.0, 0.0)),
+            (Vec2::new(-6.0, 9.0), Vec2::new(-3.0, 3.0)),
+            (Vec2::new(2.0, -2.5), Vec2::new(2.0, -2.5)),
+        ] {
+            let start = moving(velocity, 0.0);
+            let npc = flown(start, coast, 1, FlightRules::default(), Flyer::Npc);
+            assert_eq!(npc.velocity, velocity, "kept");
+            assert_eq!(npc.position, velocity, "and moved by");
+            let player = flown(start, coast, 1, FlightRules::default(), Flyer::Player);
+            assert_eq!(player.velocity, boxed, "clamped before the move");
+            assert_eq!(player.position, boxed);
         }
-        assert_eq!(state.velocity, Vec2::new(0.0, -3.0));
+        for flyer in FLYERS {
+            for velocity in [Vec2::new(6.0, 0.0), Vec2::new(-6.0, 9.0)] {
+                let circled = flown(moving(velocity, 0.0), coast, 1, CIRCLE, flyer);
+                assert!(
+                    (circled.velocity.length() - 3.0).abs() < 1e-5,
+                    "{flyer:?}: {circled:?}"
+                );
+                let direction = velocity * (1.0 / velocity.length());
+                assert!(near(circled.velocity, direction * 3.0), "{circled:?}");
+            }
+        }
     }
 
     #[test]
-    fn turning_at_top_speed_swings_the_velocity_round_and_never_exceeds_it() {
-        let mut state = after(heading(0.0), THRUST, 40);
+    fn thrust_along_an_axis_reaches_the_top_speed_and_stops_adding() {
+        let player = flown(
+            heading(0.0),
+            THRUST,
+            100,
+            FlightRules::default(),
+            Flyer::Player,
+        );
+        assert_eq!(player.velocity, Vec2::new(0.0, -3.0), "exactly, by the box");
+        let npc = flown(
+            heading(0.0),
+            THRUST,
+            100,
+            FlightRules::default(),
+            Flyer::Npc,
+        );
+        assert!(npc.velocity.x.abs() < 1e-5, "{npc:?}");
+        assert!(
+            npc.velocity.y <= -3.0 && npc.velocity.y > -3.0 - SHIP.accel,
+            "at it, or past it by under a push: {npc:?}"
+        );
+        let later = flown(npc, THRUST, 10, FlightRules::default(), Flyer::Npc);
+        assert_eq!(later.velocity, npc.velocity, "no more");
+    }
+
+    #[test]
+    fn by_default_each_axis_stays_within_the_headings_share_or_the_box() {
         let carving = Controls {
             thrust: true,
             turn: Turn::Right,
             reverse: false,
         };
-        // While the heading is within a few turns of the velocity, thrust
-        // holds the ship at its top speed.
-        for _ in 0..10 {
-            step(&mut state, &SHIP, carving, FlightRules::default());
-            let speed = state.velocity.length();
-            assert!((speed - SHIP.max_speed).abs() < 1e-5, "{speed}: {state:?}");
-        }
-        assert!(state.velocity.x > 0.0, "swinging right: {state:?}");
-        // Thrusting further round slows it, and nothing speeds it past the
-        // cap.
-        for _ in 0..60 {
-            step(&mut state, &SHIP, carving, FlightRules::default());
+        let mut player = heading(0.0);
+        let mut npc = heading(0.0);
+        for _ in 0..200 {
+            step(
+                &mut player,
+                &SHIP,
+                carving,
+                FlightRules::default(),
+                Flyer::Player,
+            );
             assert!(
-                state.velocity.length() <= SHIP.max_speed + 1e-5,
-                "{state:?}"
+                player.velocity.x.abs() <= 3.0 && player.velocity.y.abs() <= 3.0,
+                "{player:?}"
+            );
+            let before = npc.velocity;
+            step(&mut npc, &SHIP, carving, FlightRules::default(), Flyer::Npc);
+            let share = facing(npc.heading) * SHIP.max_speed;
+            for (now, was, top) in [
+                (npc.velocity.x, before.x, share.x),
+                (npc.velocity.y, before.y, share.y),
+            ] {
+                // An axis gains toward its share only while short of it.
+                let gained = (now - was) * top.signum() > 1e-6;
+                if gained && top.abs() > 1e-3 {
+                    assert!(
+                        was * top.signum() < top.abs() + 1e-5,
+                        "{was} to {now} for {top}"
+                    );
+                }
+            }
+            assert!(
+                npc.velocity.x.abs() <= 3.0 + SHIP.accel
+                    && npc.velocity.y.abs() <= 3.0 + SHIP.accel,
+                "{npc:?}"
             );
         }
-        assert!(state.velocity.length() < SHIP.max_speed - 0.1, "{state:?}");
+    }
+
+    #[test]
+    fn the_speed_cap_reads_the_rulebook() {
+        assert_eq!(FlightRules::default().speed_cap, SpeedCap::PerAxis);
+        assert_eq!(CIRCLE.speed_cap, SpeedCap::Circle);
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::SpeedCap, RuleSource::Bible)
+            ),
+            CIRCLE
+        );
     }
 
     #[test]
@@ -497,6 +711,7 @@ mod tests {
                 reverse: false,
             },
             FlightRules::default(),
+            Flyer::Player,
         );
         assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
     }
@@ -569,22 +784,29 @@ mod tests {
     }
 
     #[test]
-    fn reverse_then_thrust_brakes_the_ship_to_a_stop() {
-        let mut state = moving(Vec2::new(0.0, -3.0), 0.0);
-        for _ in 0..60 {
-            step(&mut state, &SHIP, REVERSE, FlightRules::default());
+    fn reverse_then_thrust_brakes_the_ship_to_a_stop_under_either_cap() {
+        for flyer in FLYERS {
+            for rules in [FlightRules::default(), CIRCLE] {
+                let mut state = moving(Vec2::new(0.0, -3.0), 0.0);
+                for _ in 0..60 {
+                    step(&mut state, &SHIP, REVERSE, rules, flyer);
+                }
+                assert_eq!(state.heading, 180.0);
+                let brake = Controls {
+                    thrust: true,
+                    ..REVERSE
+                };
+                // Facing back, each tick of thrust takes 0.1 off the speed.
+                for _ in 0..30 {
+                    step(&mut state, &SHIP, brake, rules, flyer);
+                    assert!((state.heading - 180.0).abs() < 1e-3, "{state:?}");
+                }
+                assert!(
+                    state.velocity.length() < 1e-4,
+                    "{flyer:?} {rules:?}: {state:?}"
+                );
+            }
         }
-        assert_eq!(state.heading, 180.0);
-        let brake = Controls {
-            thrust: true,
-            ..REVERSE
-        };
-        // Facing back, each tick of thrust takes 0.1 off the speed.
-        for _ in 0..30 {
-            step(&mut state, &SHIP, brake, FlightRules::default());
-            assert!((state.heading - 180.0).abs() < 1e-3, "{state:?}");
-        }
-        assert!(state.velocity.length() < 1e-4, "{state:?}");
     }
 
     #[test]
@@ -616,10 +838,16 @@ mod tests {
         // original's 5000 it moves.
         let creeping = moving(Vec2::new(0.0, under(3000).at_rest_speed()), 90.0);
         let mut slow = creeping;
-        step(&mut slow, &SHIP, REVERSE, under(3000));
+        step(&mut slow, &SHIP, REVERSE, under(3000), Flyer::Player);
         assert_eq!(slow.heading, 90.0, "at rest under 3000");
         let mut fast = creeping;
-        step(&mut fast, &SHIP, REVERSE, FlightRules::default());
+        step(
+            &mut fast,
+            &SHIP,
+            REVERSE,
+            FlightRules::default(),
+            Flyer::Player,
+        );
         assert_eq!(fast.heading, 87.0, "moving under 5000");
     }
 
@@ -652,10 +880,22 @@ mod tests {
             ..REVERSE
         };
         for _ in 0..60 {
-            step(&mut state, &SHIP, REVERSE, FlightRules::default());
+            step(
+                &mut state,
+                &SHIP,
+                REVERSE,
+                FlightRules::default(),
+                Flyer::Player,
+            );
         }
         for _ in 0..30 {
-            step(&mut state, &SHIP, brake, FlightRules::default());
+            step(
+                &mut state,
+                &SHIP,
+                brake,
+                FlightRules::default(),
+                Flyer::Player,
+            );
         }
         assert!(state.velocity != Vec2::ZERO, "leftover: {state:?}");
         let stopped = state.heading;

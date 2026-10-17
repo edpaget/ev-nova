@@ -471,7 +471,7 @@ use crate::combat::{
 };
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
-use crate::flight::{Controls, FlightRules, ShipState, step};
+use crate::flight::{Controls, FlightRules, Flyer, ShipState, step};
 use crate::fuel::regenerate;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
@@ -1741,6 +1741,8 @@ impl Session {
             .set_player_forward_recoil(rules.source_for(RuleKey::PlayerForwardRecoil));
         self.combat
             .set_combat_caps(rules.source_for(RuleKey::CombatCaps));
+        self.combat
+            .set_speed_cap(rules.source_for(RuleKey::SpeedCap));
         self.combat.set_asteroid_fuse(AsteroidFuse::from(
             rules.source_for(RuleKey::FuseIgnoresAsteroids),
         ));
@@ -1993,7 +1995,7 @@ impl Session {
                     crate::flight::drag(&mut self.player);
                 }
                 let flight = self.flight_rules();
-                step(&mut self.player, &handling, controls, flight);
+                step(&mut self.player, &handling, controls, flight, Flyer::Player);
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
@@ -6681,6 +6683,7 @@ pub(super) mod tests {
                 &session.handling(),
                 controls,
                 FlightRules::default(),
+                Flyer::Player,
             );
         }
         assert_eq!(*session.player(), expected);
@@ -6778,6 +6781,7 @@ pub(super) mod tests {
             &session.handling(),
             THRUST,
             FlightRules::default(),
+            Flyer::Player,
         );
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, docked);
@@ -14570,7 +14574,13 @@ pub(super) mod tests {
         };
         for _ in 0..200 {
             session.tick(THRUST);
-            step(&mut expected, &handling, THRUST, FlightRules::default());
+            step(
+                &mut expected,
+                &handling,
+                THRUST,
+                FlightRules::default(),
+                Flyer::Player,
+            );
         }
         assert_eq!(*session.player(), expected);
         assert!((session.player().velocity.length() - 13.5).abs() < 1e-3);

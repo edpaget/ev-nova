@@ -339,6 +339,7 @@ use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
+use crate::speed_cap::SpeedCap;
 
 /// An NPC's number in its system, unique while the player stays there:
 /// the order it appeared in.
@@ -940,6 +941,10 @@ pub struct Combat {
     /// ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s engine
     /// reading); by default, not.
     capped: bool,
+    /// How a push clamps the speed of the ship it moves
+    /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)): by default on
+    /// each axis, as `_SpeedLimit` does.
+    speed_cap: SpeedCap,
     /// The shots that left the table whose slots the original frees only
     /// at its next `_HandleShot` (see [`Combat::shot_room`]): from the
     /// late part of a tick (step 7) to the next tick's hit pass, the
@@ -1231,7 +1236,10 @@ impl Combat {
                     passes_shields: false,
                     late,
                 });
-                if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None) {
+                let cap = self.speed_cap;
+                if let Some(velocity) =
+                    impact::push(&fighter.body(), at, shockwave::IMPACT, None, cap)
+                {
                     self.shove(fighter, velocity);
                 }
                 let downed = if condition.standing() {
@@ -1362,6 +1370,15 @@ impl Combat {
     /// reading, the default, not.
     pub fn set_combat_caps(&mut self, source: RuleSource) {
         self.capped = source == RuleSource::Engine;
+    }
+
+    /// Has a push, the death shockwave's and a tractor's self-pull clamp
+    /// the speed of the ship it moves as `source` reads
+    /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap), [`SpeedCap`]): by
+    /// the engine, the default, on each axis; by the other reading, to the
+    /// circle of its top speed.
+    pub fn set_speed_cap(&mut self, source: RuleSource) {
+        self.speed_cap = SpeedCap::from(source);
     }
 
     /// Whether a shot `ship` fires now finds a free slot: always uncapped;
@@ -2454,7 +2471,9 @@ impl Combat {
                 passes_shields: landed.hit.passes_shields,
                 late: landed.ship == ShipRef::Player || beam,
             });
-            if let Some(velocity) = impact::push(&fighter.body(), from, impact, source) {
+            if let Some(velocity) =
+                impact::push(&fighter.body(), from, impact, source, self.speed_cap)
+            {
                 self.shove(fighter, velocity);
             }
             let before = taken(fighter.reserves);
@@ -2503,7 +2522,13 @@ impl Combat {
             return 0.0;
         };
         let body = fighters[firer].body();
-        match impact::tractor(&fighters[target].body(), &body, start, impact) {
+        match impact::tractor(
+            &fighters[target].body(),
+            &body,
+            start,
+            impact,
+            self.speed_cap,
+        ) {
             // The original's i = 0 (@0x31450); the push would refuse a
             // massless or planet-type target anyway.
             Tractor::Slips => 0.0,
@@ -4355,6 +4380,30 @@ mod tests {
             (shoves[0].velocity - Vec2::new(-1.5, 6.0)).length() < 1e-4,
             "{shoves:?}"
         );
+    }
+
+    #[test]
+    fn under_the_circle_a_shove_is_clamped_to_its_top_speeds_circle() {
+        let mut combat = Combat::default();
+        combat.set_speed_cap(RuleSource::Bible);
+        let mut slow = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+        slow.hull.mass = 100.0;
+        slow.state.velocity = Vec2::new(-9.0, 7.0);
+        slow.class_speed = 4.0;
+        slow.top_speed = 6.0;
+        let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), slow];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        let pushed = Vec2::new(-1.5, 7.0);
+        let expected = pushed * (6.0 / pushed.length());
+        assert!(
+            (shoves[0].velocity - expected).length() < 1e-4,
+            "{shoves:?}"
+        );
+        let mut engine = Combat::default();
+        engine.set_speed_cap(RuleSource::Engine);
+        assert_eq!(engine, Combat::default(), "the engine's is the default");
     }
 
     /// Says every ship is `disabled`, recording what it was asked.

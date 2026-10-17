@@ -57,7 +57,9 @@
 //!   leaves the system ([`Outcome::Docked`]).
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
-//!   the velocity it has, under its top speed's cap.
+//!   the velocity it has, unclamped (under
+//!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
+//!   its top speed).
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
 //!   carrier that is not there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
@@ -116,8 +118,12 @@
 //!   `Rand(`[`POST_BURST_SPREAD`]`)` ticks (`_HandleShip`
 //!   @0x34d5c-0x34d8b): it moves on at the speed the glide or burst left
 //!   it, above its top speed, with no steering, thrust or fire, and its
-//!   trigger is released. Then it flies its goal, [`flight::step`]
-//!   bringing it down to its top speed. A ship with a lead flies at once.
+//!   trigger is released. Then it flies its goal. Nothing but its own
+//!   thrust slows it: `_AIMakeShipStopJumping` (@0x82e77-0x82eba) writes
+//!   no velocity and `_HandleShip` clamps none, so [`flight::step`] leaves
+//!   an NPC's speed as it is (under the circle reading of
+//!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap), it brings it down
+//!   to its top speed). A ship with a lead flies at once.
 //!   One not intact while it waits drifts instead, its wait still counting
 //!   down (@0x34424 → @0x34679 → @0x34a54 → @0x35026), so once intact
 //!   again it holds its course for what is left. A mission's ship boarded
@@ -139,7 +145,7 @@ use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
-    self, AT_REST_SPEED, Controls, FlightRules, ShipState, Turn, heading_of, shortest_turn,
+    self, AT_REST_SPEED, Controls, FlightRules, Flyer, ShipState, Turn, heading_of, shortest_turn,
 };
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
@@ -342,7 +348,7 @@ pub fn fly(
         Goal::Idle => brake(&state, &handling),
         Goal::Hold => Controls::default(),
     };
-    flight::step(&mut npc.state, &handling, controls, flight);
+    flight::step(&mut npc.state, &handling, controls, flight, Flyer::Npc);
     Outcome::Flying
 }
 
@@ -443,7 +449,7 @@ fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling, flight: Flig
         turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
     };
-    flight::step(&mut npc.state, handling, controls, flight);
+    flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc);
     let pull = handling.accel * FORMATION_NUDGE;
     let towards = |at: f32, to: f32| {
         let off = to - at;
@@ -559,7 +565,13 @@ fn unsteered(
             if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
                 flight::drag(&mut npc.state);
             }
-            flight::step(&mut npc.state, handling, Controls::default(), flight);
+            flight::step(
+                &mut npc.state,
+                handling,
+                Controls::default(),
+                flight,
+                Flyer::Npc,
+            );
         }
         (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, chance),
         (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, chance),
@@ -879,6 +891,34 @@ mod tests {
     /// most tests see it.
     fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
         fly_at(npc, sites, other, TopSpeeds::own_of(npc))
+    }
+
+    /// The original's flight rules but `speed_cap`'s other reading.
+    fn circle() -> FlightRules {
+        FlightRules::from_rulebook(
+            &crate::Rulebook::default()
+                .with_override(crate::RuleKey::SpeedCap, crate::rulebook::RuleSource::Bible),
+        )
+    }
+
+    /// Flies `npc` at `speeds` under `rules`, any wait it draws its
+    /// longest.
+    fn fly_under(
+        npc: &mut Npc,
+        sites: &[LandingSite],
+        other: Option<&ShipState>,
+        speeds: TopSpeeds,
+        rules: FlightRules,
+    ) -> Outcome {
+        super::fly(
+            npc,
+            sites,
+            &BTreeMap::new(),
+            other,
+            speeds,
+            rules,
+            &mut Draws::of(&[]),
+        )
     }
 
     /// Flies `npc` at `speeds`, any wait it draws its longest.
@@ -1347,19 +1387,25 @@ mod tests {
             fly(&mut own, &[], Some(&leader));
         }
         assert!(own.state.velocity.length() <= 3.0 + 1e-4);
-        let drifting = |speed: f32| {
+        let drifting = |speed: f32, rules: FlightRules| {
             let mut wreck = npc(AVERAGE, Goal::Idle, at(0.0, 0.0, speed, 0.0, 90.0));
             wreck.condition = Condition::Disabled;
-            fly_at(&mut wreck, &[], None, raised);
+            fly_under(&mut wreck, &[], None, raised, rules);
             wreck.state.velocity.length()
         };
+        for rules in [FlightRules::default(), circle()] {
+            assert!(
+                (drifting(4.0, rules) - 4.0 * flight::DISABLED_DRAG).abs() < 1e-4,
+                "under 4.5: kept, but for the drag"
+            );
+        }
         assert!(
-            (drifting(4.0) - 4.0 * flight::DISABLED_DRAG).abs() < 1e-4,
-            "under 4.5: kept, but for the drag"
+            (drifting(10.0, FlightRules::default()) - 10.0 * flight::DISABLED_DRAG).abs() < 1e-4,
+            "an NPC isn't clamped: dragged alone"
         );
         assert!(
-            (drifting(10.0) - 4.5).abs() < 1e-4,
-            "dragged, then capped at 4.5"
+            (drifting(10.0, circle()) - 4.5).abs() < 1e-4,
+            "under the circle, dragged, then capped at 4.5"
         );
     }
 
@@ -1606,10 +1652,12 @@ mod tests {
                 ship.mode
             );
             assert_eq!(ship.goal, Goal::Attack(ShipRef::Player), "tick {tick}");
+            // Each axis within its top speed, or a push past it.
+            let reach = top.own + ship.stats.handling.accel + 1e-3;
             assert!(
-                ship.state.velocity.length() <= top.own + 1e-3,
-                "tick {tick}: {} over {}",
-                ship.state.velocity.length(),
+                ship.state.velocity.x.abs() <= reach && ship.state.velocity.y.abs() <= reach,
+                "tick {tick}: {:?} over {}",
+                ship.state.velocity,
                 top.own
             );
         }
@@ -1827,9 +1875,11 @@ mod tests {
                 &mut draws,
             );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
+            // Nothing clamps an NPC: only its own thrust would slow it.
             assert!(
-                ship.state.velocity.length() <= 3.0 + 1e-4,
-                "at its top speed"
+                ship.state.velocity.length() <= velocity.length() + ship.stats.handling.accel,
+                "at the burst's speed or slowing: {:?}",
+                ship.state
             );
         }
     }
@@ -1908,8 +1958,15 @@ mod tests {
             "a disabled ship reaches the countdown too (@0x34424 → @0x34679 → @0x34a54 → @0x35026)"
         );
         assert!(
-            ship.state.velocity.length() <= 3.0 + 1e-4,
-            "drifting at its top speed"
+            ship.state.velocity.length() > 3.0,
+            "drifting on past its top speed, as nothing clamps an NPC"
+        );
+        let mut circled = burst_out(AVERAGE, speeds, &mut Draws::of(&[0]));
+        circled.condition = Condition::Disabled;
+        fly_under(&mut circled, &[], None, speeds, circle());
+        assert!(
+            circled.state.velocity.length() <= 3.0 + 1e-4,
+            "under the circle, drifting at its top speed"
         );
     }
 
@@ -2203,7 +2260,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_with_no_speed_never_moves() {
+    fn a_ship_with_no_speed_never_moves_but_to_match_a_lead_by_default() {
         let still = ShipFields { speed: 0, ..FAST };
         let sites = [planet(140, 300.0, 0.0)];
         let lead = at(500.0, 0.0, 2.0, 0.0, 90.0);
@@ -2214,11 +2271,33 @@ mod tests {
             Goal::Idle,
         ] {
             let mut ship = npc(still, goal, at(0.0, 0.0, 0.0, 0.0, 45.0));
+            let own = TopSpeeds::own_of(&ship);
+            for _ in 0..300 {
+                let flown = fly_under(&mut ship, &sites, Some(&lead), own, circle());
+                assert_eq!(flown, Outcome::Flying);
+            }
+            assert_eq!(ship.state.position, Vec2::ZERO, "the circle: {goal:?}");
+        }
+        // A top speed of none caps nothing per axis (`_AdjustedAccel`
+        // @0x2aecd-0x2aeee), so a follower matching its lead's velocity
+        // gets it; the other goals want no speed and stay put.
+        for goal in [Goal::Land(StellarId(140)), Goal::JumpOut, Goal::Idle] {
+            let mut ship = npc(still, goal, at(0.0, 0.0, 0.0, 0.0, 45.0));
             for _ in 0..300 {
                 assert_eq!(fly(&mut ship, &sites, Some(&lead)), Outcome::Flying);
             }
             assert_eq!(ship.state.position, Vec2::ZERO, "{goal:?}");
         }
+        let mut follower = npc(still, Goal::Follow(NpcId(0)), at(0.0, 0.0, 0.0, 0.0, 45.0));
+        for _ in 0..300 {
+            fly(&mut follower, &sites, Some(&lead));
+        }
+        let off = follower.state.velocity - lead.velocity;
+        assert!(
+            off.length() <= follower.stats.handling.accel,
+            "{:?}",
+            follower.state
+        );
     }
 
     #[test]
@@ -2324,9 +2403,17 @@ mod tests {
         assert_eq!(ship.state.position, Vec2::new(30.0, 10.0), "it coasts");
         let mut fast = npc(AVERAGE, Goal::Hold, at(0.0, 0.0, 10.0, 0.0, 30.0));
         fly(&mut fast, &[], None);
-        let speed = fast.state.velocity.length();
-        assert!(speed <= 3.0 + 1e-3, "capped at its top speed: {speed}");
-        assert!(fast.state.velocity.y.abs() < 1e-3, "along its course");
+        assert_eq!(
+            fast.state.velocity,
+            Vec2::new(10.0, 0.0),
+            "nothing clamps it"
+        );
+        let mut circled = npc(AVERAGE, Goal::Hold, at(0.0, 0.0, 10.0, 0.0, 30.0));
+        let own = TopSpeeds::own_of(&circled);
+        fly_under(&mut circled, &[], None, own, circle());
+        let speed = circled.state.velocity.length();
+        assert!(speed <= 3.0 + 1e-3, "under the circle, capped: {speed}");
+        assert!(circled.state.velocity.y.abs() < 1e-3, "along its course");
     }
 
     #[test]

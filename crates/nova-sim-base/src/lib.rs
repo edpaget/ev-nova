@@ -59,7 +59,7 @@ pub mod trig;
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
-pub use flight::{Controls, FlightRules, ShipState, Turn, step};
+pub use flight::{Controls, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};

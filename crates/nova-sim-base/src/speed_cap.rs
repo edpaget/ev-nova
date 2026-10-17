@@ -2,9 +2,68 @@
 //! knockback share: `_AdjustedAccel` ([`adjusted_accel`]), a push soft-capped
 //! on each axis at the top speed's share there, and `_SpeedLimit`
 //! ([`speed_limit`]), a velocity clamped to the top speed on each axis.
+//!
+//! [`RuleKey::SpeedCap`] chooses between them and the circle the port
+//! used before ([`circle`]): [`SpeedCap`] is its reading.
 
 use crate::flight::facing;
 use crate::geometry::Vec2;
+#[cfg(any(doc, test))]
+use crate::rulebook::RuleKey;
+use crate::rulebook::RuleSource;
+
+/// How a ship's speed is capped, by [`RuleKey::SpeedCap`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpeedCap {
+    /// The original's: thrust soft-capped per axis ([`adjusted_accel`]),
+    /// the player's velocity and a push clamped per axis
+    /// ([`speed_limit`]), an NPC's velocity not at all.
+    #[default]
+    PerAxis,
+    /// The port's earlier reading: every speed rescaled onto the circle of
+    /// the top speed ([`circle`]).
+    Circle,
+}
+
+impl From<RuleSource> for SpeedCap {
+    /// The engine's reading is the original's per-axis cap; the other is
+    /// the circle.
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::PerAxis,
+            RuleSource::Bible => Self::Circle,
+        }
+    }
+}
+
+impl SpeedCap {
+    /// `velocity` clamped to `top_speed` as this reading clamps a push:
+    /// each axis ([`speed_limit`]), or the circle ([`circle`]).
+    #[must_use]
+    pub fn clamp(self, velocity: Vec2, top_speed: f32) -> Vec2 {
+        match self {
+            Self::PerAxis => speed_limit(velocity, top_speed),
+            Self::Circle => circle(velocity, top_speed),
+        }
+    }
+}
+
+/// `velocity` rescaled to `top_speed` when it is faster, keeping its
+/// direction: the circle the port capped every ship's speed to before it
+/// ported `_AdjustedAccel`. A velocity at or below the top speed is left
+/// as it is, bit for bit.
+#[must_use]
+pub fn circle(velocity: Vec2, top_speed: f32) -> Vec2 {
+    let speed = velocity.length();
+    if speed > top_speed {
+        // Divided first, so a velocity along an axis lands on the top
+        // speed exactly.
+        let direction = Vec2::new(velocity.x / speed, velocity.y / speed);
+        direction * top_speed
+    } else {
+        velocity
+    }
+}
 
 /// `velocity` pushed `push` pixels a tick along `heading`, soft-capped
 /// at `top_speed`: `_AdjustedAccel` (@0x2ae4b-0x2af43). On each axis the
@@ -45,6 +104,35 @@ pub fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engines_reading_is_per_axis_and_the_other_the_circle() {
+        assert_eq!(SpeedCap::from(RuleSource::Engine), SpeedCap::PerAxis);
+        assert_eq!(SpeedCap::from(RuleSource::Bible), SpeedCap::Circle);
+        assert_eq!(SpeedCap::default(), SpeedCap::PerAxis);
+        assert_eq!(RuleKey::SpeedCap.default_source(), RuleSource::Engine);
+    }
+
+    #[test]
+    fn the_circle_rescales_a_faster_velocity_onto_the_top_speed_and_keeps_a_slower_one() {
+        assert_eq!(circle(Vec2::new(0.0, -6.0), 3.0), Vec2::new(0.0, -3.0));
+        assert_eq!(circle(Vec2::new(6.0, 8.0), 5.0), Vec2::new(3.0, 4.0));
+        assert_eq!(circle(Vec2::new(1.0, 1.0), 3.0), Vec2::new(1.0, 1.0));
+        let at = Vec2::new(1.3, -2.9);
+        assert_eq!(circle(at, at.length()), at, "exactly at it");
+    }
+
+    #[test]
+    fn a_reading_clamps_a_push_by_its_own_shape() {
+        let fast = Vec2::new(12.0, -15.0);
+        assert_eq!(SpeedCap::PerAxis.clamp(fast, 10.0), Vec2::new(10.0, -10.0));
+        let circled = SpeedCap::Circle.clamp(fast, 10.0);
+        assert!((circled.length() - 10.0).abs() < 1e-5, "{circled:?}");
+        assert!((circled.x / circled.y - fast.x / fast.y).abs() < 1e-5);
+        let slow = Vec2::new(3.0, -4.0);
+        assert_eq!(SpeedCap::PerAxis.clamp(slow, 10.0), slow);
+        assert_eq!(SpeedCap::Circle.clamp(slow, 10.0), slow);
+    }
 
     #[test]
     fn a_carrier_at_rest_gives_the_fighter_the_push_along_its_heading() {

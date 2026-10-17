@@ -89,6 +89,7 @@ mod tests {
     use crate::combat::impact::{Body, push};
     use crate::geometry::Vec2;
     use crate::reserves::Gauge;
+    use crate::speed_cap::SpeedCap;
 
     fn of_mass(mass: f32) -> HullSpec {
         HullSpec {
@@ -277,12 +278,24 @@ mod tests {
             top_speed: 10.0,
             ..Body::default()
         };
-        let right = push(&ship(40.0, 0.0), Vec2::ZERO, IMPACT, None);
+        let right = push(
+            &ship(40.0, 0.0),
+            Vec2::ZERO,
+            IMPACT,
+            None,
+            SpeedCap::PerAxis,
+        );
         assert!(
             near(right.expect("pushed"), Vec2::new(3.75, 0.0)),
             "{right:?}"
         );
-        let up = push(&ship(5.0, -60.0), Vec2::new(5.0, 0.0), IMPACT, None);
+        let up = push(
+            &ship(5.0, -60.0),
+            Vec2::new(5.0, 0.0),
+            IMPACT,
+            None,
+            SpeedCap::PerAxis,
+        );
         assert!(near(up.expect("pushed"), Vec2::new(0.0, -3.75)), "{up:?}");
         assert_eq!(IMPACT, 750.0);
     }
