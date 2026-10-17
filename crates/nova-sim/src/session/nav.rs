@@ -39,8 +39,11 @@
 //!   selected and the course cued.
 //! - The cue ([`Session::cue_course`], `_CueNextHyperRouteDest`
 //!   @0xe2dc-0xe35f): when the course's first hop is a system the ship
-//!   can jump to from here, mode 3 with it selected (@0xe33c-0xe34d);
-//!   otherwise nothing changes. It makes no sound.
+//!   can jump to from here, mode 3 with it selected (@0xe33c-0xe34d).
+//!   When the first hop has no visible system at its place, by
+//!   [`RuleKey::CueUnplacedHop`]'s engine reading, mode 3 with the first
+//!   Con slot that has none either, which reads as no destination (a −1
+//!   = −1 match, @0xe334). Otherwise nothing changes. It makes no sound.
 //! - Hyper Select, `\` ([`Session::select_next_system`],
 //!   @0x69bb2-0x69cec): with links, [`SimSound::HyperSelected`]
 //!   (@0x69c89), and mode 3 with the next link selected, cycling from the
@@ -207,6 +210,10 @@ use crate::{RuleKey, RuleSource, StellarPick};
 /// original's link cycles step through.
 pub(super) const CON_SLOTS: usize = 16;
 
+/// The IDs a Con slot can name: any other is an empty slot, as the loader
+/// sets it to −1 (`_LoadObjectData` @0x7806d-0x780b8).
+const SYSTEM_IDS: std::ops::RangeInclusive<i16> = 128..=2175;
+
 /// The Con slot a mode-3 selection was written from, as the original
 /// keeps it at +0x6c where ours keeps the system. A setter that knows the
 /// slot notes it ([`Session::cycle_map_selection`], [`Session::cue_course`]);
@@ -223,13 +230,17 @@ pub(super) struct NavSlot {
 impl Session {
     /// The player's nav mode and its selection, a hyperspace selection
     /// resolved by place: the visible system at its place, or none when
-    /// there is none (see the module docs).
+    /// there is none or it isn't in the catalog, as
+    /// `_FindActiveCoLocatedSystem` gives −1 for a system with no `sÿst`
+    /// (see the module docs).
     #[must_use]
     pub fn nav_mode(&self) -> NavMode {
         match self.nav {
-            NavMode::Hyperspace(selected) => {
-                NavMode::Hyperspace(selected.and_then(|system| self.galaxy.same_place(system)))
-            }
+            NavMode::Hyperspace(selected) => NavMode::Hyperspace(
+                selected
+                    .filter(|&system| self.galaxy.exists(system))
+                    .and_then(|system| self.galaxy.same_place(system)),
+            ),
             mode => mode,
         }
     }
@@ -365,6 +376,9 @@ impl Session {
     /// cycle steps on from ([`Session::cycle_map_selection`]).
     pub fn cue_course(&mut self) {
         let Some(&hop) = self.course_shown().first() else {
+            if !self.pilot.course.is_empty() {
+                self.cue_unplaced_hop();
+            }
             return;
         };
         if self
@@ -374,6 +388,39 @@ impl Session {
             .contains(&hop)
         {
             self.select_at_place(hop);
+        }
+    }
+
+    /// The cue of a first hop with no visible system at its place, as
+    /// [`RuleKey::CueUnplacedHop`] says. By the engine,
+    /// `_CueNextHyperRouteDest` resolves the hop to −1 (@0xe2fa) and
+    /// matches it against each Con slot's own resolution (@0xe334): the
+    /// first of the current system's [`CON_SLOTS`] that is set and names a
+    /// system with no visible system at its place, or an ID in 128-2175
+    /// with no `sÿst`, gives mode 3 with that slot, raw, and the slot noted
+    /// (@0xe33c-0xe34d). An ID outside 128-2175 is an empty slot, as the
+    /// loader sets it to −1 (`_LoadObjectData` @0x7806d-0x780b8). The
+    /// selection reads as none ([`Session::nav_mode`]), J refuses it, and
+    /// the map draws no mode-3 link for it, as `_DrawMap` skips a slot
+    /// resolving to −1 (@0xec25-0xec2b). By the other reading nothing
+    /// changes.
+    fn cue_unplaced_hop(&mut self) {
+        if self.rules.source_for(RuleKey::CueUnplacedHop) != RuleSource::Engine {
+            return;
+        }
+        let slots = self.galaxy.con_slots(self.pilot.system);
+        let dead = slots.iter().take(CON_SLOTS).position(|&slot| {
+            SYSTEM_IDS.contains(&slot.0)
+                && (!self.galaxy.exists(slot) || self.galaxy.same_place(slot).is_none())
+        });
+        if let Some(slot) = dead {
+            let selected = slots[slot];
+            self.set_nav(NavMode::Hyperspace(Some(selected)));
+            self.nav_slot = Some(NavSlot {
+                system: self.pilot.system,
+                slot,
+                selected,
+            });
         }
     }
 
@@ -687,7 +734,8 @@ mod tests {
     use crate::sound::SimSound;
     use crate::targeting::TargetPick;
     use crate::testkit::{
-        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, land_now, star, starting,
+        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, hideable, land_now,
+        star, starting,
     };
     use crate::{RuleKey, RuleSource, Rulebook};
 
@@ -1373,6 +1421,98 @@ mod tests {
             assert_eq!(session.nav_mode(), before, "no course");
         }
         assert_eq!(session.take_sounds(), [], "silent");
+    }
+
+    /// `catalog` [`hideable`]'s session, its course's first hop 132
+    /// hidden alone at its place.
+    fn unplaced(mut catalog: FakePilotCatalog, source: RuleSource) -> Session {
+        hideable(&mut catalog);
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::CueUnplacedHop, source));
+        assert!(hide(&mut session, &catalog, &[132]));
+        session.pilot.course = ids(&[132]);
+        quiet(session)
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_selects_the_first_dead_slot_by_the_engine() {
+        // `hub`'s 130 lists 134, 131, 131, 130, 999 and 135: 999, in the
+        // ID range with no `sÿst`, is the first slot with nothing at its
+        // place (@0xe334).
+        let mut session = unplaced(hub(), RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(999), "the raw slot");
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Hyperspace(None),
+            "no destination"
+        );
+        assert_eq!(
+            session.map_drawing(None, &[]).mode3_link,
+            None,
+            "no link drawn"
+        );
+        assert_eq!(session.take_sounds(), [], "silent");
+        fly_out(&mut session);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+        assert!(session.cycle_map_selection());
+        assert_eq!(session.nav, hyperspace(135), "after the slot noted");
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_selects_a_slot_to_a_hidden_system_with_nothing_at_its_place() {
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131, 132]);
+        let mut session = unplaced(catalog, RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(132));
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_passes_over_empty_slots_and_ids_out_of_range() {
+        // -1 and 50 are empty slots in the original (@0x7806d-0x780b8).
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131, -1, 50, 999]);
+        let mut session = unplaced(catalog, RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(999));
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_changes_nothing_by_the_other_reading_or_with_no_dead_slot() {
+        let mut session = unplaced(hub(), RuleSource::Bible);
+        session.nav = stellar(128);
+        session.cue_course();
+        assert_eq!(session.nav, stellar(128), "by the other reading");
+
+        for source in RuleSource::ALL {
+            let mut session = unplaced(catalog(), source);
+            session.nav = stellar(128);
+            session.cue_course();
+            assert_eq!(session.nav, stellar(128), "130 lists 131 alone, {source:?}");
+        }
+    }
+
+    #[test]
+    fn a_placed_first_hop_cues_as_ever_by_both_readings() {
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog())
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::CueUnplacedHop, source));
+            session.pilot.course = ids(&[131, 132]);
+            session.cue_course();
+            assert_eq!(session.nav_mode(), hyperspace(131), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_selection_not_in_the_catalog_reads_as_none() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.nav = hyperspace(999);
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+        assert_eq!(session.map_preselection(), None);
     }
 
     #[test]
