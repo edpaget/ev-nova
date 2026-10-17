@@ -32,7 +32,7 @@ use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{StarMap, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GovtId, NebulaEntry, NebulaPicture, SystemEntry, SystemId};
-use super::view::{Bounds, MAP_HEIGHT, MapView};
+use super::view::{Bounds, Transform};
 use crate::{Color, Point};
 
 /// Independent systems' colour: a light grey unlike any stock government's.
@@ -62,16 +62,16 @@ pub struct NebulaPlacement {
     pub height: f32,
 }
 
-/// Where `nebula` is drawn in `view`: its map rectangle scaled, filled by
+/// Where `nebula` is drawn through `transform`: its map rectangle scaled, filled by
 /// the smallest picture at least as wide as that, or else the largest, so
 /// a picture is shrunk rather than enlarged whenever possible. `None` when
 /// it has no pictures or no area.
 #[must_use]
-pub fn placement(nebula: &NebulaEntry, view: &MapView) -> Option<NebulaPlacement> {
+pub fn placement(nebula: &NebulaEntry, transform: &Transform) -> Option<NebulaPlacement> {
     if nebula.width <= 0 || nebula.height <= 0 {
         return None;
     }
-    let scale = view.scale();
+    let scale = transform.scale;
     let width = f32::from(nebula.width) * scale;
     let height = f32::from(nebula.height) * scale;
     let pictures = nebula.pictures.iter();
@@ -83,7 +83,7 @@ pub fn placement(nebula: &NebulaEntry, view: &MapView) -> Option<NebulaPlacement
     let corner = Point::new(f32::from(nebula.left), f32::from(nebula.top));
     Some(NebulaPlacement {
         picture: *picture,
-        top_left: view.world_to_screen(corner),
+        top_left: transform.world_to_screen(corner),
         width,
         height,
     })
@@ -298,18 +298,16 @@ impl GalaxyModel {
         &self.problems
     }
 
-    /// The system whose dot is nearest `at`, within [`HIT_RADIUS`]; on a
-    /// tie, the lowest ID. Points outside the map area hit nothing.
+    /// The system whose dot, drawn through `transform`, is nearest `at`,
+    /// within [`HIT_RADIUS`]; on a tie, the lowest ID. Whether `at` is in
+    /// the map area at all is the map's to say.
     #[must_use]
-    pub fn hit(&self, at: Point, view: &MapView) -> Option<SystemId> {
-        if at.y >= MAP_HEIGHT {
-            return None;
-        }
+    pub fn hit(&self, at: Point, transform: &Transform) -> Option<SystemId> {
         let mut nearest: Option<(f32, SystemId)> = None;
         // By ascending ID, and only a strictly nearer system replaces the
         // one found, so ties go to the lowest ID.
         for system in &self.systems {
-            let dot = view.world_to_screen(system.position());
+            let dot = transform.world_to_screen(system.position());
             let distance = (dot.x - at.x).hypot(dot.y - at.y);
             let nearer = nearest.is_none_or(|(best, _)| distance < best);
             if distance <= HIT_RADIUS && nearer {
@@ -339,8 +337,13 @@ impl GalaxyModel {
     /// system selects the next system there (by ID, wrapping round). `None`
     /// when it hits nothing.
     #[must_use]
-    pub fn click(&self, at: Point, view: &MapView, current: Option<SystemId>) -> Option<SystemId> {
-        let hit = self.hit(at, view)?;
+    pub fn click(
+        &self,
+        at: Point,
+        transform: &Transform,
+        current: Option<SystemId>,
+    ) -> Option<SystemId> {
+        let hit = self.hit(at, transform)?;
         let stack = self.stack(hit);
         let next = current
             .and_then(|current| stack.iter().position(|&id| id == current))
@@ -354,7 +357,7 @@ impl GalaxyModel {
 mod tests {
     use super::*;
     use crate::galaxy::catalog::NebulaId;
-    use crate::galaxy::view::{MAP_CENTER, MAP_HEIGHT, SCALES};
+    use crate::galaxy::view::{MAP_CENTER, MapView, SCALES};
     use nova_sim::story::GalaxyOverlay;
 
     fn at(x: f32, y: f32) -> Point {
@@ -573,7 +576,7 @@ mod tests {
         for steps in -3..=3 {
             let view = view_at(steps);
             let scale = view.scale();
-            let placed = placement(&nebula, &view).expect("placed");
+            let placed = placement(&nebula, &view.transform()).expect("placed");
             assert_eq!(placed.top_left, view.world_to_screen(at(-20.0, -40.0)));
             assert_eq!(
                 (placed.width, placed.height),
@@ -581,7 +584,7 @@ mod tests {
             );
             assert_eq!(placed.picture, picture(9500, 25), "the only picture");
         }
-        let actual = placement(&nebula, &view_at(0)).expect("placed");
+        let actual = placement(&nebula, &view_at(0).transform()).expect("placed");
         assert_eq!(
             actual.top_left,
             at(MAP_CENTER.x - 20.0, MAP_CENTER.y - 40.0)
@@ -598,7 +601,7 @@ mod tests {
             picture(9524, 25),
         ]);
         let chosen = |steps| {
-            placement(&nebula, &view_at(steps))
+            placement(&nebula, &view_at(steps).transform())
                 .expect("placed")
                 .picture
                 .id
@@ -619,7 +622,7 @@ mod tests {
     #[test]
     fn a_nebula_with_no_pictures_or_no_area_is_not_placed_or_kept() {
         let none = nebula(Vec::new());
-        assert_eq!(placement(&none, &view_at(0)), None);
+        assert_eq!(placement(&none, &view_at(0).transform()), None);
         let flat = NebulaEntry {
             id: NebulaId(129),
             height: 0,
@@ -630,8 +633,8 @@ mod tests {
             width: -5,
             ..nebula(vec![picture(9514, 10)])
         };
-        assert_eq!(placement(&flat, &view_at(0)), None);
-        assert_eq!(placement(&thin, &view_at(0)), None);
+        assert_eq!(placement(&flat, &view_at(0).transform()), None);
+        assert_eq!(placement(&thin, &view_at(0).transform()), None);
         let sliver = NebulaEntry {
             id: NebulaId(131),
             width: 1,
@@ -659,9 +662,12 @@ mod tests {
     fn a_click_on_a_dot_hits_its_system() {
         let model = model(vec![system(128, 0, 0, &[]), system(129, 100, 50, &[])]);
         let view = view_at(0);
-        assert_eq!(model.hit(MAP_CENTER, &view), Some(SystemId(128)));
+        assert_eq!(
+            model.hit(MAP_CENTER, &view.transform()),
+            Some(SystemId(128))
+        );
         let beta = view.world_to_screen(at(100.0, 50.0));
-        assert_eq!(model.hit(beta, &view), Some(SystemId(129)));
+        assert_eq!(model.hit(beta, &view.transform()), Some(SystemId(129)));
     }
 
     #[test]
@@ -671,14 +677,18 @@ mod tests {
         let c = MAP_CENTER;
         for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
             let edge = at(c.x + dx * HIT_RADIUS, c.y + dy * HIT_RADIUS);
-            assert_eq!(model.hit(edge, &view), Some(SystemId(128)), "{edge:?}");
+            assert_eq!(
+                model.hit(edge, &view.transform()),
+                Some(SystemId(128)),
+                "{edge:?}"
+            );
             let past = at(c.x + dx * (HIT_RADIUS + 0.5), c.y + dy * (HIT_RADIUS + 0.5));
-            assert_eq!(model.hit(past, &view), None, "{past:?}");
+            assert_eq!(model.hit(past, &view.transform()), None, "{past:?}");
         }
         // Diagonally, 6 and 6 is 8.49 away: a miss.
-        assert_eq!(model.hit(at(c.x + 6.0, c.y + 6.0), &view), None);
+        assert_eq!(model.hit(at(c.x + 6.0, c.y + 6.0), &view.transform()), None);
         assert_eq!(
-            model.hit(at(c.x + 4.8, c.y + 6.4), &view),
+            model.hit(at(c.x + 4.8, c.y + 6.4), &view.transform()),
             Some(SystemId(128))
         );
     }
@@ -688,13 +698,28 @@ mod tests {
         let model = model(vec![system(128, 0, 0, &[]), system(129, 10, 0, &[])]);
         let view = view_at(0);
         let c = MAP_CENTER;
-        assert_eq!(model.hit(at(c.x + 4.0, c.y), &view), Some(SystemId(128)));
-        assert_eq!(model.hit(at(c.x + 6.0, c.y), &view), Some(SystemId(129)));
+        assert_eq!(
+            model.hit(at(c.x + 4.0, c.y), &view.transform()),
+            Some(SystemId(128))
+        );
+        assert_eq!(
+            model.hit(at(c.x + 6.0, c.y), &view.transform()),
+            Some(SystemId(129))
+        );
         // Exactly between them: the lower ID.
-        assert_eq!(model.hit(at(c.x + 5.0, c.y), &view), Some(SystemId(128)));
+        assert_eq!(
+            model.hit(at(c.x + 5.0, c.y), &view.transform()),
+            Some(SystemId(128))
+        );
         let model = model_rev();
-        assert_eq!(model.hit(at(c.x + 4.0, c.y), &view), Some(SystemId(129)));
-        assert_eq!(model.hit(at(c.x + 6.0, c.y), &view), Some(SystemId(128)));
+        assert_eq!(
+            model.hit(at(c.x + 4.0, c.y), &view.transform()),
+            Some(SystemId(129))
+        );
+        assert_eq!(
+            model.hit(at(c.x + 6.0, c.y), &view.transform()),
+            Some(SystemId(128))
+        );
     }
 
     /// Systems 129 at the origin and 128 ten units right.
@@ -705,35 +730,28 @@ mod tests {
     #[test]
     fn systems_at_one_position_hit_the_lowest_id() {
         let model = model(vec![system(531, 0, 0, &[]), system(130, 0, 0, &[])]);
-        assert_eq!(model.hit(MAP_CENTER, &view_at(0)), Some(SystemId(130)));
+        assert_eq!(
+            model.hit(MAP_CENTER, &view_at(0).transform()),
+            Some(SystemId(130))
+        );
     }
 
+    // Which points are in the map area at all is the map's to say
+    // (`GalaxyMap::in_map`): its `a_press_in_the_panel_starts_nothing`
+    // and `a_click_released_in_the_panel_keeps_the_selection` pin the
+    // viewer's panel edge.
     #[test]
-    fn empty_space_and_the_panel_hit_nothing() {
+    fn empty_space_hits_nothing() {
         let view = view_at(0);
         let model = model(vec![system(128, 0, 0, &[])]);
         assert_eq!(
-            model.hit(at(MAP_CENTER.x + 40.0, MAP_CENTER.y), &view),
+            model.hit(at(MAP_CENTER.x + 40.0, MAP_CENTER.y), &view.transform()),
             None
         );
         assert_eq!(
-            GalaxyModel::new(Galaxy::default()).hit(MAP_CENTER, &view),
+            GalaxyModel::new(Galaxy::default()).hit(MAP_CENTER, &view.transform()),
             None
         );
-        // A system just above the panel, clicked 4 units below it.
-        let low = (MAP_HEIGHT - MAP_CENTER.y - 4.0) as i16;
-        let model = model_with(system(128, 0, low, &[]));
-        let dot = view.world_to_screen(at(0.0, f32::from(low)));
-        assert_eq!(model.hit(dot, &view), Some(SystemId(128)));
-        assert_eq!(
-            model.hit(at(dot.x, MAP_HEIGHT - 0.5), &view),
-            Some(SystemId(128))
-        );
-        assert_eq!(model.hit(at(dot.x, MAP_HEIGHT), &view), None);
-    }
-
-    fn model_with(system: SystemEntry) -> GalaxyModel {
-        model(vec![system])
     }
 
     #[test]
@@ -742,10 +760,13 @@ mod tests {
         // 10 map units right: 10 on screen at 100%, 7.5 at 75%.
         let offset = at(10.0, 0.0);
         let actual = view_at(0);
-        assert_eq!(model.hit(actual.world_to_screen(offset), &actual), None);
+        assert_eq!(
+            model.hit(actual.world_to_screen(offset), &actual.transform()),
+            None
+        );
         let small = view_at(-1);
         assert_eq!(
-            model.hit(small.world_to_screen(offset), &small),
+            model.hit(small.world_to_screen(offset), &small.transform()),
             Some(SystemId(128))
         );
         assert_eq!(SCALES[small.zoom()], 0.75);
@@ -784,7 +805,7 @@ mod tests {
         let mut selected = None;
         let mut visited = Vec::new();
         for _ in 0..3 {
-            selected = model.click(sol, &view, selected);
+            selected = model.click(sol, &view.transform(), selected);
             visited.push(selected.expect("a system").0);
         }
         assert_eq!(visited, [130, 531, 130]);
@@ -792,7 +813,7 @@ mod tests {
         let triple = view.world_to_screen(at(50.0, 0.0));
         visited.clear();
         for _ in 0..4 {
-            selected = model.click(triple, &view, selected);
+            selected = model.click(triple, &view.transform(), selected);
             visited.push(selected.expect("a system").0);
         }
         assert_eq!(visited, [600, 650, 700, 600]);
@@ -805,17 +826,23 @@ mod tests {
         let neighbour = view.world_to_screen(at(30.0, 0.0));
         // From the alternate, a click on a lone neighbour selects it, and
         // its own repeated clicks keep it.
-        let selected = model.click(neighbour, &view, Some(SystemId(531)));
+        let selected = model.click(neighbour, &view.transform(), Some(SystemId(531)));
         assert_eq!(selected, Some(SystemId(132)));
-        assert_eq!(model.click(neighbour, &view, selected), Some(SystemId(132)));
+        assert_eq!(
+            model.click(neighbour, &view.transform(), selected),
+            Some(SystemId(132))
+        );
         // From the neighbour, the stack starts again at its lowest ID.
         assert_eq!(
-            model.click(MAP_CENTER, &view, selected),
+            model.click(MAP_CENTER, &view.transform(), selected),
             Some(SystemId(130))
         );
         // Empty space selects nothing.
         let empty = at(MAP_CENTER.x, MAP_CENTER.y + 100.0);
-        assert_eq!(model.click(empty, &view, Some(SystemId(130))), None);
+        assert_eq!(
+            model.click(empty, &view.transform(), Some(SystemId(130))),
+            None
+        );
     }
 
     // The session's galaxy.
@@ -909,7 +936,7 @@ mod tests {
         assert_eq!(model.stack(SystemId(130)), ids(&[130]), "alone there now");
         let view = view_at(0);
         let place = view.world_to_screen(at(50.0, 50.0));
-        assert_eq!(model.hit(place, &view), Some(SystemId(130)));
+        assert_eq!(model.hit(place, &view.transform()), Some(SystemId(130)));
         assert_eq!(
             model.links(),
             [

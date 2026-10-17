@@ -970,7 +970,7 @@ impl GalaxyMap {
         };
         if press.travelled <= CLICK_SLOP && self.in_map(at) {
             let from = self.selected.filter(|_| self.clicked);
-            let clicked = self.model.click(at, &self.view, from);
+            let clicked = self.model.click(at, &self.view.transform(), from);
             if self.mode == MapMode::Hypergate {
                 if clicked.is_some_and(|id| self.offered.contains(&id)) {
                     self.selected = clicked;
@@ -1001,7 +1001,7 @@ impl GalaxyMap {
     fn draw_map(&self, list: &mut DrawList) {
         // Every nebula before any line or dot, so behind the systems.
         for nebula in self.model.nebulae() {
-            if let Some(placed) = placement(nebula, &self.view) {
+            if let Some(placed) = placement(nebula, &self.view.transform()) {
                 list.stretched_picture(
                     ImageKey::picture(placed.picture.id),
                     placed.top_left,
@@ -2010,7 +2010,7 @@ mod tests {
         for _ in 0..SCALES.len() {
             let list = drawn(&map);
             let nebula = &map.model().nebulae()[0];
-            let placed = placement(nebula, map.view()).expect("placed");
+            let placed = placement(nebula, &map.view().transform()).expect("placed");
             assert_eq!(
                 list.iter().next(),
                 Some(&DrawCommand::StretchedPicture {
