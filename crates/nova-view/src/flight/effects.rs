@@ -630,6 +630,7 @@ mod tests {
     fn boom_look(image_id: i16, frames: u16, advance: f32, sound: Option<i16>) -> BoomLook {
         BoomLook {
             sheet: Ok(EffectSheet {
+                frame_width: 0,
                 image_id,
                 frames: NonZeroU16::new(frames).expect("non-zero"),
             }),
@@ -654,6 +655,7 @@ mod tests {
             })
         };
         Looks {
+            smokes: BTreeMap::default(),
             weapons: BTreeMap::from([
                 (WeaponId(128), weapon(Some(208), 0, Some(5))),
                 (WeaponId(146), weapon(Some(210), LOOPED_SOUND, Some(3))),

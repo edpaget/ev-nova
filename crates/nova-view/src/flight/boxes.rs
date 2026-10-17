@@ -88,6 +88,7 @@ mod tests {
 
     fn sheet(frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id: 600,
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
@@ -122,6 +123,7 @@ mod tests {
             boxes: (0..=4)
                 .map(|graphic: u16| {
                     let sheet = EffectSheet {
+                        frame_width: 0,
                         image_id: 500 + graphic.cast_signed(),
                         frames: NonZeroU16::new(36).expect("non-zero"),
                     };

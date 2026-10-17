@@ -481,6 +481,7 @@ mod tests {
 
     fn looks(weapons: &[(i16, WeaponLook)]) -> Looks {
         Looks {
+            smokes: BTreeMap::default(),
             weapons: weapons
                 .iter()
                 .map(|(id, look)| (WeaponId(*id), Ok(look.clone())))
@@ -494,6 +495,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id,
             frames: n(frames),
         }

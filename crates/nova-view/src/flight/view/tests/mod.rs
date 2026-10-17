@@ -242,6 +242,8 @@ const FIELDS: ShipFields = ShipFields {
 
 fn sheet() -> ShipSheet {
     ShipSheet {
+        weapon: None,
+        weap_decay: 0,
         image_id: 2000,
         rotations: NonZeroU16::new(36).expect("non-zero"),
         frame_width: 40,
@@ -295,10 +297,12 @@ fn catalog() -> FakeCatalog {
         cards: Vec::new(),
         codes: Vec::new(),
         box_sheet: Ok(EffectSheet {
+            frame_width: 0,
             image_id: 500,
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
+            frame_width: 0,
             image_id: 651,
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
@@ -804,6 +808,7 @@ impl CombatLooks for FakeCatalog {
         match graphic {
             0 => self.box_sheet.clone(),
             1..=4 => Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 500 + graphic.cast_signed(),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
@@ -814,6 +819,7 @@ impl CombatLooks for FakeCatalog {
     /// Type `kind`'s sheet: `rlëD` 1800 + `kind`, of 36 frames.
     fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
+            frame_width: 0,
             image_id: 1800 + i16::from(kind),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
@@ -821,6 +827,10 @@ impl CombatLooks for FakeCatalog {
 
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         self.cursor_sheet.clone()
+    }
+
+    fn smoke_sheet(&self, _set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
+        None
     }
 }
 
@@ -2058,6 +2068,7 @@ fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
 
 fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
+        frame_width: 0,
         image_id,
         frames: Frames::new(frames).expect("non-zero"),
     }

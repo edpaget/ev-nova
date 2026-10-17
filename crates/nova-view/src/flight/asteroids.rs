@@ -62,6 +62,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
