@@ -1028,6 +1028,7 @@ impl CombatCatalog for GameData {
                     id: ShipId(id),
                     flags: record.flags.bits(),
                     flags2: record.flags2.bits(),
+                    flags3: record.flags3.bits(),
                     death_delay: record.death_delay,
                     explode1: record.explode1,
                     explode2: record.explode2,
@@ -3736,6 +3737,7 @@ mod tests {
         put_i16s(&mut bytes, 0x3E, &[120]);
         put_i16s(&mut bytes, 0x46, &[325]);
         bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
+        bytes[0x726..0x728].copy_from_slice(&0x0040_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
         put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
         put_i16s(&mut bytes, 0x6DE, &[0, 20, 0, 0]);
@@ -3766,6 +3768,7 @@ mod tests {
             id: ShipId(id),
             flags: 0x0130,
             flags2: 0,
+            flags3: 0x0040,
             death_delay: 60,
             explode1: 4,
             explode2: 1005,

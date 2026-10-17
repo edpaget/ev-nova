@@ -30,6 +30,7 @@ use super::catalog::{Looks, WeaponId, WeaponLook};
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
 use crate::{Color, DrawList, ImageKey, Point};
+use nova_sim::sprite_layer::SpriteLayer;
 
 /// `Flags`: the shot's frames spin with its age, not its heading.
 pub const SPINS: u16 = 0x0001;
@@ -157,8 +158,8 @@ fn faded(raw: u32, alpha: i32) -> Color {
     Color::rgba(color.r, color.g, color.b, a)
 }
 
-/// A shot to draw: where on screen, which way it heads, how old it is and
-/// its weapon.
+/// A shot to draw: where on screen, which way it heads, how old it is,
+/// its weapon and the sprite layer it is drawn in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShotShown {
     /// Where its centre is drawn, on screen.
@@ -169,30 +170,37 @@ pub struct ShotShown {
     pub age: u32,
     /// Its weapon.
     pub weapon: WeaponId,
+    /// The layer it is drawn in among the ships
+    /// ([`nova_sim::sprite_layer`]).
+    pub layer: SpriteLayer,
 }
 
-/// Draws each of `shots` as its weapon's frame ([`shot_frame`]), a
-/// translucent one at [`TRANSLUCENT_ALPHA`]; nothing for a weapon whose
-/// shots have no graphic, and a crossed box for one whose look or sheet
-/// was not read.
+/// Draws each of `shots` in turn ([`draw_shot`]).
 pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks) {
     for shot in shots {
-        let Some(look) = looks.weapon(shot.weapon) else {
-            crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER);
-            continue;
-        };
-        match &look.sheet {
-            None => {}
-            Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
-            Some(Ok(sheet)) => {
-                let frame = shot_frame(shot.heading, shot.age, sheet.frames, look);
-                let tint = if look.flags3 & TRANSLUCENT == 0 {
-                    Color::WHITE
-                } else {
-                    translucent()
-                };
-                list.sprite(ImageKey::sprite(sheet.image_id, frame), shot.at, tint);
-            }
+        draw_shot(list, shot, looks);
+    }
+}
+
+/// Draws `shot` as its weapon's frame ([`shot_frame`]), a translucent one
+/// at [`TRANSLUCENT_ALPHA`]; nothing for a weapon whose shots have no
+/// graphic, and a crossed box for one whose look or sheet was not read.
+pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks) {
+    let Some(look) = looks.weapon(shot.weapon) else {
+        crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER);
+        return;
+    };
+    match &look.sheet {
+        None => {}
+        Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
+        Some(Ok(sheet)) => {
+            let frame = shot_frame(shot.heading, shot.age, sheet.frames, look);
+            let tint = if look.flags3 & TRANSLUCENT == 0 {
+                Color::WHITE
+            } else {
+                translucent()
+            };
+            list.sprite(ImageKey::sprite(sheet.image_id, frame), shot.at, tint);
         }
     }
 }
@@ -523,6 +531,7 @@ mod tests {
             heading: 90.0,
             age: 3,
             weapon: WeaponId(weapon),
+            layer: SpriteLayer::Shots,
         };
         let mut list = DrawList::new();
         draw_shots(

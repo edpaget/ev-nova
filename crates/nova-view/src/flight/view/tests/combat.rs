@@ -845,6 +845,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         id: ShipId(129),
         flags: 0,
         flags2: 0,
+        flags3: 0,
         death_delay: 0,
         explode1: -1,
         explode2: -1,
@@ -1178,8 +1179,10 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
         |c| matches!(c, DrawCommand::Text { origin, .. } if *origin == TITLE),
     );
     let hud = hud_at(&list);
+    // An unguided shot is in the shot layer 0x3b52f0, under the intact
+    // ships (`_SetupSpriteWorld` @0x21d0c-0x21e24).
     let order = [
-        stellar, under, npc, ship, shot, over, explosion, brackets, title, hud,
+        stellar, under, shot, npc, ship, over, explosion, brackets, title, hud,
     ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")
@@ -1217,6 +1220,27 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
     assert!(
         (drawn_at.1.x - expected.x).abs() < 1e-3 && (drawn_at.1.y - expected.y).abs() < 1e-3,
         "{drawn_at:?} {expected:?}"
+    );
+}
+
+#[test]
+fn a_shot_is_drawn_under_the_intact_player_in_the_shot_layer() {
+    let mut view = fighting(armed(0, &[BLASTER]), &[]);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    view.tick(TICK / 2);
+    let list = drawn(&view);
+    let shot = list
+        .iter()
+        .position(
+            |command| matches!(*command, DrawCommand::Sprite { image, .. } if image.id == 3500),
+        )
+        .expect("the shot");
+    let centre = view.camera().world_to_screen(view.shown_position());
+    assert!(
+        shot < drawn_at(&list, centre),
+        "under the player (0x3b52f0)"
     );
 }
 

@@ -1999,6 +1999,7 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         id: ShipId(id),
         flags: 0,
         flags2: 0,
+        flags3: 0,
         death_delay: 0,
         explode1: -1,
         explode2: 0,

@@ -89,6 +89,7 @@ use super::ShipRef;
 use super::damage::Blast;
 use super::hull::Condition;
 use super::jamming::{JAMMING_TYPES, Jamming};
+pub use super::shot_layer::ShotLayer;
 use super::sides::{Sides, Ties};
 use super::weapon::{
     Guidance, LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_AWAY_JAMMED, TURNS_ON_FIRER,
@@ -470,24 +471,6 @@ pub enum Source {
     Other,
 }
 
-/// The sprite layer a shot's sprite is in, which decides what its
-/// collision passes test it against (`_PutSpriteInLayer`; see
-/// [`Shot::hit`] and [`Combat`](super::Combat)'s step 2).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ShotLayer {
-    /// The shot layer 0x3b52f0, where every ship's contact pass tests a
-    /// shot: every shot but point defence fired at a missile.
-    #[default]
-    Shots,
-    /// Point defence's own layer 0x3b53bc, which only the missile pass
-    /// walks (`_DoPlayGameWork` @0x43fff-0x44010) and no ship's contact
-    /// pass acts on (@0x43fdd-0x43ffa, @0x36fbd-0x36fd6): a point-defence
-    /// shot (9), until `_HandleShipPointDefense` moves one fired at a ship
-    /// to [`ShotLayer::Shots`] (@0x398a7-0x398c2), where nothing moves it
-    /// back.
-    PointDefence,
-}
-
 /// A shot in flight.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shot {
@@ -541,10 +524,15 @@ pub struct Shot {
     /// and never misses. A sub-munition carries none too: see
     /// [`submunition`](super::submunition).
     pub miss_roll: Option<u32>,
-    /// The sprite layer it is in: [`ShotLayer::PointDefence`] for a
-    /// point-defence shot as it is launched, and [`ShotLayer::Shots`] for
-    /// any other, or one fired at a ship.
+    /// The sprite layer it is in, as `_SpawnShot` puts it
+    /// ([`ShotLayer::spawned`]), or [`ShotLayer::Shots`] for point defence
+    /// fired at a ship.
     pub layer: ShotLayer,
+    /// Whether its firer's class has `shïp` `Flags3` 0x0040 as it fired
+    /// ([`HullSpec::turret_shots_over`](super::hull::HullSpec::turret_shots_over)),
+    /// which a sub-munition's layer falls back on once the firer has left
+    /// the fight (see [`submunition`](super::submunition)).
+    pub turret_over: bool,
     /// Its rolls against each jamming type (the original's +0x38-+0x3e),
     /// drawn as it is launched ([`jamming::roll`](super::jamming::roll)).
     pub jam_rolls: [u16; JAMMING_TYPES],
@@ -703,11 +691,8 @@ impl Shot {
             generation: 0,
             disable_only: weapon.disable_only(),
             miss_roll: None,
-            layer: if weapon.guidance == Guidance::PointDefence {
-                ShotLayer::PointDefence
-            } else {
-                ShotLayer::Shots
-            },
+            layer: ShotLayer::spawned(weapon.guidance, true, false),
+            turret_over: false,
             jam_rolls: [0; JAMMING_TYPES],
             moved_from: None,
         }
@@ -1739,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn a_point_defence_shot_is_launched_in_point_defences_layer_and_any_other_in_the_shot_layer() {
+    fn a_shot_is_launched_in_its_guidances_layer() {
         let layer = |guidance| {
             Shot::launch(
                 spec(guidance, 1000, 10),
@@ -1751,7 +1736,8 @@ mod tests {
             .layer
         };
         assert_eq!(layer(9), ShotLayer::PointDefence);
-        for guidance in [-1, 0, 1, 3, 4, 5, 6, 7, 8, 10] {
+        assert_eq!(layer(1), ShotLayer::Homing);
+        for guidance in [-1, 0, 3, 4, 5, 6, 7, 8, 10] {
             assert_eq!(layer(guidance), ShotLayer::Shots, "{guidance}");
         }
         assert_eq!(ShotLayer::default(), ShotLayer::Shots);

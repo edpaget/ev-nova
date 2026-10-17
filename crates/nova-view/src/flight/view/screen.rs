@@ -277,8 +277,7 @@ impl<
         boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
-        self.draw_ships(list, &camera);
-        weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
+        self.draw_sprites(list, &camera);
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
         self.draw_brackets(list, scene, &camera);

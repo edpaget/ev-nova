@@ -571,6 +571,7 @@ mod interface;
 mod messages;
 mod readouts;
 mod screen;
+mod sprites;
 mod travel;
 
 pub use messages::*;

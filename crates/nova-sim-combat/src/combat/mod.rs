@@ -34,6 +34,8 @@
 //!   reports once each about game data it does not handle yet.
 //! - [`shockwave`]: what the shockwave of a heavy ship's final explosion
 //!   does to each ship it reaches, and how it pushes it.
+//! - [`shot_layer`]: the sprite layer `_SpawnShot` puts a shot in, which
+//!   decides its collision passes and where it is drawn.
 //! - [`sides`]: who a shot or a beam may hit, by the ships' leaders,
 //!   governments and `düde`s.
 //! - [`stellar`]: which shots hit a destroyable stellar, and what they
@@ -300,6 +302,7 @@ pub mod jamming;
 pub mod projectile;
 pub mod report;
 pub mod shockwave;
+pub mod shot_layer;
 pub mod sides;
 pub mod stellar;
 pub mod submunition;
@@ -1543,6 +1546,10 @@ impl Combat {
     ///   from none, flies as aimed, and so does point defence. A dropped
     ///   bomb or rocket reads no heading, so keeps its launch velocity, as
     ///   the gate it fails holds the broadside too.
+    /// - A shot is put in its sprite layer by its guidance
+    ///   ([`ShotLayer::spawned`], @0x3f0a9-0x3f143), a turret (4) of a ship
+    ///   of `Flags3` 0x0040 over the ships, and carries that bit for its
+    ///   sub-munitions ([`Shot::turret_over`]).
     /// - A ship's turret (4) or point-defence (9) shot rolls its miss,
     ///   `below(class) + 1` in its ship's
     ///   [`HullSpec::miss_class`] (@0x3e89e-0x3e918), drawn on `chance`;
@@ -1641,6 +1648,9 @@ impl Combat {
                 aimed_at,
                 source: Source::Ship(ties),
                 miss_roll: rolls.then(|| chance.below(muzzle.miss_class) + 1),
+                // Every ship's, the player's (slot 0) too (@0x3f0a9-0x3f143).
+                layer: ShotLayer::spawned(weapon.guidance, true, muzzle.turret_over),
+                turret_over: muzzle.turret_over,
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
             if let Some(Quarry::Ship(_)) = quarry {
@@ -2159,8 +2169,10 @@ impl Combat {
     }
 
     /// The hit pass's point-defence layer: each point-defence shot in
-    /// point defence's layer ([`ShotLayer::PointDefence`]) that has moved
-    /// meets every homing missile that has moved whose sprite its own
+    /// point defence's layer ([`ShotLayer::PointDefence`], 0x3b53bc) that
+    /// has moved meets every missile in the homing layer
+    /// ([`ShotLayer::Homing`], 0x3b531c, the only shot layer
+    /// `_DoPlayGameWork` collides it with, @0x43fff-0x44010) that has moved whose sprite its own
     /// overlaps where both ended their moves, seen from `camera`, where
     /// the player stood as they moved, or the origin in a fight without
     /// it ([`defence::sprites_meet`]), and is spent on them: each it meets
@@ -2194,7 +2206,7 @@ impl Combat {
                     continue;
                 };
                 if gone[missile]
-                    || shot.weapon.guidance != Guidance::Homing
+                    || shot.layer != ShotLayer::Homing
                     || !defence::sprites_meet(&self.shots[pd], shot, camera)
                     || touches_a_ship(shot, from, touch)
                 {
@@ -2725,7 +2737,17 @@ impl Combat {
         else {
             return;
         };
-        let shots = submunition::release(parent, sub, target, sides, chance);
+        // The firer's class as its slot holds it, or the bit the parent
+        // carried once the firer has left the fight.
+        let turret_over = sides
+            .targets
+            .iter()
+            .find(|ship| ship.ship == parent.firer)
+            .filter(|_| matches!(parent.source, Source::Ship(_)))
+            .map_or(parent.turret_over, |firer| {
+                arsenal.hull(firer.ship_type).turret_shots_over
+            });
+        let shots = submunition::release(parent, sub, (target, turret_over), sides, chance);
         if shots.is_empty() {
             return;
         }
@@ -3166,6 +3188,9 @@ struct Muzzle<'a> {
     /// Its hull's turret miss class, the range its turret and
     /// point-defence shots roll in.
     miss_class: u32,
+    /// Whether its hull's turret shots are drawn over the ships
+    /// ([`HullSpec::turret_shots_over`]).
+    turret_over: bool,
 }
 
 impl<'a> Muzzle<'a> {
@@ -3189,6 +3214,7 @@ impl<'a> Muzzle<'a> {
             cursors,
             fold,
             miss_class: hull.miss_class,
+            turret_over: hull.turret_shots_over,
         }
     }
 }
@@ -7463,6 +7489,50 @@ mod tests {
         (shell, Arsenal::new(&[shell, sub], Vec::new()))
     }
 
+    /// The layers of the turret sub-munitions a shell fired by ship 1 of
+    /// class 128 releases, its class's turret shots `over` the ships or
+    /// not, the firer `leaving` the fight before the release or not.
+    fn released_layers(over: bool, leaving: bool) -> Vec<ShotLayer> {
+        let (shell, _) = cluster(0);
+        let sub = WeaponRecord {
+            guidance: 4,
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        };
+        let class = crate::catalog::HullRecord {
+            flags3: if over { 0x0040 } else { 0 },
+            ..nova_sim_catalog::fixture::hull(128)
+        };
+        let arsenal = Arsenal::new(&[shell, sub], vec![class]);
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship {
+            hull: HullSpec {
+                turret_shots_over: true,
+                ..HullSpec::default()
+            },
+            ..Ship::at(1, 0.0, 0.0).armed(shell)
+        }];
+        tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        ships[0].trigger = QUIET;
+        if leaving {
+            ships.clear();
+        }
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        }
+        sub_shots(&combat).iter().map(|shot| shot.layer).collect()
+    }
+
+    #[test]
+    fn a_sub_munition_takes_its_firers_class_or_the_bit_its_parent_carried() {
+        // The firer's class as the arsenal reads it.
+        assert_eq!(released_layers(true, false), [ShotLayer::OverShips; 2]);
+        assert_eq!(released_layers(false, false), [ShotLayer::Shots; 2]);
+        // Gone from the fight: the bit the shell carried, its hull's.
+        assert_eq!(released_layers(false, true), [ShotLayer::OverShips; 2]);
+    }
+
     #[test]
     fn a_sub_munition_reports_its_unimplemented_flags_once_when_first_released() {
         let (shell, arsenal) = cluster_of(WeaponRecord {
@@ -10296,6 +10366,62 @@ mod tests {
         }
     }
 
+    /// The layer of the first shot of `record` that a ship of `hull`
+    /// fires at ship 2, 300 to its right.
+    fn fired_layer(record: WeaponRecord, hull: HullSpec) -> ShotLayer {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship {
+                hull,
+                ..Ship::at(1, 0.0, 0.0)
+                    .armed(record)
+                    .targeting(B)
+                    .facing(90.0)
+            },
+            Ship::at(2, 300.0, 0.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        combat.shots()[0].layer
+    }
+
+    #[test]
+    fn a_ships_shot_takes_its_layer_by_its_guidance_and_its_class() {
+        let over = HullSpec {
+            turret_shots_over: true,
+            ..HullSpec::default()
+        };
+        assert_eq!(fired_layer(turret(4), over), ShotLayer::OverShips);
+        assert_eq!(
+            fired_layer(turret(4), HullSpec::default()),
+            ShotLayer::Shots
+        );
+        assert_eq!(fired_layer(turret(7), over), ShotLayer::Shots, "4 alone");
+        assert_eq!(fired_layer(gun(), over), ShotLayer::Shots);
+        let homing = WeaponRecord {
+            guidance: 1,
+            ..gun()
+        };
+        assert_eq!(fired_layer(homing, over), ShotLayer::Homing);
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship {
+                hull: over,
+                ..player_with(turret(4)).targeting(B)
+            },
+            Ship::at(2, 300.0, 0.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            combat.shots()[0].layer,
+            ShotLayer::OverShips,
+            "the player's"
+        );
+        assert!(
+            combat.shots()[0].turret_over,
+            "carried for its sub-munitions"
+        );
+    }
+
     #[test]
     fn a_shot_leaves_on_its_ships_truncated_heading_and_flies_along_it() {
         let mut combat = Combat::default();
@@ -10451,6 +10577,7 @@ mod tests {
         let lead = lead_from(&from, &target, &WeaponSpec::new(&quad()));
         let bearing = trig::intercept_angle(from.position, target.position);
         assert_eq!(shot.heading, lead, "the whole-degree lead (@0x397c6)");
+        assert_eq!(shot.layer, ShotLayer::Shots, "moved to 0x3b52f0 (@0x398a7)");
         assert!(
             (lead - f32::from(bearing)).abs() > 3.0,
             "the lead matters here"

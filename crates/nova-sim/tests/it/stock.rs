@@ -3055,6 +3055,25 @@ fn fires_at(spec: &WeaponSpec, hull: HullSpec, bearing: f32) -> Option<f32> {
     }
 }
 
+/// The stock ships whose turret shots are drawn over the ships (`shïp`
+/// `Flags3` 0x0040, `_SpawnShot` @0x3f101) are the Fed Carrier (143) and
+/// the Aurora Thunderforge (380).
+#[test]
+fn the_fed_carrier_and_the_thunderforge_draw_their_turret_shots_over_the_ships() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let over: Vec<ShipId> = data
+        .ships()
+        .into_iter()
+        .map(|ship| ship.id)
+        .filter(|&id| arsenal.hull(id).turret_shots_over)
+        .collect();
+    assert_eq!(over, [ShipId(143), ShipId(380)]);
+}
+
 /// Each stock turret (3 and 4) fires at a target astern unless it or its
 /// ship is blind to the rear, and at one abeam unless it is blind to the
 /// sides (162), which fires ahead.

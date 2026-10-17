@@ -23,7 +23,10 @@ use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
-use crate::flight::weapons::{BeamShown, ShotShown};
+use crate::flight::weapons::{self, BeamShown, ShotShown};
+use nova_sim::sprite_layer::SpriteLayer;
+
+use super::sprites::{Sprite, sprite_stack};
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
 use crate::system::camera::{Camera, VIEW_SIZE};
@@ -165,30 +168,33 @@ impl<C> FlightView<C> {
         session.hover(Vec2::new(world.x, world.y), &ships).is_some()
     }
 
-    /// Draws the ships, bottom first, in their layers as
-    /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
-    /// the disabled, then the ships the player leads, then the rest, each
-    /// layer in the order the session's rules overlap them. Without a
-    /// session it draws the player alone.
-    /// The order and each cloak's level are read from the session as the
-    /// frame is drawn, so nothing waits past it.
-    pub(super) fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
+    /// Draws the ships and the shots, bottom first, in their layers as
+    /// the session stacks them ([`sprites`](super::sprites)): the ships as
+    /// [`Session::draw_layers`] gives them (see [`nova_sim::ship_layer`]),
+    /// each layer in the order the session's rules overlap them, and the
+    /// shots among them by their layers ([`nova_sim::sprite_layer`]).
+    /// Without a session it draws the player alone. The order and each
+    /// cloak's level are read from the session as the frame is drawn, so
+    /// nothing waits past it.
+    pub(super) fn draw_sprites(&self, list: &mut DrawList, camera: &Camera) {
         let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
             self.draw_ship(list, player, ShipDrawn::Full);
             return;
         };
         let npcs = self.shown_npcs();
-        for ship in session.draw_order() {
-            match ship {
-                ShipRef::Player => {
+        let stacked = sprite_stack(session.draw_layers(), self.shown_shots(camera));
+        for sprite in stacked {
+            match sprite {
+                Sprite::Ship(ShipRef::Player) => {
                     self.draw_ship(list, player, session.player_fate().row().drawn);
                 }
-                ShipRef::Npc(id) => {
+                Sprite::Ship(ShipRef::Npc(id)) => {
                     if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
                     }
                 }
+                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks),
             }
         }
     }
@@ -836,6 +842,7 @@ impl<C> FlightView<C> {
                 heading: shot.heading,
                 age: shot.age,
                 weapon: shot.weapon.id,
+                layer: SpriteLayer::from(shot.layer),
             })
             .collect()
     }
