@@ -932,6 +932,9 @@ pub struct Combat {
     /// How an NPC's bombs and rockets leave it
     /// ([`RuleKey::BombRocketLaunch`](crate::RuleKey::BombRocketLaunch)).
     bomb_launch: RuleSource,
+    /// Whether a bomb's heading is wrapped after it turns into the wind
+    /// ([`RuleKey::BombHeadingWrap`](crate::RuleKey::BombHeadingWrap)).
+    bomb_heading_wrap: RuleSource,
     /// Whether point defence asks the fight's
     /// [`PointDefenceRule`] which missiles are hostile
     /// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)).
@@ -1150,6 +1153,7 @@ impl Combat {
             sights: &sights,
             frame: self.field.frame,
             lock_angle: self.lock_angle,
+            bomb_heading_wrap: self.bomb_heading_wrap,
             ..Guide::among(targets)
         };
         for shot in &mut self.shots {
@@ -1342,6 +1346,14 @@ impl Combat {
     /// ship's velocity and their `Speed`.
     pub fn set_bomb_rocket_launch(&mut self, source: RuleSource) {
         self.bomb_launch = source;
+    }
+
+    /// Has a bomb's heading wrapped after it turns into the wind as
+    /// `source` says
+    /// ([`RuleKey::BombHeadingWrap`](crate::RuleKey::BombHeadingWrap)): by
+    /// default, the engine's, never.
+    pub fn set_bomb_heading_wrap(&mut self, source: RuleSource) {
+        self.bomb_heading_wrap = source;
     }
 
     /// Has point defence choose its missiles as `source` says
@@ -10263,6 +10275,25 @@ mod tests {
         );
         assert!(close_to(bomb, Vec2::new(4.0, 0.0)), "{bomb:?}");
         assert_eq!(facing, 94.0, "the player's facing takes it too");
+    }
+
+    #[test]
+    fn the_fight_turns_a_bomb_unwrapped_by_the_engine_and_wrapped_by_the_other_reading() {
+        // Thrown from a ship facing up moving left: its velocity bears
+        // left of up, so it turns back from 0.
+        for (wrap, heading) in [(RuleSource::Engine, -1.0), (RuleSource::Bible, 359.0)] {
+            let mut combat = Combat::default();
+            combat.set_bomb_heading_wrap(wrap);
+            let mut ships = [Ship {
+                state: ShipState {
+                    velocity: Vec2::new(-5.0, 0.0),
+                    ..ShipState::default()
+                },
+                ..Ship::at(1, 0.0, 0.0).armed(dropping(5, 0))
+            }];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(combat.shots()[0].heading, heading, "{wrap:?}");
+        }
     }
 
     #[test]

@@ -549,6 +549,17 @@ mod tests {
     }
 
     #[test]
+    fn a_sub_munition_of_an_unwrapped_bomb_takes_its_heading_round_once() {
+        let unwrapped = Shot {
+            heading: -1.5,
+            ..parent(5, 1, 0, 0, 0)
+        };
+        let subs = release(&unwrapped, &sub(-1), None, &among(&[]), &mut Draws::of(&[]));
+        assert_eq!(headings(&subs), [358.5]);
+        assert_eq!(subs[0].velocity, trig::accel(358, 13.0));
+    }
+
+    #[test]
     fn rockets_keep_their_parents_velocity_and_others_start_from_rest() {
         let parent = parent(-1, 1, 0, 0, 0);
         assert_eq!(parent.velocity, Vec2::new(0.0, 5.0) + trig::accel(90, 5.0));

@@ -67,9 +67,12 @@ pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook)
     let count = frames.get();
     let last = count - 1;
     if look.flags & SPINS == 0 {
-        let turned = f32::from(count) * heading.rem_euclid(360.0) / 360.0;
-        // Just short of a full turn can round to a full turn.
-        return (turned as u16).min(last);
+        // `(frames × heading)` in `f32`, over 360.0 in doubles, truncated
+        // toward 0 and clamped to the sheet (`_HandleShot`
+        // @0x3593a-0x3596c), so a bomb's unwrapped heading below 0 or past
+        // 360 shows an end frame.
+        let turned = f64::from(f32::from(count) * heading) / 360.0;
+        return (turned as i64).clamp(0, i64::from(last)) as u16;
     }
     let safety = if look.flags2 & STILL_UNTIL_SAFE == 0 {
         0
@@ -259,10 +262,14 @@ mod tests {
             .map(|heading| shot_frame(heading, 0, n(36), &plain))
             .collect();
         assert_eq!(frames, [0, 0, 1, 18, 35]);
-        assert_eq!(shot_frame(360.0, 0, n(36), &plain), 0, "a full turn");
-        assert_eq!(shot_frame(-10.0, 0, n(36), &plain), 35);
-        // Just short of 0 is a whole turn in f32.
-        assert_eq!(shot_frame(-0.000_001, 0, n(36), &plain), 35, "clamped");
+        // `_HandleShot` truncates toward 0 and clamps to the sheet
+        // (@0x3593a-0x3596c): an unwrapped bomb past 360 or below 0 shows
+        // an end frame.
+        assert_eq!(shot_frame(360.0, 0, n(36), &plain), 35, "clamped");
+        assert_eq!(shot_frame(360.5, 0, n(36), &plain), 35);
+        assert_eq!(shot_frame(-10.0, 0, n(36), &plain), 0, "clamped");
+        assert_eq!(shot_frame(-1.5, 0, n(36), &plain), 0);
+        assert_eq!(shot_frame(-0.000_001, 0, n(36), &plain), 0);
         assert_eq!(shot_frame(200.0, 0, n(1), &plain), 0);
         assert_eq!(shot_frame(100.0, 0, n(2), &plain), 0);
         assert_eq!(shot_frame(190.0, 0, n(2), &plain), 1);

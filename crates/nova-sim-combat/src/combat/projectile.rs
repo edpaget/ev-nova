@@ -379,10 +379,15 @@ pub struct Guide<'a> {
     pub frame: i32,
     /// How a `Seeker` 0x4000 lock is measured.
     pub lock_angle: LockAngle,
+    /// Whether a bomb's heading is wrapped after it turns into the wind
+    /// ([`RuleKey::BombHeadingWrap`](crate::RuleKey::BombHeadingWrap)): by
+    /// the engine, never.
+    pub bomb_heading_wrap: RuleSource,
 }
 
 impl<'a> Guide<'a> {
-    /// `targets`, with no sights, at frame 0, by the default lock angle.
+    /// `targets`, with no sights, at frame 0, by the default lock angle and
+    /// the engine's unwrapped bomb heading.
     #[must_use]
     pub fn among(targets: &'a [Target]) -> Self {
         Self {
@@ -390,6 +395,7 @@ impl<'a> Guide<'a> {
             sights: &[],
             frame: 0,
             lock_angle: LockAngle::default(),
+            bomb_heading_wrap: RuleSource::Engine,
         }
     }
 
@@ -719,7 +725,7 @@ impl Shot {
             Guidance::Rocket => {
                 self.velocity = rocket_push(self.velocity, self.heading, self.weapon.speed);
             }
-            Guidance::FreefallBomb => self.weathervane(),
+            Guidance::FreefallBomb => self.weathervane(guide.bomb_heading_wrap),
             _ => {}
         }
         let was = self.position;
@@ -736,31 +742,38 @@ impl Shot {
     /// up (0) for a bomb at rest; the original scales the velocity by 1000
     /// first (@0xdd058), which changes no ratio the table reads. While its
     /// truncated heading is not the bearing (`_AngularDifference` @0x649e
-    /// is 0 only then), it turns [`BOMB_TURN`] a whole degree: back when
-    /// the truncated difference from the heading to the bearing, taken
-    /// into 0-359 (@0x32a62-0x32a7d), is above 180, and on otherwise, half
-    /// round included. So it may pass its bearing within the degree (89.5
+    /// is 0 only then, @0x32a41-0x32a53), it turns [`BOMB_TURN`] a whole
+    /// degree: back when the truncated difference from the heading to the
+    /// bearing, taken into 0-359 in 16 bits (`≥ 360` → −360, `≤ −1` →
+    /// +360, @0x32a62-0x32a7d), is above 180, and on otherwise, half round
+    /// included. So it may pass its bearing within the degree (89.5
     /// towards 90 goes to 90.5) and then holds.
     ///
-    /// The original never wraps the heading after the turn, so a bomb that
-    /// crosses up stops up to a degree and a half short of its bearing
-    /// there, and is drawn on the end frame its frame index is clamped to;
-    /// here the heading is wrapped (weapons-fidelity phase 21).
-    fn weathervane(&mut self) {
+    /// By the engine (`wrap` [`RuleSource::Engine`]) the heading is never
+    /// wrapped after the turn (@0x32a86-0x32a98), so a bomb that crosses
+    /// up stops up to a degree and a half short of its bearing, below 0 or
+    /// past 360 (0.5 towards 359 goes to -0.5, then -1.5, where
+    /// `_AngularDifference(359, -1)` is 0), and is drawn on the end frame
+    /// its frame index is clamped to. By the other reading
+    /// ([`RuleKey::BombHeadingWrap`](crate::RuleKey::BombHeadingWrap)) it
+    /// is wrapped into 0..360 after each turn.
+    fn weathervane(&mut self, wrap: RuleSource) {
         let bearing = trig::intercept_angle(Vec2::ZERO, self.velocity);
-        // A wrapped heading is within 0..360, so its truncation is too.
-        #[allow(clippy::cast_possible_truncation)]
-        let facing = self.heading.trunc() as i16;
-        if facing == bearing {
+        if trig::angular_difference(bearing, trig::whole(self.heading)) == 0 {
             return;
         }
-        // Within -359..=359, so only a negative one needs taking round; the
-        // original's wrap of 360 and more (@0x32a66) never applies.
-        #[allow(clippy::cast_possible_truncation)]
-        let off = (f32::from(bearing) - self.heading).trunc() as i16;
-        let off = if off < 0 { off + 360 } else { off };
+        let mut off = i32::from(trig::whole(f32::from(bearing) - self.heading));
+        if off >= 360 {
+            off -= 360;
+        }
+        if off <= -1 {
+            off += 360;
+        }
         let turn = if off > 180 { -BOMB_TURN } else { BOMB_TURN };
-        self.heading = normalized(self.heading + turn);
+        self.heading += turn;
+        if wrap == RuleSource::Bible {
+            self.heading = normalized(self.heading);
+        }
     }
 
     /// `_HandleShot`'s target rule (@0x355e0-0x35621), run before the
@@ -1358,19 +1371,29 @@ mod tests {
             0.0,
         );
         step(&mut left, &[]);
-        assert!((left.heading - 359.0).abs() < 1e-3, "{left:?}");
+        assert_eq!(left.heading, -1.0, "unwrapped by the engine: {left:?}");
         assert_eq!(BOMB_TURN, 1.0);
     }
 
     /// A bomb facing `heading`, moving `velocity`, after `ticks` ticks.
     fn vaned(heading: f32, velocity: Vec2, ticks: u32) -> f32 {
+        vaned_by(heading, velocity, ticks, RuleSource::Engine)
+    }
+
+    /// As [`vaned`], its heading wrapped as `wrap` reads
+    /// [`RuleKey::BombHeadingWrap`](crate::RuleKey::BombHeadingWrap).
+    fn vaned_by(heading: f32, velocity: Vec2, ticks: u32, wrap: RuleSource) -> f32 {
         let mut bomb = Shot {
             velocity,
             heading,
             ..Shot::launch(spec(5, 1000, 600), FIRER, FIRER, &ShipState::default(), 0.0)
         };
+        let guide = Guide {
+            bomb_heading_wrap: wrap,
+            ..Guide::among(&[])
+        };
         for _ in 0..ticks {
-            step(&mut bomb, &[]);
+            bomb.step(&guide, &mut NeverFires);
         }
         bomb.heading
     }
@@ -1415,16 +1438,40 @@ mod tests {
     }
 
     #[test]
-    fn a_bomb_turns_across_up_and_wraps() {
+    fn by_the_engine_a_bomb_crossing_up_stops_short_of_its_bearing_unwrapped() {
+        // Its bearing is the table's 359.
+        let left_of_up = Vec2::new(-1.0, -40.0);
+        assert_eq!(trig::intercept_angle(Vec2::ZERO, left_of_up), 359);
+        assert_eq!(vaned(0.5, left_of_up, 1), -0.5);
+        assert_eq!(vaned(0.5, left_of_up, 2), -1.5);
+        // `_AngularDifference(359, -1)` is 0: it holds there.
+        assert_eq!(vaned(0.5, left_of_up, 6), -1.5, "then holds");
+        assert_eq!(vaned(1.0, left_of_up, 1), 0.0);
+        assert_eq!(vaned(0.0, left_of_up, 1), -1.0);
+        // The other way: 359.5 towards 0 goes to 360.5 and holds.
         let up = Vec2::new(0.0, -4.0);
+        assert_eq!(vaned(359.5, up, 1), 360.5);
+        assert_eq!(vaned(359.5, up, 4), 360.5, "then holds");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_bomb_crossing_up_wraps_and_settles_on_its_bearing() {
+        let bible = RuleSource::Bible;
+        let left_of_up = Vec2::new(-1.0, -40.0);
+        assert_eq!(vaned_by(0.5, left_of_up, 1, bible), 359.5);
+        assert_eq!(vaned_by(0.5, left_of_up, 4, bible), 359.5, "then holds");
+        assert_eq!(vaned_by(0.0, left_of_up, 1, bible), 359.0);
+        let up = Vec2::new(0.0, -4.0);
+        assert!((vaned_by(359.5, up, 1, bible) - 0.5).abs() < 1e-4);
         assert!(
-            (vaned(359.5, up, 1) - 0.5).abs() < 1e-4,
-            "{}",
-            vaned(359.5, up, 1)
+            (vaned_by(359.5, up, 4, bible) - 0.5).abs() < 1e-4,
+            "then holds"
         );
-        assert!((vaned(359.5, up, 4) - 0.5).abs() < 1e-4, "then holds");
-        assert_eq!(vaned(1.0, Vec2::new(-1.0, -40.0), 1), 0.0);
-        assert_eq!(vaned(0.0, Vec2::new(-1.0, -40.0), 1), 359.0);
+    }
+
+    #[test]
+    fn the_guide_reads_the_engines_unwrapped_bomb_heading_by_default() {
+        assert_eq!(Guide::among(&[]).bomb_heading_wrap, RuleSource::Engine);
     }
 
     #[test]

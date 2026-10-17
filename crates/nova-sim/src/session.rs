@@ -1733,6 +1733,8 @@ impl Session {
         self.combat
             .set_bomb_rocket_launch(rules.source_for(RuleKey::BombRocketLaunch));
         self.combat
+            .set_bomb_heading_wrap(rules.source_for(RuleKey::BombHeadingWrap));
+        self.combat
             .set_pd_hostility(rules.source_for(RuleKey::PdHostility));
         self.combat
             .set_seeker_lock_angle(rules.source_for(RuleKey::SeekerLockAngle));
@@ -16631,6 +16633,17 @@ pub(super) mod tests {
         assert_ne!(dropped, Combat::default());
         let other = Rulebook::default().with_override(RuleKey::BombRocketLaunch, RuleSource::Bible);
         assert_eq!(session(other).combat, dropped);
+    }
+
+    #[test]
+    fn the_rulebook_says_whether_a_bombs_heading_is_wrapped() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut wrapped = Combat::default();
+        wrapped.set_bomb_heading_wrap(RuleSource::Bible);
+        assert_ne!(wrapped, Combat::default());
+        let other = Rulebook::default().with_override(RuleKey::BombHeadingWrap, RuleSource::Bible);
+        assert_eq!(session(other).combat, wrapped);
     }
 
     #[test]
