@@ -3,7 +3,7 @@
 //! stellar ambient sound is there; and the music decodes, on kira's
 //! device-free backend. Skips, passing, when `NOVA_DATA` is unset.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::io::{self, Write};
