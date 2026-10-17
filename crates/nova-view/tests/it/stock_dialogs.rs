@@ -914,3 +914,40 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(CAP_HEIGHT, 40.0);
     }
 }
+
+#[test]
+fn the_maps_find_dialog_lays_out_from_dlog_3005_as_recorded() {
+    use nova_view::galaxy::FindDialog;
+    use nova_view::galaxy::find::{CANCEL_ITEM, FIELD_ITEM, FIND_DIALOG, FIND_ITEM, PROMPT_ITEM};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(FIND_DIALOG)
+            .expect("converts");
+        assert_eq!(template.placement, Placement::Center, "{}", path.display());
+        let dialog = FindDialog::new(&template, ButtonStyle::STOCK, mono()).expect("builds");
+        let bounds = dialog.dialog().bounds();
+        assert_eq!((bounds.width(), bounds.height()), (284.0, 105.0));
+        assert_eq!(bounds.min, Point::new(370.0, 331.0), "centred");
+        let at = |x, y, w, h| Some(rect(x, y, w, h).offset(bounds.min));
+        let item = |n| dialog.dialog().item_bounds(n);
+        assert_eq!(item(FIND_ITEM), at(165.0, 72.0, 70.0, 20.0), "Find");
+        assert_eq!(item(CANCEL_ITEM), at(83.0, 72.0, 70.0, 20.0), "Cancel");
+        assert_eq!(item(FIELD_ITEM), at(60.0, 38.0, 200.0, 16.0), "the field");
+        assert_eq!(dialog.field().text(), "");
+        let prompt = match &template.items[PROMPT_ITEM - 1].kind {
+            ItemSpec::StaticText(text) => text.clone(),
+            kind => panic!("{kind:?}"),
+        };
+        assert_eq!(prompt, nova_view::galaxy::find::PROMPT);
+        let texts: Vec<String> = drawn(&dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        for shown in ["Find", "Cancel", nova_view::galaxy::find::PROMPT] {
+            assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
+        }
+    }
+}

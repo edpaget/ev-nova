@@ -311,3 +311,62 @@ fn every_stock_system_can_be_selected_and_shows_its_stellars() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+// Find and the Done and Find buttons.
+
+/// The stock viewer, measured, with `query` found by its Find.
+fn found(map: &mut GalaxyMap, query: &str) -> Option<SystemId> {
+    let key = |key, pressed| Input::Key {
+        key,
+        pressed,
+        repeat: false,
+    };
+    map.input(&key(nova_view::Key::Char('s'), true));
+    map.input(&Input::Text('s'));
+    for c in query.chars() {
+        map.input(&Input::Text(c));
+    }
+    map.input(&key(nova_view::Key::Enter, true));
+    assert!(!map.finding());
+    map.selected()
+}
+
+#[test]
+fn the_stock_viewers_find_searches_every_system_by_name() {
+    let Some(data) = open() else {
+        return;
+    };
+    let mut map =
+        GalaxyMap::new(&data).with_metrics(std::rc::Rc::new(nova_view::text::fixture::MonoMetrics));
+    let name = |map: &GalaxyMap, id| {
+        map.model()
+            .catalog_system(SystemId(id))
+            .map(|system| system.entry.name.clone())
+    };
+    assert_eq!(name(&map, 130).as_deref(), Some("Sol"));
+    assert_eq!(name(&map, 531).as_deref(), Some("Sol"));
+    assert_eq!(found(&mut map, "sol"), Some(SystemId(130)), "the lower Sol");
+    assert_eq!(
+        found(&mut map, "kanius"),
+        Some(SystemId(461)),
+        "of 461 and 653"
+    );
+    assert_eq!(found(&mut map, "nemor"), Some(SystemId(205)), "Ne'mor");
+}
+
+#[test]
+fn str_150_4_and_59_are_the_maps_done_and_find_labels() {
+    use nova_data::records::string_list::StrList;
+    use nova_view::galaxy::buttons::{DONE_LABEL, FIND_LABEL};
+    let Some(data) = open() else {
+        return;
+    };
+    let list = data
+        .get::<StrList>(150)
+        .expect("STR# 150 is in the stock data")
+        .expect("decodes")
+        .record
+        .clone();
+    assert_eq!(list.strings[4].as_str(), DONE_LABEL);
+    assert_eq!(list.strings[59].as_str(), FIND_LABEL);
+}
