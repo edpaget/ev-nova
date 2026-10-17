@@ -82,9 +82,12 @@
 //!    assists, or escorts in formation), a fighter docking its carrier;
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
-//! 7. and the removal of those that landed, jumped out, entered a gate or
+//! 7. the removal of those that landed, jumped out, entered a gate or
 //!    docked, each in [`Traffic::departed`] with how it left, for its
-//!    session to take a fighter docked aboard.
+//!    session to take a fighter docked aboard;
+//! 8. and every NPC left, held still, disabled or breaking up included,
+//!    regenerates its fuel up to its capacity ([`Npc::regenerate_fuel`],
+//!    `_HandleShip` @0x35305-0x35374), on both passes.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
@@ -95,7 +98,7 @@
 //! ([`Leave`]), their berths and their persons' names still taken; those
 //! held in the system it goes on into come back as they were.
 //! Double time's second pass moves the traffic again
-//! ([`Traffic::move_in`]): steps 5 to 7 alone, with no cloak thinks.
+//! ([`Traffic::move_in`]): steps 5 to 8 alone, with no cloak thinks.
 //!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
@@ -825,7 +828,7 @@ impl Traffic {
 
     /// Moves the traffic again in `world`, rolling on `chance`, as double
     /// time's second pass does (`_DoPlayGameWork(0)`; see the session's
-    /// `double_time` module): steps 5 to 7 of a tick (see the module
+    /// `double_time` module): steps 5 to 8 of a tick (see the module
     /// docs), but no cloak thinks, as `_AIHandleCloaking` is the AI's.
     /// Nothing else runs, as the arrivals (`_EnterMoreShips`), the
     /// escort-strength timer, the answers to strikes, the decisions
@@ -838,11 +841,12 @@ impl Traffic {
         self.fly(&world, false, &BTreeSet::new(), chance);
     }
 
-    /// Steps 5 to 7 of a tick in `world` (see the module docs), rolling on
+    /// Steps 5 to 8 of a tick in `world` (see the module docs), rolling on
     /// `chance`: every NPC's cloak, thinking when `think`, then the
     /// autopilot, a flight step, the followers of a ship that reached its
-    /// gate released ([`Traffic::release_followers`]) and the departures,
-    /// but for the NPCs in `still`, which keep their place.
+    /// gate released ([`Traffic::release_followers`]), the departures, but
+    /// for the NPCs in `still`, which keep their place, and every NPC's
+    /// fuel regeneration.
     fn fly(
         &mut self,
         world: &World,
@@ -866,6 +870,7 @@ impl Traffic {
             .collect();
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
+        self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
     }
 
     /// The traffic's part of one `_EnterMoreShips` pass in `world`,
@@ -4095,6 +4100,51 @@ mod tests {
         traffic.tick_in(&firing, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(firing.waited.take(), [NpcId(0), NpcId(1)]);
         assert_eq!(traffic.npcs()[5].trigger, PRIMARY, "its own, flying");
+    }
+
+    /// [`populated`] with `count` NPCs, each regenerating half a unit of
+    /// fuel a tick and holding 290 of 300.
+    fn refuelling(count: u32) -> Traffic {
+        let mut traffic = populated(count, 1);
+        for npc in &mut traffic.npcs {
+            npc.stats.fuel_regen = 0.5;
+            npc.reserves.fuel = crate::reserves::Gauge {
+                now: 290.0,
+                max: 300.0,
+            };
+        }
+        traffic
+    }
+
+    #[test]
+    fn every_npc_regenerates_fuel_each_tick_held_still_or_disabled_up_to_capacity() {
+        let mut traffic = refuelling(3);
+        traffic.npcs[1].condition = Condition::Disabled;
+        let still = BTreeSet::from([NpcId(2)]);
+        let idle = Fighting::deciding(Goal::Idle);
+        let tick = |traffic: &mut Traffic| {
+            traffic.tick_holding(&idle, World::new(&[]), &[], &still, &mut Draws::of(&[]));
+        };
+        tick(&mut traffic);
+        let fuel = |traffic: &Traffic| -> Vec<f32> {
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| npc.reserves.fuel.now)
+                .collect()
+        };
+        assert_eq!(fuel(&traffic), [290.5; 3]);
+        for _ in 0..30 {
+            tick(&mut traffic);
+        }
+        assert_eq!(fuel(&traffic), [300.0; 3], "up to capacity");
+    }
+
+    #[test]
+    fn the_second_pass_regenerates_fuel_too() {
+        let mut traffic = refuelling(1);
+        traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].reserves.fuel.now, 290.5);
     }
 
     #[test]

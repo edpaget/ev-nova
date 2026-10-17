@@ -483,4 +483,27 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn a_disabled_ship_regains_its_spent_fuel_at_its_classs_rate() {
+        // The bare ship's class regenerates a unit of fuel every 2 ticks.
+        let mut catalog = repairing();
+        catalog.ship_records[3].fields.fuel_regen = 2;
+        let mut session = flying(&catalog);
+        let bare = placed(&session)[3];
+        disable(&mut session, bare);
+        session.npc_mut(bare).expect("there").reserves.fuel.now = 298.0;
+        let fuel = |session: &Session| session.npc(bare).expect("there").reserves.fuel;
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fuel(&session).now, 298.5);
+        for _ in 0..10 {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        }
+        assert_eq!(fuel(&session).now, 300.0, "up to its capacity");
+        assert_eq!(fuel(&session).max, 300.0);
+        assert_eq!(
+            session.npc(bare).map(|npc| npc.condition),
+            Some(Condition::Disabled)
+        );
+    }
 }

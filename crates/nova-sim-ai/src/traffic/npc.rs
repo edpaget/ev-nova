@@ -587,6 +587,14 @@ impl Npc {
             }
     }
 
+    /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`], then
+    /// holds it between none and its capacity, every tick whatever its
+    /// condition, disabled and breaking up included (`_HandleShip`
+    /// @0x35305-0x35374, `_ShipFuelGenRate` @0x2ffb for an NPC).
+    pub fn regenerate_fuel(&mut self) {
+        crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen);
+    }
+
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
     /// [`CloakGear::can_cloak`], knowing whether it is disabled and how
     /// much fuel it has left.
@@ -867,6 +875,57 @@ impl Npc {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// An NPC regenerating `rate` fuel a tick, holding `now` of its 300.
+    fn fuelled(rate: f32, now: f32) -> Npc {
+        let stats = ShipStats {
+            fuel_regen: rate,
+            fuel: 300.0,
+            ..ShipStats::default()
+        };
+        let mut npc = crate::traffic::fixture::npc(1, stats);
+        npc.reserves.fuel.now = now;
+        npc
+    }
+
+    #[test]
+    fn an_npc_regenerates_fuel_at_its_rate_up_to_its_capacity() {
+        let mut npc = fuelled(0.5, 298.0);
+        npc.regenerate_fuel();
+        assert_eq!(npc.reserves.fuel.now, 298.5);
+        for _ in 0..10 {
+            npc.regenerate_fuel();
+        }
+        assert_eq!(npc.reserves.fuel.now, 300.0, "up to its capacity");
+    }
+
+    #[test]
+    fn an_npcs_fuel_is_held_to_its_capacity_and_above_none_every_tick() {
+        let mut npc = fuelled(0.0, 310.0);
+        npc.regenerate_fuel();
+        assert_eq!(npc.reserves.fuel.now, 300.0, "clamped with no rate");
+        let mut npc = fuelled(-0.5, 0.7);
+        npc.regenerate_fuel();
+        assert!((npc.reserves.fuel.now - 0.2).abs() < 1e-6);
+        npc.regenerate_fuel();
+        assert_eq!(npc.reserves.fuel.now, 0.0, "a drain stops at none");
+    }
+
+    #[test]
+    fn a_disabled_or_dying_npc_still_regenerates_fuel() {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
+            let mut npc = fuelled(0.5, 100.0);
+            npc.condition = condition;
+            npc.regenerate_fuel();
+            assert_eq!(npc.reserves.fuel.now, 100.5, "{condition:?}");
+        }
+    }
 
     #[test]
     fn raw_ai_types_1_to_4_are_the_bibles_and_any_other_is_the_fallback() {
