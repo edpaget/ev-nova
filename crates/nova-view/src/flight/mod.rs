@@ -50,7 +50,7 @@ pub mod flash;
 pub mod floating;
 pub mod hud;
 pub mod jump;
-mod pen;
+pub(crate) mod pen;
 pub mod radar;
 pub mod sprite;
 pub mod target;

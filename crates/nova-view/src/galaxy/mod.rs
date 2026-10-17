@@ -9,11 +9,14 @@
 //!   at what scale.
 //! - [`model`]: the [`GalaxyModel`], the galaxy laid out for drawing and
 //!   clicking: colours, hyperlinks, nebula placement and hit-testing.
+//! - [`panel`]: the in-flight maps' two info panels, laid out at DITL
+//!   2000's offsets as `_MapDialogUpdate` draws them.
 
 pub mod catalog;
 pub mod data;
 pub mod map;
 pub mod model;
+pub mod panel;
 pub mod view;
 
 pub use catalog::{
