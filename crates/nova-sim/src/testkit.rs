@@ -5,30 +5,34 @@ use std::cell::RefCell;
 
 /// The scripted [`Chance`], from the foundation crate's test support.
 pub(crate) use nova_sim_base::fixture::Scripted;
+/// The catalog's record builders and control-bit mocks, from the catalog
+/// crate's test support.
+pub(crate) use nova_sim_catalog::fixture::{
+    AllowAll, RefuseBits, cron, govt, hull, mission, nebula, person, planet, rank, ship, star,
+    weapon,
+};
 
 use crate::ai::Goal;
 use crate::catalog::{
-    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS,
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
-    NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
-    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate,
+    AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, CharacterStart,
+    CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DisasterRecord, DudeId,
+    DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord,
+    PersonRecord, PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, StarSystem, StartDate,
     StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic,
-    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
+    SystemVisibility, TrafficCatalog, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::ion::Ion;
-use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
-use crate::escort::EscortClass;
+use crate::control::Test;
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
-use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
+use crate::landing::{LandOutcome, LandingRefusal};
 use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
@@ -145,71 +149,6 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) warp_out_sound: Option<SoundLength>,
 }
 
-/// Cron `id`, open on every date, starting on any roll and asking
-/// nothing, running 0 days with no holdoffs, and with no scripts and no
-/// `Contribute`.
-pub(crate) fn cron(id: i16) -> CronRecord {
-    CronRecord {
-        id: CronId(id),
-        first_day: 0,
-        first_month: 0,
-        first_year: 0,
-        last_day: 0,
-        last_month: 0,
-        last_year: 0,
-        random: 100,
-        duration: 0,
-        pre_holdoff: 0,
-        post_holdoff: 0,
-        flags: 0,
-        enable_on: Test::default(),
-        on_start: Script::default(),
-        on_end: Script::default(),
-        contribute: 0,
-        require: 0,
-        news_govt: [-1; 4],
-        govt_news: [-1; 4],
-        ind_news: -1,
-    }
-}
-
-/// Nebula `id` over `rect` (left, top, width, height), active by
-/// `active_on` and running `on_explore` as it is explored.
-pub(crate) fn nebula(
-    id: i16,
-    rect: (i16, i16, i16, i16),
-    active_on: &str,
-    on_explore: &str,
-) -> NebulaRecord {
-    NebulaRecord {
-        id: NebulaId(id),
-        left: rect.0,
-        top: rect.1,
-        width: rect.2,
-        height: rect.3,
-        active_on: Test::parse(active_on),
-        on_explore: Script::parse(on_explore),
-    }
-}
-
-/// Rank `id`: unaffiliated, of `Weight` 0, paying nothing, with no cap,
-/// no `Contribute`, no flags, every name empty and a `PriceMod` of 100.
-pub(crate) fn rank(id: i16) -> RankRecord {
-    RankRecord {
-        id: RankId(id),
-        name: String::new(),
-        weight: 0,
-        affil_govt: None,
-        salary: 0,
-        salary_cap: 0,
-        contribute: 0,
-        flags: 0,
-        conv_name: String::new(),
-        short_name: String::new(),
-        price_mod: 100,
-    }
-}
-
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
 /// whole, with no `OnRegen`.
 pub(crate) fn life(id: i16, dead_time: i16) -> StellarLife {
@@ -249,47 +188,6 @@ pub(crate) const FAST: ShipFields = ShipFields {
     flags2: 0,
 };
 
-/// Mission `id`, offered at the mission computer of any stellar on every
-/// visit, to anyone: going nowhere, carrying nothing, paying nothing and
-/// with no deadline.
-pub(crate) fn mission(id: i16) -> MissionRecord {
-    MissionRecord {
-        id: MissionId(id),
-        avail_stel: -1,
-        avail_loc: 0,
-        avail_record: 0,
-        avail_rating: 0,
-        avail_random: 100,
-        avail_ship_type: 0,
-        avail_bits: Test::default(),
-        require: 0,
-        flags: 0,
-        flags2: 0,
-        travel_stel: -1,
-        return_stel: -1,
-        cargo_type: -1,
-        cargo_qty: 0,
-        pickup_mode: -1,
-        drop_off_mode: -1,
-        scan_mask: 0,
-        pay_val: 0,
-        time_limit: 0,
-        disp_weight: 0,
-        on_accept: Script::default(),
-        on_refuse: Script::default(),
-        on_success: Script::default(),
-        on_failure: Script::default(),
-        on_abort: Script::default(),
-        on_ship_done: Script::default(),
-        can_abort: 1,
-        comp_govt: None,
-        comp_reward: 0,
-        date_post_inc: 0,
-        ships: MissionShip::NONE,
-        aux: AuxShip::NONE,
-    }
-}
-
 /// Mission `id` active, going nowhere, with `tons` of cargo 0 (food)
 /// aboard.
 pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
@@ -308,29 +206,6 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         failed: None,
         ships: crate::mission::SpecialShips::default(),
         aux: crate::mission::aux_ships::AuxShips::default(),
-    }
-}
-
-/// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
-pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
-    LandingSite {
-        id: StellarId(id),
-        position: Vec2::new(x, y),
-        frame_size: Some((100, 100)),
-        flags: StellarFlags::CAN_LAND,
-        min_status: 0,
-        tech_level: 0,
-        special_tech: [0; 8],
-        govt: None,
-        flags2: 0,
-        destroyed: false,
-        graphic: 0,
-        dead_graphic: None,
-        dead_frame_size: None,
-        type_counts_frames: true,
-        exit_angle: -1,
-        tribute: 0,
-        animation: crate::catalog::SiteAnimation::default(),
     }
 }
 
@@ -363,172 +238,6 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         scan_mask: 0,
         on_purchase: crate::control::Script::default(),
         on_sell: crate::control::Script::default(),
-    }
-}
-
-/// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
-/// every day (`BuyRandom` 100), never for hire (`HireRandom` 0),
-/// requiring nothing, with no default items, no `Flags` or `Flags3` and no inherent
-/// government, hailed as "ship `id`", a wimpy trader whose escort class
-/// is worked out (`EscortType` -1).
-pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
-    ShipRecord {
-        id: ShipId(id),
-        name: format!("Ship {id}"),
-        short_name: format!("Ship\\n{id}"),
-        long_name: format!("The Ship {id}"),
-        fields,
-        defaults: Vec::new(),
-        cost: 10_000,
-        tech_level: 1,
-        buy_random: 100,
-        hire_random: 0,
-        require: 0,
-        availability: Test::default(),
-        appear_on: Test::default(),
-        flags: 0,
-        flags3: 0,
-        disp_weight: 0,
-        max_gun: 2,
-        max_tur: 1,
-        length: 20,
-        crew: 3,
-        inherent_ai: 1,
-        comm_name: format!("ship {id}"),
-        inherent_govt: None,
-        combat_govt: None,
-        escort_type: -1,
-        on_capture: crate::control::Script::default(),
-        on_purchase: crate::control::Script::default(),
-        on_retire: crate::control::Script::default(),
-    }
-}
-
-/// `wëap` `id`: an unguided weapon with unlimited ammo that does
-/// nothing, with every other field none or unused (-1).
-pub(crate) fn weapon(id: i16) -> WeaponRecord {
-    WeaponRecord {
-        id: WeaponId(id),
-        reload: 0,
-        count: 0,
-        mass_dmg: 0,
-        energy_dmg: 0,
-        guidance: -1,
-        speed: 0,
-        ammo_type: -1,
-        inaccuracy: 0,
-        impact: 0,
-        explod_type: -1,
-        prox_radius: 0,
-        blast_radius: 0,
-        flags: 0,
-        seeker: 0,
-        flags2: 0,
-        flags3: 0,
-        decay: 0,
-        beam_length: 0,
-        falloff: 0,
-        li_density: 0,
-        burst_count: 0,
-        burst_reload: 0,
-        guided_turn: 0,
-        durability: 0,
-        sub_count: 0,
-        sub_type: None,
-        sub_theta: 0,
-        sub_limit: 0,
-        max_ammo: 0,
-        prox_safety: 0,
-        hit_particles: 0,
-        hit_part_life: 0,
-        hit_part_vel: 0,
-        hit_part_color: 0,
-        recoil: 0,
-        exit_type: -1,
-        ionization: 0,
-        ionize_color: 0,
-        jam_vuln: [0; 4],
-        frame: None,
-    }
-}
-
-/// `shïp` `id`'s combat fields: no flags, no weapons, no `shän`, no
-/// explosions, gone at once, massless and of no strength.
-pub(crate) fn hull(id: i16) -> HullRecord {
-    HullRecord {
-        id: ShipId(id),
-        flags: 0,
-        flags2: 0,
-        death_delay: 0,
-        explode1: -1,
-        explode2: -1,
-        mass: 0,
-        weapons: Vec::new(),
-        size: None,
-        height: None,
-        strength: 0,
-        key_carried: None,
-        cost: 0,
-        speed: 0,
-        exits: None,
-        escort_class: EscortClass::Freighter,
-    }
-}
-
-/// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
-/// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
-/// "Govt `id`", scanning for nothing, fining nothing, requiring nothing
-/// and jamming nothing.
-pub(crate) fn govt(id: i16) -> GovtRecord {
-    GovtRecord {
-        id: GovtId(id),
-        flags: 0,
-        flags2: 0,
-        crime_tol: 0,
-        initial_rec: 0,
-        penalties: Penalties::default(),
-        max_odds: 100,
-        classes: [-1; 4],
-        allies: [-1; 4],
-        enemies: [-1; 4],
-        comm_name: format!("Govt {id}"),
-        scan_mask: 0,
-        scan_fine: 0,
-        news_pic: -1,
-        require: 0,
-        inh_jam: [0; 4],
-    }
-}
-
-/// `përs` `id`, "Person `id`", flying ship `ship`: a warship of no
-/// government and `Aggress` 2 that may appear anywhere (`LinkSyst` -1),
-/// with no `Coward`, extra weapons, credits, `ShieldMod`, quotes,
-/// picture, mission, flags, `ActiveOn` or grant.
-pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
-    PersonRecord {
-        id: PersonId(id),
-        name: format!("Person {id}"),
-        link_syst: -1,
-        govt: None,
-        ai_type: 3,
-        aggress: 2,
-        coward: 0,
-        ship: Some(ShipId(ship)),
-        weapons: Vec::new(),
-        credits: 0,
-        shield_mod: 0,
-        hail_pict: None,
-        comm_quote: -1,
-        hail_quote: -1,
-        link_mission: None,
-        flags: 0,
-        active_on: Test::default(),
-        subtitle: String::new(),
-        flags2: 0,
-        grant_class: 0,
-        grant_count: 0,
-        grant_prob: 0,
-        mission_ship: None,
     }
 }
 
@@ -747,18 +456,6 @@ pub(crate) const START: StartDate = StartDate {
     month: 6,
     year: 1177,
 };
-
-pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
-    StarSystem {
-        id: SystemId(id),
-        position: Vec2::new(x, y),
-        links: links.iter().copied().map(SystemId).collect(),
-        govt: None,
-        stellars: Vec::new(),
-        interference: 0,
-        message: -1,
-    }
-}
 
 /// The control bit that hides `system` in a [`hideable`] catalog: 9000
 /// past its ID.
@@ -1282,27 +979,6 @@ pub(crate) fn edge_lander() -> FakePilotCatalog {
         )],
         sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
         ..catalog()
-    }
-}
-
-/// Control bits that refuse every test reading one of these bits, and
-/// hold every other.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RefuseBits(pub(crate) &'static [u16]);
-
-impl ControlBits for RefuseBits {
-    fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
-        !test.reads().iter().any(|bit| self.0.contains(&bit.get()))
-    }
-}
-
-/// Control bits that hold every test asked.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AllowAll;
-
-impl ControlBits for AllowAll {
-    fn allows(&self, _test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
-        true
     }
 }
 

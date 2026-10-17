@@ -152,7 +152,7 @@ impl Gate<'static> {
 /// A new pilot, as a control-bit test reads one: no bit set, male, paid
 /// for, owning nothing and having explored nowhere.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FreshPilot;
+pub struct FreshPilot;
 
 impl PilotFacts for FreshPilot {
     fn bit(&self, _bit: Bit) -> bool {
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn a_gate_refuses_a_malformed_test_without_asking_its_port() {
         let gate = Gate {
-            control_bits: &crate::testkit::AllowAll,
+            control_bits: &crate::fixture::AllowAll,
             ..Gate::FRESH
         };
         assert!(gate.allows(&Test::parse("b1")));
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn the_refusing_fake_refuses_tests_that_read_its_bits() {
         let gate = Gate {
-            control_bits: &crate::testkit::RefuseBits(&[7]),
+            control_bits: &crate::fixture::RefuseBits(&[7]),
             ..Gate::FRESH
         };
         assert!(!gate.allows(&Test::parse("b7")));

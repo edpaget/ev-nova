@@ -2363,7 +2363,7 @@ mod tests {
                 name: "Shuttle".to_owned(),
                 comm_name: "shuttle".to_owned(),
                 inherent_govt: Some(GovtId(129)),
-                ..crate::testkit::ship(128, ShipFields::default())
+                ..crate::fixture::ship(128, ShipFields::default())
             }]
         }
 
@@ -2506,7 +2506,7 @@ mod tests {
 
         /// Mission 130, offered at the mission computer.
         fn missions(&self) -> Vec<MissionRecord> {
-            vec![crate::testkit::mission(130)]
+            vec![crate::fixture::mission(130)]
         }
 
         /// Mission 130's texts: "Run", and nothing more.
@@ -2555,7 +2555,7 @@ mod tests {
         fn crons(&self) -> Vec<CronRecord> {
             vec![CronRecord {
                 duration: 105,
-                ..crate::testkit::cron(156)
+                ..crate::fixture::cron(156)
             }]
         }
 
@@ -2563,13 +2563,13 @@ mod tests {
         fn ranks(&self) -> Vec<RankRecord> {
             vec![RankRecord {
                 salary: 200,
-                ..crate::testkit::rank(140)
+                ..crate::fixture::rank(140)
             }]
         }
 
         /// Nebula 141, 300 wide.
         fn nebulae(&self) -> Vec<NebulaRecord> {
-            vec![crate::testkit::nebula(141, (0, 0, 300, 10), "", "")]
+            vec![crate::fixture::nebula(141, (0, 0, 300, 10), "", "")]
         }
 
         /// A second at 22050 Hz.
@@ -2692,8 +2692,8 @@ mod tests {
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
             match system.0 {
                 130 => vec![
-                    crate::testkit::planet(128, 0.0, 0.0),
-                    crate::testkit::planet(129, 9.0, 0.0),
+                    crate::fixture::planet(128, 0.0, 0.0),
+                    crate::fixture::planet(129, 9.0, 0.0),
                 ],
                 131 => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
@@ -2703,7 +2703,7 @@ mod tests {
         fn star_map(&self) -> Vec<StarSystem> {
             [130, 131, 132]
                 .into_iter()
-                .map(|id| crate::testkit::star(id, (0.0, 0.0), &[]))
+                .map(|id| crate::fixture::star(id, (0.0, 0.0), &[]))
                 .collect()
         }
 
@@ -2923,7 +2923,7 @@ mod tests {
         fn persons(&self) -> Vec<PersonRecord> {
             vec![PersonRecord {
                 name: "Ace".to_owned(),
-                ..crate::testkit::person(510, 128)
+                ..crate::fixture::person(510, 128)
             }]
         }
     }
@@ -2964,7 +2964,7 @@ mod tests {
                 reload: 10,
                 count: 13,
                 speed: 1500,
-                ..crate::testkit::weapon(128)
+                ..crate::fixture::weapon(128)
             }]
         }
 
@@ -2977,7 +2977,7 @@ mod tests {
                 }],
                 size: Some(24),
                 strength: 250,
-                ..crate::testkit::hull(128)
+                ..crate::fixture::hull(128)
             }]
         }
 
@@ -2985,7 +2985,7 @@ mod tests {
             vec![GovtRecord {
                 crime_tol: 6,
                 comm_name: "Federation".to_owned(),
-                ..crate::testkit::govt(128)
+                ..crate::fixture::govt(128)
             }]
         }
     }

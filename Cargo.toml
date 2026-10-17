@@ -16,6 +16,7 @@ nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
 nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
+nova-sim-catalog = { path = "crates/nova-sim-catalog" }
 nova-audio = { path = "crates/nova-audio" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"

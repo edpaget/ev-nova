@@ -1,0 +1,36 @@
+[package]
+name = "nova-sim-catalog"
+description = "The catalog layer of nova-sim's layered crates: the typed view of the game data, its GameData adapter, control bits, sounds, strings and the warp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: geometry, handling, chance, the clock, running
+# lights and the rulebook. Nothing else of the nova-sim stack: `deny.toml`
+# bans the way back up.
+nova-sim-base.workspace = true
+# The records the catalog ports are adapted from, and the control-bit
+# expressions they hold.
+nova-data.workspace = true
+# The resource types the GameData adapter reads raw, such as `snd `.
+nova-rsrc.workspace = true
+# `StartError`.
+thiserror.workspace = true
+
+[dev-dependencies]
+# Synthetic resource forks for the GameData adapter tests.
+nova-data = { workspace = true, features = ["fixture"] }
+nova-rsrc = { workspace = true, features = ["fixture"] }
+# The scripted `Chance` (`Scripted`) the control set tests draw on.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+
+[features]
+# Exposes the test support in `fixture` (the catalog record builders and
+# the control-bit mocks) to the tests of the nova-sim crates above.
+fixture = []
+
+[lints]
+workspace = true

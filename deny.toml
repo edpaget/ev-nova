@@ -23,5 +23,6 @@ deny = [
     # layered crate gets its own entry and is added to the `wrappers` of
     # every crate below it.
     { crate = "nova-sim", wrappers = ["nova", "nova-sim", "nova-view"], reason = "a layered nova-sim crate must never depend on the facade above it" },
-    { crate = "nova-sim-base", wrappers = ["nova-sim"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
+    { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-catalog"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
+    { crate = "nova-sim-catalog", wrappers = ["nova-sim"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },
 ]

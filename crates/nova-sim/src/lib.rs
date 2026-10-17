@@ -298,18 +298,18 @@ pub mod bay;
 pub use nova_sim_base::blink;
 pub mod board;
 pub mod brackets;
-pub mod buoy;
+pub use nova_sim_catalog::buoy;
 pub mod cargo_box;
-pub mod catalog;
 pub use nova_sim_base::chance;
+pub use nova_sim_catalog::catalog;
 pub mod clearance;
 pub mod cloak;
 pub use nova_sim_base::clock;
 pub mod combat;
-pub mod control;
+pub use nova_sim_catalog::control;
 pub mod course;
 pub mod cron;
-pub mod data;
+pub use nova_sim_catalog::data;
 pub mod date;
 pub mod escape;
 pub mod escort;
@@ -364,11 +364,11 @@ pub mod session;
 pub mod ship_change;
 pub mod ship_layer;
 pub mod shipyard;
-pub mod sound;
+pub use nova_sim_catalog::sound;
 pub mod stats;
 pub mod status_cargo;
 pub mod story;
-pub mod strings;
+pub use nova_sim_catalog::strings;
 pub mod target_panel;
 pub mod targeting;
 #[cfg(test)]
@@ -380,7 +380,7 @@ pub mod traffic;
 pub use nova_sim_base::trig;
 pub mod tutorial;
 pub mod wares;
-pub mod warp;
+pub use nova_sim_catalog::warp;
 
 pub use ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,

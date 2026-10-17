@@ -87,7 +87,7 @@ mod tests {
 
     use super::*;
     use crate::control::Bit;
-    use crate::testkit::Scripted;
+    use nova_sim_base::fixture::Scripted;
 
     /// A target holding control bits and a log of what happened to it.
     #[derive(Debug, Default)]
