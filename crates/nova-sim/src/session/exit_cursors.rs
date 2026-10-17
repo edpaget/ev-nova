@@ -5,7 +5,9 @@
 //! and `_SpawnBeam` write +0xc8fe-+0xc905 (see
 //! [`berth_exits`](crate::traffic::berth_exits) and
 //! [`RuleKey::ReusedSlotExits`]). The fold set (+0xc8fc), which no refit
-//! writes either, carries through a refit too.
+//! writes either, carries through an outfit refit too, but a change of
+//! ship sets it back to 0, the original's `BaseSets` − 1 for a hull of
+//! one set (`_HandlePlayer` @0x6ef3f).
 
 use super::ship_change::ClassChange;
 use super::tests::{FIRE, Firing, armed, blaster, facing_an_npc};
@@ -177,6 +179,24 @@ fn a_change_of_ship_keeps_the_players_exit_cursors_by_the_engine_and_resets_them
             "{reading:?}"
         );
         assert_eq!(fire(&mut session), exit, "{reading:?}: the new hull's");
+    }
+}
+
+#[test]
+fn a_change_of_ship_puts_the_players_fold_set_back_to_0_by_either_reading() {
+    let catalog = four_guns();
+    for reading in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        session.armament = session.armament.clone().with_fold_set(2);
+        let record = session.ship_record(ShipId(129)).cloned().expect("ship 129");
+        let change = ClassChange {
+            outfits: session.pilot.outfits.clone(),
+            reserves: ReservePolicy::Hold,
+        };
+        session.become_class(&record, change, |_| {});
+        assert_eq!(session.ship(), ShipId(129));
+        assert_eq!(session.armament.fold_set(), 0, "{reading:?}");
     }
 }
 

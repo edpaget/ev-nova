@@ -1839,8 +1839,9 @@ impl Session {
     /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
     /// reads [`RuleKey::ShipChangeReserves`] (see
     /// [`ReservePolicy::reading`]). The exit cursors and the fold set carry
-    /// over, as no refit writes them (see the `exit_cursors` tests).
-    /// Capture, a change of ship and a
+    /// over, as no refit writes them (see the `exit_cursors` tests); a
+    /// change of class then sets the fold set back to 0
+    /// ([`Session::become_class`]). Capture, a change of ship and a
     /// purchase refit through [`Session::become_class`], by the policy
     /// they chose. By the engine, a refit leaves the secondary selected as
     /// it is, one the ship no longer carries too, as the original's
@@ -1851,7 +1852,8 @@ impl Session {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
         // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
-        // set (+0xc8fc): the new armament carries the old's.
+        // set (+0xc8fc): the new armament carries the old's (a change of
+        // class resets the fold set after, in `become_class`).
         self.armament = self
             .arsenal
             .player(&self.pilot.outfits, &self.outfits)

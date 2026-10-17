@@ -727,6 +727,20 @@ mod tests {
     }
 
     #[test]
+    fn an_ejecting_players_fold_set_goes_back_to_0_in_the_pod_by_either_reading() {
+        use crate::rulebook::Rulebook;
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = ejecting(100);
+            let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
+            let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
+            session.armament = session.armament.clone().with_fold_set(2);
+            to_the_breakup(&mut session, &catalog, false);
+            assert!(in_the_pod(&session));
+            assert_eq!(session.armament.fold_set(), 0, "{reading:?}");
+        }
+    }
+
+    #[test]
     fn a_dying_player_without_a_pod_or_escape_ship_never_ejects() {
         let catalog = ejecting(2);
         let mut session = flying(&catalog, &[AUTO]);

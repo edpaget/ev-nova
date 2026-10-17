@@ -1073,7 +1073,9 @@ impl Armament {
     /// original's `BaseSets` − 1 for a hull of one set. A beam of `ExitType`
     /// -1 steps it as `_SpawnBeam` steps a cursor (@0x450fa-0x4523d; see
     /// [`exits::step_stray`](super::exits::step_stray)), and no refit
-    /// writes it. Folding hulls' `BaseSets` − 1 at spawn and on a ship
+    /// writes it; the player's goes back to 0 on a change of ship, as the
+    /// original writes `BaseSets` − 1 there (`_HandlePlayer` @0x6ef3f).
+    /// Folding hulls' `BaseSets` − 1 at spawn and on a ship
     /// change, and every reader (the drawn set, the fold-before-fire
     /// gates), are ship-handling-fidelity phase 10's; this is their hook.
     #[must_use]
@@ -1082,7 +1084,7 @@ impl Armament {
     }
 
     /// This armament with `fold_set` for its fold set: the player's carried
-    /// through a refit (see [`Armament::fold_set`]).
+    /// through an outfit refit (see [`Armament::fold_set`]).
     #[must_use]
     pub fn with_fold_set(mut self, fold_set: u16) -> Self {
         self.fold_set = fold_set;
