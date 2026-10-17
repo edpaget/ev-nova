@@ -42,6 +42,20 @@ exclude_re = [
     # `push <= 0.0` (the first operand, column 24) cannot be told apart.
     # The top speed's own test beside it is caught.
     "bay.rs:[0-9]+:24: replace < with <= in launch_velocity",
+    # The same tests where `launch_velocity`'s body now lives, as
+    # `speed_cap::adjusted_accel`: a push of exactly none adds none whichever
+    # branch it takes, so `push > 0.0` / `>=` (column 28) and `push < 0.0` /
+    # `<=` (column 24) can't be told apart.
+    "speed_cap.rs:[0-9]+:28: replace > with >= in adjusted_accel",
+    "speed_cap.rs:[0-9]+:24: replace < with <= in adjusted_accel",
+    # `whole_degree`'s slack test: no f32 heading in 0..360 lies exactly
+    # 0.001 (as an f32) from a whole degree (checked over 1..=360, where
+    # `heading - heading.round()` is exact), so `<` and `<=` agree.
+    "speed_cap.rs:[0-9]+:[0-9]+: replace < with <= in whole_degree",
+    # `RuleValue::index` with the one value there is so far, the thrust
+    # divisor, whose index is 0: replacing it with 0 changes nothing until
+    # a second value is declared, whose tests will catch it.
+    "rule_values.rs:[0-9]+:[0-9]+: replace RuleValue::index -> usize with 0",
     # The galaxy map's star map is built only for its links and places;
     # nothing reads a buoy from it, so the `Message` it gives its systems
     # (-1, none) cannot be observed.
