@@ -321,6 +321,8 @@ mod tests {
         assert_eq!(wrap_once(0.0), 0.0);
         assert_eq!(wrap_once(-400.0), -40.0, "only once");
         assert_eq!(wrap_once(800.0), 440.0, "only once");
+        // `ucomiss` finds -0.0 equal to 0.0, so it is not taken round.
+        assert_eq!(wrap_once(-0.0).to_bits(), (-0.0_f32).to_bits());
     }
 
     #[test]
@@ -355,6 +357,24 @@ mod tests {
     fn with_no_weapon_to_lead_with_the_lead_is_the_table_bearing() {
         let target = (Vec2::new(100.0, 0.0), Vec2::new(0.0, 5.0));
         assert_eq!(lead_angle(Vec2::ZERO, Vec2::ZERO, target, None), 90);
+    }
+
+    #[test]
+    fn the_lead_reads_where_the_shot_leaves_and_both_velocities_on_both_axes() {
+        let from = Vec2::new(30.0, 40.0);
+        let firer = Vec2::new(2.0, 1.0);
+        let target = (Vec2::new(130.0, -60.0), Vec2::new(-3.0, 4.0));
+        assert_eq!(
+            lead_angle(from, firer, target, None),
+            table_arctan(-100.0, 100.0)
+        );
+        // 141.42 away at 10 a tick: 14.142 ticks, the target moving
+        // (-5, 3) relative to the firer, so aimed at (59.29, -17.57).
+        assert_eq!(
+            lead_angle(from, firer, target, PLAIN),
+            table_arctan(30.0 - 59.289_32, 40.0 + 17.573_59)
+        );
+        assert_eq!(table_arctan(30.0 - 59.289_32, 40.0 + 17.573_59), 26);
     }
 
     #[test]

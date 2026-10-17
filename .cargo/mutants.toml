@@ -16,6 +16,16 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_AngularDifference`'s first fold (from 360 when the two lie either
+    # side of 179, @0x649e-0x64f4) is undone or redone by its second (from
+    # 360 above 180) for every pair of 16-bit values, so flipping or
+    # loosening either comparison gives the same answer; the port keeps
+    # both as the original has them.
+    "trig.rs:[0-9]+:[0-9]+: replace (!=|>) with (==|>=|<) in angular_difference",
+    # `_TableArcTan`'s `180 + c` for a point below and left of the origin
+    # (@0x25a64-0x25a6d) is taken round into 0..360 after, so `c - 180`
+    # lands on the same heading.
+    "trig.rs:[0-9]+:[0-9]+: replace \\+= with -= in table_arctan",
     # `open_audio` (nova's `main.rs`) opens the default audio device
     # through cpal and reads the soundtrack from disk: the program's edge,
     # which no hermetic test may run. Its decisions are tested on their

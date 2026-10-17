@@ -142,8 +142,6 @@ pub fn release(
             Shot {
                 target,
                 aimed_at: target,
-                generation: unaimed.generation,
-                source: parent.source,
                 heading,
                 velocity,
                 layer: ShotLayer::spawned(sub.guidance, ship_source, turret_over),

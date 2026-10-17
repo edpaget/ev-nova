@@ -1440,6 +1440,15 @@ mod tests {
     }
 
     #[test]
+    fn an_unwrapped_bombs_16_bit_difference_is_taken_round_once_each_way() {
+        let left_of_up = Vec2::new(-1.0, -40.0);
+        // 359 - (-2.5) truncates to 361, taken to 1: on.
+        assert_eq!(vaned(-2.5, left_of_up, 1), -1.5);
+        // 359 - (-182.5) truncates to 541, taken to 181: back.
+        assert_eq!(vaned(-182.5, left_of_up, 1), -183.5);
+    }
+
+    #[test]
     fn by_the_other_reading_a_bomb_crossing_up_wraps_and_settles_on_its_bearing() {
         let bible = RuleSource::Bible;
         let left_of_up = Vec2::new(-1.0, -40.0);
@@ -3434,6 +3443,20 @@ mod tests {
         assert_eq!(trig::intercept_angle(Vec2::ZERO, past[0].position), 271);
         step(&mut back, &past);
         assert!((back.heading - 83.0).abs() < 1e-4, "{back:?}");
+    }
+
+    #[test]
+    fn a_homing_turn_takes_its_16_bit_difference_round_once_each_way() {
+        // A heading below 0: 355 - (-6) is 361, taken to 1, so on; a turn
+        // of 0.5 truncates to 0, under the difference's 1.
+        assert_eq!(homing_turn(-6.0, 355, 0.5), -5.5);
+        // 359 - (-182) is 541, taken to 181, so back.
+        assert_eq!(homing_turn(-182.0, 359, 7.0), -189.0);
+        // 10 - 350 is -340, taken to 20, so on.
+        assert_eq!(homing_turn(350.0, 10, 7.0), 357.0);
+        assert_eq!(wrap_turned(0.0), 0.0, "0 stays 0");
+        assert_eq!(wrap_turned(360.0), 0.0);
+        assert_eq!(wrap_turned(-1.0), 359.0);
     }
 
     #[test]

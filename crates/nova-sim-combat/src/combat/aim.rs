@@ -714,6 +714,7 @@ mod tests {
             10,
             "(90 + 180) mod 360"
         );
+        assert_eq!(quadrant_off(rear, 90.0, 260, engine), 10, "under the tail");
         assert_eq!(
             quadrant_off(rear, 190.0, 350, engine),
             340,
