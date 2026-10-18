@@ -1919,6 +1919,18 @@ fn beginning_the_fade_before_the_hold_expires_does_nothing() {
 }
 
 #[test]
+fn only_a_pilot_with_a_session_whose_ship_is_breaking_up_or_destroyed_is_dying() {
+    let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    assert!(!flying.is_dying(), "alive");
+    assert!(at_the_explosion().is_dying(), "destroyed");
+    let failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..killed_in(1)
+    });
+    assert!(!failed.is_dying(), "no session, no pilot dying");
+}
+
+#[test]
 fn only_a_living_pilot_may_be_saved() {
     let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
     assert!(flying.may_save());
