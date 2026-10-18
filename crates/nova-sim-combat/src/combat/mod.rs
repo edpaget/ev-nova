@@ -46,12 +46,15 @@
 //! [`Combat`] holds the shots and beams in flight. Each tick
 //! ([`Combat::tick`]) runs over every ship in the fight, each a
 //! [`Fighter`] with the ship it targets, by the fight's [`Rules`], in this
-//! order:
+//! order, each step one of the tick's public phases (see [`phases`]),
+//! which a session may run with its own work between them:
 //!
-//! 1. The player's point defence fires, then the player fires the weapons
-//!    its trigger holds that are ready, as `_HandlePlayer` calls them
-//!    (`_HandleShipPointDefense` @0x68c74, then `_FirePlayerWeapon`
-//!    @0x6ab55 and @0x6abc7) before the frame's collision passes
+//! 1. The player's point defence fires ([`Combat::defend_player`]), then
+//!    the player fires the weapons its trigger holds that are ready and
+//!    its reloads count down a tick ([`Combat::fire_player`]), as
+//!    `_HandlePlayer` runs them (`_HandleShipPointDefense` @0x68c74, then
+//!    `_FirePlayerWeapon` @0x6ab55 and @0x6abc7, then the countdown
+//!    @0x6ae25-0x6ae61) before the frame's collision passes
 //!    (`_DoPlayGameWork` @0x43e19). So point defence takes a free shot or
 //!    beam slot, and steps an exit cursor it shares with a gun, before the
 //!    trigger, and reads the ship before the trigger's recoil. Each weapon
@@ -86,8 +89,8 @@
 //!    [`PointDefenceRule`] which missiles are hostile only by the other
 //!    reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility), and
 //!    never of a ship.
-//! 2. The hit pass (`Combat::hit_pass`): each shot that moved in the
-//!    last tick is tested on that move, as the original's next frame tests
+//! 2. The hit pass (`Combat::hit_pass`, [`Combat::test_hits`]): each shot
+//!    that moved in the last tick is tested on that move, as the original's next frame tests
 //!    it before `_HandleShot` moves it again; a shot fired since has not
 //!    moved, and is not tested. The pass meets each NPC where it stood as
 //!    the last tick ran and the player where it is now, but for contact
@@ -111,10 +114,9 @@
 //!      ([`Shot::fused`]: by the engine, the first ship in the fight's
 //!      order within its reach, the hit at the shot), or else an asteroid
 //!      that set it off.
-//!    - Each shot whose move spent its life, which is not tested, comes to
-//!      its end of life where it ended: it detonates (blasting the same
-//!      way) or fizzles, and releases its sub-munitions at the ship its
-//!      damage is aimed at.
+//!    - Each shot whose move spent its life is tested against no ship,
+//!      fuse or stellar, but meets an asteroid it touched; met by none, it
+//!      waits in the table for its end of life in step 5.
 //!    - Each planet-type shot left meets the stellars (see 2b).
 //!
 //!    A shot that hits damages the ship, less a point of mass and of energy
@@ -125,7 +127,7 @@
 //!    a touch until the shot's age reaches it and the fuse until its age is
 //!    past it. Each age read is the one its move left, as the pass comes
 //!    before the shots move again. Sub-munitions released here take their
-//!    first move in step 6.
+//!    first move in step 5.
 //!
 //!    2a. Each shot meets the asteroids the session hands the tick
 //!    ([`AsteroidTarget`](asteroid_hit::AsteroidTarget)), where the last
@@ -147,59 +149,71 @@
 //!    hands the tick ([`StellarTarget`]) is spent on it: it explodes where
 //!    it hit, with no blast and no sub-munitions, and takes its mass and
 //!    energy damage off the stellar's strength. A stellar below 0 is
-//!    skipped by the later shots. This comes after the ship hits and the
-//!    expiries, as the original's stellar check (`_CheckShotProximities`
+//!    skipped by the later shots. This comes after the ship hits, as the
+//!    original's stellar check (`_CheckShotProximities`
 //!    @0x44015) comes after its ship collision passes; beams never hit a
 //!    stellar. The session takes each hit as a [`StellarStrike`]
 //!    ([`Combat::take_stellar_strikes`]) and shoots down those it
 //!    destroyed.
 //! 3. The pass's hits land at once (`Combat::land`), in its order:
-//!    contacts, proximities, then expiries. Each ship struck settles its
-//!    condition as step 9 does, but for a breakup's countdown: it is
-//!    disabled, or starts breaking up, and the pass's last strike on it
-//!    says so. So an NPC downed by a shot fires nothing more that tick, as
-//!    `_HandleShip` reads `_IsDisabled` after the passes.
-//! 4. Every NPC's point defence fires, as `_AIDispatch` runs it in its
-//!    slot loop (@0x4429d, `_AIFireTurret` @0x80b0d); then each NPC fires
-//!    the weapons its trigger holds that are ready, as in step 1, as
-//!    `_HandleShip`'s loop fires the picks (@0x44483); both read the
-//!    conditions the hit pass left. So a missile an NPC fires is first met
-//!    by an NPC's point defence on the next tick. An NPC fires its pick as
-//!    `_FireAIShipWeapon` does
-//!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
-//!    engine, and a recoil sets the firer's velocity, reported as a
-//!    [`Shove`].
-//! 5. Every reload timer counts down a tick.
-//! 6. Shots fly a tick, homing ones steering at their target, breaking up
-//!    or not, unless it jams them, their firer cannot see it, or a
-//!    `Seeker` 0x4000 lock fails, and confused ones circling by the
-//!    [`Field`]'s frame ([`projectile`]); each ship's jamming and sight
-//!    are read as the hit pass left them ([`Sight`]). Each keeps where its
-//!    move began, for the next tick's hit pass ([`Shot::moved_from`]). A
-//!    shot of no life (`Count` 0 or below) is dropped unmoved and unseen.
-//!    A hit by a shot turned on its firer is by no ship ([`Strike::by`]).
-//!    Each beam spends a tick of its life, or fades a tick at its end
-//!    ([`Beam::live`]), one that has ended going before it hits or is
-//!    drawn again. The rest follow their firers ([`Beam::follow`]), each
-//!    from its exit on the frame its firer is drawn on this tick, pointing
-//!    along that frame, at its target or at its missile, turned by its
-//!    jitter drawn on the tick's chance. A beam outlives its firer disabled
-//!    or breaking up, and stays where its firer last was once the firer is
-//!    destroyed or out of the fight; a beam whose target is destroyed or
-//!    gone, or whose missile is gone, goes with it. Before it moves, any
-//!    shot but point defence whose ship has gone (destroyed, or out of the
-//!    fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)), and hits no
-//!    ship from then on. A player's homing missile not lost, aimed at an
-//!    NPC outside the player's fleet, locks on it as its age passes
+//!    contacts, then proximities. Each ship struck settles its condition
+//!    as step 9 does, but for a breakup's countdown: it is disabled, or
+//!    starts breaking up, and the pass's last strike on it says so. So an
+//!    NPC downed by a shot runs no point defence and fires nothing more
+//!    that tick, as `_AIDispatch` and `_HandleShip` read `_IsDisabled`
+//!    after the passes.
+//! 4. Every NPC's point defence fires ([`Combat::defend_npcs`]), as
+//!    `_AIDispatch` runs it in its slot loop (@0x4429d, `_AIFireTurret`
+//!    @0x80b0d), on the advance pass alone (@0x4402a). So a missile an NPC
+//!    fires is first met by an NPC's point defence on the next tick, and
+//!    under the caps it finds the slots of the shots the collision passes
+//!    ended, and of the spent ones, still held ([`Combat::shot_room`]).
+//! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots`]) frees the slots
+//!    held since its last pass. Each shot whose last move spent its life
+//!    comes to its end of life where it ended ([`Combat::expire`],
+//!    @0x36195): it detonates, blasting the ships about it with its
+//!    weapon's whole damage, or fizzles, and releases its sub-munitions at
+//!    the ship its damage is aimed at; its blasts meet the ships as the
+//!    hit pass does, land, and settle as in step 3. Then the shots fly a
+//!    tick, homing ones steering at their target, breaking up or not,
+//!    unless it jams them, their firer cannot see it, or a `Seeker` 0x4000
+//!    lock fails, and confused ones circling by the [`Field`]'s frame
+//!    ([`projectile`]); each ship's jamming and sight are read as the hit
+//!    pass left them ([`Sight`]). Each keeps where its move began, for the
+//!    next tick's hit pass ([`Shot::moved_from`]). A shot of no life
+//!    (`Count` 0 or below) is dropped unmoved and unseen. A hit by a shot
+//!    turned on its firer is by no ship ([`Strike::by`]). Before it moves,
+//!    any shot but point defence whose ship has gone (destroyed, or out of
+//!    the fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)), and hits
+//!    no ship from then on. A player's homing missile not lost, aimed at
+//!    an NPC outside the player's fleet, locks on it as its age passes
 //!    [`LOCK_AGE`](projectile::LOCK_AGE): a strike of no damage the NPC
-//!    answers ([`Strike::lock`]). Each shot of a weapon that fires one shot
-//!    at a time (`Flags3` 0x0004) holds its firer's reload for it at its
-//!    `Reload` ([`Armament::hold`]).
+//!    answers ([`Strike::lock`]), landing at once (@0x35855). Each shot of
+//!    a weapon that fires one shot at a time (`Flags3` 0x0004) holds its
+//!    firer's reload for it at its `Reload` ([`Armament::hold`]).
+//! 6. `_HandleShip`'s fire (@0x44483, [`Combat::fire_npcs`]): each NPC's
+//!    reloads count down a tick (@0x33896), then it fires the weapons its
+//!    trigger holds that are ready, as in step 1, reading the conditions
+//!    the passes and the ends of life left. Its shots first move in the
+//!    next tick's step 5. An NPC fires its pick as `_FireAIShipWeapon`
+//!    does ([`ai_fire`]): a copy that spawns nothing still spends, by the
+//!    engine, and a recoil sets the firer's velocity, reported as a
+//!    [`Shove`]. Then, in `_HandleBeams` (@0x4453d,
+//!    [`Combat::close_tick`]), each beam spends a tick of its life, or
+//!    fades a tick at its end ([`Beam::live`]), one that has ended going
+//!    before it hits or is drawn again. The rest follow their firers
+//!    ([`Beam::follow`]), each from its exit on the frame its firer is
+//!    drawn on this tick, pointing along that frame, at its target or at
+//!    its missile, turned by its jitter drawn on the tick's chance. A beam
+//!    outlives its firer disabled or breaking up, and stays where its
+//!    firer last was once the firer is destroyed or out of the fight; a
+//!    beam whose target is destroyed or gone, or whose missile is gone,
+//!    goes with it.
 //! 7. A point-defence beam hits the missile it is held on the same way as
 //!    a point-defence shot; a missile downed leaves the fight before the
 //!    next hit pass tests its move, as `_HandleBeams` runs last in the
 //!    frame (@0x4453d).
-//! 8. The tick's missile locks land, then the beams' hits. A beam damages
+//! 8. The beams' hits land. A beam damages
 //!    the nearest ship it may hit in its cone, or the first its segment
 //!    meets, as the fight's rules say ([`beam`]), every tick until its
 //!    life is over, and ends where it hit.
@@ -254,29 +268,47 @@
 //!     what it holds: a disabled or breaking-up one regenerates neither
 //!     (`_HandleShip` @0x34424, `_HandlePlayer` @0x6cf86-0x6cff3).
 //!
-//! **Frame to tick.** Tick t is the original's frame t
-//! (`_DoPlayGameWork` @0x43e19-0x4453d, drawn after it returns,
-//! `_PrepareAllSprites` @0x45834): step 1 is its `_HandlePlayer` point
-//! defence and trigger (@0x68c74, then @0x6ab55); steps 2 and 3 its
-//! collision passes
-//! (`_SWCollideSpriteLayer` @0x43e70-0x44010, `_CheckShotProximities`
-//! @0x44015), testing tick t−1's moves, and `_HandleShot`'s ends of life
-//! (@0x36195); step 4 `_AIDispatch`'s point defence (@0x4429d) and
-//! `_HandleShip`'s fire (@0x44483); step 6 `_HandleShot`'s moves
-//! (@0x44385); steps 7 and 8 `_HandleBeams` (@0x4453d). So a shot that
-//! meets a ship is drawn over it, or at its last point, for a frame before
-//! its hit, as the original draws it. The session's traffic tick runs
-//! before the fight, where the original's AI and ships come after the
-//! passes (rdm:phase/weapons-fidelity/phase-28-npc-answers-hits-in-the-frame-they-land).
-//! Within the hit pass, shots go in the order they are kept, where the
-//! original goes in sprite-collision or slot order; the locks land with
-//! the beams, after the NPCs fire, where `_HandleShot` makes them before
-//! `_HandleShip`, though a lock does no damage and its answer is taken
-//! after the tick; neither crosses a boundary the player sees.
+//! After step 10 each ship's place is kept: the next tick's hit pass meets
+//! each NPC there (`Combat::hit_pass`).
 //!
+//! **Frame to tick.** Tick t is the original's frame t
+//! (`_DoPlayGameWork` @0x43de5-0x4453d, drawn after it returns,
+//! `_PrepareAllSprites` @0x45834): step 1 is its `_HandlePlayer` point
+//! defence, trigger and reload countdown (@0x68c74, @0x6ab55, @0x6ae25);
+//! steps 2 and 3 its collision passes (`_SWCollideSpriteLayer`
+//! @0x43e70-0x44010, `_CheckShotProximities` @0x44015), testing tick
+//! t−1's moves; step 4 `_AIDispatch`'s point defence (@0x4429d); step 5
+//! `_HandleShot` (@0x44385): the ends of life (@0x36195), the moves and
+//! the locks (@0x35855); step 6 `_HandleShip`'s countdown and fire
+//! (@0x33896, @0x34ffd, loop @0x44483) and `_HandleBeams`' moves; steps 7
+//! and 8 `_HandleBeams`' hits (@0x4453d). So a shot that meets a ship is
+//! drawn over it, or at its last point, for a frame before its hit, as
+//! the original draws it, and an NPC's shot is drawn where it left for a
+//! frame before it moves.
+//!
+//! The session (`nova_sim::Session::game_work`) runs the player's move
+//! after step 1, the traffic's AI between steps 3 and 4, and the NPCs'
+//! motion between steps 5 and 6, as `_DoPlayGameWork` does.
+//!
+//! What remains of the original's order crosses no boundary the player
+//! sees, and is not filed:
+//!
+//! - Within the hit pass, shots go in the order they are kept, where the
+//!   original goes in sprite-collision or slot order.
+//! - Step 5 runs every end of life and then every move, where
+//!   `_HandleShot` goes slot by slot, and frees the held slots at once,
+//!   where the original frees each at its visit.
+//! - Step 4 runs after every NPC's decision, where `_AIDispatch`
+//!   interleaves them slot by slot.
+//!
+//! When a breakup's countdown starts, and when ships regenerate, differ
+//! from the original's `_HandleShipDisplay` and `_HandleShip` per-slot
+//! loop (filed as weapons-fidelity's phase 39).
+
 //! A tick runs on a [`GamePass`] ([`Combat::tick_on`]): double time's second
-//! pass runs every step but the beams', which only spend their life on
-//! it, and the advance pass in double time doubles the beams' damage.
+//! pass runs every step but the NPCs' point defence, which it skips, and
+//! the beams', which only spend their life on it, and the advance pass in
+//! double time doubles the beams' damage.
 //!
 //! Each hit on a ship (a shot's, a beam's, a blast's, a shockwave's) is
 //! kept as a [`Strike`] by the ship whose it was, with the shield and
@@ -917,7 +949,7 @@ pub struct Field {
     pub interference: i16,
 }
 
-/// A hit that landed on a ship in the hit pass or in step 8, before it
+/// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
 /// is taken.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Landed {
@@ -1068,7 +1100,13 @@ pub struct Combat {
     /// ([`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse)).
     proximity_fuse: ProximityFuse,
     /// Where each ship stood as the last tick ran, which the next tick's
-    /// hit pass meets it at (see `Combat::hit_pass`).
+    /// hit pass and ends of life meet it at (see `Combat::hit_pass`). A
+    /// session that runs the traffic's motion between the fight's phases,
+    /// as `_DoPlayGameWork` does (`nova_sim::Session::game_work`), moves
+    /// no NPC between one tick's close and the next tick's hit pass, so
+    /// there each NPC's entry is where it is; the player's still differs,
+    /// as `_HandlePlayer` moves it before the passes. A session that runs
+    /// the traffic before the whole fight needs the NPCs' too.
     stood: BTreeMap<ShipRef, Vec2>,
     /// The slots of the asteroids broken since they were last taken, in
     /// the order they broke.
@@ -1196,7 +1234,7 @@ impl Combat {
         }
     }
 
-    /// Step 6's shots: each shot of no life (`Count` 0 or below) is
+    /// Step 5's shots: each shot of no life (`Count` 0 or below) is
     /// dropped unmoved and unseen, as `_HandleShot` sends it straight to
     /// its end of life with its sprite never shown (@0x355a8-0x355b3,
     /// @0x35f0a), freeing its slot in the same pass, so it holds none
@@ -1535,7 +1573,7 @@ impl Combat {
     /// ([`Shot::aimed_at`]), its mass and energy
     /// damage times [`AIMED_DAMAGE_SHARE`], added to that ship's total
     /// and truncated after each add. A shot whose last move spent its
-    /// life, waiting for its end of life in the next hit pass, counts for
+    /// life, waiting for its end of life in `_HandleShot`, counts for
     /// nothing, as the original skips a life of none or below
     /// (@0x3a1ad-0x3a1b5). Beams are not shots and count for
     /// nothing. The original keeps each total in 16 bits; here it is not
@@ -1543,10 +1581,11 @@ impl Combat {
     ///
     /// The original builds the totals once a frame, after the collision
     /// passes and before the AI runs (`_DoPlayGameWork` @0x44223, before
-    /// `_AIDispatch` @0x4429d); the session builds them from the shots in
-    /// flight as its traffic decides, before the fight's hit pass, so the
-    /// shots that pass will hit still count
-    /// (rdm:phase/weapons-fidelity/phase-28-npc-answers-hits-in-the-frame-they-land).
+    /// `_AIDispatch` @0x4429d), so no shot the passes hit counts. The
+    /// session's `nova_sim::Session::game_work` reads them there, after
+    /// [`Combat::test_hits`]; its separate parts, which run the traffic
+    /// before the fight, read them before the hit pass, so the shots that
+    /// pass will hit still count.
     #[must_use]
     pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
         let mut aimed = BTreeMap::new();
@@ -1833,13 +1872,14 @@ impl Combat {
         (start, side)
     }
 
-    /// Steps 1 and 4, after point defence ([`Combat::defend`]): each of the
+    /// Steps 1 and 6, after point defence ([`Combat::defend`]): each of the
     /// `firers` fires what its trigger holds, aimed at its target among
     /// `targets` while that can be hit. The player fires in step 1, before
     /// the hit pass, as `_HandlePlayer` calls `_FirePlayerWeapon` after
     /// `_HandleShipPointDefense` ([`Combat::fire_player`]); the NPCs in step
-    /// 4, as `_HandleShip` fires their picks after `_AIDispatch` has run
-    /// their point defence.
+    /// 6, as `_HandleShip` fires their picks after `_AIDispatch` has run
+    /// their point defence and `_HandleShot` has moved the shots
+    /// ([`Combat::fire_npcs`]).
     /// An NPC launches its fighters with [`Trigger::bays`] and fires an
     /// escort's formation trigger through [`Armament::fire`], its quadrant
     /// turrets testing their blind spots as the original's AI picks them
@@ -2119,7 +2159,7 @@ impl Combat {
         }
     }
 
-    /// Step 6's hold: each shot in flight of a weapon that fires one shot
+    /// Step 5's hold: each shot in flight of a weapon that fires one shot
     /// at a time (`Flags3` 0x0004) holds its firer's reload for that
     /// weapon at its whole `Reload` ([`Armament::hold`]), on every tick
     /// it moves, the move that spends it or brings it to its victim
@@ -2606,7 +2646,7 @@ impl Combat {
     /// velocities from the shoves after the fight's tick
     /// ([`Combat::take_shoves`]), before the next movement, which crosses
     /// no boundary the player sees. The hits compound in the order they
-    /// land: locks, contacts, proximities, expiries, then beams.
+    /// land: contacts, proximities, expiries, locks, then beams.
     ///
     /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
     /// at the ship's place, the escape pod included, whatever the tractor
@@ -3302,9 +3342,9 @@ fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
 
 /// Which ships defend and fire in a step of the tick, point defence
 /// first: the player in step 1, as `_HandlePlayer` runs its point defence
-/// and then its trigger before the collision passes, and the NPCs in step
-/// 4, after them, as `_AIDispatch` runs their point defence before
-/// `_HandleShip` fires their picks.
+/// and then its trigger before the collision passes, and the NPCs in
+/// steps 4 and 6, after them, as `_AIDispatch` runs their point defence
+/// before `_HandleShot`, and `_HandleShip` fires their picks after it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Firers {
     /// The player alone.
@@ -3482,12 +3522,10 @@ const LOCK_HIT: Hit = Hit {
 ///
 /// The original locks in `_HandleShot`, after the move and before the
 /// next frame's collision passes test that move; here it is made on the
-/// move in step 6 and lands with the beams in step 8, after the NPCs
-/// fire, where the original makes it before `_HandleShip`; a lock does
-/// no damage, and its answer is taken after the tick, so that crosses no
-/// boundary the player sees. The original's target sets +0x70 then, and
-/// its AI reads it the next frame; here the session answers the strike
-/// at its next traffic tick, a tick's lag with no frame drawn between.
+/// move and lands at once, in step 5 ([`Combat::fly_shots`]), before the
+/// NPCs fire. The original's target sets +0x70 then, in `_DamageShip`'s
+/// reaction block; the session answers the strike after the shot step
+/// (`nova_sim::Session::game_work`).
 fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
     let players = shot.firer == ShipRef::Player && matches!(shot.source, Source::Ship(_));
     if shot.weapon.guidance != Guidance::Homing

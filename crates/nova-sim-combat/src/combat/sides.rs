@@ -83,7 +83,7 @@
 //! stops after one pass over the ships, should leaders form a loop.
 //!
 //! A shot on the move that spends it is not tested at all (@0x447c2): its
-//! end of life takes it ([`Combat`](super::Combat)'s step 2).
+//! end of life takes it ([`Combat`](super::Combat)'s step 5).
 //!
 //! The rules read each ship as it was when the hit pass began
 //! ([`Combat`](super::Combat)'s step 2), where the original reads it as

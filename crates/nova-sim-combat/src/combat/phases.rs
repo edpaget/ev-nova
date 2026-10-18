@@ -113,7 +113,7 @@ impl Combat {
         self.defend(fighters, &targets, defence, chance, Firers::Npcs);
     }
 
-    /// Step 4's picks, `_HandleShip`'s (@0x44483): each NPC's reloads
+    /// Step 6's picks, `_HandleShip`'s (@0x44483): each NPC's reloads
     /// count down a tick (@0x33896-0x338ce), after `_HandleShot` has held
     /// them (`Combat::hold_reloads`), then it fires the weapons its trigger
     /// holds that are ready (`_FireAIShipWeapon` @0x34ffd, @0x3500a),
@@ -132,7 +132,7 @@ impl Combat {
         self.fire(fighters, &targets, chance, Firers::Npcs);
     }
 
-    /// Step 6, `_HandleShot` (@0x44385): first each shot its last move
+    /// Step 5, `_HandleShot` (@0x44385): first each shot its last move
     /// spent comes to its end of life ([`Combat::expire`], @0x36195), its
     /// blast meeting each NPC where it stood as the last tick ran and the
     /// player where it is, as the collision passes do
@@ -186,12 +186,17 @@ impl Combat {
         self.hold_reloads(fighters);
     }
 
-    /// `_HandleBeams` (@0x4453d) and the late steps 7 to 10: the beams
-    /// follow their firers among `fighters`, point-defence beams hit
-    /// their missiles, the locks and the beams' hits land, conditions
-    /// follow the damage, the shockwaves go off, shields and armour
-    /// regenerate, and where each ship stands is kept for the next tick's
-    /// collision passes.
+    /// `_HandleBeams` (@0x4453d), step 6's beams and the late steps 7 to
+    /// 10: the beams follow their firers among `fighters`, drawing on
+    /// `chance`, point-defence beams hit their missiles, the beams' hits
+    /// land, conditions follow the damage, the shockwaves go off, shields
+    /// and armour regenerate, and where each ship stands is kept for the
+    /// next tick's collision passes.
+    ///
+    /// The original starts a breakup's countdown in `_HandleShipDisplay`,
+    /// and regenerates in `_HandlePlayer` and `_HandleShip`, before
+    /// `_HandleBeams`; here both come after the beams' hits (filed as
+    /// weapons-fidelity's phase 39).
     pub fn close_tick(
         &mut self,
         fighters: &mut [Fighter],
