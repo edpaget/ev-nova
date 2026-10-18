@@ -153,7 +153,7 @@
 //! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see `nova_sim::ai::warship`) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
 //! | [`ExploredByPlace`](RuleKey::ExploredByPlace) | `explored_by_place` | exploring a system explores its place's head (`_RecursiveAutoExplore` @0xd9b6-0xda10, the arrivals and the take-off), and each rebuild point explores every system at an explored head's place, hidden or not (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f; see `nova_sim::exploration`) | each system is explored on its own\* |
 //! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden hop of the course to the system at its place and cuts the course at the first hop with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see `nova_sim::course`) | hops resolved only when used, and an arrival drops only the hops made\* |
-//! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile` @0x765a2-0x765ce; see `nova_sim::nebula`) | `OnExplore` runs once a pilot, through the once-fired record\* |
+//! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, Open Pilot's `_MainScreenChoice` @0x1a8d4-0x1a906, and `_OpenLastPilotFile` @0x765a2-0x765ce at launch; see `nova_sim::nebula`) | `OnExplore` runs once a pilot, through the once-fired record\* |
 //! | [`NebulaNewPilot`](RuleKey::NebulaNewPilot) | `nebula_new_pilot` | a new pilot explores no nebula until its first exploration, a take-off, a jump or a map (`_DoNewPilot` @0x18de5, @0x1df4b, @0x19118, before its first refresh @0x1925e; see `nova_sim::nebula`) | the start system's nebulae are explored as the game begins††††††††† |
 //! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see `nova_sim::scan`) | the outfits are scanned when no illegal `jünk` is found\* |
 //! | [`OutfitScanFine`](RuleKey::OutfitScanFine) | `outfit_scan_fine` | only a `ScanFine` above 0 fines an illegal outfit, as it is; a negative one fines nothing (`_ScanPlayer` `jle` @0x7f222; see `nova_sim::scan`) | a negative `ScanFine` takes that percent of the cash in hundreds, at least 1, as for `jünk` and mission cargo (the Bible's `ScanFine`) |
@@ -2145,8 +2145,10 @@ rule_keys! {
     /// How often a nebula's `OnExplore` runs: by the engine, whether a
     /// nebula is explored is never saved, so after every load the sweep
     /// over the visible explored systems explores it, and runs its
-    /// `OnExplore`, again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile`
-    /// @0x765a2-0x765ce); by the other reading, once a pilot, kept in the
+    /// `OnExplore`, again (`_ResetPlayer` @0x1da86, Open Pilot's
+    /// `_MainScreenChoice` @0x1a8d4-0x1a906, and `_OpenLastPilotFile`
+    /// @0x765a2-0x765ce at launch); a return from play to the main screen
+    /// sweeps nothing; by the other reading, once a pilot, kept in the
     /// once-fired record. The Bible agrees with the engine ("this
     /// expression may get evaluated multiple times"), so the other reading
     /// is the port's choice (see `nova_sim::nebula`).

@@ -38,9 +38,14 @@
 //!
 //! **The load sweep.** [`Session::fly`] raises `Explored` for every
 //! catalog system that is visible after the load's refresh and explored,
-//! by ascending ID, as `_OpenLastPilotFile` (@0x765a2-0x765ce) and
-//! `_MainScreenChoice` (@0x1a8d4-0x1a906) sweep. Nothing it decides reads
-//! a rule, so it does not wait on task load-reads-rules-before-fly.
+//! by ascending ID, as Open Pilot's `_MainScreenChoice` sweeps
+//! (@0x1a8d4-0x1a906) once the pilot is loaded; `_OpenLastPilotFile`
+//! sweeps the same way at launch (@0x765a2-0x765ce). A return from play
+//! to the main screen keeps the session as play left it, so it sweeps
+//! nothing and runs no `OnExplore`: `_DoMainScreen`'s setup, which
+//! explores the player's system, runs once a launch. Nothing the sweep
+//! decides reads a rule, so it does not wait on task
+//! load-reads-rules-before-fly.
 //!
 //! **Gate exits** explore no nebula (`_PlayerEnterHypergate` 0x637bf,
 //! `_PlayerEnterWormhole` 0x64005): their row raises no `Explored` (the
@@ -48,8 +53,8 @@
 //!
 //! Left to others: the activity read at the exploration
 //! (crons-news-ranks-fidelity phase 24), a jump's `OnExplore` before its
-//! days and crons (phase 25), the menu round trip re-running `OnExplore`
-//! (phase 26), and the escape pod's exploration (roadmap player-death).
+//! days and crons (phase 25), and the escape pod's exploration (roadmap
+//! player-death).
 
 use super::{Session, SessionEvent};
 use crate::catalog::{NebulaId, SystemId};

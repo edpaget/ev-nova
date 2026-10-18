@@ -1359,7 +1359,8 @@ impl Session {
     /// `ActiveOn`. The explored nebulae are forgotten, but for those kept
     /// in the once-fired record, and [`StoryEvent::Explored`] is raised
     /// for every visible explored system, by ascending ID: the load's
-    /// sweep (see the `nebulae` module).
+    /// sweep, Open Pilot's (`_MainScreenChoice` @0x1a8d4-0x1a906), as the
+    /// router builds a pilot it opens (see the `nebulae` module).
     ///
     /// A pilot last landed on a stellar that some system lists resumes in
     /// the system that stellar decides (`resume_system`), not the one it
@@ -1720,9 +1721,11 @@ impl Session {
         // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
         // its `OnStart` (@0x1925e).
         session.refresh_galaxy_quietly(catalog);
-        // A load's sweep of the visible explored systems' nebulae
-        // (@0x765a2-0x765ce); a new pilot's (@0x19118), which by the
-        // engine `Session::begin` withdraws (see the `nebulae` module).
+        // Open Pilot's sweep of the visible explored systems' nebulae
+        // (`_MainScreenChoice` @0x1a8d4-0x1a906; `_OpenLastPilotFile`
+        // sweeps so at launch, @0x765a2-0x765ce); a new pilot's
+        // (@0x19118), which by the engine `Session::begin` withdraws (see
+        // the `nebulae` module).
         session.sweep_explored();
         // A load forgets the stellar the offers were rolled at (@0x75ef5),
         // so the first landing after it rolls them afresh (see the
