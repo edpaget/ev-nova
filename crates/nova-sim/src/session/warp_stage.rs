@@ -81,9 +81,6 @@ pub const WARP_DRAG: f64 = 0.98;
 /// off, unless its turn rate is wider (30.0, f32 @0xdd084).
 pub const MOVE_OFF_ARC: f32 = 30.0;
 
-/// The fastest the move-off moves the ship a pass (50.0, f32 @0xdd064).
-const MOVE_OFF_CAP: f32 = 50.0;
-
 /// The player's warp: the original's +0x50 and the globals its warp end
 /// and the screen's white read and write (see the module docs). Not
 /// saved, as no warp survives a save.
@@ -425,7 +422,7 @@ impl Session {
         if self.warp.effects {
             self.warp.gamma = warp::hyper_gamma(v);
         }
-        let push = trig::accel(whole(self.player.heading), v.min(MOVE_OFF_CAP));
+        let push = trig::accel(whole(self.player.heading), warp::capped_move_off(v));
         self.player.position = self.player.position + push;
         true
     }

@@ -101,7 +101,8 @@ const SINGLE_TIME: f64 = 1.0;
 /// @0xdd628).
 const LED_WARP_OUT: f64 = -45.0;
 
-/// The fastest a warp-out's speed gets (50.0, f32 @0xdd064).
+/// The fastest a move-off or a warp-out moves a ship a pass (50.0, f32
+/// @0xdd064; see [`capped_move_off`]).
 const WARP_OUT_CAP: f32 = 50.0;
 
 /// A sound's length as `_ParseSndHeader` gives it: its frames, and the
@@ -221,8 +222,9 @@ pub fn lead_in_speed(since: u32, factor: f32, duration: u32) -> f32 {
 /// off while v > 0 (@0x6d293-0x6d296).
 ///
 /// Out of double time it is [`lead_in_speed`] bit for bit: a − b is
-/// a + (−b) in IEEE arithmetic. The cap at 50.0 the motion applies after
-/// it (@0x6d2c3-0x6d2f8) is the session's warp stage's.
+/// a + (−b) in IEEE arithmetic. The motion caps it after
+/// (@0x6d2c3-0x6d2f8, [`capped_move_off`]), though `_hyperGamma` reads
+/// it uncapped.
 #[must_use]
 pub fn move_off_speed(since: u32, factor: f32, duration: u32, double_time: bool) -> f32 {
     let term = if double_time {
@@ -280,8 +282,7 @@ pub enum WarpOutClock {
 ///   ([`WarpOutClock::Own`], @0x348ff) while `double_time`, else 1.0;
 /// - then, when w ≠ 0, v = f32(f64(v) + T / f64(w)), with T −45.0
 ///   (@0x348b5) or −35.0 (@0x3498a);
-/// - then capped at 50.0 (@0x349a3-0x349be). A NaN passes the cap
-///   (`ucomiss`, `jbe`).
+/// - then capped at 50.0 (@0x349a3-0x349be, [`capped_move_off`]).
 ///
 /// The ship accelerates while v > 0 (@0x349c1). A ship the player leads
 /// runs this only while the player's +0x50 > 1.0 (@0x347cf-0x347e3),
@@ -302,7 +303,15 @@ pub fn npc_warp_out_speed(
     let rate = if double_time { rate } else { SINGLE_TIME };
     let t = f64::from(since) * rate * f64::from(factor);
     let v = (t / (f64::from(duration) * DURATION_SCALE)) as f32;
-    let v = less_over_factor(v, factor, term);
+    capped_move_off(less_over_factor(v, factor, term))
+}
+
+/// A move-off or warp-out speed `v` capped at 50.0 (f32 @0xdd064), as
+/// the player's move-off (`_HandlePlayer` @0x6d2c3-0x6d2f8) and an NPC's
+/// warp-out (`_HandleShip` @0x349a3-0x349be) cap it. A NaN passes the cap
+/// (`ucomiss`, `jbe`).
+#[must_use]
+pub fn capped_move_off(v: f32) -> f32 {
     if v > WARP_OUT_CAP { WARP_OUT_CAP } else { v }
 }
 
@@ -863,6 +872,16 @@ mod tests {
             assert!(npc_warp_out_speed(clock, 0, w, 0, false).is_nan(), "0 / 0");
             assert!(npc_warp_out_speed(clock, 100, f32::NAN, 252, true).is_nan());
         }
+    }
+
+    #[test]
+    fn a_move_off_is_capped_at_50_and_a_nan_passes() {
+        assert_eq!(capped_move_off(50.5), 50.0);
+        assert_eq!(capped_move_off(f32::INFINITY), 50.0);
+        assert_eq!(capped_move_off(50.0), 50.0);
+        assert_eq!(capped_move_off(49.75), 49.75);
+        assert_eq!(capped_move_off(-3.0), -3.0);
+        assert!(capped_move_off(f32::NAN).is_nan(), "`ucomiss`, `jbe`");
     }
 
     #[test]
