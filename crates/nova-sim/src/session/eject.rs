@@ -144,6 +144,7 @@ use super::hooks::ShipHook;
 use super::player_led::slot_of;
 use super::ship_change::ClassChange;
 use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::combat::ion::Ion;
@@ -395,6 +396,8 @@ impl Session {
             former: None,
             tractor: None,
             ion: Ion::default(),
+            afterburner: false,
+            pursuit: Pursuit::default(),
         }
     }
 

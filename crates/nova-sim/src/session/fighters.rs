@@ -38,9 +38,11 @@
 use std::collections::BTreeMap;
 
 use super::Session;
-use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
+use crate::ai::{Goal, afterburner};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::catalog::{OutfitId, ShipId, WeaponId};
+use crate::chance::Chance;
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
@@ -59,18 +61,19 @@ use crate::traffic::table::{self, ShipKind};
 impl Session {
     /// Puts each fighter of `sorties` in the system (see the module
     /// docs); one with no room, or whose ship type has no record, goes
-    /// back into its bay.
-    pub(super) fn launch_fighters(&mut self, sorties: &[Sortie]) {
+    /// back into its bay. Each rolls its afterburner on `chance`.
+    pub(super) fn launch_fighters(&mut self, sorties: &[Sortie], chance: &mut dyn Chance) {
         for sortie in sorties {
-            if !self.launch_fighter(sortie) {
+            if !self.launch_fighter(sortie, chance) {
                 self.put_back(sortie);
             }
         }
     }
 
-    /// Puts the fighter of `sortie` in the system, and says whether it
-    /// did.
-    fn launch_fighter(&mut self, sortie: &Sortie) -> bool {
+    /// Puts the fighter of `sortie` in the system, its afterburner rolled
+    /// on `chance` as `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736,
+    /// see [`afterburner`]), and says whether it did.
+    fn launch_fighter(&mut self, sortie: &Sortie, chance: &mut dyn Chance) -> bool {
         if self
             .traffic
             .free_berth(self.spawn_reserve(SPAWN_RESERVE))
@@ -100,7 +103,17 @@ impl Session {
             window: dock_window(record.fields.maneuver),
             reach: self.reach_of(sortie.carrier),
         };
-        let npc = fighter(&kind, sortie.ship, state, carrier);
+        let mut npc = fighter(&kind, sortie.ship, state, carrier);
+        let side = self.player_side();
+        // A class's `Strength` is none below none, so in 16 bits.
+        #[allow(clippy::cast_possible_truncation)]
+        let own = kind.hull.strength as i16;
+        let yardstick = afterburner::yardstick(
+            self.rules.source_for(RuleKey::AfterburnerYardstick),
+            side.yardstick,
+            own,
+        );
+        npc.afterburner = afterburner::has_afterburner(&kind.hull, side.rating, yardstick, chance);
         match sortie.carrier {
             ShipRef::Player => self.join_as_fighter(npc, sortie.target),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
@@ -489,6 +502,8 @@ fn fighter(
         former: None,
         tractor: None,
         ion: Ion::default(),
+        afterburner: false,
+        pursuit: Pursuit::default(),
     }
 }
 
@@ -807,6 +822,27 @@ mod tests {
         );
         assert!(!session.take_save_due(), "as firing ammunition");
         assert_eq!(session.traffic_ships(), [VIPER]);
+    }
+
+    #[test]
+    fn a_fighter_launched_rolls_its_afterburner_by_its_classs_flags() {
+        // `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736): a Viper of
+        // `Flags` 0x0040 always has one, of neither bit none.
+        for (flags, has) in [(0x0040, true), (0x0000, false)] {
+            let mut catalog = carrying();
+            for record in &mut catalog.hulls {
+                if record.id == VIPER {
+                    record.flags = flags;
+                }
+            }
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            launch(&mut session);
+            assert_eq!(
+                fleet_npcs(&session).first().map(|npc| npc.afterburner),
+                Some(has),
+                "{flags:#x}"
+            );
+        }
     }
 
     #[test]
@@ -1445,7 +1481,7 @@ mod tests {
             target: None,
         };
         let launched = |session: &mut Session, carrier| {
-            assert!(session.launch_fighter(&sortie(carrier)));
+            assert!(session.launch_fighter(&sortie(carrier), &mut NeverFires));
             session.npcs().last().expect("launched").state.velocity
         };
         assert_eq!(

@@ -3,6 +3,7 @@
 
 use super::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
 use crate::catalog::{EscortClass, ShipId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
@@ -62,5 +63,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         former: None,
         tractor: None,
         ion: Ion::default(),
+        afterburner: false,
+        pursuit: Pursuit::default(),
     }
 }

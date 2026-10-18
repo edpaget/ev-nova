@@ -570,7 +570,10 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         stats: ShipStats::new(record.fields, &outfit_mods(&defaults, outfits)),
         inherent_ai: record.inherent_ai,
         escort_class: EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass),
-        hull: arsenal.hull(record.id),
+        hull: HullSpec {
+            inherent_ai: record.inherent_ai,
+            ..arsenal.hull(record.id)
+        },
         armament,
         rounds,
         appear_on: record.appear_on.clone(),
@@ -1258,6 +1261,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3, 4]
         );
+        // The hull carries it too, for the break-off's gate.
+        assert_eq!(
+            table
+                .ships
+                .values()
+                .map(|kind| kind.hull.inherent_ai)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
     }
 
     #[test]
@@ -1436,7 +1448,13 @@ mod tests {
     fn each_ship_type_named_is_armed_from_the_arsenal() {
         let table = resolved();
         let armed = &table.ships[&ShipId(200)];
-        assert_eq!(armed.hull, arsenal().hull(ShipId(200)));
+        assert_eq!(
+            armed.hull,
+            HullSpec {
+                inherent_ai: 1,
+                ..arsenal().hull(ShipId(200))
+            }
+        );
         assert!(
             (armed.hull.hit_radius - 9.9).abs() < 1e-5,
             "{:?}",
@@ -1458,7 +1476,13 @@ mod tests {
         );
         let unarmed = &table.ships[&ShipId(201)];
         assert_eq!(unarmed.armament, Armament::default());
-        assert_eq!(unarmed.hull, HullSpec::default());
+        assert_eq!(
+            unarmed.hull,
+            HullSpec {
+                inherent_ai: 2,
+                ..HullSpec::default()
+            }
+        );
         assert_eq!(unarmed.rounds, LauncherRounds::default());
     }
 

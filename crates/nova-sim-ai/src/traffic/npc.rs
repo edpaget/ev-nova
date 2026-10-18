@@ -2,6 +2,7 @@
 //! doing, and what it fights with.
 
 use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
 use crate::bay::Carrier;
 use crate::catalog::{GovtId, PersonId, PersonRecord, ShipId, StellarId, WeaponId};
 use crate::cloak::{Cloak, CloakGear};
@@ -378,6 +379,14 @@ pub struct Npc {
     /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
     /// ship-handling-fidelity phase 11 lowers it. Never saved.
     pub ion: Ion,
+    /// Whether it has an afterburner (the original's +0xbd), rolled as it
+    /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
+    /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
+    pub afterburner: bool,
+    /// The pursuit it keeps from tick to tick (substate 0x10 or 0x11) and
+    /// this tick's frame (see [`pursuit`](crate::ai::pursuit)): none as it
+    /// spawns. Never saved.
+    pub pursuit: Pursuit,
 }
 
 /// The commodities 0-5 the original's ship records count.

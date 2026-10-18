@@ -2418,6 +2418,8 @@ impl Session {
             iff_marked: &self.iff_marked,
             stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
             independent_kin: self.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
         };
         f(&mut self.traffic, world);
     }
@@ -2489,6 +2491,8 @@ impl Session {
             iff_marked: &self.iff_marked,
             stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
             independent_kin: self.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
         }
     }
 
@@ -2755,7 +2759,7 @@ impl Session {
         self.raise_disabled(&was, &mut &mut *chance);
         self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
         let sorties = self.combat.take_sorties();
-        self.launch_fighters(&sorties);
+        self.launch_fighters(&sorties, &mut &mut *chance);
         self.sync_fleet();
         self.lose_escorts();
         self.lose_dying_mission_escorts();
@@ -17873,14 +17877,17 @@ pub(super) mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        session.launch_fighters(&[crate::combat::Sortie {
-            carrier: ShipRef::Player,
-            bay: WeaponId(149),
-            ship: ShipId(130),
-            from: *session.player(),
-            heading: 0.0,
-            target: None,
-        }]);
+        session.launch_fighters(
+            &[crate::combat::Sortie {
+                carrier: ShipRef::Player,
+                bay: WeaponId(149),
+                ship: ShipId(130),
+                from: *session.player(),
+                heading: 0.0,
+                target: None,
+            }],
+            &mut crate::chance::NeverFires,
+        );
         let fighter = session
             .npcs()
             .iter()

@@ -104,6 +104,7 @@
 //! grows when frames run slow; the simulation's is always
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
+mod afterburners;
 pub mod autopilot;
 pub mod berth_exits;
 pub mod berth_kept;
@@ -117,6 +118,8 @@ pub mod fixture;
 pub mod gate_entry;
 pub mod npc;
 pub mod persons;
+#[cfg(test)]
+mod pursuit_tests;
 pub mod quote;
 mod reinforcing;
 pub mod snipe;
@@ -126,11 +129,13 @@ pub mod table;
 pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
+use crate::ai::pursuit::{self, Pursuit, PursuitRules};
 use crate::ai::{
     Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
     reinforcements,
 };
 use crate::combat::ion::Ion;
+use afterburners::AfterburnerRoll;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
@@ -413,6 +418,17 @@ pub struct World<'a> {
     /// ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin), see
     /// [`answer_flag`](crate::ai::answer_flag)).
     pub independent_kin: RuleSource,
+    /// Which weapon an approaching attacker with a last gun leads with: its
+    /// pick by the engine, its last gun by the other reading
+    /// ([`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead), see
+    /// [`pursuit`](crate::ai::pursuit)).
+    pub approach_lead: RuleSource,
+    /// What a spawned ship's afterburner roll measures the player's combat
+    /// rating by: `shïp` 128's `Strength` by the engine, its own class's
+    /// by the other reading
+    /// ([`RuleKey::AfterburnerYardstick`](crate::RuleKey::AfterburnerYardstick),
+    /// see [`afterburner`](crate::ai::afterburner)).
+    pub afterburner_yardstick: RuleSource,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -448,6 +464,8 @@ impl<'a> World<'a> {
             iff_marked: bare.iff_marked,
             stray_shoot_penalty: RuleSource::Engine,
             independent_kin: RuleSource::Engine,
+            approach_lead: RuleSource::Engine,
+            afterburner_yardstick: RuleSource::Engine,
         }
     }
 
@@ -676,7 +694,12 @@ impl Traffic {
         self.quotes.clear();
         self.attack_quotes.clear();
         self.comm_calls.clear();
-        self.add(missions, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            missions,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            None,
+        );
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
         let ships = spawn::initial(
@@ -686,7 +709,12 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(ships, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            ships,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
+        );
     }
 
     /// Brings `ships` into the system as they are, numbered after every
@@ -697,7 +725,9 @@ impl Traffic {
     /// and the mission ships' whose appear timer ran out or that a hail
     /// swaps in (`_MissionDudeSpawn`, reserve 8 @0x3cd50).
     pub fn bring_in_within(&mut self, ships: Vec<NewShip>, reserve: u32) -> usize {
-        self.add(ships, &BTreeSet::new(), Some(reserve))
+        // Neither `_SpecificDudeSpawn` nor `_MissionDudeSpawn` rolls an
+        // afterburner.
+        self.add(ships, &BTreeSet::new(), Some(reserve), None)
     }
 
     /// What the system's traffic is drawn from.
@@ -838,6 +868,7 @@ impl Traffic {
             self.ask_quote_gate(id, dropped_target, view);
         }
         self.take_goals(decisions, world.player.map(|player| player.state.position));
+        self.pursue(&world, &due, chance);
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
             .npcs
@@ -898,6 +929,28 @@ impl Traffic {
         // crossing no boundary, as a ship left behind is never drawn.
         self.left_behind.clear();
         self.ticks += 1;
+    }
+
+    /// Each NPC whose decision is `due` takes its pursuit in `world`,
+    /// rolling on `chance` ([`pursuit::step`]): `_LowLevelAIHandler` runs
+    /// in the same frame as the think (`_AIDispatch` @0x901e5-0x901f4),
+    /// after the goal and before the passes and the flight read its frame.
+    fn pursue(&mut self, world: &World, due: &[bool], chance: &mut (impl Chance + ?Sized)) {
+        let around = world.around(&self.npcs);
+        let rules = PursuitRules {
+            approach_lead: world.approach_lead,
+        };
+        let pursuits: Vec<Option<Pursuit>> = self
+            .npcs
+            .iter()
+            .zip(due)
+            .map(|(npc, &due)| due.then(|| pursuit::step(npc, &around, rules, &mut *chance)))
+            .collect();
+        for (npc, pursuit) in self.npcs.iter_mut().zip(pursuits) {
+            if let Some(pursuit) = pursuit {
+                npc.pursuit = pursuit;
+            }
+        }
     }
 
     /// Moves the traffic again in `world`, rolling on `chance`, as double
@@ -975,7 +1028,12 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(arrivals, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            arrivals,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
+        );
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
@@ -1184,7 +1242,12 @@ impl Traffic {
             chance,
             &mut fleet,
         );
-        self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            fleet,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            Some(&mut AfterburnerRoll::of(world, &mut &mut *chance)),
+        );
     }
 
     /// Each intact NPC answers each of `strikes` in `world` that was
@@ -1743,7 +1806,9 @@ impl Traffic {
     /// grudge when `grudges` say; a ship set up derelict
     /// ([`NewShip::derelict`]) starts disabled, its shield gone and its
     /// armour cut ([`derelict_armor`]); a ship set up held
-    /// ([`NewShip::held`]) starts holding ([`Goal::Hold`]).
+    /// ([`NewShip::held`]) starts holding ([`Goal::Hold`]). Each rolls its
+    /// afterburner on `afterburners` as its spawn asks (see
+    /// [`afterburners`]); with none, no ship has one.
     ///
     /// A ship whose ship type has no record does not come, and neither
     /// does an escort whose lead did not come. With a `reserve`, each ship
@@ -1760,6 +1825,7 @@ impl Traffic {
         ships: Vec<NewShip>,
         grudges: &BTreeSet<PersonId>,
         reserve: Option<u32>,
+        mut afterburners: Option<&mut AfterburnerRoll>,
     ) -> usize {
         let mut placed: Vec<Option<NpcId>> = Vec::with_capacity(ships.len());
         for ship in ships {
@@ -1789,6 +1855,8 @@ impl Traffic {
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             let name = person.map(|person| person.record.name.clone());
+            let afterburner =
+                AfterburnerRoll::has(afterburners.as_deref_mut(), &ship, kind, person);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             let npc = Npc {
@@ -1858,6 +1926,8 @@ impl Traffic {
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
+                afterburner,
+                pursuit: Pursuit::default(),
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -5936,7 +6006,7 @@ mod tests {
     #[test]
     fn a_fleet_with_no_slot_for_its_lead_brings_nothing_and_no_quote() {
         let mut traffic = at_berths(1..=55);
-        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE));
+        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE), None);
         assert_eq!(traffic.npcs().len(), 55);
         assert!(traffic.take_quotes().is_empty(), "no line, no beep");
     }
@@ -5944,7 +6014,7 @@ mod tests {
     #[test]
     fn an_escort_with_no_slot_is_skipped_and_the_lead_keeps_its_quote() {
         let mut traffic = at_berths(1..=53);
-        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE));
+        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE), None);
         let npcs = &traffic.npcs()[53..];
         assert_eq!(npcs.len(), 2, "the lead and one escort");
         assert_eq!((npcs[0].berth, npcs[1].berth), (54, 55));
@@ -5963,7 +6033,7 @@ mod tests {
             lead: ship.lead.map(|_| 1),
             ..ship
         }));
-        traffic.add(ships, &BTreeSet::new(), None);
+        traffic.add(ships, &BTreeSet::new(), None, None);
         let npcs = traffic.npcs();
         assert_eq!(npcs.len(), 2, "ship 999 has no record");
         assert_eq!(npcs[1].leader, Some(npcs[0].id));
@@ -5974,7 +6044,7 @@ mod tests {
         let mut traffic = at_berths([]);
         let mut fleet = quoted_fleet(1);
         fleet[0].ship = ShipId(999);
-        traffic.add(fleet, &BTreeSet::new(), None);
+        traffic.add(fleet, &BTreeSet::new(), None, None);
         assert_eq!(traffic.npcs(), [], "no lead, no escort");
         assert!(traffic.take_quotes().is_empty());
     }

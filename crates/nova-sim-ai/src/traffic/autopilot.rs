@@ -54,14 +54,21 @@
 //!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
 //!   towards it. Within the carrier's reach on both axes it docks, and
 //!   leaves the system ([`Outcome::Docked`]).
-//! - [`Goal::Attack`] and [`Goal::Snipe`]: it flies the manoeuvre
-//!   [`fire::manoeuvre`] gives, reading whether its target is disabled.
-//!   Approaching, it faces the heading it wants to fire along
-//!   and thrusts within [`APPROACH_THRUST`] turns of it; dogfighting,
-//!   within a turn and [`DOGFIGHT_THRUST`]; sniping, as [`snipe::fly`]
-//!   says (below); backing away, a stand-off ship inside the dogfight box
-//!   flees close (sub 5, below), never running out to jump (see
-//!   [`stand_off`](crate::ai::stand_off)). With its target gone an
+//! - [`Goal::Attack`], [`Goal::Snipe`] and [`Goal::Flee`]: it flies the
+//!   last body of its frame ([`pursuit::frame_of`]), reading whether its
+//!   target is disabled, as that body's thrust, cap and heading win
+//!   (see [`pursuit`]). It turns to the heading the body wants;
+//!   approaching, it thrusts while off it by less than
+//!   [`APPROACH_THRUST`] turns; dogfighting, by less than a turn and
+//!   [`DOGFIGHT_THRUST`]; fleeing close (sub 5, @0x85c62-0x85d72), turned
+//!   to the table bearing from its attacker to itself, by less than a
+//!   turn and [`FLEE_THRUST`], as a stand-off ship backing away inside
+//!   the dogfight box does, never running out to jump (see
+//!   [`stand_off`](crate::ai::stand_off)); each in whole degrees,
+//!   strictly ([`fire::off_by`]). Breaking off it thrusts every tick at
+//!   [`BREAK_THRUST`] times its acceleration; rushing, at [`RUSH_THRUST`]
+//!   times it, up to [`RUSH_SPEED`] times its top speed. Sniping, it
+//!   flies as [`snipe::fly`] says (below). With its target gone an
 //!   attacker brakes and a sniper coasts.
 //! - Sniping, as [`snipe::fly`] says: moving 0.35 or more on an axis it
 //!   brakes, turning to its retro heading (or, with a last gun and by the
@@ -69,13 +76,9 @@
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
 //!   sub-goal 0xe, @0x8709d-0x87334).
-//! - [`Goal::Flee`]: within [`FLEE_CLOSE`] of its attacker on both axes it
-//!   flees close: it turns straight away, thrusting within a turn and
-//!   [`FLEE_THRUST`] of that heading (`_LowLevelAIHandler` sub 5,
-//!   @0x85c62-0x85d72, which heads along `_CalcInterceptAngle` from the
-//!   attacker to itself; here the plain away bearing). Farther off it runs
-//!   out from the centre and jumps once past its jump distance with the
-//!   fuel.
+//! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
+//!   either axis, truncated (its frame has no body): it runs out from the
+//!   centre and jumps once past its jump distance with the fuel.
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, under its top speed's cap.
@@ -148,7 +151,8 @@
 //!   never lands or jumps. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
-use crate::ai::{Goal, fire};
+use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
+use crate::ai::{Goal, fire, fire::Manoeuvre};
 use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
@@ -186,9 +190,6 @@ pub const DOGFIGHT_THRUST: f32 = 15.0;
 /// How far beyond a turn, in degrees, a ship fleeing close still thrusts
 /// (20.0 @0xdd668).
 pub const FLEE_THRUST: f32 = 20.0;
-/// How near, in pixels on either axis, an attacker must be for a ship
-/// fleeing to turn straight away from it (low mode 5, @0x85c62).
-pub const FLEE_CLOSE: f32 = 250.0;
 /// The least a leaderless ship holds its course after its glide in or
 /// burst out of a gate, in ticks (`Rand(30) + 30`, @0x34d74-0x34d81).
 pub const POST_BURST_WAIT: u32 = 30;
@@ -308,26 +309,24 @@ pub fn fly(
             Some(other) => follow(&state, &handling, other),
             None => brake(&state, &handling),
         },
-        Goal::Attack(_) | Goal::Snipe(_) => match other {
-            Some(target) => fight(npc, target, other_disabled, &handling, snipe_lead),
+        Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) => match other {
+            Some(target) => {
+                if let Some(body) =
+                    pursuit::frame_of(npc, target, other_disabled).and_then(|frame| frame.last())
+                {
+                    fight(npc, target, body, &handling, snipe_lead);
+                    return Outcome::Flying;
+                }
+                // Running out from its attacker beyond its reach.
+                let out = state.position.length();
+                if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
+                    return Outcome::JumpedOut;
+                }
+                run_out(&state, &handling)
+            }
             // A sniper whose target is gone coasts ([`snipe::fly`]).
             None if matches!(npc.goal, Goal::Snipe(_)) => {
                 snipe::fly(npc, None, &handling, snipe_lead)
-            }
-            None => brake(&state, &handling),
-        },
-        Goal::Flee(_) => match other {
-            Some(attacker) => {
-                let off = state.position - attacker.position;
-                if off.x.abs() <= FLEE_CLOSE && off.y.abs() <= FLEE_CLOSE {
-                    flee_close(&state, attacker, &handling)
-                } else {
-                    let out = state.position.length();
-                    if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
-                        return Outcome::JumpedOut;
-                    }
-                    run_out(&state, &handling)
-                }
             }
             None => brake(&state, &handling),
         },
@@ -500,56 +499,59 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     }
 }
 
-/// Fights a target at `target`, disabled as `disabled` says, attacking or
-/// sniping, as its manoeuvre says ([`fire::manoeuvre`]): approaching, it
-/// faces the heading it wants to fire along ([`fire::wanted_heading`]),
-/// thrusting within [`APPROACH_THRUST`] turns of it; dogfighting, within a
-/// turn and [`DOGFIGHT_THRUST`]; sniping, as [`snipe::fly`] says, a moving
-/// sniper with a last gun turning as `snipe_lead` says; backing away (a
-/// stand-off ship inside the dogfight box), it flees close
-/// ([`flee_close`]).
+/// Flies one tick of `npc`'s fight at a target at `target` on
+/// `handling` by its frame's last `body`, whose writes to the thrust
+/// (+0x30), the cap (+0x34) and the heading (+0x68) win (see
+/// [`pursuit`](crate::ai::pursuit)): it turns to the heading the body
+/// wants, and thrusts approaching (7) while off it by less than
+/// [`APPROACH_THRUST`] turns, dogfighting (6) by less than a turn and
+/// [`DOGFIGHT_THRUST`], fleeing close or backing away (5) by less than a
+/// turn and [`FLEE_THRUST`], each in whole degrees, strictly
+/// ([`fire::off_by`]); breaking off (0x10) it thrusts every tick at
+/// [`BREAK_THRUST`] times its acceleration, and rushing (0x11) at
+/// [`RUSH_THRUST`] times it up to [`RUSH_SPEED`] times its top speed;
+/// sniping, it flies as [`snipe::fly`] says, a moving sniper with a last
+/// gun turning as `snipe_lead` says.
 fn fight(
     npc: &mut Npc,
     target: &ShipState,
-    disabled: bool,
+    body: Body,
     handling: &Handling,
     snipe_lead: RuleSource,
-) -> Controls {
-    match fire::manoeuvre(npc, target, disabled) {
-        Some(fire::Manoeuvre::Snipe) => snipe::fly(npc, Some(target), handling, snipe_lead),
-        Some(fire::Manoeuvre::Flee) => flee_close(&npc.state, target, handling),
-        Some(fire::Manoeuvre::Dogfight) => {
-            attack(npc, target, handling.turn_rate + DOGFIGHT_THRUST, handling)
+) {
+    let window = match body.manoeuvre {
+        Manoeuvre::Approach => APPROACH_THRUST * handling.turn_rate,
+        Manoeuvre::Dogfight => handling.turn_rate + DOGFIGHT_THRUST,
+        Manoeuvre::Flee => handling.turn_rate + FLEE_THRUST,
+        // Breaking off and rushing thrust whatever the heading.
+        Manoeuvre::BreakOff | Manoeuvre::Rush => f32::INFINITY,
+        Manoeuvre::Snipe => {
+            let controls = snipe::fly(npc, Some(target), handling, snipe_lead);
+            flight::step(&mut npc.state, handling, controls);
+            return;
         }
-        Some(fire::Manoeuvre::Approach) | None => {
-            attack(npc, target, APPROACH_THRUST * handling.turn_rate, handling)
-        }
-    }
-}
-
-/// Flees close from a ship at `from` (`_LowLevelAIHandler` sub 5,
-/// @0x85c62-0x85d72): turns straight away from it, thrusting within a
-/// turn and [`FLEE_THRUST`] of that heading. The original heads along
-/// `_CalcInterceptAngle` from the other ship to itself (@0x85ceb); here
-/// the plain away bearing.
-fn flee_close(state: &ShipState, from: &ShipState, handling: &Handling) -> Controls {
-    let away = heading_of(state.position - from.position);
-    Controls {
-        thrust: shortest_turn(state.heading, away).abs() <= handling.turn_rate + FLEE_THRUST,
-        turn: steer(state.heading, away, handling),
+    };
+    let flown = match body.manoeuvre {
+        Manoeuvre::BreakOff => Handling {
+            accel: handling.accel * BREAK_THRUST,
+            ..*handling
+        },
+        Manoeuvre::Rush => Handling {
+            accel: handling.accel * RUSH_THRUST,
+            // `_ShipMaxSpeed` × the double 1.8, back to a float
+            // (@0x865cf-0x865e3).
+            #[allow(clippy::cast_possible_truncation)]
+            max_speed: (f64::from(handling.max_speed) * RUSH_SPEED) as f32,
+            ..*handling
+        },
+        _ => *handling,
+    };
+    let controls = Controls {
+        thrust: fire::off_by(npc.state.heading, body.heading) < window,
+        turn: steer(npc.state.heading, f32::from(body.heading), handling),
         reverse: false,
-    }
-}
-
-/// Faces the heading `npc` wants to fire along at a target at `target`,
-/// thrusting within `window` degrees of it.
-fn attack(npc: &Npc, target: &ShipState, window: f32, handling: &Handling) -> Controls {
-    let wanted = fire::wanted_heading(npc, target);
-    Controls {
-        thrust: shortest_turn(npc.state.heading, wanted).abs() <= window,
-        turn: steer(npc.state.heading, wanted, handling),
-        reverse: false,
-    }
+    };
+    flight::step(&mut npc.state, &flown, controls);
 }
 
 /// Tick `tick` of `npc`'s glide in from hyperspace: along its heading at
@@ -2576,11 +2578,12 @@ mod tests {
 
     #[test]
     fn attacking_from_afar_it_turns_to_the_lead_and_thrusts_within_four_turns() {
-        // 3 degrees a tick: thrust within 12 of the target 1000 above.
+        // 3 degrees a tick: thrust under 12 off the target 1000 above,
+        // strictly, in whole degrees (@0x868fb-0x8695e).
         let target = at(0.0, -1000.0, 0.0, 0.0, 0.0);
-        let thrusting = controls_of(&fighter(Goal::Attack(FOE), 12.0), &target);
+        let thrusting = controls_of(&fighter(Goal::Attack(FOE), 11.9), &target);
         assert_eq!((thrusting.thrust, thrusting.turn), (true, Turn::Left));
-        let turning = controls_of(&fighter(Goal::Attack(FOE), 12.1), &target);
+        let turning = controls_of(&fighter(Goal::Attack(FOE), 12.0), &target);
         assert_eq!((turning.thrust, turning.turn), (false, Turn::Left));
         let other_way = controls_of(&fighter(Goal::Attack(FOE), 300.0), &target);
         assert_eq!(other_way.turn, Turn::Right);
@@ -2588,13 +2591,14 @@ mod tests {
 
     #[test]
     fn dogfighting_within_165_it_thrusts_within_a_turn_and_15_degrees() {
-        // 3 + 15: within 18 of the target 165 above, which the table
-        // bears at 46, its diagonal a degree past 45.
+        // 3 + 15: under 18 off the target 165 above, strictly, in whole
+        // degrees (@0x85f1c-0x85f82), which the table bears at 46, its
+        // diagonal a degree past 45.
         let target = at(165.0, -165.0, 0.0, 0.0, 0.0);
         let bearing = 46.0;
-        let thrusting = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.0), &target);
+        let thrusting = controls_of(&fighter(Goal::Attack(FOE), bearing + 17.9), &target);
         assert!(thrusting.thrust);
-        let turning = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.1), &target);
+        let turning = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.0), &target);
         assert!(!turning.thrust);
         let afar = at(165.1, -165.0, 0.0, 0.0, 0.0);
         let approaching = controls_of(&fighter(Goal::Attack(FOE), bearing + 13.0), &afar);
@@ -2602,9 +2606,9 @@ mod tests {
     }
 
     #[test]
-    fn an_attacker_leads_a_moving_target_with_its_gun() {
-        use crate::catalog::WeaponRecord;
-        use crate::combat::armament::Armament;
+    fn an_attacker_with_a_last_gun_leads_a_moving_target_with_its_pick() {
+        use crate::catalog::{WeaponId, WeaponRecord};
+        use crate::combat::armament::{Armament, LauncherRounds, Shooter};
         use crate::combat::weapon::WeaponSpec;
         let mut ship = fighter(Goal::Attack(FOE), 0.0);
         ship.armament = Armament::new([(
@@ -2615,6 +2619,20 @@ mod tests {
             }),
             1,
         )]);
+        // It has fired its gun, its last gun, and holds it as its pick.
+        let mut fuel = ship.reserves.fuel;
+        ship.armament.fire_pick(
+            WeaponId(128),
+            Condition::Intact,
+            Shooter::PLAYER,
+            &mut LauncherRounds::default(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        );
+        ship.pick = Some(WeaponId(128));
         // 1000 above crossing right at 10 a tick: led about 1000 to the
         // right, near 45 degrees, in whole degrees as the ship moves.
         let crossing = at(0.0, -1000.0, 10.0, 0.0, 0.0);
@@ -2622,7 +2640,12 @@ mod tests {
         for _ in 0..30 {
             fly(&mut flown, &[], Some(&crossing));
         }
-        let wanted = fire::wanted_heading(&flown, &crossing);
+        let wanted = f32::from(fire::approach_lead(
+            &flown,
+            &crossing,
+            flown.pick,
+            RuleSource::Engine,
+        ));
         assert_eq!(wanted, wanted.trunc(), "a whole degree");
         assert!((wanted - 45.0).abs() < 3.0, "{wanted}");
         let half_turn = flown.stats.handling.turn_rate / 2.0;
@@ -2656,11 +2679,12 @@ mod tests {
 
     #[test]
     fn fleeing_close_it_turns_straight_away_and_thrusts_within_a_turn_and_20() {
-        // The attacker 250 below: away is up, 0; thrust within 23.
+        // The attacker 250 below: away is up, the table's 0; thrust under
+        // 23 off it, strictly, in whole degrees (@0x85cf3-0x85d59).
         let attacker = at(0.0, 250.0, 0.0, 0.0, 0.0);
-        let thrusting = controls_of(&fighter(Goal::Flee(FOE), 23.0), &attacker);
+        let thrusting = controls_of(&fighter(Goal::Flee(FOE), 22.9), &attacker);
         assert_eq!((thrusting.thrust, thrusting.turn), (true, Turn::Left));
-        let turning = controls_of(&fighter(Goal::Flee(FOE), 23.1), &attacker);
+        let turning = controls_of(&fighter(Goal::Flee(FOE), 23.0), &attacker);
         assert!(!turning.thrust);
     }
 
@@ -2745,11 +2769,11 @@ mod tests {
 
     #[test]
     fn a_stand_off_attacker_beyond_its_band_approaches() {
-        // 3 degrees a tick: thrust within 12 of the target 1000 above.
+        // 3 degrees a tick: thrust under 12 off the target 1000 above.
         let target = at(0.0, -1000.0, 0.0, 0.0, 0.0);
-        let ship = stand_off(Goal::Attack(FOE), 12.0);
+        let ship = stand_off(Goal::Attack(FOE), 11.9);
         assert_eq!(thrust_turn(&ship, &target, false), (true, Turn::Left));
-        let ship = stand_off(Goal::Attack(FOE), 12.1);
+        let ship = stand_off(Goal::Attack(FOE), 12.0);
         assert_eq!(thrust_turn(&ship, &target, false), (false, Turn::Left));
     }
 
@@ -2777,11 +2801,11 @@ mod tests {
 
     #[test]
     fn a_stand_off_attacker_inside_165_turns_away_and_thrusts() {
-        // The target 165 below: away is up, 0; thrust within 3 + 20.
+        // The target 165 below: away is up, 0; thrust under 3 + 20 off.
         let target = at(0.0, 165.0, 0.0, 0.0, 0.0);
-        let ship = stand_off(Goal::Attack(FOE), 23.0);
+        let ship = stand_off(Goal::Attack(FOE), 22.9);
         assert_eq!(thrust_turn(&ship, &target, false), (true, Turn::Left));
-        let ship = stand_off(Goal::Attack(FOE), 23.1);
+        let ship = stand_off(Goal::Attack(FOE), 23.0);
         assert_eq!(thrust_turn(&ship, &target, false), (false, Turn::Left));
         let ship = stand_off(Goal::Attack(FOE), 0.0);
         assert_eq!(

@@ -129,6 +129,13 @@ pub const STANDS_OFF: u16 = 0x0002;
 /// over the ships, in 0x3b5308 (class +0x9ec, filled @0x7a204; `_SpawnShot`
 /// @0x3f101; see [`ShotLayer`](super::shot_layer::ShotLayer)).
 pub const TURRET_SHOTS_OVER: u16 = 0x0040;
+/// The `shïp` `Flags` bit of a class whose AI ships always have an
+/// afterburner, unless it is planet-type (class +0x9e8, `_AIHasAfterburner`
+/// @0x6559; see `nova_sim::ai::afterburner`).
+pub const AFTERBURNER_ALWAYS: u16 = 0x0040;
+/// The `shïp` `Flags` bit of a class whose AI ships have an afterburner by
+/// the player's combat rating (`_AIHasAfterburner` @0x655d-0x6589).
+pub const AFTERBURNER_BY_RATING: u16 = 0x0020;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -251,6 +258,17 @@ pub struct HullSpec {
     /// [`TURRET_SHOTS_OVER`] (see
     /// [`ShotLayer::spawned`](super::shot_layer::ShotLayer::spawned)).
     pub turret_shots_over: bool,
+    /// Its `Flags` afterburner bits, [`AFTERBURNER_ALWAYS`] and
+    /// [`AFTERBURNER_BY_RATING`], which decide with [`HullSpec::planet_type`]
+    /// whether an AI ship of the type has an afterburner (see
+    /// `nova_sim::ai::afterburner`).
+    pub afterburner: u16,
+    /// Its class's `InherentAI` (the original's class +0x12), which a
+    /// dogfighter's break-off reads (see `nova_sim::ai::pursuit`). A
+    /// [`HullRecord`] doesn't carry it: the spawn table sets it from the
+    /// `shïp` (`nova_sim::traffic::table::kind`), and it is none
+    /// otherwise.
+    pub inherent_ai: i16,
 }
 
 impl Default for HullSpec {
@@ -282,6 +300,8 @@ impl Default for HullSpec {
             exits: None,
             miss_class: miss_class(EscortClass::Freighter),
             turret_shots_over: false,
+            afterburner: 0,
+            inherent_ai: 0,
         }
     }
 }
@@ -318,6 +338,8 @@ impl HullSpec {
             exits: record.exits.as_ref().and_then(ExitPoints::new),
             miss_class: miss_class(record.escort_class),
             turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
+            afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
+            inherent_ai: 0,
         }
     }
 
@@ -507,6 +529,21 @@ mod tests {
         assert!(!under.turret_shots_over);
         assert!(!HullSpec::default().turret_shots_over);
         assert_eq!(TURRET_SHOTS_OVER, 0x0040);
+    }
+
+    #[test]
+    fn a_ship_types_afterburner_bits_are_its_flags_0x0020_and_0x0040() {
+        let of = |flags: u16| HullSpec::new(&HullRecord { flags, ..hull(140) }).afterburner;
+        assert_eq!(of(0x0160), 0x0060);
+        assert_eq!(of(0x0420), 0x0020);
+        assert_eq!(of(0x0040), 0x0040);
+        assert_eq!(of(0x0110), 0);
+        assert_eq!(HullSpec::default().afterburner, 0);
+        assert_eq!(
+            (AFTERBURNER_ALWAYS, AFTERBURNER_BY_RATING),
+            (0x0040, 0x0020)
+        );
+        assert_eq!(HullSpec::new(&hull(140)).inherent_ai, 0);
     }
 
     #[test]

@@ -99,6 +99,7 @@
 use std::collections::BTreeSet;
 
 use super::Session;
+use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
@@ -305,6 +306,8 @@ impl Session {
             former: None,
             tractor: None,
             ion: Ion::default(),
+            afterburner: false,
+            pursuit: Pursuit::default(),
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

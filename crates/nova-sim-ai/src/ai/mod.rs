@@ -38,6 +38,7 @@
 //! - [`miner`]: [`MinerAi`], how a leaderless miner stops, mines, or
 //!   shuttles to its nearest stellar; [`NovaAi`] routes every one to it.
 
+pub mod afterburner;
 pub mod answer_flag;
 pub mod brave;
 pub mod call_for_help;
@@ -53,6 +54,7 @@ pub mod miner;
 pub mod nova;
 pub mod odds;
 pub mod out_of_ammo;
+pub mod pursuit;
 pub mod react;
 pub mod reinforcements;
 pub mod stand_off;

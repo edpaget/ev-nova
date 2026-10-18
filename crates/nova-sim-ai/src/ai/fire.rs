@@ -15,18 +15,25 @@
 //! ([`Trigger::bays`], `_AILaunchFighter` from the attack state, see
 //! [`bay`](crate::bay)).
 //!
-//! - **The passes**, each gate outside its call, so a pass whose gate
-//!   fails doesn't run: approaching, the gun and then the turret pass
-//!   while facing within [`GUN_FACING`] turns of the heading it wants,
-//!   then the missile pass within [`MISSILE_FACING`]; dogfighting, the
-//!   turret pass, then the gun pass within [`GUN_FACING`]; sniping at
+//! - **The passes**, each body of its frame's in turn
+//!   ([`pursuit::Frame`]), each gate outside its call, so a pass whose
+//!   gate fails doesn't run, and each facing test the original's
+//!   ([`faces`]: `_AngularDifference` of the whole-degree heading and the
+//!   heading the body wants, under the turns, strictly): approaching, the
+//!   gun and then the turret pass while facing within [`GUN_FACING`]
+//!   turns, then the missile pass within [`MISSILE_FACING`]; dogfighting,
+//!   the turret pass, then the gun pass within [`GUN_FACING`]; sniping at
 //!   rest, the gun and missile passes while it faces the plain bearing of
 //!   its target within [`GUN_FACING`] turns, strictly
 //!   ([`snipe::facing`]), then the turret pass; sniping while moving 0.35
 //!   or more on an axis ([`snipe::moving`]), none at all, and no point
 //!   defence: it brakes and only launches its fighters (@0x87329, see
-//!   [`snipe`]); fleeing, the turret pass alone (`_LowLevelAIHandler`
-//!   substates 7, 6, 0xe and 5).
+//!   [`snipe`]); fleeing close, the turret pass alone; breaking off, the
+//!   turret pass alone inside [`pursuit::FIRE_BOX`] on both axes; rushing,
+//!   inside it the turret pass then the gun pass within [`GUN_FACING`],
+//!   outside it the missile pass within [`GUN_FACING`]
+//!   (`_LowLevelAIHandler` substates 7, 6, 0xe, 5, 0x10 and 0x11). A ship
+//!   running out from its attacker runs none.
 //! - **The gun pass** (`_AIFireGun`), past its preamble (a target live
 //!   in the system and seen), makes the gun it finds the pick; then any
 //!   pick, found or kept, raises the flag (@0x80213-0x8021d), its
@@ -53,17 +60,27 @@
 //!   ship is not disabled, @0x85240). A captured ship's pick is cleared
 //!   (`_DoShipCapture` @0x41207).
 //!
-//! - **Its manoeuvre** ([`Manoeuvre`], [`manoeuvre`]): attacking, it
+//! - **Its manoeuvres** ([`Manoeuvre`], [`pursuit`]): attacking, it
 //!   approaches outside [`DOGFIGHT_BOX`] on either axis and dogfights
-//!   within it; it snipes; or it flees. A stand-off ship (`shïp` `Flags2`
+//!   within it, breaking off a joust and rushing on its afterburner as
+//!   the pursuit says; it snipes; or it flees, close within the pursuit's
+//!   reach and running out beyond. A stand-off ship (`shïp` `Flags2`
 //!   0x0002) attacking or sniping keeps its band instead
-//!   ([`stand_off::keep`], `_HighLevelAIHandler` @0x8e48e-0x8e5ee and
+//!   ([`stand_off::keep`](crate::ai::stand_off::keep), `_HighLevelAIHandler` @0x8e48e-0x8e5ee and
 //!   @0x8e6b7-0x8e6c4): it approaches beyond it, snipes within it, and
-//!   backs away (fleeing, its turret pass alone) inside the box, its band
-//!   halved against a disabled target.
-//! - **The heading it wants** ([`wanted_heading`]): the whole-degree lead
-//!   angle for its first forward gun (`_CalcLeadAngle`), or the table
-//!   bearing with none.
+//!   backs away (fleeing close) inside the box, its band halved against a
+//!   disabled target.
+//! - **The heading it wants**, worked out once as its frame starts from
+//!   the pick it holds before its passes ([`lead_pick`]), so the passes'
+//!   facing tests and the flight agree: dogfighting
+//!   ([`dogfight_lead`]), the whole-degree lead (`_CalcLeadAngle`) for a
+//!   pick of guidance -1 or 6, the table bearing for any other, and with
+//!   no pick the lead for its last gun or the bearing; approaching
+//!   ([`approach_lead`]), with a last gun the lead for its pick (or, by
+//!   [`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead)'s other
+//!   reading, its last gun), else the bearing; rushing, the bearing;
+//!   breaking off, its break heading; fleeing close, the bearing from its
+//!   attacker to itself.
 //! - **A gun** (guidance -1, 0 and 6; a homing weapon only while no other
 //!   gun of the target's planet-type has its ammunition, @0x7ffaa-0x8001c,
 //!   @0x80243): none at a target the shooter does not see
@@ -148,10 +165,10 @@
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
-use crate::ai::{Goal, Surroundings, stand_off};
+use crate::ai::{Surroundings, pursuit};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
-use crate::combat::aim::{FRONT_ARC, angle_off, blind_spot, quadrant_off};
+use crate::combat::aim::{FRONT_ARC, blind_spot, quadrant_off};
 #[cfg(doc)]
 use crate::combat::armament::Armament;
 use crate::combat::armament::{Arsenal, GUN_RANGE_MARGIN, Mount, Shooter, Trigger};
@@ -203,42 +220,34 @@ pub struct FireRules {
     pub quadrant_arc: RuleSource,
 }
 
-/// How an NPC flies its fight.
+/// How an NPC flies its fight: `_LowLevelAIHandler`'s substates (see
+/// [`pursuit`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Manoeuvre {
-    /// Closing on its target from afar.
+    /// Closing on its target from afar (7).
     Approach,
-    /// Turning with its target, close in.
+    /// Turning with its target, close in (6).
     Dogfight,
-    /// Standing off and firing.
+    /// Standing off and firing (0xe).
     Snipe,
-    /// Running from its attacker.
+    /// Running from its attacker, close (5).
     Flee,
+    /// Breaking off a joust along its break heading (0x10).
+    BreakOff,
+    /// Rushing its target on its afterburner (0x11).
+    Rush,
 }
 
-/// How `npc` flies its goal at a ship at `at`, disabled as `at_disabled`
-/// says: none for a goal that is no fight (see the module docs).
+/// The manoeuvre `npc`'s high level starts its frame with at a ship at
+/// `at`, disabled as `at_disabled` says ([`pursuit::high_level`]): none
+/// for a goal that is no fight, or for a ship running out from its
+/// attacker beyond [`pursuit::FLEE_REACH`].
 #[must_use]
 pub fn manoeuvre(npc: &Npc, at: &ShipState, at_disabled: bool) -> Option<Manoeuvre> {
-    let off = at.position - npc.state.position;
-    // Attacking and sniping are both the original's state 4, which
-    // re-decides a stand-off ship's manoeuvre on every think.
-    if matches!(npc.goal, Goal::Attack(_) | Goal::Snipe(_))
-        && let Some(band) = stand_off::band(npc, at_disabled)
-    {
-        return Some(stand_off::keep(off, band));
-    }
-    match npc.goal {
-        Goal::Attack(_) => Some(
-            if off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX {
-                Manoeuvre::Approach
-            } else {
-                Manoeuvre::Dogfight
-            },
-        ),
-        Goal::Snipe(_) => Some(Manoeuvre::Snipe),
-        Goal::Flee(_) => Some(Manoeuvre::Flee),
-        _ => None,
+    match pursuit::high_level(npc, at, at_disabled)? {
+        pursuit::Start::Sub(manoeuvre) => Some(manoeuvre),
+        pursuit::Start::BreakOff { .. } => Some(Manoeuvre::BreakOff),
+        pursuit::Start::RunningOut => None,
     }
 }
 
@@ -250,17 +259,95 @@ fn forward(spec: &WeaponSpec) -> bool {
     )
 }
 
-/// The heading `npc` wants to face to fire at a ship at `at` (see the
-/// module docs): [`lead_with`] its first forward gun.
-#[must_use]
-pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
-    let gun = npc
-        .armament
+/// The spec of `weapon` among `npc`'s own mounts, if it carries it.
+fn carried(npc: &Npc, weapon: WeaponId) -> Option<&WeaponSpec> {
+    npc.armament
         .mounts()
         .iter()
-        .find(|mount| forward(&mount.spec))
-        .map(|mount| &mount.spec);
-    lead_with(npc, at, gun)
+        .find(|mount| mount.spec.id == weapon)
+        .map(|mount| &mount.spec)
+}
+
+/// The whole-degree heading a dogfighter wants at a ship at `at`, holding
+/// `pick` as its pick (+0x72) before its passes (@0x85e3c-0x85f0d): the
+/// lead for a pick of guidance -1 or 6, the table bearing for any other,
+/// and with no pick the lead for its last gun
+/// ([`Armament::last_gun`], +0xc8da), or the bearing with none. A weapon
+/// it does not carry leads with nothing here (see the module docs).
+#[must_use]
+pub fn dogfight_lead(npc: &Npc, at: &ShipState, pick: Option<WeaponId>) -> i16 {
+    let weapon = match pick {
+        Some(pick) => carried(npc, pick)
+            .filter(|spec| matches!(spec.guidance, Guidance::Unguided | Guidance::Rocket)),
+        None => npc.armament.last_gun().and_then(|gun| carried(npc, gun)),
+    };
+    lead(npc, at, weapon)
+}
+
+/// The whole-degree heading an approaching attacker wants at a ship at
+/// `at`, holding `pick` as its pick before its passes, as `reading` of
+/// [`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead) says: with a
+/// last gun ([`Armament::last_gun`]), the lead for its pick by the engine
+/// (`_CalcLeadAngle` gets +0x72, @0x86822-0x86858, the bearing with no
+/// pick, as `_CalcLeadAngle` returns at once for -1, @0x2b05b), or for
+/// that last gun by the other reading; with none, the table bearing
+/// (@0x8685f-0x86883).
+#[must_use]
+pub fn approach_lead(
+    npc: &Npc,
+    at: &ShipState,
+    pick: Option<WeaponId>,
+    reading: RuleSource,
+) -> i16 {
+    let Some(last) = npc.armament.last_gun() else {
+        return lead(npc, at, None);
+    };
+    let weapon = match reading {
+        RuleSource::Engine => pick,
+        RuleSource::Bible => Some(last),
+    };
+    lead(npc, at, weapon.and_then(|weapon| carried(npc, weapon)))
+}
+
+/// The pick `npc` holds as its low level starts among `around`: the bay
+/// `_AILaunchFighter` launches, when it attacks or snipes at a ship live
+/// there (the high level's launch comes first, @0x8e6fa, @0x81411), else
+/// the pick it holds.
+#[must_use]
+pub fn lead_pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
+    if launches(npc, around)
+        && let Some(bay) = npc.armament.bay_to_launch(&npc.rounds)
+    {
+        return Some(bay);
+    }
+    npc.pick
+}
+
+/// How far, in whole degrees, a ship heading `heading` is off `wanted`:
+/// `_AngularDifference(trunc(heading), wanted)`, as every facing test of
+/// `_LowLevelAIHandler`'s substates 5, 6, 7, 0x10 and 0x11 reads it.
+#[must_use]
+pub fn off_by(heading: f32, wanted: i16) -> f32 {
+    f32::from(trig::angular_difference(trig::whole(heading), wanted))
+}
+
+/// Whether `npc` faces `wanted` within `turns` of its turn rate,
+/// strictly, as the substates' passes test it (`ucomiss`, `jbe` past the
+/// call).
+#[must_use]
+pub fn faces(npc: &Npc, wanted: i16, turns: f32) -> bool {
+    off_by(npc.state.heading, wanted) < turns * npc.stats.handling.turn_rate
+}
+
+/// The whole-degree lead from `npc`'s centre to a ship at `at` for
+/// `weapon` ([`lead_with`]).
+fn lead(npc: &Npc, at: &ShipState, weapon: Option<&WeaponSpec>) -> i16 {
+    trig::lead_angle(
+        npc.state.position,
+        npc.state.velocity,
+        (at.position, at.velocity),
+        weapon.and_then(WeaponSpec::lead_shot),
+    )
 }
 
 /// The whole-degree lead angle from `npc`'s centre to a ship at `at` for
@@ -272,12 +359,7 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
 /// shots share one lead.
 #[must_use]
 pub fn lead_with(npc: &Npc, at: &ShipState, weapon: Option<&WeaponSpec>) -> f32 {
-    f32::from(trig::lead_angle(
-        npc.state.position,
-        npc.state.velocity,
-        (at.position, at.velocity),
-        weapon.and_then(WeaponSpec::lead_shot),
-    ))
+    f32::from(lead(npc, at, weapon))
 }
 
 /// Whether a stock weapon of `npc`'s class reaches a ship at `at`: within
@@ -530,24 +612,34 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
     let Some(at) = around.state_of(ship) else {
         return false;
     };
-    match manoeuvre(npc, &at, disabled(around, ship)) {
-        None => false,
-        Some(Manoeuvre::Approach) => facing(npc, &at, GUN_FACING),
-        Some(Manoeuvre::Snipe) => !snipe::moving(&npc.state),
-        Some(_) => true,
-    }
+    let Some(frame) = pursuit::frame_of(npc, &at, disabled(around, ship)) else {
+        return false;
+    };
+    frame.iter().any(|body| match body.manoeuvre {
+        Manoeuvre::Approach => faces(npc, body.heading, GUN_FACING),
+        Manoeuvre::Snipe => !snipe::moving(&npc.state),
+        Manoeuvre::BreakOff | Manoeuvre::Rush => in_fire_box(npc, &at),
+        Manoeuvre::Dogfight | Manoeuvre::Flee => true,
+    })
+}
+
+/// Whether a ship at `at` is within [`pursuit::FIRE_BOX`] of `npc` on
+/// both axes, each truncated (`trunc(d) + 164` unsigned ≤ 328), as a
+/// break-off's and a rush's turret pass asks.
+fn in_fire_box(npc: &Npc, at: &ShipState) -> bool {
+    let off = npc.state.position - at.position;
+    let near = |offset: f32| {
+        #[allow(clippy::cast_possible_truncation)] // Offsets fit an i32.
+        let whole = offset as i32;
+        whole.abs() <= pursuit::FIRE_BOX
+    };
+    near(off.x) && near(off.y)
 }
 
 /// Whether `ship` is disabled, as `_IsDisabled` says of a stand-off
 /// ship's target (@0x8e4ca).
 fn disabled(around: &Surroundings, ship: ShipRef) -> bool {
     around.condition_of(ship) == Some(Condition::Disabled)
-}
-
-/// Whether `npc` faces within `turns` of its turn rate of the heading it
-/// wants to fire at a ship at `at` ([`wanted_heading`]).
-fn facing(npc: &Npc, at: &ShipState, turns: f32) -> bool {
-    angle_off(npc.state.heading, wanted_heading(npc, at)) <= turns * npc.stats.handling.turn_rate
 }
 
 /// The weapon [`trigger`] fires, if any, and the pick `npc` holds after
@@ -569,8 +661,10 @@ fn pick(
     if launches && let Some(bay) = npc.armament.bay_to_launch(&npc.rounds) {
         passes.pick = Some(bay);
     }
-    if let Some((sight, manoeuvre)) = sight(npc, around, rules) {
-        passes.run(&sight, manoeuvre);
+    if let Some((sight, frame)) = sight(npc, around, rules) {
+        for body in frame.iter() {
+            passes.run(&sight, body);
+        }
     }
     (passes.pick.filter(|_| passes.flag), passes.pick)
 }
@@ -582,11 +676,11 @@ struct Passes {
 }
 
 impl Passes {
-    /// The passes `manoeuvre` runs on `sight`, in the original's order,
-    /// each gate outside its call (see the module docs).
-    fn run(&mut self, sight: &Sight, manoeuvre: Manoeuvre) {
-        let facing = |turns: f32| facing(sight.npc, &sight.at, turns);
-        match manoeuvre {
+    /// The passes `body` runs on `sight`, in the original's order, each
+    /// gate outside its call (see the module docs).
+    fn run(&mut self, sight: &Sight, body: pursuit::Body) {
+        let facing = |turns: f32| faces(sight.npc, body.heading, turns);
+        match body.manoeuvre {
             Manoeuvre::Approach => {
                 if facing(GUN_FACING) {
                     self.gun(sight);
@@ -614,6 +708,21 @@ impl Passes {
                 self.turret(sight);
             }
             Manoeuvre::Flee => self.turret(sight),
+            Manoeuvre::BreakOff => {
+                if in_fire_box(sight.npc, &sight.at) {
+                    self.turret(sight);
+                }
+            }
+            Manoeuvre::Rush => {
+                if in_fire_box(sight.npc, &sight.at) {
+                    self.turret(sight);
+                    if facing(GUN_FACING) {
+                        self.gun(sight);
+                    }
+                } else if facing(GUN_FACING) {
+                    self.missile(sight);
+                }
+            }
         }
     }
 
@@ -656,18 +765,19 @@ impl Passes {
     }
 }
 
-/// How `npc` sizes up the ship its goal is about, by `rules`, and how it
-/// flies its fight; none for a goal that is no fight, or a ship not live
-/// or gone from the system, where every pass stops at its preamble.
+/// How `npc` sizes up the ship its goal is about, by `rules`, and the
+/// frame it flies its fight by ([`pursuit::frame_of`]); none for a goal
+/// that is no fight, or a ship not live or gone from the system, where
+/// every pass stops at its preamble.
 fn sight<'a>(
     npc: &'a Npc,
     around: &Surroundings,
     rules: FireRules,
-) -> Option<(Sight<'a>, Manoeuvre)> {
+) -> Option<(Sight<'a>, pursuit::Frame)> {
     let ship = npc.goal.quarry()?;
     let sight = sight_of(npc, ship, around, rules)?;
-    let manoeuvre = manoeuvre(npc, &sight.at, disabled(around, ship))?;
-    Some((sight, manoeuvre))
+    let frame = pursuit::frame_of(npc, &sight.at, disabled(around, ship))?;
+    Some((sight, frame))
 }
 
 /// The turret `npc`, intact, finds to fire at `ship` among `around` by
@@ -935,8 +1045,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::ai::PlayerSide;
-    use crate::catalog::{WeaponId, WeaponRecord};
+    use crate::ai::{Goal, PlayerSide};
+    use crate::catalog::WeaponRecord;
     use crate::combat::armament::Armament;
     use crate::combat::hull::{Condition, HullSpec};
     use crate::combat::weapon::AVOIDS_FAST_SHIPS;
@@ -1238,14 +1348,17 @@ mod tests {
             );
         }
         // Approaching (300 above), only while facing within three turns
-        // (3 degrees a tick) of the heading it wants (@0x868d3-0x868de).
+        // (3 degrees a tick) of the heading it wants, strictly, in whole
+        // degrees (@0x868d3-0x868de).
         let mut approaching = shooter(&[], ATTACK);
-        approaching.state.heading = 9.0;
+        approaching.state.heading = 8.9;
         assert!(asks_at_player(&approaching, 0.0, -300.0, plain));
-        approaching.state.heading = 9.1;
+        approaching.state.heading = 9.0;
         assert!(!asks_at_player(&approaching, 0.0, -300.0, plain));
-        approaching.state.heading = 350.9;
+        approaching.state.heading = 351.9;
         assert!(!asks_at_player(&approaching, 0.0, -300.0, plain));
+        approaching.state.heading = 352.0;
+        assert!(asks_at_player(&approaching, 0.0, -300.0, plain));
         assert!(
             asks_at_player(&approaching, 0.0, -100.0, plain),
             "dogfighting, any heading"
@@ -1530,7 +1643,8 @@ mod tests {
     #[test]
     fn a_stand_off_ship_flees_or_ignores_as_any_other() {
         let flee = standing_off(Goal::Flee(ShipRef::Player), true);
-        assert_eq!(flown(&flee, 900.0, 0.0, false), Some(Manoeuvre::Flee));
+        assert_eq!(flown(&flee, 200.0, 0.0, false), Some(Manoeuvre::Flee));
+        assert_eq!(flown(&flee, 900.0, 0.0, false), None, "running out");
         let idle = standing_off(Goal::Idle, true);
         assert_eq!(flown(&idle, 600.0, 0.0, false), None);
     }
@@ -1577,31 +1691,173 @@ mod tests {
         assert_eq!(at(Condition::Disabled), None);
     }
 
-    #[test]
-    fn the_heading_wanted_leads_with_the_first_forward_gun_or_bears_without() {
-        let mut npc = shooter(&[missile(131), gun(128, 1, 1)], ATTACK);
-        npc.state.velocity = Vec2::new(-1.0, 0.0);
-        let crossing = ShipState {
+    /// A target 100 above [`SHOOTER`] crossing right at 4 a tick, the
+    /// shooter moving left at 1: by the table, a lead of 26 for a gun of 10
+    /// a tick (10 ticks, 50 to the right relative to the shooter: 26, not
+    /// 26.57, `_CalcLeadAngle` @0x85e99), and a bearing of 0.
+    fn crossing() -> ShipState {
+        ShipState {
             position: SHOOTER + Vec2::new(0.0, -100.0),
             velocity: Vec2::new(4.0, 0.0),
             heading: 0.0,
+        }
+    }
+
+    /// A shooter at [`SHOOTER`] moving left at 1, carrying a gun (128, 10
+    /// a tick), a rocket (129), a turret (130, 20 a tick), a missile (131)
+    /// and a beam (132), with `goal`.
+    fn leading(goal: Goal) -> Npc {
+        let mut npc = shooter(
+            &[
+                gun(128, 1, 1),
+                guided(129, 6),
+                WeaponRecord {
+                    speed: 2000,
+                    ..guided(130, 4)
+                },
+                missile(131),
+                guided(132, 0),
+            ],
+            goal,
+        );
+        npc.state.velocity = Vec2::new(-1.0, 0.0);
+        npc
+    }
+
+    /// `npc` having fired `weapon` once: its last gun when that is a gun
+    /// or a rocket.
+    fn having_fired(mut npc: Npc, weapon: i16) -> Npc {
+        let mut fuel = npc.reserves.fuel;
+        npc.armament.fire_pick(
+            WeaponId(weapon),
+            Condition::Intact,
+            Shooter::PLAYER,
+            &mut LauncherRounds::default(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        );
+        npc
+    }
+
+    /// The lead of `npc` at [`crossing`] for its weapon `id`.
+    fn lead_for(npc: &Npc, id: i16) -> i16 {
+        let spec = npc
+            .armament
+            .mounts()
+            .iter()
+            .find(|mount| mount.spec.id.0 == id)
+            .map(|mount| mount.spec);
+        lead(npc, &crossing(), spec.as_ref())
+    }
+
+    #[test]
+    fn a_dogfighter_leads_with_a_gun_or_rocket_pick() {
+        let npc = leading(ATTACK);
+        assert_eq!(trig::table_arctan(-50.0, 100.0), 26);
+        assert_eq!(dogfight_lead(&npc, &crossing(), id(128)), 26);
+        let rocket = lead_for(&npc, 129);
+        assert_ne!(rocket, 0);
+        assert_eq!(dogfight_lead(&npc, &crossing(), id(129)), rocket);
+    }
+
+    #[test]
+    fn a_dogfighter_with_no_pick_leads_with_its_last_gun_or_takes_the_bearing() {
+        let npc = leading(ATTACK);
+        assert_eq!(dogfight_lead(&npc, &crossing(), None), 0, "no last gun");
+        let fired = having_fired(npc, 128);
+        assert_eq!(fired.armament.last_gun(), id(128));
+        assert_eq!(dogfight_lead(&fired, &crossing(), None), 26);
+    }
+
+    #[test]
+    fn a_dogfighter_with_a_turret_missile_or_beam_pick_takes_the_plain_bearing() {
+        // Its last gun is not read while it holds a pick (@0x85e43-0x85e6e).
+        let npc = having_fired(leading(ATTACK), 128);
+        for pick in [130, 131, 132] {
+            assert_eq!(dogfight_lead(&npc, &crossing(), id(pick)), 0, "{pick}");
+        }
+        assert_ne!(lead_for(&npc, 130), 0, "though a turret leads");
+    }
+
+    #[test]
+    fn an_approacher_with_a_last_gun_leads_with_its_pick_by_the_engine_and_its_last_gun_by_the_other_reading()
+     {
+        let npc = leading(ATTACK);
+        let at = crossing();
+        for reading in RuleSource::ALL {
+            assert_eq!(approach_lead(&npc, &at, id(128), reading), 0, "no last gun");
+        }
+        let fired = having_fired(npc, 128);
+        let turret = lead_for(&fired, 130);
+        assert_ne!(turret, 26);
+        assert_eq!(
+            approach_lead(&fired, &at, id(130), RuleSource::Engine),
+            turret
+        );
+        assert_eq!(approach_lead(&fired, &at, id(130), RuleSource::Bible), 26);
+        // `_CalcLeadAngle` takes the bearing for a pick of -1 (@0x2b05b) or
+        // one outside its gate.
+        assert_eq!(approach_lead(&fired, &at, None, RuleSource::Engine), 0);
+        assert_eq!(approach_lead(&fired, &at, id(131), RuleSource::Engine), 0);
+        assert_eq!(approach_lead(&fired, &at, None, RuleSource::Bible), 26);
+    }
+
+    #[test]
+    fn the_lead_is_fixed_from_the_pick_held_before_the_passes() {
+        // A dogfighter holding its gun, facing its lead at a crossing
+        // target: its turret pass picks the turret first, and its gun pass
+        // still faces the lead the gun gave, so the gun fires. Led from the
+        // turret pick, it would want the bearing, 26 off, and fire the
+        // turret.
+        let mut npc = holding(leading(ATTACK), 128);
+        npc.armament = Armament::new([
+            (WeaponSpec::new(&gun(128, 1, 1)), 1),
+            (
+                WeaponSpec::new(&WeaponRecord {
+                    count: 30,
+                    ..guided(130, 4)
+                }),
+                1,
+            ),
+        ]);
+        npc.state.heading = 26.0;
+        let mut player = player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0);
+        player.state.velocity = Vec2::new(4.0, 0.0);
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(player),
+            ..Surroundings::new(&[], &npcs)
         };
-        // 100 pixels at 10 a tick: 10 ticks, 50 to the right of it,
-        // relative to the shooter's own motion, by the table: 26, not
-        // 26.57 (`_CalcLeadAngle` @0x85e99).
-        let expected = trig::table_arctan(-50.0, 100.0);
-        assert_eq!(expected, 26);
-        assert_eq!(wanted_heading(&npc, &crossing), f32::from(expected));
-        npc.armament = Armament::new([(WeaponSpec::new(&missile(131)), 1)]);
-        assert_eq!(wanted_heading(&npc, &crossing), 0.0, "the bearing");
-        // A beam is outside `_CalcLeadAngle`'s gate: the table bearing.
-        let beam = WeaponSpec::new(&WeaponRecord {
-            guidance: 0,
-            speed: 1000,
-            ..weapon(140)
-        });
-        npc.armament = Armament::new([(beam, 1)]);
-        assert_eq!(wanted_heading(&npc, &crossing), 0.0, "ungated");
+        let mut stepped = npc.clone();
+        stepped.pursuit = pursuit::step(
+            &npc,
+            &around,
+            pursuit::PursuitRules::default(),
+            &mut nova_sim_base::fixture::Ranged::of(&[]),
+        );
+        let trigger = trigger(&stepped, &around, FireRules::default());
+        assert_eq!(trigger.only, id(128));
+        let frame = stepped.pursuit.frame.expect("a frame");
+        assert_eq!(frame.last().map(|body| body.heading), Some(26));
+    }
+
+    #[test]
+    fn a_dogfighters_gun_faces_by_whole_degrees() {
+        // The bearing straight up is 0; 3 turns of 3 is 9, strictly. A
+        // heading of 351.5 is 8.5 off as a float but 351, 9 off, in whole
+        // degrees: it holds.
+        let at = |heading: f32| {
+            let mut npc = shooter(&[gun(128, 1, 1)], ATTACK);
+            npc.state.heading = heading;
+            fired(&npc, 0.0, -100.0, 50.0)
+        };
+        assert_eq!(at(351.5), None);
+        assert_eq!(at(352.0), id(128));
+        assert_eq!(at(8.9), id(128));
+        assert_eq!(at(9.0), None);
     }
 
     #[test]
@@ -1702,16 +1958,17 @@ mod tests {
 
     #[test]
     fn a_gun_fires_only_facing_within_three_turns_and_a_missile_four() {
-        // 3 degrees a tick: 9 for a gun, 12 for a missile.
+        // 3 degrees a tick: under 9 for a gun, under 12 for a missile,
+        // strictly, in whole degrees (@0x868db, @0x86947).
         let mut npc = shooter(&[gun(128, 1, 1)], ATTACK);
-        npc.state.heading = 9.0;
+        npc.state.heading = 8.9;
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(128));
-        npc.state.heading = 9.1;
+        npc.state.heading = 9.0;
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), None);
         let mut npc = shooter(&[missile(131)], ATTACK);
-        npc.state.heading = 348.0;
+        npc.state.heading = 349.0;
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(131));
-        npc.state.heading = 347.9;
+        npc.state.heading = 348.9;
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), None);
     }
 
@@ -2815,14 +3072,16 @@ mod tests {
             npc.state.heading = heading;
             npc
         };
+        let still = sniper(0.0);
         assert_eq!(
-            wanted_heading(
-                &sniper(0.0),
+            lead_with(
+                &still,
                 &ShipState {
                     position: SHOOTER + Vec2::new(0.0, -100.0),
                     velocity: Vec2::new(5.0, 0.0),
                     heading: 0.0,
-                }
+                },
+                Some(&still.armament.mounts()[0].spec),
             ),
             26.0,
             "the table's lead"
