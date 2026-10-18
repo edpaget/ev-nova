@@ -117,7 +117,7 @@ use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
 use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
-use crate::legal::{self, Crime, LegalCode};
+use crate::legal::{Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
@@ -152,15 +152,17 @@ impl Session {
 
     /// A rebuild point that tells nothing: first, docked or not, the
     /// course rewritten (`Session::rewrite_course`, as
-    /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d)
-    /// and the exploration shared by place (`Session::share_explored`, as
-    /// it then raises each system to its head's level @0x32b13-0x32b8f
-    /// before its stellars); then, in flight, the
+    /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d),
+    /// the exploration shared by place (`Session::share_explored`, as
+    /// it then raises each system to its head's level @0x32b13-0x32b8f)
+    /// and the known set worked out afresh (`Session::rework_known`,
+    /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it. Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         self.rewrite_course();
         self.share_explored();
+        self.rework_known();
         let reshown = self.reshow();
         let galaxy = &self.galaxy;
         let rebuilt = self.rebuilt.rebuild(
@@ -330,13 +332,14 @@ impl Session {
     /// its centre, destroyed with the countdown `Y` gives it, then its
     /// `OnDestroy`, drawing on `chance`, and destroyed with that countdown
     /// again whatever the script did. The player, and no other ship, is
-    /// convicted ten times of killing a ship of its government, as `law`
+    /// convicted, and only by a shot whose source is its ship (`by` none
+    /// for one turned on its firer, @0x374e1-0x374e7), ten times of killing a ship of its government, as `law`
     /// says, and loses the ranks that killing reaches (see
     /// [`rank`](crate::rank)'s **Crimes**).
     pub(super) fn shoot_down(
         &mut self,
         stellar: StellarId,
-        by: ShipRef,
+        by: Option<ShipRef>,
         law: &dyn LegalCode,
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -354,10 +357,9 @@ impl Session {
         self.run_on_destroy(stellar, &life.on_destroy, chance);
         self.set_stellar_state(stellar, Some(countdown));
         self.strength.remove(&stellar);
-        if by == ShipRef::Player {
-            let changes = law.penalties(Crime::Kill, site.govt, &self.govts);
+        if by == Some(ShipRef::Player) {
             for _ in 0..STELLAR_KILLINGS {
-                legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+                self.convict_of(law, Crime::Kill, site.govt);
             }
             // `_CheckShotProximities` slaps ten times (@0x374e9), but
             // after the first pass no rank it takes is still active, so
@@ -531,24 +533,81 @@ mod tests {
         assert_eq!(session.landed(), None);
     }
 
+    /// F5 picks as `_FindNearestStellar` does (@0x276c-0x2888), a
+    /// destroyed can-land stellar included, and beeps (@0x69e9a).
     #[test]
-    fn f5_skips_a_destroyed_stellar() {
+    fn f5_picks_a_destroyed_stellar_as_find_nearest_stellar_does() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        session.take_sounds();
         assert_eq!(
             session.select_stellar(StellarPick::Nearest),
             Some(StellarId(128))
         );
-        run(&mut session, "Y128");
-        assert_eq!(
-            session.select_stellar(StellarPick::Nearest),
-            Some(StellarId(129))
+        assert!(
+            session
+                .take_sounds()
+                .contains(&crate::SimSound::NavSelected)
         );
         run(&mut session, "U128");
         assert_eq!(
             session.select_stellar(StellarPick::Nearest),
             Some(StellarId(128))
         );
+    }
+
+    /// `catalog` with every stellar but 128 stripped of its flags.
+    fn only_128_can_land(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+        for (_, sites) in &mut catalog.sites {
+            for site in sites {
+                if site.id.0 != 128 {
+                    site.flags = 0;
+                }
+            }
+        }
+        catalog
+    }
+
+    /// An untargeted L selects `_FindNearestStellar`'s pick silently
+    /// (@0x276c-0x2888, @0x6a8ed-0x6a932) and the dock request refuses it
+    /// as not landable (@0x66977 → 0x67cda).
+    fn assert_l_selects_128_and_cannot_land(session: &mut Session) {
+        session.take_sounds();
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            })
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+        assert_eq!(
+            session.nav_mode(),
+            crate::navigation::NavMode::Stellar(Some(StellarId(128)))
+        );
+        assert_eq!(session.dock_request(), None);
+        assert!(
+            !session
+                .take_sounds()
+                .contains(&crate::SimSound::NavSelected)
+        );
+    }
+
+    #[test]
+    fn an_untargeted_l_selects_the_only_can_land_stellar_destroyed_and_says_it_cannot_land() {
+        let catalog = only_128_can_land(wrecking());
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_l_selects_128_and_cannot_land(&mut session);
+    }
+
+    #[test]
+    fn an_untargeted_l_selects_an_intact_stellar_landable_only_once_destroyed_and_says_it_cannot_land()
+     {
+        let catalog = only_128_can_land(ruins());
+        let mut session = quiet(&catalog);
+        assert_l_selects_128_and_cannot_land(&mut session);
     }
 
     /// [`wrecking`] with 128 and 140 landable only once destroyed.
@@ -931,11 +990,10 @@ mod tests {
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(catalog, saved).expect("flies");
         assert_eq!(
-            flown.landed(),
+            crate::testkit::resumed_on(&flown),
             Some(StellarId(140)),
-            "{script}: docked there"
+            "{script}: on it"
         );
-        flown.assert_docked_among_shown();
         session
     }
 
@@ -1059,14 +1117,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_saved_docked_at_a_stellar_destroyed_since_resumes_docked_there() {
+    fn a_pilot_saved_docked_at_a_stellar_destroyed_since_resumes_on_it() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
         land_now(&mut session).expect("lands");
         run(&mut session, "Y128");
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        assert_eq!(flown.landed(), Some(StellarId(128)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(128)));
         assert!(shown_destroyed(&flown, 128));
         assert_eq!(destroyed(&flown, 128), Some(left(2)));
     }
@@ -1077,17 +1135,18 @@ mod tests {
         GovtId, GovtRecord, HullRecord, Penalties, StockWeapon, WeaponId, WeaponRecord,
     };
     use crate::combat::armament::{MOD_WEAPON, Trigger};
+    use crate::combat::projectile::Source;
     use crate::combat::weapon::{Explosion, PLANET_TYPE};
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::geometry::Vec2;
     use crate::govt::{DERELICT, Governments};
-    use crate::legal::{Crime, LegalCode, NovaLaw, RECORD_LIMIT};
+    use crate::legal::{Crime, CrimeMap, LegalCode, NovaLaw, RECORD_LIMIT};
     use crate::testkit::{govt, hull, outfit, weapon};
     use crate::traffic::npc::NpcId;
 
     /// A planet-type gun firing every tick, 15 pixels a tick, doing 30
     /// mass and 20 energy damage and exploding in `bööm` 130 where it
-    /// hits.
+    /// hits, of a `BlastRadius` of 25.
     fn planet_gun() -> WeaponRecord {
         WeaponRecord {
             count: 30,
@@ -1096,13 +1155,15 @@ mod tests {
             energy_dmg: 20,
             flags2: PLANET_TYPE,
             explod_type: 2,
+            blast_radius: 25,
             ..weapon(128)
         }
     }
 
     /// [`catalog`] with `lives`, its ship carrying a [`planet_gun`]. The
-    /// ship starts over 128, so each shot hits 128 on the tick it is
-    /// fired: 128 of `Strength` 100 is shot down by the third.
+    /// ship starts over 128, so each shot hits 128 in the hit pass of the
+    /// tick after it is fired, testing its first move: 128 of `Strength`
+    /// 100 is shot down by the third.
     fn shooting(lives: impl IntoIterator<Item = StellarLife>) -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![planet_gun()],
@@ -1135,14 +1196,19 @@ mod tests {
         turrets_only: false,
         bays: false,
         point_defence: false,
+        keep: None,
     };
 
-    /// Fires every tick for `ticks` ticks under `law`, then lets go: the
+    /// Fires every tick for `ticks` ticks under `law`, then lets go for a
+    /// tick more, whose hit pass tests the last shot's first move: the
     /// fight's events.
     fn fire_by(session: &mut Session, ticks: u32, law: &dyn LegalCode) -> Vec<CombatEvent> {
         session.hold_trigger(FIRE);
         let mut events = Vec::new();
-        for _ in 0..ticks {
+        for tick in 0..=ticks {
+            if tick == ticks {
+                session.hold_trigger(Trigger::default());
+            }
             let rules = Rules {
                 law,
                 ..Rules::default()
@@ -1150,7 +1216,6 @@ mod tests {
             session.tick_combat(rules, &mut NeverFires);
             events.extend(session.take_combat_events());
         }
-        session.hold_trigger(Trigger::default());
         events
     }
 
@@ -1160,14 +1225,23 @@ mod tests {
 
     /// The explosions among `events` of `bööm` `kind`, where each was.
     fn booms(events: &[CombatEvent], kind: i16) -> Vec<Vec2> {
+        sized_booms(events, kind)
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The explosions among `events` of `bööm` `kind`, where each was and
+    /// its size.
+    fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
         events
             .iter()
             .filter_map(|event| match *event {
-                CombatEvent::Exploded { at, explosion }
-                    if Some(explosion) == Explosion::decode(kind) =>
-                {
-                    Some(at)
-                }
+                CombatEvent::Exploded {
+                    at,
+                    explosion,
+                    size,
+                } if Some(explosion) == Explosion::decode(kind) => Some((at, size)),
                 _ => None,
             })
             .collect()
@@ -1241,12 +1315,14 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
     }
 
-    /// Fines each government a `kill` penalty of -3 for a killing, and
+    /// Fines government 140 a `kill` penalty of -3 for a killing, and
+    /// along the walk the system the crime is in -2.6 and 131 +1.5;
     /// records each crime it is asked about with the victim's
-    /// government.
+    /// government, and each system a walk starts from.
     #[derive(Debug, Default)]
     struct Fine {
         seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+        from: std::cell::RefCell<Vec<SystemId>>,
     }
 
     impl LegalCode for Fine {
@@ -1258,6 +1334,18 @@ mod tests {
         ) -> Vec<(GovtId, i32)> {
             self.seen.borrow_mut().push((crime, victim));
             vec![(GovtId(140), -3)]
+        }
+
+        fn system_penalties(
+            &self,
+            _crime: Crime,
+            _victim: Option<GovtId>,
+            from: SystemId,
+            _map: &dyn CrimeMap,
+            _govts: &Governments,
+        ) -> Vec<(SystemId, f32)> {
+            self.from.borrow_mut().push(from);
+            vec![(from, -2.6), (SystemId(131), 1.5)]
         }
     }
 
@@ -1300,17 +1388,24 @@ mod tests {
     }
 
     #[test]
-    fn shooting_a_stellar_down_changes_the_record_in_each_system_of_a_changed_government() {
-        let mut catalog = shooting([life(128, 2)]);
-        catalog.star_map[0].govt = Some(GovtId(140));
+    fn shooting_a_stellar_down_walks_ten_times_from_the_players_system_each_truncating() {
+        let catalog = shooting([life(128, 2)]);
         let mut session = overlaid(&catalog);
-        fire_by(&mut session, 3, &Fine::default());
+        session.pilot.set_system_record(SystemId(130), 5);
+        let fine = Fine::default();
+        fire_by(&mut session, 3, &fine);
+        assert_eq!(fine.from.take(), [SystemId(130); 10], "the player's system");
         assert_eq!(
             session.pilot().system_record(SystemId(130)),
-            -30,
-            "140's system, ten times"
+            -16,
+            "5 - 2.6 to 2, then 0, -2 and on, each truncated in turn: not 5 - 26 \
+             nor 5 - 10 x 2"
         );
-        assert_eq!(session.pilot().system_record(SystemId(131)), 0);
+        assert_eq!(
+            session.pilot().system_record(SystemId(131)),
+            10,
+            "1.5 ten times, each truncated"
+        );
     }
 
     #[test]
@@ -1320,7 +1415,7 @@ mod tests {
         let fine = Fine::default();
         session.shoot_down(
             StellarId(128),
-            ShipRef::Npc(NpcId(1)),
+            Some(ShipRef::Npc(NpcId(1))),
             &fine,
             &mut NeverFires,
         );
@@ -1373,12 +1468,70 @@ mod tests {
         let mut session = ranked(shooting([life(128, 2)]));
         session.shoot_down(
             StellarId(128),
-            ShipRef::Npc(NpcId(1)),
+            Some(ShipRef::Npc(NpcId(1))),
             &NovaLaw::default(),
             &mut NeverFires,
         );
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert_eq!(ranks_held(&session), [200, 201]);
+    }
+
+    /// [`ranked`]'s session, 128 taken to none by two shots, then shot
+    /// down by a third fired from 200 pixels left of it, which a jamming
+    /// draw has turned on its firer (`Source::Other`, aimed at the player)
+    /// in flight when `turned`. The player moves out of its way, as the
+    /// shot flies straight.
+    fn shot_down_from_afar(turned: bool) -> Session {
+        let mut session = ranked(shooting([life(128, 2)]));
+        let fine = Fine::default();
+        fire_by(&mut session, 2, &fine);
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(30.0 - 200.0, -40.0),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        session.hold_trigger(FIRE);
+        let rules = Rules {
+            law: &fine,
+            ..Rules::default()
+        };
+        session.tick_combat(rules, &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        // The player moves off, and the hit pass meets it where it stood a
+        // tick later, before the shot can turn on it.
+        session.player.position.y += 1000.0;
+        session.tick_combat(rules, &mut NeverFires);
+        assert_eq!(destroyed(&session, 128), None, "still in flight");
+        if turned {
+            for shot in session.combat.shots_mut() {
+                shot.source = Source::Other;
+                shot.target = Some(ShipRef::Player);
+                shot.aimed_at = Some(ShipRef::Player);
+            }
+        }
+        for _ in 0..20 {
+            let rules = Rules {
+                law: &fine,
+                ..Rules::default()
+            };
+            session.tick_combat(rules, &mut NeverFires);
+        }
+        assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
+        session
+    }
+
+    #[test]
+    fn a_players_shot_turned_on_its_firer_shooting_a_stellar_down_convicts_no_one() {
+        let kept = shot_down_from_afar(false);
+        assert_eq!(kept.pilot().legal_record(GovtId(140)), -30);
+        assert_eq!(ranks_held(&kept), [201]);
+        let turned = shot_down_from_afar(true);
+        assert_eq!(
+            turned.pilot().legal_record(GovtId(140)),
+            0,
+            "its source is no ship (`_CheckShotProximities` @0x374e1-0x374e7)"
+        );
+        assert_eq!(ranks_held(&turned), [200, 201]);
     }
 
     #[test]
@@ -1424,8 +1577,16 @@ mod tests {
         let mut session = quiet(&catalog);
         assert_eq!(booms(&fire(&mut session, 2), 4), []);
         let events = fire(&mut session, 1);
-        assert_eq!(booms(&events, 4), [Vec2::new(30.0, -40.0)]);
-        assert_eq!(booms(&events, 2).len(), 1, "the shot's own");
+        assert_eq!(
+            sized_booms(&events, 4),
+            [(Vec2::new(30.0, -40.0), 0.0)],
+            "of no size, as `_CreateExplosion(.., 0, 1)` makes it"
+        );
+        let own: Vec<f32> = sized_booms(&events, 2)
+            .into_iter()
+            .map(|(_, size)| size)
+            .collect();
+        assert_eq!(own, [25.0], "the shot's own, of the gun's BlastRadius");
     }
 
     /// [`shooting`]'s session with the ship 200 pixels left of 128's
@@ -1971,9 +2132,16 @@ mod tests {
         let mut session = quiet(&catalog);
         run(&mut session, "Y128");
         settle(&mut session, &catalog, "M130");
+        // A shot fired while it lies dead, which a frame samples dead.
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_trigger(Trigger::default());
+        assert!(session.dead_since_rebuild(StellarId(128)));
         run(&mut session, "U128");
         session.strength.insert(StellarId(128), 0);
-        fire(&mut session, 1);
+        // The next frame's hit pass shoots it down before the frame
+        // samples it.
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         assert!(session.dead_since_rebuild(StellarId(128)));
     }
@@ -2251,9 +2419,11 @@ mod tests {
         catalog
     }
 
-    /// The stellar a click at (`x`, `y`) picks.
+    /// The stellar a click at (`x`, `y`) picks, with none selected
+    /// before it (a click passes over the one selected).
     fn click(session: &mut Session, x: f32, y: f32) -> Option<StellarId> {
-        session.select_stellar(StellarPick::At(Vec2::new(x, y)))
+        session.nav = crate::NavMode::Off;
+        crate::testkit::click_stellar(session, Vec2::new(x, y))
     }
 
     #[test]
@@ -2481,7 +2651,7 @@ mod tests {
         pilot.system = SystemId(131);
         pilot.stellar = Some(StellarId(200));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert_eq!(session.landed(), Some(StellarId(200)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(200)));
         assert_eq!(
             session.system(),
             SystemId(130),

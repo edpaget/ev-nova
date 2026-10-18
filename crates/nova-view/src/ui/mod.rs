@@ -35,6 +35,14 @@
 //! - [`volume`]: a volume level with arrows that step it.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
+//! - [`mission_info`]: the key that asks for the mission info screen
+//!   ([`MISSION_INFO_KEY`](mission_info::MISSION_INFO_KEY)).
+//! - [`mission_dialogs`]: the mission texts and the mission info screen
+//!   under them ([`MissionDialogs`](mission_dialogs::MissionDialogs)),
+//!   over the spaceport or over flight.
+//! - [`picture_variant`]: the choice between a dialog's plain and
+//!   picture templates ([`VariantTemplates`](picture_variant::VariantTemplates)),
+//!   which the text, offer, bar and shipyard info dialogs share.
 //! - [`player_info`]: the player info screen ([`PlayerInfoScreen`]):
 //!   the pilot, the ship, its cargo, extras, ranks and honors.
 //! - [`plunder`]: the plunder dialog ([`PlunderDialog`]), taking what is
@@ -54,8 +62,11 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
+pub mod mission_dialogs;
+pub mod mission_info;
 pub mod new_pilot;
 pub mod note;
+pub mod picture_variant;
 pub mod player_info;
 pub mod plunder;
 pub mod prefs;

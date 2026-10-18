@@ -15,7 +15,6 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
-use crate::sound::UiSound;
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
@@ -68,6 +67,20 @@ impl Placement {
             Self::Fixed => bounds.min,
         }
     }
+}
+
+/// Where `_CenterWindow` (@0x220e-0x2359 in `EV Nova.app`) puts the
+/// top-left corner of a dialog `size` wide and high in a `window`: the
+/// window's centre less half the dialog, each half truncated toward zero
+/// as the original's integer halving is. For an odd size it sits a pixel
+/// right of or below [`Placement::Center`], which floors the spare space
+/// in one step. The galaxy map's dialog (`DLOG` 2000) is placed so; the
+/// other dialogs `_CenterWindow` moves still centre as
+/// [`Placement::Center`] does.
+#[must_use]
+pub fn center_window(window: (f32, f32), size: (f32, f32)) -> Point {
+    let half = |length: f32| (length / 2.0).trunc();
+    Point::new(half(window.0) - half(size.0), half(window.1) - half(size.1))
 }
 
 /// What a dialog item is, with its data.
@@ -219,8 +232,6 @@ pub struct Dialog {
     /// The item a press is held on, by index, and its tracking.
     tracked: Option<usize>,
     tracker: ButtonTracker,
-    /// The sound the last input made on a button, until it is taken.
-    sound: Option<UiSound>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -295,7 +306,6 @@ impl Dialog {
             focus: None,
             tracked: None,
             tracker: ButtonTracker::default(),
-            sound: None,
         }
     }
 
@@ -385,6 +395,21 @@ impl Dialog {
     #[must_use]
     pub fn item_bounds(&self, item: usize) -> Option<Bounds> {
         self.item(item).map(|item| item.bounds)
+    }
+
+    /// Draws `image` stretched over the whole dialog, as `DrawPicHandle`
+    /// fills a picture dialog's port with its frame.
+    pub fn draw_stretched_over(&self, list: &mut DrawList, image: ImageKey) {
+        let bounds = self.bounds;
+        list.stretched_picture(image, bounds.min, bounds.width(), bounds.height());
+    }
+
+    /// Draws `PICT` `graphic` stretched into item `item` (from 1); nothing
+    /// when the dialog has no such item.
+    pub fn draw_picture_in(&self, list: &mut DrawList, item: usize, graphic: i16) {
+        if let Some(at) = self.item_bounds(item) {
+            list.stretched_picture(ImageKey::picture(graphic), at.min, at.width(), at.height());
+        }
     }
 
     /// Whether item `item` (from 1) is shown: inside the dialog.
@@ -506,11 +531,11 @@ impl Dialog {
         let activated = self
             .tracker
             .track(self.hit_area(item), item.active(), input);
-        if let Some(sound) = self.tracker.take_sound()
-            && item.is_button()
-        {
-            self.sound = Some(sound);
-        }
+        // Silent under the pointer, as every one of the original's
+        // in-game and spaceport button trackers (`_TrackTextButtons`
+        // @0x26bb0 and its kin) plays nothing: only the main screen's
+        // `_TrackMainScreenButtons` @0x195b9 clicks.
+        let _ = self.tracker.take_sound();
         if !self.tracker.armed() {
             self.tracked = None;
         }
@@ -525,13 +550,6 @@ impl Dialog {
             min: Point::new(inner.min.x.max(outer.min.x), inner.min.y.max(outer.min.y)),
             max: Point::new(inner.max.x.min(outer.max.x), inner.max.y.min(outer.max.y)),
         }
-    }
-
-    /// The sound the last input made on a button, once: it going down
-    /// when pressed, and coming back up when let go. Other items, and
-    /// keyboard activations, are silent.
-    pub fn take_sound(&mut self) -> Option<UiSound> {
-        self.sound.take()
     }
 
     /// Abandons any click in progress without activating anything.
@@ -714,6 +732,30 @@ mod tests {
         assert_eq!(Placement::Alert.origin(bounds), at(1.0, 1.0));
     }
 
+    #[test]
+    fn center_window_takes_half_the_window_less_half_the_dialog_each_truncated() {
+        // The map's DLOG 2000, 601 x 513: (512 − 300, 384 − 256).
+        assert_eq!(center_window(SCREEN, (601.0, 513.0)), at(212.0, 128.0));
+        let bounds = rect(0.0, 0.0, 601.0, 513.0);
+        assert_eq!(
+            Placement::Center.origin(bounds),
+            at(211.0, 127.0),
+            "a pixel up and left"
+        );
+        // Even sizes agree with the Window Manager's centring.
+        assert_eq!(center_window(SCREEN, (600.0, 512.0)), at(212.0, 128.0));
+        // An odd window too: trunc(1023 / 2) − trunc(601 / 2).
+        assert_eq!(
+            center_window((1023.0, 767.0), (601.0, 513.0)),
+            at(211.0, 127.0)
+        );
+        // A dialog wider than the window sits left of it.
+        assert_eq!(
+            center_window((100.0, 100.0), (201.0, 101.0)),
+            at(-50.0, 0.0)
+        );
+    }
+
     /// Stock `YesNo` (`DLOG` 3002): 355 x 109, centred, with OK (1), a
     /// picture parked outside (2), static text (3), a picture (4) and
     /// Cancel (5).
@@ -758,6 +800,48 @@ mod tests {
         let mut list = DrawList::new();
         dialog.draw(&mut list);
         list.iter().cloned().collect()
+    }
+
+    #[test]
+    fn draw_stretched_over_fills_the_dialog_bounds_with_the_image() {
+        let dialog = dialog(&yes_no(), &[]);
+        let mut list = DrawList::new();
+        dialog.draw_stretched_over(&mut list, ImageKey::picture(8527));
+        let drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(
+            drawn,
+            vec![DrawCommand::StretchedPicture {
+                image: ImageKey::picture(8527),
+                top_left: YES_NO,
+                width: 355.0,
+                height: 109.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn draw_picture_in_stretches_the_graphic_into_the_item() {
+        let dialog = dialog(&yes_no(), &[]);
+        let mut list = DrawList::new();
+        dialog.draw_picture_in(&mut list, 4, 5008);
+        let drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(
+            drawn,
+            vec![DrawCommand::StretchedPicture {
+                image: ImageKey::picture(5008),
+                top_left: Point::new(YES_NO.x + 7.0, YES_NO.y + 5.0),
+                width: 32.0,
+                height: 32.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn draw_picture_in_an_absent_item_draws_nothing() {
+        let dialog = dialog(&yes_no(), &[]);
+        let mut list = DrawList::new();
+        dialog.draw_picture_in(&mut list, 6, 5008);
+        assert_eq!(list.iter().count(), 0);
     }
 
     fn press(at: Point) -> Input {
@@ -1337,7 +1421,6 @@ mod tests {
         ));
         let cancel = dialog.item_bounds(5).expect("Cancel").center();
         assert_eq!(click(&mut dialog, cancel), None);
-        assert_eq!(dialog.take_sound(), None, "it never goes down");
         assert_eq!(dialog.input(&key(Key::Escape)), None);
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Tab));
@@ -1448,49 +1531,23 @@ mod tests {
     }
 
     #[test]
-    fn clicking_a_button_sounds_it_going_down_then_coming_up() {
-        let mut dialog = dialog(&yes_no(), &[]);
-        let ok = dialog.item_bounds(1).expect("OK").center();
-        assert_eq!(dialog.take_sound(), None);
-        dialog.input(&press(ok));
-        assert_eq!(dialog.take_sound(), Some(UiSound::ButtonDown));
-        assert_eq!(dialog.take_sound(), None, "once");
-        assert_eq!(dialog.input(&release(ok)), Some(DialogEvent::Item(1)));
-        assert_eq!(dialog.take_sound(), Some(UiSound::ButtonUp));
-        assert_eq!(dialog.take_sound(), None, "once");
-        dialog.input(&press(ok));
-        dialog.take_sound();
-        assert_eq!(dialog.input(&release(at(0.0, 0.0))), None);
-        assert_eq!(
-            dialog.take_sound(),
-            Some(UiSound::ButtonUp),
-            "let go off it"
-        );
-    }
-
-    #[test]
-    fn clicking_anything_but_a_button_and_keys_are_silent() {
+    fn clicking_anything_but_a_button_activates_only_user_items() {
         let mut dialog = dialog(&desc_like(), &desc_roles("text"));
         let user = dialog.item_bounds(4).expect("item 4").center();
         assert_eq!(click(&mut dialog, user), Some(DialogEvent::Item(4)));
-        assert_eq!(dialog.take_sound(), None, "a role-less user item");
         let text = dialog.item_bounds(3).expect("item 3").center();
-        click(&mut dialog, text);
-        assert_eq!(dialog.take_sound(), None, "disabled text");
-        click(&mut dialog, at(199.0, 1.0));
-        assert_eq!(dialog.take_sound(), None, "empty space");
-        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
-        assert_eq!(dialog.take_sound(), None, "Return");
+        assert_eq!(click(&mut dialog, text), None, "disabled text");
+        assert_eq!(click(&mut dialog, at(199.0, 1.0)), None, "empty space");
     }
 
+    /// `_TextDialogFilter` maps Return, Enter and Escape straight to an
+    /// item (@0x51fca-0x51fef).
     #[test]
-    fn cancelling_a_press_keeps_its_sound_and_makes_none() {
-        let mut dialog = dialog(&yes_no(), &[]);
-        let ok = dialog.item_bounds(1).expect("OK").center();
-        dialog.input(&press(ok));
-        dialog.cancel_pointer();
-        assert_eq!(dialog.take_sound(), Some(UiSound::ButtonDown));
-        dialog.input(&release(ok));
-        assert_eq!(dialog.take_sound(), None);
+    fn keys_activate_the_default_and_cancel_buttons() {
+        let mut dialog = dialog(&yes_no(), &[]).with_cancel(Some(5));
+        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+        assert_eq!(dialog.input(&key(Key::Tab)), None);
+        assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
     }
 }

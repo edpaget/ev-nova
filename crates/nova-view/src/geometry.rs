@@ -1,5 +1,7 @@
 //! Points and rectangles in logical units.
 
+use std::cmp::Ordering;
+
 /// A point in logical units: x grows right, y grows down.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -103,6 +105,47 @@ impl Bounds {
             max: Point::new(self.max.x + margin, self.max.y + margin),
         }
     }
+}
+
+/// The point `t` of the way from `from` to `to`: exactly `from` at 0 and
+/// `to` at 1.
+pub(crate) fn lerp(from: Point, to: Point, t: f32) -> Point {
+    let mix = |a: f32, b: f32| a * (1.0 - t) + b * t;
+    Point::new(mix(from.x, to.x), mix(from.y, to.y))
+}
+
+/// Where `a` and `b` overlap, if they share any area.
+pub(crate) fn intersection(a: Bounds, b: Bounds) -> Option<Bounds> {
+    let min = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y));
+    let max = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y));
+    (min.x < max.x && min.y < max.y).then_some(Bounds { min, max })
+}
+
+/// The stretch of the segment from `from` to `to` inside `area`, edges
+/// included, as fractions of the way along it (Liang-Barsky); `None` when
+/// it misses or only touches it at a point. A segment of no length inside
+/// is all of it.
+pub(crate) fn span_in(from: Point, to: Point, area: Bounds) -> Option<(f32, f32)> {
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let mut span = (0.0_f32, 1.0_f32);
+    for (p, q) in [
+        (-dx, from.x - area.min.x),
+        (dx, area.max.x - from.x),
+        (-dy, from.y - area.min.y),
+        (dy, area.max.y - from.y),
+    ] {
+        match p.partial_cmp(&0.0) {
+            Some(Ordering::Less) => span.0 = span.0.max(q / p),
+            Some(Ordering::Greater) => span.1 = span.1.min(q / p),
+            // Parallel to this edge: in or out along its whole length.
+            _ => {
+                if q < 0.0 {
+                    return None;
+                }
+            }
+        }
+    }
+    (span.0 < span.1).then_some(span)
 }
 
 #[cfg(test)]

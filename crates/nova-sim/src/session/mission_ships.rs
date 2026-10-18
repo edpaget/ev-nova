@@ -196,6 +196,7 @@ use crate::mission::{
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::mission_screens::MissionTextKind;
+use crate::sound::SimSound;
 use crate::story::{
     Consumer, Entrance, EventFilter, Fate, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
@@ -503,7 +504,7 @@ impl Session {
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.ships.ship_done = true;
         }
-        self.show_mission_text(MissionTextKind::ShipDone, record.id, Some(slot));
+        self.show_mission_text(MissionTextKind::ShipDone, record.id, Some(slot), chance);
         if ShipGoal::from_code(record.ships.goal) != ShipGoal::None {
             self.run_mission_script(slot, &record.on_ship_done, chance);
         }
@@ -996,9 +997,21 @@ impl Session {
         let targeted = self.target == Some(npc);
         self.drop_quarry(npc);
         self.traffic.remove(npc);
+        // The ship brought in above is numbered last.
+        let swapped_in = self.last_npc();
         if targeted {
-            self.target = self.last_npc();
+            self.target = swapped_in;
             self.target_fly_in.settle();
+        }
+        // The hail's dialog closes on the player's target, now the ship
+        // swapped in (@0x6252f), which `_offeringShipIndex` takes
+        // (@0x625a4): `<OSN>` names its slot, which holds no person. The
+        // original swaps as the dialog closes, when the hailed ship is
+        // always the target; this settling comes after, so a target the
+        // player moved since is kept, and `<OSN>` names the swapped-in
+        // ship all the same.
+        if let Some(npc) = swapped_in.and_then(|id| self.npc(id)) {
+            self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
         if self.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
             && let Some(active) = self.slot_holding(slot, record.id)
@@ -1095,7 +1108,11 @@ impl Session {
     /// ([`assists`]), on which its slot counts it boarded and the comm
     /// line is said. Off both paths, a board counts only by the other
     /// reading of [`RuleKey::PlainBoardCounts`] ([`plain_board_counts`]),
-    /// with no comm line. Then it is marked boarded (@0x65f43), with no
+    /// with no comm line. Each comm line said, on the pickup path and the
+    /// assist path, beeps [`SimSound::MissionShipBoarded`] (`_beepSnd[4]`
+    /// @0x6556b, @0x656ee); the refused pickup raises none here (its
+    /// `_beepSnd[3]` @0x65ffe is the board refusal's). Then it is marked
+    /// boarded (@0x65f43), with no
     /// `BoardPenalty`, person's offer or plunder. A ship of a failed
     /// mission is boarded for plunder, but still with no `BoardPenalty`
     /// (the slap @0x6582b passes its mark; see [`Session::board`]):
@@ -1121,6 +1138,7 @@ impl Session {
                     active.ships.boarded = active.ships.boarded.saturating_add(1);
                 }
                 self.mark_boarded(npc.id);
+                self.sounds.push(SimSound::MissionShipBoarded);
                 return Some(Ok(Boarding::MissionShip(Some(
                     MissionBoardLine::Retrieved { cargo },
                 ))));
@@ -1140,6 +1158,9 @@ impl Session {
             }
         }
         self.mark_boarded(npc.id);
+        if line.is_some() {
+            self.sounds.push(SimSound::MissionShipBoarded);
+        }
         Some(Ok(Boarding::MissionShip(line)))
     }
 
@@ -1356,6 +1377,7 @@ impl Session {
         if fails {
             if record.flags & HIDDEN == 0 {
                 self.messages.push(SimMessage::MissionShipLost);
+                self.sounds.push(SimSound::MissionShipLost);
             }
             self.quick_failure(mark.slot, &record, chance);
         }
@@ -2656,18 +2678,38 @@ pub(super) mod tests {
             .and_then(|active| active.failed)
     }
 
+    /// How many [`SimSound::MissionShipLost`] beeps are pending, taken.
+    fn lost_beeps(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .iter()
+            .filter(|sound| **sound == crate::SimSound::MissionShipLost)
+            .count()
+    }
+
+    /// How many [`SimSound::MissionShipBoarded`] beeps are pending, taken.
+    fn boarded_beeps(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .iter()
+            .filter(|sound| **sound == crate::SimSound::MissionShipBoarded)
+            .count()
+    }
+
     #[test]
     fn the_first_ship_destroyed_fails_an_escort_disable_or_unboarded_rescue_at_once() {
         for goal in [1, 3, 5] {
             let catalog = goal_catalog(goal, 0);
             let mut session = in_flight(&catalog);
             let _ = session.take_messages();
+            let _ = session.take_sounds();
             destroy(&mut session, 0);
             assert_eq!(
                 session.take_messages(),
                 [SimMessage::MissionShipLost],
                 "{goal}"
             );
+            assert_eq!(lost_beeps(&mut session), 1, "{goal}: _beepSnd[1]");
             // An escort goal's take-off check, after the setup, met it
             // with its ships here: OnShipDone (b6) ran.
             let ran: &[u16] = if goal == 3 { &[5, 6] } else { &[5] };
@@ -2691,8 +2733,10 @@ pub(super) mod tests {
         assert_eq!(failed(&session), Some(FailedBy::Quick));
         assert_eq!(bits(&session), [5, 6]);
         assert_eq!(session.take_messages(), [SimMessage::MissionShipLost]);
+        assert_eq!(lost_beeps(&mut session), 1);
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), [], "fails once");
+        assert_eq!(lost_beeps(&mut session), 0, "beeps once");
         assert_eq!(bits(&session), [5, 6], "OnFailure ran once");
         let ships = ships_of(&session);
         assert_eq!((ships.destroyed, ships.left), (2, 0), "both counted");
@@ -2732,6 +2776,7 @@ pub(super) mod tests {
         destroy(&mut session, 0);
         disable(&mut session, 0);
         assert_eq!(session.take_messages(), []);
+        assert_eq!(lost_beeps(&mut session), 0);
         assert_eq!(failed(&session), None);
         assert_eq!(
             bits(&session),
@@ -2754,6 +2799,7 @@ pub(super) mod tests {
         let _ = session.take_messages();
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), []);
+        assert_eq!(lost_beeps(&mut session), 0);
         assert_eq!(failed(&session), None);
         assert_eq!(bits(&session), [] as [u16; 0]);
         assert!(session.pilot().missions().get(0).is_some(), "still held");
@@ -2768,6 +2814,7 @@ pub(super) mod tests {
             let _ = session.take_messages();
             destroy(&mut session, 0);
             assert_eq!(session.take_messages(), [], "{can_abort}: no message");
+            assert_eq!(lost_beeps(&mut session), 0, "{can_abort}: no beep");
             assert_eq!(bits(&session), [5], "{can_abort}: OnFailure ran");
             if can_abort == 0 {
                 assert_eq!(failed(&session), Some(FailedBy::Quick), "held, failed");
@@ -2782,8 +2829,10 @@ pub(super) mod tests {
         let catalog = goal_catalog(3, 0);
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
+        let _ = session.take_sounds();
         disable(&mut session, 1);
         assert_eq!(session.take_messages(), [SimMessage::MissionShipLost]);
+        assert_eq!(lost_beeps(&mut session), 1, "_beepSnd[1]");
         assert_eq!(bits(&session), [5, 6], "OnShipDone at the take-off's check");
         assert!(session.pilot().missions().get(0).is_none());
     }
@@ -3183,7 +3232,7 @@ pub(super) mod tests {
     /// The kinds of the mission texts shown since last taken.
     fn shown(session: &mut Session) -> Vec<(MissionTextKind, String)> {
         session
-            .take_mission_texts()
+            .take_texts_only()
             .into_iter()
             .map(|shown| (shown.kind, shown.text))
             .collect()
@@ -4338,6 +4387,17 @@ pub(super) mod tests {
             self.seen.borrow_mut().push(crime);
             Vec::new()
         }
+
+        fn system_penalties(
+            &self,
+            _crime: crate::legal::Crime,
+            _victim: Option<GovtId>,
+            _from: crate::catalog::SystemId,
+            _map: &dyn crate::legal::CrimeMap,
+            _govts: &crate::govt::Governments,
+        ) -> Vec<(crate::catalog::SystemId, f32)> {
+            Vec::new()
+        }
     }
 
     /// [`returning`] of `goal` with `count` ships, `Flags` `flags`, its
@@ -4396,6 +4456,7 @@ pub(super) mod tests {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
         let _ = shown(&mut session);
+        let _ = session.take_sounds();
         let (boarding, crimes) = board_first(&mut session);
         assert_eq!(
             boarding,
@@ -4403,6 +4464,7 @@ pub(super) mod tests {
                 MissionBoardLine::Boarded
             )))
         );
+        assert_eq!(boarded_beeps(&mut session), 1, "_beepSnd[4]");
         assert_eq!(crimes, [], "no BoardPenalty");
         assert_eq!(session.boarding(), None, "no plunder");
         assert!(session.npcs()[0].boarded);
@@ -4424,6 +4486,7 @@ pub(super) mod tests {
         let catalog = rescuing(5, 1, 0x0409);
         let mut session = in_flight_with(&catalog, 1);
         let fuel = session.reserves().fuel.now;
+        let _ = session.take_sounds();
         let (boarding, _) = board_first(&mut session);
         assert_eq!(
             boarding,
@@ -4431,6 +4494,7 @@ pub(super) mod tests {
                 MissionBoardLine::Refuelled { ship: ShipId(200) }
             )))
         );
+        assert_eq!(boarded_beeps(&mut session), 1, "_beepSnd[4]");
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert!((session.reserves().fuel.now - (fuel - 100.0)).abs() < f32::EPSILON);
@@ -4462,7 +4526,9 @@ pub(super) mod tests {
             catalog.missions[0].pickup_mode = pickup;
             let mut session =
                 in_flight_with(&catalog, count).with_rules(plain_board(crate::RuleSource::Engine));
+            let _ = session.take_sounds();
             let (boarding, crimes) = board_first(&mut session);
+            assert_eq!(boarded_beeps(&mut session), 0, "{goal}: nothing said");
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(None)),
@@ -4489,7 +4555,9 @@ pub(super) mod tests {
             let mut session =
                 in_flight_with(&catalog, count).with_rules(plain_board(crate::RuleSource::Bible));
             let _ = shown(&mut session);
+            let _ = session.take_sounds();
             let (boarding, crimes) = board_first(&mut session);
+            assert_eq!(boarded_beeps(&mut session), 0, "{goal}: nothing said");
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(None)),
@@ -4550,7 +4618,9 @@ pub(super) mod tests {
             let mut session = in_flight_with(&catalog, 1);
             let _ = shown(&mut session);
             assert!(!cargo_aboard(&session), "{goal}");
+            let _ = session.take_sounds();
             let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
+            assert_eq!(boarded_beeps(&mut session), 1, "{goal}: _beepSnd[4]");
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(Some(
@@ -4623,8 +4693,14 @@ pub(super) mod tests {
         if let Some(active) = session.pilot.missions.get_mut(0) {
             active.cargo_tons = 100_000;
         }
+        let _ = session.take_sounds();
         let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
         assert_eq!(boarding, Err(crate::board::BoardRefusal::CantBoard));
+        assert_eq!(
+            boarded_beeps(&mut session),
+            0,
+            "the refusal's snd 153 is the board refusal's, not this line's"
+        );
         assert_eq!(crimes, []);
         assert!(session.strikes.is_empty(), "no help called");
         assert_eq!(session.boarding(), None);
@@ -4678,6 +4754,57 @@ pub(super) mod tests {
         let (boarding, crimes) = board_first(&mut session);
         assert_eq!(boarding, Ok(crate::board::Boarding::MissionShip(None)));
         assert_eq!(crimes, []);
+    }
+
+    /// The airlocks among the sounds raised since the last taken.
+    fn airlocks(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == crate::sound::SimSound::Boarded)
+            .count()
+    }
+
+    /// A mission's special ship skips the plunder and its airlock
+    /// (@0x657b8-0x657e3 → @0x65f43), whether its mission stands or its
+    /// slot is free; a failed mission's ship goes on to the plunder,
+    /// after `_DoGoodSamaritan`, and plays it (@0x65eb3 → @0x65f00).
+    #[test]
+    fn only_a_failed_missions_ship_plays_the_airlock() {
+        let catalog = rescuing(5, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        let _ = session.take_sounds();
+        let (boarding, _) = board_first(&mut session);
+        assert!(
+            matches!(boarding, Ok(crate::board::Boarding::MissionShip(_))),
+            "{boarding:?}"
+        );
+        assert_eq!(airlocks(&mut session), 0, "the mission stands");
+
+        let mut session = in_flight_with(&catalog, 1);
+        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+            npc.mission = Some(crate::traffic::npc::MissionMark {
+                order: None,
+                slot: 5,
+                behav: ShipBehav::Own,
+                formation: None,
+            });
+        }
+        let _ = session.take_sounds();
+        let _ = board_first(&mut session);
+        assert_eq!(airlocks(&mut session), 0, "a free slot");
+
+        let mut session = in_flight_with(&catalog, 1);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Marked);
+        }
+        let _ = session.take_sounds();
+        let (boarding, _) = board_first(&mut session);
+        assert!(
+            matches!(boarding, Ok(crate::board::Boarding::Opened(_))),
+            "{boarding:?}"
+        );
+        assert_eq!(airlocks(&mut session), 1, "the mission failed");
     }
 
     /// [`in_flight`] for a mission of `count` ships.
@@ -5239,6 +5366,105 @@ pub(super) mod tests {
         assert!(!session.pilot().gone(PersonId(600)), "not gone for good");
     }
 
+    #[test]
+    fn by_the_engine_after_a_swap_osn_names_the_swapped_in_ships_slot() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let session = hailing_ace(&catalog);
+        assert_eq!(session.plain_text("<OSN>"), "Ace", "hailed (@0x621de)");
+        let session = swapped(&catalog);
+        assert_eq!(
+            session.plain_text("<OSN>"),
+            "[Error]",
+            "the target swapped in (@0x6252f, @0x625a4) holds no person (@0x3cb48)"
+        );
+        let mut kept = swapping(0);
+        kept.persons[0].flags = 0;
+        let session = swapped(&kept);
+        assert!(person_here(&session), "no swap");
+        assert_eq!(session.plain_text("<OSN>"), "Ace", "the hailed ship still");
+    }
+
+    /// [`hailing_ace`] with Ace moved to berth 2 before the hail, which
+    /// remembers Ace, and the lower berth 1 left free: the ship swapped in
+    /// takes berth 1, not the hailed ship's.
+    fn hailing_ace_at_berth_2(catalog: &FakePilotCatalog) -> Session {
+        let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(Names));
+        session.populate(catalog, &mut NeverFires);
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.state = ACE_AT;
+        ace.berth = 2;
+        session.traffic.set_berth_person(2, "Ace");
+        session.traffic.forget_berth_person(1);
+        session.target = Some(NpcId(0));
+        let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        assert_eq!(session.plain_text("<OSN>"), "Ace", "hailed at berth 2");
+        session
+    }
+
+    /// The berth of the one mission ship here after a swap.
+    fn swapped_in_berth(session: &Session) -> u32 {
+        let ships: Vec<_> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.person.is_none())
+            .collect();
+        assert_eq!(ships.len(), 1, "the swapped-in ship alone");
+        ships[0].berth
+    }
+
+    #[test]
+    fn by_the_engine_after_a_swap_osn_follows_the_swapped_in_ship_to_its_new_slot() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace_at_berth_2(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        let berth = swapped_in_berth(&session);
+        assert_eq!(berth, 1, "the lowest free berth, not the hailed ship's");
+        assert_eq!(
+            session.offering_ship,
+            Some(super::super::person_offers::OfferingShip { berth }),
+            "the target swapped in (@0x6252f, @0x625a4)"
+        );
+        assert_eq!(
+            session.plain_text("<OSN>"),
+            "[Error]",
+            "its slot holds no person, though Ace's old slot still names Ace"
+        );
+        assert_eq!(session.traffic.berth_person(2), Some("Ace"));
+    }
+
+    #[test]
+    fn by_the_engine_a_swap_settled_after_the_target_moved_still_names_the_swapped_in_ships_slot() {
+        // The original swaps as the hail's dialog closes, when the hailed
+        // ship is always the player's target, and `_offeringShipIndex`
+        // takes the ship swapped into its place (@0x6252f, @0x625a4). The
+        // engine swaps at the settling after, so a target moved in
+        // between is kept, and `<OSN>` still names the swapped-in ship.
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace_at_berth_2(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        session.target = None;
+        settle(&mut session, &catalog);
+        assert!(!person_here(&session), "swapped all the same");
+        assert_eq!(session.target, None, "the player's target is kept");
+        let berth = swapped_in_berth(&session);
+        assert_eq!(
+            session.offering_ship,
+            Some(super::super::person_offers::OfferingShip { berth }),
+        );
+        assert_eq!(session.plain_text("<OSN>"), "[Error]");
+    }
+
     /// [`swapped`], under `source` of [`RuleKey::LeaderlessSwapHold`].
     fn swapped_by(catalog: &FakePilotCatalog, source: crate::RuleSource) -> Session {
         swapped_under(
@@ -5607,7 +5833,9 @@ pub(super) mod tests {
             );
         } else {
             assert_eq!(
-                session.refuse_mission(MissionId(140), &mut NeverFires),
+                session
+                    .refuse_mission(MissionId(140), &mut NeverFires)
+                    .map(|_| ()),
                 Ok(())
             );
         }
@@ -5797,7 +6025,9 @@ pub(super) mod tests {
         let mut session = hailing_ace(&catalog);
         session.target_fly_in.start();
         assert_eq!(
-            session.refuse_mission(MissionId(140), &mut NeverFires),
+            session
+                .refuse_mission(MissionId(140), &mut NeverFires)
+                .map(|_| ()),
             Ok(())
         );
         settle(&mut session, &catalog);

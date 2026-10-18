@@ -70,6 +70,7 @@ use super::pen::Pen;
 use super::radar::{self, IRect, RadarColor, RadarMark, RadarScene};
 use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
+use crate::oval::oval_frame_pixels;
 use crate::spaceport::credits::comma_number;
 use crate::system::camera::VIEW_SIZE;
 use crate::text::TextMetrics;
@@ -357,7 +358,7 @@ pub fn draw(
 /// Draws one radar mark on `radar`: in the layout's radar colours, or a
 /// fixed one ([`RadarColor::fixed`]). A pixel is a 1-pixel dot over it (a
 /// QuickDraw pixel at (x, y) covers [x, x + 1)), a square and a fill are
-/// filled, an oval is [`oval_frame_pixels`], the static is its `ppat`
+/// filled, an oval is [`oval_frame_pixels`] at a pen of 1, the static is its `ppat`
 /// tiled over its rect, and a line is [`line_pixels`], those inside the
 /// radar only (@0x49f33 copies only the radar's rect to the window).
 fn draw_mark(list: &mut DrawList, layout: &StatusBarLayout, radar: IRect, mark: RadarMark) {
@@ -372,7 +373,7 @@ fn draw_mark(list: &mut DrawList, layout: &StatusBarLayout, radar: IRect, mark: 
             fill_rect(list, rect.to_bounds(), color(c));
         }
         RadarMark::Oval { rect, color: c } => {
-            for (x, y) in oval_frame_pixels(rect) {
+            for (x, y) in oval_frame_pixels(rect, 1) {
                 pixel(list, x, y, color(c));
             }
         }
@@ -419,39 +420,6 @@ pub fn line_pixels(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
 /// Draws the pixel at (`x`, `y`) in `color`.
 fn pixel(list: &mut DrawList, x: i32, y: i32, color: Color) {
     list.dot(Point::new(x as f32 + 0.5, y as f32 + 0.5), 1.0, color);
-}
-
-/// The pixels framing the oval inscribed in `rect`, row by row: those
-/// whose centres lie inside the ellipse (on it included) with a pixel
-/// above, below, left or right that does not. QuickDraw's own `FrameOval`
-/// raster is in the Toolbox, not in the original's binary, so this is our
-/// approximation of it: a 2×2 oval is all 4 pixels, and a 4×4 one the 8
-/// that are not its corners.
-#[must_use]
-pub fn oval_frame_pixels(rect: IRect) -> Vec<(i32, i32)> {
-    let (width, height) = (
-        i64::from(rect.right) - i64::from(rect.left),
-        i64::from(rect.bottom) - i64::from(rect.top),
-    );
-    // Twice each pixel centre's offset from the oval's centre, scaled so
-    // the test stays in whole numbers.
-    let inside = |x: i32, y: i32| {
-        let dx = 2 * (i64::from(x) - i64::from(rect.left)) + 1 - width;
-        let dy = 2 * (i64::from(y) - i64::from(rect.top)) + 1 - height;
-        dx * dx * height * height + dy * dy * width * width <= width * width * height * height
-    };
-    let mut pixels = Vec::new();
-    for y in rect.top..rect.bottom {
-        for x in rect.left..rect.right {
-            let edge = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
-                .into_iter()
-                .any(|(x, y)| !inside(x, y));
-            if inside(x, y) && edge {
-                pixels.push((x, y));
-            }
-        }
-    }
-    pixels
 }
 
 /// The face flight messages are drawn in. `_DisplayComm` (@0x90201) is
@@ -1101,50 +1069,6 @@ mod tests {
 
     // The radar.
 
-    #[test]
-    fn small_ovals_frame_every_pixel_and_a_four_pixel_one_leaves_its_corners() {
-        assert_eq!(
-            oval_frame_pixels(IRect::new(10, 20, 12, 22)),
-            [(10, 20), (11, 20), (10, 21), (11, 21)]
-        );
-        assert_eq!(
-            oval_frame_pixels(IRect::new(0, 0, 4, 4)),
-            [
-                (1, 0),
-                (2, 0),
-                (0, 1),
-                (3, 1),
-                (0, 2),
-                (3, 2),
-                (1, 3),
-                (2, 3)
-            ]
-        );
-    }
-
-    #[test]
-    fn a_six_pixel_oval_is_rounded() {
-        // Rows 0 and 5 run from 1 to 4; rows 1 to 4 are their ends alone.
-        let mut expected = vec![(1, 0), (2, 0), (3, 0), (4, 0)];
-        for y in 1..5 {
-            expected.extend([(0, y), (5, y)]);
-        }
-        expected.extend([(1, 5), (2, 5), (3, 5), (4, 5)]);
-        assert_eq!(oval_frame_pixels(IRect::new(0, 0, 6, 6)), expected);
-    }
-
-    #[test]
-    fn a_clipped_oval_is_squashed_into_its_rect() {
-        // 3 across and 6 down: a point at each end, the sides between.
-        let mut expected = vec![(101, 0)];
-        for y in 1..5 {
-            expected.extend([(100, y), (102, y)]);
-        }
-        expected.push((101, 5));
-        assert_eq!(oval_frame_pixels(IRect::new(100, 0, 103, 6)), expected);
-        assert_eq!(oval_frame_pixels(IRect::new(0, 0, 0, 6)), []);
-    }
-
     // Drawing.
 
     fn reserves(shield: f32, armor: f32, fuel: f32) -> Reserves {
@@ -1531,7 +1455,7 @@ mod tests {
         for (x, y) in [(935, 95), (936, 95), (935, 96), (936, 96)] {
             expected.dot(pixel_at(x, y), 1.0, DIM_RADAR);
         }
-        for (x, y) in oval_frame_pixels(IRect::new(921, 93, 927, 99)) {
+        for (x, y) in oval_frame_pixels(IRect::new(921, 93, 927, 99), 1) {
             expected.dot(pixel_at(x, y), 1.0, DIM_RADAR);
         }
         expected.dot(pixel_at(921, 96), 1.0, DIM_RADAR);

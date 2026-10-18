@@ -64,6 +64,14 @@ pub enum Blend {
     ///   to 5 bits as well would posterise every such pixel under the
     ///   layer's black area, which is the whole ship frame.
     Or,
+    /// Takes, in each colour channel, the larger of its colour (scaled by
+    /// its alpha) and what is beneath, and keeps the destination's alpha. A
+    /// transparent texel scales to black, so it leaves what is beneath as it
+    /// is. This is QuickDraw's `addMax` transfer mode (`CopyBits` mode
+    /// 0x25), which `_MapDialogUpdate` copies each map nebula with (0xfc42),
+    /// so overlapping nebulae, and the borders under them, take the
+    /// brighter of each channel.
+    Max,
 }
 
 /// One thing to draw, in logical coordinates.
@@ -101,6 +109,23 @@ pub enum DrawCommand {
         width: f32,
         /// The rectangle's height.
         height: f32,
+    },
+    /// A picture stretched (or shrunk) to fill a rectangle, untinted, and
+    /// combined with what is beneath by `blend`. It follows
+    /// [`DrawCommand::StretchedPicture`]'s rules: a rectangle whose width or
+    /// height is not a positive, finite number draws nothing. A
+    /// `StretchedPicture` is this with [`Blend::Normal`].
+    BlendedPicture {
+        /// The picture.
+        image: ImageKey,
+        /// The rectangle's top-left corner.
+        top_left: Point,
+        /// The rectangle's width.
+        width: f32,
+        /// The rectangle's height.
+        height: f32,
+        /// How it combines with what is beneath it.
+        blend: Blend,
     },
     /// A picture repeated edge to edge from the screen's origin, (0, 0),
     /// as QuickDraw's `FillCRect` tiles a pattern from the port's origin,
@@ -146,6 +171,17 @@ pub enum DrawCommand {
         size: f32,
         /// Its colour.
         color: Color,
+    },
+    /// `command` drawn only inside `clip`: a text run cut to it, a
+    /// sprite's or picture's quad cropped to it with its texture
+    /// coordinates, a tiled picture's area cut to it. A line or a dot is
+    /// drawn as it is, uncut. The floating map clips its names and arrows
+    /// to its frame so.
+    Clipped {
+        /// Where it may draw.
+        clip: Bounds,
+        /// What it draws.
+        command: Box<DrawCommand>,
     },
 }
 
@@ -236,6 +272,24 @@ impl DrawList {
         })
     }
 
+    /// Appends a [`DrawCommand::BlendedPicture`].
+    pub fn blended_picture(
+        &mut self,
+        image: ImageKey,
+        top_left: Point,
+        width: f32,
+        height: f32,
+        blend: Blend,
+    ) -> &mut Self {
+        self.push(DrawCommand::BlendedPicture {
+            image,
+            top_left,
+            width,
+            height,
+            blend,
+        })
+    }
+
     /// Appends a [`DrawCommand::TiledPicture`].
     pub fn tiled_picture(&mut self, image: ImageKey, area: Bounds) -> &mut Self {
         self.push(DrawCommand::TiledPicture { image, area })
@@ -289,6 +343,14 @@ impl DrawList {
             center,
             size,
             color,
+        })
+    }
+
+    /// Appends `command` drawn only inside `clip` ([`DrawCommand::Clipped`]).
+    pub fn clipped(&mut self, clip: Bounds, command: DrawCommand) -> &mut Self {
+        self.push(DrawCommand::Clipped {
+            clip,
+            command: Box::new(command),
         })
     }
 }
@@ -584,6 +646,31 @@ mod tests {
                 top_left: at(-3.5, 20.0),
                 width: 188.25,
                 height: 223.5
+            }
+        );
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn a_blended_picture_keeps_its_rectangle_and_its_blend() {
+        let mut list = DrawList::new();
+        list.blended_picture(
+            ImageKey::picture(9502),
+            at(-3.5, 20.0),
+            188.25,
+            223.5,
+            Blend::Max,
+        )
+        .picture(ImageKey::picture(1), at(0.0, 0.0));
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            *commands[0],
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(9502),
+                top_left: at(-3.5, 20.0),
+                width: 188.25,
+                height: 223.5,
+                blend: Blend::Max,
             }
         );
         assert_eq!(list.len(), 2);

@@ -10,7 +10,7 @@ use nova_view::{Blend, Color, DrawCommand, DrawList, ImageKey, ImageKind, Point}
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
 use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 use crate::images::{ImageError, ImageSource};
-use crate::viewport::Viewport;
+use crate::viewport::{PixelRect, Viewport};
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -81,100 +81,9 @@ impl<S: ImageSource> Renderer<S> {
             return report;
         };
         let mut batches: Vec<Batch> = Vec::new();
+        let target = Target { rect, scale };
         for command in list {
-            match *command {
-                DrawCommand::Sprite {
-                    image,
-                    center,
-                    tint,
-                    blend,
-                } => {
-                    if let Some(entry) = self.entry(image, gpu, &mut report) {
-                        let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
-                        let dest = Rect {
-                            x: center.x - w / 2.0,
-                            y: center.y - h / 2.0,
-                            w,
-                            h,
-                        };
-                        push_quad(&mut batches, &entry, dest, tint, blend);
-                    }
-                }
-                DrawCommand::Picture { image, top_left } => {
-                    let picture = (image, top_left, None);
-                    self.push_picture(&mut batches, picture, gpu, &mut report);
-                }
-                DrawCommand::StretchedPicture {
-                    image,
-                    top_left,
-                    width,
-                    height,
-                } => {
-                    // A rectangle with no drawable size draws nothing, so
-                    // its picture is not even loaded.
-                    if drawable(width) && drawable(height) {
-                        let picture = (image, top_left, Some((width, height)));
-                        self.push_picture(&mut batches, picture, gpu, &mut report);
-                    }
-                }
-                DrawCommand::TiledPicture { image, area } => {
-                    // An area with no drawable size draws nothing, so its
-                    // picture is not even loaded.
-                    if drawable(area.width())
-                        && drawable(area.height())
-                        && let Some(entry) = self.entry(image, gpu, &mut report)
-                    {
-                        push_tiles(&mut batches, &entry, area);
-                    }
-                }
-                DrawCommand::Text {
-                    ref text,
-                    font,
-                    origin,
-                    size,
-                    wrap_width,
-                    color,
-                } => {
-                    let size_px = size * scale;
-                    let line_height_px = LINE_HEIGHT * size_px;
-                    // Text with nothing in it draws nothing. Nor does text
-                    // whose size is zero, negative, NaN or too big to give
-                    // a finite line height in pixels, and the text shaper
-                    // would panic on some of those, so skip both.
-                    if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
-                        continue;
-                    }
-                    let run = TextRun {
-                        text: text.clone(),
-                        font,
-                        origin_px: (
-                            rect.x as f32 + origin.x * scale,
-                            rect.y as f32 + origin.y * scale,
-                        ),
-                        size_px,
-                        line_height_px,
-                        wrap_px: wrap_width.map(|w| w * scale),
-                        color,
-                        clip: rect,
-                    };
-                    if let Some(Batch::Text(runs)) = batches.last_mut() {
-                        runs.push(run);
-                    } else {
-                        batches.push(Batch::Text(vec![run]));
-                    }
-                }
-                DrawCommand::Line {
-                    from,
-                    to,
-                    width,
-                    color,
-                } => push_solid(&mut batches, line_corners(from, to, width), color),
-                DrawCommand::Dot {
-                    center,
-                    size,
-                    color,
-                } => push_solid(&mut batches, square(center, size), color),
-            }
+            self.draw(command, None, target, &mut batches, gpu, &mut report);
         }
         gpu.submit(&Frame {
             target: viewport.window_px(),
@@ -186,12 +95,171 @@ impl<S: ImageSource> Renderer<S> {
         report
     }
 
+    /// Appends `command`'s batches, drawn only inside `clip` when it is
+    /// given (see [`DrawCommand::Clipped`]).
+    #[allow(clippy::too_many_lines)] // one arm for each command
+    fn draw(
+        &mut self,
+        command: &DrawCommand,
+        clip: Option<Bounds>,
+        target: Target,
+        batches: &mut Vec<Batch>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        let Target { rect, scale } = target;
+        match *command {
+            DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            } => {
+                if let Some(entry) = self.entry(image, gpu, report) {
+                    let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
+                    let dest = Rect {
+                        x: center.x - w / 2.0,
+                        y: center.y - h / 2.0,
+                        w,
+                        h,
+                    };
+                    if let Some((entry, dest)) = cropped(&entry, dest, clip) {
+                        push_quad(batches, &entry, dest, tint, blend);
+                    }
+                }
+            }
+            DrawCommand::Picture { image, top_left } => {
+                let picture = (image, top_left, None);
+                self.push_picture(batches, picture, Blend::Normal, clip, gpu, report);
+            }
+            DrawCommand::StretchedPicture {
+                image,
+                top_left,
+                width,
+                height,
+            } => {
+                let picture = (image, top_left, (width, height));
+                self.push_stretched(batches, picture, Blend::Normal, clip, gpu, report);
+            }
+            DrawCommand::BlendedPicture {
+                image,
+                top_left,
+                width,
+                height,
+                blend,
+            } => {
+                let picture = (image, top_left, (width, height));
+                self.push_stretched(batches, picture, blend, clip, gpu, report);
+            }
+            DrawCommand::TiledPicture { image, area } => {
+                let area = match clip {
+                    Some(clip) => meet(area, clip),
+                    None => Some(area),
+                };
+                // An area with no drawable size draws nothing, so its
+                // picture is not even loaded.
+                if let Some(area) = area
+                    && drawable(area.width())
+                    && drawable(area.height())
+                    && let Some(entry) = self.entry(image, gpu, report)
+                {
+                    push_tiles(batches, &entry, area);
+                }
+            }
+            DrawCommand::Text {
+                ref text,
+                font,
+                origin,
+                size,
+                wrap_width,
+                color,
+            } => {
+                let size_px = size * scale;
+                let line_height_px = LINE_HEIGHT * size_px;
+                // Text with nothing in it draws nothing. Nor does text
+                // whose size is zero, negative, NaN or too big to give
+                // a finite line height in pixels, and the text shaper
+                // would panic on some of those, so skip both.
+                if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
+                    return;
+                }
+                let Some(clip) = clip.map_or(Some(rect), |clip| pixel_clip(rect, scale, clip))
+                else {
+                    return;
+                };
+                let run = TextRun {
+                    text: text.clone(),
+                    font,
+                    origin_px: (
+                        rect.x as f32 + origin.x * scale,
+                        rect.y as f32 + origin.y * scale,
+                    ),
+                    size_px,
+                    line_height_px,
+                    wrap_px: wrap_width.map(|w| w * scale),
+                    color,
+                    clip,
+                };
+                if let Some(Batch::Text(runs)) = batches.last_mut() {
+                    runs.push(run);
+                } else {
+                    batches.push(Batch::Text(vec![run]));
+                }
+            }
+            DrawCommand::Line {
+                from,
+                to,
+                width,
+                color,
+            } => push_solid(batches, line_corners(from, to, width), color),
+            DrawCommand::Dot {
+                center,
+                size,
+                color,
+            } => push_solid(batches, square(center, size), color),
+            DrawCommand::Clipped {
+                clip: inner,
+                ref command,
+            } => {
+                let clip = match clip {
+                    Some(outer) => meet(outer, inner),
+                    None => Some(inner),
+                };
+                // A clip with no area draws nothing at all.
+                if let Some(clip) = clip {
+                    self.draw(command, Some(clip), target, batches, gpu, report);
+                }
+            }
+        }
+    }
+
+    /// Appends a stretched picture's quad, `(image, top_left, size)`,
+    /// combined by `blend`. A rectangle with no drawable size draws
+    /// nothing, so its picture is not even loaded.
+    fn push_stretched(
+        &mut self,
+        batches: &mut Vec<Batch>,
+        (image, top_left, (width, height)): (ImageKey, Point, (f32, f32)),
+        blend: Blend,
+        clip: Option<Bounds>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        if drawable(width) && drawable(height) {
+            let picture = (image, top_left, Some((width, height)));
+            self.push_picture(batches, picture, blend, clip, gpu, report);
+        }
+    }
+
     /// Appends a picture's quad: `(image, top_left, size)`, drawn at `size`
-    /// when given and at the picture's own size otherwise.
+    /// when given and at the picture's own size otherwise, combined by
+    /// `blend`.
     fn push_picture(
         &mut self,
         batches: &mut Vec<Batch>,
         (image, top_left, size): (ImageKey, Point, Option<(f32, f32)>),
+        blend: Blend,
+        clip: Option<Bounds>,
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) {
@@ -203,7 +271,9 @@ impl<S: ImageSource> Renderer<S> {
                 w,
                 h,
             };
-            push_quad(batches, &entry, dest, Color::WHITE, Blend::Normal);
+            if let Some((entry, dest)) = cropped(&entry, dest, clip) {
+                push_quad(batches, &entry, dest, Color::WHITE, blend);
+            }
         }
     }
 
@@ -259,6 +329,75 @@ impl<S: ImageSource> Renderer<S> {
             ),
         }
     }
+}
+
+/// Where a frame draws: the viewport's content rect in window pixels, and
+/// how many pixels a logical unit is.
+#[derive(Clone, Copy, Debug)]
+struct Target {
+    rect: PixelRect,
+    scale: f32,
+}
+
+/// Where `a` and `b` overlap, if they share any area.
+fn meet(a: Bounds, b: Bounds) -> Option<Bounds> {
+    let min = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y));
+    let max = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y));
+    (min.x < max.x && min.y < max.y).then_some(Bounds { min, max })
+}
+
+/// `entry`'s quad at `dest` cropped to `clip`, its texture coordinates
+/// cut to match; as it is with no clip, and none when nothing of it is
+/// inside.
+fn cropped(entry: &AtlasEntry, dest: Rect, clip: Option<Bounds>) -> Option<(AtlasEntry, Rect)> {
+    let Some(clip) = clip else {
+        return Some((*entry, dest));
+    };
+    let whole = Bounds {
+        min: Point::new(dest.x, dest.y),
+        max: Point::new(dest.x + dest.w, dest.y + dest.h),
+    };
+    let kept = meet(whole, clip)?;
+    if kept == whole {
+        return Some((*entry, dest));
+    }
+    let uv = entry.uv;
+    let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
+    let u = |x: f32| (x - dest.x) / dest.w * du + uv.u0;
+    let v = |y: f32| (y - dest.y) / dest.h * dv + uv.v0;
+    let cut = AtlasEntry {
+        uv: Uv {
+            u0: u(kept.min.x),
+            v0: v(kept.min.y),
+            u1: u(kept.max.x),
+            v1: v(kept.max.y),
+        },
+        ..*entry
+    };
+    let dest = Rect {
+        x: kept.min.x,
+        y: kept.min.y,
+        w: kept.width(),
+        h: kept.height(),
+    };
+    Some((cut, dest))
+}
+
+/// `clip`, in logical units, as window pixels inside `rect`, the
+/// viewport's content at `scale`, each edge rounded to the nearest
+/// pixel; none when nothing of it is inside.
+fn pixel_clip(rect: PixelRect, scale: f32, clip: Bounds) -> Option<PixelRect> {
+    let to_px = |origin: u32, logical: f32| (origin as f32 + logical * scale).round();
+    let left = to_px(rect.x, clip.min.x).max(rect.x as f32);
+    let top = to_px(rect.y, clip.min.y).max(rect.y as f32);
+    let right = to_px(rect.x, clip.max.x).min((rect.x + rect.w) as f32);
+    let bottom = to_px(rect.y, clip.max.y).min((rect.y + rect.h) as f32);
+    (left < right && top < bottom).then_some(PixelRect {
+        x: left as u32,
+        y: top as u32,
+        w: (right - left) as u32,
+        h: (bottom - top) as u32,
+    })
 }
 
 /// Whether a side `side` long can be drawn: a positive, finite number.
@@ -1090,6 +1229,161 @@ mod tests {
     }
 
     #[test]
+    fn a_max_picture_lowers_to_a_max_batch_at_its_rectangle() {
+        let mut list = DrawList::new();
+        list.blended_picture(ImageKey::picture(128), at(-2.5, 3.0), 20.0, 1.5, Blend::Max);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Max,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: -2.5,
+                        y: 3.0,
+                        w: 20.0,
+                        h: 1.5,
+                    },
+                    uv: uv(0, 0, 8, 4),
+                    tint: WHITE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_max_picture_after_a_solid_keeps_its_place() {
+        let mut list = DrawList::new();
+        list.dot(at(5.0, 5.0), 4.0, Color::WHITE).blended_picture(
+            ImageKey::picture(128),
+            at(0.0, 0.0),
+            16.0,
+            8.0,
+            Blend::Max,
+        );
+
+        let frame = render_one(&list, &viewport());
+
+        let kinds: Vec<Option<Blend>> = frame
+            .batches
+            .iter()
+            .map(|batch| match batch {
+                Batch::Sprites { blend, .. } => Some(*blend),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, [None, Some(Blend::Max)]);
+        assert!(matches!(frame.batches[0], Batch::Solid(_)));
+    }
+
+    #[test]
+    fn overlapping_max_pictures_share_a_batch() {
+        // A fixed-function max sees earlier quads of the same draw, so it
+        // needs no split as OR's copy of what is beneath does.
+        let mut list = DrawList::new();
+        for x in [0.0, 4.0, 8.0] {
+            list.blended_picture(ImageKey::picture(128), at(x, 0.0), 16.0, 8.0, Blend::Max);
+        }
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(sprite_blends(&frame), [(Blend::Max, 3)]);
+    }
+
+    #[test]
+    fn a_blended_picture_lowers_to_its_own_blend() {
+        let mut list = DrawList::new();
+        for (y, blend) in [
+            (0.0, Blend::Normal),
+            (10.0, Blend::Additive),
+            (20.0, Blend::Or),
+            (30.0, Blend::Max),
+        ] {
+            list.blended_picture(ImageKey::picture(128), at(0.0, y), 16.0, 8.0, blend);
+        }
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [
+                (Blend::Normal, 1),
+                (Blend::Additive, 1),
+                (Blend::Or, 1),
+                (Blend::Max, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clipped_max_picture_is_cropped_with_its_texture_coordinates() {
+        // 8x4 stretched to 16x8: each texel two units wide and tall.
+        let mut list = DrawList::new();
+        list.clipped(
+            bounds(4.0, 2.0, 40.0, 40.0),
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(128),
+                top_left: at(0.0, 0.0),
+                width: 16.0,
+                height: 8.0,
+                blend: Blend::Max,
+            },
+        );
+
+        let frame = render_one(&list, &viewport());
+
+        let page = 64.0;
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Max,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: 4.0,
+                        y: 2.0,
+                        w: 12.0,
+                        h: 6.0,
+                    },
+                    uv: Uv {
+                        u0: 2.0 / page,
+                        v0: 1.0 / page,
+                        u1: 8.0 / page,
+                        v1: 4.0 / page,
+                    },
+                    tint: WHITE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_blended_picture_with_no_drawable_size_draws_and_loads_nothing() {
+        let mut list = DrawList::new();
+        for (w, h) in [
+            (0.0, 4.0),
+            (4.0, 0.0),
+            (-1.0, 4.0),
+            (4.0, -1.0),
+            (f32::NAN, 4.0),
+            (4.0, f32::INFINITY),
+        ] {
+            list.blended_picture(ImageKey::picture(128), at(0.0, 0.0), w, h, Blend::Max);
+        }
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+        assert_eq!(renderer.images().calls(), []);
+    }
+
+    #[test]
     fn failures_are_skipped_and_reported_once() {
         let images = images().with(
             ImageKind::Rled,
@@ -1276,6 +1570,247 @@ mod tests {
                 },
             ])]
         );
+    }
+
+    fn bounds(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+        Bounds {
+            min: at(left, top),
+            max: at(right, bottom),
+        }
+    }
+
+    #[test]
+    fn a_clipped_text_run_is_cut_to_its_clip_in_pixels() {
+        let mut list = DrawList::new();
+        let text = DrawCommand::Text {
+            text: "Sol".to_owned(),
+            font: Font::Geneva,
+            origin: at(1.0, 2.0),
+            size: 8.0,
+            wrap_width: None,
+            color: Color::WHITE,
+        };
+        list.clipped(bounds(10.0, 5.25, 30.0, 70.0), text.clone())
+            .clipped(bounds(70.0, 0.0, 90.0, 10.0), text);
+
+        let frame = render_one(&list, &viewport());
+
+        let [Batch::Text(runs)] = frame.batches.as_slice() else {
+            panic!("one text batch: {frame:?}");
+        };
+        assert_eq!(runs.len(), 1, "the clip off the viewport drops its run");
+        assert_eq!(runs[0].origin_px, (2.0, 4.0));
+        assert_eq!(
+            runs[0].clip,
+            rect(20, 11, 40, 85),
+            "rounded to pixels, and cut to the viewport"
+        );
+    }
+
+    #[test]
+    fn a_clipped_picture_is_cropped_with_its_texture_coordinates() {
+        let mut list = DrawList::new();
+        let picture = DrawCommand::Picture {
+            image: ImageKey::picture(128),
+            top_left: at(10.0, 20.0),
+        };
+        list.clipped(bounds(12.0, 21.0, 40.0, 40.0), picture.clone())
+            .clipped(bounds(0.0, 0.0, 40.0, 40.0), picture.clone())
+            .clipped(bounds(30.0, 30.0, 40.0, 40.0), picture);
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        assert_eq!(
+            quads.as_slice(),
+            [
+                QuadInstance {
+                    dest: Rect {
+                        x: 12.0,
+                        y: 21.0,
+                        w: 6.0,
+                        h: 3.0,
+                    },
+                    uv: Uv {
+                        u0: 2.0 / page,
+                        v0: 1.0 / page,
+                        u1: 8.0 / page,
+                        v1: 4.0 / page,
+                    },
+                    tint: WHITE,
+                },
+                QuadInstance {
+                    dest: Rect {
+                        x: 10.0,
+                        y: 20.0,
+                        w: 8.0,
+                        h: 4.0,
+                    },
+                    uv: uv(0, 0, 8, 4),
+                    tint: WHITE,
+                },
+            ],
+            "whole inside its clip, as it is; wholly outside, nothing"
+        );
+    }
+
+    #[test]
+    fn a_clip_that_only_touches_or_misses_one_axis_draws_nothing() {
+        let mut list = DrawList::new();
+        let picture = DrawCommand::Picture {
+            image: ImageKey::picture(128),
+            top_left: at(10.0, 20.0),
+        };
+        // The 8 x 4 picture covers (10, 20)-(18, 24).
+        for clip in [
+            bounds(18.0, 0.0, 40.0, 40.0),
+            bounds(0.0, 24.0, 40.0, 40.0),
+            bounds(12.0, 30.0, 16.0, 40.0),
+            bounds(30.0, 21.0, 40.0, 23.0),
+        ] {
+            list.clipped(clip, picture.clone());
+        }
+        list.clipped(bounds(10.0, 0.0, 10.2, 40.0), text_at(at(1.0, 2.0)))
+            .clipped(bounds(0.0, 10.0, 40.0, 10.2), text_at(at(1.0, 2.0)));
+
+        let frame = render_one_with(images(), &list);
+
+        assert_eq!(frame.batches, [], "no area left, in pixels too");
+    }
+
+    fn text_at(origin: Point) -> DrawCommand {
+        DrawCommand::Text {
+            text: "Sol".to_owned(),
+            font: Font::Geneva,
+            origin,
+            size: 8.0,
+            wrap_width: None,
+            color: Color::WHITE,
+        }
+    }
+
+    #[test]
+    fn a_cropped_quad_keeps_its_place_on_the_page() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0)).clipped(
+            bounds(0.0, 0.0, 30.0, 40.0),
+            DrawCommand::Sprite {
+                image: ImageKey::sprite(200, 1),
+                center: at(30.0, 40.0),
+                tint: Color::WHITE,
+                blend: Blend::Normal,
+            },
+        );
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        // Frame 1 is at (6, 5) on the page, under the picture's shelf.
+        assert_eq!(
+            quads[1].uv,
+            Uv {
+                u0: 6.0 / page,
+                v0: 5.0 / page,
+                u1: 8.5 / page,
+                v1: 8.0 / page,
+            }
+        );
+    }
+
+    #[test]
+    fn a_clipped_sprite_is_cropped_and_keeps_its_tint() {
+        let mut list = DrawList::new();
+        let tint = Color::rgba(255, 255, 255, 128);
+        let sprite = DrawCommand::Sprite {
+            image: ImageKey::sprite(200, 0),
+            center: at(30.0, 40.0),
+            tint,
+            blend: Blend::Normal,
+        };
+        list.clipped(bounds(0.0, 0.0, 30.0, 40.0), sprite);
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }] = frame.batches.as_slice() else {
+            panic!("one sprite batch: {frame:?}");
+        };
+        let page = 64.0;
+        assert_eq!(
+            quads[0].dest,
+            Rect {
+                x: 27.5,
+                y: 37.0,
+                w: 2.5,
+                h: 3.0,
+            }
+        );
+        assert_eq!(
+            quads[0].uv,
+            Uv {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 2.5 / page,
+                v1: 3.0 / page,
+            },
+            "the sheet alone on its page, its first frame at the corner"
+        );
+        assert_eq!(quads[0].tint, [1.0, 1.0, 1.0, 128.0 / 255.0]);
+    }
+
+    #[test]
+    fn clips_meet_and_lines_and_dots_are_not_cut() {
+        let mut list = DrawList::new();
+        let mut inner = DrawList::new();
+        inner.clipped(
+            bounds(20.0, 0.0, 64.0, 48.0),
+            DrawCommand::TiledPicture {
+                image: ImageKey::picture(128),
+                area: bounds(0.0, 0.0, 64.0, 48.0),
+            },
+        );
+        let nested = inner.iter().next().cloned().expect("one");
+        list.clipped(bounds(0.0, 0.0, 28.0, 4.0), nested).clipped(
+            bounds(0.0, 0.0, 1.0, 1.0),
+            DrawCommand::Line {
+                from: at(0.0, 10.0),
+                to: at(10.0, 10.0),
+                width: 2.0,
+                color: Color::WHITE,
+            },
+        );
+
+        let frame = render_one_with(images(), &list);
+
+        let [Batch::Sprites { quads, .. }, Batch::Solid(solids)] = frame.batches.as_slice() else {
+            panic!("tiles then a line: {frame:?}");
+        };
+        let dests: Vec<Rect> = quads.iter().map(|quad| quad.dest).collect();
+        assert_eq!(
+            dests,
+            [
+                Rect {
+                    x: 20.0,
+                    y: 0.0,
+                    w: 4.0,
+                    h: 4.0,
+                },
+                Rect {
+                    x: 24.0,
+                    y: 0.0,
+                    w: 4.0,
+                    h: 4.0,
+                },
+            ],
+            "the tiles in both clips"
+        );
+        assert_eq!(solids.len(), 1, "the line drawn whole");
+        assert_eq!(solids[0].corners[0], at(0.0, 11.0));
     }
 
     #[test]

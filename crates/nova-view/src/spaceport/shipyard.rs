@@ -57,7 +57,7 @@
 //! again. Without the "Text Input" dialog, the prompt is laid out by
 //! [`TextInputDialog::fallback`].
 //!
-//! Info, clicked or with I, opens the "Shipyard Info" panel (`DLOG`/`DITL`
+//! Info, clicked or with Space ([`INFO_KEY`]), opens the "Shipyard Info" panel (`DLOG`/`DITL`
 //! 1005 over `PICT` 8506) over the shipyard: the ship's name in item 3,
 //! and in item 5 what `_ShipDescDialogUpdate` draws (@0x4fb4a-0x50f17),
 //! each text placed by its baseline ([`spec_lines`]). Two columns of a
@@ -112,8 +112,11 @@
 //! ([`ShipyardScreen::rearm`]) with the gap drawn, after which it asks
 //! again (`_ShipyardFilter` @0x60de5-0x60e1f). The offer takes every
 //! input while it is open, and its choice is taken through the screen
-//! ([`ShipyardScreen::take_offer_choice`]). The wait runs down only while
-//! neither the info panel, the name prompt nor an offer is open.
+//! ([`ShipyardScreen::take_offer_choice`]). The info panel and the name
+//! prompt cover the shipyard, as the offer does: nothing is asked while
+//! any is open, and the wait runs on or stops as
+//! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
+//! ([`ShipyardScreen::with_offer_clock`]).
 //!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
@@ -123,7 +126,8 @@ use std::time::Duration;
 
 use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{
-    MissionId, OfferPrompt, Rating, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard, StockLine,
+    MissionId, OfferPrompt, Rating, RuleSource, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard,
+    StockLine,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -134,7 +138,7 @@ use super::grid::{
 };
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
-use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -142,12 +146,15 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
@@ -205,13 +212,18 @@ pub const TITLE_BASELINE: f32 = 18.0;
 /// @0x50fd0-0x51043).
 pub const PANEL_GRAPHIC_ITEM: usize = 7;
 /// The highest description `Graphic` that shows no picture: the engine
-/// shows one only above it (`_DoShipyardDescription` @0x5b6db-0x5b6e4).
-pub const LAST_UNSHOWN_GRAPHIC: i16 = 127;
+/// shows one only above it (`_DoShipyardDescription` @0x5b6db-0x5b6e4),
+/// as it does for every `dësc`.
+pub use crate::ui::desc::LAST_UNSHOWN_GRAPHIC;
 
 /// Buys the selected ship, as Buy Ship does: the original's default.
 pub const BUY_KEY: Key = Key::Char('b');
-/// Opens the info panel, as Info does.
-pub const INFO_KEY: Key = Key::Char('i');
+/// Opens the info panel, as Info does: Space, which `_ShipyardFilter`
+/// maps to item 10 (@0x60526-0x60537). Nothing in it reads I, which asks
+/// for the mission info screen
+/// ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), pref
+/// +0x50 @0x60947-0x6096d).
+pub const INFO_KEY: Key = Key::Space;
 
 /// The first ship's `PICT`; ship n's is n - 128 after it.
 pub const FIRST_SHIP_PICTURE: i16 = 5000;
@@ -398,15 +410,10 @@ impl InfoVariant {
 /// `exists` is asked only above 127.
 #[must_use]
 pub fn info_variant(graphic: Option<i16>, exists: impl Fn(i16) -> bool) -> InfoVariant {
-    match graphic {
-        Some(id) if id > LAST_UNSHOWN_GRAPHIC => {
-            if exists(id) {
-                InfoVariant::Picture(id)
-            } else {
-                InfoVariant::MissingPicture
-            }
-        }
-        _ => InfoVariant::Plain,
+    match shown_graphic(graphic) {
+        Some(id) if exists(id) => InfoVariant::Picture(id),
+        Some(_) => InfoVariant::MissingPicture,
+        None => InfoVariant::Plain,
     }
 }
 
@@ -420,15 +427,22 @@ pub struct InfoTemplates {
     pub picture: Result<DialogTemplate, String>,
 }
 
+impl VariantTemplates for InfoTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
+
 impl InfoTemplates {
     /// The template of `variant`'s dialog, if it is there.
     fn of(&self, variant: InfoVariant) -> Option<&DialogTemplate> {
-        let template = if variant.dialog() == SHIP_PICTURE_INFO_DIALOG {
-            &self.picture
-        } else {
-            &self.plain
-        };
-        template.as_ref().ok()
+        self.template(variant.dialog() == SHIP_PICTURE_INFO_DIALOG)
+            .as_ref()
+            .ok()
     }
 }
 
@@ -736,12 +750,10 @@ impl Panel {
         &self.dialog
     }
 
-    /// Its input, its sounds added to `sounds`: whether Done, Return or
-    /// Escape closed it.
-    pub(super) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
-        let event = self.dialog.input(input);
-        sounds.extend(self.dialog.take_sound().map(Sound::Ui));
-        event == Some(DialogEvent::Item(PANEL_DONE_ITEM))
+    /// Its input, silent under the pointer as `_TrackShipyardButtons`
+    /// @0x2a54e: whether Done, Return or Escape closed it.
+    pub(super) fn input(&mut self, input: &Input) -> bool {
+        self.dialog.input(input) == Some(DialogEvent::Item(PANEL_DONE_ITEM))
     }
 
     /// Abandons any click in progress on it.
@@ -757,12 +769,8 @@ impl Panel {
     pub(super) fn draw(&self, list: &mut DrawList, metrics: &dyn TextMetrics) {
         let bounds = self.dialog.bounds();
         if self.variant == InfoVariant::MissingPicture {
-            list.stretched_picture(
-                self.variant.background(),
-                bounds.min,
-                bounds.width(),
-                bounds.height(),
-            );
+            self.dialog
+                .draw_stretched_over(list, self.variant.background());
         } else {
             list.picture(self.variant.background(), bounds.min);
         }
@@ -803,11 +811,8 @@ impl Panel {
         {
             draw_weapons(list, metrics, area, heading, sentence.as_deref());
         }
-        if let (Some(id), Some(area)) = (
-            self.variant.graphic(),
-            self.dialog.item_bounds(PANEL_GRAPHIC_ITEM),
-        ) {
-            list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
+        if let Some(id) = self.variant.graphic() {
+            self.dialog.draw_picture_in(list, PANEL_GRAPHIC_ITEM, id);
         }
     }
 }
@@ -889,6 +894,17 @@ pub(super) fn open_panel(
     ))
 }
 
+/// The info screens the shipyard has asked for, until taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct InfoAsks {
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// asked for the player info screen.
+    player_info: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    mission_info: bool,
+}
+
 /// The Shipyard of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct ShipyardScreen {
@@ -917,9 +933,11 @@ pub struct ShipyardScreen {
     declined: Option<ShipId>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
-    player_info: bool,
+    /// The info screens asked for, until taken.
+    asks: InfoAsks,
     closed: bool,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
     sounds: Vec<Sound>,
 }
 
@@ -990,8 +1008,9 @@ impl ShipyardScreen {
             order: None,
             declined: None,
             offering: None,
-            player_info: false,
+            asks: InfoAsks::default(),
             closed: false,
+            description_request: None,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -999,14 +1018,25 @@ impl ShipyardScreen {
         screen
     }
 
-    /// The shipyard with mission offers, each shown in the offer dialog laid
-    /// out by `template` (or saying why there is none): it asks for the
+    /// The shipyard with mission offers, each shown in the offer dialog of
+    /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`ShipyardScreen::rearm`]), as
     /// the original's does ([`SHIPYARD`](nova_sim::mission::screens::SHIPYARD)).
     #[must_use]
-    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+    pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(template)),
+            offering: Some(VenueOffers::asking(templates)),
+            ..self
+        }
+    }
+
+    /// Its offers' timer running as `clock` reads
+    /// [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock), for offers
+    /// given ([`ShipyardScreen::with_offers`]) before it.
+    #[must_use]
+    pub fn with_offer_clock(self, clock: RuleSource) -> Self {
+        Self {
+            offering: self.offering.map(|offering| offering.with_clock(clock)),
             ..self
         }
     }
@@ -1020,7 +1050,24 @@ impl ShipyardScreen {
             .offering
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request);
-        std::mem::take(&mut self.player_info) || offer
+        std::mem::take(&mut self.asks.player_info) || offer
+    }
+
+    /// The mission of the offer open over it, when the offer's map key
+    /// asked for the map since this was last asked, once.
+    pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
+        self.offering.as_mut()?.take_map_request()
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.asks.mission_info) || offer
     }
 
     /// Whether the shipyard has asked for an offer since this was last
@@ -1053,10 +1100,33 @@ impl ShipyardScreen {
         self.offering.as_mut()?.take_choice()
     }
 
+    /// Lets go of its offer dialog answered and left drawn, if any
+    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
+    pub fn release_answered_offer(&mut self) {
+        if let Some(offering) = &mut self.offering {
+            offering.release_answered();
+        }
+    }
+
+    /// Its offers play their movies as `movies` says.
+    pub fn set_offer_movies(&mut self, movies: Movies) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies);
+        }
+    }
+
     /// Asks for the next offer after `gap`.
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Ticks only its offers' timer, as covered: something is open over
+    /// the shipyard.
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, true);
         }
     }
 
@@ -1155,6 +1225,36 @@ impl ShipyardScreen {
         self.naming.dialog()
     }
 
+    /// The `dësc` of the ship the shipyard has shown since this was last
+    /// taken, once, read raw until whoever flies the ship loads it as
+    /// `_ShipyardFilter` does (@0x607fc, @0x60c33) and answers with
+    /// `show_description`, in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the ship
+    /// shown, while it is the ship whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((ship, shown)),
+            ..
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if nova_data::ship_desc_id(*ship) == Some(id) {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
+    }
+
     /// The ship ordered at its name prompt since it was last taken, once.
     pub fn take_order(&mut self) -> Option<ShipOrder> {
         self.order.take()
@@ -1234,6 +1334,7 @@ impl ShipyardScreen {
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let description = nova_data::ship_desc_id(ship);
+        self.description_request = description;
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
         laid.shown = Some((ship, shown));
     }
@@ -1298,7 +1399,7 @@ impl ShipyardScreen {
         let Some(panel) = &mut self.panel else {
             return;
         };
-        if panel.input(input, &mut self.sounds) {
+        if panel.input(input) {
             self.panel = None;
         }
     }
@@ -1385,7 +1486,11 @@ impl Screen for ShipyardScreen {
             return ScreenAction::None;
         }
         if is_player_info_press(input) {
-            self.player_info = true;
+            self.asks.player_info = true;
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
+            self.asks.mission_info = true;
             return ScreenAction::None;
         }
         if self.panel.is_some() {
@@ -1415,7 +1520,6 @@ impl Screen for ShipyardScreen {
             self.select(index);
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
-            self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
                 self.activate(item);
             }
@@ -1423,14 +1527,12 @@ impl Screen for ShipyardScreen {
         ScreenAction::None
     }
 
-    /// The wait for the next offer runs down while neither the info
-    /// panel, the name prompt nor an offer is open.
+    /// The wait for the next offer runs down, the Info panel or the name
+    /// prompt covering the shipyard while either is open.
     fn tick(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering
-            && self.panel.is_none()
-            && !self.naming.is_open()
-        {
-            offering.tick(dt);
+        let covered = self.panel.is_some() || self.naming.is_open();
+        if let Some(offering) = &mut self.offering {
+            offering.tick(dt, covered);
         }
     }
 
@@ -1486,7 +1588,9 @@ impl Screen for ShipyardScreen {
         }
     }
 
-    /// The buttons' sounds, in order.
+    /// The offer's and the naming dialog's sounds, in order. The buttons
+    /// are silent under the pointer, as `_TrackShipyardButtons` @0x2a54e
+    /// plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -1644,6 +1748,11 @@ mod tests {
                 .iter()
                 .find(|(desc, _)| *desc == id)
                 .map(|(_, graphic)| *graphic)
+        }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+            None
         }
     }
 
@@ -1878,7 +1987,7 @@ mod tests {
             (PANEL_DONE_ITEM, PANEL_TITLE_ITEM, PANEL_TEXT_ITEM),
             (1, 3, 5)
         );
-        assert_eq!((BUY_KEY, INFO_KEY), (Key::Char('b'), Key::Char('i')));
+        assert_eq!((BUY_KEY, INFO_KEY), (Key::Char('b'), Key::Space));
         assert_eq!(FIRST_SHIP_PICTURE, 5000);
         assert_eq!(
             [BUY_SHIP_LABEL, INFO_LABEL, PRICE_LABEL, TRADE_IN_LABEL],
@@ -2162,6 +2271,22 @@ mod tests {
         press(&mut screen, Key::Right);
         let picture = item(&screen, PICTURE_ITEM);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
+    }
+
+    #[test]
+    fn each_description_read_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(screen.take_description_request(), Some(13000));
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(13000, "Loaded.");
+        assert!(words(&screen).contains(&"Loaded.".to_owned()));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.take_description_request(), Some(13001));
+        screen.show_description(13000, "Stale.");
+        assert!(
+            !words(&screen).contains(&"Stale.".to_owned()),
+            "not shown now"
+        );
     }
 
     #[test]
@@ -2643,15 +2768,13 @@ mod tests {
         assert_eq!(screen.take_declined(), None);
     }
 
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
     #[test]
-    fn ok_clicked_orders_the_ship_with_its_sounds() {
+    fn ok_clicked_orders_the_ship_silently() {
         let mut screen = naming_by_key();
         screen.take_sounds();
         naming_click(&mut screen, crate::ui::text_input::OK_ITEM);
-        assert_eq!(
-            screen.take_sounds(),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(
             screen.take_order(),
             Some(ShipOrder {
@@ -3138,17 +3261,9 @@ mod tests {
         click(&mut screen, done);
         assert!(screen.info_panel().is_none());
         assert!(!screen.closed());
-        assert_eq!(
-            screen.take_sounds(),
-            [
-                Sound::Ui(UiSound::ButtonDown),
-                Sound::Ui(UiSound::ButtonUp),
-                Sound::Ui(UiSound::ButtonDown),
-                Sound::Ui(UiSound::ButtonUp)
-            ]
-        );
+        assert_eq!(screen.take_sounds(), [], "Info and Done are silent");
         press(&mut screen, INFO_KEY);
-        assert!(screen.info_panel().is_some(), "I opens it");
+        assert!(screen.info_panel().is_some(), "Space opens it");
         screen.input(&key(INFO_KEY, true, true));
         assert!(screen.info_panel().is_some());
     }
@@ -3674,8 +3789,9 @@ mod tests {
         assert!(!held.closed());
     }
 
+    /// `_TrackShipyardButtons` @0x2a54e plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_cancelling_the_pointer_abandons_a_click() {
+    fn pointer_click_is_silent_as_the_original_and_cancelling_the_pointer_abandons_a_click() {
         let mut screen = screen();
         press(&mut screen, Key::Right);
         let buy = item(&screen, BUY_ITEM).center();
@@ -3685,7 +3801,7 @@ mod tests {
             at: buy,
         };
         screen.input(&button(true));
-        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(screen.take_sounds(), []);
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_request(), None);
@@ -3750,7 +3866,7 @@ mod tests {
     // The shipyard's mission offers.
 
     use crate::spaceport::offer::OfferChoice;
-    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+    use crate::spaceport::offer::fixture::{prompt, templates as offer_templates};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -3758,7 +3874,7 @@ mod tests {
 
     /// The shipyard, its offers given.
     fn offering() -> ShipyardScreen {
-        screen().with_offers(Ok(offer_template()))
+        screen().with_offers(offer_templates())
     }
 
     #[test]
@@ -3824,7 +3940,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_offer_choice(), None, "abandoned");
-        assert!(!screen.take_sounds().is_empty(), "its sounds go through");
+        assert_eq!(screen.take_sounds(), [], "silent under the pointer");
         screen.input(&button(true));
         screen.input(&button(false));
         assert_eq!(
@@ -3848,8 +3964,8 @@ mod tests {
     }
 
     #[test]
-    fn the_shipyard_does_not_count_down_while_its_info_panel_or_name_prompt_is_open() {
-        let mut screen = offering();
+    fn by_the_other_reading_the_shipyard_waits_out_its_info_panel_and_name_prompt() {
+        let mut screen = offering().with_offer_clock(RuleSource::Bible);
         assert!(screen.take_offer_request());
         screen.rearm(ms(600));
         press(&mut screen, INFO_KEY);
@@ -3872,5 +3988,132 @@ mod tests {
             screen.take_offer_request(),
             "the wait goes on once it closes"
         );
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_info_panel_or_name_prompt_is_asked_for_as_it_closes() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_some());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not under the info panel");
+        press(&mut screen, Key::Escape);
+        assert!(screen.info_panel().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+        screen.rearm(ms(600));
+        screen.open_naming(&naming());
+        assert!(screen.naming().is_some());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not under the name prompt");
+        naming_click(&mut screen, crate::ui::text_input::CANCEL_ITEM);
+        assert!(screen.naming().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    #[test]
+    fn the_shipyards_gap_runs_from_the_ask_by_the_engine_and_the_answer_by_the_other() {
+        for (clock, wait) in [(RuleSource::Engine, 200), (RuleSource::Bible, 600)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.open_offer(prompt());
+            screen.tick(ms(400));
+            press(&mut screen, Key::Enter);
+            assert!(screen.take_offer_choice().is_some());
+            screen.rearm(ms(600));
+            screen.tick(ms(wait - 1));
+            assert!(!screen.take_offer_request(), "{clock:?}");
+            screen.tick(ms(1));
+            assert!(screen.take_offer_request(), "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn covered_the_shipyard_runs_only_its_offer_clock() {
+        for (clock, asked) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut screen = offering().with_offer_clock(clock);
+            assert!(screen.take_offer_request());
+            screen.rearm(ms(600));
+            screen.tick_covered(ms(10_000));
+            assert!(!screen.take_offer_request(), "{clock:?}: covered");
+            screen.tick(ms(0));
+            assert_eq!(screen.take_offer_request(), asked, "{clock:?}");
+        }
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_shipyard_and_its_panel_not_its_prompt() {
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let mut screen = screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(screen.info_panel().is_none(), "I no longer opens the panel");
+        assert!(!screen.closed());
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_some(), "Space does");
+        press(&mut screen, i);
+        assert!(screen.take_info_request(), "the Info panel");
+        assert!(screen.info_panel().is_some(), "which stays open");
+        let mut screen = naming_by_key();
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the prompt takes it");
+        assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_nothing_without_the_dialog() {
+        let art = art();
+        let mut screen = ShipyardScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            Ok(text_input_template()),
+            shipyard(),
+            Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        assert!(!screen.take_info_request());
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
+    }
+
+    /// The original's `_ShipyardFilter` @0x60449 maps keys to items with no click sound; the arrows also cover `grid`.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            BUY_KEY,
+            INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
+        }
     }
 }

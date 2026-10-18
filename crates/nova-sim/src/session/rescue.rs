@@ -85,12 +85,9 @@
 //! **The search's galaxy** ([`SearchMap`], the [`EscapeMap`] port). A
 //! system's links are its raw `Con1-Con16` from the catalog's star map,
 //! not the resolved map's. A system is open while it is in the galaxy,
-//! visible ([`OverlaidGalaxy::visible`](crate::story::OverlaidGalaxy::visible))
-//! and explored ([`Pilot::has_explored`](crate::Pilot::has_explored)). The
-//! original also needs it known (+0x1ec, @0xd166), which the engine does
-//! not model yet
-//! (rdm:phase/crons-news-ranks-fidelity/phase-20-known-flag-on-the-map):
-//! until it does, every system reads as known. A stellar is active (+0x44)
+//! visible ([`OverlaidGalaxy::visible`](crate::story::OverlaidGalaxy::visible)),
+//! known (+0x1ec, @0xd166; [`Session::is_known`]) and explored
+//! ([`Pilot::has_explored`](crate::Pilot::has_explored)). A stellar is active (+0x44)
 //! while a visible system owns it
 //! ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)), as
 //! `_HandleStellarSystemVisibility` sets it from its owner's visibility
@@ -155,7 +152,10 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
 
     fn open(&self, system: SystemId) -> bool {
         let galaxy = &self.session.galaxy;
-        galaxy.exists(system) && galaxy.visible(system) && self.session.pilot.has_explored(system)
+        galaxy.exists(system)
+            && galaxy.visible(system)
+            && self.session.is_known(system)
+            && self.session.pilot.has_explored(system)
     }
 
     fn stellars(&self, system: SystemId) -> Vec<(StellarId, bool)> {
@@ -273,7 +273,7 @@ impl Session {
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
         // modules).
-        self.nav = crate::navigation::NavMode::Off;
+        self.set_nav(crate::navigation::NavMode::Off);
         self.dock = None;
         self.tutorial = crate::tutorial::Tutorial::SEASONED;
         self.secondary = None;
@@ -404,12 +404,29 @@ mod tests {
         catalog
     }
 
+    /// A session of `catalog` with `systems` explored too, known as the
+    /// next rebuild point works them out.
     fn explored(catalog: &FakePilotCatalog, systems: &[i16]) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         for &system in systems {
             session.pilot.explore(SystemId(system));
         }
+        session.rework_known();
         session
+    }
+
+    #[test]
+    fn the_search_map_closes_an_unknown_system() {
+        let catalog = galaxy();
+        let mut session = explored(&catalog, &[133]);
+        assert!(session.search_map(&catalog).open(SystemId(133)));
+        session.known.remove(&SystemId(133));
+        assert!(!session.search_map(&catalog).open(SystemId(133)), "unknown");
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            RESCUE_FALLBACK,
+            "133's shipyard is passed over"
+        );
     }
 
     #[test]
@@ -1056,14 +1073,13 @@ mod tests {
     }
 
     #[test]
-    fn a_strict_rescued_pilot_flown_again_resumes_docked_at_the_first_stellar() {
+    fn a_strict_rescued_pilot_flown_again_resumes_on_the_first_stellar() {
         let catalog = rescuing();
         let mut session = strict(due(&catalog));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("decodes");
         let resumed = Session::fly(&catalog, saved).expect("flies");
-        resumed.assert_docked_among_shown();
         assert_eq!(resumed.system(), SystemId(131));
-        assert_eq!(resumed.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&resumed), Some(StellarId(140)));
     }
 }

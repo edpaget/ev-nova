@@ -53,9 +53,9 @@
 //!
 //! # Sounds
 //!
-//! Screens report the sounds they make as events ([`sound`]): a button
-//! pressed or released, the flight session's own, and a fight's, heard
-//! from where they happen. The audio side decides what each plays. The
+//! Screens report the sounds they make as events ([`sound`]): a
+//! main-menu button pressed or released, the flight session's own, and a
+//! fight's, heard from where they happen. The audio side decides what each plays. The
 //! player's preferences, sound and hyperspace effects alike, are reported
 //! as a [`Prefs`] ([`preferences`]).
 //!
@@ -75,7 +75,9 @@ pub mod geometry;
 pub mod image;
 pub mod input;
 pub mod menu;
+pub mod movie;
 pub mod navigator;
+pub mod oval;
 pub mod preferences;
 pub mod screen;
 pub mod ships;

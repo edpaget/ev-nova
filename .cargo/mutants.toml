@@ -16,6 +16,55 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_AngularDifference`'s first fold (from 360 when the two lie either
+    # side of 179, @0x649e-0x64f4) is undone or redone by its second (from
+    # 360 above 180) for every pair whose difference fits in 16 bits
+    # (checked exhaustively), so any mutant of its three comparisons
+    # (`!=` at column 18, `a > 179` at 11, `b > 179` at 24) gives the same
+    # answer; the port keeps the fold as the original has it. The second
+    # fold's `> 180` loosened to `>= 180` folds 180 to 180, the same; its
+    # `<` and `==` mutants are not equivalent and stay in.
+    "nova-sim-base/src/trig\\.rs:140:(11|24): replace > with (==|<|>=) in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:140:18: replace != with == in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:143:19: replace > with >= in angular_difference$",
+    # `_TableArcTan`'s `180 + c` for a point below and left of the origin
+    # (@0x25a64-0x25a6d) is taken round into 0..360 after, so `c - 180`
+    # lands on the same heading.
+    "trig.rs:[0-9]+:[0-9]+: replace \\+= with -= in table_arctan",
+    # `open_audio` (nova's `main.rs`) opens the default audio device
+    # through cpal and reads the soundtrack from disk: the program's edge,
+    # which no hermetic test may run. Its decisions are tested on their
+    # own (`music_warning`, `voice_limit`, `game_audio`).
+    "nova/src/main.rs:.*replace open_audio -> ",
+    # `run_seed` reads the clock for a different seed each run: no test
+    # can tell one seed from another.
+    "main.rs:.*replace run_seed -> u64 with",
+    # `fitted` scales a movie box down only when the window is smaller
+    # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
+    # `<=` gives the same size.
+    "movie.rs:.*replace < with <= in fitted",
+    # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
+    # which is `StringPatch::default()`: the same value.
+    "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
+    # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
+    # `+ 360` in place of `mod 360` lands on the same heading.
+    "galaxy_map.rs:[0-9]+:[0-9]+: replace % with \\+ in arrow_head",
+    # The player's recoil gate by the engine (`Combat::fire_player`): a
+    # `Recoil` of exactly 0 pushes nothing whichever way `> 0.0` or
+    # `>= 0.0` reads it, as `ai_fire::recoil` gives no push for a weapon
+    # that does not recoil (`WeaponSpec::recoils`).
+    "combat/mod.rs:[0-9]+:[0-9]+: replace > with >= in Combat::fire_player",
+    # A burst's end spends one copy's worth unless its copies fire together
+    # (`Armament::burst_step`): copies that don't are one a call
+    # (`ai_fire::copies`), so `spawned` is 1 whichever branch `flags &
+    # SIMULTANEOUS == 0` (or its `|` mutant, always false) takes.
+    "combat/armament.rs:[0-9]+:[0-9]+: replace & with \\| in Armament::burst_step",
+    # `_AdjustedAccel`'s sign tests (`launch_velocity`): a push of exactly
+    # none adds none whichever branch it takes, so `push < 0.0` and
+    # `push <= 0.0` (the first operand, column 24) cannot be told apart.
+    # The top speed's own test beside it is caught.
+    "bay.rs:[0-9]+:24: replace < with <= in launch_velocity",
     # The galaxy map's star map is built only for its links and places;
     # nothing reads a buoy from it, so the `Message` it gives its systems
     # (-1, none) cannot be observed.
@@ -53,6 +102,16 @@ exclude_re = [
     # A crime of violence takes a rank of `Flags` 0x0040 or 0x0004: two
     # distinct bits, so `|` and `^` combine them the same.
     "replace \\| with \\^ in flags_taken",
+    # The sim's `table_arctan` has the same strict quadrant tests as the
+    # radar's copy above: at x == 0 (y not 0) the entry is 90, and
+    # 180 ± 90 lands where 90 and -90 do once taken 90 back and wrapped;
+    # at y == 0 it is 0, and 180 ± 0 and -0 are the same. So `<` and `<=`
+    # give the same heading at every zero.
+    "nova-sim-base/src/trig\\.rs:.*replace < with <= in table_arctan",
+    # `npc_warp_out_speed` caps the speed with `if v > WARP_OUT_CAP { cap }
+    # else { v }`: at v == the cap both branches give the cap, and a NaN
+    # fails `>` and `>=` alike, so `>=` returns the same speed every time.
+    "nova-sim-catalog/src/warp\\.rs:.*replace > with >= in npc_warp_out_speed",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.
@@ -161,7 +220,7 @@ exclude_re = [
     # `9999 - 1` and `9999 * 1` round up to the same 157 words, so the
     # set's size and every bit's word are unchanged. (A mutant outside a
     # function is named by its line alone, hence no `in`.)
-    "nova-sim/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
+    "nova-sim-catalog/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
     # A fresh pilot is male, which is `Gender`'s default, so its body and
     # `Default::default()` are the same.
     "replace <impl PilotFacts for FreshPilot>::gender -> (crate::pilot::)?Gender with Default::default\\(\\)",
@@ -172,7 +231,7 @@ exclude_re = [
     # `H`'s engine mask is the persistent bit (0x0004) and the mission
     # persistent bit (0x0020): two distinct bits, so `|` and `^` combine
     # them the same. (A constant, named by its line alone.)
-    "nova-sim/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
+    "nova-sim-port/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
     # The ship-change clamp lowers a count to its limit when it is above
     # it; with `<=` a count already at its limit is set to it again, which
     # changes nothing.
@@ -200,4 +259,74 @@ exclude_re = [
     # `AnimDelay` for a bias above 1: with `>=`, a bias of exactly 1 takes
     # that branch too, and 1 x `AnimDelay` is `AnimDelay` anyway.
     "gate_sprite.rs:.*replace > with >= in GateAnimation::threshold",
+    # `_AIShipIsScooping` (goal 0x11): no goal the engine has scoops until
+    # rdm:phase/asteroids/phase-5-ai-mining adds the miner's, so both
+    # answer false for every NPC already. Phase 5 removes these two.
+    "ai/mod.rs:.*replace Goal::scooping -> bool with false",
+    "traffic/npc.rs:.*replace Npc::is_scooping -> bool with false",
+    # A shockwave's flash is late on a ship before its wreck in the table:
+    # the wreck is destroyed, so its own shockwave never reaches it, and a
+    # victim's index never equals the wreck's.
+    "combat/mod.rs:.*replace < with <= in Combat::shock",
+    # A run-out shield flash is dropped from the view's map: with `>=` it
+    # is kept at none, which `FlightView::shield_flash` reads as no flash
+    # all the same, and the next hit sets it afresh either way.
+    "flight/view/mod.rs:.*replace > with >= in step_flashes",
+    # A simultaneous fuel weapon's copies at its burst end: with no fuel
+    # (`fuel.now` exactly 0) the whole shots paid are `trunc(0 / cost)`,
+    # none, the same as the `else` branch's none.
+    "combat/ai_fire.rs:.*replace > with >= in copies",
+    # The recoil's push runs along `(heading + 180) mod 360`: `heading -
+    # 180` and `heading + 180 + 360` name the same angle, and `facing`
+    # reads any angle, so the push differs at most by sin and cos rounding,
+    # far below what a frame shows.
+    "combat/ai_fire.rs:.*replace \\+ with - in recoil",
+    "combat/ai_fire.rs:.*replace % with \\+ in recoil",
+    # Damage at or below none is skipped (`apply`): with `>=`, a damage of
+    # exactly none is taken, which takes nothing off.
+    "combat/damage.rs:.*replace > with >= in apply",
+    # An exit turned onto the screen's centre line (`turned.y` exactly 0)
+    # would take either compression: no whole-degree angle of the trig
+    # table turns an exit off the centre onto it (checked over every angle
+    # for every point within 300 pixels), and one on the centre has none
+    # to compress.
+    "combat/exits.rs:.*replace < with <= in ExitPoints::offset",
+    # A negative `Impact` is gated by its firer's centre; an `Impact` of
+    # exactly none pushes nothing anyway (`impact == 0.0`), gated or not.
+    "combat/impact.rs:.*replace < with <= in push",
+    # A homing shot turns `turn` toward `off`'s side: `off.signum()` is 1 or
+    # -1 there (`off` is past `turn`, so not none), and dividing by it is
+    # multiplying by it.
+    "combat/projectile.rs:[0-9]+:63: replace \\* with / in Shot::home",
+    # A jammed shot's turn is turned away or stopped only when it is
+    # positive: with `>=`, a turn of none becomes -0.0 or 0.0, which turns
+    # nothing either way.
+    "combat/projectile.rs:.*replace > with >= in Shot::jammed",
+    # `Sides::root` steps to a leader not the ship itself: a ship that leads
+    # itself stepping to itself stays where it is, and the walk is bounded.
+    "combat/sides.rs:.*replace match guard leader != at with true in Sides<'_>::root",
+    # A self sub-munition adds `SubLimit` more flights when that is above
+    # none: with `>=`, a limit of none adds none of them.
+    "combat/weapon.rs:.*replace > with >= in chain_range",
+    # A point-defence shot at a ship is aimed at none (`_SpawnShot(.., -1,
+    # ..)`); aimed at the ship, it is aimed at none again as it first moves
+    # (`Shot::lose_a_gone_ship`), later that same tick, before anything
+    # reads it.
+    "combat/mod.rs:.*replace match guard launch.weapon.is_beam\\(\\) with true in Combat::defend",
+    # A mission ship code of 2176-9998 is nowhere, drawing nothing. Without
+    # its own arm it falls to the last, where `GovtCode::of` names only
+    # 9999-31999 and so gives `None` for every code of 2176-9998, which is
+    # nowhere with no draw too. The arm states the original's reading.
+    "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
+    # The lightning rolls' seed joins a high word shifted past 32 bits and
+    # a low word below 2^32, and a trail colour joins channels shifted to
+    # their own 8 bits: their bits never overlap, so `|` and `^` give the
+    # same word.
+    "nova-view/src/flight/lightning\\.rs:188:30: replace \\| with \\^ in StepRolls::draw$",
+    "nova-view/src/flight/trails\\.rs:90:16: replace \\| with \\^ in scaled_colour$",
+    # A trail's tail angle is taken `% 360` as the original takes it, but
+    # the table trig it feeds (`table_sin`, `table_cos`) takes every angle
+    # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
+    # same tail.
+    "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
 ]

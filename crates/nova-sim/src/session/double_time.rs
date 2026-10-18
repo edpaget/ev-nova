@@ -4,17 +4,51 @@
 //!
 //! **The switch** (`_PlayGame` @0x463b3-0x4643e). Every iteration of the
 //! main loop, after the frame counter moves on (@0x45f36) and the mission
-//! sound plays (@0x462fa-0x46375), sets `_doubleTime` from Caps Lock's
-//! lock state (`_QuickKeyCheck(0x39)` @0x463c3, reading the `GetKeys`
-//! map @0xa0f5). Ours takes the key's state from its caller
-//! ([`Session::set_double_time_key`]): the view toggles it on each Caps
-//! Lock press, an accepted difference: it can drift from the lock itself
-//! when pressed while unfocused or already on at launch, and on macOS,
-//! where winit 0.30.13 reports no Caps Lock key, there is no double time.
-//! The switch's hold through a warp begun at double speed, and its
-//! release through an aligned warp begun at single speed (@0x463b3-0x463c1,
-//! @0x463d3-0x4640c), read the warp-up sounds' play state, which ours does
-//! not model (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
+//! sound plays (@0x462fa-0x46375), sets `_doubleTime` ([`switch`]):
+//!
+//! - on while `_warpUpSnd[1]`, `snd ` 129 "Warp up x2", plays
+//!   (`ST_IsSoundPlaying` @0x463b3-0x463c1, set @0x46415-0x4641a),
+//!   whatever the key says, so a warp begun in double time runs in it to
+//!   the end;
+//! - else off without Caps Lock's lock state (`_QuickKeyCheck(0x39)`
+//!   @0x463c3, reading the `GetKeys` map @0xa0f5; @0x4641f-0x4642c);
+//! - else off while `_warpUpSnd[0]`, `snd ` 128, plays and the player
+//!   faces within 10° of its desired heading, +0x68
+//!   ([`angular_difference`] of the whole-degree facing and +0x68,
+//!   @0x463d3-0x4640c), so a warp begun in single time lines up in it;
+//! - else on.
+//!
+//! Ours takes the key's state from its caller
+//! ([`Session::set_double_time_key`], which latches the switch at once):
+//! the view toggles it on each Caps Lock press, an accepted difference:
+//! it can drift from the lock itself when pressed while unfocused or
+//! already on at launch, and on macOS, where winit 0.30.13 reports no Caps
+//! Lock key, there is no double time. The warp-ups' play state is the
+//! session's ([`WarpUps`](crate::warp::WarpUps)). The session latches the
+//! switch at the top of each advance pass ([`Session::tick`]), after the
+//! warp-ups play on a frame, where the original latches at the end of the
+//! iteration before: nothing runs between the two.
+//!
+//! The desired heading, +0x68, is the session's `aim`, in whole degrees
+//! as `_CalcInterceptAngle` (@0x2af60-0x2af90) gives it
+//! ([`intercept_angle`](crate::trig::intercept_angle)); 0 as a session
+//! starts (pilot init @0x1c315), and kept after a jump ends. It is set:
+//!
+//! - in a jump's warp stage, a slow ship's, to the bearing of the map
+//!   position of the next system from the current one (@0x6b0cf), in the
+//!   turn and through the warp;
+//! - while the ship brakes for a jump, against its velocity
+//!   (`_CalcInterceptAngle(v × 100, 0)` @0x6b761);
+//! - while the reverse key is held out of a jump by a player not
+//!   disabled, moving at 0.05 or more on either axis (@0x6c7d8-0x6c822),
+//!   against its velocity: `(_CalcInterceptAngle(0, v × 100) + 180) mod
+//!   360` (@0x6c88e), whatever the turn keys say.
+//!
+//! Left out: the face-target key's writes of +0x68 (@0x6af65, @0x6af9e,
+//! @0x6afea), with the key itself
+//! (rdm:phase/ship-handling-fidelity/phase-4-turning-and-reverse); and
+//! an inertialess ship's reverse, which brakes and writes no +0x68
+//! (@0x6c770-0x6c7d3), as the engine has no inertialess player.
 //! `_gameFrozen`'s clearing (@0x46427, @0x4642f-0x4643e) is a cheat's, and
 //! ours has no cheats. The mode is not saved: `_doubleTime` is a global,
 //! not a pilot field.
@@ -54,9 +88,34 @@
 //!   `_HandleAlertSprite` (@0x44518), which steps the Red Alert's blink.
 //!   So the second pass plays no mission sound, rolls no arrivals, decides
 //!   nothing, takes no scan, hails nothing and does not move the AI's
-//!   timer; strikes it raises wait for the next advance pass's answers.
+//!   timer.
+//! - The strikes the second pass raises are answered in that pass:
+//!   `_HandleShot` (0x35586-0x361ab) takes no pass argument and calls
+//!   `_DamageShip` (@0x35855, @0x36106), and neither reads `_doubleTime`,
+//!   so `_DamageShip`'s whole reaction block (@0x3b44d-0x3bf5e: target and
+//!   provocation, the gate's wait cut @0x3be6e-0x3be7c,
+//!   `_AIMakeShipAttackPlayer` @0x3be66 and its quote,
+//!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
+//!   Its caller answers them after this pass
+//!   ([`Session::answer_strikes`]) and says the attack quotes
+//!   ([`Session::tick_quotes_again`]), before the frame is drawn. The
+//!   block plays no sound and tells no comm.
+//! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
+//!   test, so each eligible person draws `Rand(140)` on both passes
+//!   ([`Session::tick_quotes_again`], after the attack quotes). The
+//!   display timer (0x3b5020) is counted down only by `_HandleComm`
+//!   (@0x301ce-0x301de), on the advance pass, so after any quote on the
+//!   advance pass only a quote due now (forced, @0x33f65-0x33f6c) can
+//!   follow on the second; otherwise each frame's odds of a random quote
+//!   double. The quote clock moves once a frame, on the advance pass.
 //! - `_HandleBeams(arg)` (@0x4452f-0x4453d): on the second pass a beam
 //!   only ages (see [`GamePass`]).
+//! - The warp's clock is `TickCount` less the warp stage's stamp (see the
+//!   [`warp`](crate::warp) module), real time, which the second pass
+//!   doesn't move on: the pre-jump flies on both passes, and the second
+//!   can start the clock, but only the advance pass moves it on, and a
+//!   collapse on the second pass reads the frame's clock as its advance
+//!   pass left it.
 //!
 //! **Ordering.** The original draws its frame between the two passes
 //! (@0x45d96-0x45e3e); the view draws after both. Every frame shown is
@@ -67,12 +126,41 @@ use super::Session;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
 use crate::flight::Controls;
+use crate::trig::angular_difference;
+
+/// `_PlayGame`'s double-time switch (@0x463b3-0x4642f; see the module
+/// docs), from whether the `key` is on, whether each warp-up is
+/// `playing`, `snd ` 128 then 129, and whether the player faces within
+/// 10° of its desired heading (`aligned`).
+#[must_use]
+pub fn switch(key: bool, playing: [bool; 2], aligned: bool) -> bool {
+    let [single, double] = playing;
+    double || (key && !(aligned && single))
+}
+
+/// How far, in whole degrees, the player may face off its desired
+/// heading and count as aligned with it (`cmpl $0xa` @0x463fa).
+const ALIGNED: i32 = 10;
 
 impl Session {
     /// Takes the double-time key's state: `on` while double time should
-    /// run (see the module docs). Off until it says otherwise.
+    /// run, and latches the switch at once (see the module docs). Off
+    /// until it says otherwise.
     pub fn set_double_time_key(&mut self, on: bool) {
-        self.double_time = on;
+        self.double_time_key = on;
+        self.latch_double_time();
+    }
+
+    /// Sets double time by the switch (see the module docs).
+    pub(super) fn latch_double_time(&mut self) {
+        #[allow(clippy::cast_possible_truncation)]
+        let facing = self.player.heading as i16;
+        let off = i32::from(angular_difference(facing, self.aim)).abs();
+        self.double_time = switch(
+            self.double_time_key,
+            [false, true].map(|double| self.warp_ups.playing(double)),
+            off <= ALIGNED,
+        );
     }
 
     /// Whether double time is on.
@@ -89,7 +177,10 @@ impl Session {
     /// pass's calls stand still; a jump that begins on it stops it there,
     /// and so does the escape pod's countdown running out on it, the
     /// rescue then due ([`Session::rescue_if_due`], which its caller asks
-    /// after this pass as after the advance pass's tick).
+    /// after this pass as after the advance pass's tick). Its caller
+    /// then answers the pass's strikes ([`Session::answer_strikes`]) and
+    /// runs the second-pass quote roll, the attack quotes they raise
+    /// first ([`Session::tick_quotes_again`]).
     pub fn tick_again(
         &mut self,
         controls: Controls,
@@ -105,7 +196,8 @@ impl Session {
         }
         self.move_traffic_again(&mut *chance);
         self.before_fight(rules, &mut &mut *chance);
-        self.fight(GamePass::Again, rules, chance);
+        self.fight(GamePass::Again, rules, &mut *chance);
+        self.tick_asteroids(chance);
     }
 
     /// The traffic's part of the second pass, drawing on `chance`: the NPCs
@@ -134,13 +226,16 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::armament::Trigger;
     use crate::combat::{CombatEvent, ShipRef};
+    use crate::control::SetExpr;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
-    use crate::session::tests::{armed, facing_an_npc};
+    use crate::session::tests::{OUT, armed, bound_for_131, facing_an_npc};
+    use crate::sound::SimSound;
     use crate::testkit::{
-        Draws, FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, npc,
+        Draws, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, land_now, npc,
     };
     use crate::traffic::npc::NpcId;
+    use crate::warp::SoundLength;
 
     const THRUST: Controls = Controls {
         thrust: true,
@@ -156,14 +251,453 @@ mod tests {
         session.tick_again(controls, Rules::default(), &mut NeverFires);
     }
 
+    /// [`catalog`] with a double-time warp-up, `snd ` 129, of 44100 frames
+    /// at 22050 Hz: 120 Mac ticks, where 128, of which there is none, lasts
+    /// 350.
+    fn with_warp_up_x2() -> FakePilotCatalog {
+        FakePilotCatalog {
+            warp_sound_double_time: Some(SoundLength {
+                frames: 44_100,
+                rate: 22_050,
+            }),
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn double_time_ends_the_warps_lead_in_by_the_double_time_warp_up() {
+        // w = 1.3: the lead-in lasts while t ≤ 0.35 × d / 1.69, 24.85 Mac
+        // ticks for 129's 120 and 72.49 for 128's 350, through engine tick
+        // 12 and 36.
+        let catalog = with_warp_up_x2();
+        for (double_time, last) in [(true, 12), (false, 36)] {
+            let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            assert_eq!(session.warp_clock(), Some(0), "at once");
+            for _ in 0..last {
+                session.tick(Controls::default());
+            }
+            assert_eq!(session.warp_clock(), Some(last));
+            assert!(session.in_warp_lead_in(), "{double_time}");
+            session.tick(Controls::default());
+            assert!(!session.in_warp_lead_in(), "{double_time}");
+        }
+    }
+
+    #[test]
+    fn a_collapse_in_double_time_reads_the_double_time_warp_up() {
+        // Facing up, the turn to east runs 30 ticks; disabled on the 15th,
+        // the collapse reads t = 32 Mac ticks.
+        let catalog = with_warp_up_x2();
+        let w = crate::warp::warp_factor(0);
+        let speed = crate::warp::lead_in_speed(32, w, 120);
+        assert!(crate::warp::lead_in_speed(32, w, 350) < 0.0, "none by 128");
+        for double_time in [true, false] {
+            let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            for _ in 0..15 {
+                session.tick(Controls::default());
+            }
+            assert_eq!(session.warp_clock(), Some(15));
+            let before = *session.player();
+            session.condition = crate::combat::hull::Condition::Disabled;
+            session.tick(Controls::default());
+            assert_eq!(session.preparing_jump(), None, "collapsed");
+            let expected = if double_time {
+                assert!(speed > 0.0 && speed < session.top_speed(), "{speed}");
+                crate::cargo_box::accel(45, speed)
+            } else {
+                before.velocity
+            };
+            assert_eq!(
+                session.player().velocity,
+                expected * crate::flight::DISABLED_DRAG,
+                "{double_time}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_warp_clock_moves_on_once_a_frame_in_double_time() {
+        // The clock is `TickCount`, which the second pass does not move on
+        // (F7). Facing up, the turn to east takes 15 frames at two turns a
+        // frame.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.warp_clock(), Some(0));
+        for frame in 1..=5 {
+            session.tick(Controls::default());
+            assert_eq!(session.warp_clock(), Some(frame), "advance {frame}");
+            again(&mut session, Controls::default());
+            assert_eq!(session.warp_clock(), Some(frame), "again {frame}");
+        }
+        assert_eq!(session.player().heading, 30.0, "turned on both passes");
+        assert_eq!(
+            session.preparing_jump(),
+            Some(crate::catalog::SystemId(131))
+        );
+    }
+
+    #[test]
+    fn a_collapse_on_the_second_pass_reads_the_frames_clock() {
+        // Three frames into the turn, a collapse on the fourth frame's
+        // advance pass reads t = 8 Mac ticks; disabled after it, the
+        // second pass's collapse reads the same 8, where 10 would be the
+        // next frame's.
+        let w = crate::warp::warp_factor(0);
+        let d = 36;
+        let at_8 = crate::warp::lead_in_speed(8, w, d);
+        let at_10 = crate::warp::lead_in_speed(10, w, d);
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        let top = session.top_speed();
+        assert!(at_8 > 0.0 && at_8 < top && at_10 > at_8, "{at_8} {at_10}");
+        session.warp_sounds[1] = d;
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        for _ in 0..3 {
+            session.tick(Controls::default());
+            again(&mut session, Controls::default());
+        }
+        let mut advance = session.clone();
+        advance.condition = crate::combat::hull::Condition::Disabled;
+        advance.tick(Controls::default());
+        assert_eq!(advance.preparing_jump(), None, "collapsed");
+        assert_eq!(
+            advance.player().velocity,
+            crate::cargo_box::accel(18, at_8) * crate::flight::DISABLED_DRAG
+        );
+        session.tick(Controls::default());
+        session.condition = crate::combat::hull::Condition::Disabled;
+        again(&mut session, Controls::default());
+        assert_eq!(session.preparing_jump(), None, "collapsed");
+        assert_eq!(
+            session.player().velocity,
+            crate::cargo_box::accel(21, at_8) * crate::flight::DISABLED_DRAG
+        );
+    }
+
+    // The warp-up (`_HandlePlayer` @0x6b60d-0x6b690).
+
+    /// The warp-up a jump begun `double_time` sounds.
+    fn warp_up(double_time: bool) -> SimSound {
+        if double_time {
+            SimSound::JumpBeganInDoubleTime
+        } else {
+            SimSound::JumpBegan
+        }
+    }
+
+    #[test]
+    fn a_jump_begun_in_double_time_sounds_warp_up_x2_and_otherwise_warp_up() {
+        for double_time in [true, false] {
+            let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            assert_eq!(
+                session.take_sounds(),
+                [warp_up(double_time)],
+                "{double_time}"
+            );
+        }
+        assert_ne!(SimSound::JumpBeganInDoubleTime, SimSound::JumpBegan);
+    }
+
+    /// Gives up `session`'s jump as a script's move in flight does (`N130`,
+    /// [`Reset::Jump`](super::super::entry::Reset::Jump)): no halt and no
+    /// arrival. Then puts the ship back out at rest facing up, bound for
+    /// 131 again.
+    fn given_up_by_a_move(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.run_set(
+            &SetExpr::parse("N130").expect("parses"),
+            &mut Scripted::default(),
+        );
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        assert_eq!(session.warp_clock(), None, "given up");
+        let sounds = session.take_sounds();
+        assert!(
+            !sounds
+                .iter()
+                .any(|sound| matches!(sound, SimSound::Halt(_))),
+            "no halt: {sounds:?}"
+        );
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        session.player = ShipState {
+            position: OUT,
+            velocity: Vec2::ZERO,
+            heading: 0.0,
+        };
+    }
+
+    /// Runs one frame of `session` with no controls: the advance pass and,
+    /// in double time, the second.
+    fn frame(session: &mut Session) {
+        session.tick(Controls::default());
+        if session.double_time() {
+            again(session, Controls::default());
+        }
+    }
+
+    /// The still-playing skip (`_HandlePlayer` @0x6b617-0x6b62b,
+    /// @0x6b645-0x6b658): a jump whose warp stage starts while its warp-up
+    /// still plays sounds none, though its clock starts. Here a script's
+    /// move in flight gives the first jump up, with no halt and no
+    /// arrival, which end the warp-up (see the next tests). The skip
+    /// happens in the engine's normal play too: a ship knocked back past
+    /// the jump speed in its turn brakes again, and the warp stage starts
+    /// afresh as it slows (`braking_again_stops_the_warp_clock_...` in
+    /// the session's tests). The escape pod's rescue gives a jump up as
+    /// well, but the eject before it halts the warp-ups.
+    #[test]
+    fn a_warp_up_still_playing_is_not_sounded_again() {
+        // 129 lasts 120 Mac ticks, 60 frames, and 128, of which there is
+        // none, 350, 175 frames, in real time: double time's second pass
+        // doesn't shorten it.
+        let catalog = with_warp_up_x2();
+        for (double_time, frames) in [(true, 60), (false, 175)] {
+            let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+            session.set_double_time_key(double_time);
+            session.begin_jump().expect("jumps");
+            assert_eq!(session.take_sounds(), [warp_up(double_time)]);
+            for _ in 0..frames - 1 {
+                frame(&mut session);
+            }
+            given_up_by_a_move(&mut session, &catalog);
+            session.begin_jump().expect("jumps");
+            assert_eq!(session.take_sounds(), [], "{double_time}: still playing");
+            assert_eq!(session.warp_clock(), Some(0), "the clock starts");
+            frame(&mut session);
+            given_up_by_a_move(&mut session, &catalog);
+            session.begin_jump().expect("jumps");
+            assert_eq!(
+                session.take_sounds(),
+                [warp_up(double_time)],
+                "{double_time}: over"
+            );
+        }
+    }
+
+    #[test]
+    fn a_warp_up_of_the_other_speed_plays_on_its_own() {
+        // 128, begun in single time, still plays as a jump begins in
+        // double time: 129 sounds all the same. The ship faces 90° off its
+        // aim, so the switch gives double time while 128 plays.
+        let catalog = with_warp_up_x2();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+        given_up_by_a_move(&mut session, &catalog);
+        assert_eq!(session.aim, 0, "no tick has aimed it");
+        session.player.heading = 90.0;
+        session.set_double_time_key(true);
+        assert!(session.double_time());
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+    }
+
+    #[test]
+    fn a_collapse_halts_the_warp_up_so_the_next_jump_sounds_it_again() {
+        let catalog = with_warp_up_x2();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        frame(&mut session);
+        session.condition = crate::combat::hull::Condition::Disabled;
+        frame(&mut session);
+        assert_eq!(session.preparing_jump(), None, "collapsed");
+        assert!(
+            session
+                .take_sounds()
+                .contains(&SimSound::Halt(&crate::sound::WARP_UP_HALTS))
+        );
+        session.condition = crate::combat::hull::Condition::Intact;
+        given_up_by_a_move(&mut session, &catalog);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+    }
+
+    #[test]
+    fn the_arrival_ends_the_warp_up() {
+        let catalog = with_warp_up_x2();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert!(session.warp_ups.playing(true));
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+    }
+
+    #[test]
+    fn landing_ends_the_warp_up() {
+        let catalog = with_warp_up_x2();
+        let mut session = session(&catalog);
+        session.warp_ups.start(true, 120);
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+    }
+
     #[test]
     fn double_time_follows_the_key_and_starts_off() {
         let mut session = session(&catalog());
         assert!(!session.double_time());
         session.set_double_time_key(true);
-        assert!(session.double_time());
+        assert!(session.double_time(), "at once");
         session.set_double_time_key(false);
+        assert!(!session.double_time(), "at once");
+    }
+
+    // The switch (`_PlayGame` @0x463b3-0x4643e).
+
+    #[test]
+    fn the_switch_holds_through_warp_up_x2_and_drops_an_aligned_warp_up() {
+        for key in [false, true] {
+            for single in [false, true] {
+                for aligned in [false, true] {
+                    assert!(switch(key, [single, true], aligned), "129 plays");
+                }
+            }
+        }
+        for single in [false, true] {
+            for aligned in [false, true] {
+                assert!(!switch(false, [single, false], aligned), "no key");
+            }
+        }
+        assert!(
+            !switch(true, [true, false], true),
+            "aligned while 128 plays"
+        );
+        assert!(switch(true, [true, false], false), "turned away");
+        assert!(switch(true, [false, false], true), "128 over");
+        assert!(switch(true, [false, false], false));
+    }
+
+    /// A session at rest out of the no-jump zone facing east, `snd ` 128
+    /// lasting 350 Mac ticks and 129 120.
+    fn east(catalog: &FakePilotCatalog) -> Session {
+        bound_for_131(catalog, OUT, Vec2::ZERO, 90.0)
+    }
+
+    /// The aim a jump from `session`'s system to 131 sets, as the turn's
+    /// `_CalcInterceptAngle` of the map positions gives it (@0x6b0cf).
+    fn bearing_aim(session: &Session) -> i16 {
+        let map = |id| session.galaxy.map().position(id).expect("on the map");
+        crate::trig::intercept_angle(map(session.system()), map(crate::catalog::SystemId(131)))
+    }
+
+    #[test]
+    fn double_time_holds_while_warp_up_x2_plays() {
+        // 129 lasts 120 Mac ticks: 60 frames.
+        let catalog = with_warp_up_x2();
+        let mut session = east(&catalog);
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        session.set_double_time_key(false);
+        assert!(session.double_time(), "held by 129");
+        for frame in 1..60 {
+            session.tick(Controls::default());
+            assert!(session.double_time(), "frame {frame}");
+        }
+        session.tick(Controls::default());
+        assert!(!session.double_time(), "129 over");
+    }
+
+    #[test]
+    fn the_key_gives_no_double_time_facing_the_aim_while_warp_up_plays() {
+        let catalog = with_warp_up_x2();
+        let mut session = east(&catalog);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+        session.tick(Controls::default());
+        let aim = bearing_aim(&session);
+        assert_eq!(session.aim, aim, "the jump's bearing");
+        assert!((i32::from(aim) - 90).abs() <= 1, "{aim}");
+        session.set_double_time_key(true);
+        assert!(!session.double_time(), "aligned while 128 plays");
+        session.player.heading = f32::from(aim) + 10.9;
+        session.set_double_time_key(true);
+        assert!(!session.double_time(), "10 degrees off, whole");
+        session.player.heading = f32::from(aim) + 11.0;
+        session.set_double_time_key(true);
+        assert!(session.double_time(), "11 degrees off");
+        session.player.heading = f32::from(aim);
+        session.set_double_time_key(true);
         assert!(!session.double_time());
+        // 128 lasts 350 Mac ticks: 175 frames from the jump.
+        for _ in 1..174 {
+            session.tick(Controls::default());
+        }
+        assert!(!session.double_time(), "128 plays on");
+        session.tick(Controls::default());
+        assert!(session.double_time(), "128 over");
+    }
+
+    #[test]
+    fn the_brake_aims_against_the_velocity_and_the_turn_at_the_bearing() {
+        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        let velocity = session.player().velocity;
+        session.tick(Controls::default());
+        assert_eq!(session.warp_clock(), None, "braking");
+        assert_eq!(
+            session.aim,
+            crate::trig::intercept_angle(velocity * 100.0, Vec2::ZERO),
+            "@0x6b761"
+        );
+        assert_eq!(session.aim, 180, "racing north: south");
+        while session.warp_clock().is_none() {
+            session.tick(Controls::default());
+        }
+        session.tick(Controls::default());
+        assert_eq!(session.aim, bearing_aim(&session), "@0x6b0cf");
+        while session.jumping().is_none() {
+            session.tick(Controls::default());
+        }
+        session.tick(Controls::default());
+        assert_eq!(session.aim, bearing_aim(&session), "on through the warp");
+        session
+            .arrive(&catalog(), &mut NeverFires)
+            .expect("arrives");
+        let kept = session.aim;
+        session.tick(Controls::default());
+        assert_eq!(session.aim, kept, "kept after the jump");
+    }
+
+    #[test]
+    fn reverse_aims_against_the_velocity() {
+        const REVERSE: Controls = Controls {
+            thrust: false,
+            turn: crate::flight::Turn::Left,
+            reverse: true,
+        };
+        let mut session = session(&catalog());
+        session.player.velocity = Vec2::new(3.0, 1.0);
+        session.tick(REVERSE);
+        let toward = crate::trig::intercept_angle(Vec2::ZERO, Vec2::new(300.0, 100.0));
+        assert_eq!(
+            session.aim,
+            (toward + 180) % 360,
+            "@0x6c88e, turn keys or not"
+        );
+        assert_eq!(toward, 108);
+        // Slower than 0.05 on both axes, it is left alone (@0x6c7d8-0x6c822).
+        session.player.velocity = Vec2::new(0.049, -0.049);
+        session.tick(REVERSE);
+        assert_eq!(session.aim, 288);
+        session.player.velocity = Vec2::new(0.0, -0.05);
+        session.tick(REVERSE);
+        assert_eq!(session.aim, 180);
+        // Not without the key.
+        session.player.velocity = Vec2::new(0.0, 3.0);
+        session.tick(Controls::default());
+        assert_eq!(session.aim, 180);
     }
 
     #[test]
@@ -267,7 +801,8 @@ mod tests {
             session
                 .strikes
                 .iter()
-                .any(|strike| strike.by == ShipRef::Player && strike.ship == ShipRef::Npc(NpcId(0))),
+                .any(|strike| strike.by == Some(ShipRef::Player)
+                    && strike.ship == ShipRef::Npc(NpcId(0))),
             "kept for the advance pass's answers: {:?}",
             session.strikes
         );

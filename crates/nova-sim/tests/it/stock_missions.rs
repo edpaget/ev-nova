@@ -1,0 +1,493 @@
+//! Mission offers over the stock data: a new pilot docked at the first
+//! landable stellar of its starting system, its offers rolled as the
+//! session settles with every roll 1, is offered missions at the mission
+//! computer, each of `AvailLoc` 0 and passing every availability field,
+//! and its mission computer lists them, each name cut at its ';' and each
+//! name and offer text filled. Every `mïsn`'s texts fill every tag but the
+//! ranks'. A stock cargo mission loads its cargo as it is accepted, and
+//! landing at its destination unloads it, pays and runs its `OnSuccess`.
+//! The new pilot is offered the tutorial at the spaceport. Every finale's
+//! `M472` leaves the port after it, and each system's first stellar is
+//! the first of its landing sites. The one mission `dësc` naming a movie
+//! is mission 906's offer, "\x01", after the dialog. Mission 128 marks
+//! its destination green on its dialogs' maps (`Flags` 0x0100), and each
+//! offer so flagged marks its destination stellar's holder. Skips,
+//! passing, when `NOVA_DATA` is unset.
+
+use crate::common;
+
+use nova_data::GameData;
+use nova_data::records::desc::Desc;
+use nova_data::records::mission::Mission;
+use nova_sim::catalog::MissionRecord;
+use nova_sim::catalog::{ListedStellar, PlaceNames};
+use nova_sim::control::SetOp;
+use nova_sim::mission::screens::SPACEPORT;
+use nova_sim::mission::{Offer, Stop, Venue, VenueOffer};
+use nova_sim::story::listers_of;
+use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames, TagRules};
+use nova_sim::{
+    Bit, CommCatalog, DateAffixes, GameDate, GovtId, MARKS_DESTINATION, MissionId, NeverFires,
+    Pilot, PilotCatalog, RuleSource, Session, StellarId, SystemId, is_landable,
+};
+
+/// A new stock pilot resumed over the first landable stellar of its
+/// system through a save that says so, flown, landed there and settled
+/// with every roll 1.
+fn docked_new_pilot(data: &GameData) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let site = data
+        .landing_sites(pilot.system())
+        .into_iter()
+        .find(is_landable)
+        .expect("a landable stellar where the pilot starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["stellar"] = serde_json::json!(site.id.0);
+    let saved = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, saved).expect("flies");
+    let system = session.pilot().system();
+    session.land_at(data, system, site.id).expect("lands");
+    assert_eq!(session.landed(), Some(site.id), "docked");
+    let _ = session.settle_script(data, &mut NeverFires);
+    session
+}
+
+#[test]
+fn a_new_stock_pilot_is_offered_missions_that_pass_every_field() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = docked_new_pilot(&data);
+    let offers = session.mission_offers(Venue::Computer);
+    assert!(!offers.is_empty(), "the mission computer offers something");
+    let missions = data.missions();
+    for offer in offers {
+        let record = missions
+            .iter()
+            .find(|record| record.id == offer.mission)
+            .expect("a mïsn");
+        assert_eq!(record.avail_loc, 0, "{:?} at the computer", offer.mission);
+        assert_eq!(
+            session.offer_refusals(offer.mission),
+            Some(Vec::new()),
+            "{:?} passes every field",
+            offer.mission
+        );
+    }
+}
+
+#[test]
+fn a_new_stock_pilot_is_offered_the_tutorial_at_the_spaceport() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_new_pilot(&data);
+    let docked = session.landed().expect("docked");
+    let site = data
+        .landing_sites(session.system())
+        .into_iter()
+        .find(|site| site.id == docked)
+        .expect("the docked stellar");
+    assert_eq!(
+        site.govt,
+        Some(GovtId(128)),
+        "AvailStel 10000 names gövt 128"
+    );
+    let Some(VenueOffer::Prompt(prompt)) = session.next_offer(SPACEPORT, &mut NeverFires) else {
+        panic!("the spaceport offers");
+    };
+    assert_eq!(prompt.mission, MissionId(251), "Head to Sol;Tutorial 001");
+    assert!(prompt.can_refuse());
+    assert!(
+        prompt
+            .text
+            .starts_with("As you wander around a spaceport for the first time"),
+        "{}",
+        prompt.text
+    );
+}
+
+/// The stock names: the stellars' and systems', and `STR#` 4001's cargo.
+struct StockNames {
+    places: PlaceNames,
+    cargo: Vec<String>,
+    /// Every listed stellar, for the system a tag names each in.
+    listed: Vec<ListedStellar>,
+}
+
+impl TagNames for StockNames {
+    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
+        self.places.stellars.get(&stellar).cloned()
+    }
+
+    fn system_name(&self, system: SystemId) -> Option<String> {
+        self.places.systems.get(&system).cloned()
+    }
+
+    /// The lowest system listing it: `_FindSystemFromStellar`'s answer
+    /// with no system visible, enough for a tag to fill.
+    fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
+        listers_of(&self.listed, stellar).first().copied()
+    }
+
+    fn cargo_name(&self, cargo: u8) -> Option<String> {
+        self.cargo.get(usize::from(cargo)).cloned()
+    }
+}
+
+/// Every tag of `_MungeBriefing`'s table but the ranks'.
+const TAGS: [&str; 15] = [
+    "<DST>", "<DSY>", "<RST>", "<RSY>", "<CT>", "<CQ>", "<SN>", "<DL>", "<PN>", "<PNN>", "<PSN>",
+    "<PST>", "<OSN>", "<PAY>", "<REG>",
+];
+
+#[test]
+fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let names = StockNames {
+        places: data.place_names(),
+        cargo: CommCatalog::string_list(&data, 4001),
+        listed: data.listed_stellars(),
+    };
+    let listed = data.listed_stellars();
+    let stop = |at: usize| Stop {
+        stellar: listed[at].id,
+        system: listed[at].systems.first().copied(),
+    };
+    let today = GameDate::new(1177, 6, 23).expect("exists");
+    let affixes = DateAffixes {
+        prefix: String::new(),
+        suffix: " NC".to_owned(),
+    };
+    let context = |cargo: i16| TagContext {
+        pilot: "Stock",
+        ship_type: "Shuttle",
+        ship_name: "Kestrel",
+        person: Some("Bounty Hunter"),
+        ranks: nova_sim::rank::RankNames::none(),
+        mission: Some(MissionTags {
+            values: MissionValues {
+                destination: Some(stop(0)),
+                return_to: Some(stop(1)),
+                cargo_type: Some(cargo),
+                cargo_tons: 10,
+                pay: Some(25_000),
+                deadline: Some(today.next_day()),
+                ship_name: Some("Rover".to_owned()),
+            },
+            cash: 1000,
+            today,
+            date_affixes: &affixes,
+            pay_millions: RuleSource::Engine,
+            slot: None,
+        }),
+        rank_govts: nova_sim::text_tags::RankTagGovts::NONE,
+        leet: false,
+        rules: TagRules::default(),
+    };
+    let mut texts = 0;
+    let mut tagged = 0;
+    for (id, mission) in data.records::<Mission>() {
+        let record = mission.expect("every stock mïsn decodes").record;
+        let fields = [
+            record.brief_text,
+            record.quick_brief,
+            record.load_carg_text,
+            record.dump_cargo_text,
+            record.comp_text,
+            record.fail_text,
+            record.ship_done_text,
+            record.refuse_text,
+        ];
+        let offer = 4000 + (id - 128);
+        let descs = fields
+            .into_iter()
+            .flatten()
+            .map(|desc| desc.0)
+            .chain([offer]);
+        for desc in descs {
+            let Some(Ok(text)) = data.get::<Desc>(desc) else {
+                continue;
+            };
+            let text = text.record.text.as_str().to_owned();
+            texts += 1;
+            if TAGS.iter().any(|tag| text.contains(tag)) {
+                tagged += 1;
+            }
+            let filled = text_tags::expand(&text, &context(0), &names);
+            for tag in TAGS {
+                assert!(!filled.contains(tag), "mïsn {id}, dësc {desc}: {tag} left");
+            }
+            assert!(!filled.contains(text_tags::UNSET), "mïsn {id}, dësc {desc}");
+        }
+    }
+    assert!(texts > 1000, "{texts} texts read");
+    assert!(tagged > 100, "{tagged} texts with tags");
+    assert_eq!(
+        text_tags::expand("<DST>", &context(0), &names),
+        names.places.stellars[&listed[0].id],
+        "the stock stellar's name"
+    );
+    assert_eq!(names.cargo[6], "*passengers");
+    assert_eq!(text_tags::expand("<CT>", &context(6), &names), "passengers");
+}
+
+#[test]
+fn a_new_stock_pilots_mission_computer_lists_its_offers_named_and_filled() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = docked_new_pilot(&data);
+    let computer = session.mission_computer().expect("the computer opens");
+    assert_eq!(
+        computer.rows.len(),
+        session.mission_offers(Venue::Computer).len()
+    );
+    assert!(!computer.rows.is_empty());
+    for row in &computer.rows {
+        assert!(!row.name.is_empty(), "{:?} is named", row.mission);
+        assert!(!row.name.contains(';'), "{:?}: {}", row.mission, row.name);
+        for tag in TAGS {
+            assert!(!row.name.contains(tag), "{:?}: {}", row.mission, row.name);
+            assert!(!row.text.contains(tag), "{:?}: {}", row.mission, row.text);
+        }
+    }
+    assert!(
+        computer.rows.iter().any(|row| !row.text.is_empty()),
+        "the offers have texts"
+    );
+}
+
+#[test]
+fn a_stock_offer_of_flag_0x0100_marks_its_destinations_holder_on_its_map() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    let delivery = missions
+        .iter()
+        .find(|record| record.id == MissionId(128))
+        .expect("mïsn 128");
+    assert_ne!(
+        delivery.flags & MARKS_DESTINATION,
+        0,
+        "Delivery to Earth; Vellos1"
+    );
+    let session = docked_new_pilot(&data);
+    let listed = data.listed_stellars();
+    let mut marked = 0;
+    for offer in session.mission_offers(Venue::Computer) {
+        let record = missions
+            .iter()
+            .find(|record| record.id == offer.mission)
+            .expect("a mïsn");
+        let marks = session.offer_map_marks(offer.mission);
+        assert!(marks.multi_arrows, "{:?}", offer.mission);
+        assert_eq!(
+            session.computer_map_marks(Some(offer.mission)),
+            marks,
+            "{:?}: the computer's are the offer's",
+            offer.mission
+        );
+        let stellar = offer
+            .destination
+            .or(offer.return_to)
+            .map(|stop: Stop| stop.stellar);
+        let holder = stellar.and_then(|stellar| {
+            session
+                .galaxy()
+                .holder(listers_of(&listed, stellar), session.pilot().system())
+        });
+        if record.flags & MARKS_DESTINATION == 0 {
+            assert_eq!(marks.green, None, "{:?}", offer.mission);
+        } else {
+            assert_eq!(marks.green, holder, "{:?}", offer.mission);
+            marked += usize::from(holder.is_some());
+        }
+    }
+    assert!(marked > 0, "an offer here marks a system green");
+}
+
+/// The first bit `record`'s `OnSuccess` sets that nothing after it in the
+/// script clears or toggles.
+fn bit_set_on_success(record: &MissionRecord) -> Option<Bit> {
+    let ops = &record.on_success.tree()?.ops;
+    ops.iter().enumerate().find_map(|(at, op)| {
+        let SetOp::Set(bit) = op else {
+            return None;
+        };
+        let undone = ops[at + 1..].iter().any(
+            |later| matches!(later, SetOp::Clear(other) | SetOp::Toggle(other) if other == bit),
+        );
+        (!undone).then_some(*bit)
+    })
+}
+
+/// Whether `offer` of `record` carries cargo loaded as it is accepted
+/// (`PickupMode` 0) and unloaded at its destination or its return, which
+/// is the destination (`ReturnStel` -1), paying credits, with no ship.
+fn carries_cargo_there_and_back(offer: &Offer, record: &MissionRecord) -> bool {
+    offer.cargo_type.is_some_and(|cargo| cargo >= 0)
+        && offer.cargo_tons > 0
+        && offer.pay > 0
+        && offer.destination.is_some()
+        && offer.return_to == offer.destination
+        && record.return_stel == -1
+        && record.pickup_mode == 0
+        && matches!(record.drop_off_mode, 0 | 1)
+        && record.ships.count <= 0
+}
+
+/// `date`, `days` days on.
+fn days_after(date: GameDate, days: i16) -> GameDate {
+    (0..days.max(0)).fold(date, |date, _| date.next_day())
+}
+
+#[test]
+fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_new_pilot(&data);
+    let missions = data.missions();
+    let record_of = |offer: &Offer| {
+        missions
+            .iter()
+            .find(|record| record.id == offer.mission)
+            .expect("a mïsn")
+    };
+    // The first such offer whose `OnSuccess` sets a bit, to see it run.
+    // None of the stock missions whose `OnSuccess` sets one is offered to
+    // a new pilot (each waits on the story's bits), so otherwise the
+    // first such offer: its `OnSuccess` is empty, and the success that
+    // runs it is seen by its pay and its `DatePostInc` days.
+    let offers = session.mission_offers(Venue::Computer);
+    let qualifies = |offer: &&Offer| carries_cargo_there_and_back(offer, record_of(offer));
+    let offer = offers
+        .iter()
+        .filter(qualifies)
+        .find(|offer| bit_set_on_success(record_of(offer)).is_some())
+        .or_else(|| offers.iter().find(qualifies))
+        .cloned()
+        .expect("a stock cargo mission to and from one stellar");
+    let record = record_of(&offer);
+    let bit = bit_set_on_success(record);
+    let slot = session
+        .accept_mission(offer.mission, &mut NeverFires)
+        .expect("accepted");
+    let active = session.pilot().missions().get(slot).expect("held");
+    assert!(active.aboard, "{:?} loaded at accept", offer.mission);
+    assert_eq!(session.pilot().total_cargo(), offer.cargo_tons);
+    let cash = session.pilot().cash();
+    let today = session.date();
+
+    // Landed at the destination, before the deadline.
+    let destination = offer.destination.expect("a destination");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
+    save["stellar"] = serde_json::json!(destination.stellar.0);
+    save["system"] = serde_json::json!(destination.system.expect("a system").0);
+    let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(&data, there).expect("flies");
+    let system = session.pilot().system();
+    session
+        .land_at(&data, system, destination.stellar)
+        .expect("lands");
+    assert_eq!(session.landed(), Some(destination.stellar), "docked there");
+    let _ = session.settle_script(&data, &mut NeverFires);
+
+    assert!(
+        !session.pilot().missions().holds(slot, offer.mission),
+        "{:?} completed",
+        offer.mission
+    );
+    assert_eq!(session.pilot().total_cargo(), 0, "unloaded");
+    assert_eq!(session.pilot().cash(), cash + offer.pay, "paid");
+    assert_eq!(
+        session.date(),
+        days_after(today, record.date_post_inc),
+        "its DatePostInc days, after OnSuccess"
+    );
+    if let Some(bit) = bit {
+        assert!(session.control_bit(bit), "OnSuccess set {bit:?}");
+    }
+}
+
+#[test]
+fn the_one_stock_mission_movie_is_906s_offer_after_its_dialog() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let filmed: Vec<(MissionId, nova_sim::TextMovies)> = PilotCatalog::mission_texts(&data)
+        .into_iter()
+        .filter(|texts| texts.movies != nova_sim::TextMovies::default())
+        .map(|texts| (texts.id, texts.movies))
+        .collect();
+    assert_eq!(
+        filmed,
+        [(
+            MissionId(906),
+            nova_sim::TextMovies {
+                offer: Some(nova_sim::DescMovie {
+                    file: "\u{1}".to_owned(),
+                    after: true,
+                    double_size: false,
+                    cinematic: false,
+                }),
+                ..nova_sim::TextMovies::default()
+            }
+        )],
+        "dësc 4778, Flags 1"
+    );
+}
+
+/// Every stock storyline finale that moves the player to `sÿst` 472 leaves
+/// the port after it (`Q`), so the landed `M`'s selection never reaches the
+/// port's bar in stock. And each system's first stellar, read without
+/// sprites, is the first of its landing sites: `spöb` 420 for 472.
+#[test]
+fn every_stock_m472_leaves_the_port_and_each_systems_first_stellar_is_its_first_site() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    for id in [354, 381, 417, 474, 686, 712, 887] {
+        let record = missions
+            .iter()
+            .find(|record| record.id == MissionId(id))
+            .expect("a mïsn");
+        let ops = &record.on_success.tree().expect("OnSuccess parses").ops;
+        let moved = ops
+            .iter()
+            .position(|op| *op == SetOp::MoveTo(SystemId(472)))
+            .unwrap_or_else(|| panic!("mïsn {id} moves to 472"));
+        assert!(
+            ops[moved + 1..]
+                .iter()
+                .any(|op| matches!(op, SetOp::LeaveStellar(_))),
+            "mïsn {id} leaves after its M472"
+        );
+    }
+    let first = data.first_stellars();
+    let landing: Vec<_> = data
+        .star_map()
+        .iter()
+        .filter_map(|system| Some((system.id, data.landing_sites(system.id).first()?.id)))
+        .collect();
+    assert_eq!(first, landing);
+    assert!(
+        first.contains(&(SystemId(472), StellarId(420))),
+        "Our Spiel"
+    );
+}

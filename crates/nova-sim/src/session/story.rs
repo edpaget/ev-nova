@@ -153,10 +153,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // module).
             Consumer::Offers => {
                 if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
-                    if self.session.offers.due_at(stellar) {
-                        self.session.refresh_galaxy(self.catalog);
-                    }
-                    self.session.roll_offers(stellar, &mut *self.chance);
+                    self.session
+                        .roll_landing_offers(stellar, self.catalog, &mut *self.chance);
                 }
             }
             // The galaxy refresh after the land check (@0xa1af2) and the
@@ -208,8 +206,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn settle_leave(&mut self) -> bool {
-        self.session
-            .settle_leave(self.catalog, &mut *self.chance, self.settled)
+        self.session.settle_leave(self.settled)
     }
 
     fn take_raised(&mut self) -> VecDeque<StoryEvent> {
@@ -439,6 +436,23 @@ impl Session {
         }
     }
 
+    /// Rolls the offers at `stellar`, landed on, as a landing does:
+    /// first refreshing the galaxy from `catalog` when they are due
+    /// there, then drawing on `chance`.
+    pub(super) fn roll_landing_offers<C>(
+        &mut self,
+        stellar: StellarId,
+        catalog: &C,
+        chance: &mut dyn Chance,
+    ) where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        if self.offers.due_at(stellar) {
+            self.refresh_galaxy(catalog);
+        }
+        self.roll_offers(stellar, chance);
+    }
+
     /// The galaxy refresh at a landing or a new pilot's start
     /// (`_PropagateMissionBitEffects` @0x99676): every system's visibility
     /// written from its `Visibility`, and every nebula's activity from its
@@ -453,6 +467,7 @@ impl Session {
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
+        self.propagate_avail_bits();
         let refresh = self.refresh_now();
         self.change_galaxy(catalog, |overlay| {
             refresh.write(overlay);
@@ -470,6 +485,7 @@ impl Session {
     /// rebuild follows its refresh (@0x751ca, @0x751cf): in flight, the
     /// stellars shown are those the refreshed galaxy gives.
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
+        self.propagate_avail_bits();
         if !self.refresh_now().write(&mut self.pilot.galaxy) {
             return;
         }
@@ -1377,13 +1393,8 @@ mod tests {
 
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let mut session = Session::fly(&catalog, saved).expect("flies");
-        // The `Landed` a pilot resumed docked raises settles before the
-        // fixture registers again.
         let _ = session.settle_script(&catalog, &mut NeverFires);
         register(&mut session, subs());
-        session
-            .take_off(&catalog, &mut NeverFires)
-            .expect("takes off");
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [5, 6], "still fired after the reload");
 
@@ -1644,7 +1655,6 @@ mod tests {
             session.settle_script(&catalog, &mut NeverFires),
             Settled {
                 moved: Some(SystemId(131)),
-                took_off: None,
                 message: None,
             }
         );
@@ -1951,15 +1961,13 @@ mod tests {
         pilot
     }
 
-    /// Asserts `session` is docked at 300, at its place, among the
-    /// stellars shown.
-    fn assert_docked_at_300(session: &Session) {
-        assert_eq!(session.landed(), Some(StellarId(300)));
+    /// Asserts `session` resumed in flight on 300, at its place.
+    fn assert_resumed_on_300(session: &Session) {
+        assert_eq!(testkit::resumed_on(session), Some(StellarId(300)));
         assert_eq!(
             session.player().position,
             crate::geometry::Vec2::new(70.0, 80.0)
         );
-        session.assert_docked_among_shown();
     }
 
     #[test]
@@ -1973,7 +1981,7 @@ mod tests {
         add_system(&mut catalog, 200, (900.0, 900.0), &[300]);
         let session = Session::fly(&catalog, saved_at_300(&catalog, &[128])).expect("flies");
         assert_eq!(session.pilot().system(), SystemId(129), "out of hidden 128");
-        assert_docked_at_300(&session);
+        assert_resumed_on_300(&session);
     }
 
     #[test]
@@ -1985,7 +1993,7 @@ mod tests {
         add_system(&mut catalog, 200, (900.0, 900.0), &[300]);
         let session = Session::fly(&catalog, saved_at_300(&catalog, &[])).expect("flies");
         assert_eq!(session.pilot().system(), SystemId(128));
-        assert_docked_at_300(&session);
+        assert_resumed_on_300(&session);
     }
 
     #[test]
@@ -1995,11 +2003,11 @@ mod tests {
         add_system(&mut catalog, 200, (900.0, 900.0), &[300]);
         let session = Session::fly(&catalog, saved_at_300(&catalog, &[])).expect("flies");
         assert_eq!(session.pilot().system(), SystemId(200));
-        assert_docked_at_300(&session);
+        assert_resumed_on_300(&session);
     }
 
     #[test]
-    fn a_stellar_listed_only_by_hidden_systems_resumes_at_the_lowest_then_moves_docked() {
+    fn a_stellar_listed_only_by_hidden_systems_resumes_at_the_lowest_then_moves_on_it() {
         // 150 and 160 list 300, both hidden; 151 stands for 150.
         let mut catalog = gated(&[(150, "b50"), (160, "b50")]);
         add_system(&mut catalog, 150, (-900.0, 0.0), &[300]);
@@ -2007,7 +2015,7 @@ mod tests {
         add_system(&mut catalog, 160, (900.0, 900.0), &[300]);
         let session = Session::fly(&catalog, saved_at_300(&catalog, &[150, 160])).expect("flies");
         assert_eq!(session.pilot().system(), SystemId(151));
-        assert_docked_at_300(&session);
+        assert_resumed_on_300(&session);
     }
 
     #[test]

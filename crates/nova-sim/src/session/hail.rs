@@ -20,7 +20,10 @@
 //! its reply, does its deed, and asks its price, drawing the haggle roll
 //! then; the player haggles ([`Session::haggle`]) and pays from its cash,
 //! which makes no save due. Every reply is said here, in the
-//! conversation's variant, read from the caller's [`CommCatalog`].
+//! conversation's variant, read from the caller's [`CommCatalog`], and
+//! filled with no mission as the dialog shows it (`_CommDialogUpdate`
+//! @0x907f7-0x9080b); a specific advice line is parsed as the press picks
+//! it (`_LoadAdvice` @0x919ca).
 //!
 //! The deeds:
 //!
@@ -70,6 +73,7 @@
 //!   aren't built, so the call is an empty hook until they are.
 
 use super::Session;
+use super::missions::TextSource;
 use crate::ai::Goal;
 use crate::board::MAX_ESCORTS;
 use crate::catalog::{CommCatalog, MissionId, StellarId};
@@ -103,13 +107,16 @@ pub(super) enum HailTarget {
 
 /// A hail under way: the NPC hailed, the conversation, what it last
 /// said, and the price it asks while the player haggles.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Talk {
     npc: NpcId,
     conversation: Conversation,
     /// What it said just before `reply` in the last press, if anything.
     first: Option<Reply>,
     reply: Reply,
+    /// The words of `reply` when it is a specific advice line, parsed as
+    /// it was said (`_LoadAdvice` @0x919ca; [`Reply::say_parsed`]).
+    said: Option<String>,
     ask: Option<Ask>,
     /// Whether the escort hailed is to be released once the channel
     /// closes.
@@ -127,6 +134,7 @@ impl Talk {
             conversation: Conversation::open(0, false, 0, &mut crate::chance::NeverFires),
             first: None,
             reply: Reply::Comm(1),
+            said: None,
             ask: None,
             release: false,
         }
@@ -190,6 +198,7 @@ impl Session {
             conversation,
             first: None,
             reply: opening,
+            said: None,
             ask: None,
             release: false,
         });
@@ -383,14 +392,20 @@ impl Session {
 
     /// The comm dialog's contents while a hail is under way and its ship
     /// is still in the system, `options` listed and the reply read from
-    /// `catalog`.
+    /// `catalog`. What the ship says is filled with no mission
+    /// ([`Session::plain_text`]), as `_CommDialogUpdate` munges the comm
+    /// text with index -1 on each update (@0x907f7-0x9080b): its mission
+    /// tags read as [`RuleKey::MissionlessTags`] says, its crossed rank
+    /// tags the governments remembered, and the `l33t` munge applies. The
+    /// escort status is not filled (@0x90688-0x906ff). This changes
+    /// nothing, as the original's update does not.
     #[must_use]
     pub fn hailing(
         &self,
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
     ) -> Option<HailView> {
-        let talk = self.talk?;
+        let talk = self.talk.as_ref()?;
         let npc = self.npcs().iter().find(|npc| npc.id == talk.npc)?;
         let hail = self.hail_of(npc, &talk.conversation);
         let buttons = options
@@ -402,17 +417,21 @@ impl Session {
             })
             .collect();
         let say = |reply: Reply| {
-            reply.say(
+            self.plain_text(&reply.say(
                 talk.conversation.variant,
                 catalog,
                 self.pilot.ship_name().unwrap_or_default(),
-            )
+            ))
+        };
+        let reply = match &talk.said {
+            Some(said) => self.plain_text(said),
+            None => say(talk.reply),
         };
         Some(HailView {
             npc: npc.id,
             ship: npc.ship,
             first: talk.first.map(say),
-            reply: say(talk.reply),
+            reply,
             comm_name: self
                 .ship_record(npc.ship)
                 .map(|record| record.comm_name.clone())
@@ -443,7 +462,7 @@ impl Session {
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Option<HailView> {
-        let mut talk = self.talk?;
+        let mut talk = self.talk.clone()?;
         if talk.ask.is_some() {
             return self.hailing(catalog, options);
         }
@@ -455,14 +474,16 @@ impl Session {
         talk.first = answer.first;
         if let Some(said) = answer.reply {
             talk.reply = said;
+            talk.said = self.take_advice(said, talk.conversation.variant, catalog, chance);
         }
         if let Some(ask) = answer.ask {
             talk.conversation.ask(chance);
             talk.ask = Some(ask);
         }
+        let npc = talk.npc;
         self.talk = Some(talk);
         if let Some(deed) = answer.deed {
-            self.act(talk.npc, deed);
+            self.act(npc, deed);
         }
         self.hailing(catalog, options)
     }
@@ -478,7 +499,7 @@ impl Session {
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
     ) -> Option<HailView> {
-        let mut talk = self.talk?;
+        let mut talk = self.talk.clone()?;
         let ask = talk.ask?;
         let settled = talk.conversation.haggle(choice, self.pilot.cash)?;
         let (said, deed) = match settled {
@@ -495,11 +516,41 @@ impl Session {
         }
         talk.first = None;
         talk.reply = said;
+        talk.said = None;
+        let npc = talk.npc;
         self.talk = Some(talk);
         if let Some(deed) = deed {
-            self.act(talk.npc, deed);
+            self.act(npc, deed);
         }
         self.hailing(catalog, options)
+    }
+
+    /// The words of `reply` when it is a specific advice line, taken in as
+    /// `_LoadAdvice` takes one in as the press picks it (@0x919a2-0x919ca):
+    /// a line that is not blank is parsed ([`TextSource::Advice`]: its
+    /// conditional text resolved, its rank governments scanned onto those
+    /// remembered, with no reset), before the "Nice to meet you." check;
+    /// none for any other reply, whose words [`Reply::say`] reads.
+    fn take_advice(
+        &mut self,
+        reply: Reply,
+        variant: u8,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) -> Option<String> {
+        if !matches!(
+            reply,
+            Reply::Advice {
+                greet_if_blank: true,
+                ..
+            }
+        ) {
+            return None;
+        }
+        let ship_name = self.pilot.ship_name().unwrap_or_default().to_owned();
+        Some(reply.say_parsed(variant, catalog, &ship_name, |line| {
+            self.take_in(TextSource::Advice, line, chance)
+        }))
     }
 
     /// Ends the hail under way, if any; an escort Release was pressed
@@ -710,6 +761,7 @@ mod tests {
     use crate::ai::NovaAi;
     use crate::catalog::{DudeId, DudeRecord, GovtId, GovtRecord, ShipId, SystemTraffic};
     use crate::catalog::{RankId, RankRecord, StellarId, SystemId};
+    use crate::chance::NeverFires;
     use crate::combat::Strike;
     use crate::combat::hull::{HullSpec, NovaDisable};
     use crate::geometry::Vec2;
@@ -1462,6 +1514,101 @@ mod tests {
         assert_eq!(greeted(&mut session, &empty, 2), "Greetings.");
     }
 
+    // The comm text's tags (`_CommDialogUpdate` @0x907f7-0x9080b) and the
+    // specific advice's parse (`_LoadAdvice` @0x919ca).
+
+    /// [`hailable`] with `STR#` 7505's first line `advice`.
+    fn advising(advice: &str) -> FakePilotCatalog {
+        let mut catalog = hailable();
+        catalog.strings[3].1[0] = advice.to_owned();
+        catalog
+    }
+
+    /// [`targeting`], its ship giving specific advice (`STR#` 7505), the
+    /// pilot "Stock".
+    fn advised(catalog: &FakePilotCatalog) -> Session {
+        let mut session = targeting(catalog);
+        npc(&mut session).info_types = 0x4005;
+        session.pilot.name = "Stock".to_owned();
+        session
+    }
+
+    #[test]
+    fn the_comm_text_is_filled_with_no_mission() {
+        let catalog = advising("Hello, <PN>. Off to <DST>?");
+        let mut session = advised(&catalog);
+        assert_eq!(
+            greeted(&mut session, &catalog, 2),
+            "Hello, Stock. Off to [Error]?"
+        );
+        let rules = Rulebook::default().with_override(RuleKey::MissionlessTags, RuleSource::Bible);
+        let mut session = advised(&catalog).with_rules(rules);
+        assert_eq!(
+            greeted(&mut session, &catalog, 2),
+            "Hello, Stock. Off to <DST>?",
+            "by the other reading, the mission tags as written"
+        );
+    }
+
+    #[test]
+    fn the_opening_line_is_filled_too() {
+        let mut catalog = hailable();
+        catalog.strings[0].1[3] = "Hail, <PN>.".to_owned();
+        let mut session = targeting(&catalog);
+        session.pilot.name = "Stock".to_owned();
+        let (hailed, _) = hail_with(&mut session, &catalog, &opening(3));
+        assert_eq!(hailed.map(|view| view.reply), Ok("Hail, Stock.".to_owned()));
+    }
+
+    #[test]
+    fn specific_advice_reads_its_conditional_text_by_the_pilots_gender() {
+        let catalog = advising("Fly safe, {G \"sir\" \"ma'am\"}.");
+        let mut session = advised(&catalog);
+        assert_eq!(greeted(&mut session, &catalog, 2), "Fly safe, sir.");
+        let mut session = advised(&catalog);
+        session.pilot.gender = crate::pilot::Gender::Female;
+        assert_eq!(greeted(&mut session, &catalog, 2), "Fly safe, ma'am.");
+    }
+
+    #[test]
+    fn specific_advice_emptied_by_its_conditional_text_is_nice_to_meet_you() {
+        let catalog = advising("{b7 \"Secret.\"}");
+        let mut session = advised(&catalog);
+        assert_eq!(
+            greeted(&mut session, &catalog, 2),
+            "c48",
+            "parsed before the check (@0x91aa9)"
+        );
+    }
+
+    #[test]
+    fn specific_advice_parses_its_rank_governments_with_no_reset() {
+        let catalog = advising("Hail the <PRK128>.");
+        let mut session = advised(&catalog);
+        let _ = session.take_in(TextSource::Quote, "<SRK129>!", &mut NeverFires);
+        let before = session.plain_text("<SRK129> <PRK128>");
+        assert_eq!(before, "captain <PRK128>");
+        let _ = greeted(&mut session, &catalog, 2);
+        assert_eq!(
+            session.plain_text("<SRK129> <PRK128>"),
+            "captain captain",
+            "the <PRK128> remembered beside the <SRK129> kept"
+        );
+        let plain = advising("No ranks here.");
+        let mut session = advised(&plain);
+        let _ = session.take_in(TextSource::Quote, "<SRK129>!", &mut NeverFires);
+        let _ = greeted(&mut session, &plain, 2);
+        assert_eq!(session.plain_text("<SRK129>"), "captain", "kept");
+    }
+
+    #[test]
+    fn with_leet_mode_the_comm_text_is_munged() {
+        let catalog = advising("Hello, <PN>.");
+        let mut session = advised(&catalog);
+        session.leet = true;
+        assert_eq!(greeted(&mut session, &catalog, 2), "H377o, Stox0r.");
+    }
+
     #[test]
     fn greetings_twice_says_the_same_and_rolls_nothing_more() {
         let catalog = hailable();
@@ -1561,10 +1708,15 @@ mod tests {
         });
         session.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 5.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
@@ -2226,10 +2378,15 @@ mod tests {
         });
         session.strikes.push(Strike {
             ship: ShipRef::Npc(NpcId(0)),
-            by: ShipRef::Player,
+            by: Some(ShipRef::Player),
             damage: 5.0,
             downed: None,
-            provokes: true,
+            direct: true,
+            intended: true,
+            lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert!(!matches!(npc.goal, Goal::Assist(_)), "{:?}", npc.goal);

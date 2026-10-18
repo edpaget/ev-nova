@@ -44,6 +44,8 @@ use super::Session;
 use crate::catalog::{PilotCatalog, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
+use crate::geometry::Vec2;
+use crate::landing::nearest_stellar;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// The disputed orders of the set-expression hooks that the session
@@ -132,18 +134,43 @@ impl Session {
     /// `nebulae` module); explores the start system's visible
     /// neighbours, or by the engine their heads (see the `explored`
     /// module), destroys the stellars that start the
-    /// game destroyed (see the `stellars` module), then runs the first
-    /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
+    /// game destroyed (see the `stellars` module), then, by the engine's
+    /// reading of
+    /// [`RuleKey::CharacterStatusSpread`](crate::RuleKey::CharacterStatusSpread),
+    /// spreads the first `chär`'s statuses to its governments' allies and
+    /// enemies, in both legal stores ([`legal::spread_statuses`](crate::legal::spread_statuses)),
+    /// then runs its `OnStart` once, drawing on `chance` (see the module docs),
     /// and nothing when the `chär` cannot be read, then refreshes the
     /// galaxy, so the systems its bits show are visible (`_PlayGame`
-    /// @0x457e9; see the `story` module), and last rebuilds the stellars
-    /// shown (see the `stellars` module). For a pilot just created and
+    /// @0x457e9; see the `story` module), rebuilds the stellars shown
+    /// (see the `stellars` module), and last draws the offers' roll table
+    /// on `chance`, as `_DoNewPilot`'s `_ResetPlayer` does (@0x18dd4).
+    /// The original draws it before the `OnStart`; nothing here reads it,
+    /// so it settles before the first frame either way. For a pilot just created and
     /// flown, before its first save; never for one opened from a save.
+    ///
+    /// It is the engine's `_DoNewPilot` seam, so it first puts the ship in
+    /// space at (50, 50), at rest, facing up, as `_DoNewPilot`'s
+    /// `_ResetPlayer(1)` does (@0x18dd4, @0x1d427-0x1d441), where nothing
+    /// later moves it: [`Session::start`], which a test flies a new pilot
+    /// with, keeps the centre. And after the `OnStart` and the refresh it
+    /// records, as the stellar last landed on, the one `_DoNewPilot`
+    /// saves (@0x1926e-0x192a6): the stellar shown nearest the ship
+    /// ([`nearest_stellar`]), or else the first the system lists, or else
+    /// none, so a new pilot reopened before it lands resumes over it.
+    /// Left out: the original saves stellar index 0 when the system lists
+    /// none (@0x19358); the engine keeps none, which resumes at the
+    /// centre.
     pub fn begin(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut dyn Chance,
     ) {
+        // `_ResetPlayer(1)` (@0x18dd4, @0x1d427-0x1d441).
+        self.player.position = Vec2::new(50.0, 50.0);
+        self.player.velocity = Vec2::ZERO;
+        self.player.heading = 0.0;
+        self.touchdown = self.player.position;
         // A new pilot starts the first-flight tutorial (`_DoNewPilot`
         // @0x19254; see the `tutorial` module).
         self.tutorial = crate::tutorial::Tutorial::NEW_PILOT;
@@ -156,6 +183,19 @@ impl Session {
         self.explore_start_neighbours();
         self.destroy_from_the_start();
         if let Ok(start) = catalog.first_character() {
+            // `_DoNewPilot`'s first `_ActivateCharResource` (@0x18e5f),
+            // after `_ResetPlayerRecord` (@0x18de0) and before the
+            // `OnStart`: the `chär`'s statuses spread (see the `legal`
+            // module). By the Bible, `Pilot::new` and the flight's
+            // derivation already keep each with its own government.
+            if self.rules.source_for(crate::RuleKey::CharacterStatusSpread) == RuleSource::Engine {
+                crate::legal::spread_statuses(
+                    &mut self.pilot,
+                    self.galaxy.governed(),
+                    &start.legal,
+                    &self.govts,
+                );
+            }
             if self.hook_rules().start_ship_purchase == RuleSource::Bible {
                 self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
             }
@@ -164,11 +204,21 @@ impl Session {
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
         // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
         self.refresh_galaxy(catalog);
+        // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
+        // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
+        // pilot is what it saves.
+        self.pilot.stellar = nearest_stellar(self.player.position, &self.sites)
+            .or_else(|| self.listed.first().map(|site| site.id));
         // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
         self.reset_precalced();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
+        // `_DoNewPilot`'s `_ResetPlayer` (@0x18dd4) draws the offers' roll
+        // table before its `OnStart`; nothing above reads the table, so
+        // drawing it last settles the same table before the first frame
+        // and the first save.
+        self.draw_offer_rolls(chance);
     }
 }
 
@@ -181,7 +231,7 @@ mod tests {
 
     use super::*;
     use crate::board::{Assigned, Assignment, Take, Taken};
-    use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError};
+    use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError, StellarId, SystemId};
     use crate::control::{Bit, SetOp};
     use crate::outfit_effects::Rgb15;
     use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
@@ -1106,6 +1156,76 @@ mod tests {
         }
     }
 
+    /// [`starting_with`] whose `chär` gives government 128 a status of
+    /// 20, its systems 130 of 128, 131 of its ally 129 (`InitialRec` 5),
+    /// 132 of its enemy 130 and 133 independent.
+    fn with_a_status() -> FakePilotCatalog {
+        use crate::catalog::{GovtId, GovtRecord, SystemId};
+        let mut catalog = starting_with("");
+        let start = catalog.character.as_mut().expect("a chär");
+        start.legal = [Some((GovtId(128), 20)), None, None, None];
+        for (system, govt) in [(130, Some(128)), (131, Some(129)), (132, Some(130))] {
+            let star = catalog
+                .star_map
+                .iter_mut()
+                .find(|star| star.id == SystemId(system))
+                .expect("a system");
+            star.govt = govt.map(GovtId);
+        }
+        catalog.govts = vec![
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..crate::testkit::govt(128)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                initial_rec: 5,
+                ..crate::testkit::govt(129)
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..crate::testkit::govt(130)
+            },
+        ];
+        catalog
+    }
+
+    fn records(session: &Session) -> ([i16; 4], [i16; 3]) {
+        use crate::catalog::{GovtId, SystemId};
+        let pilot = session.pilot();
+        (
+            [130, 131, 132, 133].map(|system| pilot.system_record(SystemId(system))),
+            [128, 129, 130].map(|govt| pilot.legal_record(GovtId(govt))),
+        )
+    }
+
+    #[test]
+    fn by_the_engine_beginning_spreads_the_chärs_statuses_to_allies_and_enemies() {
+        let catalog = with_a_status();
+        let mut session = new_pilot(&catalog);
+        assert_eq!(
+            records(&session),
+            ([20, 5, 0, 0], [20, 0, 0]),
+            "flying alone derives each system from its government, as a load does"
+        );
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(
+            records(&session),
+            ([20, 20, -20, 0], [20, 20, -20]),
+            "both stores: the ally's and the enemy's too"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_chärs_status_stays_with_its_own_government() {
+        let catalog = with_a_status();
+        let rules =
+            Rulebook::default().with_override(RuleKey::CharacterStatusSpread, RuleSource::Bible);
+        let mut session = new_pilot(&catalog).with_rules(rules);
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(records(&session), ([20, 5, 0, 0], [20, 0, 0]));
+    }
+
     #[test]
     fn on_start_sees_the_starting_system_explored() {
         let catalog = starting_with("X131");
@@ -1140,6 +1260,97 @@ mod tests {
         session.begin(&unreadable, &mut Scripted::default());
         assert!(!session.control_bit(bit(5)));
         assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn begin_puts_the_new_pilots_ship_at_50_50_at_rest_facing_up() {
+        let catalog = starting_with("");
+        let mut session = new_pilot(&catalog);
+        session.player.heading = 90.0;
+        session.player.velocity = Vec2::new(3.0, 4.0);
+        session.begin(&catalog, &mut Scripted::default());
+        let player = session.player();
+        assert_eq!(player.position, Vec2::new(50.0, 50.0));
+        assert_eq!(player.velocity, Vec2::ZERO);
+        assert_eq!(player.heading, 0.0);
+        assert_eq!(session.landed(), None, "in space, not landed");
+    }
+
+    #[test]
+    fn begin_records_the_stellar_nearest_50_50_as_last_landed() {
+        // 130 holds 128 at (30, -40) and 129 at (2000, 0).
+        let catalog = starting_with("");
+        let mut session = new_pilot(&catalog);
+        assert_eq!(session.pilot().stellar(), None);
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn begin_records_the_first_listed_stellar_when_none_can_be_landed_on() {
+        let mut catalog = starting_with("");
+        catalog.sites = vec![(
+            SystemId(130),
+            [(129, 2000.0), (128, 30.0)]
+                .map(|(id, x)| crate::catalog::LandingSite {
+                    flags: 0,
+                    ..crate::testkit::planet(id, x, 0.0)
+                })
+                .to_vec(),
+        )];
+        let mut session = new_pilot(&catalog);
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(session.pilot().stellar(), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn begin_picks_the_stellar_nearest_where_it_puts_the_ship_not_the_centre() {
+        // 128 is nearest the centre, 129 nearest (50, 50).
+        let mut catalog = starting_with("");
+        catalog.sites = vec![(
+            SystemId(130),
+            vec![
+                crate::testkit::planet(128, -20.0, -20.0),
+                crate::testkit::planet(129, 60.0, 60.0),
+            ],
+        )];
+        let mut session = new_pilot(&catalog);
+        assert_eq!(session.player().position, Vec2::ZERO, "flown at the centre");
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(session.pilot().stellar(), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn begin_falls_back_to_the_first_stellar_listed_though_it_is_not_shown() {
+        // 130 lists 127 first, but 129, visible and lower, owns it, so 130
+        // doesn't show it; none of the three can be landed on.
+        let mut catalog = starting_with("");
+        let unlandable = |id| crate::catalog::LandingSite {
+            flags: 0,
+            ..crate::testkit::planet(id, 0.0, 0.0)
+        };
+        catalog.sites = vec![
+            (SystemId(129), vec![unlandable(127)]),
+            (SystemId(130), [127, 128, 129].map(unlandable).to_vec()),
+        ];
+        catalog.systems.push(SystemId(129));
+        catalog
+            .star_map
+            .push(crate::testkit::star(129, (-600.0, 600.0), &[]));
+        let mut session = new_pilot(&catalog);
+        session.begin(&catalog, &mut Scripted::default());
+        let shown: Vec<StellarId> = session.sites.iter().map(|site| site.id).collect();
+        assert_eq!(shown, [StellarId(128), StellarId(129)], "127 not shown");
+        assert_eq!(session.pilot().stellar(), Some(StellarId(127)));
+    }
+
+    #[test]
+    fn begin_records_no_stellar_when_the_system_lists_none() {
+        let mut catalog = starting_with("");
+        catalog.sites = vec![(SystemId(130), Vec::new())];
+        let mut session = new_pilot(&catalog);
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(session.pilot().stellar(), None);
     }
 
     #[test]

@@ -21,7 +21,9 @@
 //!   next take-off populates the new system; a held `P` sound and the
 //!   fighters out are kept. It enters the system by the relocation's row
 //!   of the table in the `entry` module ([`Session::enter_system`]). It
-//!   makes no sound and raises no message, and leaves the ship, its
+//!   makes no sound and raises no message, and raises no `Landed`: the
+//!   new stellar's offers are rolled at the next settling instead, if the
+//!   ship is still landed there. It leaves the ship, its
 //!   outfits, stats and reserves as they were. It tells
 //!   [`SessionEvent::SystemChanged`](super::SessionEvent) into a system
 //!   other than the one whose stellars are shown, and
@@ -110,7 +112,9 @@ impl Session {
             self.save_due = true;
             return Ok(());
         }
-        self.enter_at(catalog, system, stellar)
+        self.enter_at(catalog, system, stellar)?;
+        self.offer_roll_due = Some(stellar);
+        Ok(())
     }
 
     /// Lands the ship at `stellar` in `system`, read from `catalog`,
@@ -554,6 +558,24 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
+    #[test]
+    fn a_moves_dock_ends_a_warp_up_playing() {
+        // The move docks by the entry table's `Reset::Dock`, not through
+        // a landing, so it ends the warp-ups itself (see `warp::WarpUps`),
+        // for the session only: no landing in the original halts them,
+        // so it raises no halt.
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.warp_ups.start(false, 364);
+        session.warp_ups.start(true, 252);
+        session.take_sounds();
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.warp_ups, crate::warp::WarpUps::default());
+        assert_eq!(session.take_sounds(), [], "silently");
+    }
+
     /// The original redraws the rolls only in its daily step
     /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
     /// them: a move, passing no day, keeps them, and only the redraw due
@@ -724,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_pilot_saved_flies_again_docked_at_the_new_stellar() {
+    fn a_moved_pilot_saved_flies_again_on_the_new_stellar() {
         let catalog = atlas();
         let mut session = landed(&catalog);
         session
@@ -733,9 +755,8 @@ mod tests {
         session.assert_docked_among_shown();
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        flown.assert_docked_among_shown();
         assert_eq!(flown.system(), SystemId(131));
-        assert_eq!(flown.landed(), Some(StellarId(140)));
+        assert_eq!(crate::testkit::resumed_on(&flown), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
     }
 
@@ -815,6 +836,70 @@ mod tests {
         assert!(session.take_save_due());
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert!(offered(&session, 200));
+    }
+
+    #[test]
+    fn a_move_to_another_stellar_rolls_its_offers_as_it_settles() {
+        let catalog = with_missions(vec![crate::catalog::MissionRecord {
+            avail_stel: 129,
+            ..crate::testkit::mission(200)
+        }]);
+        let mut session = docked(&catalog);
+        assert_eq!(
+            session.relocate(&catalog, SystemId(130), StellarId(129)),
+            Ok(())
+        );
+        assert!(!offered(&session, 200));
+        assert!(landings(&session).is_empty(), "a move raises no Landed");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(offered(&session, 200));
+    }
+
+    #[test]
+    fn a_move_to_the_stellar_docked_at_rolls_nothing() {
+        let catalog = with_missions(vec![
+            crate::testkit::mission(200),
+            crate::testkit::mission(201),
+        ]);
+        let mut session = docked(&catalog);
+        let slot = session
+            .accept_mission(crate::catalog::MissionId(200), &mut NeverFires)
+            .expect("accepted");
+        // An abort forgets the offers' stellar, so only the early return
+        // keeps the settling from rolling the visit's offers again.
+        session
+            .abort_mission(slot, &mut NeverFires)
+            .expect("aborted");
+        session.offers.set_roll(crate::catalog::MissionId(201), 77);
+        assert_eq!(
+            session.relocate(&catalog, SystemId(130), StellarId(128)),
+            Ok(())
+        );
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.offer_rolls().roll(crate::catalog::MissionId(201)),
+            Some(77),
+            "the visit's offers not rolled again"
+        );
+    }
+
+    #[test]
+    fn a_move_then_a_take_off_rolls_nothing_as_it_settles() {
+        let catalog = with_missions(vec![crate::catalog::MissionRecord {
+            avail_stel: 129,
+            ..crate::testkit::mission(200)
+        }]);
+        let mut session = docked(&catalog);
+        assert_eq!(
+            session.relocate(&catalog, SystemId(130), StellarId(129)),
+            Ok(())
+        );
+        assert_eq!(
+            session.take_off(&catalog, &mut NeverFires),
+            Some(StellarId(129))
+        );
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(!offered(&session, 200), "rolled only while landed there");
     }
 
     #[test]
@@ -921,7 +1006,8 @@ mod tests {
         let catalog = atlas();
         let flying =
             Session::fly(&catalog, Pilot::new(&catalog, "Ada").expect("starts")).expect("flies");
-        for session in [landed(&catalog), flying] {
+        // Boxed: two sessions side by side outgrow clippy's stack-array limit.
+        for session in [Box::new(landed(&catalog)), Box::new(flying)] {
             for (to, refusal) in [
                 ((132, 140), RelocateRefusal::NoSystem),
                 ((999, 140), RelocateRefusal::NoSystem),
@@ -931,7 +1017,7 @@ mod tests {
                 ((131, 142), RelocateRefusal::NotLandable),
                 ((131, 143), RelocateRefusal::NotLandable),
             ] {
-                assert_landing_refused(session.clone(), &catalog, to, refusal);
+                assert_landing_refused((*session).clone(), &catalog, to, refusal);
             }
         }
     }

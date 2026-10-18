@@ -52,7 +52,6 @@ use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
@@ -137,7 +136,8 @@ pub struct HireScreen {
     /// The ship asked for, until it is taken.
     order: Option<ShipId>,
     closed: bool,
-    sounds: Vec<Sound>,
+    /// The `dësc` shown since this was last taken, to be loaded.
+    description_request: Option<i16>,
 }
 
 impl HireScreen {
@@ -199,7 +199,7 @@ impl HireScreen {
             panel: None,
             order: None,
             closed: false,
-            sounds: Vec::new(),
+            description_request: None,
         };
         screen.select(0);
         screen
@@ -252,6 +252,36 @@ impl HireScreen {
         self.closed
     }
 
+    /// The `dësc` of the ship the hire screen has shown since this was last
+    /// taken, once, read raw until whoever flies the ship loads it as
+    /// `_ShipyardFilter` does (with `_hiringEscort` set, @0x607e1, @0x60c0c) and answers with
+    /// `show_description`, in the same input.
+    pub fn take_description_request(&mut self) -> Option<i16> {
+        self.description_request.take()
+    }
+
+    /// Shows `text`, `dësc` `id` loaded, as the description of the ship
+    /// shown, while it is the ship whose `dësc` that is.
+    pub fn show_description(&mut self, id: i16, text: &str) {
+        let Ok(Laid {
+            dialog,
+            metrics,
+            shown: Some((ship, shown)),
+            ..
+        }) = &mut self.laid
+        else {
+            return;
+        };
+        if pilot_desc_id(*ship) == id {
+            let area = dialog.item_bounds(DESCRIPTION_ITEM).unwrap_or(Bounds::at(
+                Point::new(0.0, 0.0),
+                0.0,
+                0.0,
+            ));
+            shown.retext(text, area, &metrics.0);
+        }
+    }
+
     /// The ship asked for since it was last taken, once.
     pub fn take_order(&mut self) -> Option<ShipId> {
         self.order.take()
@@ -295,6 +325,7 @@ impl HireScreen {
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let picture = ship_picture(ship, &self.bases, |id| catalog.picture_exists(id));
         let description = Some(pilot_desc_id(ship));
+        self.description_request = description;
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
         laid.shown = Some((ship, shown));
     }
@@ -400,7 +431,7 @@ impl Screen for HireScreen {
             return ScreenAction::None;
         }
         if let Some(panel) = &mut self.panel {
-            if panel.input(input, &mut self.sounds) {
+            if panel.input(input) {
                 self.panel = None;
             }
             return ScreenAction::None;
@@ -428,7 +459,6 @@ impl Screen for HireScreen {
             self.select(index);
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
-            self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
                 self.activate(item);
             }
@@ -478,11 +508,6 @@ impl Screen for HireScreen {
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -605,6 +630,11 @@ mod tests {
                 .iter()
                 .find(|(desc, _)| *desc == id)
                 .map(|(_, graphic)| *graphic)
+        }
+
+        /// Names no movie: these screens never play one.
+        fn description_movie(&self, _id: i16) -> Option<nova_sim::DescMovie> {
+            None
         }
     }
 
@@ -937,6 +967,22 @@ mod tests {
         let mut screen = screen;
         screen.input(&key(Key::Right, false));
         assert_eq!(*art.asked.borrow(), ["dësc 14000", "dësc 14012"]);
+    }
+
+    #[test]
+    fn the_pilots_description_is_asked_to_load_and_shows_loaded() {
+        let mut screen = screen();
+        assert_eq!(screen.take_description_request(), Some(14000));
+        assert_eq!(screen.take_description_request(), None, "once");
+        screen.show_description(14000, "Loaded pilot.");
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(words.contains(&"Loaded pilot.".to_owned()), "{words:?}");
+        screen.show_description(14012, "Another.");
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(
+            !words.contains(&"Another.".to_owned()),
+            "not the ship shown"
+        );
     }
 
     #[test]
@@ -1294,6 +1340,48 @@ mod tests {
         let debug = format!("{:?}", screen());
         for part in ["HireScreen", "ShipyardCatalog", "TextMetrics", "Ship 128"] {
             assert!(debug.contains(part), "{part}: {debug}");
+        }
+    }
+
+    /// A pointer click plays nothing: `_TrackEscortButtons` @0x27987 calls
+    /// no sound routine.
+    #[test]
+    fn pointer_click_is_silent_as_the_original() {
+        let mut screen = screen();
+        let hire = item(&screen, HIRE_ITEM).center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: hire,
+            });
+            assert_eq!(screen.take_sounds(), [], "pressed: {pressed}");
+        }
+        assert_eq!(screen.take_order(), Some(ShipId(128)), "it still hires");
+    }
+
+    /// The original's hire mode of `_DoShipyardDialog` maps keys in `_ShipyardFilter` @0x60449 to items with no click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for k in [
+            Key::Right,
+            Key::Down,
+            Key::Left,
+            Key::Up,
+            HIRE_KEY,
+            INFO_KEY,
+            Key::Enter,
+            Key::Escape,
+        ] {
+            let mut screen = screen();
+            for pressed in [true, false] {
+                screen.input(&Input::Key {
+                    key: k,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
         }
     }
 }

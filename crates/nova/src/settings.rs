@@ -1,8 +1,8 @@
 //! The player's settings, all of them, kept in one settings file.
 //!
 //! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
-//!   hyperspace jumps play their white fades, and whether the game runs
-//!   fullscreen.
+//!   hyperspace jumps play their white fades, whether `dësc` movies play,
+//!   and whether the game runs fullscreen.
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -11,9 +11,16 @@
 //!   somewhere to save.
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
-//! `music_volume`, `hyperspace_effects` and `fullscreen`; files saved
-//! before the last two existed load unchanged, with the hyperspace effects
-//! on and the game windowed.
+//! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
+//! `show_map_borders` and `fullscreen`; files saved before the last four
+//! existed load unchanged, with the hyperspace effects, the movies and the
+//! map's borders on, and the game windowed.
+//!
+//! `show_map_borders` is the original's `ShowMapBorders`: whether the
+//! galaxy map shades government borders, on when absent (`_LoadPrefs`
+//! @0xced57-0xced93). The Preferences dialog never carries it, as
+//! `_SavePrefs` never writes it: the map's close saves it
+//! (`nova_view::flight::FlightView::take_map_borders_save`).
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
 use nova_view::Prefs;
@@ -21,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 /// Every setting the player can change.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // One field per on-off setting.
 pub struct GameSettings {
     /// Whether sound effects and music play, and how loud.
     pub audio: AudioSettings,
@@ -29,16 +37,24 @@ pub struct GameSettings {
     pub hyperspace_effects: bool,
     /// Whether the game runs borderless fullscreen rather than in a window.
     pub fullscreen: bool,
+    /// Whether a `dësc`'s movie plays: the original's QuickTime Movies
+    /// preference.
+    pub quicktime_movies: bool,
+    /// Whether the galaxy map shades government borders: the original's
+    /// `ShowMapBorders`.
+    pub map_borders: bool,
 }
 
 impl Default for GameSettings {
-    /// The default sound settings, with the hyperspace effects on, in a
-    /// window.
+    /// The default sound settings, with the hyperspace effects, the
+    /// movies and the map's borders on, in a window.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
             hyperspace_effects: true,
             fullscreen: false,
+            quicktime_movies: true,
+            map_borders: true,
         }
     }
 }
@@ -50,17 +66,19 @@ impl GameSettings {
         Prefs {
             sound: self.audio.prefs(),
             hyperspace_effects: self.hyperspace_effects,
+            quicktime_movies: self.quicktime_movies,
         }
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
-    /// at its chosen level as [`AudioSettings::with_prefs`] does. The
-    /// settings the dialog does not show, such as fullscreen, are kept.
+    /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
+    /// settings the prefs don't carry: the map's borders and fullscreen.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
             audio: self.audio.with_prefs(prefs.sound),
             hyperspace_effects: prefs.hyperspace_effects,
+            quicktime_movies: prefs.quicktime_movies,
             ..self
         }
     }
@@ -69,9 +87,9 @@ impl GameSettings {
 /// The settings as saved: JSON, every field optional (a missing one takes
 /// its default). Other fields, such as the rules' `rules` and
 /// `rule_overrides`, are kept and saved back as they were.
-#[allow(clippy::struct_excessive_bools)] // one per key of the file
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // One field per key of the file.
 struct Saved {
     sound: bool,
     music: bool,
@@ -79,6 +97,8 @@ struct Saved {
     music_volume: f32,
     hyperspace_effects: bool,
     fullscreen: bool,
+    quicktime_movies: bool,
+    show_map_borders: bool,
     #[serde(flatten)]
     others: Others,
 }
@@ -102,13 +122,17 @@ impl From<GameSettings> for Saved {
             music_volume: audio.music_volume.amplitude(),
             hyperspace_effects: settings.hyperspace_effects,
             fullscreen: settings.fullscreen,
+            quicktime_movies: settings.quicktime_movies,
+            show_map_borders: settings.map_borders,
             others: Others::new(),
         }
     }
 }
 
 impl From<Saved> for GameSettings {
-    /// Volumes out of range are clamped.
+    /// Volumes are clamped to what the levels reach: silent through full,
+    /// and the effects no louder than their top level's
+    /// ([`AudioSettings::capped`]).
     fn from(saved: Saved) -> Self {
         Self {
             audio: AudioSettings {
@@ -116,9 +140,12 @@ impl From<Saved> for GameSettings {
                 music: saved.music,
                 effects_volume: Volume::new(saved.effects_volume),
                 music_volume: Volume::new(saved.music_volume),
-            },
+            }
+            .capped(),
             hyperspace_effects: saved.hyperspace_effects,
             fullscreen: saved.fullscreen,
+            quicktime_movies: saved.quicktime_movies,
+            map_borders: saved.show_map_borders,
         }
     }
 }
@@ -143,8 +170,8 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// Nothing saved gives the defaults, silently. Text that cannot be
     /// read, or is not settings (not JSON, or a field of the wrong type),
     /// gives the defaults and a warning naming the store's location. A
-    /// missing field takes its default, and volumes are clamped to silent
-    /// through full. Other fields, the game's other settings, are saved
+    /// missing field takes its default, and volumes are clamped to what
+    /// the levels reach. Other fields, the game's other settings, are saved
     /// back with each change.
     pub fn open(mut store: S) -> (Self, Option<String>) {
         let mut others = Others::new();
@@ -243,7 +270,7 @@ pub fn game_settings(
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_audio::recording::MemorySettings;
-    use nova_audio::settings::level_volume;
+    use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
     use nova_view::SoundPrefs;
 
@@ -263,6 +290,8 @@ mod tests {
             audio,
             hyperspace_effects: false,
             fullscreen: false,
+            quicktime_movies: true,
+            map_borders: true,
         }
     }
 
@@ -278,6 +307,8 @@ mod tests {
                 audio: AudioSettings::default(),
                 hyperspace_effects: true,
                 fullscreen: false,
+                quicktime_movies: true,
+                map_borders: true,
             }
         );
     }
@@ -343,6 +374,8 @@ mod tests {
                 },
                 hyperspace_effects: true,
                 fullscreen: false,
+                quicktime_movies: true,
+                map_borders: true,
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -363,6 +396,8 @@ mod tests {
                 },
                 hyperspace_effects: true,
                 fullscreen: false,
+                quicktime_movies: true,
+                map_borders: true,
             }
         );
     }
@@ -408,11 +443,87 @@ mod tests {
     }
 
     #[test]
+    fn the_movies_flag_is_saved_and_a_file_without_it_has_them_on() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(keeper.settings().quicktime_movies, "an old file");
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                quicktime_movies: false,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["quicktime_movies"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert!(!restarted.settings().quicktime_movies);
+        assert!(!restarted.settings().prefs().quicktime_movies);
+        let movies_on = GameSettings::default().with_prefs(Prefs {
+            quicktime_movies: false,
+            ..Prefs::default()
+        });
+        assert!(!movies_on.quicktime_movies, "the prefs choose it");
+    }
+
+    #[test]
+    fn the_map_borders_start_on_and_a_file_without_them_has_them_on() {
+        assert!(GameSettings::default().map_borders);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(
+            keeper.settings().map_borders,
+            "ShowMapBorders' default, YES"
+        );
+    }
+
+    #[test]
+    fn the_map_borders_off_are_saved_and_read_back() {
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                map_borders: false,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["show_map_borders"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert!(!restarted.settings().map_borders);
+    }
+
+    #[test]
+    fn the_prefs_keep_the_map_borders() {
+        let off = GameSettings {
+            map_borders: false,
+            ..GameSettings::default()
+        };
+        let changed = off.with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        assert!(!changed.map_borders, "the Preferences dialog never has it");
+        assert!(!changed.hyperspace_effects);
+    }
+
+    #[test]
     fn volumes_out_of_range_are_clamped() {
         let text = r#"{"effects_volume": 3.5, "music_volume": -1}"#;
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding(text));
-        assert_eq!(keeper.settings().audio.effects_volume, Volume::FULL);
+        assert_eq!(keeper.settings().audio.effects_volume, Volume::new(0.5));
         assert_eq!(keeper.settings().audio.music_volume, Volume::SILENT);
+    }
+
+    #[test]
+    fn an_effects_volume_above_the_top_level_loads_at_the_top_level() {
+        let text = r#"{"effects_volume": 1.0, "music_volume": 1.0}"#;
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().audio.effects_volume, Volume::new(0.5));
+        assert_eq!(keeper.settings().audio.music_volume, Volume::FULL);
+        assert_eq!(keeper.settings().audio.prefs().effects_level, 8);
     }
 
     #[test]
@@ -434,6 +545,8 @@ mod tests {
                 "music_volume": 0.5,
                 "hyperspace_effects": false,
                 "fullscreen": false,
+                "quicktime_movies": true,
+                "show_map_borders": true,
             })
         );
     }
@@ -486,11 +599,14 @@ mod tests {
                 audio: quiet(),
                 hyperspace_effects: true,
                 fullscreen: false,
+                quicktime_movies: true,
+                map_borders: true,
             })
             .expect("saves");
         keeper
             .change(GameSettings {
                 hyperspace_effects: false,
+                quicktime_movies: true,
                 ..keeper.settings()
             })
             .expect("saves");
@@ -533,6 +649,7 @@ mod tests {
             Prefs {
                 sound: quiet().prefs(),
                 hyperspace_effects: false,
+                quicktime_movies: true,
             }
         );
         assert_eq!(settings.with_prefs(prefs), settings, "between levels kept");
@@ -542,8 +659,9 @@ mod tests {
                 ..prefs.sound
             },
             hyperspace_effects: true,
+            quicktime_movies: true,
         });
-        assert_eq!(changed.audio.effects_volume, level_volume(3));
+        assert_eq!(changed.audio.effects_volume, effects_level_volume(3));
         assert_eq!(changed.audio.music_volume, Volume::new(0.5));
         assert!(changed.hyperspace_effects);
         assert_eq!(GameSettings::default().prefs(), Prefs::default());
@@ -594,6 +712,8 @@ mod tests {
             },
             hyperspace_effects: false,
             fullscreen: false,
+            quicktime_movies: true,
+            map_borders: true,
         };
         assert_eq!((settings, warning), (expected, None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");

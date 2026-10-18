@@ -196,7 +196,6 @@ impl<P: Confirm> Screen for EditDialog<P> {
             return ScreenAction::None;
         }
         let event = self.dialog.input(input);
-        self.sounds.extend(self.dialog.take_sound().map(Sound::Ui));
         match event {
             Some(DialogEvent::Item(item)) if item == self.items.ok => self.confirm(),
             Some(DialogEvent::Item(item)) if item == self.items.cancel => {
@@ -223,8 +222,8 @@ impl<P: Confirm> Screen for EditDialog<P> {
         self.dialog.cancel_pointer();
     }
 
-    /// OK's and Cancel's sounds as they are clicked, and the alert as OK
-    /// is refused, in order.
+    /// The alert as OK is refused. OK and Cancel are silent under the
+    /// pointer, as `_TrackTextButtons` @0x26bb0 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -392,10 +391,7 @@ mod tests {
     fn ok_and_return_ask_the_policy_with_the_fields_text() {
         let policy = Scripted::answering(&[Some("first"), Some("second")]);
         let mut dialog = dialog_with(policy.clone());
-        assert_eq!(
-            click(&mut dialog, ITEMS.ok),
-            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
-        );
+        assert_eq!(click(&mut dialog, ITEMS.ok), []);
         assert_eq!(dialog.take_outcome(), Some("first".to_owned()));
         dialog.input(&Input::Text('d'));
         dialog.input(&key(Key::Enter));
@@ -432,6 +428,21 @@ mod tests {
         assert_eq!(dialog.take_outcome(), None);
         assert_eq!(dialog.field().text(), "abc");
         assert!(policy.asked.borrow().is_empty());
+    }
+
+    /// Return and Escape play nothing in the original:
+    /// `_EVTextInputDialog` (`ModalDialog` @0x5544d) passes a NULL filter,
+    /// and the Toolbox's standard filter only flashes the button. Space
+    /// types into the field, so it activates nothing here.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        let mut dialog = dialog_with(Scripted::answering(&[Some("first")]));
+        assert_eq!(dialog.take_sounds(), []);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some("first".to_owned()));
+        assert_eq!(dialog.take_sounds(), [], "Return");
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_sounds(), [], "Escape");
     }
 
     #[test]

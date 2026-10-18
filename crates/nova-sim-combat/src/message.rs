@@ -1,0 +1,370 @@
+//! The messages a flight session raises, as events: what happened, not
+//! the words. The view decides what each one says on the message line.
+
+use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
+use crate::clearance::DockKind;
+use crate::tutorial::TutorialHint;
+
+/// Something a `nova_sim::Session` did that the player is told of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SimMessage {
+    /// A jump ended in this system, the last of a multi-jump.
+    Arrived(SystemId),
+    /// A jump ended in a system whose message buoy shows this text, in
+    /// place of [`Arrived`](Self::Arrived) and the whole arrival line
+    /// (`_HandlePlayer` @0x6c25b-0x6c27a, `_DisplayMessage`
+    /// @0x5289-0x530e; see [`buoy`](crate::buoy)): the text ready to show,
+    /// empty for the original's empty line.
+    Buoy(String),
+    /// The ship came out of a hypergate in this system.
+    ExitedHypergate(SystemId),
+    /// The ship passed through a wormhole into this system.
+    PassedWormhole(SystemId),
+    /// A mission failed as its cargo was jettisoned (`_JettisonCargo`
+    /// @0x3e114-0x3e182).
+    MissionFailed,
+    /// A mission's deadline ran out in flight and failed it, for a
+    /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
+    /// @0x9ebd0-0x9ec53).
+    DeadlineMissed,
+    /// The mission info key was pressed with no active mission whose
+    /// `Flags` lacks 0x0400: "No active missions.", `STR#` 2002 #354
+    /// (`_HandlePlayer` @0x7055c-0x705a8).
+    NoActiveMissions,
+    /// A mission failed as one of its special ships was destroyed or
+    /// disabled, for a mission whose `Flags` lacks 0x0400
+    /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
+    /// @0x3aee8-0x3af62).
+    MissionShipLost,
+    /// The player's ship was newly disabled: "Ship disabled.", `STR#`
+    /// 2002 #287 (`_DamageShip` @0x3b181; see the session's
+    /// `player_downed` module).
+    ShipDisabled,
+    /// The player's ship newly started to break up: "Ship destroyed.",
+    /// `STR#` 2002 #288 (`_DamageShip` @0x3b3b9).
+    ShipDestroyed,
+    /// The player's ship being disabled or breaking up failed its first
+    /// unfailed `Flags2` 0x0004 mission: "Mission failed.", `STR#` 2002
+    /// #284 (`_DamageShip` @0x3b0b6, @0x3b353), hidden or not.
+    DownedMissionFailed,
+    /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
+    CargoJettisoned,
+    /// The cargo but the missions' was jettisoned (`_JettisonCargo`
+    /// @0x3e35e).
+    NonMissionCargoJettisoned,
+    /// A scan found a mission's cargo and failed the mission
+    /// (`_ScanPlayer` @0x7e6e2-0x7e7c9).
+    MissionScanned,
+    /// A scan found a mission's cargo: the player is caught smuggling
+    /// (`_ScanPlayer` @0x7e7ce-0x7ea9b).
+    Smuggling {
+        /// The scanner's ship class, which names it when there is no
+        /// `ship_name` (ship +0x76 → `shïp` +0x6c, @0x7e7d7-0x7e7ec).
+        scanner: ShipId,
+        /// The drawn ship name of the mission whose cargo the scan found,
+        /// when not empty, which names the scanner in place of its class:
+        /// by the engine, whichever ship it is (the found slot's +0x70,
+        /// @0x7e7ce); see
+        /// [`RuleKey::SmugglingShipName`](crate::RuleKey::SmugglingShipName).
+        ship_name: Option<String>,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
+    /// A disabled former escort repaired itself and rejoined the fleet
+    /// (`_HandleShip` @0x33b45-0x33bac, `STR#` 2002 #127).
+    EscortRepaired,
+    /// A disabled former fighter repaired itself and rejoined the fleet
+    /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128).
+    FighterRepaired,
+    /// A scan found illegal `jünk`: the player is caught smuggling it
+    /// (`_ScanPlayer` @0x7eba9-0x7eece; see `nova_sim::scan`).
+    IllegalJunk {
+        /// The scanner's ship class, which names it when it is no person
+        /// (ship +0x76 → `shïp` +0x6c, @0x7ebf7-0x7ec0c).
+        scanner: ShipId,
+        /// The scanner's person's name, which names it when it is one
+        /// (+0xc8d0 → `përs` +0x624, @0x7ebd1-0x7ebf5).
+        person: Option<String>,
+        /// The `jünk` found, named by its `LCName`.
+        junk: JunkId,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
+    /// A scan found an illegal outfit: the player is caught with it
+    /// (`_ScanPlayer` @0x7effc-0x7f38f; see `nova_sim::scan`).
+    IllegalOutfit {
+        /// The scanner's ship class, which names it when it is no person
+        /// (@0x7f04a-0x7f05f).
+        scanner: ShipId,
+        /// The scanner's person's name, which names it when it is one
+        /// (@0x7f024-0x7f048).
+        person: Option<String>,
+        /// The outfit found, named by its `LCName` for one, else its
+        /// `LCPlural`.
+        outfit: OutfitId,
+        /// Whether the player owns exactly one (@0x7f103-0x7f113).
+        one: bool,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
+    /// An announced fleet arrived, showing this line of its `flët`'s
+    /// `Quote`, its '#'s filled with digits, empty when the list has none
+    /// (`_HyperSpawnFleet` @0x42607-0x426f4; see
+    /// `nova_sim::traffic::quote`).
+    FleetArrivalQuote(String),
+    /// The ship took off past the tutorial with no `Q` message: the
+    /// take-off greeting, "{lead} {the stellar} on {the date}."
+    /// (`_PlayerLandOnStellar` @0x635f7-0x63732; see
+    /// [`tutorial`](crate::tutorial)).
+    TookOff {
+        /// The stellar taken off from.
+        stellar: StellarId,
+        /// Which lead, 0-4: `STR#` 2002 #(55 + `lead`), rolled
+        /// `Rand(5)` (@0x63604).
+        lead: u16,
+    },
+    /// A first-flight tutorial hint (`_HandlePlayer` @0x7093d-0x70ea2; see
+    /// [`tutorial`](crate::tutorial)).
+    Tutorial(TutorialHint),
+    /// The land key requested docking away from the stellar, and traffic
+    /// control cleared it: the request's line, "… Begin initial
+    /// approach." (`_HandlePlayerDockRequest` @0x67a41-0x67c46; see
+    /// [`clearance`](crate::clearance)).
+    DockRequested {
+        /// The stellar.
+        stellar: StellarId,
+        /// How the line words it.
+        kind: DockKind,
+    },
+    /// The land key found the stellar uninhabited: "No response.", `STR#`
+    /// 2002 #53 (`_HandlePlayerDockRequest` @0x66b51-0x66bcd).
+    NoResponse,
+    /// The dock approach cleared the pilot: its greeting, "… cleared to
+    /// land." (`_HandlePlayerDockApproach` @0x64975-0x64e8e; see
+    /// [`clearance`](crate::clearance)).
+    DockCleared {
+        /// The stellar.
+        stellar: StellarId,
+        /// How the greeting words it.
+        kind: DockKind,
+    },
+    /// The player ejected into an escape ship: "Escaping in" (`STR#` 2002
+    /// #52), a space, the ship's shipyard long name and a full stop
+    /// (`_HandlePlayer` @0x6f588-0x6f635).
+    EscapingIn {
+        /// The escape ship's class.
+        ship: ShipId,
+    },
+    /// A sabotage kill outfit went off aboard the player's ship
+    /// (`_HandlePlayer` @0x693c8-0x6969d): "Your" (`STR#` 2002 #39), the
+    /// outfit's `LCName` and "has exploded!" (#40) for one, its
+    /// `LCPlural` and "have exploded!" (#41) for more; "A bomb has
+    /// exploded onboard your ship!" (#38) with no outfit named.
+    Sabotaged {
+        /// The outfit named, and whether the player owns exactly one
+        /// (see [`kill_notice`](crate::sabotage::kill_notice)).
+        outfit: Option<(OutfitId, bool)>,
+    },
+    /// A sabotage kill outfit with no outfit named went off aboard the
+    /// player's ship in the `l33t` mode: "Someone set up us the bomb!",
+    /// the string at 0xd9962 in place of `STR#` 2002 #38 (`_HandlePlayer`
+    /// @0x69623-0x6963e).
+    BombSetUp,
+    /// A sabotage bomb outfit went off aboard the player's ship
+    /// (`_HandlePlayer` @0x69701-0x698b0), in the same words as
+    /// [`Sabotaged`](Self::Sabotaged) names an outfit, whatever its names.
+    BombExploded {
+        /// The bomb outfit.
+        outfit: OutfitId,
+        /// Whether the player owned exactly one.
+        one: bool,
+    },
+    /// A disabled or dying player's pre-jump collapsed: "Ship disabled -
+    /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
+    /// `_GetIndString` @0x68a04).
+    JumpCollapsed,
+}
+
+impl SimMessage {
+    /// How many ticks the message line shows this message for: the
+    /// frames its caller passes `_DisplayComm` (@0x90201).
+    ///
+    /// - [`Arrived`](Self::Arrived): 240 (`_HandlePlayer` @0x6c46d).
+    /// - [`Buoy`](Self::Buoy): 480 (`_DisplayMessage` @0x5300).
+    /// - [`ExitedHypergate`](Self::ExitedHypergate): 360
+    ///   (`_PlayerEnterHypergate` @0x63f1d).
+    /// - [`FleetArrivalQuote`](Self::FleetArrivalQuote): 360
+    ///   (`_HyperSpawnFleet` @0x426e9).
+    /// - [`PassedWormhole`](Self::PassedWormhole): 240
+    ///   (`_PlayerEnterWormhole` @0x645be).
+    /// - [`MissionFailed`](Self::MissionFailed),
+    ///   [`CargoJettisoned`](Self::CargoJettisoned) and
+    ///   [`NonMissionCargoJettisoned`](Self::NonMissionCargoJettisoned):
+    ///   240 (`_JettisonCargo` @0x3e17d, @0x3e3b0).
+    /// - [`MissionShipLost`](Self::MissionShipLost): 240
+    ///   (`_HandleShipDisplay` @0x2dbab, `_DamageShip` @0x3af62).
+    /// - [`ShipDisabled`](Self::ShipDisabled),
+    ///   [`ShipDestroyed`](Self::ShipDestroyed) and
+    ///   [`DownedMissionFailed`](Self::DownedMissionFailed): 240
+    ///   (`_DamageShip` @0x3b181, @0x3b3b9, @0x3b0b6, @0x3b353).
+    /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
+    ///   (`_MissionObjectivesCheck` @0x9ec53).
+    /// - [`NoActiveMissions`](Self::NoActiveMissions): 240
+    ///   (`_HandlePlayer` @0x705a8).
+    /// - [`MissionScanned`](Self::MissionScanned),
+    ///   [`Smuggling`](Self::Smuggling),
+    ///   [`IllegalJunk`](Self::IllegalJunk) and
+    ///   [`IllegalOutfit`](Self::IllegalOutfit): 400 (`_ScanPlayer`
+    ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f).
+    /// - [`EscortRepaired`](Self::EscortRepaired) and
+    ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
+    ///   @0x33ba1).
+    /// - [`TookOff`](Self::TookOff): 240 (`_PlayerLandOnStellar`
+    ///   @0x63727).
+    /// - [`Tutorial`](Self::Tutorial): 512 (0x200, `_HandlePlayer`
+    ///   @0x70b8f, @0x70d28, @0x70ddf, @0x70e8d).
+    /// - [`DockRequested`](Self::DockRequested) and
+    ///   [`NoResponse`](Self::NoResponse): 250 (`_HandlePlayerDockRequest`
+    ///   @0x67c46, @0x66bcd).
+    /// - [`DockCleared`](Self::DockCleared): 250
+    ///   (`_HandlePlayerDockApproach` @0x64e8e).
+    /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
+    ///   @0x6f62a).
+    /// - [`Sabotaged`](Self::Sabotaged) and [`BombSetUp`](Self::BombSetUp):
+    ///   360 (`_HandlePlayer` @0x6969d).
+    /// - [`BombExploded`](Self::BombExploded): 400 (`_HandlePlayer`
+    ///   @0x698b0).
+    /// - [`JumpCollapsed`](Self::JumpCollapsed): 250 (`_HandlePlayer`
+    ///   @0x68a3d, 0xfa pushed @0x68a32).
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        match self {
+            Self::ExitedHypergate(_)
+            | Self::FleetArrivalQuote(_)
+            | Self::Sabotaged { .. }
+            | Self::BombSetUp => 360,
+            Self::MissionScanned
+            | Self::Smuggling { .. }
+            | Self::IllegalJunk { .. }
+            | Self::IllegalOutfit { .. }
+            | Self::BombExploded { .. } => 400,
+            Self::Arrived(_)
+            | Self::PassedWormhole(_)
+            | Self::MissionFailed
+            | Self::DeadlineMissed
+            | Self::NoActiveMissions
+            | Self::MissionShipLost
+            | Self::ShipDisabled
+            | Self::ShipDestroyed
+            | Self::DownedMissionFailed
+            | Self::CargoJettisoned
+            | Self::NonMissionCargoJettisoned
+            | Self::TookOff { .. } => 240,
+            Self::EscortRepaired
+            | Self::FighterRepaired
+            | Self::JumpCollapsed
+            | Self::DockRequested { .. }
+            | Self::NoResponse
+            | Self::DockCleared { .. } => 250,
+            Self::Buoy(_) => 480,
+            Self::Tutorial(_) | Self::EscapingIn { .. } => 512,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_sim_message_lasts_its_callers_ticks() {
+        let smuggling = SimMessage::Smuggling {
+            scanner: ShipId(128),
+            ship_name: None,
+            fine: 0,
+        };
+        let cases = [
+            (SimMessage::Arrived(SystemId(128)), 240),
+            (SimMessage::Buoy("Message Buoy: hello.".into()), 480),
+            (SimMessage::ExitedHypergate(SystemId(128)), 360),
+            (SimMessage::FleetArrivalQuote("Hail 1".to_owned()), 360),
+            (SimMessage::PassedWormhole(SystemId(128)), 240),
+            (SimMessage::MissionFailed, 240),
+            (SimMessage::DeadlineMissed, 240),
+            (SimMessage::NoActiveMissions, 240),
+            (SimMessage::MissionShipLost, 240),
+            (SimMessage::ShipDisabled, 240),
+            (SimMessage::ShipDestroyed, 240),
+            (SimMessage::DownedMissionFailed, 240),
+            (SimMessage::CargoJettisoned, 240),
+            (SimMessage::NonMissionCargoJettisoned, 240),
+            (SimMessage::MissionScanned, 400),
+            (smuggling, 400),
+            (SimMessage::EscortRepaired, 250),
+            (SimMessage::FighterRepaired, 250),
+            (SimMessage::JumpCollapsed, 250),
+            (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
+            (SimMessage::Sabotaged { outfit: None }, 360),
+            (SimMessage::BombSetUp, 360),
+            (
+                SimMessage::BombExploded {
+                    outfit: OutfitId(262),
+                    one: true,
+                },
+                400,
+            ),
+            (
+                SimMessage::Sabotaged {
+                    outfit: Some((OutfitId(261), false)),
+                },
+                360,
+            ),
+            (
+                SimMessage::TookOff {
+                    stellar: StellarId(128),
+                    lead: 2,
+                },
+                240,
+            ),
+            (SimMessage::Tutorial(TutorialHint::Hyperspace), 512),
+            (SimMessage::Tutorial(TutorialHint::FarEnough), 512),
+            (
+                SimMessage::DockRequested {
+                    stellar: StellarId(128),
+                    kind: DockKind::Planet,
+                },
+                250,
+            ),
+            (SimMessage::NoResponse, 250),
+            (
+                SimMessage::DockCleared {
+                    stellar: StellarId(128),
+                    kind: DockKind::Hypergate,
+                },
+                250,
+            ),
+            (
+                SimMessage::IllegalJunk {
+                    scanner: ShipId(128),
+                    person: None,
+                    junk: JunkId(137),
+                    fine: 0,
+                },
+                400,
+            ),
+            (
+                SimMessage::IllegalOutfit {
+                    scanner: ShipId(128),
+                    person: None,
+                    outfit: OutfitId(320),
+                    one: true,
+                    fine: 0,
+                },
+                400,
+            ),
+        ];
+        for (message, ticks) in cases {
+            assert_eq!(message.ticks(), ticks, "{message:?}");
+        }
+    }
+}

@@ -100,30 +100,51 @@ impl Session {
     /// ([`Session::is_hidden`]), the player too, is left out by either.
     #[must_use]
     pub fn draw_order(&self) -> Vec<ShipRef> {
-        match self.rules.source_for(RuleKey::ShipOverlap) {
-            RuleSource::Engine => {
-                let mut layers = self.slot_sprites.layers.clone();
-                let ships = self.ship_layers();
-                for &(_, slot, layer) in &ships {
-                    layers.put(slot, layer);
+        self.draw_layers()
+            .into_iter()
+            .map(|(ship, _)| ship)
+            .collect()
+    }
+
+    /// The ships in [`Session::draw_order`], each with the layer it is
+    /// drawn in, which the view stacks the shots among
+    /// ([`sprite_layer`](crate::sprite_layer)).
+    #[must_use]
+    pub fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
+        let (order, layers): (Vec<ShipRef>, Vec<(ShipRef, ShipLayer)>) =
+            match self.rules.source_for(RuleKey::ShipOverlap) {
+                RuleSource::Engine => {
+                    let mut entries = self.slot_sprites.layers.clone();
+                    let ships = self.ship_layers();
+                    for &(_, slot, layer) in &ships {
+                        entries.put(slot, layer);
+                    }
+                    let order =
+                        entries.in_entry_order(ships.iter().map(|&(ship, slot, _)| (ship, slot)));
+                    let layers = ships.into_iter().map(|(ship, _, layer)| (ship, layer));
+                    (order, layers.collect())
                 }
-                layers.in_entry_order(ships.into_iter().map(|(ship, slot, _)| (ship, slot)))
-            }
-            RuleSource::Bible => {
-                let npcs = self
-                    .npcs()
-                    .iter()
-                    .filter(|npc| self.shown(npc.hull))
-                    .map(|npc| {
-                        let layer = ShipLayer::of(disabled(npc.condition), npc.escorts_player());
-                        (ShipRef::Npc(npc.id), layer)
-                    });
-                let player = self
-                    .shown(self.hull)
-                    .then(|| (ShipRef::Player, self.player_layer()));
-                in_draw_order(npcs.chain(player))
-            }
-        }
+                RuleSource::Bible => {
+                    let npcs = self
+                        .npcs()
+                        .iter()
+                        .filter(|npc| self.shown(npc.hull))
+                        .map(|npc| {
+                            let layer =
+                                ShipLayer::of(disabled(npc.condition), npc.escorts_player());
+                            (ShipRef::Npc(npc.id), layer)
+                        });
+                    let player = self
+                        .shown(self.hull)
+                        .then(|| (ShipRef::Player, self.player_layer()));
+                    let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
+                    (in_draw_order(layers.iter().copied()), layers)
+                }
+            };
+        order
+            .into_iter()
+            .filter_map(|ship| layers.iter().find(|&&(drawn, _)| drawn == ship).copied())
+            .collect()
     }
 
     /// Whether `ship` is hidden: its type's `Cost` is -1
@@ -722,6 +743,29 @@ mod tests {
         let mut first = vec![traffic];
         first.extend(&led);
         assert_eq!(drawn(&session), order(&first, &[]), "the disabled first");
+    }
+
+    #[test]
+    fn the_draw_layers_pair_the_draw_order_with_each_ships_layer_by_either_reading() {
+        for overlap in RuleSource::ALL {
+            let (session, led, traffic) = with_traffic();
+            let mut session = session
+                .with_rules(Rulebook::default().with_override(RuleKey::ShipOverlap, overlap));
+            combat_tick(&mut session);
+            crate::fixture::disable(&mut session, traffic);
+            let layers = session.draw_layers();
+            let order: Vec<ShipRef> = layers.iter().map(|&(ship, _)| ship).collect();
+            assert_eq!(order, session.draw_order(), "{overlap:?}");
+            let layer_of = |ship| {
+                layers
+                    .iter()
+                    .find(|&&(drawn, _)| drawn == ship)
+                    .map(|&(_, layer)| layer)
+            };
+            assert_eq!(layer_of(ShipRef::Npc(traffic)), Some(ShipLayer::Disabled));
+            assert_eq!(layer_of(ShipRef::Npc(led[0])), Some(ShipLayer::Led));
+            assert_eq!(layer_of(ShipRef::Player), Some(ShipLayer::Ships));
+        }
     }
 
     #[test]

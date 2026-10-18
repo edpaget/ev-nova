@@ -349,9 +349,9 @@ mod tests {
 
     #[test]
     fn a_level_above_the_loudest_is_clamped() {
-        assert_eq!(control(8).level(), MAX_LEVEL);
+        assert_eq!(control(9).level(), MAX_LEVEL);
         assert_eq!(control(u8::MAX).level(), MAX_LEVEL);
-        assert_eq!(control(7).level(), 7);
+        assert_eq!(control(8).level(), 8);
     }
 
     #[test]
@@ -368,13 +368,13 @@ mod tests {
 
     #[test]
     fn a_click_on_an_arrow_steps_the_level_within_its_range() {
-        let mut control = control(6);
+        let mut control = control(7);
         assert!(click(&mut control, stock().up.center()));
-        assert_eq!(control.level(), 7);
+        assert_eq!(control.level(), 8);
         assert!(!click(&mut control, stock().up.center()), "the loudest");
-        assert_eq!(control.level(), 7);
+        assert_eq!(control.level(), 8);
         assert!(click(&mut control, stock().down.center()));
-        assert_eq!(control.level(), 6);
+        assert_eq!(control.level(), 7);
         let mut control = super::tests::control(0);
         assert!(!click(&mut control, stock().down.center()), "silent");
         assert_eq!(control.level(), 0);
@@ -433,7 +433,7 @@ mod tests {
             assert!(!control.input(&other), "{other:?}");
         }
         assert_eq!(control.level(), 2);
-        let mut control = super::tests::control(7);
+        let mut control = super::tests::control(8);
         assert!(!control.input(&key(Key::Up, false)));
         let mut control = super::tests::control(0);
         assert!(!control.input(&key(Key::Left, false)));

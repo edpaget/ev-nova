@@ -24,7 +24,9 @@
 //! halts the warp-up sounds ([`WARP_UP_HALTS`], @0x695ea, @0x6960d), and
 //! the comm line names the first owned kill outfit with a name for its
 //! count ([`kill_notice`]), or none, for 360 ticks
-//! ([`SimMessage::Sabotaged`], @0x6969d). Nothing is removed and nothing
+//! ([`SimMessage::Sabotaged`], @0x6969d); with none named and the data's
+//! `l33t` mode on, it says the original's own words instead
+//! ([`SimMessage::BombSetUp`], @0x69623-0x6963e). Nothing is removed and nothing
 //! refreshes, so the flag stays set; the player dies, and a dying player
 //! counts nothing, so the outfit goes off once.
 //!
@@ -36,8 +38,8 @@
 //! (`_CreateExplosion` @0x698ef; the view plays a `bööm`'s sound for any
 //! [`CombatEvent::Exploded`](crate::combat::CombatEvent::Exploded)); every
 //! copy is removed (@0x698f7); and the player takes [`bomb_damage`] to
-//! its armour alone, a spared hit
-//! ([`apply_spared`](crate::combat::damage::apply_spared): `_DamageShip`
+//! its armour alone, a hit that can neither kill nor disable
+//! ([`take`](crate::combat::damage::take): `_DamageShip`
 //! @0x699b2 with +0x28, +0x2c and +0x30 set and no source), the player
 //! counted disabled before it as its armour then says (`_IsDisabled`
 //! @0x3a9ad), so a second bomb sees the first's damage. The damage is at
@@ -60,7 +62,7 @@
 use super::Session;
 use crate::chance::Chance;
 use crate::combat::Rules;
-use crate::combat::damage::{Hit, apply_spared};
+use crate::combat::damage::{Hit, take};
 use crate::combat::hull::{Condition, DisableRule};
 use crate::message::SimMessage;
 use crate::sabotage::{Sabotage, bomb_damage, bombs, kill_notice};
@@ -120,8 +122,10 @@ impl Session {
                 mass: bomb_damage(armor.max, chance),
                 energy: 0.0,
                 passes_shields: true,
+                cant_kill: true,
+                cant_disable: true,
             };
-            apply_spared(
+            take(
                 &mut self.pilot.reserves,
                 hit,
                 &self.hull,
@@ -142,8 +146,13 @@ impl Session {
             self.jump = None;
         }
         let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
-        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
-        self.messages.push(SimMessage::Sabotaged { outfit });
+        self.halt_sounds(&WARP_UP_HALTS);
+        // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
+        self.messages.push(if outfit.is_none() && self.leet {
+            SimMessage::BombSetUp
+        } else {
+            SimMessage::Sabotaged { outfit }
+        });
     }
 }
 
@@ -422,6 +431,31 @@ mod tests {
     }
 
     #[test]
+    fn with_leet_mode_a_kill_outfit_with_no_named_outfit_says_someone_set_up_the_bomb() {
+        let mut catalog = sabotaged();
+        for record in &mut catalog.outfits {
+            record.lc_name.clear();
+        }
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        session.leet = true;
+        fight(&mut session, &[]);
+        let messages = session.take_messages();
+        assert_eq!(messages, [SimMessage::BombSetUp]);
+        assert_eq!(messages[0].ticks(), 360);
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        session.leet = true;
+        fight(&mut session, &[]);
+        assert!(
+            matches!(
+                session.take_messages()[..],
+                [SimMessage::Sabotaged { outfit: Some(_) }]
+            ),
+            "an outfit named is named in l33t mode too"
+        );
+    }
+
+    #[test]
     fn a_kill_outfit_stays_owned_and_the_flag_stays_set() {
         let catalog = sabotaged();
         let mut session = lit(&catalog, &[(KILL, 1)]);
@@ -501,10 +535,15 @@ mod tests {
                 .take_combat_events()
                 .into_iter()
                 .filter_map(|event| match event {
-                    CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                    CombatEvent::Exploded {
+                        at,
+                        explosion,
+                        size,
+                    } => Some((at, explosion, size)),
                     _ => None,
                 })
                 .collect();
+            // Of no size: `_CreateExplosion(.., 0, 1)` @0x698ef.
             let expected: Vec<_> = boom
                 .map(|boom| {
                     (
@@ -513,6 +552,7 @@ mod tests {
                             boom: BoomId(boom),
                             extra: false,
                         },
+                        0.0,
                     )
                 })
                 .into_iter()

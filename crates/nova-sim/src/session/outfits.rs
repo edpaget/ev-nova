@@ -79,7 +79,7 @@ use crate::exploration::map_reveals;
 use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
-use crate::pilot::Pilot;
+use crate::pilot::{ExploredLevel, Pilot};
 use crate::rulebook::RuleSource;
 use crate::story::StoryEvent;
 
@@ -205,11 +205,14 @@ impl Session {
                 self.outfit_rules().map_explore,
             );
             for system in reached {
-                // With its place's head, by the engine
-                // (`_RecursiveAutoExplore` @0xd9b6-0xda10).
-                self.explore_place(system);
+                // At level 2, with its place's head, by the engine
+                // (`_RecursiveAutoExplore` @0xd9a6-0xd9af, @0xda07-0xda10).
+                self.explore_place(system, ExploredLevel::Charted);
                 self.raise(StoryEvent::Explored { system });
             }
+            // Its known pass, with no clear (`_AutoSetExploration`
+            // @0xdb06-0xdbd4).
+            self.add_known();
         }
         if let Some(paint) = effect.paint {
             self.pilot.paint = paint;
@@ -405,6 +408,22 @@ mod tests {
         let mut session = self::session(&mapped());
         session.grant_outfit(CLASS_3);
         assert_eq!(explored(&session), ids(&[130, 135]));
+    }
+
+    #[test]
+    fn a_map_grant_adds_its_known_pass_and_clears_nothing() {
+        let mut session = session(&mapped());
+        let known = |session: &Session| -> BTreeSet<i16> {
+            session.known().iter().map(|system| system.0).collect()
+        };
+        assert_eq!(known(&session), ids(&[130, 131, 132]));
+        session.mark_known([SystemId(137)]);
+        session.grant_outfit(JUMPS_2);
+        assert_eq!(
+            known(&session),
+            ids(&[130, 131, 132, 133, 137]),
+            "132's link 133 learnt, 137 kept"
+        );
     }
 
     #[test]
@@ -841,6 +860,63 @@ mod tests {
             assert!(session.pilot().has_explored(SystemId(131)));
             assert!(!session.pilot().has_explored(SystemId(129)), "{source:?}");
         }
+    }
+
+    fn charted(session: &Session) -> BTreeSet<i16> {
+        session.pilot().charted().map(|system| system.0).collect()
+    }
+
+    #[test]
+    fn each_map_grant_charts_what_it_reaches_and_by_the_engine_their_heads() {
+        // `_AutoSetExploration` at level 2 (@0x44dcb, @0x44e12, @0x44e86);
+        // `_RecursiveAutoExplore` raises the system (@0xd9a6-0xd9af) and
+        // its head (@0xda07-0xda10).
+        for source in RuleSource::ALL {
+            let heads = |engine: &[i16]| -> Vec<i16> {
+                if source == RuleSource::Engine {
+                    engine.to_vec()
+                } else {
+                    Vec::new()
+                }
+            };
+            let (_, mut session) = shadowed(source);
+            session.grant_outfit(JUMPS_2);
+            let mut expected = ids(&[130, 131, 132]);
+            expected.extend(heads(&[129]));
+            assert_eq!(charted(&session), expected, "{source:?}: N jumps");
+            let (_, mut session) = shadowed(source);
+            session.grant_outfit(CLASS_3);
+            let mut expected = ids(&[135]);
+            expected.extend(heads(&[128]));
+            assert_eq!(charted(&session), expected, "{source:?}: a class");
+            // 127 at 134's place, hidden, its head.
+            let mut catalog = mapped();
+            catalog.star_map.push(star(127, (5.0, 0.0), &[]));
+            let mut session = session_with(&catalog, source);
+            overlay(&mut session, &catalog, |galaxy| {
+                galaxy.set_visible(SystemId(127), Some(false));
+            });
+            session.grant_outfit(INDEPENDENTS);
+            let mut expected = ids(&[134]);
+            expected.extend(heads(&[127]));
+            assert_eq!(charted(&session), expected, "{source:?}: independents");
+        }
+    }
+
+    /// [`session`] sharing exploration as `source` says.
+    fn session_with(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        session(catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::ExploredByPlace, source))
+    }
+
+    #[test]
+    fn x_explores_at_level_1_and_leaves_a_charted_system_charted() {
+        // `_EvalSetExp` @0x15c93-0x15ca1 raises a level of 0 to 1.
+        let mut session = scripted(&mapped());
+        session.pilot.chart(SystemId(132));
+        assert!(run(&mut session, "X133 X132"));
+        assert_eq!(charted(&session), ids(&[132]));
+        assert_eq!(explored(&session), ids(&[130, 132, 133]));
     }
 
     #[test]

@@ -1,0 +1,47 @@
+[package]
+name = "nova-sim-story"
+description = "The story layer of nova-sim's layered crates: missions and their offers, the story runtime, persons, ranks, news, nebulae, exploration, the text tags and the pilot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The foundation below it: chance, geometry, reserves, the rulebook and
+# the rules.
+nova-sim-base.workspace = true
+# The catalog below it: the typed records the story reads (missions,
+# crons, persons, ranks, nebulae, systems, stellars), the control bits,
+# the strings and the warp clock.
+nova-sim-catalog.workspace = true
+# The state below it: crons, the date, governments, landing, the legal
+# record, the market, outfit effects and a ship's stats.
+nova-sim-state.workspace = true
+# Combat below it: combat, cloaking and the player's fleet.
+nova-sim-combat.workspace = true
+# The ai and traffic layer below it: NPCs and the persons model, NPC
+# goals and blessings, escorts, gates, hails, hyperspace routes, scans
+# and cargo boxes. Nothing else of the nova-sim stack: `deny.toml` bans
+# the way back up.
+nova-sim-ai.workspace = true
+# The `Error` derive on the mission and story-dispatch errors.
+thiserror.workspace = true
+
+[dev-dependencies]
+# The scripted `Chance`s and draws (`Scripted`, `Draws`) and the handling
+# (`FAST`) the moved tests use.
+nova-sim-base = { workspace = true, features = ["fixture"] }
+# The catalog record builders and `FakePilotCatalog` the moved tests
+# build from.
+nova-sim-catalog = { workspace = true, features = ["fixture"] }
+# `traffic::fixture::npc`, the NPC builder the person tests use.
+nova-sim-ai = { workspace = true, features = ["fixture"] }
+
+[features]
+# Test support for other crates' tests: `mission::fixture::carrying`, an
+# active mission carrying cargo.
+fixture = []
+
+[lints]
+workspace = true

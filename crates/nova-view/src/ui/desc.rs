@@ -1,20 +1,32 @@
 //! The "Desc Dialog" (`DLOG` 3003): a long description in a scrolling box
 //! with a Done button, over the game's text-and-briefing frame.
+//!
+//! A `dësc` whose `Graphic` is above [`LAST_UNSHOWN_GRAPHIC`] shows in
+//! its picture variant, `DLOG` 3004 ([`DescTemplates::open`]), as
+//! `_ShowTextDialog` picks it when its caller allows a picture
+//! (@0x5a881-0x5a8df): the text in item 3 as before, over the single
+//! frame `PICT` 8527, and the graphic stretched into item 2
+//! (`_TextDialogUpdate` @0x51b7a, @0x51dc7-0x51e28). The choice reads the
+//! ID alone; a graphic whose `PICT` is missing leaves item 2 empty, as
+//! `GetPicture` finds nothing to draw.
 
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::MapMarks;
+
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use super::picture_variant::VariantTemplates;
 use super::scroll_text::ScrollText;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
@@ -45,11 +57,78 @@ pub const FRAME: DialogFrame = DialogFrame {
     bottom_height: 40.0,
 };
 
+/// The picture variant's `DLOG` (and `DITL`) ID ("Desc + pict",
+/// `GetNewDialog` 0xbbc @0x5a8bf).
+pub const PICTURE_DESC_DIALOG: i16 = 3004;
+
+/// The picture variant's picture item (`GetDialogItem` 2 @0x51e00).
+pub const DESC_PICTURE_ITEM: usize = 2;
+
+/// The picture variant's frame, one picture over the whole dialog: `PICT`
+/// 8527, "Desc + pict" (0x214f @0x5a913).
+pub const PICTURE_FRAME: ImageKey = ImageKey::picture(8527);
+
+pub use super::picture_variant::{LAST_UNSHOWN_GRAPHIC, shown_graphic};
+
+/// Both "Desc Dialog" templates, or why each is missing: `DLOG` 3003's and
+/// `DLOG` 3004's.
+#[derive(Clone, Debug)]
+pub struct DescTemplates {
+    /// "Desc Dialog" ([`DESC_DIALOG`]).
+    pub plain: Result<DialogTemplate, String>,
+    /// "Desc Dialog" with a picture ([`PICTURE_DESC_DIALOG`]).
+    pub picture: Result<DialogTemplate, String>,
+}
+
+impl VariantTemplates for DescTemplates {
+    fn plain_template(&self) -> &Result<DialogTemplate, String> {
+        &self.plain
+    }
+
+    fn picture_template(&self) -> &Result<DialogTemplate, String> {
+        &self.picture
+    }
+}
+
+impl DescTemplates {
+    /// `text` in the variant `graphic` picks ([`VariantTemplates::pick`]), its
+    /// button labelled in `style`, its text measured by `metrics`.
+    ///
+    /// # Errors
+    ///
+    /// Why that variant's template is missing: nothing shows then, as
+    /// `_ShowTextDialog` shows nothing when `GetNewDialog` fails
+    /// (@0x5a8fb).
+    pub fn open(
+        &self,
+        text: &str,
+        graphic: Option<i16>,
+        style: ButtonStyle,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Result<DescDialog, String> {
+        let (shown, template) = self.pick(graphic);
+        let template = template.as_ref().map_err(Clone::clone)?;
+        Ok(match shown {
+            Some(id) => DescDialog::pictured(template, text, id, style, metrics),
+            None => DescDialog::new(template, text, style, metrics),
+        })
+    }
+}
+
 /// "Desc Dialog": `text` scrolling in item 3, and item 1 a Done button
 /// that Return, Escape or a click activates, which closes it.
 #[derive(Clone, Debug)]
 pub struct DescDialog {
     dialog: Dialog,
+    /// The picture variant's graphic, drawn in item 2 over
+    /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
+    picture: Option<i16>,
+    /// The marks of the map [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// opens from it, or none when it opens no map.
+    map: Option<MapMarks>,
+    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for the
+    /// map, until it is taken.
+    map_requested: bool,
     closed: bool,
     reported: bool,
 }
@@ -59,6 +138,35 @@ impl DescDialog {
     /// labelled in `style`, its text measured by `metrics`.
     #[must_use]
     pub fn new(
+        template: &DialogTemplate,
+        text: &str,
+        style: ButtonStyle,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Self {
+        let mut desc = Self::laid(template, text, style, metrics);
+        desc.dialog = desc.dialog.with_frame(FRAME);
+        desc
+    }
+
+    /// The picture variant `template` (stock `DLOG` 3004) showing `text`,
+    /// over [`PICTURE_FRAME`], with `graphic` in item 2; its button
+    /// labelled in `style`, its text measured by `metrics`.
+    #[must_use]
+    pub fn pictured(
+        template: &DialogTemplate,
+        text: &str,
+        graphic: i16,
+        style: ButtonStyle,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Self {
+        Self {
+            picture: Some(graphic),
+            ..Self::laid(template, text, style, metrics)
+        }
+    }
+
+    /// `text` laid out by `template`, with no frame and no picture.
+    fn laid(
         template: &DialogTemplate,
         text: &str,
         style: ButtonStyle,
@@ -77,15 +185,45 @@ impl DescDialog {
             ),
         ];
         let dialog = Dialog::new(template, &roles, metrics)
-            .with_frame(FRAME)
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(DONE_ITEM))
             .with_cancel(Some(DONE_ITEM));
         Self {
             dialog,
+            picture: None,
+            map: None,
+            map_requested: false,
             closed: false,
             reported: false,
         }
+    }
+
+    /// This dialog opening the map marked `map` on
+    /// [`MAP_KEY`](crate::flight::view::MAP_KEY), or none: only the
+    /// accept's briefing does, as only `_DoMissionAccept` passes
+    /// `_ShowTextDialog` a first argument of 1, which allows item 4
+    /// (@0xa1f0e, @0x5b135-0x5b146); `_TextDialogFilter` gives item 4 for
+    /// the key in every text (@0x51f9c-0x51fbe), which opens nothing then.
+    #[must_use]
+    pub fn with_map(self, map: Option<MapMarks>) -> Self {
+        Self { map, ..self }
+    }
+
+    /// The marks of the map [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// asked for since this was last taken, once: `_ShowTextDialog` opens
+    /// the course map over the text (@0x5b14c-0x5b17d; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)),
+    /// which stays open under it.
+    pub fn take_map_request(&mut self) -> Option<MapMarks> {
+        std::mem::take(&mut self.map_requested)
+            .then_some(self.map)
+            .flatten()
+    }
+
+    /// The picture variant's graphic, if this is the picture variant.
+    #[must_use]
+    pub fn picture(&self) -> Option<i16> {
+        self.picture
     }
 
     /// Whether Done has been activated.
@@ -125,9 +263,15 @@ impl DescDialog {
 }
 
 impl Screen for DescDialog {
-    /// Every event goes to the dialog; activating Done closes it. It never
-    /// quits.
+    /// A press of [`MAP_KEY`](crate::flight::view::MAP_KEY) asks for the
+    /// map when it opens one ([`DescDialog::take_map_request`]); every
+    /// other event goes to the dialog, and activating Done closes it. It
+    /// never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if is_map_press(input) {
+            self.map_requested = self.map.is_some();
+            return ScreenAction::None;
+        }
         if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
             self.closed = true;
         }
@@ -137,21 +281,23 @@ impl Screen for DescDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
+    /// The plain dialog draws its frame under its items. The picture
+    /// variant draws [`PICTURE_FRAME`] stretched over the dialog, as
+    /// `DrawPicHandle` fills the port with it, then the items, then the
+    /// graphic stretched into item 2.
     fn draw(&self, list: &mut DrawList) {
+        let Some(graphic) = self.picture else {
+            self.dialog.draw(list);
+            return;
+        };
+        self.dialog.draw_stretched_over(list, PICTURE_FRAME);
         self.dialog.draw(list);
+        self.dialog
+            .draw_picture_in(list, DESC_PICTURE_ITEM, graphic);
     }
 
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
-    }
-
-    /// Done's sounds as it is clicked.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.dialog
-            .take_sound()
-            .map(Sound::Ui)
-            .into_iter()
-            .collect()
     }
 }
 
@@ -161,7 +307,6 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
-    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -211,6 +356,40 @@ mod tests {
             pressed: true,
             repeat: false,
         }
+    }
+
+    #[test]
+    fn with_marks_the_map_key_asks_for_the_map_and_without_none() {
+        let m = crate::flight::view::MAP_KEY;
+        let marks = MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: true,
+        };
+        let mut briefing = desc().with_map(Some(marks));
+        for input in [
+            Input::Key {
+                key: m,
+                pressed: true,
+                repeat: true,
+            },
+            Input::Key {
+                key: m,
+                pressed: false,
+                repeat: false,
+            },
+        ] {
+            briefing.input(&input);
+            assert_eq!(briefing.take_map_request(), None, "{input:?}");
+        }
+        briefing.input(&key(m));
+        assert_eq!(briefing.take_map_request(), Some(marks));
+        assert_eq!(briefing.take_map_request(), None, "once");
+        assert!(!briefing.closed(), "it stays open under the map");
+        assert_eq!(briefing.take_sounds(), [], "silent");
+        let mut plain = desc();
+        plain.input(&key(m));
+        assert_eq!(plain.take_map_request(), None, "no map for this text");
+        assert!(!plain.closed());
     }
 
     #[test]
@@ -336,8 +515,9 @@ mod tests {
         assert_eq!(desc.first_line(), 0);
     }
 
+    /// `_TrackTextButtons` @0x26bb0 plays nothing under the pointer.
     #[test]
-    fn a_click_on_done_sounds_it_going_down_then_up_and_keys_are_silent() {
+    fn pointer_click_is_silent_as_the_original() {
         let mut desc = desc();
         let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done").center();
         let button = |pressed| Input::PointerButton {
@@ -346,12 +526,172 @@ mod tests {
             at: done,
         };
         desc.input(&button(true));
-        assert_eq!(desc.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        assert_eq!(desc.take_sounds(), []);
         desc.input(&button(false));
-        assert_eq!(desc.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
         assert_eq!(desc.take_sounds(), []);
-        let mut desc = self::desc();
-        desc.input(&key(Key::Enter));
         assert_eq!(desc.take_sounds(), []);
+    }
+
+    // The picture variant, `DLOG` 3004.
+
+    /// `DLOG` 3004's shape, smaller: 300 x 120 at (0, 0), fixed, with
+    /// Done (1) at (100, 90), the picture (2) at (200, 10) 90 x 90 and a
+    /// 60 x 36 text box (3) at (10, 10).
+    fn picture_template() -> DialogTemplate {
+        let item = |bounds, enabled| ItemTemplate {
+            bounds,
+            enabled,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 300.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), true),
+                item(rect(200.0, 10.0, 90.0, 90.0), false),
+                item(rect(10.0, 10.0, 60.0, 36.0), false),
+            ],
+        }
+    }
+
+    fn templates() -> DescTemplates {
+        DescTemplates {
+            plain: Ok(template()),
+            picture: Ok(picture_template()),
+        }
+    }
+
+    fn shown(templates: &DescTemplates, graphic: Option<i16>) -> Result<DescDialog, String> {
+        templates.open(TEXT, graphic, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+    }
+
+    #[test]
+    fn the_picture_variants_named_values() {
+        assert_eq!(
+            (PICTURE_DESC_DIALOG, DESC_PICTURE_ITEM, PICTURE_FRAME),
+            (3004, 2, ImageKey::picture(8527))
+        );
+        assert_eq!(LAST_UNSHOWN_GRAPHIC, 127);
+    }
+
+    #[test]
+    fn a_graphic_is_shown_only_above_127() {
+        for graphic in [None, Some(-5), Some(0), Some(127)] {
+            assert_eq!(shown_graphic(graphic), None, "{graphic:?}");
+        }
+        for id in [128, 5008] {
+            assert_eq!(shown_graphic(Some(id)), Some(id));
+        }
+    }
+
+    #[test]
+    fn a_graphic_above_127_shows_3004_over_8527_its_picture_in_item_2() {
+        let desc = shown(&templates(), Some(5008)).expect("shown");
+        assert_eq!(desc.dialog().bounds(), rect(0.0, 0.0, 300.0, 120.0));
+        assert_eq!(desc.picture(), Some(5008));
+        assert_eq!(desc.lines(), ["one", "two", "three", "four", "five"]);
+        let commands = drawn(&desc);
+        assert_eq!(
+            commands[0],
+            DrawCommand::StretchedPicture {
+                image: PICTURE_FRAME,
+                top_left: Point::new(0.0, 0.0),
+                width: 300.0,
+                height: 120.0,
+            },
+            "_TextDialogUpdate draws 8527 over the port (@0x51b7a)"
+        );
+        let mut alone = DrawList::new();
+        desc.dialog().draw(&mut alone);
+        let alone: Vec<DrawCommand> = alone.iter().cloned().collect();
+        assert_eq!(commands[1..=alone.len()], alone[..]);
+        assert_eq!(
+            commands[alone.len() + 1..],
+            [DrawCommand::StretchedPicture {
+                image: ImageKey::picture(5008),
+                top_left: Point::new(200.0, 10.0),
+                width: 90.0,
+                height: 90.0,
+            }],
+            "the graphic stretched into item 2 (@0x51dc7-0x51e28)"
+        );
+        let plain = [FRAME.top, FRAME.middle, FRAME.bottom];
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Picture { image, .. }
+                    | DrawCommand::StretchedPicture { image, .. }
+                    | DrawCommand::TiledPicture { image, .. }
+                    if plain.contains(image)
+            )),
+            "no plain three-slice frame under the picture variant: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn the_picture_variant_closes_as_the_plain_one_does() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut desc = shown(&templates(), Some(200)).expect("shown");
+            desc.input(&input);
+            assert!(desc.closed(), "{input:?}");
+        }
+        let mut desc = shown(&templates(), Some(200)).expect("shown");
+        let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done").center();
+        for pressed in [true, false] {
+            desc.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: done,
+            });
+        }
+        assert!(desc.closed());
+    }
+
+    #[test]
+    fn a_graphic_of_127_or_none_shows_the_plain_dialog() {
+        for graphic in [None, Some(127)] {
+            let desc = shown(&templates(), graphic).expect("shown");
+            assert_eq!(desc.picture(), None);
+            assert_eq!(drawn(&desc), drawn(&self::desc()), "{graphic:?}");
+        }
+    }
+
+    #[test]
+    fn the_variants_missing_template_is_the_reason_none_shows() {
+        let missing = DescTemplates {
+            plain: Ok(template()),
+            picture: Err("no DLOG 3004".to_owned()),
+        };
+        assert_eq!(
+            shown(&missing, Some(200)).err().as_deref(),
+            Some("no DLOG 3004")
+        );
+        assert!(shown(&missing, None).is_ok());
+        let missing = DescTemplates {
+            plain: Err("no DLOG 3003".to_owned()),
+            picture: Ok(picture_template()),
+        };
+        assert_eq!(shown(&missing, None).err().as_deref(), Some("no DLOG 3003"));
+        assert!(shown(&missing, Some(200)).is_ok());
+    }
+
+    /// A key that activates Done plays nothing in the original:
+    /// `_ShipDescFilter` @0x510e5 and `_TextDialogFilter` @0x51f77 map
+    /// Return, Enter and Escape to item 1 (@0x51fca-0x51fef) with no
+    /// sound, and `_MyModalDialog` @0x59954 calls no sound routine.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut desc = desc();
+            assert_eq!(desc.take_sounds(), []);
+            desc.input(&input);
+            assert!(desc.closed(), "{input:?}");
+            assert_eq!(desc.take_sounds(), [], "{input:?}");
+        }
+        let mut desc = desc();
+        desc.input(&key(Key::Tab));
+        desc.input(&key(Key::Space));
+        assert!(desc.closed(), "Space on Done");
+        assert_eq!(desc.take_sounds(), [], "Space");
     }
 }

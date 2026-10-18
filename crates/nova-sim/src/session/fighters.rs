@@ -43,6 +43,7 @@ use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
+use crate::combat::ion::Ion;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
@@ -52,7 +53,7 @@ use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
@@ -460,14 +461,17 @@ fn fighter(
         armament: kind.armament.clone(),
         rounds: kind.rounds.clone(),
         trigger: Trigger::default(),
+        pick: None,
         target: None,
         provoked: 0.0,
+        // `_LaunchFighter` zeroes +0xc910 (@0x3d952).
+        stray: 0.0,
         aggression: 0,
         inspected: None,
-        booty: 0,
+        booty: None,
         boarded: false,
         info_types: 0,
-        cargo: None,
+        cargo: NpcHold::default(),
         spared: false,
         assisting: 0,
         carrier: Some(carrier),
@@ -480,12 +484,15 @@ fn fighter(
         emerges_from: None,
         self_repair: kind.self_repair,
         former: None,
+        tractor: None,
+        ion: Ion::default(),
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::combat::armament::LauncherRounds;
     use std::rc::Rc;
 
     use super::*;
@@ -786,6 +793,12 @@ mod tests {
                 ship: ShipRef::Player,
                 weapon: BAY,
                 at: session.player().position,
+                // `_FirePlayerWeapon`'s looped test (@0x62d98-0x62dbf)
+                // gates its bay branch too (@0x62e40-0x62e44).
+                sound: Some(crate::combat::FireSound {
+                    priority: crate::combat::PLAYER_SECONDARY_FIRE_PRIORITY,
+                    unless_playing: true,
+                }),
             }),
             "the bay's sound is heard"
         );
@@ -1325,7 +1338,7 @@ mod tests {
             crate::combat::weapon::WeaponSpec::new(&bay()),
             1,
         )]);
-        npc.rounds = std::collections::BTreeMap::from([(BAY, vipers)]);
+        npc.rounds = LauncherRounds::from([(BAY, i32::try_from(vipers).expect("few"))]);
         npc.hull.sprite_size = Some(60.0);
         session.traffic.add_npc(npc)
     }
@@ -1342,7 +1355,9 @@ mod tests {
 
     /// The fighters `carrier` holds.
     fn aboard(session: &Session, carrier: NpcId) -> u32 {
-        session.npc(carrier).map_or(0, |npc| npc.rounds[&BAY])
+        session
+            .npc(carrier)
+            .map_or(0, |npc| u32::try_from(npc.rounds.slot(BAY)).unwrap_or(0))
     }
 
     /// A session with a pirate carrier of 2 Vipers attacking the player,
@@ -1988,13 +2003,13 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_resumed_docked_with_fighters_out_loses_them_buying_a_ship() {
+    fn a_pilot_resumed_and_landed_with_fighters_out_loses_them_buying_a_ship() {
         let catalog = spaceport();
         let mut pilot = pilot(&catalog, 0, vec![out(), warship(None), dart_out()]);
         pilot.cash = 1_000_000;
         pilot.stellar = Some(crate::catalog::StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        assert!(session.landed().is_some(), "resumed docked");
+        land_now(&mut session).expect("lands on resuming");
         assert!(session.fleet.is_empty(), "none placed yet");
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)

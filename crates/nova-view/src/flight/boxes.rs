@@ -1,8 +1,10 @@
-//! Drawing the cargo boxes a jettison leaves, as `_HandleBoxes`
-//! (@0x2df85-0x2e29e in the `EV Nova` executable) shows them.
+//! Drawing the cargo boxes a jettison leaves and a destroyed asteroid
+//! drops, as `_HandleBoxes` (@0x2df85-0x2e29e in the `EV Nova`
+//! executable) shows them.
 //!
 //! - A box is a frame of its graphic's sheet, `spïn` 500 + graphic (the
-//!   box masters `_InitSprites` loads; a jettisoned box is graphic 0),
+//!   box masters `_InitSprites` loads; a jettisoned box is graphic 0, an
+//!   asteroid's 1-4),
 //!   centred on where it is (@0x2e1c2-0x2e250). Its frame is the
 //!   simulation's, `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the
 //!   sheet's frames.
@@ -13,8 +15,9 @@
 //! - Boxes draw in `_boxLayer`, over the stellars and under the ships and
 //!   the shots.
 //!
-//! Left out: `_HandleSpriteMurkiness` (@0x2e181), as no sprite is drawn
-//! murky here.
+//! Left out: `_HandleSpriteMurkiness` (@0x2e181): the view murks shots
+//! alone so far ([`murk`](super::murk)), and
+//! rdm:task/murk-other-sprites draws the boxes murky.
 
 use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
@@ -86,6 +89,7 @@ mod tests {
 
     fn sheet(frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id: 600,
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
@@ -111,6 +115,40 @@ mod tests {
         let mut expected = DrawList::new();
         expected.sprite(ImageKey::sprite(600, 0), at(1.0, 5.0), Color::WHITE);
         expected.sprite(ImageKey::sprite(600, 35), at(2.0, 5.0), Color::WHITE);
+        assert_eq!(list, expected);
+    }
+
+    #[test]
+    fn an_asteroids_boxes_draw_graphics_1_to_4_from_spin_501_to_504() {
+        let sheets = Looks {
+            boxes: (0..=4)
+                .map(|graphic: u16| {
+                    let sheet = EffectSheet {
+                        frame_width: 0,
+                        image_id: 500 + graphic.cast_signed(),
+                        frames: NonZeroU16::new(36).expect("non-zero"),
+                    };
+                    (graphic, Ok(sheet))
+                })
+                .collect(),
+            ..Looks::default()
+        };
+        let shown: Vec<BoxShown> = (1..=4)
+            .map(|graphic| BoxShown {
+                graphic,
+                ..shown(f32::from(graphic), 7, 0)
+            })
+            .collect();
+        let mut list = DrawList::new();
+        draw_boxes(&mut list, &shown, &sheets);
+        let mut expected = DrawList::new();
+        for graphic in 1..=4_u16 {
+            expected.sprite(
+                ImageKey::sprite(500 + graphic.cast_signed(), 7),
+                at(f32::from(graphic), 5.0),
+                Color::WHITE,
+            );
+        }
         assert_eq!(list, expected);
     }
 

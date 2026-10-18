@@ -64,6 +64,9 @@ pub enum Showing {
     MissionInfo,
     /// The player info screen, over flight, which it pauses.
     PlayerInfo,
+    /// A `dësc`'s movie, over flight, which it pauses: a mission text's,
+    /// or an offer's.
+    Movie,
 }
 
 /// Something in the game data a screen cannot use, for the app to write
@@ -112,6 +115,22 @@ pub trait Screen {
     /// it. A screen that acts on held keys over time stops acting on them.
     /// Does nothing by default.
     fn release_keys(&mut self) {}
+    /// The audio side is not waiting on a keyed click: its button-down
+    /// sound has ended and its button-up sound has started, or there was
+    /// nothing to wait for (sound off, no button-down sound, no audio).
+    /// The app calls it after each time it feeds the audio side, so an
+    /// action held for the click ([`UiSound::ButtonKeyed`]) runs now.
+    /// Does nothing by default.
+    ///
+    /// [`UiSound::ButtonKeyed`]: crate::sound::UiSound::ButtonKeyed
+    fn keyed_click_ended(&mut self) {}
+    /// Whether the screen has asked to quit since this was last taken,
+    /// outside an input's own [`ScreenAction`]: a quit that waited out a
+    /// delay on a tick, or one asked by an input replayed after a keyed
+    /// click. Each ask is reported once. `false` by default.
+    fn take_quit(&mut self) -> bool {
+        false
+    }
     /// The sounds the screen has made since they were last taken, in
     /// order; taking them empties the list. None by default.
     fn take_sounds(&mut self) -> Vec<Sound> {
@@ -120,6 +139,13 @@ pub trait Screen {
     /// The preferences the player has chosen since they were last taken,
     /// if they changed: each change is reported once. None by default.
     fn take_prefs(&mut self) -> Option<Prefs> {
+        None
+    }
+    /// The galaxy map's borders setting to save since this was last taken,
+    /// if a map's close changed it, as the original's map saves
+    /// `ShowMapBorders` (`_SaveMapBordersState` @0xcf110): each change is
+    /// reported once. None by default.
+    fn take_map_borders_save(&mut self) -> Option<bool> {
         None
     }
     /// Which screen is showing, for a screen that routes between others;
@@ -183,6 +209,11 @@ mod tests {
         fn draw(&self, list: &mut DrawList) {
             list.dot(Point::new(0.0, 0.0), 1.0, Color::WHITE);
         }
+    }
+
+    #[test]
+    fn a_screen_reports_no_map_borders_save_by_default() {
+        assert_eq!(Counter::default().take_map_borders_save(), None);
     }
 
     #[test]
@@ -257,6 +288,16 @@ mod tests {
         assert_eq!(Diagnostic::Sim(sim).to_string(), sim.to_string());
         let unreadable = Diagnostic::Unreadable("wëap 140: no spïn 3005".to_owned());
         assert_eq!(unreadable.to_string(), "wëap 140: no spïn 3005");
+    }
+
+    #[test]
+    fn a_keyed_click_ending_does_nothing_and_no_quit_is_asked_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.keyed_click_ended();
+        assert!(!screen.take_quit());
+        assert_eq!(screen.take_sounds(), []);
+        assert_eq!(counter.elapsed, Duration::ZERO);
     }
 
     #[test]

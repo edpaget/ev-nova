@@ -30,7 +30,8 @@
 //! - at a flight start (`_InitObjects` @0x1d071-0x1d085, `_ResetPlayer`
 //!   @0x1d774-0x1d77e, `_ResetGameData` @0x1df6e-0x1df78): a session
 //!   starts with none;
-//! - on Nav Off (@0x69b2f-0x69b3c, [`Session::nav_off`]);
+//! - on Nav Off and Hyperspace Mode (@0x69b1e-0x69b3c,
+//!   [`Session::nav_mode_keys`]);
 //! - when a stellar key or a click changes the selection or the mode
 //!   (@0x69efd-0x69f12, @0x6a6e7-0x6a6fc, [`Session::select_stellar`]),
 //!   not when it finds the stellar already selected in mode 2
@@ -113,7 +114,7 @@ impl Session {
     /// mode 2 with the brackets' fly-in (@0x6a8ed-0x6a932).
     pub(super) fn select_pressed(&mut self, selected: Option<crate::catalog::StellarId>) {
         if let Some(stellar) = selected {
-            self.nav = NavMode::Stellar(Some(stellar));
+            self.set_nav(NavMode::Stellar(Some(stellar)));
             self.nav_fly_in.start();
         }
     }
@@ -511,7 +512,7 @@ mod tests {
             session.select_stellar(pick);
             assert_eq!(session.dock_request(), request(128, CLEARED), "{pick:?}");
         }
-        session.select_stellar(StellarPick::At(Vec2::new(30.0, -40.0)));
+        crate::testkit::click_stellar(&mut session, Vec2::new(30.0, -40.0));
         assert_eq!(session.dock_request(), request(128, CLEARED), "a click");
         assert_eq!(session.land(), landed(128));
     }
@@ -519,7 +520,7 @@ mod tests {
     #[test]
     fn a_click_on_another_stellar_drops_the_request() {
         let mut session = greeted(session());
-        session.select_stellar(StellarPick::At(Vec2::new(2000.0, 0.0)));
+        crate::testkit::click_stellar(&mut session, Vec2::new(2000.0, 0.0));
         assert_eq!(session.dock_request(), None);
     }
 
@@ -527,7 +528,8 @@ mod tests {
     fn a_tick_in_hyperspace_mode_drops_the_request() {
         let mut session = greeted(session());
         session.hyperspace_mode();
-        assert_eq!(session.dock_request(), request(128, CLEARED), "H alone");
+        assert_eq!(session.dock_request(), None, "H alone");
+        session.dock = request(128, CLEARED);
         session.set_land_key(true);
         tick(&mut session);
         assert_eq!(session.dock_request(), None, "even with L held");
@@ -611,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn an_uninhabited_stellar_answers_every_press_no_response_in_silence() {
+    fn an_uninhabited_stellar_answers_every_press_no_response_and_the_too_far_beep() {
         let catalog = only(uninhabited(128, 2000.0, 0.0, 0));
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         for _ in 0..3 {
@@ -623,7 +625,11 @@ mod tests {
                 })
             );
             assert_eq!(session.take_messages(), [SimMessage::NoResponse]);
-            assert_eq!(session.take_sounds(), []);
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::Refused],
+                "no traffic control, the too-far beep (@0x676aa)"
+            );
             assert_eq!(session.dock_request(), request(128, CLEARED));
             tick(&mut session);
             assert_eq!(session.take_messages(), [], "no greeting");

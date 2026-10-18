@@ -169,7 +169,6 @@ mod tests {
             frame_size: Some((100, 100)),
             flags: CAN_LAND,
             min_status: 0,
-            landing_sound: None,
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,
@@ -181,6 +180,7 @@ mod tests {
             type_counts_frames: true,
             exit_angle: -1,
             tribute: 0,
+            gravity: 0,
             animation: nova_sim::catalog::SiteAnimation::default(),
         }
     }
@@ -325,6 +325,20 @@ mod tests {
 
         fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
             Vec::new()
+        }
+    }
+
+    impl nova_sim::AsteroidCatalog for Catalog {
+        fn asteroid_types(&self) -> Vec<nova_sim::AsteroidTypeRecord> {
+            Vec::new()
+        }
+
+        fn asteroid_fields(&self) -> Vec<nova_sim::AsteroidFieldRecord> {
+            Vec::new()
+        }
+
+        fn box_frame_sizes(&self) -> [Option<(u32, u32)>; nova_sim::BOX_GRAPHICS] {
+            [None; nova_sim::BOX_GRAPHICS]
         }
     }
 

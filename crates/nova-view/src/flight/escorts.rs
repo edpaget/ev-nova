@@ -158,6 +158,15 @@ impl EscortMenu {
         self.open.is_some()
     }
 
+    /// Whether a click at screen point `at` lands in the menu: it is open
+    /// and its frame holds the point, edges included. The original tests
+    /// its frame (`0x3b52ac`) while the menu shows (`0x3b51a0` > 0,
+    /// `_HandlePlayer` @0x6a060-0x6a092) and ends the click there.
+    #[must_use]
+    pub fn holds_click(&self, at: Point) -> bool {
+        self.is_open() && Bounds::at(MENU_AT, MENU_WIDTH, MENU_HEIGHT).contains(at)
+    }
+
     /// The group a command goes to: the one selected, or every escort
     /// while the menu is shut.
     #[must_use]
@@ -397,6 +406,18 @@ mod tests {
     }
 
     const AT: Duration = Duration::from_secs(100);
+
+    #[test]
+    fn only_the_open_menus_frame_holds_a_click() {
+        let inside = Point::new(MENU_AT.x + 1.0, MENU_AT.y + MENU_HEIGHT);
+        let outside = Point::new(MENU_AT.x + MENU_WIDTH + 1.0, MENU_AT.y + 1.0);
+        let mut menu = EscortMenu::default();
+        assert!(!menu.holds_click(inside), "shut");
+        menu.toggle(AT, &rows());
+        assert!(menu.holds_click(inside));
+        assert!(menu.holds_click(MENU_AT), "its corner");
+        assert!(!menu.holds_click(outside));
+    }
 
     #[test]
     fn e_opens_the_menu_on_all_ships_and_closes_it() {

@@ -11,7 +11,10 @@
 //! offer's name in item 5 and its text in item 4; and Accept (item 1,
 //! `STR#` 150 #26) and Leave (item 7, #1). Items 6, 9 and 10 (the map,
 //! player info and mission info) lie outside the dialog, reached only by
-//! keys. The screen enables its buttons itself.
+//! keys: M ([`MAP_KEY`](crate::flight::view::MAP_KEY), a press) asks for
+//! the course map marked for the selected offer, or for none with no row
+//! selected ([`MissionComputerScreen::take_map_request`]). The screen
+//! enables its buttons itself.
 //!
 //! What it shows is the session's [`MissionComputer`], decided in
 //! `nova-sim`. Accept asks for the selected mission
@@ -30,7 +33,9 @@
 //! one's `QuickBrief` in item 4, which shows its deadline through `<DL>`;
 //! and Done (item 1, `STR#` 150 #5) and Abort (item 5, #35), greyed unless
 //! the selected mission can be aborted (`_DrawMissionInfoButtons`
-//! @0x28359). Item 6, the map, lies outside it. What it shows is the
+//! @0x28359). Item 6, the map, lies outside it: M asks for the course map
+//! marked for the selected mission ([`MissionInfoScreen::take_map_request`]),
+//! unless the screen was opened over an offer or the computer. What it shows is the
 //! session's [`MissionInfo`]; Abort asks for the selected slot
 //! ([`MissionInfoScreen::take_abort`]), with no confirmation, and whoever
 //! holds the session aborts it and hands the info back
@@ -44,23 +49,25 @@ use std::time::Duration;
 use nova_sim::mission::screens::{
     ABORT_LABEL, ACCEPT_LABEL, ACTIVE_MISSIONS, AVAILABLE_HERE, FAILED_MARK,
 };
-use nova_sim::{InfoRow, MissionComputer, MissionId, MissionInfo};
+use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
-use super::bar::MISSION_INFO_KEY;
 use super::layout::LEAVE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::MapOpener;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::Sound;
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
 
@@ -137,13 +144,18 @@ pub struct MissionComputerScreen {
     computer: MissionComputer,
     /// The mission Accept asked for, until it is taken.
     accepted: Option<MissionId>,
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info_requested: bool,
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
+    /// the selected row's offer, until it is taken.
+    map_request: Option<MapOpener>,
+    /// The offer shown selected whose text is to be loaded, until it is
+    /// taken.
+    text_request: Option<MissionId>,
     closed: bool,
-    sounds: Vec<Sound>,
 }
 
 impl MissionComputerScreen {
@@ -196,8 +208,9 @@ impl MissionComputerScreen {
             accepted: None,
             info_requested: false,
             player_info_requested: false,
+            map_request: None,
+            text_request: None,
             closed: false,
-            sounds: Vec::new(),
         };
         screen.set_computer(computer);
         screen
@@ -238,7 +251,7 @@ impl MissionComputerScreen {
         self.accepted.take()
     }
 
-    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
     /// since this was last asked (`_DoMissionDialog` item 10,
     /// @0xa3e37-0xa3ec1).
     pub fn take_info_request(&mut self) -> bool {
@@ -250,6 +263,16 @@ impl MissionComputerScreen {
     /// (`_MissionFilter` @0x9f82c, `_DoMissionDialog` @0xa3ffc).
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.player_info_requested)
+    }
+
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
+    /// since this was last asked, once, with the selected row's offer, or
+    /// none with no row selected: `_MissionFilter` gives item 6
+    /// (@0x9f7fa-0x9f818), and `_DoMissionDialog` opens the course map
+    /// marked for that offer, or for none (@0xa3c7b-0xa3daa; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)).
+    pub fn take_map_request(&mut self) -> Option<MapOpener> {
+        self.map_request.take()
     }
 
     /// Shows `computer` in place of the one shown, keeping the selected
@@ -283,7 +306,8 @@ impl MissionComputerScreen {
         self.computer.rows.get(index).map(|row| row.mission)
     }
 
-    /// Shows the selected offer's name and text, or none.
+    /// Shows the selected offer's name and text, or none, and asks for
+    /// its text to be loaded ([`MissionComputerScreen::take_text_request`]).
     fn show_selected(&mut self) {
         let Ok(laid) = &mut self.laid else {
             return;
@@ -296,6 +320,27 @@ impl MissionComputerScreen {
             .set_text(NAME_ITEM, row.map_or("", |row| row.name.as_str()));
         laid.dialog
             .set_text(TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
+        self.text_request = row.map(|row| row.mission);
+    }
+
+    /// The offer shown selected since this was last taken, once, whose
+    /// text is to be loaded as the original's selection loads it
+    /// (`_MissionFilter` @0x9f9bd): whoever flies the ship answers with
+    /// [`MissionComputerScreen::show_row`].
+    pub fn take_text_request(&mut self) -> Option<MissionId> {
+        self.text_request.take()
+    }
+
+    /// Shows `row`, its name and text loaded, while its offer is the one
+    /// selected; otherwise nothing changes.
+    pub fn show_row(&mut self, row: &ComputerRow) {
+        if self.selected_mission() != Some(row.mission) {
+            return;
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_text(NAME_ITEM, &row.name);
+            laid.dialog.set_text(TEXT_ITEM, &row.text);
+        }
     }
 
     /// Activates dialog item `item`: Accept asks for the selected mission
@@ -323,13 +368,11 @@ impl Screen for MissionComputerScreen {
             self.closed = true;
             return ScreenAction::None;
         }
-        if *input
-            == (Input::Key {
-                key: MISSION_INFO_KEY,
-                pressed: true,
-                repeat: false,
-            })
-        {
+        if is_map_press(input) {
+            self.map_request = Some(MapOpener::Computer(self.selected_mission()));
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
             self.info_requested = true;
             return ScreenAction::None;
         }
@@ -347,7 +390,6 @@ impl Screen for MissionComputerScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -382,11 +424,6 @@ impl Screen for MissionComputerScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
-    }
-
-    /// The buttons' sounds, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -424,6 +461,15 @@ pub struct MissionInfoScreen {
     info: MissionInfo,
     /// The slot Abort asked for, until it is taken.
     abort: Option<u8>,
+    /// The slot shown selected whose text is to be loaded, until it is
+    /// taken.
+    text_request: Option<u8>,
+    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) may open the
+    /// map: not when the screen is opened over an offer or the computer.
+    map_allowed: bool,
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
+    /// the selected slot, until it is taken.
+    map_request: Option<MapOpener>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -470,8 +516,11 @@ impl MissionInfoScreen {
                 today: String::new(),
             },
             abort: None,
+            text_request: None,
+            map_allowed: true,
+            map_request: None,
             closed: false,
-            sounds: Vec::new(),
+            sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
         };
         screen.set_info(info);
         screen
@@ -507,6 +556,31 @@ impl MissionInfoScreen {
         self.closed
     }
 
+    /// This screen, letting [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// open the map or not: `_DoMissionInfoDialog` opens none while
+    /// `_missionDialog` is set (@0x9e3c6-0x9e3cd), as it is when the
+    /// screen is opened over an offer (its item 7) or the computer (its
+    /// item 10).
+    #[must_use]
+    pub fn with_map_allowed(self, allowed: bool) -> Self {
+        Self {
+            map_allowed: allowed,
+            ..self
+        }
+    }
+
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
+    /// since this was last asked, once, with the selected slot, if any:
+    /// `_MissionInfoFilter` gives item 6 (@0x9d70a-0x9d72d), and
+    /// `_DoMissionInfoDialog` opens the course map marked for that
+    /// mission (@0x9e3bc-0x9e4d8; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)),
+    /// unless the map isn't allowed ([`MissionInfoScreen::with_map_allowed`]),
+    /// when the key does nothing.
+    pub fn take_map_request(&mut self) -> Option<MapOpener> {
+        self.map_request.take()
+    }
+
     /// The slot Abort asked for since this was last taken, once.
     pub fn take_abort(&mut self) -> Option<u8> {
         self.abort.take()
@@ -519,7 +593,7 @@ impl MissionInfoScreen {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
         if self.info.rows.is_empty() {
-            self.closed = true;
+            self.close();
         }
         let Ok(laid) = &mut self.laid else {
             return;
@@ -562,15 +636,44 @@ impl MissionInfoScreen {
             .set_text(INFO_TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
         laid.dialog
             .set_greyed(ABORT_ITEM, !row.is_some_and(|row| row.abortable));
+        self.text_request = row.map(|row| row.slot);
+    }
+
+    /// The slot shown selected since this was last taken, once, whose
+    /// `QuickBrief` is to be loaded as the original's selection loads it
+    /// (`_MissionInfoFilter` @0x9d89f): whoever flies the ship answers
+    /// with [`MissionInfoScreen::show_text`].
+    pub fn take_text_request(&mut self) -> Option<u8> {
+        self.text_request.take()
+    }
+
+    /// Shows `text`, slot `slot`'s loaded, while that slot is the one
+    /// selected; otherwise nothing changes.
+    pub fn show_text(&mut self, slot: u8, text: &str) {
+        if self.selected_row().map(|row| row.slot) != Some(slot) {
+            return;
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_text(INFO_TEXT_ITEM, text);
+        }
     }
 
     /// Activates dialog item `item`: Done closes, and Abort asks for the
     /// selected slot. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            INFO_DONE_ITEM => self.closed = true,
+            INFO_DONE_ITEM => self.close(),
             ABORT_ITEM => self.abort = self.selected_row().map(|row| row.slot),
             _ => {}
+        }
+    }
+
+    /// Closes it, beeping `_beepSnd[2]` (@0x9e791) the first time when it
+    /// was laid out; without its dialog the original returns before it
+    /// (@0x9e20b).
+    fn close(&mut self) {
+        if !std::mem::replace(&mut self.closed, true) && self.laid.is_ok() {
+            self.sounds.push(Sound::Ui(UiSound::MissionInfoClosed));
         }
     }
 }
@@ -579,6 +682,14 @@ impl Screen for MissionInfoScreen {
     /// Up, Down and a press on the list go to the list; everything else
     /// goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if is_map_press(input) {
+            if self.map_allowed {
+                self.map_request = Some(MapOpener::MissionInfo(
+                    self.selected_row().map(|row| row.slot),
+                ));
+            }
+            return ScreenAction::None;
+        }
         let Ok(laid) = &mut self.laid else {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -586,7 +697,7 @@ impl Screen for MissionInfoScreen {
                 repeat: false,
             } = *input
             {
-                self.closed = true;
+                self.close();
             }
             return ScreenAction::None;
         };
@@ -597,7 +708,6 @@ impl Screen for MissionInfoScreen {
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
-        self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
         }
@@ -634,7 +744,7 @@ impl Screen for MissionInfoScreen {
         }
     }
 
-    /// The buttons' sounds, in order.
+    /// Its opening's and closing's sounds, in order.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -643,6 +753,7 @@ impl Screen for MissionInfoScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::ComputerRow;
 
     use super::*;
@@ -843,6 +954,37 @@ mod tests {
     }
 
     #[test]
+    fn each_offer_shown_selected_asks_once_for_its_text_to_be_loaded() {
+        let mut screen = screen();
+        assert_eq!(
+            screen.take_text_request(),
+            Some(MissionId(130)),
+            "the first, as it opens (_DoMissionDialog @0xa3a96)"
+        );
+        assert_eq!(screen.take_text_request(), None, "once");
+        screen.input(&key(Key::Down));
+        assert_eq!(screen.take_text_request(), Some(MissionId(131)));
+        screen.input(&key(Key::Escape));
+        assert_eq!(screen.take_text_request(), None, "no new selection");
+    }
+
+    #[test]
+    fn a_loaded_row_shows_its_name_and_text_while_it_is_selected() {
+        let mut screen = screen();
+        let _ = screen.take_text_request();
+        screen.show_row(&row(131, "Walk loaded", "Not now."));
+        assert_eq!(
+            item_text(&screen, TEXT_ITEM),
+            "Take this to Mars.",
+            "131 is not selected"
+        );
+        screen.show_row(&row(130, "Run, loaded", "Loaded text."));
+        assert_eq!(item_text(&screen, NAME_ITEM), "Run, loaded");
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Loaded text.");
+        assert_eq!(screen.take_text_request(), None, "showing asks nothing");
+    }
+
+    #[test]
     fn accept_asks_for_the_selected_mission_once() {
         let mut screen = screen();
         assert_eq!(screen.take_accept(), None);
@@ -957,14 +1099,12 @@ mod tests {
         assert!(screen.closed());
     }
 
-    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
-    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
-
+    /// `_TrackMissionButtons` @0x287f5 plays nothing under the pointer.
     #[test]
-    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
         let mut screen = screen();
         click_item(&mut screen, ACCEPT_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_accept(), Some(MissionId(130)));
         let at = screen
             .dialog()
@@ -980,7 +1120,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_accept(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), []);
     }
 
     // The mission info screen.
@@ -1141,6 +1281,22 @@ mod tests {
     }
 
     #[test]
+    fn each_mission_shown_selected_asks_once_for_its_text_to_be_loaded() {
+        let mut screen = info_screen();
+        let first = screen.info().rows[0].slot;
+        assert_eq!(screen.take_text_request(), Some(first), "as it opens");
+        assert_eq!(screen.take_text_request(), None, "once");
+        screen.show_text(first, "Loaded brief.");
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Loaded brief.");
+        screen.show_text(first + 1, "Another's.");
+        assert_eq!(
+            info_text(&screen, INFO_TEXT_ITEM),
+            "Loaded brief.",
+            "not selected"
+        );
+    }
+
+    #[test]
     fn done_return_and_escape_close_mission_info() {
         for close in [Key::Enter, Key::Escape] {
             let mut screen = info_screen();
@@ -1197,8 +1353,40 @@ mod tests {
         assert!(screen.closed());
     }
 
+    /// `_TrackMissionInfoButtons` @0x2850e plays nothing under the pointer.
     #[test]
-    fn mission_infos_buttons_sound_and_a_click_abandoned_does_nothing() {
+    fn mission_info_beeps_as_it_opens_and_as_it_closes() {
+        const OPENED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoOpened);
+        const CLOSED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoClosed);
+        let mut screen = info_screen();
+        assert_eq!(screen.take_sounds(), [OPENED]);
+        click_info(&mut screen, INFO_DONE_ITEM);
+        assert_eq!(screen.take_sounds(), [CLOSED]);
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds(), [CLOSED], "{close:?}");
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds(), [], "{close:?} once closed");
+        }
+        let mut screen = info_screen();
+        screen.take_sounds();
+        screen.set_info(info());
+        assert_eq!(screen.take_sounds(), [], "still listing");
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [CLOSED], "emptied");
+        let mut broken =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        broken.input(&key(Key::Escape));
+        assert_eq!(broken.take_sounds(), [OPENED], "without its dialog");
+    }
+
+    #[test]
+    fn mission_infos_pointer_click_is_silent_and_a_click_abandoned_does_nothing() {
         let mut screen = info_screen();
         let at = screen
             .dialog()
@@ -1214,10 +1402,45 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_abort(), None, "abandoned");
-        assert_eq!(screen.take_sounds(), [DOWN]);
+        assert_eq!(screen.take_sounds(), [OPENED], "its opening's alone");
         click_info(&mut screen, ABORT_ITEM);
-        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_abort(), Some(0));
+    }
+
+    const OPENED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoOpened);
+    const CLOSED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoClosed);
+
+    #[test]
+    fn mission_info_beeps_as_it_opens_and_as_it_closes_laid_out() {
+        let mut screen = info_screen();
+        assert_eq!(screen.take_sounds(), [OPENED], "_beepSnd[1] @0x9e1d5");
+        click_info(&mut screen, INFO_DONE_ITEM);
+        assert_eq!(screen.take_sounds(), [CLOSED], "_beepSnd[2] @0x9e791");
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [], "closed once");
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds().last(), Some(&CLOSED), "{close:?}");
+        }
+        let mut screen = info_screen();
+        screen.take_sounds();
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [CLOSED], "an abort leaving nothing");
+        let mut bare =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        assert_eq!(bare.take_sounds(), [OPENED], "before GetNewDialog");
+        bare.input(&key(Key::Escape));
+        assert!(bare.closed());
+        assert_eq!(bare.take_sounds(), [], "@0x9e20b skips the close's");
     }
 
     #[test]
@@ -1231,12 +1454,144 @@ mod tests {
         assert_eq!(screen.take_accept(), None);
     }
 
+    /// A press, a repeat and a release of [`MAP_KEY`](crate::flight::view::MAP_KEY), in that order.
+    fn map_keys() -> [Input; 3] {
+        let m = crate::flight::view::MAP_KEY;
+        [
+            Input::Key {
+                key: m,
+                pressed: true,
+                repeat: true,
+            },
+            Input::Key {
+                key: m,
+                pressed: false,
+                repeat: false,
+            },
+            key(m),
+        ]
+    }
+
+    #[test]
+    fn the_map_key_in_the_computer_asks_for_the_map_with_its_selected_offer() {
+        let mut screen = screen();
+        let [repeat, release, press] = map_keys();
+        for input in [repeat, release] {
+            screen.input(&input);
+            assert_eq!(screen.take_map_request(), None, "{input:?}");
+        }
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::Computer(Some(MissionId(130))))
+        );
+        assert_eq!(screen.take_map_request(), None, "once");
+        screen.input(&key(Key::Down));
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::Computer(Some(MissionId(131))))
+        );
+        assert!(!screen.closed());
+        assert!(!screen.take_info_request());
+        assert_eq!(screen.take_accept(), None);
+        assert_eq!(screen.take_sounds(), [], "silent");
+        let mut empty = screen_of(MissionComputer {
+            rows: Vec::new(),
+            today: String::new(),
+        });
+        empty.input(&press);
+        assert_eq!(
+            empty.take_map_request(),
+            Some(MapOpener::Computer(None)),
+            "no row selected"
+        );
+    }
+
+    #[test]
+    fn the_map_key_in_mission_info_asks_for_the_map_with_its_selected_slot_unless_refused() {
+        let mut screen = info_screen();
+        screen.take_sounds();
+        let [repeat, release, press] = map_keys();
+        for input in [repeat, release] {
+            screen.input(&input);
+            assert_eq!(screen.take_map_request(), None, "{input:?}");
+        }
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(Some(0)))
+        );
+        assert_eq!(screen.take_map_request(), None, "once");
+        screen.input(&key(Key::Down));
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(Some(3)))
+        );
+        assert!(!screen.closed());
+        assert_eq!(screen.take_sounds(), [], "silent");
+        let mut refused = info_screen().with_map_allowed(false);
+        refused.input(&press);
+        assert_eq!(
+            refused.take_map_request(),
+            None,
+            "opened over an offer or the computer (@0x9e3c6-0x9e3cd)"
+        );
+        assert!(!refused.closed());
+    }
+
     #[test]
     fn their_debug_names_what_they_hold() {
         for debug in [format!("{:?}", screen()), format!("{:?}", info_screen())] {
             for part in ["Dialog", "RowList", "TextMetrics"] {
                 assert!(debug.contains(part), "{part}: {debug}");
             }
+        }
+    }
+
+    fn press_and_release(key: Key) -> [Input; 2] {
+        [true, false].map(|pressed| Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        })
+    }
+
+    /// The original's `_MissionFilter` (@0x9f7a9) maps Tab, the arrows,
+    /// Return and Escape to items without a click sound.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original_on_the_computer() {
+        for k in [
+            Key::Tab,
+            Key::Up,
+            Key::Down,
+            MISSION_INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::Char('a'),
+        ]
+        .into_iter()
+        .chain(LEAVE_KEYS)
+        {
+            let mut screen = screen();
+            for input in press_and_release(k) {
+                screen.input(&input);
+            }
+            assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
+
+    /// The original's `_MissionInfoFilter` (@0x9d6e5) maps Return and Escape
+    /// to Done without a click sound: only the close's beep plays.
+    #[test]
+    fn keyboard_activation_is_silent_as_the_original_on_the_info_screen() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            for input in press_and_release(k) {
+                screen.input(&input);
+            }
+            assert_eq!(screen.take_sounds(), [CLOSED], "{k:?}");
         }
     }
 }

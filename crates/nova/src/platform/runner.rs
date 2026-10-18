@@ -7,7 +7,7 @@
 //! about the game data; the runner prints the warnings the app keeps, such as a
 //! failed save.
 //!
-//! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
+//! With the `dev-tools` feature and `Runner::with_dev_tools`, it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first, over the pilot flying (`App::pilot_desk_frame`),
 //! and submits the frame with the panel painted over it, and the raw
@@ -290,7 +290,7 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader};
 
     use nova_audio::recording::{MemorySettings, RecordingAudio};
-    use nova_audio::{AudioCommand, AudioSettings, SettingsStore, Volume};
+    use nova_audio::{AudioCommand, AudioSettings, SettingsStore};
 
     use crate::settings::{GameSettings, SettingsKeeper};
     use nova_view::Showing;
@@ -366,11 +366,11 @@ mod tests {
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let mut runner = runner.with_audio(core);
         let core = runner.audio.as_mut().expect("kept");
-        core.update(Some(Showing::GalaxyMap), &[]);
+        core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(
             *log.borrow(),
             [AudioCommand::StartMusic {
-                volume: Volume::FULL
+                volume: AudioSettings::default().music_volume
             }]
         );
     }
@@ -390,6 +390,8 @@ mod tests {
             },
             hyperspace_effects: false,
             fullscreen: false,
+            quicktime_movies: true,
+            map_borders: true,
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);
