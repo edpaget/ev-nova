@@ -323,4 +323,15 @@ exclude_re = [
     # 9999-31999 and so gives `None` for every code of 2176-9998, which is
     # nowhere with no draw too. The arm states the original's reading.
     "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
+    # The afterburner's boundaries where both sides give the same: a heading
+    # share of exactly the snap's slack (1e-6) is none either way to well
+    # within f32; an inertialess speed pushed to exactly the afterburner's
+    # top is the top either way; fuel drained to exactly none is none
+    # either way; a box exactly at the top speed bled by a step is raised
+    # back to it, and one raised to the top speed it already holds is
+    # unchanged.
+    "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in push_velocity",
+    "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in push_speed",
+    "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in drain",
+    "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in MaxVel::bleed",
 ]

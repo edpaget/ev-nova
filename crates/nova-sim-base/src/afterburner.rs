@@ -260,6 +260,9 @@ mod tests {
         assert!(near(past.x, (-top - 1.0) * 0.99));
         let north = push_velocity(Vec2::new(0.0, -1.0), 0.0, ACCEL, TOP);
         assert!(near(north.y, -1.0 - ACCEL * PUSH), "{north:?}");
+        // Facing up the share is exactly -1, so the top is exactly -9.
+        let on = push_velocity(Vec2::new(0.0, -top), 0.0, ACCEL, TOP);
+        assert!(near(on.y, -top * 0.99), "at the top, damped: {on:?}");
     }
 
     #[test]

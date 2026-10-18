@@ -14,8 +14,9 @@
 //! the pre-jump and the warp's run in hyperspace, and is left alone while
 //! the player is destroyed or the pod flies. Every frame that reaches the
 //! block passes the engage test, which clears `_abOn` first (@0x6cae3);
-//! the engine clears it on the others too, which only a destroyed player
-//! could tell, and a destroyed ship is never pushed.
+//! the engine runs the test on a destroyed player's ticks too, which
+//! clears it there (a destroyed ship is not intact) where the original
+//! leaves it: nothing can tell, as a destroyed ship is never pushed.
 //!
 //! **What reads it.** `_HandlePlayer` runs before `_HandleShot`
 //! (`_DoPlayGameWork` @0x43e19, @0x44385), so `_DamageShip`'s knockback
@@ -76,11 +77,6 @@ impl Session {
             self.jump.is_some(),
             self.pilot.reserves.fuel.now,
         );
-    }
-
-    /// Lets the afterburner go, on a tick that never reaches its test.
-    pub(super) fn cut_afterburner(&mut self) {
-        self.afterburner_on = false;
     }
 
     /// What the player's tick is capped by ([`Caps`]): its thrust tops out
@@ -266,6 +262,16 @@ mod tests {
         jumping.tick(held(true, true));
         assert!(!jumping.afterburner_on(), "in the pre-jump");
         assert!(fuel(&jumping) <= full, "{}", fuel(&jumping));
+    }
+
+    #[test]
+    fn a_destroyed_players_afterburner_is_off() {
+        let mut session = flying(&burner(), 90.0);
+        session.tick(held(false, true));
+        assert!(session.afterburner_on());
+        session.condition = Condition::Destroyed;
+        session.tick(held(false, true));
+        assert!(!session.afterburner_on());
     }
 
     #[test]

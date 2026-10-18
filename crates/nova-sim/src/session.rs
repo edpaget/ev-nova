@@ -2020,7 +2020,6 @@ impl Session {
                 }
             }
             Condition::Destroyed => {
-                self.cut_afterburner();
                 self.stop_thrust();
                 self.player.velocity = Vec2::ZERO;
                 self.dead_tick();

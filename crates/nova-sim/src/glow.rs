@@ -366,6 +366,7 @@ mod tests {
             [25, 26, 27, 28, 29, 30, 31, 32, 32, 32]
         );
         assert_eq!(burnt(0, false, 3), [2, 3, 4], "nothing to fall from none");
+        assert_eq!(burnt(33, false, 1), [32], "coasting from 33: none to raise");
         assert_eq!(burnt(40, false, 2), [38, 36], "coasting from above, 2 down");
         assert_eq!(burnt(40, true, 2), [39, 38], "thrusting from above, 1 down");
     }
