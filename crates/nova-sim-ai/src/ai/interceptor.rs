@@ -29,7 +29,13 @@
 //!   `nova_sim::mission` module's "Cargo"), failing a mission
 //!   flagged 0x0020 or fining the smuggler, then its illegal `jünk` and
 //!   outfits (see [`scan`](crate::scan)), convicting the smuggler; any
-//!   find sets the interceptor attacking the player.
+//!   find sets the interceptor attacking the player. A fresh pick of the
+//!   player raises the pre-scan hail ([`CommCall::PreScan`], @0x8ce4b),
+//!   which the session says when the interceptor has a government, the
+//!   player carries matching mission cargo and the line is idle (see
+//!   [`call_for_help`](super::call_for_help)); the hail comes in the
+//!   pick, so it stands when the out-of-ammo retreat then turns the
+//!   inspection into a flight.
 //! - Short of ammunition with a hull of `Flags2` 0x0080
 //!   (@0x8d343-0x8d391), it flees the ship it attacks, snipes at or
 //!   inspects, and with none it stops, unless it is leaving; it has no
@@ -44,7 +50,7 @@
 use crate::ai::fire::FireRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
-    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting,
+    Admit, Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting,
     out_of_ammo, react,
 };
 use crate::chance::Chance;
@@ -107,7 +113,16 @@ impl Behaviour for Interceptor {
             ..INTERCEPTOR_RETREAT
         };
         let hunt = hunt(npc, around, retreat, Some(self.always_attacks));
-        hunt.or(|| out_of_ammo::after_patrol(npc, self.patrol(npc, around, chance)))
+        let mut comm_call = None;
+        let decision = hunt.or(|| {
+            let (goal, call) = self.patrol(npc, around, chance);
+            comm_call = call;
+            out_of_ammo::after_patrol(npc, goal)
+        });
+        Decision {
+            comm_call,
+            ..decision
+        }
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -124,24 +139,38 @@ impl Behaviour for Interceptor {
 }
 
 impl Interceptor {
-    /// Its goal with nothing to fight: its inspection, hold or patrol.
-    fn patrol(self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    /// Its goal with nothing to fight: its inspection, hold or patrol;
+    /// and the pre-scan hail when its pick is the player, fresh
+    /// (`_InterceptorAI` @0x8ce34-0x8ce4b: the block runs only as the
+    /// pick sets slot 0, never for an inspection kept).
+    fn patrol(
+        self,
+        npc: &Npc,
+        around: &Surroundings,
+        chance: &mut dyn Chance,
+    ) -> (Goal, Option<CommCall>) {
         if let Goal::Inspect(ship) = npc.goal
             && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
             && !within_reach(state.position - npc.state.position)
         {
-            return Goal::Inspect(ship);
+            return (Goal::Inspect(ship), None);
         }
         if npc.goal == Goal::Hold {
             // The patrol and inspect block needs goal 1 or below, or
             // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
             // holds.
-            return idle(npc, around, chance);
+            return (idle(npc, around, chance), None);
         }
         let patrol = Admit::PlainOnly {
             uninhabited: self.patrol_uninhabited == RuleSource::Engine,
         };
-        inspect(npc, around, chance).unwrap_or_else(|| idle_admitting(npc, around, chance, patrol))
+        match inspect(npc, around, chance) {
+            Some(goal) => {
+                let call = (goal == Goal::Inspect(ShipRef::Player)).then_some(CommCall::PreScan);
+                (goal, call)
+            }
+            None => (idle_admitting(npc, around, chance, patrol), None),
+        }
     }
 }
 
@@ -175,6 +204,7 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::CommCall;
     use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{
         NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, short_of_ammo, sites,
@@ -537,6 +567,7 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: true,
+                comm_call: None,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -552,6 +583,7 @@ mod tests {
             turns_on_player: true,
             dropped_target: false,
             provokes: true,
+            comm_call: None,
         };
         let picked = |goal| Decision {
             goal,
@@ -572,7 +604,10 @@ mod tests {
         );
         assert_eq!(
             decision_by(ALWAYS, &[busy, pirate], Condition::Disabled, 0, &[0]),
-            turned(Goal::Inspect(P)),
+            Decision {
+                comm_call: Some(CommCall::PreScan),
+                ..turned(Goal::Inspect(P))
+            },
             "the word lets a disabled player go: on to an inspection"
         );
         let mut held = police();
@@ -596,7 +631,10 @@ mod tests {
         );
         assert_eq!(
             decision_by(0, &[police()], intact, 0, &[0]),
-            not(Goal::Inspect(P)),
+            Decision {
+                comm_call: Some(CommCall::PreScan),
+                ..not(Goal::Inspect(P))
+            },
             "an inspection"
         );
         assert_eq!(
@@ -625,8 +663,41 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: true,
                 provokes: false,
+                comm_call: None,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
+        );
+    }
+
+    #[test]
+    fn a_fresh_pick_of_the_player_raises_the_pre_scan_hail() {
+        let intact = Condition::Intact;
+        let call = |npcs: &[Npc], draws: &[u32]| decision_by(0, npcs, intact, 0, draws).comm_call;
+        assert_eq!(call(&[police()], &[0]), Some(CommCall::PreScan), "@0x8ce4b");
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+        assert_eq!(
+            decision_by(0, &[police(), trader.clone()], intact, 0, &[1]).goal,
+            Goal::Inspect(n(2))
+        );
+        assert_eq!(
+            call(&[police(), trader.clone()], &[1]),
+            None,
+            "an NPC picked"
+        );
+        let mut kept = police();
+        kept.goal = Goal::Inspect(P);
+        assert_eq!(
+            decision_by(0, &[kept.clone()], intact, 0, &[]).goal,
+            Goal::Inspect(P)
+        );
+        assert_eq!(call(&[kept], &[]), None, "an inspection kept");
+        let mut dry = short_of_ammo(police(), AmmoLeft::Dry, true);
+        dry.goal = Goal::Idle;
+        let decision = decision_by(0, &[dry], intact, 0, &[0]);
+        assert_eq!(
+            (decision.goal, decision.comm_call),
+            (Goal::Flee(P), Some(CommCall::PreScan)),
+            "the hail comes in the pick, before the out-of-ammo retreat (@0x8d343)"
         );
     }
 

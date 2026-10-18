@@ -104,6 +104,8 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 pub mod autopilot;
+#[cfg(test)]
+mod comm_call_tests;
 pub mod destination;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
@@ -117,7 +119,9 @@ pub mod strength;
 pub mod table;
 
 use crate::ai::interceptor::within_reach;
-use crate::ai::{Behaviour, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings};
+use crate::ai::{
+    Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
+};
 use crate::combat::ion::Ion;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -470,6 +474,9 @@ pub struct Traffic {
     /// at once, since they were last taken, in order
     /// ([`Traffic::take_attack_quotes`]).
     attack_quotes: Vec<NpcId>,
+    /// The calls the decisions made on the message line since they were
+    /// last taken, in NPC order ([`Traffic::take_comm_calls`]).
+    comm_calls: Vec<(NpcId, CommCall)>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
     /// The name of the person of the ship last brought in at each berth,
@@ -541,6 +548,7 @@ impl Traffic {
             scans: Vec::new(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
+            comm_calls: Vec::new(),
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
             left_behind: BTreeMap::new(),
@@ -605,6 +613,7 @@ impl Traffic {
         self.scans.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
+        self.comm_calls.clear();
         self.add(missions, world.persons.grudges, Some(world.spawn_reserve));
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
@@ -688,6 +697,7 @@ impl Traffic {
         self.scans.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
+        self.comm_calls.clear();
     }
 
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
@@ -760,6 +770,16 @@ impl Traffic {
                     .map(|decision| (npc.id, decision.dropped_target))
             })
             .collect();
+        self.comm_calls.extend(
+            self.npcs
+                .iter()
+                .zip(&decisions)
+                .filter_map(|(npc, decision)| {
+                    decision
+                        .and_then(|decision| decision.comm_call)
+                        .map(|call| (npc.id, call))
+                }),
+        );
         let view = world.gate_view();
         for (id, dropped_target) in turning {
             self.ask_quote_gate(id, dropped_target, view);
@@ -1507,6 +1527,14 @@ impl Traffic {
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)
+    }
+
+    /// The calls the decisions made on the message line since this was
+    /// last called, in NPC order within a tick ([`Decision::comm_call`]),
+    /// for the session to answer. Taking them empties the list; entering
+    /// or going on into another system drops them.
+    pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall)> {
+        std::mem::take(&mut self.comm_calls)
     }
 
     /// The ship types the system's traffic can spawn, by ascending ID.
@@ -3530,6 +3558,7 @@ mod tests {
             turns_on_player: true,
             dropped_target: true,
             provokes: false,
+            comm_call: None,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

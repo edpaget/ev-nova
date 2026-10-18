@@ -235,6 +235,7 @@ impl Behaviour for NovaAi {
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: false,
+                comm_call: None,
             };
         }
         self.thinker(npc).decision(npc, around, chance)
@@ -1242,6 +1243,7 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: true,
                 provokes: false,
+                comm_call: None,
             }
         }
     }
@@ -1261,6 +1263,7 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: false,
+                comm_call: None,
             },
             "the mission hunt (@0x8d6b7)"
         );

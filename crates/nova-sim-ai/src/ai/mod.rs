@@ -17,6 +17,9 @@
 //! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
 //!   weapons' longest reach, and how it flies there.
 //! - [`react`]: how a ship hit answers, and how others come to its help.
+//! - [`call_for_help`]: the calls a think makes on the message line
+//!   ([`CommCall`]): a fleeing trader's distress call and an
+//!   interceptor's pre-scan hail, and the distress call's gates.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
 //!   NPC to the one for its type.
@@ -28,6 +31,7 @@
 //!   shuttles to its nearest stellar; [`NovaAi`] routes every one to it.
 
 pub mod brave;
+pub mod call_for_help;
 pub mod carried;
 pub mod escort;
 pub mod fire;
@@ -68,6 +72,7 @@ use nova_sim_combat::asteroid::Asteroid;
 pub use crate::traffic::destination::Admit;
 
 pub use brave::BraveTrader;
+pub use call_for_help::CommCall;
 pub use carried::CarriedAi;
 pub use escort::EscortAi;
 pub use interceptor::Interceptor;
@@ -562,6 +567,11 @@ pub struct Decision {
     /// (`_WarshipAI` @0x8b7e5, `_InterceptorAI` @0x8cb9d). The traffic sets
     /// [`Npc::provoked`] so as it takes the goal.
     pub provokes: bool,
+    /// The call the think makes on the message line, if any: a distress
+    /// call (`_AICallForHelp`) or a pre-scan hail (see
+    /// [`call_for_help`]). The session answers it after the tick's
+    /// decisions (`Session::answer_comm_calls`).
+    pub comm_call: Option<CommCall>,
 }
 
 /// How NPCs decide what to do.

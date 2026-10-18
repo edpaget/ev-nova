@@ -272,6 +272,7 @@ impl Hunt {
             turns_on_player: self.turns_on_player,
             dropped_target: self.dropped_target,
             provokes: self.provokes,
+            comm_call: None,
         }
     }
 }
@@ -1057,6 +1058,7 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: true,
+                comm_call: None,
             }
         );
         assert!(
@@ -1434,6 +1436,7 @@ mod tests {
             turns_on_player: turns,
             dropped_target: false,
             provokes: turns,
+            comm_call: None,
         }
     }
 
@@ -1508,6 +1511,7 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: true,
                 provokes: false,
+                comm_call: None,
             }
         );
         let mut calm = grudger;
@@ -1522,6 +1526,7 @@ mod tests {
                 turns_on_player: false,
                 dropped_target: true,
                 provokes: false,
+                comm_call: None,
             },
             "no grudge: dropped, and nothing picked"
         );

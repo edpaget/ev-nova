@@ -11,8 +11,8 @@
 //!   decides for a disabled ship, so only this core's own test reaches it.
 //! - **Provoked** (+0x96 > 0 with a target): state 3, [`Goal::Flee`] from
 //!   its attacker ([`provoked_by`]), then a tail call to `_AICallForHelp`
-//!   (@0x8b46c-0x8b483), which rdm:phase/combat-ai-fidelity/phase-4-distress-calls-and-pre-scan-hails
-//!   adds.
+//!   (@0x8b46c-0x8b483): its [`Decision::comm_call`] (see
+//!   [`call_for_help`](crate::ai::call_for_help)).
 //! - **[`MINES`]**, unless already leaving (state 2, [`Goal::JumpOut`]):
 //!   with asteroid slot 0 live ([`Surroundings::mining_rock`]) state 16,
 //!   [`Goal::Mine`]; without, state 6, [`Goal::Idle`], its target and
@@ -36,7 +36,8 @@
 //!   or stops (state 6). The first test's state 6 comes before this one,
 //!   so an Asteroid Miner that can't scoop lands even after fleeing.
 //!
-//! No `PlaySound` or `_beepSnd` call is anywhere in it.
+//! No `PlaySound` or `_beepSnd` call is anywhere in it; the distress
+//! call's beep is `_AICallForHelp`'s.
 //!
 //! **Left out** (see rdm:phase/combat-ai-fidelity/phase-2-miners-without-asteroids):
 //!
@@ -51,7 +52,8 @@
 //! - +0x92's "last landed" write (@0x8b3ae): a ship that lands leaves the
 //!   system here.
 
-use crate::ai::{Behaviour, Goal, Surroundings, provoked_by};
+use crate::ai::call_for_help::when_fleeing;
+use crate::ai::{Behaviour, Decision, Goal, Surroundings, provoked_by};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -82,6 +84,18 @@ impl Behaviour for MinerAi {
         decide(npc, around)
     }
 
+    /// Its [`decide`] goal, with a distress call fleeing, as `_MinerAI`
+    /// tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483,
+    /// [`when_fleeing`]).
+    fn decision(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Decision {
+        let goal = decide(npc, around);
+        Decision {
+            goal,
+            comm_call: when_fleeing(goal),
+            ..Decision::default()
+        }
+    }
+
     /// Its attacker while it flees; no ship otherwise, as the stop and the
     /// leave clear its target (@0x8b2c5, @0x8b31e, @0x8b43f).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
@@ -97,8 +111,8 @@ pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
         return Goal::Idle;
     }
     if let Some(attacker) = provoked_by(npc, around) {
-        // `_MinerAI` tail-calls `_AICallForHelp` here (@0x8b46c-0x8b483):
-        // rdm:phase/combat-ai-fidelity/phase-4-distress-calls-and-pre-scan-hails.
+        // `_MinerAI` tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483):
+        // its decision carries the call (`MinerAi::decision`).
         return Goal::Flee(attacker);
     }
     let mines = npc.miner & MINES != 0;
@@ -418,6 +432,26 @@ mod tests {
             Goal::Mine,
             "its attacker gone, it decides as unprovoked"
         );
+    }
+
+    #[test]
+    fn a_provoked_miner_calls_for_help_and_a_working_one_does_not() {
+        let mut provoked = miner(MINER_BITS, true);
+        provoked.provoked = 5.0;
+        provoked.target = Some(n(2));
+        let npcs = [
+            provoked.clone(),
+            ship(2, PIRATES, AiType::Warship, 50.0, 0.0),
+        ];
+        let around = Surroundings::new(&[], &npcs);
+        let decision = MinerAi.decision(&provoked, &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert_eq!(decision.comm_call, Some(crate::ai::CommCall::Distress));
+        let alone = [provoked.clone()];
+        let around = Surroundings::new(&[], &alone);
+        let decision = MinerAi.decision(&provoked, &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Mine);
+        assert_eq!(decision.comm_call, None);
     }
 
     #[test]
