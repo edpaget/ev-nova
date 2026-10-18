@@ -448,6 +448,11 @@ pub struct EscortStatus {
     pub wage: Option<i64>,
 }
 
+/// How long an assisting ship's comm note shows: 240 (`_HighLevelAIHandler`
+/// @0x8f6a1, `_LowLevelAIHandler` @0x86ef4), the one count the session
+/// sets the message line to and the flight shows it for.
+pub const NOTE_TICKS: u16 = 240;
+
 /// What an NPC assisting the player has done, for the flight's message
 /// line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -458,6 +463,14 @@ pub struct CommNote {
     pub comm_name: String,
     /// The help it gave.
     pub done: Help,
+}
+
+impl CommNote {
+    /// How long the note shows: [`NOTE_TICKS`], whatever the help.
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        NOTE_TICKS
+    }
 }
 
 /// One of the comm dialog's options, a button with its hotkey: an open
@@ -598,6 +611,18 @@ mod tests {
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_catalog::fixture::govt;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_comm_note_shows_for_240_ticks_whatever_the_help() {
+        for done in [Help::Refuel, Help::Repair] {
+            let note = CommNote {
+                from: NpcId(0),
+                comm_name: String::new(),
+                done,
+            };
+            assert_eq!(note.ticks(), 240, "{done:?}");
+        }
+    }
 
     const G: GovtId = GovtId(140);
     const INHERENT: GovtId = GovtId(141);

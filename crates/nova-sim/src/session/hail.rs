@@ -683,15 +683,16 @@ impl Session {
             }
         }
         for (from, ship, help) in done {
-            self.comm_line.show(super::comm_calls::NOTE_TICKS);
-            self.comm.push(CommNote {
+            let note = CommNote {
                 from,
                 comm_name: self
                     .ship_record(ship)
                     .map(|record| record.comm_name.clone())
                     .unwrap_or_default(),
                 done: help,
-            });
+            };
+            self.comm_line.show(note.ticks());
+            self.comm.push(note);
         }
     }
 
@@ -2218,8 +2219,8 @@ mod tests {
         session.pilot.reserves.fuel.now = 150.0;
         assert!(session.comm_line().free_for_calls(), "free before");
         session.tick_assistance(&NovaDisable);
-        assert_eq!(session.take_comm().len(), 1);
-        for tick in 1..super::super::comm_calls::NOTE_TICKS {
+        let [note] = session.take_comm().try_into().expect("one note");
+        for tick in 1..note.ticks() {
             session.count_down_comm_line();
             assert!(!session.comm_line().free_for_calls(), "{tick} counted");
         }

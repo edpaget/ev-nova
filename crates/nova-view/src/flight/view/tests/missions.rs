@@ -1367,8 +1367,11 @@ fn a_hail_quote_shows_in_the_message_line_for_420_ticks() {
         Some("Ace: Prepare to die, !"),
         "an unnamed pilot"
     );
-    assert_lasts(&mut view, "Ace: Prepare to die, !", 420);
-    assert_eq!(HAIL_QUOTE_TICKS, 420);
+    assert_lasts(
+        &mut view,
+        "Ace: Prepare to die, !",
+        nova_sim::person::QUOTE_SHOWN_TICKS,
+    );
 }
 
 #[test]

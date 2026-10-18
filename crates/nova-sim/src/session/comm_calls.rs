@@ -8,7 +8,10 @@
 //! - Each message it raises sets it as it is raised ([`Session::say`],
 //!   [`SimMessage::ticks`]); so do the hail quotes (420, see the
 //!   `persons` module) and the assisting ships' comm notes
-//!   ([`NOTE_TICKS`]).
+//!   ([`CommNote::ticks`](crate::hail::CommNote::ticks)). The flight
+//!   relays each for the ticks the session set, [`SimMessage::ticks`],
+//!   [`PersonQuote::ticks`](super::PersonQuote::ticks) and
+//!   [`CommNote::ticks`](crate::hail::CommNote::ticks).
 //! - The flight's own lines, the ones the view raises and words itself
 //!   (a refused jump, a boarding's line, an escort command, a line it
 //!   composes at an arrival or a take-off), set it through
@@ -72,10 +75,6 @@ use crate::message::SimMessage;
 use crate::mission::hail_finds;
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
-
-/// How long an assisting ship's comm note shows: 240 (`_HighLevelAIHandler`
-/// @0x8f6a1, `_LowLevelAIHandler` @0x86ef4), as the flight shows it.
-pub(super) const NOTE_TICKS: u16 = 240;
 
 /// The `STR#` of the twenty distress lines, `_shipHelpRequests`
 /// (`_LoadStrings` @0x71bf3-0x71c27).

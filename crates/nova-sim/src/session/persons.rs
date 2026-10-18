@@ -118,6 +118,16 @@ pub struct PersonQuote {
     pub text: String,
 }
 
+impl PersonQuote {
+    /// How long the quote shows: [`QUOTE_SHOWN_TICKS`] (@0x4464d), the
+    /// one count the session sets the message line to and the flight
+    /// shows it for.
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        QUOTE_SHOWN_TICKS
+    }
+}
+
 /// The hail quotes' clock: the quote ticks so far, in place of the
 /// original's `TickCount`, which the personal gap ([`QUOTE_GAP_TICKS`])
 /// reads.
@@ -477,6 +487,15 @@ mod tests {
     use crate::rulebook::RuleSource;
     use crate::rulebook::{RuleKey, Rulebook};
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
+
+    #[test]
+    fn a_quote_shows_for_420_ticks() {
+        let quote = PersonQuote {
+            npc: NpcId(0),
+            text: String::new(),
+        };
+        assert_eq!(quote.ticks(), 420);
+    }
 
     /// System 130 has no traffic of its own (`AvgShips` `avg_ships`) and
     /// one Person slot, naming "Ace" (`përs` 600, subtitle "Top Gun",

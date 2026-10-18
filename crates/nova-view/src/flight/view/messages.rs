@@ -21,20 +21,20 @@ use super::{JUMP_KEY, LAND_KEY, MAP_KEY};
 /// times are recorded in rdm phase hud-fidelity/phase-6-message-line;
 /// those the engine does not raise yet are rdm phase
 /// hud-fidelity/phase-12-flight-messages-the-original-raises's. The
-/// session's own messages carry their time ([`SimMessage::ticks`]).
+/// session's own messages carry their time ([`SimMessage::ticks`]), as
+/// do the ships' comm notes and the hail quotes it raises
+/// ([`CommNote::ticks`](nova_sim::CommNote::ticks),
+/// [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)).
 ///
 /// [`MESSAGE_TICKS`], 240, is the original's common time: "No
 /// response." (`_HandlePlayerCommunication` @0x626c8), "You have no
-/// active missions." (`_HandlePlayer` @0x705a8), the ships' comm notes
-/// (`_HighLevelAIHandler` @0x8f6a1, `_LowLevelAIHandler` @0x86ef4),
-/// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
+/// active missions." (`_HandlePlayer` @0x705a8), the plunder dialog's
+/// lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
 /// [`REPELLED`]) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
-/// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
-pub const HAIL_QUOTE_TICKS: u16 = 420;
 /// A grant's message: 240 (0xf0, `_DoPlunderDialog` @0x9342c).
 pub const GRANT_TICKS: u16 = 240;
 /// A mission ship boarded on the assist path, refuelled, or its cargo
@@ -1391,7 +1391,6 @@ mod tests {
         assert_eq!(
             [
                 MESSAGE_TICKS,
-                HAIL_QUOTE_TICKS,
                 GRANT_TICKS,
                 BOARD_LINE_TICKS,
                 BOARD_REFUSAL_TICKS,
@@ -1403,7 +1402,7 @@ mod tests {
                 JUMP_REFUSAL_TICKS,
                 OLD_SHIP_TICKS,
             ],
-            [240, 420, 240, 250, 360, 250, 500, 250, 360, 250, 360, 360]
+            [240, 240, 250, 360, 250, 500, 250, 360, 250, 360, 360]
         );
     }
 
