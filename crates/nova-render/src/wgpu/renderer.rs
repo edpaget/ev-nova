@@ -134,6 +134,8 @@ pub struct WgpuRenderer {
     text_viewport: glyphon::Viewport,
     text_renderers: Vec<TextRenderer>,
     upscale: Box<dyn Upscale>,
+    /// What its frames raised, for [`Self::take_warnings`].
+    warnings: Vec<String>,
 }
 
 impl WgpuRenderer {
@@ -244,7 +246,14 @@ impl WgpuRenderer {
             text_viewport,
             text_renderers: Vec::new(),
             upscale: upscale_for(upscaler, device, queue),
+            warnings: Vec::new(),
         }
+    }
+
+    /// The warnings its frames raised since it was last asked, oldest
+    /// first, each once.
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
     }
 
     /// The resolution it draws flight's world layer at: its upscaler's.

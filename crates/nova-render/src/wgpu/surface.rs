@@ -91,6 +91,10 @@ impl Gpu for SurfaceGpu {
     fn set_upscaler(&mut self, upscaler: Upscaler) {
         self.renderer.set_upscaler(upscaler);
     }
+
+    fn take_warnings(&mut self) -> Vec<String> {
+        self.renderer.take_warnings()
+    }
 }
 
 impl UpscalerProbe for SurfaceGpu {

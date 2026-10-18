@@ -69,6 +69,7 @@ pub struct RecordingGpu {
     world_resolution: WorldResolution,
     upscaler: Upscaler,
     probed: Vec<Upscaler>,
+    warnings: Vec<String>,
 }
 
 impl Default for RecordingGpu {
@@ -78,6 +79,7 @@ impl Default for RecordingGpu {
             world_resolution: WorldResolution::Native,
             upscaler: Upscaler::Native,
             probed: vec![Upscaler::Native],
+            warnings: Vec::new(),
         }
     }
 }
@@ -125,6 +127,12 @@ impl RecordingGpu {
             .collect()
     }
 
+    /// Raises `warning`, for [`Gpu::take_warnings`] to hand out. Raising
+    /// one is not a call.
+    pub fn warn(&mut self, warning: &str) {
+        self.warnings.push(warning.to_owned());
+    }
+
     /// Takes the calls received so far, leaving none.
     pub fn take(&mut self) -> Vec<GpuCall> {
         std::mem::take(&mut self.calls)
@@ -151,6 +159,10 @@ impl Gpu for RecordingGpu {
     fn set_upscaler(&mut self, upscaler: Upscaler) {
         self.upscaler = upscaler;
         self.world_resolution = resolution_of(upscaler);
+    }
+
+    fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
     }
 }
 
@@ -192,6 +204,17 @@ mod tests {
         assert_eq!(gpu.world_resolution(), WorldResolution::Logical);
         gpu.set_upscaler(Upscaler::Native);
         assert_eq!(gpu.world_resolution(), WorldResolution::Native);
+    }
+
+    #[test]
+    fn its_warnings_are_handed_out_once_and_are_no_call() {
+        let mut gpu = RecordingGpu::new();
+        assert_eq!(gpu.take_warnings(), Vec::<String>::new());
+        gpu.warn("first");
+        gpu.warn("second");
+        assert_eq!(gpu.take_warnings(), ["first", "second"]);
+        assert_eq!(gpu.take_warnings(), Vec::<String>::new(), "once");
+        assert_eq!(gpu.calls, []);
     }
 
     #[test]

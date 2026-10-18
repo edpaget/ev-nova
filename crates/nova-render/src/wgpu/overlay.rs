@@ -69,6 +69,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
     fn set_upscaler(&mut self, upscaler: Upscaler) {
         self.gpu.set_upscaler(upscaler);
     }
+
+    fn take_warnings(&mut self) -> Vec<String> {
+        self.gpu.take_warnings()
+    }
 }
 
 #[cfg(test)]
@@ -91,11 +95,12 @@ mod tests {
     }
 
     /// Records every call, and the painter's address for `submit_with`;
-    /// draws the world at `resolution`.
+    /// draws the world at `resolution` and hands out `warnings` once.
     #[derive(Default)]
     struct FakeGpu {
         calls: Vec<Call>,
         resolution: WorldResolution,
+        warnings: Vec<String>,
     }
 
     impl Gpu for FakeGpu {
@@ -117,6 +122,10 @@ mod tests {
 
         fn set_upscaler(&mut self, upscaler: Upscaler) {
             self.calls.push(Call::SetUpscaler(upscaler));
+        }
+
+        fn take_warnings(&mut self) -> Vec<String> {
+            std::mem::take(&mut self.warnings)
         }
     }
 
@@ -179,6 +188,21 @@ mod tests {
             with.set_upscaler(Upscaler::SharpBilinear);
         }
         assert_eq!(gpu.calls, [Call::SetUpscaler(Upscaler::SharpBilinear)]);
+    }
+
+    #[test]
+    fn with_overlay_hands_out_its_gpus_warnings() {
+        let mut gpu = FakeGpu {
+            warnings: vec!["MetalFX said no".to_owned()],
+            ..FakeGpu::default()
+        };
+        let mut painter = NoPainter;
+        let mut with = WithOverlay {
+            gpu: &mut gpu,
+            painter: &mut painter,
+        };
+        assert_eq!(with.take_warnings(), ["MetalFX said no"]);
+        assert_eq!(with.take_warnings(), Vec::<String>::new());
     }
 
     #[test]

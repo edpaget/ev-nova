@@ -800,6 +800,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.switch_upscaler(gpu);
         let report = self.renderer.render(&list, &self.viewport, gpu);
         self.failures.extend(report.new_failures);
+        // What drawing it raised (an upscaler's fallback, say), to show.
+        self.warnings.extend(gpu.take_warnings());
         self.show_pointer(window);
         window.request_redraw();
         resync

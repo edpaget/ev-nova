@@ -28,6 +28,10 @@ pub trait Gpu {
     /// Draws the world layer with `upscaler` from the next frame it
     /// submits on, and answers [`Gpu::world_resolution`] for it.
     fn set_upscaler(&mut self, upscaler: Upscaler);
+    /// The warnings its frames raised since it was last asked, oldest
+    /// first, each handed out once: an upscaler that fell back for a
+    /// size, say. The caller shows them.
+    fn take_warnings(&mut self) -> Vec<String>;
 }
 
 /// An axis-aligned rectangle in logical units.

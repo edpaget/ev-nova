@@ -293,6 +293,19 @@ mod tests {
     const METAL_FX: Upscaler = Upscaler::MetalFxSpatial;
 
     #[test]
+    fn a_gpu_warning_is_passed_on_after_the_frame_that_raised_it_once() {
+        let (store, _) = holding("metalfx_spatial");
+        let mut gpu = RecordingGpu::probing(&[SHARP, METAL_FX]);
+        let mut app = restored(&store, &mut gpu);
+        gpu.warn("nova: MetalFX can't scale the world");
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "no frame yet");
+        frame(&mut app, &mut gpu, 16);
+        assert_eq!(app.take_warnings(), ["nova: MetalFX can't scale the world"]);
+        frame(&mut app, &mut gpu, 32);
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "once");
+    }
+
+    #[test]
     fn a_stored_metal_fx_on_a_device_without_it_starts_native_with_one_warning() {
         let (store, text) = holding("metalfx_spatial");
         let mut gpu = RecordingGpu::probing(&[SHARP]);
