@@ -2221,7 +2221,7 @@ impl Traffic {
                 ai_wait: 0,
                 docking: None,
                 marines: kind.marines,
-                pods_left: kind.hull.pod_count,
+                pods_left: kind.hull.signed_pod_count,
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -2502,10 +2502,18 @@ mod tests {
         let mut kinds = table(1);
         if let Some(kind) = kinds.ships.get_mut(&ShipId(200)) {
             kind.hull.pod_count = 10;
+            kind.hull.signed_pod_count = 10;
         }
         let mut traffic = Traffic::new();
         traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
         assert_eq!(traffic.npcs()[0].pods_left, 10);
+        let mut kinds = table(1);
+        if let Some(kind) = kinds.ships.get_mut(&ShipId(200)) {
+            kind.hull.signed_pod_count = -3;
+        }
+        let mut traffic = Traffic::new();
+        traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
+        assert_eq!(traffic.npcs()[0].pods_left, -3, "raw (@0x3c4b0)");
         let mut traffic = Traffic::new();
         traffic.enter(table(1), &mut Draws::of(&placed(750, 750)));
         assert_eq!(traffic.npcs()[0].pods_left, 0, "a class of none");

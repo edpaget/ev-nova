@@ -317,7 +317,7 @@ impl Session {
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
             // `_RespawnEscort` leaves +0xc908 alone.
-            pods_left: kind.hull.pod_count,
+            pods_left: kind.hull.signed_pod_count,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),
@@ -1204,6 +1204,9 @@ mod tests {
             .map(|npc| (npc.ship, npc.pods_left))
             .collect();
         assert_eq!(pods, [(WARSHIP, 3), (FREIGHTER, 0)]);
+        catalog.hulls[1].pod_count = -3;
+        let session = flying(&catalog, RuleSource::Engine);
+        assert_eq!(escort_npcs(&session)[0].pods_left, -3, "raw");
     }
 
     #[test]

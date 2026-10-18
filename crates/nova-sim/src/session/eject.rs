@@ -408,7 +408,7 @@ impl Session {
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
-            pods_left: kind.hull.pod_count,
+            pods_left: kind.hull.signed_pod_count,
         }
     }
 
@@ -741,6 +741,14 @@ mod tests {
         to_the_breakup(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert_eq!(hulk(&session).pods_left, 3);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.pod_count = -3;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert_eq!(hulk(&session).pods_left, -3, "raw");
     }
 
     #[test]

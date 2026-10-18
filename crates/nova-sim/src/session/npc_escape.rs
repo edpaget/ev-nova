@@ -341,7 +341,7 @@ mod tests {
         npc.hull.death_delay = u32::try_from(death_delay).unwrap_or(0);
         npc.hull.signed_death_delay = i32::from(death_delay);
         npc.hull.pod_count = pods;
-        npc.pods_left = pods;
+        npc.pods_left = i16::try_from(pods).unwrap_or(i16::MAX);
         npc.state.position = Vec2::new(300.0, 0.0);
         npc.state.velocity = Vec2::new(2.0, 4.0);
         npc.reserves.armor.now = 0.0;

@@ -194,6 +194,11 @@ pub struct HullSpec {
     /// The crew pods a dying ship of the type ejects, its `PodCount`
     /// (class +0xa20); none below none.
     pub pod_count: u16,
+    /// Its `PodCount` as the data gives it, negative too: the spawns write
+    /// it raw to the ship's pod word (+0xc908), which a stray beam steps
+    /// as a signed word (see `nova_sim::Npc::pods_left`), while the pods
+    /// ejected read it floored ([`HullSpec::pod_count`]).
+    pub signed_pod_count: i16,
     /// The explosion as it breaks up, its `Explode1`.
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
@@ -314,6 +319,7 @@ impl Default for HullSpec {
             death_delay: 0,
             signed_death_delay: 0,
             pod_count: 0,
+            signed_pod_count: 0,
             breakup: None,
             explosion: None,
             mass: 0.0,
@@ -356,6 +362,7 @@ impl HullSpec {
             death_delay: u32::try_from(record.death_delay).unwrap_or(0),
             signed_death_delay: i32::from(record.death_delay),
             pod_count: u16::try_from(record.pod_count).unwrap_or(0),
+            signed_pod_count: record.pod_count,
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
@@ -758,6 +765,9 @@ mod tests {
             ..hull(128)
         });
         assert_eq!(odd.pod_count, 0, "none below none");
+        assert_eq!(odd.signed_pod_count, -3, "the pod word's raw");
+        assert_eq!(liner.signed_pod_count, 10);
+        assert_eq!(HullSpec::default().signed_pod_count, 0);
         assert_eq!(
             (odd.death_delay, odd.signed_death_delay),
             (0, -5),

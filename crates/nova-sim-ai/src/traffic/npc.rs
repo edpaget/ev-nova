@@ -416,8 +416,12 @@ pub struct Npc {
     /// as the player's hulk, as `_RandomShipSpawn`,
     /// `_GenericRandomShipSpawn`, `_MissionDudeSpawn` and `_LaunchFighter`
     /// set it (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe), one fewer for each
-    /// pod it ejects (see `nova_sim::npc_escape`). Never saved.
-    pub pods_left: u16,
+    /// pod it ejects (see `nova_sim::npc_escape`). Written raw
+    /// ([`HullSpec::signed_pod_count`]), so a class of negative
+    /// `PodCount` leaves it negative, which a stray beam of `ExitType` 5
+    /// reads when it steps the word (see `nova_sim::stray_words`). Never
+    /// saved.
+    pub pods_left: i16,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).

@@ -515,7 +515,7 @@ fn fighter(
         docking: None,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
-        pods_left: kind.hull.pod_count,
+        pods_left: kind.hull.signed_pod_count,
     }
 }
 
@@ -1632,6 +1632,14 @@ mod tests {
         };
         assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
         assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
+        catalog.hulls[1].pod_count = -3;
+        let (mut session, _, _) = raided(&catalog);
+        assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+        assert_eq!(
+            session.npcs().last().expect("launched").pods_left,
+            -3,
+            "raw, as _LaunchFighter writes it (@0x3d8fe)"
+        );
     }
 
     #[test]
