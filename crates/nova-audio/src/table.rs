@@ -102,6 +102,13 @@ pub struct SoundTable {
     /// Plays with the line said as a pirate takes a former escort into its
     /// fleet.
     pub ship_stolen: Option<SoundId>,
+    /// Plays as a press in the plunder dialog does something: a take,
+    /// Abort, a take's self-destruct, a capture's successful roll, and a
+    /// person's grant line.
+    pub plunder_beep: Option<SoundId>,
+    /// Plays as either button of the captured-ship assignment dialog is
+    /// pressed.
+    pub capture_assigned: Option<SoundId>,
     /// Plays as a mission's special ship lost fails a mission that isn't
     /// hidden.
     pub mission_ship_lost: Option<SoundId>,
@@ -265,6 +272,14 @@ impl SoundTable {
     /// - `cargo_stolen` and `ship_stolen`: 151, `_beepSnd[1]`, which
     ///   `_AIPlunderShipContents` plays with its cargo line (@0x84758) and
     ///   with its stolen-escort line (@0x84908).
+    /// - `plunder_beep`: 152, `_beepSnd[2]`, which `_DoPlunderDialog`
+    ///   plays with each take, Abort, a take's self-destruct, the
+    ///   capture's successful roll and a person's grant line (@0x935cb,
+    ///   @0x93681, @0x937a0, @0x939b9, @0x93b3b, @0x93f10, @0x93f77,
+    ///   @0x94095, @0x94368, @0x933fe).
+    /// - `capture_assigned`: 151, `_beepSnd[1]`, which
+    ///   `_DoCapturedShipAssignmentDialog` plays for either button
+    ///   (@0x5b56b, @0x5b66b).
     /// - `mission_ship_lost`: 151, `_beepSnd[1]`, which
     ///   `_HandleShipDisplay` plays as a mission's special ship destroyed
     ///   (@0x2db5a) and `_DamageShip` as one disabled (@0x3af11) fails a
@@ -372,6 +387,8 @@ impl SoundTable {
         downed_mission_failed: Some(SoundId(151)),
         cargo_stolen: Some(SoundId(151)),
         ship_stolen: Some(SoundId(151)),
+        plunder_beep: Some(SoundId(152)),
+        capture_assigned: Some(SoundId(151)),
         mission_ship_lost: Some(SoundId(151)),
         mission_ship_boarded: Some(SoundId(154)),
         traffic_control: Some(SoundId(151)),
@@ -452,6 +469,8 @@ mod tests {
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.ship_stolen, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.plunder_beep, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.capture_assigned, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(
             table.downed_mission_failed,
             Some(SoundId(151)),

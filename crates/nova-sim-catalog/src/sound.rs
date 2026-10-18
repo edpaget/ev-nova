@@ -194,6 +194,25 @@ pub enum SimSound {
     /// original never does: the boarders go aboard first. Its priority,
     /// 8.
     Boarded,
+    /// A press in the plunder dialog that does something: `_beepSnd[2]`,
+    /// `snd ` 152, priority 1 (`_DoPlunderDialog`). Abort (@0x935cb); the
+    /// self-destruct tripped by a take's press (@0x93681, before `STR#`
+    /// 2002 #113); the cargo taken (@0x939b9), or with no room for it
+    /// (@0x937a0, #114); the credits taken (@0x93b3b); some ammunition
+    /// taken (@0x93f10), or none fitting (@0x93f77, #117); the energy, with
+    /// any on board (@0x94095); and the capture's successful roll, before
+    /// the fleet's room is checked (@0x94368). A person's grant line plays
+    /// it too, as the dialog opens, when it grants any (@0x933fe). The
+    /// capture's own self-destruct (@0x942de-0x94336) and the escort path
+    /// (@0x9459b-0x947cf) are silent; the refusals raise
+    /// [`SimSound::Refused`].
+    PlunderBeep,
+    /// Either button of the captured-ship assignment dialog:
+    /// `_beepSnd[1]`, `snd ` 151, priority 1
+    /// (`_DoCapturedShipAssignmentDialog`: "Use As My Ship" @0x5b66b,
+    /// "Use As Escort" @0x5b56b), before anything else is done, so a swap
+    /// dropped for want of a ship slot beeps too.
+    CaptureAssigned,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
@@ -249,6 +268,11 @@ pub enum SimSound {
     /// fast (@0x65fcc) and #130 can't board, a refused `PickupMode` 2
     /// pickup's too (@0x65ffe), all at priority 1, not modelled (see
     /// `nova_sim::Session::board`),
+    /// as does the plunder dialog's (`_DoPlunderDialog`, priority 1; see
+    /// `nova_sim::Session::plunder`): a take with nothing on board, cargo
+    /// (@0x93ad2), credits (@0x93cb8), ammunition (@0x93d2f) or energy
+    /// (@0x94256); a failed capture (@0x94936, #125); and a capture into a
+    /// full fleet (@0x9487f, #124),
     /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own. The
     /// audio side plays it at 1, its most common site's priority (rdm task

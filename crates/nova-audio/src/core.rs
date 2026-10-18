@@ -238,6 +238,10 @@ impl<A: Audio> AudioCore<A> {
             SimSound::ShipDowned => self.play(self.table.ship_downed, at::SHIP_DOWNED),
             SimSound::CargoStolen => self.play(self.table.cargo_stolen, at::CARGO_STOLEN),
             SimSound::ShipStolen => self.play(self.table.ship_stolen, at::SHIP_STOLEN),
+            SimSound::PlunderBeep => self.play(self.table.plunder_beep, at::PLUNDER_BEEP),
+            SimSound::CaptureAssigned => {
+                self.play(self.table.capture_assigned, at::CAPTURE_ASSIGNED);
+            }
             SimSound::DownedMissionFailed => {
                 self.play(self.table.downed_mission_failed, at::DOWNED_MISSION_FAILED);
             }
@@ -861,6 +865,8 @@ mod tests {
             (Sound::Sim(SimSound::MissionShipLost), at::MISSION_SHIP_LOST),
             (Sound::Sim(SimSound::CargoStolen), at::CARGO_STOLEN),
             (Sound::Sim(SimSound::ShipStolen), at::SHIP_STOLEN),
+            (Sound::Sim(SimSound::PlunderBeep), at::PLUNDER_BEEP),
+            (Sound::Sim(SimSound::CaptureAssigned), at::CAPTURE_ASSIGNED),
             (
                 Sound::Sim(SimSound::MissionShipBoarded),
                 at::MISSION_SHIP_BOARDED,

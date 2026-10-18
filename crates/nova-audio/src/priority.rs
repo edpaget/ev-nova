@@ -128,6 +128,13 @@ pub const CARGO_STOLEN: Priority = Priority::new(1);
 /// A pirate's stolen-escort line, `_beepSnd[1]`: `_AIPlunderShipContents`
 /// @0x84908.
 pub const SHIP_STOLEN: Priority = Priority::new(1);
+/// A press in the plunder dialog that does something, `_beepSnd[2]`:
+/// `_DoPlunderDialog` @0x935cb, @0x93681, @0x937a0, @0x939b9, @0x93b3b,
+/// @0x93f10, @0x93f77, @0x94095, @0x94368, @0x933fe.
+pub const PLUNDER_BEEP: Priority = Priority::new(1);
+/// Either assignment button, `_beepSnd[1]`:
+/// `_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b.
+pub const CAPTURE_ASSIGNED: Priority = Priority::new(1);
 /// A mission's special ship lost, `_beepSnd[1]`: `_HandleShipDisplay`
 /// @0x2db5a, `_DamageShip` @0x3af11.
 pub const MISSION_SHIP_LOST: Priority = Priority::new(1);
@@ -222,6 +229,8 @@ mod tests {
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),
             (CARGO_STOLEN, 1, "cargo stolen"),
             (SHIP_STOLEN, 1, "ship stolen"),
+            (PLUNDER_BEEP, 1, "plunder beep"),
+            (CAPTURE_ASSIGNED, 1, "capture assigned"),
             (MISSION_SHIP_LOST, 1, "mission ship lost"),
             (MISSION_SHIP_BOARDED, 8, "mission ship boarded"),
             (TRAFFIC_CONTROL, 1, "traffic control"),
