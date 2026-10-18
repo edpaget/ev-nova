@@ -18,7 +18,10 @@
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
 //! recorded. Each keeps its ion colour with its charge cleared, as
 //! `_RespawnEscort` clears +0x5c (@0x3d543) but leaves +0xb0, so the
-//! next ionization ORs onto the old colours. At a hypergate or wormhole exit each is placed on its slot
+//! next ionization ORs onto the old colours. Each also keeps its cloak,
+//! fade and direction, as `_RespawnEscort` writes neither +0x64 nor
+//! +0xc8d8, so an escort cloaked or fading when the player leaves arrives
+//! the same way and decides from there on its first think. At a hypergate or wormhole exit each is placed on its slot
 //! and then comes out of the exit gate after the player (see
 //! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
 //! the record. A trader escort's
@@ -123,12 +126,15 @@ use crate::traffic::table::{self, ShipKind};
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Session::fleet_kept`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
     /// Its ion colour ([`Ion::colour`]); its charge is cleared.
     pub(super) ion_colour: u32,
+    /// Its cloak, fade and direction ([`Npc::cloak`]), as `_RespawnEscort`
+    /// leaves +0x64 and +0xc8d8.
+    pub(super) cloak: Cloak,
 }
 
 impl Session {
@@ -164,14 +170,18 @@ impl Session {
     }
 
     /// What each of the fleet's escorts keeps across a setup, by its
-    /// index, from its NPC in the system, if any (none and colour 0
-    /// without one).
+    /// index, from its NPC in the system, if any (none, colour 0 and
+    /// uncloaked without one).
     ///
     /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
     /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark. And as
     /// `_RespawnEscort` clears an escort's ion charge (+0x5c @0x3d543)
     /// but never writes its ion colour (+0xb0), the escort keeps the
-    /// colours it was ionized with.
+    /// colours it was ionized with. Neither `_RespawnEscort`
+    /// (@0x3d4b8-0x3d62c), its tail `_AIMakeEscortFlyInForm`
+    /// (@0x89b8e-0x89c3d) nor the kept slot (@0x3bf7e-0x3bfb6) writes the
+    /// cloak's fade (+0x64) or direction (+0xc8d8), so the escort keeps its
+    /// cloak as it was, cloaked, fading or seen.
     pub(super) fn fleet_kept(&self) -> Vec<KeptEscort> {
         (0..self.pilot.escorts.len())
             .map(|index| {
@@ -184,6 +194,7 @@ impl Session {
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
                     aux: npc.aux,
                     ion_colour: npc.ion.colour,
+                    cloak: npc.cloak,
                 })
             })
             .collect()
@@ -193,7 +204,7 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark, and its ion colour with no charge.
+    /// mark, its ion colour with no charge, and its cloak.
     pub(super) fn enter_escorts(&mut self, berths: &[u32], kept: &[KeptEscort]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
@@ -216,6 +227,7 @@ impl Session {
                         charge: 0.0,
                         colour: kept.ion_colour,
                     };
+                    npc.cloak = kept.cloak;
                 }
                 Some(id)
             })
@@ -1362,6 +1374,69 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         assert_ion_colour_kept(&mut session, before);
+    }
+
+    /// Checks that, once the fleet has entered a new system, the first
+    /// escort is a new NPC carrying `cloak` exactly, and the second has
+    /// the default.
+    fn assert_cloak_kept(session: &Session, before: NpcId, cloak: Cloak) {
+        let escorts: Vec<NpcId> = session.fleet.iter().copied().flatten().collect();
+        assert_ne!(escorts[0], before, "a new NPC");
+        assert_eq!(session.npc(escorts[0]).expect("there").cloak, cloak);
+        assert_eq!(
+            session.npc(escorts[1]).expect("there").cloak,
+            Cloak::default()
+        );
+    }
+
+    fn cloak_first_escort(session: &mut Session, cloak: Cloak) -> NpcId {
+        let warship = session.fleet[0].expect("placed");
+        session.npc_mut(warship).expect("there").cloak = cloak;
+        warship
+    }
+
+    const FULLY_CLOAKED: Cloak = Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_cloaked_escort_arrives_after_a_jump_cloaked() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let before = cloak_first_escort(&mut session, FULLY_CLOAKED);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_cloak_kept(&session, before, FULLY_CLOAKED);
+        let first = session.fleet[0].expect("placed");
+        assert!(session.npc(first).expect("there").cloak.is_cloaked());
+    }
+
+    #[test]
+    fn a_cloaked_escort_takes_off_cloaked() {
+        let catalog = crate::testkit::far_129_reachable(fleeted());
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let before = cloak_first_escort(&mut session, FULLY_CLOAKED);
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_cloak_kept(&session, before, FULLY_CLOAKED);
+    }
+
+    /// The carried direction, not just the fade, comes through: an escort
+    /// fading in arrives still fading in, which its first think's uncloak
+    /// leaves alone (`_DoShipUncloak` acts only on a cloaked ship).
+    #[test]
+    fn an_escort_fading_in_when_the_player_jumps_arrives_fading_in() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let fading = Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        let before = cloak_first_escort(&mut session, fading);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_cloak_kept(&session, before, fading);
     }
 
     #[test]
