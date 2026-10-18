@@ -621,6 +621,159 @@ mod tests {
     }
 
     #[test]
+    fn the_high_level_measures_the_box_from_the_victim_where_it_is() {
+        let victim = Vec2::new(1000.0, -1000.0);
+        let step = |x: f32, y: f32| {
+            high_level(
+                &pirate(at(x, y, 0.0, 0.0, 0.0), DockSub::Approach),
+                victim,
+                false,
+            )
+        };
+        assert_eq!(step(1210.0, -790.0), DockStep::Sub(DockSub::Dock));
+        assert_eq!(step(1420.5, -1000.0), DockStep::Sub(DockSub::Approach));
+    }
+
+    #[test]
+    fn its_turn_and_thrust_wait_while_its_ai_wait_runs() {
+        // Matching across 3: it would turn and thrust, but only moves on at
+        // the damped velocity.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = pirate(at(50.0, 0.0, 0.0, 2.0, 90.0), DockSub::Dock);
+        ship.ai_wait = 150;
+        let (ship, _) = flown(ship, &victim, &[]);
+        assert_eq!(ship.state.heading, 90.0);
+        assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.9));
+        assert_eq!(ship.state.position, Vec2::new(50.0, 1.9));
+    }
+
+    #[test]
+    fn approaching_reads_the_bearing_and_the_box_from_the_victim_where_it_is() {
+        let victim = at(1000.0, -1000.0, 0.0, 0.0, 0.0);
+        // 150 below it, moving across: inside the box it corrects.
+        let (ship, _) = flown(
+            pirate(at(1000.0, -850.0, 2.0, 0.0, 90.0), DockSub::Approach),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 87.0, "turning towards 333");
+        // 250 below it, outside: it turns to the bearing, 0.
+        let (ship, _) = flown(
+            pirate(at(1000.0, -750.0, 2.0, 0.0, 10.0), DockSub::Approach),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 7.0);
+    }
+
+    #[test]
+    fn approaching_it_corrects_by_the_gap_to_its_top_speed_on_one_axis_alone() {
+        // The bearing 90; its velocity's direction far off it, short of the
+        // top speed (4, 0) by (3.9, 0.2): it turns to the gap, about 93.
+        let victim = at(150.0, 0.0, 0.0, 0.0, 0.0);
+        let (ship, _) = flown(
+            pirate(at(0.0, 0.0, 0.1, -0.2, 90.0), DockSub::Approach),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 93.0, "turning right to the gap");
+    }
+
+    #[test]
+    fn approaching_15_degrees_off_the_bearing_is_not_off_enough() {
+        let victim = at(0.0, -150.0, 0.0, 0.0, 0.0);
+        // A velocity whose table angle is `angle`, off the bearing of 0.
+        let moving = |angle: i16| {
+            (0_i16..400)
+                .map(|tenth| flight::facing(f32::from(tenth) * 0.1) * 0.5)
+                .find(|velocity| trig::intercept_angle(Vec2::ZERO, *velocity * 100.0) == angle)
+                .expect("some heading reads so")
+        };
+        let heading_after = |velocity: Vec2| {
+            let (ship, _) = flown(
+                pirate(
+                    at(0.0, 0.0, velocity.x, velocity.y, 180.0),
+                    DockSub::Approach,
+                ),
+                &victim,
+                &[],
+            );
+            ship.state.heading
+        };
+        assert_eq!(heading_after(moving(15)), 180.0, "15 is not above 15");
+        assert_ne!(heading_after(moving(16)), 180.0, "16 is");
+    }
+
+    #[test]
+    fn matching_turns_against_the_velocity_gap_on_either_axis() {
+        // 3 apart going right: it wants to face left, 270.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let (ship, _) = flown(
+            pirate(at(50.0, 0.0, 3.0, 0.0, 260.0), DockSub::Dock),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 263.0);
+        let (ship, _) = flown(
+            pirate(at(50.0, 0.0, 3.0, 0.0, 280.0), DockSub::Dock),
+            &victim,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 277.0);
+    }
+
+    #[test]
+    fn matching_damps_both_axes_of_the_gap() {
+        let victim = at(0.0, 0.0, 1.0, 1.0, 0.0);
+        // A gap of (0.6, 2.0), facing far off its wanted heading.
+        let (ship, _) = flown(
+            pirate(at(50.0, 0.0, 1.6, 3.0, 90.0), DockSub::Dock),
+            &victim,
+            &[],
+        );
+        let expected = Vec2::new(1.0 + 0.57, 1.0 + 1.9);
+        assert!(
+            (ship.state.velocity - expected).length() < 1e-5,
+            "{:?}",
+            ship.state.velocity
+        );
+    }
+
+    #[test]
+    fn matching_thrusts_strictly_within_a_turn_and_one() {
+        // It wants 0 (a gap going down); turn 3, so within 4.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let thrusts = |heading: f32| {
+            let (ship, _) = flown(
+                pirate(at(50.0, 0.0, 0.0, 2.0, heading), DockSub::Dock),
+                &victim,
+                &[],
+            );
+            ship.state.velocity.y < 1.89
+        };
+        assert!(thrusts(3.0), "3 off");
+        assert!(!thrusts(4.0), "4 off");
+    }
+
+    #[test]
+    fn aligned_it_reads_the_docked_box_from_the_victim_where_it_is() {
+        let victim = at(1000.0, -1000.0, 0.5, 0.0, 0.0);
+        let (ship, outcome) = flown(
+            pirate(at(1003.0, -997.0, 0.5, 0.0, 0.0), DockSub::Dock),
+            &victim,
+            &[0],
+        );
+        assert!(matches!(outcome, DockOutcome::Started { .. }), "inside 3");
+        assert_eq!(ship.state.position, Vec2::new(1003.5, -997.0));
+        let (_, outcome) = flown(
+            pirate(at(1003.5, -1000.0, 0.5, 0.0, 0.0), DockSub::Dock),
+            &victim,
+            &[0],
+        );
+        assert_eq!(outcome, DockOutcome::Flying, "outside 3");
+    }
+
+    #[test]
     fn with_no_docking_it_flies_nothing() {
         let mut ship = pirate(at(0.0, 0.0, 1.0, 0.0, 0.0), DockSub::Dock);
         ship.docking = None;

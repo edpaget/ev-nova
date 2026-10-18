@@ -616,6 +616,156 @@ mod tests {
     }
 
     #[test]
+    fn an_announced_capture_drops_only_the_ships_targeting_the_victim() {
+        let mut busy = npc(6, ShipStats::new(FAST, &[]));
+        busy.berth = 6;
+        busy.goal = Goal::Attack(ShipRef::Player);
+        busy.target = Some(ShipRef::Player);
+        // Disabled, so no think of its own rewrites its target.
+        busy.condition = Condition::Disabled;
+        let mut docked = pirate(1000);
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = former();
+        boarded.boarded = true;
+        let mut traffic = traffic_of(vec![docked, boarded, busy]);
+        tick(&mut traffic, 0);
+        assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
+        assert_eq!(
+            ship(&traffic, NpcId(6)).target,
+            Some(ShipRef::Player),
+            "it targets another ship"
+        );
+    }
+
+    #[test]
+    fn a_captured_ship_with_no_armour_capacity_is_left_intact() {
+        #[derive(Debug)]
+        struct AlwaysDisabled;
+        impl crate::combat::hull::DisableRule for AlwaysDisabled {
+            fn disabled(
+                &self,
+                _armor: crate::reserves::Gauge,
+                _hull: &crate::combat::hull::HullSpec,
+            ) -> bool {
+                true
+            }
+        }
+        let mut docked = pirate(1000);
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = victim();
+        boarded.boarded = true;
+        boarded.reserves.armor = crate::reserves::Gauge { now: 0.0, max: 0.0 };
+        let mut traffic = traffic_of(vec![docked, boarded]);
+        let world = World {
+            disable: &AlwaysDisabled,
+            ..World::new(&[])
+        };
+        traffic.tick_in(
+            &PirateWarship::default(),
+            world,
+            &[],
+            &mut Draws::of(&[0; 64]),
+        );
+        assert_eq!(
+            ship(&traffic, VICTIM).condition,
+            Condition::Intact,
+            "the rule isn't asked"
+        );
+    }
+
+    #[test]
+    fn a_docking_flies_only_an_intact_flying_ship_at_its_own_top_speed() {
+        let victim = ShipState::default();
+        let mut far = pirate(1);
+        far.state.position = Vec2::new(0.0, 1000.0);
+        far.state.velocity = Vec2::new(0.0, -0.9);
+        far.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Approach,
+        });
+        let speeds = TopSpeeds {
+            own: 1.0,
+            lead: None,
+        };
+        let mut flown = far.clone();
+        assert_eq!(
+            fly_docking(&mut flown, Some(&victim), speeds, &mut Draws::of(&[])),
+            Some(DockOutcome::Flying)
+        );
+        assert_eq!(
+            flown.state.velocity.length(),
+            1.0,
+            "capped at its own top speed"
+        );
+        for (condition, mode) in [
+            (Condition::Disabled, crate::traffic::npc::Mode::Flying),
+            (
+                Condition::Intact,
+                crate::traffic::npc::Mode::Coasting { ticks_left: 3 },
+            ),
+        ] {
+            let mut down = far.clone();
+            down.condition = condition;
+            down.mode = mode;
+            assert_eq!(
+                fly_docking(&mut down, Some(&victim), speeds, &mut Draws::of(&[])),
+                None,
+                "{condition:?} {mode:?}"
+            );
+        }
+        let mut lost = far.clone();
+        assert_eq!(
+            fly_docking(&mut lost, None, speeds, &mut Draws::of(&[])),
+            None
+        );
+        assert_eq!(lost.docking, None, "its victim gone");
+    }
+
+    #[test]
+    fn a_docked_pirate_holds_with_its_victim_whatever_ship_it_targets() {
+        // Waiting its dock, its goal an attack on another ship: it moves
+        // with the victim it docked with.
+        let mut docked = pirate(1);
+        docked.goal = Goal::Attack(ShipRef::Npc(NpcId(5)));
+        docked.target = Some(ShipRef::Npc(NpcId(5)));
+        docked.ai_wait = 50;
+        docked.state.position = Vec2::new(2.0, 0.0);
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut drifting = victim();
+        drifting.state.position = Vec2::ZERO;
+        drifting.state.velocity = Vec2::new(0.25, 0.0);
+        let mut other = npc(5, ShipStats::new(FAST, &[]));
+        other.berth = 5;
+        other.state.position = Vec2::new(0.0, 500.0);
+        other.state.velocity = Vec2::new(0.0, 2.0);
+        let mut traffic = traffic_of(vec![docked, drifting, other]);
+        traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(ship(&traffic, PIRATE).state.velocity, Vec2::new(0.25, 0.0));
+    }
+
+    #[test]
+    fn a_queued_event_is_taken_once() {
+        let mut traffic = traffic_of(vec![]);
+        let event = PirateEvent::PlunderPlayer { pirate: PIRATE };
+        traffic.queue_pirate_event(event);
+        assert_eq!(traffic.take_pirate_events(), [event]);
+        assert_eq!(traffic.take_pirate_events(), []);
+    }
+
+    #[test]
     fn a_stranger_is_taken_silently_and_the_pirate_drifts() {
         let traffic = plundered(1000, victim(), 0);
         assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));

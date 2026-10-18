@@ -16,6 +16,20 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # A pirate's docking turns against its velocity gap: the gap's table
+    # angle + 180 taken mod 360 (`_LowLevelAIHandler` @0x86b77-0x86ba0);
+    # - 180 mod 360 (`rem_euclid`) is the same angle.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:283:42: replace \\+ with - in dock$",
+    # The approach's speed gap is a float widened to a double and tested
+    # against the double 0.35 (@0x87538, @0x8755b): no float widens to
+    # 0.35 exactly, so `>=` can't be told from `>`.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:242:.*replace > with >= in approach$",
+    # A class item of count 0 multiplies its marines by 0, so counting it
+    # (`>=`) adds nothing, as skipping it (`>`, @0x84129) does.
+    "nova-sim-ai/src/ai/plunder_contents\\.rs:156:.*replace > with >= in ClassMarines::of$",
+    # A take that lands exactly on the victim's holds is cut to holds less
+    # what was stolen, which is the take itself (@0x844ab-0x844b2).
+    "nova-sim-ai/src/ai/plunder_contents\\.rs:248:26: replace > with >= in steal$",
     # The joust's reverse bearing (`_LowLevelAIHandler` @0x86279-0x862a0)
     # is the bearing + 180 taken mod 360; - 180 mod 360 is the same angle.
     "nova-sim-ai/src/ai/pursuit\\.rs:.*replace \\+ with - in joust$",

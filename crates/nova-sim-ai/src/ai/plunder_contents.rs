@@ -615,6 +615,16 @@ mod tests {
     }
 
     #[test]
+    fn a_later_pass_is_cut_to_the_victims_holds_less_what_was_stolen() {
+        // Holds of 4: 1 ton of commodity 0, then 4 of commodity 1 cut to 3.
+        let mut victim = [1, 4, 0, 0, 0, 0];
+        let mut pirate = carrying(0);
+        let stolen = steal(&mut victim, 4, &mut pirate, 100, &mut Draws::of(&[0, 0]));
+        assert_eq!(stolen, 4);
+        assert_eq!(victim, [0, 1, 0, 0, 0, 0]);
+    }
+
+    #[test]
     fn the_draws_pick_among_the_commodities_held_and_the_room_decides_the_total() {
         // Room for both: both go, whichever is picked first.
         for first in [0, 1] {
