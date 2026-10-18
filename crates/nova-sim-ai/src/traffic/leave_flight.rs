@@ -423,6 +423,67 @@ mod tests {
         );
     }
 
+    /// `npc` alone in a system with no stellars, ticked once through
+    /// [`Traffic::tick_in`](crate::traffic::Traffic::tick_in) by Nova's AI
+    /// in a world reading `jump_fuel` as its
+    /// [`npc_jump_fuel`](crate::traffic::World::npc_jump_fuel), the player
+    /// at `player`: the NPC after the tick, or `None` once it departed, and
+    /// how each ship that left did.
+    fn traffic_tick(
+        npc: Npc,
+        player: Option<(f32, f32)>,
+        jump_fuel: RuleSource,
+    ) -> (Option<Npc>, Vec<Outcome>) {
+        use crate::ai::NovaAi;
+        use crate::traffic::{Traffic, World};
+
+        let mut traffic = Traffic::new();
+        let id = traffic.add_npc(npc);
+        let world = World {
+            player: player.map(|(x, y)| crate::ai::fixture::player(x, y)),
+            npc_jump_fuel: jump_fuel,
+            ..World::new(&[])
+        };
+        traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
+        let after = traffic.npcs().iter().find(|npc| npc.id == id).cloned();
+        let departed = traffic.departed().iter();
+        assert!(departed.clone().all(|&(left, _)| left == id));
+        (after, departed.map(|&(_, how)| how).collect())
+    }
+
+    #[test]
+    fn the_traffic_tick_decides_an_idle_ships_jump_by_the_worlds_npc_jump_fuel() {
+        let mut idle = ship(ShipStats::new(FAST, &[]), Goal::Idle, ShipState::default());
+        idle.reserves.fuel.now = 0.0;
+        assert_eq!(idle.class_fuel, 300);
+        for (reading, goal) in [
+            (RuleSource::Engine, Goal::JumpOut),
+            (RuleSource::Bible, Goal::Idle),
+        ] {
+            let (after, _) = traffic_tick(idle.clone(), None, reading);
+            assert_eq!(after.expect("still here").goal, goal, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn the_traffic_tick_flies_a_ship_fleeing_from_afar_by_the_worlds_npc_jump_fuel() {
+        let (mut runner, attacker) = fleeing(moving(0.0, -1001.0, 0.0, 0.0, 0.0));
+        runner.reserves.fuel.now = 0.0;
+        // Provoked by the player, it decides to keep fleeing it.
+        runner.provoked = 10.0;
+        runner.target = Some(ShipRef::Player);
+        assert_eq!(runner.class_fuel, 300);
+        let player = Some((attacker.position.x, attacker.position.y));
+        let (after, departed) = traffic_tick(runner.clone(), player, RuleSource::Engine);
+        assert!(after.is_none(), "it left: {after:?}");
+        assert_eq!(departed, [Outcome::JumpedOut]);
+        let (after, departed) = traffic_tick(runner, player, RuleSource::Bible);
+        assert_eq!(departed, []);
+        let after = after.expect("it keeps flying");
+        assert_eq!(after.goal, Goal::Flee(ShipRef::Player));
+        assert!(beyond(&after.state), "{:?}", after.state);
+    }
+
     #[test]
     fn a_hunter_giving_up_on_a_disabled_player_flies_out_past_1000_brakes_and_jumps() {
         use crate::ai::NovaAi;
