@@ -13,8 +13,8 @@ use crate::catalog::{
     DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
     ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
     PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponRecord,
+    StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::warp::SoundLength;
@@ -52,6 +52,8 @@ pub struct FakePilotCatalog {
     pub goods_reads: RefCell<usize>,
     /// Each system's traffic; any other has none.
     pub traffic: Vec<(SystemId, SystemTraffic)>,
+    /// Each system's reinforcement fleet; any other has none.
+    pub reinforcements: Vec<(SystemId, SystemReinforcements)>,
     /// Every `düde`.
     pub dudes: Vec<(DudeId, DudeRecord)>,
     /// Every `flët`.
@@ -183,6 +185,7 @@ pub fn catalog() -> FakePilotCatalog {
         stellars: Vec::new(),
         goods_reads: RefCell::default(),
         traffic: Vec::new(),
+        reinforcements: Vec::new(),
         dudes: Vec::new(),
         fleets: Vec::new(),
         persons: Vec::new(),
@@ -447,6 +450,13 @@ impl TrafficCatalog for FakePilotCatalog {
             .iter()
             .find(|(system, _)| *system == id)
             .map(|(_, traffic)| *traffic)
+    }
+
+    fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+        self.reinforcements
+            .iter()
+            .find(|(system, _)| *system == id)
+            .map(|(_, kept)| *kept)
     }
 
     fn dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -853,6 +863,22 @@ mod tests {
         assert_eq!(fake.dude(DudeId(130)), None);
         assert_eq!(fake.fleets(), [fleet]);
         assert_eq!(fake.persons(), [person(128, 128)]);
+    }
+
+    #[test]
+    fn the_fake_gives_its_reinforcements_by_system() {
+        let kept = crate::catalog::SystemReinforcements {
+            fleet: crate::catalog::FleetId(129),
+            time: 900,
+            interval: 2,
+        };
+        let fake = FakePilotCatalog {
+            reinforcements: vec![(SystemId(130), kept)],
+            ..catalog()
+        };
+        assert_eq!(fake.system_reinforcements(SystemId(130)), Some(kept));
+        assert_eq!(fake.system_reinforcements(SystemId(131)), None);
+        assert_eq!(catalog().system_reinforcements(SystemId(130)), None);
     }
 
     #[test]

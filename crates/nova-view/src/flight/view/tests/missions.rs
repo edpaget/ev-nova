@@ -747,6 +747,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: String::new(),
+        medium_name: String::new(),
         scan_mask: 0x0004,
         scan_fine: fine,
         news_pic: -1,
