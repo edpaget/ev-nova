@@ -60,6 +60,11 @@
 //! as a [`Prefs`] ([`preferences`]), and the display modes it offers for
 //! exclusive fullscreen are [`VideoMode`]s ([`video_mode`]).
 //!
+//! # Display shapes
+//!
+//! Each screen asks for a [`ViewShape`] ([`view_shape`]): flight widens to
+//! the window's aspect ratio, and every other screen keeps 1024x768.
+//!
 //! # Developer tools
 //!
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
@@ -89,6 +94,7 @@ pub mod text;
 mod time;
 pub mod ui;
 pub mod video_mode;
+pub mod view_shape;
 
 pub use color::Color;
 pub use draw::{Blend, DrawCommand, DrawList};
@@ -101,3 +107,4 @@ pub use preferences::Prefs;
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};
 pub use video_mode::{FullscreenKind, MonitorMode, VideoMode, listed_modes};
+pub use view_shape::ViewShape;

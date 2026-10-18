@@ -1033,3 +1033,28 @@ fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
         );
     }
 }
+
+/// Every dialog that opens over flight centres on the screen, so in a
+/// widened flight view each lands where the original's `_CenterWindow`
+/// puts it once its 1024x768 frame is centred: none keeps its `DLOG`
+/// bounds. Comm 1007, haggle 1008, plunder 1011, mission info 1012, the
+/// offers 1016 and 1020, player info 1017, assignment 1018, the map 2000,
+/// yes/no 3002, the texts 3003 and 3004, Find 3005 and the preferences
+/// 4003.
+#[test]
+fn every_dialog_opened_over_flight_is_centred() {
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        for id in [
+            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 2000, 3002, 3003, 3004, 3005, 4003,
+        ] {
+            let template = ui.dialog_template(id).expect("converts");
+            assert_eq!(
+                template.placement,
+                Placement::Center,
+                "{} DLOG {id}",
+                path.display()
+            );
+        }
+    }
+}

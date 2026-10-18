@@ -75,6 +75,20 @@
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
 //!   display gets its own mode back. Nothing is saved on the way out.
 //!
+//! # Display shapes
+//!
+//! The screen says which shape it draws in ([`Screen::view_shape`]):
+//! flight widens to the window's aspect ratio, 768 high and as wide as
+//! the window makes it, and every other screen keeps Nova's 1024 x 768,
+//! letterboxed. The app fits the viewport to the shape
+//! ([`Viewport::for_shape`]) when it is built, on every resize, after each
+//! input the screen takes and before each frame, so a change of shape
+//! (flight entered, a landing) shows from the next frame, and the pointer
+//! maps through the shape shown; a screen drawing its own pointer is told
+//! again where it is. The screen is told the widened size the window
+//! gives ([`Screen::set_widened_size`]) at the start and on every resize,
+//! whatever it shows.
+//!
 //! # Diagnostics
 //!
 //! An app built [`App::with_diagnostics`] writes each diagnostic the
@@ -93,11 +107,12 @@ use std::io::Write;
 use std::time::Duration;
 
 use nova_audio::{Audio, AudioCore};
-use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
+use nova_render::{Gpu, ImageError, ImageSource, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
+use nova_view::view_shape::widened_size;
 use nova_view::{
     DrawList, FullscreenKind, ImageKey, Input, Key, MonitorMode, MouseButton, Point, Screen,
-    ScreenAction, listed_modes,
+    ScreenAction, ViewShape, listed_modes,
 };
 
 mod fullscreen;
@@ -108,6 +123,13 @@ pub use screen::{AppScreen, Showing, start_screen};
 use crate::config::Os;
 use crate::settings::{FullscreenSetting, GameKeeper, GameSettings};
 use fullscreen::{Fullscreen, Shortcut};
+
+/// The widened view's size, in logical units, for a window `window_px`
+/// in size ([`widened_size`]).
+fn widened_logical(window_px: (u32, u32)) -> (f32, f32) {
+    let (w, h) = widened_size(window_px);
+    (w as f32, h as f32)
+}
 
 /// What the app needs from the window.
 pub trait WindowPort {
@@ -241,6 +263,8 @@ pub struct Handled {
 pub struct App<S, C = AppScreen> {
     renderer: Renderer<S>,
     viewport: Viewport,
+    /// The shape [`App::viewport`] fits: the screen's, as last asked.
+    shape: ViewShape,
     screen: C,
     last_redraw: Duration,
     pointer: Option<(f64, f64)>,
@@ -266,11 +290,16 @@ pub struct App<S, C = AppScreen> {
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
-    /// An app drawing `screen` with images from `images` into `window`.
-    pub fn new(window: &impl WindowPort, images: S, screen: C) -> Self {
+    /// An app drawing `screen` with images from `images` into `window`,
+    /// telling it the widened size the window gives
+    /// ([`Screen::set_widened_size`]).
+    pub fn new(window: &impl WindowPort, images: S, mut screen: C) -> Self {
+        let shape = screen.view_shape();
+        screen.set_widened_size(widened_logical(window.size_px()));
         Self {
             renderer: Renderer::new(images),
-            viewport: Viewport::new(LOGICAL, window.size_px(), window.scale_factor()),
+            viewport: Viewport::for_shape(shape, window.size_px(), window.scale_factor()),
+            shape,
             screen,
             last_redraw: Duration::ZERO,
             pointer: None,
@@ -524,7 +553,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 
     /// Handles one window event.
     ///
-    /// A resize refits the viewport. Keys go to the screen, Escape
+    /// A resize refits the viewport to the screen's shape and tells the
+    /// screen the widened size (see the module docs). Keys go to the screen, Escape
     /// included: what it does is the screen's to decide. So does the text
     /// a key press types. Losing focus tells the screen to let go of
     /// the keys it holds down, since their releases will not arrive. Pointer events go to the screen in logical
@@ -608,7 +638,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 scale_factor,
             } => {
                 self.fullscreen.resized(size_px);
-                self.viewport = Viewport::new(LOGICAL, size_px, scale_factor);
+                self.screen.set_widened_size(widened_logical(size_px));
+                self.viewport = Viewport::for_shape(self.shape, size_px, scale_factor);
+                self.refit_shape();
                 game(Control::Continue)
             }
             WindowEvent::CloseRequested => {
@@ -702,6 +734,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             self.quit();
             return Control::Exit;
         }
+        self.refit_shape();
         let resync = self.resync_pointer();
         // A dialog a keyed click opened shows its modes from its first
         // frame.
@@ -822,6 +855,27 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         control
     }
 
+    /// Fits the viewport to the screen's shape when it has changed since
+    /// the viewport was fitted: after each input the screen takes, and
+    /// before each frame, so a screen that widens (flight entered) or goes
+    /// back to classic (landing) draws its next frame in its own shape.
+    /// A screen drawing its own pointer is then told again where the
+    /// pointer is ([`App::resync_pointer`]), as the same pixel now maps to
+    /// another logical point.
+    fn refit_shape(&mut self) {
+        let shape = self.screen.view_shape();
+        if shape == self.shape {
+            return;
+        }
+        self.shape = shape;
+        self.viewport = Viewport::for_shape(
+            shape,
+            self.viewport.window_px(),
+            self.viewport.scale_factor(),
+        );
+        self.cursor_synced = false;
+    }
+
     /// The pointer's logical position, when it is over the game.
     fn pointer_at(&self) -> Option<Point> {
         self.pointer
@@ -848,6 +902,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             self.cursor_synced = true;
         }
         let action = self.screen.input(&input);
+        self.refit_shape();
         self.forget_sync_unless_drawing();
         self.feed_audio();
         self.take_screen_warnings();
@@ -909,7 +964,7 @@ mod tests {
     use nova_view::sound::SimSound;
     use nova_view::{
         Color, Diagnostic, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Prefs,
-        Screen, ScreenAction, Showing, Sound, SoundPrefs, UiSound,
+        Screen, ScreenAction, Showing, Sound, SoundPrefs, UiSound, ViewShape,
     };
 
     use super::*;
@@ -1004,11 +1059,20 @@ mod tests {
         asks_quit: bool,
         /// How many inputs had arrived at each draw.
         drawn_after: std::cell::RefCell<Vec<usize>>,
+        /// The shape it draws in.
+        shape: ViewShape,
+        /// Each widened size it was told, in order.
+        widened: Vec<(f32, f32)>,
+        /// The shape to switch to on its next input, if any.
+        shape_on_input: Option<ViewShape>,
     }
 
     impl Screen for RecordingScreen {
         fn input(&mut self, input: &Input) -> ScreenAction {
             self.inputs.push(*input);
+            if let Some(shape) = self.shape_on_input.take() {
+                self.shape = shape;
+            }
             match input {
                 Input::Key { key, .. } if Some(*key) == self.quit_on => ScreenAction::Quit,
                 _ => ScreenAction::None,
@@ -1052,9 +1116,19 @@ mod tests {
         fn take_quit(&mut self) -> bool {
             std::mem::take(&mut self.asks_quit)
         }
+
+        fn view_shape(&self) -> ViewShape {
+            self.shape
+        }
+
+        fn set_widened_size(&mut self, size: (f32, f32)) {
+            self.widened.push(size);
+        }
     }
 
     type TestApp = App<NoImages, RecordingScreen>;
+
+    mod display_shapes;
 
     /// Bytes written, kept where the test can read them.
     #[derive(Clone, Default)]

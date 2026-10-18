@@ -8,8 +8,12 @@
 //!
 //! - **The frame** ([`frame`]) is `_SetupSpriteWorld`'s
 //!   (@0x21e86-0x21f61): a square of side max(200, trunc(width × 0.25)),
-//!   at (width − side − 210, 150). In the 1024 x 768 window it is 256 x
-//!   256 at (558, 150)-(814, 406). Its clicks are tested half-open, as
+//!   at (width − side − 210, 150), the width the view's, widened or not.
+//!   In the 1024 x 768 window it is 256 x 256 at (558, 150)-(814, 406),
+//!   and in a 16:9 window's 1365-wide view 341 x 341 at (814, 150). With
+//!   no cap on the width its bottom, 150 + trunc(width / 4), passes 768
+//!   from a width of 2476, and the screen's bottom cuts it off, as the
+//!   original's would be. Its clicks are tested half-open, as
 //!   `PtInRect` does ([`contains`]).
 //! - **The clock.** Each show ([`FloatingMap::show`]) restarts it. The map
 //!   is drawn at level w = clamp(150 − (now − start), 0, 32) in 32nds
@@ -763,6 +767,11 @@ mod tests {
             frame((1030.0, 768.0)),
             Bounds::at(at(563.0, 150.0), 257.0, 257.0),
             "trunc(257.5)"
+        );
+        assert_eq!(
+            frame((1365.0, 768.0)),
+            Bounds::at(at(814.0, 150.0), 341.0, 341.0),
+            "a 16:9 window's widened view: trunc(341.25)"
         );
     }
 

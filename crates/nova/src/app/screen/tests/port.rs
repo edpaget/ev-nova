@@ -691,7 +691,7 @@ fn in_the_bar() -> AppScreen {
 }
 
 /// [`in_the_bar`], its rules read as `rules` says.
-fn in_the_bar_by(rules: Rulebook) -> AppScreen {
+pub(super) fn in_the_bar_by(rules: Rulebook) -> AppScreen {
     let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
     let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
     built.put_u16(alpha + 0x04, 129);
@@ -748,7 +748,7 @@ fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
 /// Where `system` is on flight's open map, scrolled well into item 3 with
 /// the arrows first: the map opens at 0.5625 and shows little of the
 /// galaxy.
-fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
+pub(super) fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
     let shown = nova_view::galaxy::dialog::map_area().grown(-12.0);
     for _ in 0..200 {
         let map = flight(screen).course_map();

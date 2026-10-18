@@ -449,6 +449,7 @@ fn a_long_message_wraps_in_the_box_by_the_metrics() {
     hud::draw_message(
         &mut expected,
         &text,
+        VIEW_SIZE,
         Some(&crate::text::fixture::MonoMetrics),
     );
     let list = drawn(&view);

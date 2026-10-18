@@ -239,6 +239,20 @@
 //! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
 //! Apple Event's handler redraws (@0x56195).
 //!
+//! # Display shapes
+//!
+//! Flight, and every dialog or map over it, is drawn widened to the
+//! window's aspect ratio ([`ViewShape::Widened`](nova_view::ViewShape));
+//! the main menu, the developer's sides and the spaceport, with anything
+//! over it, the bar's course map included, stay classic, 1024 x 768. The
+//! router keeps the widened size the app tells it and hands it to every
+//! flight. Over widened flight, the dialogs (About, Preferences, player
+//! info, haggle, comm, the mission texts and info, the offer, plunder and
+//! assignment) are drawn in their 1024 x 768 frame centred in the view
+//! ([`classic_offset`](nova_view::view_shape::classic_offset)), where the
+//! original's `_CenterWindow` puts a dialog in a window that wide, and take
+//! the pointer moved back to match. Flight places its own course map so.
+//!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`](nova_view::Screen::take_sounds), and what it shows through
 //! [`Screen::now_showing`](nova_view::Screen::now_showing). The spaceport and the two dialogs are dropped
@@ -511,7 +525,17 @@ pub struct AppScreen {
     /// side, and every flight is told. Never saved, as the original's
     /// `_doubleTime` is not.
     double_time: bool,
+    /// The widened view's size, as the app last told it
+    /// ([`Screen::set_widened_size`](nova_view::Screen::set_widened_size)):
+    /// every flight, built or to be built, draws at it.
+    widened: (f32, f32),
 }
+
+/// Nova's own 1024 x 768, which every screen but flight draws in.
+const CLASSIC_VIEW: (f32, f32) = (
+    nova_view::view_shape::CLASSIC_SIZE.0 as f32,
+    nova_view::view_shape::CLASSIC_SIZE.1 as f32,
+);
 
 /// The physical keys the main menu reads as held.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

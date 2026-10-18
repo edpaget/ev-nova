@@ -221,7 +221,7 @@ fn board(screen: &mut AppScreen) {
 
 /// The router over [`boarding_data`] with dialogs, in the developer's
 /// flight, boarded, its sounds taken.
-fn boarded() -> AppScreen {
+pub(super) fn boarded() -> AppScreen {
     let mut screen = boardable(with_dialogs(boarding_data()));
     fly(&mut screen);
     let _ = screen.take_sounds();
@@ -555,7 +555,7 @@ fn hailable(screen: AppScreen) -> AppScreen {
 
 /// The router over [`boarding_data`] with dialogs, in the developer's
 /// flight, hailing the trader.
-fn hailing() -> AppScreen {
+pub(super) fn hailing() -> AppScreen {
     let mut screen = hailable(with_dialogs(boarding_data()));
     fly(&mut screen);
     hail(&mut screen);

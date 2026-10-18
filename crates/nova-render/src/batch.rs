@@ -77,7 +77,7 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
     ) -> RenderReport {
         let mut report = RenderReport::default();
-        let Some((rect, scale)) = viewport.content() else {
+        let (Some((rect, _)), Some(scale)) = (viewport.content(), viewport.axis_scales()) else {
             return report;
         };
         let mut batches: Vec<Batch> = Vec::new();
@@ -151,7 +151,11 @@ impl<S: ImageSource> Renderer<S> {
                 let picture = (image, top_left, (width, height));
                 self.push_stretched(batches, picture, blend, clip, gpu, report);
             }
-            DrawCommand::TiledPicture { image, area } => {
+            DrawCommand::TiledPicture {
+                image,
+                area,
+                origin,
+            } => {
                 let area = match clip {
                     Some(clip) => meet(area, clip),
                     None => Some(area),
@@ -163,7 +167,7 @@ impl<S: ImageSource> Renderer<S> {
                     && drawable(area.height())
                     && let Some(entry) = self.entry(image, gpu, report)
                 {
-                    push_tiles(batches, &entry, area);
+                    push_tiles(batches, &entry, area, origin);
                 }
             }
             DrawCommand::Text {
@@ -174,7 +178,10 @@ impl<S: ImageSource> Renderer<S> {
                 wrap_width,
                 color,
             } => {
-                let size_px = size * scale;
+                let (across, down) = scale;
+                // Glyphs are sized by the height: the axes' scales differ
+                // only in a widened view, by under half a unit's width.
+                let size_px = size * down;
                 let line_height_px = LINE_HEIGHT * size_px;
                 // Text with nothing in it draws nothing. Nor does text
                 // whose size is zero, negative, NaN or too big to give
@@ -191,12 +198,12 @@ impl<S: ImageSource> Renderer<S> {
                     text: text.clone(),
                     font,
                     origin_px: (
-                        rect.x as f32 + origin.x * scale,
-                        rect.y as f32 + origin.y * scale,
+                        rect.x as f32 + origin.x * across,
+                        rect.y as f32 + origin.y * down,
                     ),
                     size_px,
                     line_height_px,
-                    wrap_px: wrap_width.map(|w| w * scale),
+                    wrap_px: wrap_width.map(|w| w * across),
                     color,
                     clip,
                 };
@@ -332,11 +339,12 @@ impl<S: ImageSource> Renderer<S> {
 }
 
 /// Where a frame draws: the viewport's content rect in window pixels, and
-/// how many pixels a logical unit is.
+/// how many pixels a logical unit is across and down
+/// ([`Viewport::axis_scales`]).
 #[derive(Clone, Copy, Debug)]
 struct Target {
     rect: PixelRect,
-    scale: f32,
+    scale: (f32, f32),
 }
 
 /// Where `a` and `b` overlap, if they share any area.
@@ -384,14 +392,14 @@ fn cropped(entry: &AtlasEntry, dest: Rect, clip: Option<Bounds>) -> Option<(Atla
 }
 
 /// `clip`, in logical units, as window pixels inside `rect`, the
-/// viewport's content at `scale`, each edge rounded to the nearest
-/// pixel; none when nothing of it is inside.
-fn pixel_clip(rect: PixelRect, scale: f32, clip: Bounds) -> Option<PixelRect> {
-    let to_px = |origin: u32, logical: f32| (origin as f32 + logical * scale).round();
-    let left = to_px(rect.x, clip.min.x).max(rect.x as f32);
-    let top = to_px(rect.y, clip.min.y).max(rect.y as f32);
-    let right = to_px(rect.x, clip.max.x).min((rect.x + rect.w) as f32);
-    let bottom = to_px(rect.y, clip.max.y).min((rect.y + rect.h) as f32);
+/// viewport's content at `scale` across and down, each edge rounded to
+/// the nearest pixel; none when nothing of it is inside.
+fn pixel_clip(rect: PixelRect, (across, down): (f32, f32), clip: Bounds) -> Option<PixelRect> {
+    let to_px = |origin: u32, logical: f32, scale: f32| (origin as f32 + logical * scale).round();
+    let left = to_px(rect.x, clip.min.x, across).max(rect.x as f32);
+    let top = to_px(rect.y, clip.min.y, down).max(rect.y as f32);
+    let right = to_px(rect.x, clip.max.x, across).min((rect.x + rect.w) as f32);
+    let bottom = to_px(rect.y, clip.max.y, down).min((rect.y + rect.h) as f32);
     (left < right && top < bottom).then_some(PixelRect {
         x: left as u32,
         y: top as u32,
@@ -406,18 +414,17 @@ fn drawable(side: f32) -> bool {
 }
 
 /// Appends the quads tiling `area` with `entry`'s picture: copies of it
-/// edge to edge from the origin, (0, 0), each cut to `area` with its
-/// texture coordinates cut to match. A picture with no size draws
-/// nothing: its first edge, a division by 0 times 0, is NaN, which no
-/// loop runs past.
-fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds) {
+/// edge to edge from `origin`, each cut to `area` with its texture
+/// coordinates cut to match. A picture with no size draws nothing: its
+/// first edge, a division by 0 times 0, is NaN, which no loop runs past.
+fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds, origin: Point) {
     let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
     let uv = entry.uv;
     let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
-    let mut top = (area.min.y / h).floor() * h;
+    let mut top = ((area.min.y - origin.y) / h).floor().mul_add(h, origin.y);
     while top < area.max.y {
         let (y0, y1) = (top.max(area.min.y), (top + h).min(area.max.y));
-        let mut left = (area.min.x / w).floor() * w;
+        let mut left = ((area.min.x - origin.x) / w).floor().mul_add(w, origin.x);
         while left < area.max.x {
             let (x0, x1) = (left.max(area.min.x), (left + w).min(area.max.x));
             let cut = AtlasEntry {
@@ -882,6 +889,30 @@ mod tests {
     }
 
     #[test]
+    fn a_tiled_picture_moved_with_its_origin_draws_the_same_tiles_moved() {
+        let mut at_home = DrawList::new();
+        at_home.tiled_picture(ImageKey::pattern(130), area(10.0, 5.0, 50.0, 45.0));
+        let mut moved = DrawList::new();
+        moved.extend_translated(&at_home, at(170.0, 3.0));
+        let quads = |list: &DrawList| match &render_one_with(tiles(), list).batches[..] {
+            [Batch::Sprites { quads, .. }] => quads.clone(),
+            other => panic!("{other:?}"),
+        };
+        let expected: Vec<QuadInstance> = quads(&at_home)
+            .into_iter()
+            .map(|quad| QuadInstance {
+                dest: Rect {
+                    x: quad.dest.x + 170.0,
+                    y: quad.dest.y + 3.0,
+                    ..quad.dest
+                },
+                ..quad
+            })
+            .collect();
+        assert_eq!(quads(&moved), expected);
+    }
+
+    #[test]
     fn an_area_on_tile_edges_takes_whole_tiles_and_no_more() {
         assert_eq!(
             tiled_quads(area(16.0, 32.0, 32.0, 48.0)),
@@ -979,12 +1010,13 @@ mod tests {
             uv: uv(0, 0, 0, 16),
             opened: false,
         };
-        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0));
+        let origin = at(0.0, 0.0);
+        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0), origin);
         let entry = AtlasEntry {
             rect: rect(0, 0, 16, 0),
             ..entry
         };
-        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0));
+        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0), origin);
         assert_eq!(batches, vec![]);
     }
 
@@ -1530,6 +1562,50 @@ mod tests {
     }
 
     #[test]
+    fn in_a_widened_view_text_dots_and_clips_meet_on_the_same_pixel_column() {
+        let viewport = Viewport::for_shape(nova_view::ViewShape::Widened, (1920, 1080), 1.0);
+        let x = 1365.0 - 10.0;
+        let clip = Bounds {
+            min: at(x, 0.0),
+            max: at(1365.0, 768.0),
+        };
+        let mut list = DrawList::new();
+        list.text("Edge", at(x, 100.0), 12.0, Some(100.0), Color::WHITE)
+            .dot(at(x, 200.0), 2.0, Color::WHITE)
+            .clipped(
+                clip,
+                DrawCommand::Text {
+                    text: "Cut".to_owned(),
+                    font: Font::Geneva,
+                    origin: at(0.0, 300.0),
+                    size: 12.0,
+                    wrap_width: None,
+                    color: Color::WHITE,
+                },
+            );
+        let frame = render_one(&list, &viewport);
+        let across = 1920.0 / 1365.0;
+        let Batch::Text(runs) = &frame.batches[0] else {
+            panic!("{frame:?}");
+        };
+        assert_eq!(runs[0].origin_px, (x * across, 100.0 * 1.406_25));
+        assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
+        assert_eq!(runs[0].wrap_px, Some(100.0 * across));
+        // The GPU projects quads from the logical space onto the content.
+        let dot = solid_quads(&frame)[0].corners;
+        let dot_centre = f32::midpoint(dot[0].x, dot[2].x);
+        let projected = dot_centre * frame.viewport.w as f32 / frame.logical.w as f32;
+        let Batch::Text(cut) = &frame.batches[2] else {
+            panic!("{frame:?}");
+        };
+        let column = runs[0].origin_px.0.round();
+        assert_eq!(projected.round(), column);
+        assert_eq!(cut[0].clip.x as f32, column);
+        assert_eq!(cut[0].clip.x + cut[0].clip.w, 1920, "to the window's edge");
+        assert_eq!(cut[0].clip.h, 1080);
+    }
+
+    #[test]
     fn text_is_converted_to_physical_pixels() {
         let color = Color::rgba(1, 2, 3, 4);
         let mut list = DrawList::new();
@@ -1772,6 +1848,7 @@ mod tests {
             DrawCommand::TiledPicture {
                 image: ImageKey::picture(128),
                 area: bounds(0.0, 0.0, 64.0, 48.0),
+                origin: at(0.0, 0.0),
             },
         );
         let nested = inner.iter().next().cloned().expect("one");

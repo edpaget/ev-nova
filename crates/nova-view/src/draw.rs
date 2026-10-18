@@ -127,15 +127,20 @@ pub enum DrawCommand {
         /// How it combines with what is beneath it.
         blend: Blend,
     },
-    /// A picture repeated edge to edge from the screen's origin, (0, 0),
-    /// as QuickDraw's `FillCRect` tiles a pattern from the port's origin,
-    /// and drawn only inside `area`, untinted. An area with no drawable
-    /// size draws nothing.
+    /// A picture repeated edge to edge from `origin`, as QuickDraw's
+    /// `FillCRect` tiles a pattern from the port's origin, and drawn only
+    /// inside `area`, untinted. An area with no drawable size draws
+    /// nothing.
     TiledPicture {
         /// The picture.
         image: ImageKey,
         /// Where it shows.
         area: Bounds,
+        /// Where one copy's top-left corner is, which every other copy
+        /// lines up with: the screen's origin, (0, 0), unless the command
+        /// was moved ([`DrawList::extend_translated`]), so a pattern keeps
+        /// its phase where its frame goes.
+        origin: Point,
     },
     /// A run of text.
     Text {
@@ -183,6 +188,39 @@ pub enum DrawCommand {
         /// What it draws.
         command: Box<DrawCommand>,
     },
+}
+
+impl DrawCommand {
+    /// The command moved by `by` ([`DrawList::extend_translated`]).
+    #[must_use]
+    pub fn translated(&self, by: Point) -> Self {
+        let moved = |p: Point| Point::new(p.x + by.x, p.y + by.y);
+        let moved_bounds = |b: Bounds| Bounds {
+            min: moved(b.min),
+            max: moved(b.max),
+        };
+        let mut command = self.clone();
+        match &mut command {
+            Self::Sprite { center, .. } | Self::Dot { center, .. } => *center = moved(*center),
+            Self::Picture { top_left, .. }
+            | Self::StretchedPicture { top_left, .. }
+            | Self::BlendedPicture { top_left, .. } => *top_left = moved(*top_left),
+            Self::TiledPicture { area, origin, .. } => {
+                *area = moved_bounds(*area);
+                *origin = moved(*origin);
+            }
+            Self::Text { origin, .. } => *origin = moved(*origin),
+            Self::Line { from, to, .. } => {
+                *from = moved(*from);
+                *to = moved(*to);
+            }
+            Self::Clipped { clip, command } => {
+                *clip = moved_bounds(*clip);
+                **command = command.translated(by);
+            }
+        }
+        command
+    }
 }
 
 /// A frame's draw commands, drawn in order (later ones on top).
@@ -290,9 +328,25 @@ impl DrawList {
         })
     }
 
-    /// Appends a [`DrawCommand::TiledPicture`].
+    /// Appends a [`DrawCommand::TiledPicture`] tiled from the screen's
+    /// origin, (0, 0).
     pub fn tiled_picture(&mut self, image: ImageKey, area: Bounds) -> &mut Self {
-        self.push(DrawCommand::TiledPicture { image, area })
+        self.push(DrawCommand::TiledPicture {
+            image,
+            area,
+            origin: Point::new(0.0, 0.0),
+        })
+    }
+
+    /// Appends every command of `other`, in order, moved by `by`: each
+    /// point, each rectangle and each clip, and a tiled picture's tiling
+    /// origin with its area, so what `other` draws looks the same, `by`
+    /// further on. A frame drawn for Nova's 1024x768 is drawn centred in a
+    /// widened view so.
+    pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
+        self.commands
+            .extend(other.iter().map(|command| command.translated(by)));
+        self
     }
 
     /// Appends a [`DrawCommand::Text`] in [`Font::Geneva`].
@@ -690,10 +744,107 @@ mod tests {
             *commands[0],
             DrawCommand::TiledPicture {
                 image: ImageKey::pattern(130),
-                area
+                area,
+                origin: at(0.0, 0.0),
             }
         );
         assert_eq!(list.len(), 2);
+    }
+
+    /// One of each command at `(x, y)`-based points, the clipped one
+    /// clipping a tiled picture.
+    fn one_of_each(x: f32, y: f32, origin: Point) -> Vec<DrawCommand> {
+        let p = |dx: f32, dy: f32| at(x + dx, y + dy);
+        let area = |dx: f32| Bounds {
+            min: p(dx, 0.0),
+            max: p(dx + 10.0, 10.0),
+        };
+        vec![
+            DrawCommand::Sprite {
+                image: ImageKey::sprite(1, 0),
+                center: p(1.0, 2.0),
+                tint: Color::WHITE,
+                blend: Blend::Additive,
+            },
+            DrawCommand::Picture {
+                image: ImageKey::picture(2),
+                top_left: p(3.0, 4.0),
+            },
+            DrawCommand::StretchedPicture {
+                image: ImageKey::picture(3),
+                top_left: p(5.0, 6.0),
+                width: 7.0,
+                height: 8.0,
+            },
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(4),
+                top_left: p(9.0, 10.0),
+                width: 11.0,
+                height: 12.0,
+                blend: Blend::Max,
+            },
+            DrawCommand::TiledPicture {
+                image: ImageKey::pattern(5),
+                area: area(13.0),
+                origin,
+            },
+            DrawCommand::Text {
+                text: "Hi".to_owned(),
+                font: Font::Charcoal,
+                origin: p(14.0, 15.0),
+                size: 12.0,
+                wrap_width: Some(100.0),
+                color: Color::WHITE,
+            },
+            DrawCommand::Line {
+                from: p(16.0, 17.0),
+                to: p(18.0, 19.0),
+                width: 2.0,
+                color: Color::BLACK,
+            },
+            DrawCommand::Dot {
+                center: p(20.0, 21.0),
+                size: 3.0,
+                color: Color::WHITE,
+            },
+            DrawCommand::Clipped {
+                clip: area(22.0),
+                command: Box::new(DrawCommand::TiledPicture {
+                    image: ImageKey::pattern(6),
+                    area: area(23.0),
+                    origin,
+                }),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_list_extended_translated_moves_every_command_and_its_tiling_origin() {
+        let mut other = DrawList::new();
+        for command in one_of_each(0.0, 0.0, at(0.0, 0.0)) {
+            other.push(command);
+        }
+        let mut list = DrawList::new();
+        list.dot(at(1.0, 1.0), 1.0, Color::WHITE);
+        list.extend_translated(&other, at(170.0, -5.0));
+        let mut expected = vec![DrawCommand::Dot {
+            center: at(1.0, 1.0),
+            size: 1.0,
+            color: Color::WHITE,
+        }];
+        expected.extend(one_of_each(170.0, -5.0, at(170.0, -5.0)));
+        assert_eq!(list.iter().cloned().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn a_list_extended_untranslated_is_appended_as_it_is() {
+        let mut other = DrawList::new();
+        for command in one_of_each(4.0, 2.0, at(1.0, 1.0)) {
+            other.push(command);
+        }
+        let mut list = DrawList::new();
+        list.extend_translated(&other, at(0.0, 0.0));
+        assert_eq!(list, other);
     }
 
     #[test]

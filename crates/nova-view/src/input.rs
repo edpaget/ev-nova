@@ -93,3 +93,61 @@ pub enum Input {
         at: Point,
     },
 }
+
+impl Input {
+    /// The input with its pointer point moved by `by`, and any other input
+    /// as it is: how a frame drawn moved by `−by` takes the pointer.
+    #[must_use]
+    pub fn translated(self, by: Point) -> Self {
+        let moved = |p: Point| Point::new(p.x + by.x, p.y + by.y);
+        match self {
+            Self::PointerMoved(at) => Self::PointerMoved(moved(at)),
+            Self::PointerButton {
+                button,
+                pressed,
+                at,
+            } => Self::PointerButton {
+                button,
+                pressed,
+                at: moved(at),
+            },
+            Self::Key { .. } | Self::Text(_) | Self::PointerLeft => self,
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_translated_input_moves_its_pointer_point_and_nothing_else() {
+        let by = Point::new(-170.0, 2.0);
+        assert_eq!(
+            Input::PointerMoved(Point::new(300.0, 40.0)).translated(by),
+            Input::PointerMoved(Point::new(130.0, 42.0))
+        );
+        assert_eq!(
+            Input::PointerButton {
+                button: MouseButton::Right,
+                pressed: false,
+                at: Point::new(170.0, 0.0),
+            }
+            .translated(by),
+            Input::PointerButton {
+                button: MouseButton::Right,
+                pressed: false,
+                at: Point::new(0.0, 2.0),
+            }
+        );
+        let key = Input::Key {
+            key: Key::Enter,
+            pressed: true,
+            repeat: false,
+        };
+        for unmoved in [key, Input::Text('a'), Input::PointerLeft] {
+            assert_eq!(unmoved.translated(by), unmoved);
+        }
+    }
+}

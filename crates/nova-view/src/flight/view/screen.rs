@@ -22,7 +22,9 @@ use crate::system::scene::{self};
 use crate::system::starfield;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound};
+use crate::{
+    Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
+};
 
 use super::{
     BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
@@ -248,9 +250,10 @@ impl<
 
     /// The scene, its HUD and the cursor, then the fades. With the course
     /// map open, the map's dialog over the paused scene as it would be
-    /// drawn shut, less the cursor, which the map hides; in port, where
-    /// the bar opens it, the dialog alone, for the app to draw over the
-    /// spaceport.
+    /// drawn shut, less the cursor, which the map hides, its 1024 x 768
+    /// frame centred in a widened view ([`FlightView::map_offset`]); in
+    /// port, where the bar opens it, the dialog alone, where the classic
+    /// spaceport has it, for the app to draw over the spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
             let in_port = self
@@ -260,7 +263,9 @@ impl<
             if !in_port {
                 self.draw_scene(list);
             }
-            self.map.draw(list);
+            let mut map = DrawList::new();
+            self.map.draw(&mut map);
+            list.extend_translated(&map, self.map_offset());
             self.draw_fades(list);
             return;
         }
@@ -322,6 +327,17 @@ impl<
         }
         diagnostics
     }
+
+    /// Flight widens to the window's aspect ratio
+    /// ([`ViewShape::Widened`]), showing more space.
+    fn view_shape(&self) -> ViewShape {
+        ViewShape::Widened
+    }
+
+    /// Takes the widened size as the view's ([`FlightView::set_view_size`]).
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        self.set_view_size(size);
+    }
 }
 
 impl<
@@ -363,7 +379,7 @@ impl<
         }
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
-            hud::draw_message(list, message, metrics);
+            hud::draw_message(list, message, self.view, metrics);
         }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
         asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
@@ -403,8 +419,8 @@ impl<
         }
         self.draw_help(list);
         match &self.status_bar {
-            Ok(bar) => self.draw_bar(list, bar),
-            Err(reason) => hud::draw_unavailable(list, reason),
+            Ok(bar) => self.draw_bar(list, bar, self.view.0),
+            Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
         true
     }

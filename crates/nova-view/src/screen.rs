@@ -10,6 +10,7 @@ use crate::input::Input;
 use crate::preferences::Prefs;
 use crate::sound::Sound;
 use crate::video_mode::{FullscreenKind, VideoMode};
+use crate::view_shape::ViewShape;
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,6 +200,19 @@ pub trait Screen {
     fn hides_pointer(&self) -> bool {
         false
     }
+    /// The logical shape the screen draws in now, for the app to fit into
+    /// the window: [`ViewShape::Classic`], 1024x768, by default.
+    fn view_shape(&self) -> ViewShape {
+        ViewShape::Classic
+    }
+    /// The size a [`ViewShape::Widened`] screen draws at in the window as
+    /// it is now ([`widened_size`](crate::view_shape::widened_size)),
+    /// in logical units. The app tells the screen when it is built and on
+    /// every resize, whatever shape it shows, so a screen that widens
+    /// later already knows its width. Ignored by default.
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        let _ = size;
+    }
 }
 
 #[cfg(test)]
@@ -341,6 +355,18 @@ mod tests {
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);
         assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_is_classic_and_ignores_the_widened_size_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        assert_eq!(screen.view_shape(), ViewShape::Classic);
+        screen.set_widened_size((1365.0, 768.0));
+        assert_eq!(screen.view_shape(), ViewShape::Classic);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
     }
 
     #[test]

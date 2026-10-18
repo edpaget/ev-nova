@@ -1,5 +1,9 @@
 //! The flight HUD: the status bar down the right edge of the screen, laid
 //! out by an `ïntf`, with the radar and the shield, armour and fuel bars.
+//! The screen is the view's, widened or not: the bar and its areas are
+//! placed from the view's width ([`bar_origin`]), and the message box from
+//! its width and height ([`message_box`]), as the original places them
+//! from the window's at any size.
 //! The `ïntf`'s nav area is the navigation display (Nova Bible, "The ïntf
 //! resource": `NavArea`; STR# 2002 342-349), never the system's name: a
 //! [`NavDisplay`], drawn as `_DrawStatusNav` (@0x49f43-0x4a451) draws it,
@@ -72,7 +76,6 @@ use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
 use crate::oval::oval_frame_pixels;
 use crate::spaceport::credits::comma_number;
-use crate::system::camera::VIEW_SIZE;
 use crate::text::TextMetrics;
 use crate::{Color, DrawList, Font, ImageKey};
 
@@ -186,12 +189,17 @@ fn background(catalog: &impl StatusBars, id: i16) -> Option<Background> {
     })
 }
 
-/// Where the bar's top-left corner goes: against the right edge of the
-/// screen, as wide as its background, or [`STATUS_BAR_WIDTH`] without one.
+/// Where the bar's top-left corner goes in a view `view_width` wide:
+/// against its right edge, as wide as its background, or
+/// [`STATUS_BAR_WIDTH`] without one. The original draws the bar at the
+/// window's width less 194 whatever the width (`_BlitStatusArea`
+/// @0x4957d-0x495a7, `_RedrawStatus` @0x4cafd-0x4cc04), and offsets each
+/// of its `ïntf` areas by the same (`_DrawStatusRadar` @0x49769 and the
+/// others).
 #[must_use]
-pub fn bar_origin(bar: &StatusBar) -> Point {
+pub fn bar_origin(bar: &StatusBar, view_width: f32) -> Point {
     let width = bar.background.map_or(STATUS_BAR_WIDTH, |b| b.width);
-    Point::new(VIEW_SIZE.0 - width, 0.0)
+    Point::new(view_width - width, 0.0)
 }
 
 /// `STR#` 2002 #342: the nav area with the nav system off (nav mode −1).
@@ -319,7 +327,8 @@ pub struct HudState<'a> {
     pub disabled: bool,
 }
 
-/// Draws `bar` showing `state`: its background, the radar (see the
+/// Draws `bar` showing `state` against the right edge of a view
+/// `view_width` wide ([`bar_origin`]): its background, the radar (see the
 /// module docs), then the shield, armour and fuel bars, the nav area,
 /// its lines centred as `metrics` measures them, and the cargo area.
 pub fn draw(
@@ -327,8 +336,9 @@ pub fn draw(
     bar: &StatusBar,
     state: &HudState,
     metrics: Option<&dyn TextMetrics>,
+    view_width: f32,
 ) {
-    let origin = bar_origin(bar);
+    let origin = bar_origin(bar, view_width);
     let layout = &bar.layout;
     if let Some(background) = bar.background {
         list.picture(ImageKey::picture(background.id), origin);
@@ -452,13 +462,19 @@ pub fn message_box(view: (f32, f32)) -> Bounds {
     }
 }
 
-/// Draws the flight message `text` in [`message_box`] of the screen, as
+/// Draws the flight message `text` in [`message_box`] of a view `view`
+/// in size, as
 /// `_DisplayComm` (@0x90294-0x902f5) draws it with `TETextBox`:
 /// left-justified and wrapped to the box, in [`MESSAGE_FONT`] at
 /// [`MESSAGE_TEXT_SIZE`], white (`InitColors` @0x1bece sets the colour
 /// it is passed to 0xffff, 0xffff, 0xffff). See [`draw_message_in`].
-pub fn draw_message(list: &mut DrawList, text: &str, metrics: Option<&dyn TextMetrics>) {
-    draw_message_in(list, text, message_box(VIEW_SIZE), metrics);
+pub fn draw_message(
+    list: &mut DrawList,
+    text: &str,
+    view: (f32, f32),
+    metrics: Option<&dyn TextMetrics>,
+) {
+    draw_message_in(list, text, message_box(view), metrics);
 }
 
 /// Draws the flight message `text` in `area`: with `metrics`, each line
@@ -684,12 +700,13 @@ fn draw_fuel(list: &mut DrawList, layout: &StatusBarLayout, area: Bounds, fuel: 
     paint(list, gauge_rect(area, whole, to), layout.fuel_partial);
 }
 
-/// Draws why no status bar can be shown, where the bar would go.
-pub fn draw_unavailable(list: &mut DrawList, reason: &str) {
+/// Draws why no status bar can be shown, where the bar would go in a view
+/// `view_width` wide.
+pub fn draw_unavailable(list: &mut DrawList, reason: &str, view_width: f32) {
     list.text_in(
         Font::Geneva,
         format!("Status bar unavailable: {reason}"),
-        Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH, 0.0),
+        Point::new(view_width - STATUS_BAR_WIDTH, 0.0),
         MESSAGE_SIZE,
         Some(STATUS_BAR_WIDTH),
         Color::ERROR,
@@ -706,6 +723,7 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::flight::radar::{RadarShip, RadarStellar};
+    use crate::system::camera::VIEW_SIZE;
     use crate::text::fixture::MonoMetrics;
     use nova_sim::{ShipIff, StellarIff};
 
@@ -1055,16 +1073,39 @@ mod tests {
             layout: layout(700),
             background: Some(background(700)),
         };
-        assert_eq!(bar_origin(&bar), at(830.0, 0.0));
+        assert_eq!(bar_origin(&bar, 1024.0), at(830.0, 0.0));
+        assert_eq!(bar_origin(&bar, 1365.0), at(1171.0, 0.0), "widened");
         bar.background = Some(Background {
             id: 700,
             width: 200.0,
             height: 10.0,
         });
-        assert_eq!(bar_origin(&bar), at(824.0, 0.0));
+        assert_eq!(bar_origin(&bar, 1024.0), at(824.0, 0.0));
         bar.background = None;
-        assert_eq!(bar_origin(&bar), at(830.0, 0.0));
+        assert_eq!(bar_origin(&bar, 1024.0), at(830.0, 0.0));
+        assert_eq!(bar_origin(&bar, 1366.0), at(1172.0, 0.0));
         assert_eq!(STATUS_BAR_WIDTH, 194.0);
+    }
+
+    #[test]
+    fn a_widened_view_draws_the_whole_bar_moved_to_its_right_edge() {
+        let bar = stock();
+        let hud = HudState {
+            nav: NavDisplay::Stellar(Some("Earth".to_owned())),
+            ..state(reserves(15.0, 30.0, 150.0))
+        };
+        let classic = drawn(&bar, &hud);
+        let mut widened = DrawList::new();
+        draw(&mut widened, &bar, &hud, Some(&MonoMetrics), 1365.0);
+        let mut moved = DrawList::new();
+        moved.extend_translated(&classic, at(341.0, 0.0));
+        assert_eq!(widened, moved);
+        let mut unavailable = DrawList::new();
+        draw_unavailable(&mut unavailable, "no ïntf 128", 1365.0);
+        assert!(matches!(
+            unavailable.iter().next(),
+            Some(DrawCommand::Text { origin, .. }) if *origin == at(1171.0, 0.0)
+        ));
     }
 
     // The radar.
@@ -1090,7 +1131,7 @@ mod tests {
 
     fn drawn(bar: &StatusBar, state: &HudState) -> DrawList {
         let mut list = DrawList::new();
-        draw(&mut list, bar, state, Some(&MonoMetrics));
+        draw(&mut list, bar, state, Some(&MonoMetrics), VIEW_SIZE.0);
         list
     }
 
@@ -1644,6 +1685,7 @@ mod tests {
             DrawCommand::TiledPicture {
                 image: ImageKey::pattern(133),
                 area: rect(838.0, 8.0, 1014.0, 184.0),
+                origin: Point::new(0.0, 0.0),
             }
         );
         assert_eq!(commands.len(), 2, "then the player");
@@ -1924,7 +1966,7 @@ mod tests {
             ..state(reserves(30.0, 60.0, 300.0))
         };
         let mut list = DrawList::new();
-        draw(&mut list, &odd_bar(), &hud, None);
+        draw(&mut list, &odd_bar(), &hud, None, VIEW_SIZE.0);
         assert_eq!(
             texts(&list),
             [
@@ -2193,7 +2235,7 @@ mod tests {
     #[test]
     fn an_unreadable_bar_says_why_where_the_bar_goes() {
         let mut list = DrawList::new();
-        draw_unavailable(&mut list, "no ïntf 128");
+        draw_unavailable(&mut list, "no ïntf 128", VIEW_SIZE.0);
         let mut expected = DrawList::new();
         expected.text_in(
             Font::Geneva,
@@ -2212,6 +2254,11 @@ mod tests {
         assert_eq!(message_box(VIEW_SIZE), rect(25.0, 724.0, 780.0, 763.0));
         // 800 x 600: right 556, width 531, height 29470 / 531 = 55.
         assert_eq!(message_box((800.0, 600.0)), rect(25.0, 540.0, 556.0, 595.0));
+        // 1365 x 768: right 1121, width 1096, height 29470 / 1096 = 26.
+        assert_eq!(
+            message_box((1365.0, 768.0)),
+            rect(25.0, 737.0, 1121.0, 763.0)
+        );
     }
 
     fn message_text(text: &str, origin: Point, wrap_width: Option<f32>) -> DrawCommand {
@@ -2228,7 +2275,7 @@ mod tests {
     #[test]
     fn a_message_is_drawn_in_the_box_at_12_pt_in_white() {
         let mut list = DrawList::new();
-        draw_message(&mut list, "Mission failed.", Some(&MonoMetrics));
+        draw_message(&mut list, "Mission failed.", VIEW_SIZE, Some(&MonoMetrics));
         let drawn: Vec<&DrawCommand> = list.iter().collect();
         assert_eq!(
             drawn,
@@ -2243,7 +2290,7 @@ mod tests {
         // 60 words of 4: 299 characters at 7.2 each, 104 to a 755-wide line.
         let text = vec!["abcd"; 60].join(" ");
         let mut list = DrawList::new();
-        draw_message(&mut list, &text, Some(&MonoMetrics));
+        draw_message(&mut list, &text, VIEW_SIZE, Some(&MonoMetrics));
         let lines: Vec<(String, Point)> = list
             .iter()
             .map(|c| match c {
@@ -2292,7 +2339,7 @@ mod tests {
     #[test]
     fn without_metrics_the_message_wraps_at_the_box_width() {
         let mut list = DrawList::new();
-        draw_message(&mut list, "Mission failed.", None);
+        draw_message(&mut list, "Mission failed.", VIEW_SIZE, None);
         let drawn: Vec<&DrawCommand> = list.iter().collect();
         assert_eq!(
             drawn,
