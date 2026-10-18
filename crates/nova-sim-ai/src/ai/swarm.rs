@@ -322,9 +322,12 @@ mod tests {
         let mut ship = swarmer(2, 3);
         ship.swarm_leader = Some(3);
         assert!(!verify(&ship, &[ship.clone()]));
-        // Berth 0 is never valid.
+        // Berth 0, the player's, is never valid, nor found, whatever
+        // holds it.
         ship.swarm_leader = Some(0);
-        assert!(!verify(&ship, &[ship.clone()]));
+        let at_zero = swarmer(3, 0);
+        assert!(!verify(&ship, &[at_zero.clone(), ship.clone()]));
+        assert_eq!(find(&ship, &[at_zero, ship.clone()]), None);
     }
 
     #[test]
