@@ -310,10 +310,12 @@ impl Entry {
         matches!(self.stage, Stage::FadingOut(_))
     }
 
-    /// Whether the intro hides the pointer: while its pictures show.
+    /// Whether the intro hides the pointer: while its pictures show,
+    /// which is the intro stage alone (the intro hides it neither before
+    /// it begins nor once it has ended).
     #[must_use]
     pub fn hides_pointer(&self) -> bool {
-        self.stage == Stage::Intro && self.intro.as_ref().is_some_and(Intro::hides_pointer)
+        self.intro.as_ref().is_some_and(Intro::hides_pointer)
     }
 
     /// What becomes of `input`, Command being held as `command_held`

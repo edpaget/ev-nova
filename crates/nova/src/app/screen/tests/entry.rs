@@ -387,6 +387,24 @@ fn letting_go_of_the_keys_or_the_pointer_during_the_entry_reaches_nothing_else()
     assert_eq!(screen.showing(), Showing::Flight);
 }
 
+#[test]
+fn flights_fade_in_covers_the_widened_view_and_the_fade_out_the_classic_one() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    screen.set_widened_size((1365.0, 768.0));
+    create_held(&mut screen, "Ada");
+    choose(&mut screen, MenuChoice::EnterShip);
+    let span = |screen: &AppScreen| match drawn(screen).iter().last() {
+        Some(DrawCommand::Line { from, to, .. }) => Some((from.x, to.x)),
+        _ => None,
+    };
+    screen.tick(SECOND / 2);
+    assert_eq!(span(&screen), Some((0.0, 1024.0)), "over the menu");
+    screen.tick(SECOND / 2);
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(span(&screen), Some((0.0, 1365.0)), "over widened flight");
+}
+
 // Step 7: the intro.
 
 #[test]
@@ -612,6 +630,37 @@ fn a_text_that_cant_be_found_shows_an_empty_dialog() {
             .all(String::is_empty),
         "empty"
     );
+}
+
+#[test]
+fn letting_go_of_the_keys_or_the_pointer_during_a_picture_starts_its_timer() {
+    for let_go in [false, true] {
+        let store = MemoryPilots::new();
+        let mut screen = intro_menu(&store);
+        create_held(&mut screen, "Ada");
+        choose(&mut screen, MenuChoice::EnterShip);
+        faded_out(&mut screen);
+        if let_go {
+            screen.input(&key(Key::Space, true));
+        } else {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed: true,
+                at: Point::new(500.0, 400.0),
+            });
+        }
+        picture_in(&mut screen);
+        screen.tick(Duration::from_secs(10));
+        assert_eq!(intro_picture(&screen), Some(8200), "held, it waits");
+        if let_go {
+            screen.release_keys();
+        } else {
+            screen.cancel_pointer();
+        }
+        screen.tick(Duration::from_secs(2));
+        screen.tick(SECOND);
+        assert_eq!(intro_picture(&screen), Some(8201), "let go: {let_go}");
+    }
 }
 
 #[test]
