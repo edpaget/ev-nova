@@ -331,6 +331,21 @@ fn a_close_during_a_first_entry_is_dropped_with_the_intros_flush() {
 }
 
 #[test]
+fn command_q_during_flights_fade_in_waits_for_it() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    choose(&mut screen, MenuChoice::EnterShip);
+    screen.tick(SECOND);
+    command_q(&mut screen);
+    screen.tick(SECOND / 2);
+    assert!(!screen.take_quit());
+    screen.tick(SECOND / 2);
+    assert!(screen.take_quit(), "replayed as the fade-in ends");
+}
+
+#[test]
 fn a_close_during_flights_fade_in_waits_for_it() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
@@ -338,11 +353,14 @@ fn a_close_during_flights_fade_in_waits_for_it() {
     escape_to_menu(&mut screen);
     choose(&mut screen, MenuChoice::EnterShip);
     screen.tick(SECOND);
-    assert!(!screen.close_requested());
-    command_q(&mut screen);
-    screen.tick(SECOND / 2);
+    assert_eq!(screen.showing(), Showing::Flight, "handed over");
+    assert!(!screen.close_requested(), "held, the window stays open");
     assert!(!screen.take_quit());
     screen.tick(SECOND / 2);
+    assert!(screen.entering(), "still fading in");
+    assert!(!screen.take_quit(), "held at half the fade");
+    screen.tick(SECOND / 2);
+    assert!(!screen.entering());
     assert!(screen.take_quit(), "replayed as the fade-in ends");
 }
 
