@@ -46,12 +46,17 @@ pub struct PixelRect {
 pub enum Letterbox {
     /// The window has no area (it is minimised): nothing is drawn.
     None,
-    /// The logical space fills `rect`, at `scale` physical pixels per
-    /// logical unit; the rest of the window is bars.
+    /// The logical space fills `rect`, `scale` physical pixels per
+    /// logical unit down; the rest of the window is bars. Across it is
+    /// the same, except in a widened view filling a window wider than
+    /// 4:3, which scales each axis to the window: map x through
+    /// [`Viewport::axis_scales`].
     Content {
         /// The content rectangle, in physical pixels.
         rect: PixelRect,
-        /// Physical pixels per logical unit.
+        /// Physical pixels per logical unit down, which text is sized by.
+        /// In a widened view filling a window wider than 4:3 it is not
+        /// the scale across ([`Viewport::axis_scales`] gives both).
         scale: f32,
     },
 }
@@ -158,7 +163,10 @@ impl Viewport {
         self.letterbox
     }
 
-    /// The content rectangle and scale, or `None` in a zero-area window.
+    /// The content rectangle and the vertical scale, which text is sized
+    /// by, or `None` in a zero-area window. In a widened view filling a
+    /// window wider than 4:3 the scale is not the horizontal one: map x
+    /// through [`Viewport::axis_scales`].
     #[must_use]
     pub fn content(&self) -> Option<(PixelRect, f32)> {
         match self.letterbox {
