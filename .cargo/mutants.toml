@@ -395,5 +395,5 @@ exclude_re = [
     # 0 divides by something; the preset's is 3, where 3.000001 and
     # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
     # texel shows.
-    "nova-render/src/super_xbr\\.rs:442:55: replace \\+ with - in kernel$",
+    "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
 ]
