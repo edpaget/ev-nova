@@ -142,6 +142,9 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let rule = arena.rules.disable;
+        // `_HandleShot` frees the slots of the shots ended since its last
+        // pass, each at its visit (@0x356c1, @0x30ab1).
+        self.ended_shots = 0;
         let now = self.stand_where_they_stood(fighters);
         let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let sides = Sides {
@@ -151,6 +154,8 @@ impl Combat {
         };
         let first_strike = self.strikes.len();
         let expiries = self.expire(fighters, &sides, arena.arsenal, chance);
+        // Each end of life frees its slot as it ends (@0x3617c).
+        self.ended_shots = 0;
         self.land(fighters, expiries, rule);
         for (fighter, position) in fighters.iter_mut().zip(now) {
             fighter.state.position = position;
@@ -192,7 +197,6 @@ impl Combat {
         let beams_held = self.beams.len();
         self.move_beams(fighters, &targets, pass, chance);
         // Steps 7 and 8.
-        self.ended_shots = 0;
         if pass.beams_act() {
             self.hold_on_missiles(pass.beam_damage());
         }

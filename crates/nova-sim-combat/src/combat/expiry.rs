@@ -19,8 +19,9 @@ impl Combat {
     /// releases its sub-munitions at the ship its damage is aimed at
     /// (@0x35f49), each weapon read from `arsenal`, its spread drawn on
     /// `chance`, its owner's plunder read among `fighters`; and it leaves
-    /// the table, counted among the shots ended this tick
-    /// ([`Combat::shot_room`]) until the slots are next freed. A shot that
+    /// the table, still holding its slot through the releases
+    /// ([`Combat::shot_room`]), which `_HandleShot` frees after them
+    /// (@0x3617c, see [`Combat::fly_shots`]). A shot that
     /// has not moved yet is left for its first move, as a shot of no life
     /// is dropped unmoved ([`Combat::fly`]). Gives the blasts' hits to land.
     ///

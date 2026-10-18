@@ -250,3 +250,143 @@ fn a_breakup_an_expiry_begins_takes_no_tick_off_on_its_first() {
     };
     assert_eq!(ships[1].condition, counting);
 }
+
+/// A shot of C's that the collision passes end on B, its move from 10 to
+/// the left of B's place in [`missile_attack`] onto it.
+fn ending_on_b() -> Shot {
+    let at = Vec2::new(0.0, -200.0);
+    Shot {
+        position: at,
+        moved_from: Some(at - Vec2::new(10.0, 0.0)),
+        age: 1,
+        ..Shot::launch(
+            WeaponSpec::new(&blaster()),
+            C,
+            C,
+            &ShipState::default(),
+            90.0,
+        )
+    }
+}
+
+#[test]
+fn under_the_caps_an_npcs_point_defence_finds_the_slots_the_hit_pass_ended_still_held() {
+    // `_HandleShot` frees a shot the collision passes ended (life -1) only
+    // at its visit (@0x356c1), after `_AIDispatch` runs the point defence
+    // (@0x4429d): 127 in flight, one of them ended on B, leave A's point
+    // defence no slot.
+    for capped in [false, true] {
+        let (mut combat, mut ships) = last_slot_left(A, capped);
+        combat.shots.push(ending_on_b());
+        ships[0].trigger = QUIET;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert!(ships[1].reserves.shield.now < 10.0, "{capped}: B struck");
+        let (pd, _) = in_flight_by(&combat, A);
+        assert_eq!(pd, usize::from(!capped), "{capped}");
+    }
+}
+
+#[test]
+fn under_the_caps_an_npcs_pick_after_the_shots_fly_finds_them_freed() {
+    // `_HandleShip`'s picks (@0x44483) come after `_HandleShot` has freed
+    // the shots the collision passes ended (@0x356c1) and the spent ones
+    // whose end of life it ran (@0x3617c).
+    let spent = Shot::launch(
+        WeaponSpec::new(&WeaponRecord {
+            count: 1,
+            speed: 0,
+            ..weapon(141)
+        }),
+        C,
+        C,
+        &ShipState {
+            position: Vec2::new(-50_000.0, 0.0),
+            ..ShipState::default()
+        },
+        0.0,
+    );
+    for capped in [false, true] {
+        // One ended on B by the collision passes.
+        let (mut combat, mut ships) = last_slot_left(A, capped);
+        combat.shots.push(ending_on_b());
+        ships[0].trigger = Trigger {
+            only: Some(WeaponId(128)),
+            point_defence: false,
+            ..QUIET
+        };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(in_flight_by(&combat, A), (0, 1), "{capped}: ended");
+        // One whose move spends it on the tick before, ended in
+        // `_HandleShot`.
+        let (mut combat, mut ships) = last_slot_left(A, capped);
+        combat.shots.push(spent);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.shots().len(), MAX_SHOTS, "{capped}: spent");
+        ships[0].trigger = Trigger {
+            only: Some(WeaponId(128)),
+            point_defence: false,
+            ..QUIET
+        };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(in_flight_by(&combat, A), (0, 1), "{capped}: spent");
+    }
+}
+
+#[test]
+fn under_the_caps_an_npcs_point_defence_finds_the_missiles_last_ticks_beams_downed_still_held() {
+    // `_HandleBeams` downs a missile last in the frame (@0x4453d, @0x30ab1),
+    // and the next frame's `_HandleShot` frees it, after `_AIDispatch`.
+    let fragile = drawn(
+        WeaponRecord {
+            speed: 500,
+            durability: 0,
+            ..missile()
+        },
+        18,
+    );
+    for capped in [false, true] {
+        // 126 others; B's missile, which A's beam downs the tick after it
+        // is fired; and F's at E, fired that tick.
+        let mut combat = crowded(MAX_SHOTS - 2, capped);
+        let mut a = Ship::at(1, 0.0, 0.0).armed(pd_beam());
+        a.trigger = Trigger {
+            point_defence: false,
+            ..QUIET
+        };
+        let b = Ship::at(2, 0.0, -200.0)
+            .armed(fragile)
+            .facing(180.0)
+            .targeting(A);
+        let e_ref = ShipRef::Npc(NpcId(5));
+        let mut e = Ship::at(5, 300.0, 0.0).armed(quad());
+        e.trigger = Trigger {
+            point_defence: false,
+            ..QUIET
+        };
+        let mut f = Ship::at(6, 300.0, -200.0)
+            .armed(fragile)
+            .facing(180.0)
+            .targeting(e_ref);
+        f.trigger = QUIET;
+        let mut ships = [a, b, e, f];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        ships[1].trigger = QUIET;
+        ships[3] = Ship::at(6, 300.0, -200.0)
+            .armed(fragile)
+            .facing(180.0)
+            .targeting(e_ref);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let downed = combat
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, CombatEvent::ShotDown { .. }));
+        assert!(downed, "{capped}");
+        assert_eq!(combat.shots().len(), MAX_SHOTS - 1, "{capped}: F's in");
+        ships[2].trigger = QUIET;
+        ships[3].trigger = QUIET;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let (pd, _) = in_flight_by(&combat, e_ref);
+        assert_eq!(pd, usize::from(!capped), "{capped}");
+    }
+}

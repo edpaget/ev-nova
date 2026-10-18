@@ -1089,10 +1089,11 @@ pub struct Combat {
     speed_cap: SpeedCap,
     /// The shots that left the table whose slots the original frees only
     /// at its next `_HandleShot` (see [`Combat::shot_room`]): from the
-    /// late part of a tick (step 7) to the next tick's hit pass, the
-    /// missiles point-defence beams downed; through the hit pass, those
-    /// and the pass's own ends, as each is ended; none from the end of the
-    /// pass to step 7.
+    /// late part of a tick (step 7) to the next tick's `_HandleShot`
+    /// ([`Combat::fly_shots`]), the missiles point-defence beams downed;
+    /// from the collision passes on, those and the passes' own ends, as
+    /// each is ended; in `_HandleShot`, the ends of life so far, freed as
+    /// it ends; none from then to step 7.
     ended_shots: usize,
     /// The beams that ended in the last tick's step 6 and after: under the
     /// caps each still holds its slot through the next tick's firing (see
@@ -1491,33 +1492,24 @@ impl Combat {
         self.speed_cap = SpeedCap::from(source);
     }
 
-    /// Whether a shot `ship` fires now finds a free slot: always uncapped;
-    /// under the caps, while the shots in flight are fewer than
-    /// [`MAX_SHOTS`], counting for the player the shots that left the
-    /// table in the last tick's late part, the missiles point-defence
-    /// beams downed in step 7 (`ended_shots`). The original frees a shot's
-    /// slot only on the `_HandleShot` pass after it ends (life -1.0 or 0
-    /// then -2.0, @0x356c1, @0x30ab1, @0x3617c; free below -1.0,
-    /// @0x3e5be), and that pass comes after `_HandlePlayer` fires and
-    /// before `_HandleShip` (`_DoPlayGameWork` @0x43e19, @0x44385,
-    /// @0x44483).
+    /// Whether a shot fired now finds a free slot: always uncapped; under
+    /// the caps, while the shots in flight and those whose slots are still
+    /// held (`ended_shots`) are fewer than [`MAX_SHOTS`]. The original
+    /// frees a shot's slot only on the `_HandleShot` pass after it ends
+    /// (life -1.0 or 0 then -2.0, @0x356c1, @0x30ab1, @0x3617c; free below
+    /// -1.0, @0x3e5be), which comes after `_HandlePlayer` and `_AIDispatch`
+    /// and before `_HandleShip` (`_DoPlayGameWork` @0x43e19, @0x4429d,
+    /// @0x44385, @0x44483). So:
     ///
-    /// Every shot the next hit pass will end, a spent one among them,
-    /// still holds its place in the table as the player fires, so it needs
-    /// no count. A shot of no life is freed by the `_HandleShot` that
-    /// first visits it, before the next `_HandlePlayer`, so it holds none.
-    /// An NPC fires after the hit pass, which takes its ends out of the
-    /// table, as `_HandleShip` comes after `_HandleShot` frees them: it
-    /// counts none. An NPC's point defence runs in `_AIDispatch`, before
-    /// `_HandleShot`, and finds those slots still held in the original
-    /// (rdm:phase/weapons-fidelity/phase-28-npc-answers-hits-in-the-frame-they-land).
-    fn shot_room(&self, ship: ShipRef) -> bool {
-        let held = if ship == ShipRef::Player {
-            self.ended_shots
-        } else {
-            0
-        };
-        !self.capped || self.shots.len() + held < MAX_SHOTS
+    /// - the player's point defence and trigger find the missiles the last
+    ///   tick's point-defence beams downed still held;
+    /// - an NPC's point defence finds those and every shot the collision
+    ///   passes ended still held, and a spent shot still in the table;
+    /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots`]), finds
+    ///   them all freed, the spent shots' too, and a shot of no life is
+    ///   freed by the `_HandleShot` that first visits it, so it holds none.
+    fn shot_room(&self) -> bool {
+        !self.capped || self.shots.len() + self.ended_shots < MAX_SHOTS
     }
 
     /// Whether a beam fired now finds a free slot: always uncapped; under
@@ -1700,7 +1692,7 @@ impl Combat {
             self.beams.push(beam);
             false
         } else {
-            if !self.shot_room(ship) || !weapon.spawns_shot() {
+            if !self.shot_room() || !weapon.spawns_shot() {
                 return false;
             }
             let defended = quarry.and_then(|quarry| match quarry {
@@ -2080,7 +2072,7 @@ impl Combat {
             let shots = &self.shots;
             let candidates = &candidates;
             let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
-            let room = self.shot_room(fighter.ship);
+            let room = self.shot_room();
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
                 fighter.shooter(),
@@ -2245,7 +2237,6 @@ impl Combat {
         for (fighter, position) in fighters.iter_mut().zip(now) {
             fighter.state.position = position;
         }
-        self.ended_shots = 0;
         self.settle_struck(fighters, first_strike, rule);
     }
 
