@@ -570,6 +570,7 @@ use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
 use super::target::TargetPanel;
+use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
@@ -588,6 +589,8 @@ mod interface;
 mod messages;
 mod readouts;
 mod screen;
+mod shots;
+mod sprites;
 mod travel;
 
 pub use dialog_map::MapOpener;
@@ -1054,6 +1057,11 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
+    /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
+    glows: WeaponGlows,
+    /// What the view keeps of the shots in flight, drawn on the effects'
+    /// chance ([`ShotLooks`](shots::ShotLooks)).
+    shot_looks: shots::ShotLooks,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
@@ -1361,16 +1369,21 @@ fn point(v: Vec2) -> Point {
 /// ([`step_flashes`]). An NPC's shot hits land before its
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
-/// next.
+/// next. Gives the weapon glows the fight lit, each ship's and whether it
+/// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`].
 fn show_combat(
     session: &mut Session,
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     looks: &Looks,
     chance: &mut dyn Chance,
-) {
+) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
+    let mut glows = Vec::new();
     for event in session.take_combat_events() {
+        if let CombatEvent::WeaponGlow { ship, late } = event {
+            glows.push((ship, late));
+        }
         if let CombatEvent::Hit {
             ship,
             passes_shields,
@@ -1390,6 +1403,27 @@ fn show_combat(
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
+    glows
+}
+
+/// How fast `ship`'s weapon glow falls a frame in `session`, out of 32
+/// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or
+/// the NPCs' `sheets`, none for a sheet not read; `None` for a ship no
+/// longer in the system.
+fn glow_decay(
+    session: &Session,
+    player: &Result<ShipSheet, String>,
+    sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
+    ship: ShipRef,
+) -> Option<f32> {
+    let sheet = match ship {
+        ShipRef::Player => player.as_ref().ok(),
+        ShipRef::Npc(id) => {
+            let npc = session.npcs().iter().find(|npc| npc.id == id)?;
+            sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok())
+        }
+    };
+    Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
 }
 
 /// Steps each ship's shield flash among `flashes` a frame by its shield

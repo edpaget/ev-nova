@@ -15,8 +15,9 @@
 //! - Boxes draw in `_boxLayer`, over the stellars and under the ships and
 //!   the shots.
 //!
-//! Left out: `_HandleSpriteMurkiness` (@0x2e181), as no sprite is drawn
-//! murky here.
+//! Left out: `_HandleSpriteMurkiness` (@0x2e181): the view murks shots
+//! alone so far ([`murk`](super::murk)), and
+//! rdm:task/murk-other-sprites draws the boxes murky.
 
 use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
@@ -88,6 +89,7 @@ mod tests {
 
     fn sheet(frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id: 600,
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
@@ -122,6 +124,7 @@ mod tests {
             boxes: (0..=4)
                 .map(|graphic: u16| {
                     let sheet = EffectSheet {
+                        frame_width: 0,
                         image_id: 500 + graphic.cast_signed(),
                         frames: NonZeroU16::new(36).expect("non-zero"),
                     };

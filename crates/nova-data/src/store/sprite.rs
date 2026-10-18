@@ -62,6 +62,9 @@ pub enum ShipLayer {
     Glow,
     /// The running lights (`shän` `LightImageID`).
     Lights,
+    /// The weapon glow (`shän` `WeapImageID`), which a `Flags2` 0x0200
+    /// weapon lights.
+    Weapon,
 }
 
 impl fmt::Display for ShipLayer {
@@ -69,6 +72,7 @@ impl fmt::Display for ShipLayer {
         f.write_str(match self {
             Self::Glow => "glow",
             Self::Lights => "lights",
+            Self::Weapon => "weapon",
         })
     }
 }
@@ -110,7 +114,7 @@ pub enum LayerError {
     },
 }
 
-/// A ship's glow and lights layers. Each is `None` when the `shän` does not
+/// A ship's glow, lights and weapon layers. Each is `None` when the `shän` does not
 /// define it (an image ID of 0 or less), and otherwise resolves or fails on
 /// its own, so one broken layer never hides the other.
 #[derive(Debug)]
@@ -119,10 +123,12 @@ pub struct ShipLayers<'a> {
     pub glow: Option<Result<LayerSprite<'a>, LayerError>>,
     /// The running lights.
     pub lights: Option<Result<LayerSprite<'a>, LayerError>>,
+    /// The weapon glow.
+    pub weapon: Option<Result<LayerSprite<'a>, LayerError>>,
 }
 
 impl GameData {
-    /// Resolves `ship`'s glow and lights layers through its `shän` (as
+    /// Resolves `ship`'s glow, lights and weapon layers through its `shän` (as
     /// [`GameData::ship_sprite`] does), each decoded with the base's
     /// layout: the Bible gives one `FramesPer` for every layer.
     ///
@@ -137,6 +143,7 @@ impl GameData {
         Ok(ShipLayers {
             glow: layer(ShipLayer::Glow, anim.record.glow_image_id),
             lights: layer(ShipLayer::Lights, anim.record.light_image_id),
+            weapon: layer(ShipLayer::Weapon, anim.record.weap_image_id),
         })
     }
 
@@ -400,6 +407,24 @@ mod tests {
         assert_eq!(lights.sheet.frames().len(), 12);
         assert_eq!(lights.sheet.layout().columns(), 4);
         assert_eq!(lights.sheet.frames()[0].pixel(0, 0), Some([0, 0, 255, 255]));
+    }
+
+    #[test]
+    fn the_weapon_layer_resolves_with_the_shans_layout() {
+        let mut bytes = layered_anim(0, 0);
+        bytes[0x26..0x28].copy_from_slice(&1300_i16.to_be_bytes());
+        let resources = vec![(ShipAnim::TYPE, 128, bytes), (RLED, 1300, sheet(8, 0x7C00))];
+        let data = store(&[("Layers", fork(&resources))]);
+        let layers = data.ship_layers(ShipId(128)).expect("resolves");
+        let weapon = layers.weapon.expect("defined").expect("resolves");
+        assert_eq!(weapon.image_id, 1300);
+        assert_eq!(weapon.sheet.frames().len(), 8);
+        assert_eq!(weapon.sheet.layout().columns(), 4);
+        assert!(layers.glow.is_none() && layers.lights.is_none());
+        assert_eq!(ShipLayer::Weapon.to_string(), "weapon");
+        let plain = store(&[]);
+        let layers = plain.ship_layers(ShipId(128)).expect("resolves");
+        assert!(layers.weapon.is_none(), "0 is undefined");
     }
 
     #[test]

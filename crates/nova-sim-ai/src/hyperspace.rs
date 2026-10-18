@@ -702,7 +702,8 @@ impl StarMap {
         self.nodes.get(&id).map_or(0, |node| node.interference)
     }
 
-    /// System `id`'s `Murk`, raw: 0 when it is not on the map.
+    /// System `id`'s `Murk`, raw: 0 when it is not on the map. The murk
+    /// rules load it (`nova_sim::murk::loaded_murk`).
     #[must_use]
     pub fn murk(&self, id: SystemId) -> i16 {
         self.nodes.get(&id).map_or(0, |node| node.murk)
@@ -1630,19 +1631,19 @@ mod tests {
     }
 
     #[test]
-    fn a_systems_murk_is_its_records_and_0_off_the_map() {
+    fn a_systems_murk_is_its_records_raw_and_0_off_the_map() {
         let map = StarMap::new(vec![
             StarSystem {
-                murk: 45,
+                murk: 40,
                 ..system(128, &[])
             },
             StarSystem {
-                murk: -1,
+                murk: -3,
                 ..system(129, &[])
             },
         ]);
-        assert_eq!(map.murk(SystemId(128)), 45);
-        assert_eq!(map.murk(SystemId(129)), -1);
+        assert_eq!(map.murk(SystemId(128)), 40);
+        assert_eq!(map.murk(SystemId(129)), -3);
         assert_eq!(map.murk(SystemId(130)), 0, "not on the map");
     }
 

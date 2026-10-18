@@ -272,6 +272,16 @@ impl Beam {
         }
     }
 
+    /// Whether a tick of it lights its firer's weapon glow: its weapon
+    /// glows ([`WeaponSpec::glows`]) and it is not a point-defence beam
+    /// held on a missile, whose tick leaves `_HandleBeams` for the
+    /// missile's damage before the glow's write (@0x309ab-0x309bb,
+    /// @0x30b1f-0x30b37).
+    #[must_use]
+    pub fn glows(&self) -> bool {
+        self.weapon.glows() && !matches!(self.aiming, Aiming::Shot(_))
+    }
+
     /// Puts the beam on its `firer`, flying as it is with its exit points,
     /// at its exit, compressed as `compression` says, and points it at
     /// what it aims at among `targets` and `shots`, turned by its jitter

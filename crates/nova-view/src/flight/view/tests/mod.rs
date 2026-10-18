@@ -73,6 +73,7 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod shots;
 mod stellars;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
@@ -104,6 +105,8 @@ struct FakeCatalog {
     sol_navs: Vec<Option<(u32, u16)>>,
     /// System 130's `Interference`: none, by default.
     sol_interference: i16,
+    /// System 130's `Murk`: none, by default.
+    sol_murk: i16,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
     /// The stellars Sol lists after Earth and the Moon: none, by
@@ -265,6 +268,8 @@ const FIELDS: ShipFields = ShipFields {
 
 fn sheet() -> ShipSheet {
     ShipSheet {
+        weapon: None,
+        weap_decay: 0,
         image_id: 2000,
         rotations: NonZeroU16::new(36).expect("non-zero"),
         frame_width: 40,
@@ -318,10 +323,12 @@ fn catalog() -> FakeCatalog {
         cards: Vec::new(),
         codes: Vec::new(),
         box_sheet: Ok(EffectSheet {
+            frame_width: 0,
             image_id: 500,
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
+            frame_width: 0,
             image_id: 651,
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
@@ -338,6 +345,7 @@ fn catalog() -> FakeCatalog {
         nebula: false,
         sol_navs: Vec::new(),
         sol_interference: 0,
+        sol_murk: 0,
         alpha_buoy: -1,
         sol_more: Vec::new(),
         gates: Vec::new(),
@@ -472,6 +480,7 @@ impl PilotCatalog for FakeCatalog {
             StarSystem {
                 stellars: self.sol_navs.clone(),
                 interference: self.sol_interference,
+                murk: self.sol_murk,
                 ..star(130, (0.0, 0.0), &sol)
             },
             StarSystem {
@@ -795,8 +804,8 @@ impl GalaxyCatalog for FakeCatalog {
 
 impl ShipSprites for FakeCatalog {
     /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
-    /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
-    /// `rlëD` 2201; ship 130's cannot be read, nor can the escape
+    /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101, lights
+    /// `rlëD` 2201 and weapon glow `rlëD` 2301 of `WeapDecay` 3; ship 130's cannot be read, nor can the escape
     /// pod's, 895.
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         self.sheets_asked.borrow_mut().push(id);
@@ -808,6 +817,8 @@ impl ShipSprites for FakeCatalog {
                 rotations: NonZeroU16::new(72).expect("non-zero"),
                 glow: Some(layer(2101, 72)),
                 lights: Some(layer(2201, 72)),
+                weapon: Some(layer(2301, 72)),
+                weap_decay: 3,
                 ..sheet()
             }),
             130 => Err("no shän 130".to_owned()),
@@ -823,7 +834,8 @@ impl ShipSprites for FakeCatalog {
 }
 
 /// The looks, cards and codes given; any other weapon cannot be read,
-/// and there is no other explosion type.
+/// and there is no other explosion type. Smoke sets 0 and 1 have their
+/// sprites.
 impl CombatLooks for FakeCatalog {
     fn weapon_look(&self, id: nova_sim::WeaponId) -> Result<WeaponLook, String> {
         self.looks
@@ -863,6 +875,7 @@ impl CombatLooks for FakeCatalog {
         match graphic {
             0 => self.box_sheet.clone(),
             1..=4 => Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 500 + graphic.cast_signed(),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
@@ -873,6 +886,7 @@ impl CombatLooks for FakeCatalog {
     /// Type `kind`'s sheet: `rlëD` 1800 + `kind`, of 36 frames.
     fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
+            frame_width: 0,
             image_id: 1800 + i16::from(kind),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
@@ -880,6 +894,12 @@ impl CombatLooks for FakeCatalog {
 
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         self.cursor_sheet.clone()
+    }
+
+    fn smoke_sheet(&self, set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
+        (set < 2).then(|| crate::flight::catalog::SmokeSheet {
+            first_icon: 1000 + 8 * i16::from(set),
+        })
     }
 }
 
@@ -2082,6 +2102,7 @@ fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::W
         guidance,
         speed: 2000,
         ammo_type: -1,
+        graphic: 0,
         inaccuracy: 0,
         impact: 0,
         explod_type,
@@ -2125,6 +2146,7 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         id: ShipId(id),
         flags: 0,
         flags2: 0,
+        flags3: 0,
         death_delay: 0,
         explode1: -1,
         explode2: 0,
@@ -2182,6 +2204,7 @@ fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
 
 fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
+        frame_width: 0,
         image_id,
         frames: Frames::new(frames).expect("non-zero"),
     }

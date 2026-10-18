@@ -650,10 +650,11 @@ fn drain(log: &AudioLog) -> Vec<AudioCommand> {
     std::mem::take(&mut *log.borrow_mut())
 }
 
-fn play(id: i16) -> AudioCommand {
+fn play(id: i16, priority: nova_audio::Priority) -> AudioCommand {
     AudioCommand::Play {
         sound: nova_data::SoundId(id),
         volume: AudioSettings::default().effects_volume,
+        priority,
     }
 }
 
@@ -674,14 +675,21 @@ fn landing_and_leaving_play_their_sounds_and_space_has_no_music() {
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(drain(&log), []);
     harness.approach();
-    assert_eq!(drain(&log), [play(151)], "traffic control");
+    assert_eq!(
+        drain(&log),
+        [play(151, nova_audio::priority::TRAFFIC_CONTROL)],
+        "traffic control"
+    );
     // The landing beep, then, on the spaceport's first frame, the
     // planet's own ambient sound.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
-    assert_eq!(drain(&log), [play(151)]);
+    assert_eq!(drain(&log), [play(151, nova_audio::priority::LANDING)]);
     harness.frame();
-    assert_eq!(drain(&log), [play(LANDING_SOUND)]);
+    assert_eq!(
+        drain(&log),
+        [play(LANDING_SOUND, nova_audio::priority::PORT_AMBIENT)]
+    );
     harness.frame();
     assert_eq!(drain(&log), [], "not again until its wait is out");
 

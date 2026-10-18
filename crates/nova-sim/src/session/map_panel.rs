@@ -15,8 +15,10 @@
 //!   +0x44);
 //! - whether it is inhabited, [`exploration::inhabited`] as
 //!   [`RuleKey::MapExplore`] reads it;
-//! - its `Asteroids`, the count its asteroid field spawns from, and its
-//!   `Interference` and `Murk`, raw;
+//! - its `Asteroids`, the count its asteroid field spawns from, its
+//!   `Interference`, raw, and its `Murk` as loaded ([`murk::loaded_murk`]
+//!   as [`RuleKey::LowMurk`] reads it: the runtime +0xbc the panel reads,
+//!   which `_LoadObjectData` sets @0x77eb7-0x77f08);
 //! - the legal status string in it (`_DrawLegalStatusString(_selSystem)`
 //!   @0x10eb0; `Session::legal_status_in`), its record read as
 //!   [`RuleKey::LegalRecords`] says;
@@ -31,6 +33,7 @@ use crate::catalog::{PilotCatalog, SystemId};
 use crate::exploration;
 use crate::map_panel::{self, MapPanel, PanelInput, PanelStellar, PanelWords};
 use crate::market;
+use crate::murk;
 use crate::news::MISC_STRINGS;
 use crate::pilot::ExploredLevel;
 use crate::rulebook::RuleKey;
@@ -120,7 +123,7 @@ impl Session {
                 .get(&system)
                 .map_or(0, |field| field.count),
             interference: map.interference(system),
-            murk: map.murk(system),
+            murk: murk::loaded_murk(map.murk(system), self.rules.source_for(RuleKey::LowMurk)),
             stellars,
             inhabited: exploration::inhabited(
                 map.stellars(system),
@@ -421,6 +424,28 @@ mod tests {
             panic!("the info strip");
         };
         assert_eq!(hazards, "#312, #313 #316, #318 #320, #323 #324");
+    }
+
+    #[test]
+    fn the_visibility_hazard_reads_the_murk_as_loaded() {
+        // `_MapDialogUpdate` reads the runtime +0xbc (@0x1086c-0x1090c),
+        // which `_LoadObjectData` zeroes for a `Murk` of 1 to 7
+        // (@0x77ee6-0x77ef8) and caps at 100 (@0x77ed5-0x77edb).
+        let hazards = |murk, rulebook| {
+            let mut catalog = panelled();
+            catalog.star_map[0].murk = murk;
+            let mut session = session(&catalog, rulebook);
+            session.pilot.explore(SystemId(130));
+            let Strip::Info { hazards, .. } = panel(&session, &catalog, 130).strip else {
+                panic!("the info strip");
+            };
+            hazards
+        };
+        let bible = Rulebook::default().with_override(RuleKey::LowMurk, RuleSource::Bible);
+        assert_eq!(hazards(5, Rulebook::default()), "#335", "loaded as none");
+        assert_eq!(hazards(5, bible), "#321 #324");
+        assert_eq!(hazards(8, Rulebook::default()), "#321 #324");
+        assert_eq!(hazards(-4, Rulebook::default()), "#335");
     }
 
     #[test]

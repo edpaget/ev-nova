@@ -53,6 +53,7 @@ use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
 pub use crate::catalog::{BOOM_TYPES, EXTRA_EXPLOSIONS, Explosion, FIRST_BOOM};
 use crate::catalog::{FrameSize, ShipId, WeaponId, WeaponRecord};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
+use crate::trig::LeadShot;
 
 /// How a weapon's shots fly, from its `Guidance`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +131,11 @@ pub const FIRST_AMMO_WEAPON: i16 = 128;
 pub const LAST_AMMO_TYPE: i16 = 255;
 /// The `AmmoType` from which down a weapon burns fuel.
 pub const FUEL_AMMO: i16 = -1000;
+/// The `wëap` ID of weapon index 0.
+const FIRST_WEAPON: i16 = 128;
+/// The highest weapon index and `Graphic` `_SpawnShot` places a shot of,
+/// both read unsigned (@0x3e56b, @0x3e59a).
+pub const MAX_SHOT_INDEX: u16 = 255;
 /// How many steps of `AmmoType` below [`FUEL_AMMO`] are a unit of fuel a
 /// shot (the Bible: "-1005 = 0.5 units per shot").
 pub const FUEL_AMMO_PER_UNIT: f32 = 10.0;
@@ -251,6 +257,9 @@ pub struct WeaponSpec {
     pub ammo_type: i16,
     /// How far off its heading a shot may leave, in degrees.
     pub inaccuracy: u32,
+    /// Its `Graphic`, raw, which `_SpawnShot` reads unsigned
+    /// ([`WeaponSpec::spawns_shot`]).
+    pub graphic: i16,
     /// The explosion where it hits or detonates, if any.
     pub explosion: Option<Explosion>,
     /// Whether a shot of it that ends its life without detonating fizzles
@@ -335,6 +344,10 @@ pub struct WeaponSpec {
     /// The exit points it fires from, by its `ExitType`; none, the
     /// centre, for any but 0-3 (see [`exits`](super::exits)).
     pub exit: Option<ExitKind>,
+    /// Whether, as a beam, it steps its ship's fold set (+0xc8fc): its
+    /// `ExitType` is -1, which `_SpawnBeam` reads as the cursor before Gun's
+    /// (@0x450fa-0x4523d; see [`exits::step_stray`](super::exits::step_stray)).
+    pub steps_fold: bool,
     /// Whether it fires from the exit point nearest its target: its
     /// `Flags3` [`NEAREST_EXIT`].
     pub nearest_exit: bool,
@@ -379,17 +392,18 @@ pub fn line_count(record: &WeaponRecord) -> Option<WeaponId> {
 pub const DEFAULT_FALLOFF: i16 = 16;
 
 /// A weapon's `Falloff` as `_LoadObjectData` loads it from the `wëap`'s
-/// `falloff`, `beam_length` and `li_density` (@0x795e2-0x79645): a beam
-/// (a `BeamLength` above none) of a `Falloff` of none or less takes
-/// [`DEFAULT_FALLOFF`], and a lightning beam (a `LiDensity` above none)
-/// none at all, whatever it says. Any other weapon's is kept. The view
-/// draws a beam's corona from it too.
+/// `falloff`, `beam_length` and `li_density` (@0x795e2-0x79645): a
+/// lightning weapon (a `LiDensity` above none) has none at all, whatever
+/// it says and whatever its `BeamLength` (@0x79625-0x79645); a beam (a
+/// `BeamLength` above none) of a `Falloff` of none or less takes
+/// [`DEFAULT_FALLOFF`] (@0x795e2-0x795f0). Any other weapon's is kept.
+/// The view draws a beam's corona and a shot's fade from it too.
 #[must_use]
 pub fn loaded_falloff(beam_length: i16, falloff: i16, li_density: i16) -> i16 {
-    if beam_length <= 0 {
-        falloff
-    } else if li_density > 0 {
+    if li_density > 0 {
         0
+    } else if beam_length <= 0 {
+        falloff
     } else if falloff <= 0 {
         DEFAULT_FALLOFF
     } else {
@@ -473,6 +487,11 @@ pub const AI_WONT_USE: u16 = 0x0100;
 /// `Flags2`: it fires while its ship is cloaked, and no other weapon does
 /// (`_WeaponHasAmmo` @0xb9a2-0xba01).
 pub const FIRES_CLOAKED: u16 = 0x4000;
+/// `Flags2`: firing it lights its ship's weapon glow, ship +0xc8e8 =
+/// 32.0 (`_FirePlayerWeapon` @0x62c78-0x62c98, `_FireAIShipWeapon`
+/// @0x88dc0-0x88de4, `_HandleBeams` @0x30b1f-0x30b37), which the view
+/// draws.
+pub const GLOWS: u16 = 0x0200;
 /// `Flags2`: the secondary weapon's line shows no count of its rounds
 /// (`_DrawStatusWeap` @0x4c190).
 pub const HIDES_COUNT: u16 = 0x0040;
@@ -526,6 +545,7 @@ impl WeaponSpec {
             ammo,
             ammo_type: record.ammo_type,
             inaccuracy: count(record.inaccuracy),
+            graphic: record.graphic,
             explosion: Explosion::decode(record.explod_type),
             fizzles: record.explod_type > 0,
             prox_radius: ticks(record.prox_radius),
@@ -553,6 +573,7 @@ impl WeaponSpec {
             ionize_colour: record.ionize_color,
             jam_vuln: record.jam_vuln,
             exit: ExitKind::from_raw(record.exit_type),
+            steps_fold: record.exit_type == -1,
             nearest_exit: record.flags3 & NEAREST_EXIT != 0,
             broadside: if record.inaccuracy < 0 {
                 u32::from(record.inaccuracy.unsigned_abs())
@@ -569,6 +590,13 @@ impl WeaponSpec {
                 color: record.hit_part_color,
             }),
         }
+    }
+
+    /// Whether firing it lights its ship's weapon glow: its `Flags2`
+    /// [`GLOWS`] (see [`CombatEvent::WeaponGlow`](super::CombatEvent::WeaponGlow)).
+    #[must_use]
+    pub fn glows(&self) -> bool {
+        self.flags2 & GLOWS != 0
     }
 
     /// Whether its shots pass through asteroids ([`IGNORES_ASTEROIDS`]),
@@ -615,6 +643,42 @@ impl WeaponSpec {
             self.guidance,
             Guidance::FighterBay | Guidance::Other(FIGHTER_BAY)
         )
+    }
+
+    /// Whether `_SpawnShot` places a shot of it at all: not for a weapon
+    /// index (ID − 128) above 255, unsigned (@0x3e56b-0x3e57f), nor a
+    /// `Graphic` above 255, unsigned (@0x3e59a-0x3e5a1), which fail
+    /// quietly before the slot search, whatever the shot table holds.
+    #[must_use]
+    pub fn spawns_shot(&self) -> bool {
+        // The index and the graphic are read as unsigned 16-bit words.
+        #[allow(clippy::cast_sign_loss)]
+        let (index, graphic) = (
+            self.id.0.wrapping_sub(FIRST_WEAPON) as u16,
+            self.graphic as u16,
+        );
+        index <= MAX_SHOT_INDEX && graphic <= MAX_SHOT_INDEX
+    }
+
+    /// The shot `_CalcLeadAngle` leads with for it: its speed, by its
+    /// guidance's gate of -1, 4, 6, 7, 8 and 9 (@0x2b077-0x2b0a3), a rocket
+    /// (6) closing on its speed; none for any other, which gets the table
+    /// bearing ([`lead_angle`](crate::trig::lead_angle)).
+    #[must_use]
+    pub fn lead_shot(&self) -> Option<LeadShot> {
+        matches!(
+            self.guidance,
+            Guidance::Unguided
+                | Guidance::Turret
+                | Guidance::Rocket
+                | Guidance::FrontTurret
+                | Guidance::RearTurret
+                | Guidance::PointDefence
+        )
+        .then_some(LeadShot {
+            speed: self.speed,
+            rocket: self.guidance == Guidance::Rocket,
+        })
     }
 
     /// Whether it fires beams: guidance 0, 3 and 10.
@@ -872,6 +936,53 @@ mod tests {
     }
 
     #[test]
+    fn only_guidance_minus_1_4_6_7_8_and_9_leads_and_6_as_a_rocket() {
+        let lead = |guidance: i16| {
+            WeaponSpec::new(&WeaponRecord {
+                guidance,
+                speed: 1500,
+                ..weapon(128)
+            })
+            .lead_shot()
+        };
+        let plain = Some(LeadShot {
+            speed: 15.0,
+            rocket: false,
+        });
+        for guidance in [-1, 4, 7, 8, 9] {
+            assert_eq!(lead(guidance), plain, "{guidance}");
+        }
+        assert_eq!(
+            lead(6),
+            Some(LeadShot {
+                speed: 15.0,
+                rocket: true
+            })
+        );
+        for guidance in [0, 1, 3, 5, 10, 99] {
+            assert_eq!(lead(guidance), None, "{guidance}");
+        }
+    }
+
+    #[test]
+    fn a_shot_spawns_only_for_an_index_and_a_graphic_of_255_or_less() {
+        let spawns = |id: i16, graphic: i16| {
+            WeaponSpec::new(&WeaponRecord {
+                graphic,
+                ..weapon(id)
+            })
+            .spawns_shot()
+        };
+        assert!(spawns(128, 0));
+        assert!(spawns(128, 255), "Graphic 255");
+        assert!(!spawns(128, 256), "Graphic 256");
+        assert!(!spawns(128, -1), "Graphic -1 is 65535 unsigned");
+        assert!(spawns(383, 0), "index 255");
+        assert!(!spawns(384, 0), "index 256");
+        assert!(!spawns(127, 0), "index -1 is 65535 unsigned");
+    }
+
+    #[test]
     fn a_weapon_reads_its_exit_type_nearest_exit_flag_and_broadside() {
         for (raw, exit) in [
             (0, Some(ExitKind::Gun)),
@@ -886,6 +997,14 @@ mod tests {
                 ..light_blaster()
             });
             assert_eq!(spec.exit, exit, "{raw}");
+            assert_eq!(spec.steps_fold, raw == -1, "{raw}");
+        }
+        for (raw, steps) in [(-1, true), (-2, false), (i16::MIN, false)] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                exit_type: raw,
+                ..light_blaster()
+            });
+            assert_eq!((spec.exit, spec.steps_fold), (None, steps), "{raw}");
         }
         assert_eq!(NEAREST_EXIT, 0x0010);
         for (flags3, nearest) in [(0x0010, true), (0x0030, true), (0x0020, false), (0, false)] {
@@ -1163,7 +1282,12 @@ mod tests {
         assert_eq!(falloff(400, 8, 3), 0, "a lightning beam has none");
         assert_eq!(falloff(400, 0, 1), 0);
         assert_eq!(falloff(0, 0, 0), 0, "a shot's is kept");
-        assert_eq!(falloff(0, 8, 3), 8);
+        assert_eq!(falloff(0, 8, 0), 8);
+        assert_eq!(falloff(0, -4, 0), -4, "a shot's fade-in is kept");
+        // @0x79625-0x79645 zeroes a lightning weapon's whatever its
+        // BeamLength.
+        assert_eq!(falloff(0, 2, 3), 0, "a lightning shot has none");
+        assert_eq!(falloff(-5, 8, 1), 0);
     }
 
     #[test]

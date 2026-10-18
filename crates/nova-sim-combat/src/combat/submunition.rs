@@ -21,14 +21,17 @@
 //!   they can hit, as `_FindNearestValidShotTarget` (@0x6a3a-0x6af3) asks
 //!   `_ShotCanHitShip` of every active ship, the player's included, with
 //!   no target of their own (@0x3f3c3); or else the given target, and
-//!   head at its bearing; otherwise they take the given target and the
+//!   head at the table's whole-degree bearing to it (`_CalcInterceptAngle`
+//!   @0x3f421-0x3f42b); otherwise they take the given target and the
 //!   parent's heading.
 //! - A positive `SubTheta` turns each by `θ - below(2θ + 1)`, within θ
 //!   either way; a negative one spreads them in a starburst |θ| apart,
 //!   centred on the heading less half the spread in whole degrees
 //!   (`|θ|·(count − 1) / 2` in integers, @0x3f49c-0x3f4da), so an odd
-//!   spread leans half a degree clockwise.
-//! - Each takes its `Speed` along its heading from rest, a bomb's (5) too,
+//!   spread leans half a degree clockwise. The heading is then taken
+//!   round once each way (@0x3f50f-0x3f54f).
+//! - Each takes its `Speed` along its truncated heading from rest
+//!   (`_Accel(trunc(heading))` @0x3f597), a bomb's (5) too,
 //!   whoever fired the parent; a rocket's (6) starts with its parent's
 //!   velocity instead, with no speed added (@0x3f55c-0x3f5a5).
 //! - None carries a turret miss roll ([`Shot::miss_roll`]), so none is
@@ -38,6 +41,13 @@
 //!   last shot left there: -1, 0 for a slot never used, or a turret's roll.
 //!   That depends on how the fixed 128-slot shot table was reused, which
 //!   the engine does not keep, so it is ported as -1.
+//! - Each takes its sprite layer by its own guidance, as `_SpawnShot`
+//!   places it ([`ShotLayer::spawned`], @0x3f328): a turret (4) over the
+//!   ships when its parent's source is a ship whose class has `Flags3`
+//!   0x0040. The original reads whatever ship the source slot holds as it
+//!   spawns; the fight reads the firer's class while it is in the fight,
+//!   and the bit its parent carried ([`Shot::turret_over`]) once it is
+//!   gone.
 //! - The release plays the sub-munition's `Sound` once at the parent, at
 //!   [`SUBMUNITION_PRIORITY`](super::SUBMUNITION_PRIORITY) (see
 //!   [`Combat`](super::Combat)).
@@ -45,21 +55,23 @@
 //! [`Submunitions`]: super::weapon::Submunitions
 
 use super::ShipRef;
-use super::aim::bearing;
-use super::projectile::{Shot, Target};
+use super::projectile::{Shot, ShotLayer, Source, Target};
 use super::sides::Sides;
 use super::weapon::{Guidance, WeaponSpec};
 use crate::chance::Chance;
-use crate::flight::{ShipState, facing};
+use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::trig;
 
 /// The sub-munitions of `sub` that `parent` releases, aimed at `target`
 /// (the ship it hit, or its own target) among the ships of `sides`, their
-/// spread drawn on `chance` (see the module docs).
+/// spread drawn on `chance`, each in its sprite layer by its own guidance
+/// and `turret_over`, whether its firer's class draws turret shots over
+/// the ships (see the module docs).
 pub fn release(
     parent: &Shot,
     sub: &WeaponSpec,
-    target: Option<ShipRef>,
+    (target, turret_over): (Option<ShipRef>, bool),
     sides: &Sides,
     chance: &mut dyn Chance,
 ) -> Vec<Shot> {
@@ -96,12 +108,15 @@ pub fn release(
         let heading = target
             .and_then(|target| targets.iter().find(|ship| ship.ship == target))
             .map_or(parent.heading, |ship| {
-                bearing(parent.position, ship.position)
+                f32::from(trig::intercept_angle(parent.position, ship.position))
             });
         (target, heading)
     } else {
         (target, parent.heading)
     };
+    // `_SpawnShot(parent +0x2c, ..)` reads the parent's source slot
+    // (@0x3f328), a ship's while it is one.
+    let ship_source = matches!(parent.source, Source::Ship(_));
     let theta = f32::from(subs.theta);
     let spread = u32::from(subs.theta.unsigned_abs());
     // Halved in whole degrees (@0x3f49c-0x3f4da), as `count - 1` is never
@@ -114,27 +129,25 @@ pub fn release(
             } else {
                 (spread * n) as f32 - centred as f32
             };
-            let shot = Shot {
-                target,
-                aimed_at: target,
-                generation: unaimed.generation,
-                source: parent.source,
-                ..Shot::launch(
-                    *sub,
-                    parent.firer,
-                    parent.fleet,
-                    &launcher,
-                    heading + offset,
-                )
-            };
+            // Wrapped once (@0x3f50f-0x3f54f).
+            let heading = trig::wrap_once(heading + offset);
             // A rocket keeps its parent's velocity; any other, a bomb too,
-            // takes its `Speed` along its heading from rest (@0x3f55c-0x3f5a5).
+            // takes its `Speed` along its truncated heading from rest
+            // (@0x3f55c-0x3f5a5).
             let velocity = if sub.guidance == Guidance::Rocket {
                 parent.velocity
             } else {
-                facing(shot.heading) * sub.speed
+                trig::accel(trig::whole(heading), sub.speed)
             };
-            Shot { velocity, ..shot }
+            Shot {
+                target,
+                aimed_at: target,
+                heading,
+                velocity,
+                layer: ShotLayer::spawned(sub.guidance, ship_source, turret_over),
+                turret_over,
+                ..unaimed
+            }
         })
         .collect()
 }
@@ -151,6 +164,7 @@ mod tests {
     use crate::combat::sides::Ties;
     use crate::flight::{ShipState, facing};
     use crate::geometry::Vec2;
+    use crate::trig;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -215,6 +229,18 @@ mod tests {
         }
     }
 
+    /// The sub-munitions of `sub` that `parent` releases at nothing, its
+    /// firer's class drawing turret shots over the ships or not.
+    fn release_over(parent: &Shot, sub: &WeaponSpec, turret_over: bool) -> Vec<Shot> {
+        release(
+            parent,
+            sub,
+            (None, turret_over),
+            &among(&[]),
+            &mut Draws::of(&[]),
+        )
+    }
+
     fn headings(subs: &[Shot]) -> Vec<f32> {
         subs.iter().map(|shot| shot.heading).collect()
     }
@@ -230,7 +256,13 @@ mod tests {
             ..parent(-1, 3, 0, 0, 0)
         };
         let mut chance = Draws::of(&[]);
-        let subs = release(&parent, &sub(-1), Some(HIT), &among(&[]), &mut chance);
+        let subs = release(
+            &parent,
+            &sub(-1),
+            (Some(HIT), false),
+            &among(&[]),
+            &mut chance,
+        );
         assert!(chance.asked.is_empty(), "no spread, nothing drawn");
         assert_eq!(subs.len(), 3);
         for shot in &subs {
@@ -259,7 +291,7 @@ mod tests {
             (0x1000, disabling, true),
         ] {
             let parent = parent(-1, 2, 0, 0, parent_flags2);
-            let subs = release(&parent, &sub, None, &among(&[]), &mut chance);
+            let subs = release(&parent, &sub, (None, false), &among(&[]), &mut chance);
             assert_eq!(subs.len(), 2);
             for shot in &subs {
                 assert_eq!(shot.disable_only, disable_only, "{parent_flags2:#x}");
@@ -273,7 +305,7 @@ mod tests {
         let subs = release(
             &parent(-1, 3, 45, 0, 0),
             &sub(-1),
-            None,
+            (None, false),
             &among(&[]),
             &mut chance,
         );
@@ -287,7 +319,7 @@ mod tests {
         let subs = release(
             &parent(-1, 5, -10, 0, 0),
             &sub(-1),
-            None,
+            (None, false),
             &among(&[]),
             &mut chance,
         );
@@ -295,7 +327,7 @@ mod tests {
         let pair = release(
             &parent(-1, 2, -10, 0, 0),
             &sub(-1),
-            None,
+            (None, false),
             &among(&[]),
             &mut chance,
         );
@@ -318,7 +350,7 @@ mod tests {
         let subs = release(
             &seeking,
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&targets),
             &mut Draws::of(&[]),
         );
@@ -330,7 +362,7 @@ mod tests {
         let alone = release(
             &seeking,
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&targets[..1]),
             &mut Draws::of(&[]),
         );
@@ -342,7 +374,7 @@ mod tests {
         let subs = release(
             &seeking,
             &sub(-1),
-            None,
+            (None, false),
             &among(&measured),
             &mut Draws::of(&[]),
         );
@@ -350,7 +382,7 @@ mod tests {
         let nothing = release(
             &seeking,
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&[]),
             &mut Draws::of(&[]),
         );
@@ -359,7 +391,7 @@ mod tests {
         let unseeking = release(
             &parent(-1, 1, 0, 0, 0),
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&targets),
             &mut Draws::of(&[]),
         );
@@ -374,7 +406,7 @@ mod tests {
         let subs = release(
             &seeking,
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&targets),
             &mut Draws::of(&[]),
         );
@@ -389,7 +421,7 @@ mod tests {
         let subs = release(
             &seeking,
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&[targets[0], targets[1], dying]),
             &mut Draws::of(&[]),
         );
@@ -416,7 +448,7 @@ mod tests {
         let subs = release(
             &seeking,
             &sub(-1),
-            None,
+            (None, false),
             &among(&targets),
             &mut Draws::of(&[]),
         );
@@ -440,7 +472,7 @@ mod tests {
             let subs = release(
                 &parent,
                 &sub(-1),
-                Some(HIT),
+                (Some(HIT), false),
                 &among(&[]),
                 &mut Draws::of(&[]),
             );
@@ -455,7 +487,7 @@ mod tests {
         let subs = release(
             &seeking,
             &sub(1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&targets),
             &mut Draws::of(&[]),
         );
@@ -469,7 +501,13 @@ mod tests {
             miss_roll: Some(100),
             ..parent(4, 2, 0, 0, 0)
         };
-        let subs = release(&turret, &sub(4), None, &among(&[]), &mut Draws::of(&[]));
+        let subs = release(
+            &turret,
+            &sub(4),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
         assert_eq!(subs.len(), 2);
         assert!(subs.iter().all(|shot| shot.miss_roll.is_none()), "{subs:?}");
     }
@@ -490,7 +528,7 @@ mod tests {
         let subs = release(
             &turret,
             &sub(4),
-            None,
+            (None, false),
             &among(&targets),
             &mut Draws::of(&[]),
         );
@@ -506,7 +544,7 @@ mod tests {
         let subs = release(
             &defence,
             &sub(-1),
-            Some(HIT),
+            (Some(HIT), false),
             &among(&[]),
             &mut Draws::of(&[]),
         );
@@ -514,13 +552,113 @@ mod tests {
     }
 
     #[test]
+    fn a_seeking_sub_munition_heads_at_the_tables_bearing() {
+        // 135 degrees by float, 134 by the table.
+        let targets = [ship(NEAR, 200.0, 150.0)];
+        let subs = release(
+            &parent(-1, 1, 0, 0, 0x0010),
+            &sub(-1),
+            (None, false),
+            &among(&targets),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(headings(&subs), [134.0]);
+        assert_eq!(subs[0].velocity, trig::accel(134, 13.0));
+    }
+
+    #[test]
+    fn a_sub_munition_flies_along_its_truncated_heading_wrapped_once() {
+        let turned = Shot {
+            heading: 359.5,
+            ..parent(-1, 1, 5, 0, 0)
+        };
+        // θ − below(11) with a draw of 0: 359.5 + 5, taken round once.
+        let subs = release(
+            &turned,
+            &sub(-1),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[0]),
+        );
+        assert_eq!(headings(&subs), [4.5]);
+        assert_eq!(subs[0].velocity, trig::accel(4, 13.0));
+        let bomb = release(
+            &turned,
+            &sub(5),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[0]),
+        );
+        assert_eq!(
+            bomb[0].velocity,
+            trig::accel(4, 13.0),
+            "a bomb from rest too"
+        );
+    }
+
+    #[test]
+    fn a_sub_munition_takes_its_layer_by_its_own_guidance_and_its_firers_class() {
+        let parent = parent(-1, 1, 0, 0, 0);
+        let layer = |sub: &WeaponSpec, parent: &Shot, turret_over: bool| {
+            release_over(parent, sub, turret_over)[0].layer
+        };
+        assert_eq!(layer(&sub(4), &parent, true), ShotLayer::OverShips);
+        assert!(
+            release_over(&parent, &sub(4), true)[0].turret_over,
+            "carried on"
+        );
+        assert_eq!(layer(&sub(4), &parent, false), ShotLayer::Shots);
+        assert_eq!(layer(&sub(1), &parent, true), ShotLayer::Homing);
+        assert_eq!(layer(&sub(9), &parent, false), ShotLayer::PointDefence);
+        assert_eq!(layer(&sub(-1), &parent, true), ShotLayer::Shots);
+        let unowned = Shot {
+            source: Source::Other,
+            ..parent
+        };
+        assert_eq!(
+            layer(&sub(4), &unowned, true),
+            ShotLayer::Shots,
+            "no ship's"
+        );
+    }
+
+    #[test]
+    fn a_sub_munition_of_an_unwrapped_bomb_takes_its_heading_round_once() {
+        let unwrapped = Shot {
+            heading: -1.5,
+            ..parent(5, 1, 0, 0, 0)
+        };
+        let subs = release(
+            &unwrapped,
+            &sub(-1),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(headings(&subs), [358.5]);
+        assert_eq!(subs[0].velocity, trig::accel(358, 13.0));
+    }
+
+    #[test]
     fn rockets_keep_their_parents_velocity_and_others_start_from_rest() {
         let parent = parent(-1, 1, 0, 0, 0);
-        assert_eq!(parent.velocity, Vec2::new(5.0, 5.0));
-        let subs = release(&parent, &sub(6), None, &among(&[]), &mut Draws::of(&[]));
+        assert_eq!(parent.velocity, Vec2::new(0.0, 5.0) + trig::accel(90, 5.0));
+        let subs = release(
+            &parent,
+            &sub(6),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
         assert_eq!(subs[0].velocity, parent.velocity);
-        let unguided = release(&parent, &sub(-1), None, &among(&[]), &mut Draws::of(&[]));
-        assert!((unguided[0].velocity - facing(90.0) * 13.0).length() < 1e-4);
+        let unguided = release(
+            &parent,
+            &sub(-1),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(unguided[0].velocity, trig::accel(90, 13.0));
     }
 
     #[test]
@@ -531,7 +669,13 @@ mod tests {
                 fleet: firer,
                 ..parent(-1, 1, 0, 0, 0)
             };
-            let subs = release(&parent, &sub(5), None, &among(&[]), &mut Draws::of(&[]));
+            let subs = release(
+                &parent,
+                &sub(5),
+                (None, false),
+                &among(&[]),
+                &mut Draws::of(&[]),
+            );
             let along = facing(90.0) * 13.0;
             assert!(
                 (subs[0].velocity - along).length() < 1e-4,
@@ -544,7 +688,13 @@ mod tests {
     fn an_npcs_rocket_sub_munition_takes_its_parents_velocity_and_no_speed() {
         let parent = parent(-1, 1, 0, 0, 0);
         assert_eq!(parent.firer, FIRER, "an NPC's");
-        let subs = release(&parent, &sub(6), None, &among(&[]), &mut Draws::of(&[]));
+        let subs = release(
+            &parent,
+            &sub(6),
+            (None, false),
+            &among(&[]),
+            &mut Draws::of(&[]),
+        );
         assert_eq!(subs[0].velocity, parent.velocity);
     }
 
@@ -553,7 +703,7 @@ mod tests {
         let pair = release(
             &parent(-1, 2, -15, 0, 0),
             &sub(-1),
-            None,
+            (None, false),
             &among(&[]),
             &mut Draws::of(&[]),
         );
@@ -561,7 +711,7 @@ mod tests {
         let three = release(
             &parent(-1, 3, -15, 0, 0),
             &sub(-1),
-            None,
+            (None, false),
             &among(&[]),
             &mut Draws::of(&[]),
         );
@@ -576,13 +726,19 @@ mod tests {
                 generation,
                 ..parent(-1, 1, 0, limit, 0)
             };
-            let subs = release(&parent, &sub(-1), None, &among(&[]), &mut Draws::of(&[]));
+            let subs = release(
+                &parent,
+                &sub(-1),
+                (None, false),
+                &among(&[]),
+                &mut Draws::of(&[]),
+            );
             assert_eq!(subs.len(), released, "{generation} of {limit}");
         }
         let none = release(
             &parent(-1, 0, 0, 0, 0),
             &sub(-1),
-            None,
+            (None, false),
             &among(&[]),
             &mut Draws::of(&[]),
         );

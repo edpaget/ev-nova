@@ -89,9 +89,10 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// (`nova_sim::iff::interference`).
     pub interference: i16,
-    /// Its `Murk`, raw: the galaxy map panel's "visibility" hazard
-    /// (`nova_sim::map_panel`; `_MapDialogUpdate` @0x1086c-0x1090c reads
-    /// it at runtime +0xbc).
+    /// Its `Murk`, raw: how murky its space is, which
+    /// `nova_sim::murk::loaded_murk` loads as the original does, and the
+    /// galaxy map panel's "visibility" hazard (`nova_sim::map_panel`;
+    /// `_MapDialogUpdate` @0x1086c-0x1090c reads it at runtime +0xbc).
     pub murk: i16,
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
     /// −1 for none (`nova_sim::StarMap::buoy`).
@@ -1250,6 +1251,9 @@ pub struct WeaponRecord {
     pub speed: i16,
     /// Its `AmmoType`, encoded.
     pub ammo_type: i16,
+    /// Its `Graphic`: the `spïn` its shots are drawn from, less 3000
+    /// (`_SpawnShot` reads it at +0xa).
+    pub graphic: i16,
     /// Its `Inaccuracy`, in degrees.
     pub inaccuracy: i16,
     /// Its `Impact`.
@@ -1448,6 +1452,8 @@ pub struct HullRecord {
     pub flags: u16,
     /// Its `Flags2`.
     pub flags2: u16,
+    /// Its `Flags3`.
+    pub flags3: u16,
     /// Its `DeathDelay`, in ticks.
     pub death_delay: i16,
     /// Its `Explode1`, encoded.

@@ -10,8 +10,9 @@
 //!   disabled ships and the cargo boxes (`_SetupSpriteWorld`
 //!   @0x21d0c-0x21d74).
 //!
-//! Left out: `_HandleSpriteMurkiness` (@0x36446), as no sprite is drawn
-//! murky here.
+//! Left out: `_HandleSpriteMurkiness` (@0x36446): the view murks shots
+//! alone so far ([`murk`](super::murk)), and
+//! rdm:task/murk-other-sprites draws the asteroids murky.
 
 use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
@@ -62,6 +63,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }

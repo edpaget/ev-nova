@@ -438,13 +438,8 @@ mod tests {
             Trigger::default()
         );
         let hit = Strike {
-            ship: n(1),
-            by: Some(P),
             damage: 3.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(n(1), P)
         };
         assert_eq!(
             Interceptor::default()

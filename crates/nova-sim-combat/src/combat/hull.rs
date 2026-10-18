@@ -116,6 +116,10 @@ pub const PLANET_TYPE: u16 = 0x0400;
 /// fired on by point defense" (class +0x9ea, `_HandleShipPointDefense`
 /// @0x3951d; see [`defence`](super::defence)).
 pub const PD_TARGET: u16 = 0x0008;
+/// The `shïp` `Flags3` bit of a ship whose turret shots (4) are drawn
+/// over the ships, in 0x3b5308 (class +0x9ec, filled @0x7a204; `_SpawnShot`
+/// @0x3f101; see [`ShotLayer`](super::shot_layer::ShotLayer)).
+pub const TURRET_SHOTS_OVER: u16 = 0x0040;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -228,6 +232,10 @@ pub struct HullSpec {
     /// rolls in, and the highest roll that hits it while it is intact (see
     /// [`sides`](super::sides)).
     pub miss_class: u32,
+    /// Whether its turret shots (4) are drawn over the ships: its `Flags3`
+    /// [`TURRET_SHOTS_OVER`] (see
+    /// [`ShotLayer::spawned`](super::shot_layer::ShotLayer::spawned)).
+    pub turret_shots_over: bool,
 }
 
 impl Default for HullSpec {
@@ -256,6 +264,7 @@ impl Default for HullSpec {
             hidden: false,
             exits: None,
             miss_class: miss_class(EscortClass::Freighter),
+            turret_shots_over: false,
         }
     }
 }
@@ -289,6 +298,7 @@ impl HullSpec {
             hidden: record.cost == HIDDEN_COST,
             exits: record.exits.as_ref().and_then(ExitPoints::new),
             miss_class: miss_class(record.escort_class),
+            turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
         }
     }
 
@@ -462,6 +472,22 @@ mod tests {
         assert!(disabled(9.999, 100.0, true));
         assert!(!disabled(14.99, 45.0, true), "a third does not disable it");
         assert_eq!((DISABLE_PERCENT, TOUGH_DISABLE_PERCENT), (33.333, 10.0));
+    }
+
+    #[test]
+    fn a_ship_types_turret_shots_go_over_the_ships_with_flags3_0x0040() {
+        let over = HullSpec::new(&HullRecord {
+            flags3: 0x0140,
+            ..hull(143)
+        });
+        assert!(over.turret_shots_over);
+        let under = HullSpec::new(&HullRecord {
+            flags3: 0x0100,
+            ..hull(141)
+        });
+        assert!(!under.turret_shots_over);
+        assert!(!HullSpec::default().turret_shots_over);
+        assert_eq!(TURRET_SHOTS_OVER, 0x0040);
     }
 
     #[test]

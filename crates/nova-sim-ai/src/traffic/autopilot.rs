@@ -54,6 +54,12 @@
 //!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
 //!   towards it. Within the carrier's reach on both axes it docks, and
 //!   leaves the system ([`Outcome::Docked`]).
+//! - [`Goal::Snipe`]: as [`snipe::fly`] says. Moving 0.35 or more on an
+//!   axis it brakes, turning to its retro heading (or, with a last gun and
+//!   by the engine, its target's lead) and thrusting within its turn rate
+//!   and [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`]
+//!   a tick and turns to its target's plain bearing; with its target gone
+//!   it coasts (`_LowLevelAIHandler` sub-goal 0xe, @0x8709d-0x87334).
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, under its top speed's cap.
@@ -142,9 +148,11 @@ use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
+use crate::rulebook::RuleSource;
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::npc::{Mode, Npc};
+use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
 
@@ -235,14 +243,16 @@ impl TopSpeeds {
 /// ship its goal is about (the lead it follows, the ship it fights or
 /// inspects) at `other`, when it is there, at its top speed
 /// `speeds.own`, its burst out of a gate or glide in capped at
-/// [`TopSpeeds::burst_cap`], the wait a leaderless ship takes after it
-/// rolled on `chance`.
+/// [`TopSpeeds::burst_cap`], a moving sniper with a last gun turning as
+/// `snipe_lead` says ([`snipe::fly`]), the wait a leaderless ship takes
+/// after it rolled on `chance`.
 pub fn fly(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
     speeds: TopSpeeds,
+    snipe_lead: RuleSource,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let handling = Handling {
@@ -278,13 +288,7 @@ pub fn fly(
             Some(target) => attack(npc, target, &handling),
             None => brake(&state, &handling),
         },
-        Goal::Snipe(_) => match other {
-            Some(target) if state.velocity.length() <= AT_REST_SPEED => Controls {
-                turn: steer(state.heading, fire::wanted_heading(npc, target), &handling),
-                ..Controls::default()
-            },
-            _ => brake(&state, &handling),
-        },
+        Goal::Snipe(_) => snipe::fly(npc, other, &handling, snipe_lead),
         Goal::Flee(_) => match other {
             Some(attacker) => {
                 let off = state.position - attacker.position;
@@ -463,7 +467,7 @@ fn run_out(state: &ShipState, handling: &Handling) -> Controls {
 
 /// Turns from `heading` towards `wanted`, not at all within half a tick's
 /// turn, where turning would only overshoot.
-fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
+pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     let off = shortest_turn(heading, wanted);
     let half_turn = handling.turn_rate / 2.0;
     if off > half_turn {
@@ -867,6 +871,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             speeds,
+            RuleSource::Engine,
             &mut Draws::of(&[]),
         )
     }
@@ -1562,6 +1567,7 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&player),
                 top,
+                RuleSource::Engine,
                 &mut draws,
             );
             assert!(
@@ -1716,9 +1722,25 @@ mod tests {
             primary: true,
             ..Trigger::default()
         };
-        super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
+        super::fly(
+            &mut ship,
+            &sites,
+            &BTreeMap::new(),
+            None,
+            speeds,
+            RuleSource::Engine,
+            draws,
+        );
         while let Mode::LeavingGate { .. } = ship.mode {
-            super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
+            super::fly(
+                &mut ship,
+                &sites,
+                &BTreeMap::new(),
+                None,
+                speeds,
+                RuleSource::Engine,
+                draws,
+            );
         }
         ship
     }
@@ -1749,6 +1771,7 @@ mod tests {
                         &BTreeMap::new(),
                         None,
                         speeds,
+                        RuleSource::Engine,
                         &mut draws
                     ),
                     Outcome::Flying
@@ -1770,6 +1793,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 speeds,
+                RuleSource::Engine,
                 &mut draws,
             );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
@@ -1809,14 +1833,30 @@ mod tests {
             let mut ship = jumping_in(AVERAGE);
             let mut draws = Draws::of(&[draw]);
             while let Mode::JumpingIn { .. } = ship.mode {
-                super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
+                super::fly(
+                    &mut ship,
+                    &[],
+                    &BTreeMap::new(),
+                    None,
+                    speeds,
+                    RuleSource::Engine,
+                    &mut draws,
+                );
             }
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: wait });
             assert_eq!(draws.asked, [30]);
             let along = flight::facing(180.0) * glide_speed(37);
             assert!((ship.state.velocity - along).length() < 1e-4);
             let before = ship.state;
-            super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
+            super::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                None,
+                speeds,
+                RuleSource::Engine,
+                &mut draws,
+            );
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
             assert_eq!(ship.state.position, before.position + before.velocity);
         }
@@ -1879,7 +1919,15 @@ mod tests {
         widths: &BTreeMap<StellarId, TypeWidth>,
     ) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
-        super::fly(npc, sites, widths, None, speeds, &mut Draws::of(&[]))
+        super::fly(
+            npc,
+            sites,
+            widths,
+            None,
+            speeds,
+            RuleSource::Engine,
+            &mut Draws::of(&[]),
+        )
     }
 
     #[test]
@@ -2462,9 +2510,10 @@ mod tests {
 
     #[test]
     fn dogfighting_within_165_it_thrusts_within_a_turn_and_15_degrees() {
-        // 3 + 15: within 18 of the target 165 above.
+        // 3 + 15: within 18 of the target 165 above, which the table
+        // bears at 46, its diagonal a degree past 45.
         let target = at(165.0, -165.0, 0.0, 0.0, 0.0);
-        let bearing = 45.0;
+        let bearing = 46.0;
         let thrusting = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.0), &target);
         assert!(thrusting.thrust);
         let turning = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.1), &target);
@@ -2488,16 +2537,20 @@ mod tests {
             }),
             1,
         )]);
-        // 1000 above crossing right at 10 a tick: led 1000 to the right,
-        // 45 degrees.
+        // 1000 above crossing right at 10 a tick: led about 1000 to the
+        // right, near 45 degrees, in whole degrees as the ship moves.
         let crossing = at(0.0, -1000.0, 10.0, 0.0, 0.0);
         let mut flown = ship.clone();
         for _ in 0..30 {
             fly(&mut flown, &[], Some(&crossing));
         }
+        let wanted = fire::wanted_heading(&flown, &crossing);
+        assert_eq!(wanted, wanted.trunc(), "a whole degree");
+        assert!((wanted - 45.0).abs() < 3.0, "{wanted}");
+        let half_turn = flown.stats.handling.turn_rate / 2.0;
         assert!(
-            (flown.state.heading - 45.0).abs() < 3.0,
-            "{:?}",
+            shortest_turn(flown.state.heading, wanted).abs() <= half_turn,
+            "{:?} {wanted}",
             flown.state
         );
     }
@@ -2506,7 +2559,9 @@ mod tests {
     fn sniping_it_brakes_to_a_stop_then_faces_its_target() {
         let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
         let mut moving = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, -3.0, 0.0));
-        for _ in 0..200 {
+        // It turns to its retro heading and thrusts down to 0.35 a tick on
+        // each axis, then slows by 0.95 a tick.
+        for _ in 0..400 {
             fly(&mut moving, &[], Some(&target));
         }
         assert!(moving.state.velocity.length() <= crate::flight::AT_REST_SPEED);
@@ -2574,13 +2629,79 @@ mod tests {
     }
 
     #[test]
+    fn a_sniper_whose_target_is_gone_coasts() {
+        // `_LowLevelAIHandler`'s sub-goal 0xe does nothing with no target
+        // (@0x870ab-0x870b9), its thrust zeroed at entry (@0x851f1).
+        let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.1, -0.2, 10.0));
+        for _ in 0..10 {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        }
+        assert_eq!(ship.state.velocity, Vec2::new(0.1, -0.2));
+        assert_eq!(ship.state.heading, 10.0);
+    }
+
+    #[test]
+    fn a_moving_sniper_turns_as_the_lead_reading_it_is_given_says() {
+        // Moving down at 2 at heading 76, its target 300 right at rest,
+        // having fired its gun of 10 a tick: by the engine it leads its
+        // target (78.69) and thrusts; by the other reading it turns to
+        // its retro heading, 0.
+        let gun = crate::catalog::WeaponRecord {
+            speed: 1000,
+            count: 20,
+            ..nova_sim_catalog::fixture::weapon(128)
+        };
+        let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, 2.0, 76.0));
+        ship.armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&gun),
+            1,
+        )]);
+        let mut fuel = ship.reserves.fuel;
+        ship.armament.fire_pick(
+            crate::catalog::WeaponId(128),
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut crate::combat::armament::LauncherRounds::default(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        );
+        let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
+        let flown = |lead: RuleSource| {
+            let mut flown = ship.clone();
+            super::fly(
+                &mut flown,
+                &[],
+                &BTreeMap::new(),
+                Some(&target),
+                TopSpeeds::own_of(&ship),
+                lead,
+                &mut Draws::of(&[]),
+            );
+            flown.state
+        };
+        let engine = flown(RuleSource::Engine);
+        assert_eq!(engine.heading, 79.0, "a turn right");
+        assert!(engine.velocity.y < 2.0, "thrust toward its target");
+        let other = flown(RuleSource::Bible);
+        assert_eq!(other.heading, 73.0, "a turn left");
+        assert_eq!(other.velocity, Vec2::new(0.0, 2.0), "no thrust");
+    }
+
+    #[test]
+    fn a_sniper_at_rest_slows_by_0_95_a_tick() {
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.2, 0.0, 270.0));
+        fly(&mut ship, &[], Some(&target));
+        assert_eq!(ship.state.velocity, Vec2::new(0.2 * 0.95, 0.0));
+        assert_eq!(ship.state.position, Vec2::new(0.2 * 0.95, 0.0));
+    }
+
+    #[test]
     fn a_fight_whose_ship_is_gone_brakes() {
-        for goal in [
-            Goal::Attack(FOE),
-            Goal::Snipe(FOE),
-            Goal::Flee(FOE),
-            Goal::Inspect(FOE),
-        ] {
+        for goal in [Goal::Attack(FOE), Goal::Flee(FOE), Goal::Inspect(FOE)] {
             let mut ship = npc(FAST, goal, at(0.0, 0.0, 4.0, -3.0, 10.0));
             for _ in 0..200 {
                 assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);

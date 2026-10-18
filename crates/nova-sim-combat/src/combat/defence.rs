@@ -84,7 +84,7 @@
 use std::fmt::Debug;
 
 use super::ShipRef;
-use super::aim::{angle_off, bearing, blind};
+use super::aim::blind_spot;
 use super::hull::{Condition, HullSpec};
 use super::projectile::{Jam, Shot, ShotId, Target};
 use super::weapon::{Guidance, WeaponSpec};
@@ -93,6 +93,7 @@ use crate::cloak::{self, Observer};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::trig;
 
 /// A point-defence turret's engagement range, per pixel of its range.
 pub const PD_RANGE_FACTOR: f32 = 1.5;
@@ -163,7 +164,8 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 /// defence can target (no `Flags` 0x0080), whose damage is aimed at the
 /// defender or at its fleet's lead ([`Shot::aimed_at`], shot +0x2a, not
 /// its quarry), within the weapon's [`engagement_range`] and not in a
-/// blind spot. Its squared distance is truncated before the range test
+/// blind spot ([`blind_spot`], by the table's bearing to it,
+/// `_CalcInterceptAngle` @0x39477). Its squared distance is truncated before the range test
 /// and before the nearest test, so a missile under a square pixel past
 /// the range is in it, and of two whose squared distances truncate alike
 /// the one fired first wins. By the engine (`rule` none) there is no
@@ -197,9 +199,10 @@ pub fn choose<'a>(
             && aimed
             && distance <= in_range
             && best.is_none_or(|(_, nearest)| distance < nearest)
-            && !blind(
+            && !blind_spot(
                 blind_spots,
-                angle_off(at.heading, bearing(at.position, shot.position)),
+                at.heading,
+                trig::intercept_angle(at.position, shot.position),
             )
             && rule.is_none_or(|rule| rule.hostile(defender, Side::of(shot), govts));
         if candidate {
@@ -265,7 +268,8 @@ pub struct Guard {
 /// not held disabled, seen by it ([`cloak::seen`], with no cloaked-escort
 /// clause, which the leader test makes unreachable), within
 /// [`engagement_range`], the nearer by a strict `<` of truncated squared
-/// distances, not in a blind spot, and fighting it: the player while the
+/// distances, not in a blind spot ([`blind_spot`], by the table's bearing
+/// to it, `_CalcInterceptAngle` @0x395cb), and fighting it: the player while the
 /// defender threatens the player, and any other ship attacking the
 /// defender or its leader. Every test is the original's; none asks the
 /// [`PointDefenceRule`], under either reading of
@@ -318,9 +322,10 @@ pub fn choose_ship<'a>(
             )
             && distance <= in_range
             && best.is_none_or(|(_, nearest)| distance < nearest)
-            && !blind(
+            && !blind_spot(
                 blind_spots,
-                angle_off(at.heading, bearing(at.position, target.position)),
+                at.heading,
+                trig::intercept_angle(at.position, target.position),
             )
             && fighting;
         if chosen {
@@ -422,7 +427,7 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, WeaponRecord};
     use crate::combat::NpcId;
-    use crate::combat::aim::BLIND_REAR;
+    use crate::combat::aim::{BLIND_FRONT, BLIND_REAR, BLIND_SIDES};
     use crate::combat::hull::Condition;
     use crate::combat::projectile::{ShotId, Source, Target};
     use crate::combat::sides::Ties;
@@ -669,6 +674,36 @@ mod tests {
             None,
             "blind both ways"
         );
+    }
+
+    #[test]
+    fn a_missiles_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = [missile(1, 100.0, -100.0, Some(DEFENDER))];
+        assert_eq!(picked(&diagonal, BLIND_FRONT, 0), Some(ShotId(1)), "46");
+        assert_eq!(picked(&diagonal, BLIND_SIDES, 0), None, "the side");
+        // Dead ahead of a defender facing 45.9 is 45.9 off by float, the
+        // side, but 45 off its truncated heading, the front.
+        let turned = ShipState {
+            heading: 45.9,
+            ..ShipState::default()
+        };
+        let ahead = [missile(1, 0.0, -100.0, Some(DEFENDER))];
+        let from_turned = |flags| {
+            choose(
+                ESCORT,
+                &turned,
+                &HullSpec::default(),
+                &quad(flags),
+                &ahead,
+                None,
+                &Governments::default(),
+            )
+            .map(|shot| shot.id)
+        };
+        assert_eq!(from_turned(BLIND_SIDES), Some(ShotId(1)), "45");
+        assert_eq!(from_turned(BLIND_FRONT), None, "the front");
     }
 
     #[test]
@@ -1182,6 +1217,36 @@ mod tests {
             ship_picked_by(GUARD, &quad(BLIND_REAR), BLIND_REAR, &ahead),
             Some(ENEMY)
         );
+    }
+
+    #[test]
+    fn a_ships_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = [attacker(ENEMY, 100.0, -100.0)];
+        assert_eq!(
+            ship_picked_by(GUARD, &quad(BLIND_FRONT), 0, &diagonal),
+            Some(ENEMY),
+            "46"
+        );
+        assert_eq!(
+            ship_picked_by(GUARD, &quad(BLIND_SIDES), 0, &diagonal),
+            None,
+            "the side"
+        );
+        // Dead ahead of a defender facing 45.9 is 45.9 off by float, the
+        // side, but 45 off its truncated heading, the front.
+        let turned = ShipState {
+            heading: 45.9,
+            ..ShipState::default()
+        };
+        let ahead = [attacker(ENEMY, 0.0, -100.0)];
+        let from_turned = |flags| {
+            choose_ship(GUARD, &turned, &HullSpec::default(), &quad(flags), &ahead)
+                .map(|candidate| candidate.target.ship)
+        };
+        assert_eq!(from_turned(BLIND_SIDES), Some(ENEMY), "45");
+        assert_eq!(from_turned(BLIND_FRONT), None, "the front");
     }
 
     #[test]

@@ -54,6 +54,7 @@ impl CombatCatalog for Home {
             guidance: -1,
             speed: 1500,
             ammo_type: -1,
+            graphic: 0,
             inaccuracy: 0,
             impact: 0,
             explod_type: -1,

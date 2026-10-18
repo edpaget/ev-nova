@@ -14,6 +14,8 @@
 //! - [`target`]: whom a warship or interceptor attacks: the player, by its
 //!   government's relations and the player's legal record, or an NPC.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
+//! - [`answer_flag`]: whether a ship hit answers the hit at all, and the
+//!   player's stray provocation.
 //! - [`react`]: how a ship hit answers, and how others come to its help.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
@@ -23,6 +25,7 @@
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
 //!   fight with their carrier; [`NovaAi`] routes every one to it.
 
+pub mod answer_flag;
 pub mod brave;
 pub mod carried;
 pub mod escort;
@@ -40,7 +43,7 @@ pub mod wimpy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use crate::catalog::{GovtId, LandingSite, RankId, RankRecord, StellarId};
+use crate::catalog::{EscortClass, GovtId, LandingSite, RankId, RankRecord, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
@@ -375,6 +378,13 @@ pub struct PlayerSide {
     /// refresh took them (`nova_sim::Session::blessing`):
     /// [`Surroundings::blessed`] reads it.
     pub blessing: Blessing,
+    /// The ship it targets, the original's player +0x70, if any: the
+    /// answer flag reads it ([`answer_flag`]).
+    pub target: Option<ShipRef>,
+    /// Its ship type's class as an escort, the original's ship class +0xe
+    /// ([`EscortClass::of`]): the reaction's entry test reads whether it is
+    /// a fighter ([`answer_flag`]).
+    pub class: EscortClass,
 }
 
 /// No governments at all.
@@ -436,6 +446,21 @@ impl<'a> Surroundings<'a> {
     #[must_use]
     pub fn aimed_at(&self, ship: ShipRef) -> i32 {
         self.targeted.get(&ship).copied().unwrap_or(0)
+    }
+
+    /// Whether `npc` is allied with the player, as `_AlliedWithPlayer`
+    /// (@0x6985-0x69d0) has it: a ship the player leads
+    /// ([`Npc::leader_ref`]), or one led by such a ship here, such as a
+    /// fighter an escort launched. The answer flag's blessing and the
+    /// session's escort Attack read it. Combat keeps its own reading
+    /// (`Sides::allied_with_player` in `nova_sim_combat`): that crate sits
+    /// below this one and walks the fight's ties, not its NPCs.
+    #[must_use]
+    pub fn allied_with_player(&self, npc: &Npc) -> bool {
+        let players = |npc: &Npc| npc.leader_ref() == Some(ShipRef::Player);
+        players(npc)
+            || matches!(npc.leader_ref(), Some(ShipRef::Npc(lead))
+                if self.npc(lead).is_some_and(players))
     }
 
     /// NPC `id`, if it is in the system.
@@ -1036,13 +1061,8 @@ mod tests {
         let npcs = [npc(1, AiType::Warship)];
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 30.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),
@@ -1254,6 +1274,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         };
         around.player = Some(player);
         assert!(around.live(P));
@@ -1327,5 +1349,39 @@ mod tests {
         blessing.bless(GovtId(383), Blessed::Peace);
         assert!(blessing.blesses(Some(GovtId(383)), Blessed::Peace));
         assert!(!blessing.blesses(Some(GovtId(383)), Blessed::Landing));
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_or_one_led_by_such_a_ship_is_allied_with_the_player() {
+        let escorting = |id| Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..npc(id, AiType::Warship)
+        };
+        let led = |id, lead| Npc {
+            leader: Some(NpcId(lead)),
+            ..npc(id, AiType::Warship)
+        };
+        let npcs = [
+            escorting(1),
+            led(2, 1),
+            led(3, 2),
+            npc(4, AiType::Warship),
+            led(5, 4),
+            led(6, 9),
+        ];
+        let around = Surroundings::new(&[], &npcs);
+        let allied: Vec<bool> = npcs
+            .iter()
+            .map(|npc| around.allied_with_player(npc))
+            .collect();
+        assert_eq!(
+            allied,
+            [true, true, false, false, false, false],
+            "its escort, the escort's fighter, that fighter's own, a stranger, \
+             its fighter, and one whose leader has gone"
+        );
     }
 }

@@ -44,8 +44,8 @@
 //!
 //! - The wrap shift (`_WrapPlayerPosition` @0x6811f-): the engine has no
 //!   player wrap.
-//! - The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181): the engine has
-//!   no sprite murk.
+//! - The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181): the view
+//!   murks shots alone so far (rdm:task/murk-other-sprites).
 //! - `_ShipCanScoop` (@0x75c7-0x766b), the same `ModType` 31 test for an
 //!   NPC against its `shïp`'s default outfits, which only the NPC
 //!   spawners call and only `_MinerAI` reads: it is

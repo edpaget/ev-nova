@@ -253,15 +253,26 @@ pub struct Npc {
     /// The fire command it holds, as it last decided.
     pub trigger: Trigger,
     /// The weapon it holds as its pick (the original's +0x72): set by its
-    /// AI's passes ([`Trigger::keep`]), kept from tick to tick and cleared
-    /// once a pick without `Flags` 0x0002 fires
-    /// ([`after_firing`](crate::ai::fire::after_firing)); none at first.
+    /// AI's passes ([`Trigger::keep`]) or, waiting, by its turret find
+    /// ([`GateWait`](crate::ai::GateWait)), kept from tick to tick, held
+    /// through its wait ([`fire::gated`](crate::ai::fire::gated)), and
+    /// cleared once a pick whose weapon record has no `Flags` 0x0002 fires
+    /// ([`after_firing`](crate::ai::fire::after_firing)) or the ship is
+    /// captured. A new ship starts with the pick its berth's last ship
+    /// left, as no spawn writes +0x72
+    /// ([`berth_picks`](crate::traffic::berth_picks)).
     pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
     /// The shield and armour damage it has taken while it fights: none
     /// once it goes back to an idle goal or is disabled.
     pub provoked: f32,
+    /// Its stray provocation, the original's +0xc910: 1.75 × the weight of
+    /// each stray hit of the player's on it, easing by 0.5 a tick, and
+    /// none once it answers a hit; the player's stray hit is answered only
+    /// from 50 (see [`answer_flag`](crate::ai::answer_flag)). It starts at
+    /// none at every spawn and launch, and is never saved.
+    pub stray: f32,
     /// How aggressive it is: 0, 2 or 3 for traffic; 1, 2 or 4 for a
     /// person.
     pub aggression: u8,
@@ -644,7 +655,8 @@ impl Npc {
     /// Every modelled caller of `_IsThreatToPlayer` asks this, and so do
     /// the readers of `_ExtendedIsThreatToPlayer` @0x81b70, whose target
     /// test has the same led clause (@0x81c2e-0x81c4a), but for the attack
-    /// quote's gate, which asks the whole of it
+    /// quote's gate and point defence (`_HandleShipPointDefense` @0x395fe),
+    /// which ask the whole of it
     /// ([`Npc::threatens_player_extended`]).
     #[must_use]
     pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
@@ -692,8 +704,10 @@ impl Npc {
     /// the gate, as every reader of the player's sight does.
     ///
     /// This is the predicate for `_AIMakeShipAttackPlayer`'s quote gate
-    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote));
-    /// the hail's and the ranks' readers still ask
+    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote))
+    /// and for point defence (`_HandleShipPointDefense` @0x395fe), which
+    /// `nova_sim::Session`'s fight terms feed with the player's sight of
+    /// the ship; the hail's and the ranks' readers still ask
     /// [`Npc::threatens_player_among`].
     #[must_use]
     pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
@@ -723,7 +737,14 @@ impl Npc {
     /// Whether its AI wait (+0x4c) is running: waiting in its gate or
     /// held at it, holding its course after its glide or burst, or
     /// entering a gate to leave (see each [`Mode`]). Gliding in, bursting
-    /// out and flying, it has none.
+    /// out and flying, it has none. While it runs, `_HandleShip` skips the
+    /// ship's thrust and fire (@0x34a54-0x34a72): the fight fires only its
+    /// fighter bays and point defence, its pick kept
+    /// ([`fire::gated`](crate::ai::fire::gated)). The waits the engine
+    /// doesn't fly yet (a landed ship's stay, the pirates' holds, a
+    /// launched fighter's, a plundered escort's, the warp out after a
+    /// leader) will count here once built (rdm weapons-fidelity
+    /// phase 17's findings).
     #[must_use]
     pub fn wait_running(&self) -> bool {
         matches!(

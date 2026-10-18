@@ -41,17 +41,27 @@
 //!   or the shot releasing sub-munitions), and an explosion its own, each
 //!   heard from the player ([`CombatSound`]), unless the fight raised it
 //!   with no sound: an NPC's pick sounds once a call, on its first copy
-//!   ([`FireSound`](nova_sim::FireSound)). The priority it carries isn't
-//!   played by yet (rdm phase audio-fidelity/phase-15).
-//! - A weapon whose sound loops (`Flags` 0x0010) is not heard again while
-//!   its sound is still playing: for its length in steps
-//!   ([`WeaponLook::sound_ticks`]) after it was heard. It plays out when
-//!   firing stops, and is never stopped. The original's rule
-//!   (`_ST_IsSoundPlaying`, for the player, NPCs, point defence and
-//!   sub-munitions alike) keeps one of each `snd ` playing; here each ship
-//!   keeps its own, so two ships' chainguns are each heard, from where
-//!   each is. A looped weapon whose sound has no known length is heard
-//!   every shot.
+//!   ([`FireSound`](nova_sim::FireSound)). Each carries the original's
+//!   priority, which the audio side's voice list plays by: the
+//!   [`FireSound`](nova_sim::FireSound)'s for a weapon,
+//!   [`EXPLOSION_PRIORITY`] for an explosion.
+//! - A weapon whose sound loops (`Flags` 0x0010), fired by a function that
+//!   tests it ([`FireSound::unless_playing`](nova_sim::FireSound)), waits
+//!   while its sound plays, as
+//!   [`RuleKey::LoopedSoundWait`](nova_sim::RuleKey::LoopedSoundWait)
+//!   says ([`Scene::looped`]). By the engine's reading, the default
+//!   ([`LoopedSounds::Anywhere`]), its sound goes out marked
+//!   [`CombatSound::until_stopped`], and the audio side skips it while
+//!   that `snd ` plays on any voice, from any ship, as the original's
+//!   `ST_IsSoundPlaying` does for the player, NPCs, point defence and
+//!   sub-munitions alike. By the other reading
+//!   ([`LoopedSounds::PerFirer`]) each ship keeps its own: it isn't heard
+//!   again for its length in steps ([`WeaponLook::sound_ticks`]) after it
+//!   was heard, so two ships' chainguns are each heard, from where each
+//!   is, and a looped weapon whose sound has no known length is heard
+//!   every shot. Either way it plays out when firing stops, and is never
+//!   stopped. A fighter bay's launch never waits: `_AILaunchFighter` tests
+//!   nothing.
 //! - A missile shot down by point defence, and a shot fizzling out at the
 //!   end of its life ([`CombatEvent::Fizzled`]), go off as explosion type
 //!   0 ([`TYPE_ZERO`]), unheard, as `_SpawnExplod` plays nothing.
@@ -64,11 +74,15 @@
 //!   varied as `speed × (100 + Rand(2v + 1) − v) / 100` for a variation
 //!   `v` of 1-99, and lives `min + Rand(max − min + 1)` ticks, or `min`
 //!   when `min` is at or above `max`; it takes on no source's velocity,
-//!   and is a dot of the burst's `00RRGGBB` colour, opaque. Left out: the
-//!   original's eighth argument, which `_NewParticle` reads, and how the
-//!   original draws a particle. Every burst the fight raises passes 0x20,
-//!   drawn opaque; only a shot's trail (@0x35ea6) passes another, and
-//!   rdm:phase/weapons-fidelity/phase-24-shots-and-beams-drawn owns it.
+//!   and is a dot of the burst's `00RRGGBB` colour.
+//! - Every particle, a burst's, a trail's or debris, is drawn opaque and
+//!   then fades over its last 32 ticks of life, at `life`/32
+//!   ([`particle_alpha`]), as `_DrawParticlesOffscreen` blends it
+//!   (`_Trans16Bit(colour, dst, life)` @0xc5c26-0xc5c95). The
+//!   original's argument after the colour, which `_NewParticle` stores
+//!   (+0x24, @0xc50de), is only ever tested against 0x20 by the drawing
+//!   (@0xc5a61, @0xc5b2b), and both its paths draw the same: it changes
+//!   nothing, so a burst carries none.
 //!
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
@@ -85,6 +99,20 @@ use super::weapons::{LOOPED_SOUND, translucent};
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, ImageKey, Point};
+
+/// The ticks of life over which a particle fades out
+/// (`_DrawParticlesOffscreen` @0xc5c26-0xc5c95).
+pub const PARTICLE_FADE: u32 = 32;
+
+/// The alpha of a particle with `life` ticks left, as
+/// `_DrawParticlesOffscreen` blends it (@0xc5c26-0xc5c95,
+/// `_Trans16Bit(colour, dst, life)` @0xc2c2c): opaque above
+/// [`PARTICLE_FADE`] ticks, then `life`/32, rounded.
+#[must_use]
+pub fn particle_alpha(life: u32) -> u8 {
+    let shown = life.min(PARTICLE_FADE);
+    u8::try_from((shown * 255 + PARTICLE_FADE / 2) / PARTICLE_FADE).unwrap_or(u8::MAX)
+}
 
 /// The most explosions shown at once under the caps (`_SpawnExplod`
 /// @0x3f615-0x3f68e).
@@ -144,15 +172,48 @@ fn particle_color(rgb: u32) -> Color {
     Color::rgba(r, g, b, 255)
 }
 
-/// `sound`, heard by a player at `player` from `at`.
-fn heard(sound: nova_sim::SoundId, at: Point, player: Point) -> CombatSound {
+/// The priority an explosion's sound plays at (`_CreateExplosion`'s
+/// `_PlaySoundDistance(.., 6, ..)` @0x3f8f1, played @0x3f91a), a breakup's
+/// too (@0x2decf).
+pub const EXPLOSION_PRIORITY: u16 = 6;
+
+/// `sound`, heard by a player at `player` from `at`, at `priority`, and
+/// skipped while it plays `until_stopped`.
+fn heard(
+    sound: nova_sim::SoundId,
+    at: Point,
+    player: Point,
+    priority: u16,
+    until_stopped: bool,
+) -> CombatSound {
     CombatSound {
         sound,
         offset: (
             (at.x - player.x).round() as i32,
             (at.y - player.y).round() as i32,
         ),
+        priority,
+        until_stopped,
     }
+}
+
+/// `sound`, an explosion's, heard by a player at `player` from `at`.
+fn explosion_heard(sound: nova_sim::SoundId, at: Point, player: Point) -> CombatSound {
+    heard(sound, at, player, EXPLOSION_PRIORITY, false)
+}
+
+/// Where a looped weapon's sound waits, as
+/// [`RuleKey::LoopedSoundWait`](nova_sim::RuleKey::LoopedSoundWait) says
+/// (see the module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoopedSounds {
+    /// While its `snd ` plays on any voice, from any ship: the audio side
+    /// decides, from [`CombatSound::until_stopped`]. The engine's reading.
+    #[default]
+    Anywhere,
+    /// For its own length, each firer's weapon on its own. The other
+    /// reading.
+    PerFirer,
 }
 
 /// An explosion going off.
@@ -194,6 +255,8 @@ pub struct Scene {
     /// [`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
     /// reading has it; by default, not.
     pub caps: bool,
+    /// Where a looped weapon's sound waits.
+    pub looped: LoopedSounds,
 }
 
 /// A ship breaking up.
@@ -219,7 +282,7 @@ pub struct Effects {
     particles: Vec<Particle>,
     sounds: Vec<CombatSound>,
     /// Each looped weapon sound still playing, by firer and weapon, with
-    /// the steps it has left.
+    /// the steps it has left, under [`LoopedSounds::PerFirer`].
     playing: BTreeMap<(ShipRef, WeaponId), u32>,
     /// The particles made with no life under the caps: never moved, drawn
     /// or freed, each holds its count of the pool until it is cleared
@@ -242,7 +305,7 @@ impl Effects {
                 ship,
                 weapon,
                 at,
-                sound: Some(_),
+                sound: Some(fire),
             } => {
                 let Some((sound, look)) = looks
                     .weapon(weapon)
@@ -250,15 +313,22 @@ impl Effects {
                 else {
                     return;
                 };
-                if look.flags & LOOPED_SOUND != 0
-                    && let Some(ticks) = look.sound_ticks
-                {
-                    if self.playing.contains_key(&(ship, weapon)) {
-                        return;
+                let waits = look.flags & LOOPED_SOUND != 0 && fire.unless_playing;
+                let until_stopped = match scene.looped {
+                    LoopedSounds::Anywhere => waits,
+                    LoopedSounds::PerFirer => {
+                        if waits && let Some(ticks) = look.sound_ticks {
+                            if self.playing.contains_key(&(ship, weapon)) {
+                                return;
+                            }
+                            self.playing.insert((ship, weapon), ticks);
+                        }
+                        false
                     }
-                    self.playing.insert((ship, weapon), ticks);
-                }
-                self.sounds.push(heard(sound, point(at), scene.player));
+                };
+                let priority = u16::from(fire.priority);
+                let heard = heard(sound, point(at), scene.player, priority, until_stopped);
+                self.sounds.push(heard);
             }
             CombatEvent::ShotDown { at } | CombatEvent::Fizzled { at } => {
                 self.spawn(TYPE_ZERO, point(at), 0.0, looks, scene.caps);
@@ -286,17 +356,20 @@ impl Effects {
             }
             CombatEvent::Particles(burst) => self.spray(&burst, scene.caps, chance),
             // A hit's shield flash is the flight view's
-            // ([`ShieldFlash`](super::flash::ShieldFlash)).
+            // ([`ShieldFlash`](super::flash::ShieldFlash)), and so is the
+            // weapon glow.
             CombatEvent::Fired { sound: None, .. }
             | CombatEvent::Disabled { .. }
             | CombatEvent::BreakingUp { .. }
-            | CombatEvent::Hit { .. } => {}
+            | CombatEvent::Hit { .. }
+            | CombatEvent::WeaponGlow { .. } => {}
         }
     }
 
     /// Throws off `burst`'s particles, under the `caps` or not (see the
-    /// module docs).
-    fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
+    /// module docs): a fight's burst, or a shot's trail
+    /// ([`trails`](super::trails)).
+    pub fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
         let at = point(burst.at);
         let color = particle_color(burst.color);
         let (least, most) = burst.life;
@@ -424,7 +497,7 @@ impl Effects {
         // @0x3f91a).
         self.spawn(explosion.boom, at, 0.0, looks, caps);
         if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
-            self.sounds.push(heard(sound, at, scene.player));
+            self.sounds.push(explosion_heard(sound, at, scene.player));
         }
     }
 
@@ -479,7 +552,7 @@ impl Effects {
             self.spawn(explosion.boom, at, 0.0, looks, scene.caps);
             let audible = chance.below(4) == 0;
             if audible && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
-                self.sounds.push(heard(sound, at, player));
+                self.sounds.push(explosion_heard(sound, at, player));
             }
         }
     }
@@ -494,7 +567,11 @@ impl Effects {
             }
         }
         for piece in &self.particles {
-            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, piece.color);
+            let color = Color {
+                a: particle_alpha(piece.life),
+                ..piece.color
+            };
+            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, color);
         }
     }
 
@@ -576,6 +653,7 @@ mod tests {
     fn boom_look(image_id: i16, frames: u16, advance: f32, sound: Option<i16>) -> BoomLook {
         BoomLook {
             sheet: Ok(EffectSheet {
+                frame_width: 0,
                 image_id,
                 frames: NonZeroU16::new(frames).expect("non-zero"),
             }),
@@ -600,6 +678,7 @@ mod tests {
             })
         };
         Looks {
+            smokes: BTreeMap::default(),
             weapons: BTreeMap::from([
                 (WeaponId(128), weapon(Some(208), 0, Some(5))),
                 (WeaponId(146), weapon(Some(210), LOOPED_SOUND, Some(3))),
@@ -726,13 +805,7 @@ mod tests {
     fn an_explosion_without_a_sheet_sounds_for_a_frame_and_is_not_drawn() {
         let mut effects = Effects::default();
         exploded(&mut effects, 142, at(3.0, 4.0));
-        assert_eq!(
-            effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(303),
-                offset: (3, 4),
-            }]
-        );
+        assert_eq!(effects.take_sounds(), [explosion_sound(303, (3, 4))]);
         assert_eq!(frames(&effects), [0.0]);
         let mut list = DrawList::new();
         effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
@@ -941,10 +1014,7 @@ mod tests {
         );
         assert_eq!(
             effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(302),
-                offset: (1000, 500)
-            }],
+            [explosion_sound(302, (1000, 500))],
             "only the main one sounds"
         );
         let mut first = Effects::default();
@@ -1058,10 +1128,7 @@ mod tests {
         assert_eq!((explosions[0].frame, explosions[0].delay), (0.0, 0.0));
         assert_eq!(
             effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(302),
-                offset: (-12, 211)
-            }],
+            [explosion_sound(302, (-12, 211))],
             "the first heard, the second not"
         );
         assert_eq!(BREAKUP_SPREAD, 0.25);
@@ -1120,11 +1187,41 @@ mod tests {
 
     /// The scene: the player at the origin, debris scattered, nothing
     /// capped.
+    /// Explosion `snd ` `id`, heard from `offset`.
+    fn explosion_sound(id: i16, offset: (i32, i32)) -> CombatSound {
+        CombatSound {
+            sound: SoundId(id),
+            offset,
+            priority: EXPLOSION_PRIORITY,
+            until_stopped: false,
+        }
+    }
+
+    /// Weapon `snd ` `id` fired at an NPC pick's priority, 4, heard from
+    /// `offset`.
+    fn fire_sound(id: i16, offset: (i32, i32)) -> CombatSound {
+        CombatSound {
+            sound: SoundId(id),
+            offset,
+            priority: 4,
+            until_stopped: false,
+        }
+    }
+
     fn scene() -> Scene {
         Scene {
             player: PLAYER,
             debris: true,
             caps: false,
+            looped: LoopedSounds::Anywhere,
+        }
+    }
+
+    /// The scene with each firer's looped weapon waiting on its own.
+    fn per_firer() -> Scene {
+        Scene {
+            looped: LoopedSounds::PerFirer,
+            ..scene()
         }
     }
 
@@ -1155,7 +1252,7 @@ mod tests {
             } else {
                 NPC_AT
             },
-            sound: Some(FireSound::UNPORTED),
+            sound: Some(FireSound::at(4)),
         }
     }
 
@@ -1171,16 +1268,13 @@ mod tests {
             at: NPC_AT,
             sound,
         };
-        let first = Some(FireSound { priority: Some(4) });
+        let first = Some(FireSound::at(4));
         for event in [pick(first), pick(None), pick(None)] {
             effects.apply(&event, &scene(), &looks(), &mut chance);
         }
         assert_eq!(
             effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(208),
-                offset: (300, -400)
-            }],
+            [fire_sound(208, (300, -400))],
             "once a call"
         );
     }
@@ -1198,7 +1292,7 @@ mod tests {
                 ship: NPC,
                 weapon: WeaponId(128),
                 at: Vec2::new(-5.0, 7.0),
-                sound: Some(FireSound::UNPORTED),
+                sound: Some(FireSound::at(4)),
             },
         ] {
             effects.apply(&event, &scene(), &looks(), &mut chance);
@@ -1206,18 +1300,9 @@ mod tests {
         assert_eq!(
             effects.take_sounds(),
             [
-                CombatSound {
-                    sound: SoundId(208),
-                    offset: (0, 0)
-                },
-                CombatSound {
-                    sound: SoundId(208),
-                    offset: (300, -400)
-                },
-                CombatSound {
-                    sound: SoundId(208),
-                    offset: (-5, 7)
-                }
+                fire_sound(208, (0, 0)),
+                fire_sound(208, (300, -400)),
+                fire_sound(208, (-5, 7))
             ],
             "silent or unread: unheard"
         );
@@ -1233,56 +1318,156 @@ mod tests {
         };
         let mut effects = Effects::default();
         effects.apply(&fired(NPC, 128), &scene, &looks(), &mut Script::default());
-        assert_eq!(
-            effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(208),
-                offset: (290, -420)
-            }]
-        );
+        assert_eq!(effects.take_sounds(), [fire_sound(208, (290, -420))]);
     }
 
-    /// The steps of `steps` on which `firers` firing `weapon` every step
-    /// are heard, each firer's separately.
-    fn heard_on(weapon: i16, firers: &[ShipRef], steps: u32) -> Vec<Vec<u32>> {
+    /// What `firers` firing `weapon` every step for `steps` steps in
+    /// `scene` are heard as: each step's sounds, each firer's separately.
+    fn heard_in(
+        scene: &Scene,
+        weapon: i16,
+        firers: &[ShipRef],
+        steps: u32,
+    ) -> Vec<Vec<Vec<CombatSound>>> {
         let mut effects = Effects::default();
         let mut heard = vec![Vec::new(); firers.len()];
-        for step in 0..steps {
-            effects.step(&[], &scene(), &looks(), &mut Script::default());
+        for _ in 0..steps {
+            effects.step(&[], scene, &looks(), &mut Script::default());
             for (n, &firer) in firers.iter().enumerate() {
                 effects.apply(
                     &fired(firer, weapon),
-                    &scene(),
+                    scene,
                     &looks(),
                     &mut Script::default(),
                 );
-                if !effects.take_sounds().is_empty() {
-                    heard[n].push(step);
-                }
+                heard[n].push(effects.take_sounds());
             }
         }
         heard
+    }
+
+    /// The steps of `steps` on which `firers` firing `weapon` every step
+    /// are heard in `scene`, each firer's separately.
+    fn heard_on_in(scene: &Scene, weapon: i16, firers: &[ShipRef], steps: u32) -> Vec<Vec<u32>> {
+        heard_in(scene, weapon, firers, steps)
+            .into_iter()
+            .map(|by_step| {
+                (0..steps)
+                    .filter(|&step| !by_step[step as usize].is_empty())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The steps on which `firers` are heard, each firer's looped weapon
+    /// waiting on its own.
+    fn heard_on(weapon: i16, firers: &[ShipRef], steps: u32) -> Vec<Vec<u32>> {
+        heard_on_in(&per_firer(), weapon, firers, steps)
+    }
+
+    #[test]
+    fn by_default_a_looped_weapon_is_heard_every_shot_marked_to_wait_on_any_voice() {
+        let heard = heard_in(&scene(), 155, &[NPC, ShipRef::Player], 3);
+        for (firer, offset) in [(0, (300, -400)), (1, (0, 0))] {
+            let looped = CombatSound {
+                sound: SoundId(205),
+                offset,
+                priority: 4,
+                until_stopped: true,
+            };
+            assert_eq!(heard[firer], vec![vec![looped]; 3], "firer {firer}");
+        }
+        let mut effects = Effects::default();
+        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+        assert_eq!(
+            effects,
+            Effects {
+                sounds: effects.sounds.clone(),
+                ..Effects::default()
+            },
+            "nothing kept by firer"
+        );
+    }
+
+    #[test]
+    fn a_sound_not_looped_never_waits() {
+        let heard = heard_in(&scene(), 128, &[NPC], 1);
+        assert_eq!(heard, [[vec![fire_sound(208, (300, -400))]]]);
+    }
+
+    #[test]
+    fn a_looped_sound_fired_with_no_test_never_waits() {
+        for scene in [scene(), per_firer()] {
+            let mut effects = Effects::default();
+            let launch = CombatEvent::Fired {
+                ship: NPC,
+                weapon: WeaponId(155),
+                at: NPC_AT,
+                sound: Some(FireSound {
+                    priority: 5,
+                    unless_playing: false,
+                }),
+            };
+            for _ in 0..2 {
+                effects.apply(&launch, &scene, &looks(), &mut Script::default());
+            }
+            let launched = CombatSound {
+                sound: SoundId(205),
+                offset: (300, -400),
+                priority: 5,
+                until_stopped: false,
+            };
+            assert_eq!(effects.take_sounds(), [launched; 2], "{:?}", scene.looped);
+        }
+    }
+
+    #[test]
+    fn a_weapons_sound_carries_its_fire_sounds_priority() {
+        let mut effects = Effects::default();
+        let at_priority = |priority| CombatEvent::Fired {
+            ship: NPC,
+            weapon: WeaponId(128),
+            at: NPC_AT,
+            sound: Some(FireSound::at(priority)),
+        };
+        for priority in [3, 6] {
+            effects.apply(
+                &at_priority(priority),
+                &scene(),
+                &looks(),
+                &mut Script::default(),
+            );
+        }
+        let priorities: Vec<u16> = effects.take_sounds().iter().map(|s| s.priority).collect();
+        assert_eq!(priorities, [3, 6]);
+        assert_eq!(EXPLOSION_PRIORITY, 6);
     }
 
     #[test]
     fn a_looped_weapon_firing_every_step_is_heard_once_its_sound_has_played_out() {
         assert_eq!(heard_on(155, &[NPC], 30), [vec![0, 14, 28]]);
         assert_eq!(heard_on(146, &[NPC], 7), [vec![0, 3, 6]], "a looped beam");
+        let heard = heard_in(&per_firer(), 155, &[NPC], 1);
+        assert!(
+            heard[0][0].iter().all(|sound| !sound.until_stopped),
+            "{heard:?}"
+        );
     }
 
     #[test]
     fn each_firer_hears_its_own_looped_weapon_on_its_own_schedule() {
+        let scene = per_firer();
         let mut effects = Effects::default();
         let mut heard = Vec::new();
         for step in 0..20 {
-            effects.step(&[], &scene(), &looks(), &mut Script::default());
+            effects.step(&[], &scene, &looks(), &mut Script::default());
             if step % 14 == 0 {
-                effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+                effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
             }
             if step >= 5 {
                 effects.apply(
                     &fired(ShipRef::Player, 155),
-                    &scene(),
+                    &scene,
                     &looks(),
                     &mut Script::default(),
                 );
@@ -1312,10 +1497,11 @@ mod tests {
 
     #[test]
     fn clearing_forgets_the_looped_sounds_playing() {
+        let scene = per_firer();
         let mut effects = Effects::default();
-        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+        effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
         effects.clear();
-        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+        effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
         assert_eq!(effects.take_sounds().len(), 1, "heard afresh");
     }
 
@@ -1372,13 +1558,7 @@ mod tests {
         effects.apply(&event, &scene(), &looks(), &mut chance);
         assert_eq!(effects.explosions().len(), 1, "no size, no extras");
         assert_eq!(effects.explosions()[0].at, at(30.0, 40.0));
-        assert_eq!(
-            effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(302),
-                offset: (30, 40)
-            }]
-        );
+        assert_eq!(effects.take_sounds(), [explosion_sound(302, (30, 40))]);
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
     }
 
@@ -1420,10 +1600,7 @@ mod tests {
         assert_eq!(effects.explosions()[28].at, at(30.0, 40.0));
         assert_eq!(
             effects.take_sounds(),
-            [CombatSound {
-                sound: SoundId(302),
-                offset: (30, 40)
-            }],
+            [explosion_sound(302, (30, 40))],
             "only the main one is heard"
         );
     }
@@ -1568,9 +1745,41 @@ mod tests {
             DrawCommand::Dot {
                 center: camera.world_to_screen(at(200.0, 100.0)),
                 size: DEBRIS_SIZE,
-                color: DEBRIS_COLOR,
-            }
+                color: Color {
+                    a: particle_alpha(15),
+                    ..DEBRIS_COLOR
+                },
+            },
+            "15 ticks of life: fading"
         );
+    }
+
+    #[test]
+    fn a_particle_fades_over_its_last_32_ticks() {
+        assert_eq!(particle_alpha(40), 255, "opaque above 32");
+        assert_eq!(particle_alpha(33), 255);
+        assert_eq!(particle_alpha(32), 255, "full at 32");
+        assert_eq!(particle_alpha(16), 128, "half");
+        assert_eq!(particle_alpha(1), 8, "a 32nd");
+        assert_eq!(particle_alpha(0), 0);
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[0, 0, 0]);
+        effects.apply(&burst(1, 0, (40, 40), 0.0), &scene(), &looks(), &mut chance);
+        let alphas = |effects: &Effects| {
+            let mut list = DrawList::new();
+            effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+            list.iter()
+                .filter_map(|command| match *command {
+                    DrawCommand::Dot { color, .. } => Some(color.a),
+                    _ => None,
+                })
+                .collect::<Vec<u8>>()
+        };
+        assert_eq!(alphas(&effects), [255], "40 ticks left");
+        steps(&mut effects, 24);
+        assert_eq!(alphas(&effects), [128], "16 left");
+        steps(&mut effects, 15);
+        assert_eq!(alphas(&effects), [8], "1 left");
     }
 
     /// A burst of `count` at (10, 20), 2 pixels a tick varied by

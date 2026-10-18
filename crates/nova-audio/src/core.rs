@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use nova_data::SoundId;
 use nova_view::Showing;
-use nova_view::sound::{SimSound, Sound, UiSound};
+use nova_view::sound::{CombatSound, SimSound, Sound, UiSound};
 
-use crate::port::{Audio, AudioCommand, Volume};
+use crate::port::{Audio, AudioCommand, Priority, Volume};
 use crate::settings::{AudioSettings, music_volume_level};
 use crate::table::SoundTable;
 
@@ -47,8 +47,12 @@ use crate::table::SoundTable;
 ///   the main menu holds the key's choice until the app sees it is not.
 /// - A halt halts each `snd ` it names, in order ([`AudioCommand::Halt`]),
 ///   whatever the sound setting: halting what is not playing is harmless.
+/// - Each sound plays at its event's priority ([`crate::priority`]), by
+///   which the adapter's voice list keeps or drops it.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
-///   volume times its [`distance_gain`], while the sound setting is on.
+///   volume times its [`distance_gain`] and at its own priority, while the
+///   sound setting is on; one that waits ([`CombatSound::until_stopped`])
+///   is skipped while its `snd ` plays on any voice.
 /// - The engine loops while the sound setting is on, the ship thrusts in
 ///   flight, and the table has an engine sound. Leaving flight, or opening
 ///   the Preferences dialog that pauses it, stops it and forgets the
@@ -111,7 +115,7 @@ impl<A: Audio> AudioCore<A> {
             && !self.audio.playing(waiting)
         {
             self.keyed = None;
-            self.play(Some(then));
+            self.play(Some(then), crate::priority::BUTTON);
         }
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
@@ -153,106 +157,175 @@ impl<A: Audio> AudioCore<A> {
         }
     }
 
-    /// Takes in one of a frame's `sounds`.
+    /// Takes in one of a frame's `sounds`, each at its event's priority
+    /// ([`crate::priority`]).
     fn take(&mut self, sound: Sound) {
         match sound {
+            Sound::Sim(sim) => self.take_sim(sim),
+            Sound::Ui(ui) => self.take_ui(ui),
+            Sound::Combat(fight) => self.take_fight(fight),
+        }
+    }
+
+    /// Takes in one of the flight session's sounds.
+    fn take_sim(&mut self, sound: SimSound) {
+        use crate::priority as at;
+        match sound {
             // Thrust counts only in flight, where the ship flies.
-            Sound::Sim(SimSound::ThrustStarted) => {
+            SimSound::ThrustStarted => {
                 self.thrusting = self.scene == Some(Showing::Flight);
             }
-            Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
-            Sound::Sim(SimSound::Landed) => self.play(self.table.landing),
-            Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
-            Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
-            Sound::Sim(SimSound::JumpBeganInDoubleTime) => self.play(self.table.jump_double_time),
-            Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
-            Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
-            Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
-            Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
-            Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
-            Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
-            Sound::Sim(SimSound::Script {
+            SimSound::ThrustStopped => self.thrusting = false,
+            SimSound::Landed => self.play(self.table.landing, at::LANDING),
+            SimSound::TookOff => self.play(self.table.take_off, at::TAKE_OFF),
+            SimSound::JumpBegan => self.play(self.table.jump, at::JUMP),
+            SimSound::JumpBeganInDoubleTime => {
+                self.play(self.table.jump_double_time, at::JUMP);
+            }
+            SimSound::Arrived => self.play(self.table.arrival, at::ARRIVAL),
+            SimSound::ScriptMessage => {
+                self.play(self.table.script_message, at::SCRIPT_MESSAGE);
+            }
+            SimSound::RedAlert => self.play(self.table.red_alert, at::RED_ALERT),
+            SimSound::CargoJettisoned => self.play(self.table.jettison, at::JETTISON),
+            SimSound::ScanFailedMission => {
+                self.play(self.table.scan_failed, at::SCAN_FAILED);
+            }
+            SimSound::Smuggling => self.play(self.table.smuggling, at::SMUGGLING),
+            SimSound::Script {
                 sound,
                 exclusive: false,
-            })
-            | Sound::Ui(UiSound::PortAmbient {
-                sound,
-                until_stopped: false,
-            }) => self.play(Some(sound)),
-            Sound::Sim(SimSound::Script {
+            } => self.play(Some(sound), at::SCRIPT),
+            SimSound::Script {
                 sound,
                 exclusive: true,
-            }) => {
+            } => {
                 if self.settings.sound {
                     self.audio.run(AudioCommand::PlayExclusive {
                         sound,
                         volume: self.settings.effects_volume,
+                        priority: at::SCRIPT,
                     });
                 }
             }
-            Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
-            Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
-            Sound::Ui(UiSound::ButtonKeyed) => self.click_keyed(),
-            Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
-            Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
-            Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
-            Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
-            Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
-            Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
-            Sound::Sim(SimSound::PersonOfferBoarded | SimSound::Boarded) => {
-                self.play(self.table.airlock);
+            SimSound::EscortsCommanded => {
+                self.play(self.table.escorts_commanded, at::ESCORTS_COMMANDED);
             }
-            Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
-            Sound::Sim(SimSound::TargetSelected) => self.play(self.table.target_selected),
-            Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
-            Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
-            Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
-            Sound::Sim(SimSound::ShipDowned) => self.play(self.table.ship_downed),
-            Sound::Sim(SimSound::DownedMissionFailed) => {
-                self.play(self.table.downed_mission_failed);
+            SimSound::EscortRepaired => {
+                self.play(self.table.escort_repaired, at::ESCORT_REPAIRED);
             }
-            Sound::Sim(SimSound::MissionShipLost) => self.play(self.table.mission_ship_lost),
-            Sound::Sim(SimSound::MissionShipBoarded) => {
-                self.play(self.table.mission_ship_boarded);
+            SimSound::FleetArrivalQuote => {
+                self.play(self.table.fleet_quote, at::FLEET_QUOTE);
             }
-            Sound::Sim(SimSound::TrafficControl) => self.play(self.table.traffic_control),
-            Sound::Sim(SimSound::Klaxon) => self.sound_klaxon(),
-            Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
-            Sound::Sim(SimSound::OnboardExplosion) => {
-                self.play(self.table.onboard_explosion);
+            SimSound::HailOffer => self.play(self.table.hail_offer, at::HAIL_OFFER),
+            SimSound::HailQuote => self.play(self.table.hail_quote, at::HAIL_QUOTE),
+            SimSound::PersonOfferBoarded | SimSound::Boarded => {
+                self.play(self.table.airlock, at::AIRLOCK);
             }
-            Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
-            Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
-            Sound::Sim(SimSound::Halt(sounds)) => self.halt(sounds),
-            Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
-            Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
-            Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
-            Sound::Ui(UiSound::EnterRefused) => self.play(self.table.enter_refused),
-            Sound::Ui(UiSound::NewsOpened | UiSound::MissionInfoOpened) => {
-                self.play(self.table.news_open);
+            SimSound::NavSelected => {
+                self.play(self.table.nav_selected, at::NAV_SELECTED);
             }
-            Sound::Ui(UiSound::NewsClosed | UiSound::MissionInfoClosed) => {
-                self.play(self.table.news_close);
+            SimSound::TargetSelected => {
+                self.play(self.table.target_selected, at::TARGET_SELECTED);
             }
-            Sound::Ui(UiSound::FloatingMapZoomed) => {
-                self.play(self.table.floating_map_zoom);
+            SimSound::HyperSelected => {
+                self.play(self.table.hyper_selected, at::HYPER_SELECTED);
             }
-            Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
-            Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
-            Sound::Ui(UiSound::MapCentred) => self.play(self.table.map_centre),
-            Sound::Ui(UiSound::MapSystemFound) => self.play(self.table.map_found),
-            Sound::Ui(UiSound::MapSystemNotFound) => self.play(self.table.map_not_found),
-            Sound::Ui(UiSound::PortAmbient {
+            SimSound::TargetCleared => {
+                self.play(self.table.target_cleared, at::TARGET_CLEARED);
+            }
+            SimSound::TutorialHint => {
+                self.play(self.table.tutorial_hint, at::TUTORIAL_HINT);
+            }
+            SimSound::ShipDowned => self.play(self.table.ship_downed, at::SHIP_DOWNED),
+            SimSound::DownedMissionFailed => {
+                self.play(self.table.downed_mission_failed, at::DOWNED_MISSION_FAILED);
+            }
+            SimSound::MissionShipLost => {
+                self.play(self.table.mission_ship_lost, at::MISSION_SHIP_LOST);
+            }
+            SimSound::MissionShipBoarded => {
+                self.play(self.table.mission_ship_boarded, at::MISSION_SHIP_BOARDED);
+            }
+            SimSound::TrafficControl => {
+                self.play(self.table.traffic_control, at::TRAFFIC_CONTROL);
+            }
+            SimSound::Klaxon => self.sound_klaxon(),
+            SimSound::Ejected => self.play(self.table.eject, at::EJECT),
+            SimSound::OnboardExplosion => {
+                self.play(self.table.onboard_explosion, at::ONBOARD_EXPLOSION);
+            }
+            SimSound::JumpCollapsed => {
+                self.play(self.table.jump_collapsed, at::JUMP_COLLAPSED);
+            }
+            SimSound::Refused => self.play(self.table.refused, at::REFUSED),
+            SimSound::Halt(sounds) => self.halt(sounds),
+        }
+    }
+
+    /// Takes in one of the interface's sounds.
+    fn take_ui(&mut self, sound: UiSound) {
+        use crate::priority as at;
+        match sound {
+            UiSound::ButtonDown => self.play(self.table.button_down, at::BUTTON),
+            UiSound::ButtonUp => self.play(self.table.button_up, at::BUTTON),
+            UiSound::ButtonKeyed => self.click_keyed(),
+            UiSound::Alert => self.play(self.table.alert, at::ALERT),
+            UiSound::EscortMenuToggled => {
+                self.play(self.table.escort_menu, at::ESCORT_MENU);
+            }
+            UiSound::EscortGroupSelected => {
+                self.play(self.table.escort_group, at::ESCORT_GROUP);
+            }
+            UiSound::NoEscorts => self.play(self.table.no_escorts, at::NO_ESCORTS),
+            UiSound::EnterRefused => {
+                self.play(self.table.enter_refused, at::ENTER_REFUSED);
+            }
+            UiSound::NewsOpened | UiSound::MissionInfoOpened => {
+                self.play(self.table.news_open, at::NEWS_OPEN);
+            }
+            UiSound::NewsClosed | UiSound::MissionInfoClosed => {
+                self.play(self.table.news_close, at::NEWS_CLOSE);
+            }
+            UiSound::FloatingMapZoomed => {
+                self.play(self.table.floating_map_zoom, at::FLOATING_MAP_ZOOM);
+            }
+            UiSound::MapOpened => self.play(self.table.map_open, at::MAP_OPEN),
+            UiSound::MapClosed => self.play(self.table.map_close, at::MAP_CLOSE),
+            UiSound::PortAmbient {
+                sound,
+                until_stopped: false,
+            } => self.play(Some(sound), at::PORT_AMBIENT),
+            UiSound::MapCentred => self.play(self.table.map_centre, at::MAP_CENTRE),
+            UiSound::MapSystemFound => self.play(self.table.map_found, at::MAP_FOUND),
+            UiSound::MapSystemNotFound => {
+                self.play(self.table.map_not_found, at::MAP_NOT_FOUND);
+            }
+            UiSound::PortAmbient {
                 sound,
                 until_stopped: true,
-            }) => self.play_unless_playing(Some(sound)),
-            Sound::Ui(UiSound::PortAmbientHalted(sound)) => self.halt(&[sound]),
-            Sound::Combat(fight) => {
-                let gain = distance_gain(fight.offset);
-                let volume = self.settings.effects_volume.amplitude() * gain;
-                self.play_at(Some(fight.sound), Volume::new(volume));
-            }
+            } => self.play_unless_playing(Some(sound), at::PORT_AMBIENT),
+            UiSound::PortAmbientHalted(sound) => self.halt(&[sound]),
         }
+    }
+
+    /// Plays one of a fight's sounds at its own priority, at the effects
+    /// volume times its [`distance_gain`], unless it waits
+    /// ([`CombatSound::until_stopped`]) and its `snd ` plays on any voice
+    /// (the port's [`Audio::playing`], the original's `ST_IsSoundPlaying`).
+    ///
+    /// The original tests a looped weapon as it fires; here the frame's
+    /// sounds are taken after the tick, in the order they were raised. The
+    /// test sees the same voices either way: no frame is drawn between
+    /// them.
+    fn take_fight(&mut self, fight: CombatSound) {
+        if fight.until_stopped && self.audio.playing(fight.sound) {
+            return;
+        }
+        let gain = distance_gain(fight.offset);
+        let volume = self.settings.effects_volume.amplitude() * gain;
+        let priority = Priority::new(fight.priority);
+        self.play_at(Some(fight.sound), Volume::new(volume), priority);
     }
 
     /// Plays a key's click on a main-menu button, as
@@ -265,35 +338,36 @@ impl<A: Audio> AudioCore<A> {
     /// nothing waits.
     fn click_keyed(&mut self) {
         if let Some((_, then)) = self.keyed.take() {
-            self.play(Some(then));
+            self.play(Some(then), crate::priority::BUTTON);
         }
         if !self.settings.sound {
             return;
         }
         match (self.table.button_down, self.table.button_up) {
             (Some(down), up) => {
-                self.play(Some(down));
+                self.play(Some(down), crate::priority::BUTTON);
                 self.keyed = up.map(|up| (down, up));
             }
-            (None, up) => self.play(up),
+            (None, up) => self.play(up, crate::priority::BUTTON),
         }
     }
 
     /// Plays the klaxon, unless it is still playing, at the effects
     /// volume, while sound is on.
     fn sound_klaxon(&mut self) {
-        self.play_unless_playing(self.table.klaxon);
+        self.play_unless_playing(self.table.klaxon, crate::priority::KLAXON);
     }
 
     /// Plays `sound`, if there is one, unless it is still playing, at the
-    /// effects volume, while sound is on.
-    fn play_unless_playing(&mut self, sound: Option<SoundId>) {
+    /// effects volume and `priority`, while sound is on.
+    fn play_unless_playing(&mut self, sound: Option<SoundId>, priority: Priority) {
         if let Some(sound) = sound
             && self.settings.sound
         {
             self.audio.run(AudioCommand::PlayUnlessPlaying {
                 sound,
                 volume: self.settings.effects_volume,
+                priority,
             });
         }
     }
@@ -305,18 +379,23 @@ impl<A: Audio> AudioCore<A> {
         }
     }
 
-    /// Plays `sound`, if there is one, at the effects volume, while sound
-    /// is on.
-    fn play(&mut self, sound: Option<SoundId>) {
-        self.play_at(sound, self.settings.effects_volume);
+    /// Plays `sound`, if there is one, at the effects volume and
+    /// `priority`, while sound is on.
+    fn play(&mut self, sound: Option<SoundId>, priority: Priority) {
+        self.play_at(sound, self.settings.effects_volume, priority);
     }
 
-    /// Plays `sound`, if there is one, at `volume`, while sound is on.
-    fn play_at(&mut self, sound: Option<SoundId>, volume: Volume) {
+    /// Plays `sound`, if there is one, at `volume` and `priority`, while
+    /// sound is on.
+    fn play_at(&mut self, sound: Option<SoundId>, volume: Volume, priority: Priority) {
         if let Some(sound) = sound
             && self.settings.sound
         {
-            self.audio.run(AudioCommand::Play { sound, volume });
+            self.audio.run(AudioCommand::Play {
+                sound,
+                volume,
+                priority,
+            });
         }
     }
 
@@ -579,10 +658,16 @@ mod tests {
     /// The default music volume, level 4's: half of full.
     const MUSIC: f32 = 0.5;
 
+    /// The priority [`drain`] gives every command: the tests of what plays
+    /// and how loud leave priorities out, and
+    /// `each_event_plays_at_its_priority` tests them.
+    const UNCHECKED: Priority = Priority::new(u16::MAX);
+
     fn play(id: i16, volume: f32) -> AudioCommand {
         AudioCommand::Play {
             sound: SoundId(id),
             volume: Volume::new(volume),
+            priority: UNCHECKED,
         }
     }
 
@@ -618,9 +703,186 @@ mod tests {
         (AudioCore::with_table(audio, table), log)
     }
 
-    /// The commands logged since the last call.
+    /// The commands logged since the last call, each sound's priority
+    /// left out (as [`UNCHECKED`]).
     fn drain(log: &AudioLog) -> Vec<AudioCommand> {
+        drain_prioritised(log)
+            .into_iter()
+            .map(|command| match command {
+                AudioCommand::Play { sound, volume, .. } => AudioCommand::Play {
+                    sound,
+                    volume,
+                    priority: UNCHECKED,
+                },
+                AudioCommand::PlayExclusive { sound, volume, .. } => AudioCommand::PlayExclusive {
+                    sound,
+                    volume,
+                    priority: UNCHECKED,
+                },
+                AudioCommand::PlayUnlessPlaying { sound, volume, .. } => {
+                    AudioCommand::PlayUnlessPlaying {
+                        sound,
+                        volume,
+                        priority: UNCHECKED,
+                    }
+                }
+                other => other,
+            })
+            .collect()
+    }
+
+    /// The commands logged since the last call, as they were given.
+    fn drain_prioritised(log: &AudioLog) -> Vec<AudioCommand> {
         std::mem::take(&mut *log.borrow_mut())
+    }
+
+    /// The priority of each sound `commands` play.
+    fn priorities(commands: &[AudioCommand]) -> Vec<Priority> {
+        commands
+            .iter()
+            .filter_map(|command| match *command {
+                AudioCommand::Play { priority, .. }
+                | AudioCommand::PlayExclusive { priority, .. }
+                | AudioCommand::PlayUnlessPlaying { priority, .. } => Some(priority),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_map_filters_beeps_play_at_their_priorities() {
+        use crate::priority as at;
+        let cases = [
+            (Sound::Ui(UiSound::MapCentred), at::MAP_CENTRE),
+            (Sound::Ui(UiSound::MapSystemFound), at::MAP_FOUND),
+            (Sound::Ui(UiSound::MapSystemNotFound), at::MAP_NOT_FOUND),
+        ];
+        for (sound, priority) in cases {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[sound]);
+            let played = drain_prioritised(&log);
+            assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
+        }
+    }
+
+    #[test]
+    fn each_event_plays_at_its_priority() {
+        use crate::priority as at;
+        let script = |exclusive| {
+            Sound::Sim(SimSound::Script {
+                sound: SoundId(300),
+                exclusive,
+            })
+        };
+        let ambient = |until_stopped| {
+            Sound::Ui(UiSound::PortAmbient {
+                sound: SoundId(10_033),
+                until_stopped,
+            })
+        };
+        let cases = [
+            (LANDED, at::LANDING),
+            (JUMP, at::JUMP),
+            (Sound::Sim(SimSound::JumpBeganInDoubleTime), at::JUMP),
+            (ARRIVED, at::ARRIVAL),
+            (Sound::Sim(SimSound::ScriptMessage), at::SCRIPT_MESSAGE),
+            (Sound::Sim(SimSound::RedAlert), at::RED_ALERT),
+            (Sound::Sim(SimSound::CargoJettisoned), at::JETTISON),
+            (Sound::Sim(SimSound::ScanFailedMission), at::SCAN_FAILED),
+            (Sound::Sim(SimSound::Smuggling), at::SMUGGLING),
+            (script(false), at::SCRIPT),
+            (script(true), at::SCRIPT),
+            (DOWN, at::BUTTON),
+            (UP, at::BUTTON),
+            (KEYED, at::BUTTON),
+            (
+                Sound::Sim(SimSound::EscortsCommanded),
+                at::ESCORTS_COMMANDED,
+            ),
+            (Sound::Sim(SimSound::EscortRepaired), at::ESCORT_REPAIRED),
+            (Sound::Sim(SimSound::FleetArrivalQuote), at::FLEET_QUOTE),
+            (Sound::Sim(SimSound::HailOffer), at::HAIL_OFFER),
+            (Sound::Sim(SimSound::HailQuote), at::HAIL_QUOTE),
+            (Sound::Sim(SimSound::PersonOfferBoarded), at::AIRLOCK),
+            (Sound::Sim(SimSound::Boarded), at::AIRLOCK),
+            (Sound::Sim(SimSound::NavSelected), at::NAV_SELECTED),
+            (Sound::Sim(SimSound::TargetSelected), at::TARGET_SELECTED),
+            (Sound::Sim(SimSound::HyperSelected), at::HYPER_SELECTED),
+            (Sound::Sim(SimSound::TargetCleared), at::TARGET_CLEARED),
+            (Sound::Sim(SimSound::TutorialHint), at::TUTORIAL_HINT),
+            (Sound::Sim(SimSound::ShipDowned), at::SHIP_DOWNED),
+            (
+                Sound::Sim(SimSound::DownedMissionFailed),
+                at::DOWNED_MISSION_FAILED,
+            ),
+            (Sound::Sim(SimSound::MissionShipLost), at::MISSION_SHIP_LOST),
+            (
+                Sound::Sim(SimSound::MissionShipBoarded),
+                at::MISSION_SHIP_BOARDED,
+            ),
+            (Sound::Sim(SimSound::TrafficControl), at::TRAFFIC_CONTROL),
+            (Sound::Sim(SimSound::Klaxon), at::KLAXON),
+            (Sound::Sim(SimSound::Ejected), at::EJECT),
+            (
+                Sound::Sim(SimSound::OnboardExplosion),
+                at::ONBOARD_EXPLOSION,
+            ),
+            (Sound::Sim(SimSound::JumpCollapsed), at::JUMP_COLLAPSED),
+            (Sound::Sim(SimSound::Refused), at::REFUSED),
+            (Sound::Ui(UiSound::EscortMenuToggled), at::ESCORT_MENU),
+            (Sound::Ui(UiSound::EscortGroupSelected), at::ESCORT_GROUP),
+            (Sound::Ui(UiSound::NoEscorts), at::NO_ESCORTS),
+            (Sound::Ui(UiSound::EnterRefused), at::ENTER_REFUSED),
+            (Sound::Ui(UiSound::NewsOpened), at::NEWS_OPEN),
+            (Sound::Ui(UiSound::MissionInfoOpened), at::NEWS_OPEN),
+            (Sound::Ui(UiSound::NewsClosed), at::NEWS_CLOSE),
+            (Sound::Ui(UiSound::MissionInfoClosed), at::NEWS_CLOSE),
+            (Sound::Ui(UiSound::FloatingMapZoomed), at::FLOATING_MAP_ZOOM),
+            (Sound::Ui(UiSound::MapOpened), at::MAP_OPEN),
+            (Sound::Ui(UiSound::MapClosed), at::MAP_CLOSE),
+            (ambient(false), at::PORT_AMBIENT),
+            (ambient(true), at::PORT_AMBIENT),
+        ];
+        for (sound, priority) in cases {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[sound]);
+            let played = drain_prioritised(&log);
+            assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
+        }
+        let table = SoundTable {
+            take_off: Some(SoundId(201)),
+            alert: Some(SoundId(202)),
+            ..SoundTable::ORIGINAL
+        };
+        for (sound, priority) in [(TOOK_OFF, at::TAKE_OFF), (ALERT, at::ALERT)] {
+            let audio = RecordingAudio::new();
+            let log = audio.log();
+            let mut core = AudioCore::with_table(audio, table);
+            core.update(Some(Showing::ShipBrowser), &[sound]);
+            assert_eq!(
+                priorities(&drain_prioritised(&log)),
+                [priority],
+                "{sound:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_keyed_clicks_button_up_plays_at_the_buttons_priority_too() {
+        let (mut core, log, audio) = keyed();
+        audio.set_playing(SoundId(600), true);
+        core.update(Some(Showing::ShipBrowser), &[KEYED]);
+        audio.set_playing(SoundId(600), false);
+        core.update(None, &[]);
+        core.update(None, &[KEYED, KEYED]);
+        let played = drain_prioritised(&log);
+        assert_eq!(played.len(), 5, "{played:?}");
+        assert!(
+            priorities(&played)
+                .iter()
+                .all(|&priority| priority == crate::priority::BUTTON),
+            "{played:?}"
+        );
     }
 
     // Effects.
@@ -1075,6 +1337,7 @@ mod tests {
         let klaxon = AudioCommand::PlayUnlessPlaying {
             sound: SoundId(371),
             volume: Volume::new(0.5),
+            priority: UNCHECKED,
         };
         assert_eq!(drain(&log), [klaxon, klaxon], "the adapter decides");
         core.set_sound(false);
@@ -1193,6 +1456,7 @@ mod tests {
             [AudioCommand::PlayUnlessPlaying {
                 sound: SoundId(10_033),
                 volume: Volume::new(0.5),
+                priority: UNCHECKED,
             }],
             "the adapter decides"
         );
@@ -1498,6 +1762,7 @@ mod tests {
                 AudioCommand::PlayExclusive {
                     sound: SoundId(300),
                     volume: Volume::new(0.5),
+                    priority: UNCHECKED,
                 },
                 play(301, 0.5)
             ]
@@ -1644,10 +1909,102 @@ mod tests {
     // The fight's sounds.
 
     fn fight(id: i16, offset: (i32, i32)) -> Sound {
-        Sound::Combat(nova_view::sound::CombatSound {
+        Sound::Combat(CombatSound {
             sound: SoundId(id),
             offset,
+            priority: 4,
+            until_stopped: false,
         })
+    }
+
+    /// A looped weapon's `snd ` `id`, fired next to the player, waiting
+    /// while it plays.
+    fn looped(id: i16) -> Sound {
+        Sound::Combat(CombatSound {
+            sound: SoundId(id),
+            offset: (0, 0),
+            priority: 4,
+            until_stopped: true,
+        })
+    }
+
+    #[test]
+    fn a_fights_sound_plays_at_its_own_priority() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::Flight), &[fight(208, (0, 0))]);
+        let six = Sound::Combat(CombatSound {
+            sound: SoundId(302),
+            offset: (0, 0),
+            priority: 6,
+            until_stopped: false,
+        });
+        core.update(None, &[six]);
+        let played = drain_prioritised(&log);
+        assert_eq!(priorities(&played), [Priority::new(4), Priority::new(6)]);
+    }
+
+    #[test]
+    fn a_looped_sound_is_skipped_while_its_snd_plays_on_any_voice() {
+        let (mut core, log, audio) = keyed();
+        audio.set_playing(SoundId(205), true);
+        core.update(Some(Showing::Flight), &[looped(205)]);
+        assert_eq!(drain(&log), [], "still playing, from whichever ship");
+        core.update(None, &[fight(205, (0, 0))]);
+        assert_eq!(drain(&log), [play(205, EFFECTS)], "one that doesn't wait");
+        audio.set_playing(SoundId(205), false);
+        core.update(None, &[looped(205)]);
+        assert_eq!(drain(&log), [play(205, EFFECTS)], "played out");
+    }
+
+    /// A port whose sounds count as playing once they are played, until
+    /// told otherwise: as an adapter's voices do.
+    #[derive(Default)]
+    struct Voices {
+        played: Vec<AudioCommand>,
+        playing: Vec<SoundId>,
+    }
+
+    impl Audio for Voices {
+        fn run(&mut self, command: AudioCommand) {
+            if let AudioCommand::Play { sound, .. } = command {
+                self.playing.push(sound);
+            }
+            self.played.push(command);
+        }
+
+        fn music_ended(&self) -> bool {
+            false
+        }
+
+        fn playing(&self, sound: SoundId) -> bool {
+            self.playing.contains(&sound)
+        }
+    }
+
+    #[test]
+    fn a_second_looped_sound_of_a_snd_in_one_frame_is_skipped() {
+        let mut core = AudioCore::new(Voices::default());
+        let other_ship = Sound::Combat(CombatSound {
+            offset: (300, -400),
+            ..match looped(205) {
+                Sound::Combat(sound) => sound,
+                _ => unreachable!("a fight's"),
+            }
+        });
+        core.update(
+            Some(Showing::Flight),
+            &[looped(205), other_ship, looped(206)],
+        );
+        let sounds: Vec<SoundId> = core
+            .audio()
+            .played
+            .iter()
+            .filter_map(|command| match *command {
+                AudioCommand::Play { sound, .. } => Some(sound),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sounds, [SoundId(205), SoundId(206)]);
     }
 
     #[test]

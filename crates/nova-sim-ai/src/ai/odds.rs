@@ -295,6 +295,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         }
     }
 

@@ -7,6 +7,11 @@
 //!   [`Volume`]).
 //! - [`table`]: the [`SoundTable`] of which `snd ` each event plays, and
 //!   the original game's, [`SoundTable::ORIGINAL`].
+//! - [`priority`]: the [`Priority`] each sound event plays at, the
+//!   original's own from its call site.
+//! - [`voices`]: the [`VoiceList`](voices::VoiceList), which decides which
+//!   sounds play when more are asked for than there are voices, by the
+//!   original's priority and loudness.
 //! - [`settings`]: the player's [`AudioSettings`] (sound and music on or
 //!   off, and their separate volumes), and the [`SettingsStore`] port
 //!   settings are saved through. The keeper that reads and saves them,
@@ -29,14 +34,16 @@ pub mod core;
 pub mod file;
 pub mod kira;
 pub mod port;
+pub mod priority;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod settings;
 pub mod table;
+pub mod voices;
 
 pub use crate::core::{AudioCore, music_fade};
 pub use crate::file::FileSettings;
 pub use crate::kira::{KiraAudio, OpenError, SoundBank};
-pub use port::{Audio, AudioCommand, Volume};
+pub use port::{Audio, AudioCommand, Priority, Volume};
 pub use settings::{AudioSettings, SettingsStore};
 pub use table::SoundTable;

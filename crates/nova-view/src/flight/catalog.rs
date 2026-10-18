@@ -51,6 +51,29 @@ pub struct ShipSheet {
     pub lights: Option<LayerSheet>,
     /// The `shän`'s blink fields, which the lights blink by.
     pub blink: Blink,
+    /// The weapon glow (`WeapImageID`), drawn while a `Flags2` 0x0200
+    /// weapon's glow lasts (see the `weapon_glow` module).
+    pub weapon: Option<LayerSheet>,
+    /// The `shän`'s `WeapDecay`, raw: how fast the weapon glow fades
+    /// ([`ShipSheet::weapon_decay`]).
+    pub weap_decay: i16,
+}
+
+/// What `WeapDecay` is multiplied by for the glow's fall a tick
+/// (`_LoadExtendedShipSprites` @0x2279f-0x227bb, the double 0.333).
+pub const WEAP_DECAY_SCALE: f64 = 0.333;
+
+impl ShipSheet {
+    /// How far the weapon glow falls a tick, out of 32: `WeapDecay` ×
+    /// [`WEAP_DECAY_SCALE`], a double narrowed to a float as
+    /// `_LoadExtendedShipSprites` stores it in the class (+0x4c).
+    #[must_use]
+    pub fn weapon_decay(&self) -> f32 {
+        // A third of an `i16`: well within an `f32`.
+        #[allow(clippy::cast_possible_truncation)]
+        let decay = (f64::from(self.weap_decay) * WEAP_DECAY_SCALE) as f32;
+        decay
+    }
 }
 
 /// The ships' sprite sheets.
@@ -176,13 +199,42 @@ impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
     }
 }
 
-/// An effect's sprite sheet: its `rlëD`, and how many frames it holds.
+/// An effect's sprite sheet: its `rlëD`, how many frames it holds and
+/// how wide each is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectSheet {
     /// The `rlëD`'s ID.
     pub image_id: i16,
     /// How many frames the sheet holds.
     pub frames: NonZeroU16,
+    /// Each frame's width in pixels (`_GetSpriteXSize`): a shot's trail
+    /// leaves half of it behind the shot.
+    pub frame_width: u32,
+}
+
+/// A smoke set's sprite: the eight `cicn`s from
+/// [`FIRST_SMOKE_ICON`] + 8 × set, which `_LoadSprites` makes its master
+/// from (@0x21855-0x21907), for sets 0 and 1 only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SmokeSheet {
+    /// The `cicn` of its first frame.
+    pub first_icon: i16,
+}
+
+/// The `cicn` of smoke set 0's first frame (@0x2184b).
+pub const FIRST_SMOKE_ICON: i16 = 1000;
+/// The frames of a smoke set, one `cicn` each (@0x2186e).
+pub const SMOKE_FRAMES: i16 = 8;
+/// The smoke sets `_LoadSprites` makes a master for: 0 and 1 (the loop
+/// ends at `cicn` 1016, @0x21901).
+pub const SMOKE_SETS: u8 = 2;
+
+impl SmokeSheet {
+    /// The `cicn` of its frame `frame`.
+    #[must_use]
+    pub fn icon(self, frame: u8) -> i16 {
+        self.first_icon + i16::from(frame)
+    }
 }
 
 /// How a weapon's shots, beams and firing are shown: its `wëap`'s
@@ -207,10 +259,31 @@ pub struct WeaponLook {
     /// `Falloff` as the original loads it
     /// ([`loaded_falloff`](nova_sim::combat::weapon::loaded_falloff)): how
     /// fast a beam's corona fades, 16 for a beam that says none, and none
-    /// for a lightning beam.
+    /// for a lightning weapon.
     pub falloff: i16,
-    /// `LiDensity`: above none for a lightning beam.
+    /// The shot fade's `Falloff` (weapon +0xb8): the loaded `Falloff` for
+    /// a guidance other than 0, 3 and 10, none for a beam's
+    /// (`_LoadObjectData` @0x796fa-0x79722; see
+    /// the `shot_fade` module).
+    pub shot_falloff: i16,
+    /// `LiDensity` as loaded: 1 is 2 (`_LoadObjectData` @0x79625-0x7967c);
+    /// above none for a lightning beam.
     pub li_density: i16,
+    /// `LiAmplitude` as loaded: none or below is 1 (@0x79625-0x7967c).
+    pub li_amplitude: i16,
+    /// `Count`: a shot's life in ticks.
+    pub count: i16,
+    /// `Particles`: the trail's particles a tick, none for no trail.
+    pub particles: i16,
+    /// `PartVel`: the trail's speed, in hundredths of a pixel a tick.
+    pub part_vel: i16,
+    /// `PartLifeMin` and `PartLifeMax`: a trail particle's life, in ticks.
+    pub part_life: (i16, i16),
+    /// `PartColor`, `00RRGGBB`: the trail's colour.
+    pub part_color: u32,
+    /// `SmokeSet` as loaded: above 7, read unsigned, is 0
+    /// (`_LoadObjectData` @0x79b8d-0x79b94).
+    pub smoke_set: i16,
     /// `BeamColor`, `00RRGGBB`.
     pub beam_color: u32,
     /// `CoronaColor`, `00RRGGBB`.
@@ -266,6 +339,9 @@ pub trait CombatLooks {
     /// The mouse cursor's sheet, `spïn` 650 (`_InitSprites`
     /// @0x2147c-0x215eb), or why it cannot be read.
     fn cursor_sheet(&self) -> Result<EffectSheet, String>;
+    /// Smoke set `set`'s sprite ([`SmokeSheet`]): none for a set past 1,
+    /// or when any of its eight `cicn`s is missing or does not decode.
+    fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -296,6 +372,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         (**self).cursor_sheet()
+    }
+
+    fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
+        (**self).smoke_sheet(set)
     }
 }
 
@@ -328,6 +408,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         (**self).cursor_sheet()
     }
+
+    fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
+        (**self).smoke_sheet(set)
+    }
 }
 
 /// The first explosion type, `bööm` 128.
@@ -357,6 +441,8 @@ pub struct Looks {
     /// The mouse cursor's sheet, or why it cannot be read; `None` when it
     /// was not read.
     pub cursor: Option<Result<EffectSheet, String>>,
+    /// Each smoke set's sprite there is ([`SMOKE_SETS`]).
+    pub smokes: BTreeMap<u8, SmokeSheet>,
 }
 
 impl Looks {
@@ -379,7 +465,19 @@ impl Looks {
                 .map(|kind| (kind, catalog.asteroid_sheet(kind)))
                 .collect(),
             cursor: Some(catalog.cursor_sheet()),
+            smokes: (0..SMOKE_SETS)
+                .filter_map(|set| Some((set, catalog.smoke_sheet(set)?)))
+                .collect(),
         }
+    }
+
+    /// Smoke set `set`'s sprite, if there is one: only sets 0 and 1 have
+    /// one, and only when their `cicn`s were read. A set is `SmokeSet` as
+    /// loaded ([`WeaponLook::smoke_set`]).
+    #[must_use]
+    pub fn smoke_set(&self, set: i16) -> Option<SmokeSheet> {
+        let set = u8::try_from(set).ok()?;
+        self.smokes.get(&set).copied()
     }
 
     /// Cargo box graphic `graphic`'s sheet, if it was read.
@@ -460,6 +558,8 @@ mod tests {
     impl ShipSprites for Sheets {
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             Ok(ShipSheet {
+                weapon: None,
+                weap_decay: 0,
                 image_id: id.0,
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 48,
@@ -561,6 +661,7 @@ mod tests {
         fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>> {
             (id.0 <= 150).then_some(Ok(BoomLook {
                 sheet: Ok(EffectSheet {
+                    frame_width: 0,
                     image_id: id.0,
                     frames: NonZeroU16::MIN,
                 }),
@@ -582,6 +683,7 @@ mod tests {
 
         fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 500 + graphic.cast_signed(),
                 frames: NonZeroU16::MIN,
             })
@@ -589,6 +691,7 @@ mod tests {
 
         fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 800 + i16::from(kind),
                 frames: NonZeroU16::MIN,
             })
@@ -596,17 +699,24 @@ mod tests {
 
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
             Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 650,
                 frames: NonZeroU16::MIN,
+            })
+        }
+
+        fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
+            Some(SmokeSheet {
+                first_icon: FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set),
             })
         }
     }
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
-    /// govt 131, cargo box graphic 2 and asteroid type 3.
+    /// govt 131, cargo box graphic 2, asteroid type 3 and smoke set 1.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
             catalog
                 .boom_look(BoomId(129))
@@ -615,6 +725,7 @@ mod tests {
             catalog.target_code(GovtId(131)),
             catalog.box_sheet(2).map(|sheet| sheet.image_id),
             catalog.asteroid_sheet(3).map(|sheet| sheet.image_id),
+            catalog.smoke_sheet(1).map(|sheet| sheet.first_icon),
         )
     }
 
@@ -633,6 +744,7 @@ mod tests {
         assert_eq!(
             looks.boom(BoomId(150)).map(|look| look.sheet.clone()),
             Some(Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 150,
                 frames: NonZeroU16::MIN
             }))
@@ -641,6 +753,7 @@ mod tests {
         assert_eq!(
             looks.box_sheet(0),
             Some(&EffectSheet {
+                frame_width: 0,
                 image_id: 500,
                 frames: NonZeroU16::MIN
             }),
@@ -651,6 +764,7 @@ mod tests {
         assert_eq!(
             looks.box_sheet(4),
             Some(&EffectSheet {
+                frame_width: 0,
                 image_id: 504,
                 frames: NonZeroU16::MIN
             })
@@ -659,6 +773,7 @@ mod tests {
         assert_eq!(
             looks.cursor_sheet(),
             Some(&EffectSheet {
+                frame_width: 0,
                 image_id: 650,
                 frames: NonZeroU16::MIN
             }),
@@ -669,13 +784,21 @@ mod tests {
         assert_eq!(
             looks.asteroid_sheet(15),
             Some(&EffectSheet {
+                frame_width: 0,
                 image_id: 815,
                 frames: NonZeroU16::MIN
             })
         );
         assert_eq!(looks.asteroid_sheet(16), None);
+        let smokes: Vec<_> = looks.smokes.keys().copied().collect();
+        assert_eq!(smokes, [0, 1], "only sets 0 and 1 are asked for");
+        assert_eq!(looks.smoke_set(1), Some(SmokeSheet { first_icon: 1008 }));
+        assert_eq!(looks.smoke_set(2), None);
+        assert_eq!(looks.smoke_set(-1), None);
+        assert_eq!(SmokeSheet { first_icon: 1008 }.icon(7), 1015);
         assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
+            smokes: BTreeMap::default(),
             weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
             booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
             boxes: BTreeMap::from([(0, Err("no".to_owned()))]),
@@ -692,7 +815,8 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502) Ok(803)"#;
+        let direct =
+            r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502) Ok(803) Some(1008)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
@@ -748,6 +872,10 @@ mod tests {
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
             Err("no spïn 650".to_owned())
         }
+
+        fn smoke_sheet(&self, _set: u8) -> Option<SmokeSheet> {
+            None
+        }
     }
 
     #[test]
@@ -762,6 +890,7 @@ mod tests {
         assert_eq!((boom.advance, boom.sound), (1.0, Some(SoundId(302))));
         assert_eq!(looks.weapon(WeaponId(141)), None);
         assert_eq!(looks.boom(BoomId(129)), None);
+        assert_eq!(looks.smoke_set(0), None, "no smoke sprite");
         assert_eq!(
             looks.problems(),
             [

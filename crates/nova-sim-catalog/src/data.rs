@@ -989,6 +989,7 @@ impl CombatCatalog for GameData {
                     guidance: record.guidance,
                     speed: record.speed,
                     ammo_type: record.ammo_type,
+                    graphic: record.graphic,
                     inaccuracy: record.inaccuracy,
                     impact: record.impact,
                     explod_type: record.explod_type,
@@ -1043,6 +1044,7 @@ impl CombatCatalog for GameData {
                     id: ShipId(id),
                     flags: record.flags.bits(),
                     flags2: record.flags2.bits(),
+                    flags3: record.flags3.bits(),
                     death_delay: record.death_delay,
                     explode1: record.explode1,
                     explode2: record.explode2,
@@ -2920,15 +2922,18 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_and_buoy()
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_murk_and_buoy()
      {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                buoyed(
-                    interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
-                    7,
+                murky(
+                    buoyed(
+                        interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                        7,
+                    ),
+                    5,
                 ),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
@@ -2954,7 +2959,7 @@ mod tests {
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
                     interference: 45,
-                    murk: 0,
+                    murk: 5,
                     message: 7,
                 },
             ]
@@ -2991,6 +2996,12 @@ mod tests {
     /// `bytes`, a `sÿst`, with this `Message` (offset 0x68).
     fn buoyed(mut bytes: Vec<u8>, message: i16) -> Vec<u8> {
         put_i16s(&mut bytes, 0x68, &[message]);
+        bytes
+    }
+
+    /// `bytes`, a `sÿst`, with this `Murk` (offset 0x92), raw.
+    fn murky(mut bytes: Vec<u8>, murk: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x92, &[murk]);
         bytes
     }
 
@@ -3690,6 +3701,7 @@ mod tests {
             guidance: -1,
             speed: 1500,
             ammo_type: -1010,
+            graphic: 7,
             inaccuracy: 9,
             impact: 25,
             explod_type: 1003,
@@ -3790,6 +3802,7 @@ mod tests {
         put_i16s(&mut bytes, 0x3E, &[120]);
         put_i16s(&mut bytes, 0x46, &[325]);
         bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
+        bytes[0x726..0x728].copy_from_slice(&0x0040_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
         put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
         put_i16s(&mut bytes, 0x6DE, &[0, 20, 0, 0]);
@@ -3820,6 +3833,7 @@ mod tests {
             id: ShipId(id),
             flags: 0x0130,
             flags2: 0,
+            flags3: 0x0040,
             death_delay: 60,
             explode1: 4,
             explode2: 1005,

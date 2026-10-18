@@ -17,7 +17,7 @@ use nova_sim::{PlayerCommand, PlayerFate};
 use crate::devtools::SessionDesk;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::effects::Scene;
+use crate::flight::effects::{LoopedSounds, Scene};
 use crate::flight::escorts::{EscortMenuLooks, fighters_abandoned_message};
 use crate::flight::jump::JumpEffect;
 use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer};
@@ -30,7 +30,7 @@ use super::{
     HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
     MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS,
     SECONDARY_KEY, Said, TOO_CLOSE, Then, arrival_lead, arrival_message_with, assigned_message,
-    assigned_ticks, comm_message, dying, gate_refusal_message, jump_refusal_message,
+    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
     jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
     point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
     stellar_name,
@@ -599,19 +599,18 @@ impl<
                         session.tick_quotes(&self.catalog, &mut self.chance);
                     }
                     quotes.extend(session.take_quotes());
-                    let player = point(session.player().position);
                     let dying = dying(session, &self.sheet, &self.npc_sheets);
                     let chance = &mut self.effects_chance;
-                    let debris = session.rules().source_for(RuleKey::ShipDebris);
-                    let caps = session.rules().source_for(RuleKey::CombatCaps);
-                    let scene = Scene {
-                        player,
-                        debris: debris == RuleSource::Bible,
-                        caps: caps == RuleSource::Engine,
-                    };
+                    let scene = effects_scene(session);
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
-                    show_combat(session, &scene, shown, &self.looks, chance);
+                    let lit = show_combat(session, &scene, shown, &self.looks, chance);
+                    let (player, sheets) = (&self.sheet, &self.npc_sheets);
+                    let session_now: &Session = session;
+                    self.glows
+                        .step(&lit, |ship| glow_decay(session_now, player, sheets, ship));
+                    let effects = (&mut self.effects, scene.caps);
+                    self.shot_looks.step(session, &self.looks, effects, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {
@@ -897,6 +896,8 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.flashes.clear();
+        self.glows.clear();
+        self.shot_looks.clear();
         self.read_npc_sheets();
     }
 
@@ -1218,6 +1219,8 @@ impl<
                 self.message = None;
                 self.effects.clear();
                 self.flashes.clear();
+                self.glows.clear();
+                self.shot_looks.clear();
                 self.redraw_status();
             }
             Ok(LandPress::AtGate {
@@ -1543,5 +1546,21 @@ impl<
             self.sheet = self.catalog.ship_sheet(ship);
             self.sheet_ship = Some(ship);
         }
+    }
+}
+
+/// The scene a pass's effects play in: around the player in `session`,
+/// as its rulebook reads [`RuleKey::ShipDebris`], [`RuleKey::CombatCaps`]
+/// and [`RuleKey::LoopedSoundWait`].
+fn effects_scene(session: &Session) -> Scene {
+    let rules = session.rules();
+    Scene {
+        player: point(session.player().position),
+        debris: rules.source_for(RuleKey::ShipDebris) == RuleSource::Bible,
+        caps: rules.source_for(RuleKey::CombatCaps) == RuleSource::Engine,
+        looped: match rules.source_for(RuleKey::LoopedSoundWait) {
+            RuleSource::Engine => LoopedSounds::Anywhere,
+            RuleSource::Bible => LoopedSounds::PerFirer,
+        },
     }
 }

@@ -37,7 +37,43 @@ impl Default for Volume {
     }
 }
 
+/// How much a sound matters when the voices are full: the `AmbrosiaTools` library's
+/// `ST_PlaySoundParam` (@0xe3dc2) keeps its voice list in order by
+/// priority and loudness, and a sound goes before the first voice it
+/// matches or beats on both (see [`crate::voices`]).
+///
+/// The original's callers use 1 (most beeps) to 32000 (the warp-up and
+/// the spaceport ambient's param blocks); [`crate::priority`] holds each
+/// event's. A priority of 0 is 1, as `ST_PlaySoundParam` makes it
+/// (@0xe3df1-0xe3df8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Priority(u16);
+
+impl Priority {
+    /// Priority `priority`, with 0 taken as 1.
+    #[must_use]
+    pub const fn new(priority: u16) -> Self {
+        if priority == 0 {
+            Self(1)
+        } else {
+            Self(priority)
+        }
+    }
+
+    /// The number, 1 and up.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
 /// One thing for the audio device to do.
+///
+/// Every sound played once ([`Play`](Self::Play),
+/// [`PlayExclusive`](Self::PlayExclusive),
+/// [`PlayUnlessPlaying`](Self::PlayUnlessPlaying)) takes a voice in one
+/// list, by its [`Priority`] and loudness (see [`crate::voices`]): with
+/// every voice taken by sounds it doesn't match or beat, it isn't played.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AudioCommand {
     /// Plays `sound` once, at `volume`, over whatever else is playing.
@@ -46,6 +82,8 @@ pub enum AudioCommand {
         sound: SoundId,
         /// How loud.
         volume: Volume,
+        /// How much it matters when the voices are full.
+        priority: Priority,
     },
     /// Plays `sound` once, at `volume`, on the one mission channel: unless
     /// the last sound played there is still playing, when nothing happens.
@@ -54,17 +92,21 @@ pub enum AudioCommand {
         sound: SoundId,
         /// How loud.
         volume: Volume,
+        /// How much it matters when the voices are full.
+        priority: Priority,
     },
-    /// Plays `sound` once, at `volume`, unless the last `PlayUnlessPlaying`
-    /// of the same `snd ` is still playing (`_ST_IsSoundPlaying`), when
-    /// nothing happens: the klaxon, repeated while the player's ship
-    /// breaks up, and a looped spaceport ambient sound, asked for on every
-    /// frame the spaceport is frontmost.
+    /// Plays `sound` once, at `volume`, unless the same `snd ` is still
+    /// playing on any voice, however it was started (`ST_IsSoundPlaying`),
+    /// when nothing happens: the klaxon, repeated while the player's ship
+    /// breaks up (@0x6f200), and a looped spaceport ambient sound, asked
+    /// for on every frame the spaceport is frontmost (@0x4f0d6).
     PlayUnlessPlaying {
         /// The `snd `.
         sound: SoundId,
         /// How loud.
         volume: Volume,
+        /// How much it matters when the voices are full.
+        priority: Priority,
     },
     /// Starts the one looping effect, the engine: `sound`, over and over,
     /// at `volume`.
@@ -113,9 +155,10 @@ pub trait Audio {
     /// has not.
     fn music_ended(&self) -> bool;
 
-    /// Whether an instance of `sound` started by [`AudioCommand::Play`] is
-    /// still playing: the original's `ST_IsSoundPlaying`. A sound that
-    /// cannot be played never is.
+    /// Whether any voice plays `sound`, whichever command started it (an
+    /// effect, the mission channel, or one played unless playing): the
+    /// original's `ST_IsSoundPlaying` (@0xe40c0), which asks the whole
+    /// voice list. A sound that cannot be played never is.
     fn playing(&self, sound: SoundId) -> bool;
 }
 
@@ -150,6 +193,22 @@ mod tests {
         assert_eq!(Volume::FULL.amplitude(), 1.0);
         assert_eq!(Volume::SILENT.amplitude(), 0.0);
         assert_eq!(Volume::default(), Volume::FULL);
+    }
+
+    #[test]
+    fn a_priority_of_0_is_1_as_st_play_sound_param_makes_it() {
+        assert_eq!(Priority::new(0).get(), 1);
+        assert_eq!(Priority::new(0), Priority::new(1));
+        assert_eq!(Priority::new(1).get(), 1);
+        assert_eq!(Priority::new(4).get(), 4);
+        assert_eq!(Priority::new(32_000).get(), 32_000);
+        assert_eq!(Priority::new(u16::MAX).get(), u16::MAX);
+    }
+
+    #[test]
+    fn priorities_order_by_their_number() {
+        assert!(Priority::new(5) > Priority::new(4));
+        assert!(Priority::new(1) < Priority::new(32_000));
     }
 
     #[test]

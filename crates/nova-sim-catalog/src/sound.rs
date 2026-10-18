@@ -147,7 +147,7 @@ pub enum SimSound {
     /// The player boarded a person who offers its mission: `snd ` 390
     /// "Airlock" (loaded by `_LoadSounds` @0x1c277-0x1c289), played by
     /// `_HandlePlayerBoardAttempt` before `_OfferOneMission`
-    /// (@0x658e5-0x65907). Its priority, 8, is not modelled.
+    /// (@0x658e5-0x65907). Its priority is 8.
     PersonOfferBoarded,
     /// The player's boarders went aboard a ship to plunder it: `snd ` 390
     /// "Airlock", as for [`SimSound::PersonOfferBoarded`], played by
@@ -160,14 +160,14 @@ pub enum SimSound {
     /// sounds for a board the crew repels by the Bible's
     /// [`RuleKey::EmptyBooty`](crate::RuleKey::EmptyBooty), which the
     /// original never does: the boarders go aboard first. Its priority,
-    /// 8, is not modelled.
+    /// 8.
     Boarded,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
     /// not already playing (`_ST_IsSoundPlaying` @0x6f200), so it repeats
     /// through the breakup; the audio side does that check. Its priority,
-    /// 15, is not modelled. The player's final explosion halts it
+    /// 15. The player's final explosion halts it
     /// ([`PLAYER_EXPLOSION_HALTS`]).
     Klaxon,
     /// Each named `snd ` is halted if it is playing, as the original asks
@@ -187,26 +187,26 @@ pub enum SimSound {
     /// A sabotage outfit went off aboard the player's ship: `_explodSnd[0]`,
     /// `snd ` 300 (`_LoadSounds`' loop from 0x1c200 loads `snd ` 300-363),
     /// played by `PlaySound` with no test of whether it is playing
-    /// (`_HandlePlayer` @0x69375). Its priority, 100, is not modelled.
+    /// (`_HandlePlayer` @0x69375). Its priority is 100.
     OnboardExplosion,
     /// A disabled or dying player's pre-jump collapsed: `_beepSnd[1]`,
     /// `snd ` 151 (`_PlaySound` @0x68aaf), after a [`SimSound::Halt`] of
-    /// [`WARP_UP_HALTS`]. Its priority, 50, is not modelled.
+    /// [`WARP_UP_HALTS`]. Its priority is 50.
     JumpCollapsed,
     /// A key's action was refused: `_beepSnd[3]`, `snd ` 153, the
     /// original's shared refusal beep, whether or not a message says why.
     /// The player info key's refusals raise it (`_HandlePlayer`
-    /// @0x7039a-0x703bd, priority 5, not modelled; see
+    /// @0x7039a-0x703bd, priority 5; see
     /// `nova_sim::Session::press_player_info`),
     /// as does the mission info key with no mission to show, before its
-    /// "You have no active missions." (`PlaySound` @0x70557, priority 1,
-    /// not modelled; see
+    /// "You have no active missions." (`PlaySound` @0x70557, priority 1;
+    /// see
     /// `nova_sim::Session::press_mission_info`),
     /// as do the jump key's (@0x6b89f, @0x6b9cc, @0x6ba72; see
     /// `nova_sim::Session::jump_refusal_told`)
     /// and every refusal of a hail, with no target too
     /// (`_HandlePlayerCommunication` @0x626cf, @0x6206c, @0x6261c,
-    /// @0x6264e, its `PlaySound` argument of 1 or 5 not modelled; see
+    /// @0x6264e, its `PlaySound` priority 1 or 5; see
     /// `nova_sim::hail::HailRefusal`), as do the land key's
     /// not-landable, too-far and too-fast refusals from the dock request
     /// (@0x67e8f, @0x676aa, @0x676fe; see
@@ -214,7 +214,9 @@ pub enum SimSound {
     /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
     /// `nova_sim::Session::select_target`),
     /// and every other refusal
-    /// that beeps reuses it rather than adding a variant of its own.
+    /// that beeps reuses it rather than adding a variant of its own. The
+    /// audio side plays it at 1, its most common site's priority (rdm task
+    /// `refused-and-port-ambient-priorities-by-site`).
     Refused,
 }
 
