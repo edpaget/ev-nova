@@ -4,7 +4,10 @@
 //!
 //! The game opens on the main menu ([`AppScreen::with_pilots`]), which
 //! holds a game in progress, as the original's main screen holds a loaded
-//! pilot (`_gameInProgress`; see `game`). New Pilot asks for a name in
+//! pilot (`_gameInProgress`; see `game`). It opens holding the last
+//! pilot saved or opened, as `_OpenLastPilotFile` loads it at launch
+//! ([`AppScreen::open_last_pilot`], see `launch`), or holding nothing,
+//! silently, when that pilot can't be opened. New Pilot asks for a name in
 //! "Create a new pilot:" (the interface file's, or a built-in one),
 //! refusing a name already saved, then creates the pilot from the first
 //! `chär`, saves it and holds it, not flying; with a game held it first

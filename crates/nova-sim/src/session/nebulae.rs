@@ -40,10 +40,13 @@
 //! catalog system that is visible after the load's refresh and explored,
 //! by ascending ID, as Open Pilot's `_MainScreenChoice` sweeps
 //! (@0x1a8d4-0x1a906) once the pilot is loaded; `_OpenLastPilotFile`
-//! sweeps the same way at launch (@0x765a2-0x765ce). A return from play
+//! sweeps the same way at launch (@0x765a2-0x765ce), which the launch's
+//! load of the last pilot builds with the same sweep. A return from play
 //! to the main screen keeps the session as play left it, so it sweeps
 //! nothing and runs no `OnExplore`: `_DoMainScreen`'s setup, which
-//! explores the player's system, runs once a launch. Nothing the sweep
+//! explores the player's system, runs once a launch, as
+//! [`Session::open_at_launch`] does ([`Session::explore_here`]); Open
+//! Pilot doesn't run it. Nothing the sweep
 //! decides reads a rule, so it does not wait on task
 //! load-reads-rules-before-fly.
 //!

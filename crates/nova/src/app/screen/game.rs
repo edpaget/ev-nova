@@ -3,7 +3,9 @@
 //!
 //! The router keeps two slots: the game held on the main screen
 //! ([`AppScreen::game_in_progress`]) and the flight shown
-//! ([`AppScreen::flight_view`]). New Pilot and Open Pilot build a flight
+//! ([`AppScreen::flight_view`]). The launch fills the game slot with the
+//! last pilot ([`AppScreen::open_last_pilot`], `_OpenLastPilotFile`
+//! @0x764ad sets `_gameInProgress` @0x7659f). New Pilot and Open Pilot build a flight
 //! and hold it, never showing it, as `_DoNewPilot` (@0x18b0a) and
 //! `_MainScreenChoice(1)` return to the main screen with the pilot
 //! loaded. Enter Ship moves the game into the flight slot and shows it

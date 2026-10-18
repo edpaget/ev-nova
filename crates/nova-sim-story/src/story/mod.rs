@@ -421,7 +421,10 @@
 //! and explored flag asked as its consumer's predicate (see "Dispatch");
 //! its activity is written at every refresh point beside visibility; a
 //! load forgets the explored flags and sweeps the visible explored
-//! systems; and the Rulebook keys
+//! systems, the launch's load of the last pilot too (main-screen phase 4,
+//! `nova_sim::PilotKeeper::open_last`); the launch then explores the
+//! player's system once, as `_DoMainScreen` does
+//! (`nova_sim::Session::open_at_launch`); and the Rulebook keys
 //! [`nebula_explore_once`](crate::RuleKey::NebulaExploreOnce) and
 //! [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot) offer the other
 //! readings (see the session's `nebulae` module).
