@@ -39,16 +39,16 @@
 //!   turn and through the warp;
 //! - while the ship brakes for a jump, against its velocity
 //!   (`_CalcInterceptAngle(v × 100, 0)` @0x6b761);
+//! - while the face-target key is held out of a jump, at the ship target
+//!   or the nav selection's stellar (@0x6af65, @0x6af9e, @0x6afea; see
+//!   the `steering` module), disabled or not;
 //! - while the reverse key is held out of a jump by a player not
 //!   disabled, moving at 0.05 or more on either axis (@0x6c7d8-0x6c822),
 //!   against its velocity: `(_CalcInterceptAngle(0, v × 100) + 180) mod
-//!   360` (@0x6c88e), whatever the turn keys say.
+//!   360` (@0x6c88e), over the face key's, whatever the turn keys say.
 //!
-//! Left out: the face-target key's writes of +0x68 (@0x6af65, @0x6af9e,
-//! @0x6afea), with the key itself
-//! (rdm:phase/ship-handling-fidelity/phase-4-turning-and-reverse); and
-//! an inertialess ship's reverse, which brakes and writes no +0x68
-//! (@0x6c770-0x6c7d3), as the engine has no inertialess player.
+//! Left out: an inertialess ship's reverse, which brakes and writes no
+//! +0x68 (@0x6c770-0x6c7d3), as the engine has no inertialess player.
 //! `_gameFrozen`'s clearing (@0x46427, @0x4642f-0x4643e) is a cheat's, and
 //! ours has no cheats. The mode is not saved: `_doubleTime` is a global,
 //! not a pilot field.

@@ -405,6 +405,7 @@ mod script_effects;
 mod self_repair;
 mod ship_change;
 mod status_cargo;
+mod steering;
 mod stellars;
 mod story;
 mod takeoff_grace;
@@ -472,7 +473,7 @@ use crate::combat::{
 };
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
-use crate::flight::{Controls, FlightRules, Flyer, ShipState, step};
+use crate::flight::{Controls, FlightRules, ShipState, player_step};
 use crate::fuel::regenerate;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
@@ -488,8 +489,7 @@ use crate::handling::{Handling, ShipFields};
 use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
-    MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
-    jump_zone,
+    MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_zone,
 };
 use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
@@ -509,6 +509,7 @@ use crate::outfitter::{
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
+use crate::player_turn::brake_aim;
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
@@ -633,11 +634,12 @@ impl FightTerms {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Jump {
     /// The ship brakes and turns towards `bearing`, the map bearing of
-    /// `to` (none when there is nothing to turn to), before it jumps;
-    /// `warp` is the warp's clock, none while it brakes.
+    /// `to` in whole degrees as `_CalcInterceptAngle` gives it (none when
+    /// either system is off the map), before it jumps; `warp` is the
+    /// warp's clock, none while it brakes.
     PreJump {
         to: SystemId,
-        bearing: Option<f32>,
+        bearing: Option<i16>,
         warp: Option<u32>,
     },
     /// The jump to the system has begun, `warp` ticks into the warp stage.
@@ -1975,13 +1977,21 @@ impl Session {
     /// `TickCount`, real time, which double time's second pass doesn't
     /// move on (`_HandlePlayer` @0x6d1c1, @0x688bb), though that pass
     /// flies the pre-jump again and can start the clock.
+    ///
+    /// Out of a jump the ship turns as `_HandlePlayer`'s turn block does,
+    /// toward the aim the face-target key or reverse sets (see the
+    /// `steering` module), or by the turn keys. A disabled or dying
+    /// player's keys are let go of but the face key, which still aims.
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
                 self.collapse_jump(again);
-                Controls::default()
+                Controls {
+                    face: controls.face,
+                    ..Controls::default()
+                }
             }
             Condition::Destroyed => {
                 self.stop_thrust();
@@ -1992,34 +2002,32 @@ impl Session {
         };
         match self.jump {
             None => {
-                if controls.reverse {
-                    self.aim_in_reverse();
-                }
+                let aim = self.steer(controls);
                 self.thrust(controls.thrust);
                 let handling = self.flying_handling();
                 if self.player_fate().row().drag {
                     crate::flight::drag(&mut self.player);
                 }
                 let flight = self.flight_rules();
-                step(&mut self.player, &handling, controls, flight, Flyer::Player);
+                player_step(&mut self.player, &handling, controls, aim, flight);
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
                 let slow_down = !self.stats.fast_jump;
-                if pre_jump::stage(&self.player, &handling, bearing, slow_down) == PreJump::Brake {
-                    // `_CalcInterceptAngle(v × 100, 0)` (@0x6b761).
-                    self.aim = intercept_angle(self.player.velocity * AIM_SCALE, Vec2::ZERO);
+                let flight = self.flight_rules();
+                let stage = pre_jump::stage(
+                    &self.player,
+                    &handling,
+                    bearing,
+                    slow_down,
+                    flight.player_turn,
+                );
+                if stage == PreJump::Brake {
+                    self.aim = brake_aim(self.player.velocity);
                 } else {
                     self.aim_at_jump(to);
                 }
-                let flight = self.flight_rules();
-                let thrust = pre_jump::fly(
-                    &mut self.player,
-                    &handling,
-                    bearing,
-                    !self.stats.fast_jump,
-                    flight,
-                );
+                let thrust = pre_jump::fly(&mut self.player, &handling, bearing, slow_down, flight);
                 self.thrust(thrust);
                 let warp = if again {
                     warp
@@ -2046,22 +2054,20 @@ impl Session {
     /// (`_CalcInterceptAngle` @0x6b0cf; see the `double_time` module):
     /// left alone when either is off the map.
     fn aim_at_jump(&mut self, to: SystemId) {
-        let map = |id| self.galaxy.map().position(id);
-        if let Some((from, to)) = map(self.pilot.system).zip(map(to)) {
-            self.aim = intercept_angle(from, to);
+        if let Some(aim) = self.jump_aim(to) {
+            self.aim = aim;
         }
     }
 
-    /// Aims the player against its velocity, as the reverse key does
-    /// out of a jump, unless it moves slower than [`REVERSE_AIM_SPEED`] on
-    /// both axes (@0x6c7d8-0x6c88e; see the `double_time` module).
-    fn aim_in_reverse(&mut self) {
-        let velocity = self.player.velocity;
-        let fast = |speed: f32| f64::from(speed.abs()) >= REVERSE_AIM_SPEED;
-        if fast(velocity.x) || fast(velocity.y) {
-            let toward = intercept_angle(Vec2::ZERO, velocity * AIM_SCALE);
-            self.aim = (toward + 180) % 360;
-        }
+    /// The map bearing of `to` from the current system, in whole degrees,
+    /// `_CalcInterceptAngle` of their map positions (@0x6b0cf), which the
+    /// warp stage turns to; none when either is off the map. Two systems
+    /// at one place give 0, as the original's table does.
+    fn jump_aim(&self, to: SystemId) -> Option<i16> {
+        let map = |id| self.galaxy.map().position(id);
+        map(self.pilot.system)
+            .zip(map(to))
+            .map(|(from, to)| intercept_angle(from, to))
     }
 
     /// `_HandlePlayer`'s dead branch (0x6870d-0x6888c), on each tick of a
@@ -3336,10 +3342,7 @@ impl Session {
                 self.sounds.push(SimSound::Refused);
             }
         })?;
-        let map = |id| self.galaxy.map().position(id);
-        let bearing = map(self.pilot.system)
-            .zip(map(next))
-            .and_then(|(from, to)| jump_bearing(from, to));
+        let bearing = self.jump_aim(next);
         self.stage_jump(next, bearing, None);
         Ok(next)
     }
@@ -3392,9 +3395,15 @@ impl Session {
     /// Once the ship is ready to turn no further and slow no more, the
     /// jump begins: the thrust stops, the glow goes out and the led ships
     /// let go of their targets.
-    fn stage_jump(&mut self, to: SystemId, bearing: Option<f32>, warp: Option<u32>) {
+    fn stage_jump(&mut self, to: SystemId, bearing: Option<i16>, warp: Option<u32>) {
         let handling = self.flying_handling();
-        let stage = pre_jump::stage(&self.player, &handling, bearing, !self.stats.fast_jump);
+        let stage = pre_jump::stage(
+            &self.player,
+            &handling,
+            bearing,
+            !self.stats.fast_jump,
+            self.flight_rules().player_turn,
+        );
         let started = warp.is_none() && stage != PreJump::Brake;
         let warp = match stage {
             PreJump::Brake => None,
@@ -6172,15 +6181,6 @@ impl Session {
     }
 }
 
-/// What the player's velocity is scaled by before the brake and the
-/// reverse key aim against it (100.0, f32 @0xdd060; see the
-/// `double_time` module).
-const AIM_SCALE: f32 = 100.0;
-
-/// The speed, on either axis, from which the reverse key aims against the
-/// velocity (0.05, f64 @0xdd990, @0x6c7f4 and @0x6c81a).
-const REVERSE_AIM_SPEED: f64 = 0.05;
-
 /// The most restarts a counted sale makes before the port ends it (see
 /// [`Session::outfit_order`]): the list's [`LIST_SLOTS`]. Without an
 /// `OnSell` that changes the listing, a restart needs an outfit's
@@ -6689,12 +6689,12 @@ pub(super) mod tests {
         let mut expected = *session.player();
         for _ in 0..5 {
             session.tick(controls);
-            step(
+            player_step(
                 &mut expected,
                 &session.handling(),
                 controls,
+                None,
                 FlightRules::default(),
-                Flyer::Player,
             );
         }
         assert_eq!(*session.player(), expected);
@@ -6788,12 +6788,12 @@ pub(super) mod tests {
         assert_eq!(docked.velocity, Vec2::ZERO);
         session.tick(THRUST);
         let mut expected = docked;
-        step(
+        player_step(
             &mut expected,
             &session.handling(),
             THRUST,
+            None,
             FlightRules::default(),
-            Flyer::Player,
         );
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, docked);
@@ -7636,21 +7636,23 @@ pub(super) mod tests {
     pub(super) const OUT: Vec2 = Vec2 { x: 0.0, y: 1200.0 };
 
     #[test]
-    fn a_jump_begun_facing_away_turns_at_the_turn_rate_and_begins_facing_the_bearing() {
-        // AC1: at rest facing up, 90 degrees off east, at 3 degrees a tick.
+    fn a_jump_begun_facing_away_turns_at_the_turn_rate_and_begins_within_a_turn_of_the_bearing() {
+        // AC1: at rest facing up, 90 degrees off east, at 3 degrees a tick,
+        // the turn block's auto-turn stopping within a turn without
+        // snapping (see `player_turn`).
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.jumping(), None);
-        for k in 1..=29_u8 {
+        for k in 1..=28_u8 {
             session.tick(Controls::default());
             assert_eq!(session.player().heading, 3.0 * f32::from(k), "tick {k}");
             assert_eq!(session.jumping(), None, "tick {k}");
             assert_eq!(session.preparing_jump(), Some(SystemId(131)), "tick {k}");
         }
         session.tick(Controls::default());
-        assert_eq!(session.player().heading, 90.0);
-        assert_eq!(session.jumping(), Some(SystemId(131)), "facing the bearing");
+        assert_eq!(session.player().heading, 87.0, "a turn short of 90");
+        assert_eq!(session.jumping(), Some(SystemId(131)), "within a turn");
         assert_eq!(session.preparing_jump(), None);
         assert_eq!(session.player().position, OUT, "at rest throughout");
     }
@@ -7753,6 +7755,17 @@ pub(super) mod tests {
         assert_eq!(session.warp_clock(), None);
     }
 
+    /// Whether `ship`, turning 3° a tick, has done turning to the bearing
+    /// of 131, east: within a turn of it.
+    fn facing_131(ship: &ShipState) -> bool {
+        crate::player_turn::settled(
+            ship.heading,
+            3.0,
+            90,
+            crate::player_turn::PlayerTurn::WholeDegrees,
+        )
+    }
+
     /// Flies out with `catalog`'s ship, begins a jump and checks that it
     /// turns to the bearing and jumps without ever slowing down.
     fn assert_fast_jumps(catalog: &FakePilotCatalog) {
@@ -7771,7 +7784,7 @@ pub(super) mod tests {
         }
         assert_eq!(session.jumping(), Some(SystemId(131)));
         let leaving = *session.player();
-        assert_eq!(leaving.heading, 90.0, "it still turned");
+        assert!(facing_131(&leaving), "it still turned: {leaving:?}");
         assert!(!slow_enough(leaving.velocity), "{leaving:?}");
     }
 
@@ -7814,7 +7827,7 @@ pub(super) mod tests {
             }
             let before = *session.player();
             assert!(
-                !(slow_enough(before.velocity) && before.heading == 90.0),
+                !(slow_enough(before.velocity) && facing_131(&before)),
                 "ready but still waiting: {before:?}"
             );
             session.tick(Controls::default());
@@ -7825,7 +7838,7 @@ pub(super) mod tests {
         assert!(slow_enough(leaving.velocity), "{leaving:?}");
         assert!(leaving.velocity.length() < racing - 3.0, "{leaving:?}");
         assert_eq!(leaving.velocity.length(), slowest, "{leaving:?}");
-        assert_eq!(leaving.heading, 90.0);
+        assert!(facing_131(&leaving), "{leaving:?}");
     }
 
     #[test]
@@ -7998,7 +8011,7 @@ pub(super) mod tests {
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         begin_jump_now(&mut session).expect("jumps");
         assert_eq!(session.jumping(), Some(SystemId(131)));
-        assert_eq!(session.player().heading, 90.0, "the bearing to 131");
+        assert!(facing_131(session.player()), "the bearing to 131");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -14603,12 +14616,12 @@ pub(super) mod tests {
         };
         for _ in 0..200 {
             session.tick(THRUST);
-            step(
+            player_step(
                 &mut expected,
                 &handling,
                 THRUST,
+                None,
                 FlightRules::default(),
-                Flyer::Player,
             );
         }
         assert_eq!(*session.player(), expected);

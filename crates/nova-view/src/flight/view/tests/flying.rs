@@ -217,12 +217,23 @@ fn down_turns_the_ship_against_its_motion() {
     view.input(&key(Key::Up, false));
     view.input(&key(Key::Down, true));
     ticks(&mut view, 70);
+    // Within a turn of 180, without snapping onto it.
+    let rate = view.session().expect("flying").handling().turn_rate;
     assert!(
-        (player(&view).heading - 180.0).abs() < 1e-3,
+        nova_sim::player_turn::settled(
+            player(&view).heading,
+            rate,
+            180,
+            nova_sim::player_turn::PlayerTurn::WholeDegrees
+        ),
         "{:?}",
         player(&view)
     );
-    assert_eq!(view.frame(), Some(18));
+    let stopped = player(&view).heading;
+    assert_eq!(stopped, 177.0, "a turn short");
+    ticks(&mut view, 5);
+    assert_eq!(player(&view).heading, stopped, "it stays there");
+    assert_eq!(view.frame(), Some(17));
     // Left or Right overrides it.
     view.input(&key(Key::Left, true));
     ticks(&mut view, 1);

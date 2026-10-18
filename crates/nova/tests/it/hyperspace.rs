@@ -621,10 +621,13 @@ impl Harness {
         // A crawl, as a ship at rest off the centre can drift, isn't
         // drifting wrong: Down would hold it there.
         let drifting_wrong = if out { outward < -1e-3 } else { outward > 1e-3 };
+        // Down stops within a turn of its whole-degree aim, without
+        // snapping onto it: a turn and the table's degree of slack.
+        let turn = self.session().handling().turn_rate.trunc() + 1.0;
         let facing = ship.position.length() == 0.0 || {
             let away = nova_sim::flight::heading_of(ship.position);
             let way = if out { away } else { away + 180.0 };
-            shortest_turn(ship.heading, way).abs() < 1e-3
+            shortest_turn(ship.heading, way).abs() <= turn
         };
         if drifting_wrong && !facing {
             self.hold(&[Key::Down]);

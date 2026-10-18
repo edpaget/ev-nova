@@ -684,7 +684,17 @@ fn the_streak_waits_for_the_session_to_begin_the_jump() {
     }
     let effect = view.jump_effect().expect("the streak, on that tick");
     assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
-    assert_eq!(player(&view).heading, 90.0, "facing it");
+    let rate = view.session().expect("flying").handling().turn_rate;
+    assert!(
+        nova_sim::player_turn::settled(
+            player(&view).heading,
+            rate,
+            90,
+            nova_sim::player_turn::PlayerTurn::WholeDegrees
+        ),
+        "facing it, within a turn: {:?}",
+        player(&view)
+    );
     assert!(waited > 30, "braked and turned first: {waited}");
 }
 

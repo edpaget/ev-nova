@@ -215,6 +215,9 @@
 //! - [`player_fate`]: the player's lifecycle, a [`PlayerFate`] read off
 //!   its [`Condition`], and each fate's [`FateRow`]: how much of the ship
 //!   is [`Drawn`].
+//! - [`player_turn`]: the player's turn block: the whole-degree turn,
+//!   the auto-turn toward an aim that holds the turn keys off, and the
+//!   aims reverse and the jump's brake take.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -344,6 +347,7 @@ pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
 pub use nova_sim_ai::navigation;
 pub use nova_sim_base::handling;
+pub use nova_sim_base::player_turn;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::grant;
@@ -437,7 +441,7 @@ pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
 };
-pub use flight::{Controls, FlightRules, Flyer, ShipState, Turn, step};
+pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;

@@ -146,7 +146,8 @@ pub(crate) fn hideable(catalog: &mut FakePilotCatalog) {
 
 /// Flies the ship out from the centre until it is at least
 /// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
-/// centre (Down faces against its motion), then thrusts.
+/// centre (Down faces against its motion), then thrusts once within a
+/// turn of it.
 pub(crate) fn fly_out(session: &mut Session) {
     const THRUST: Controls = Controls {
         thrust: true,
@@ -165,11 +166,12 @@ pub(crate) fn fly_out(session: &mut Session) {
             0.0
         };
         let off = crate::flight::shortest_turn(player.heading, outward).abs();
-        // Down lands exactly on the heading against the motion, which
-        // is outward while the ship drifts in.
-        let controls = if off < 1e-3 {
+        // Down comes within a turn of the heading against the motion,
+        // which is outward while the ship drifts in, and stops there.
+        let turn = session.handling().turn_rate.trunc().max(1.0);
+        let controls = if off <= turn {
             THRUST
-        } else if player.velocity.length() > crate::flight::AT_REST_SPEED {
+        } else if crate::player_turn::reverse_aim(player.velocity).is_some() {
             Controls {
                 reverse: true,
                 ..Controls::default()
