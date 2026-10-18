@@ -406,6 +406,7 @@ impl Session {
             ai_wait: 0,
             docking: None,
             lost_sight: None,
+            swarm_leader: None,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).

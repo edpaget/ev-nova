@@ -73,6 +73,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         ai_wait: 0,
         docking: None,
         lost_sight: None,
+        swarm_leader: None,
         marines: ClassMarines::default(),
         pods_left: 0,
     }

@@ -65,6 +65,7 @@ pub mod react;
 pub mod reinforcements;
 pub mod sight;
 pub mod stand_off;
+pub mod swarm;
 pub mod target;
 pub mod threatened;
 pub mod wait;
@@ -571,6 +572,10 @@ pub struct Surroundings<'a> {
     /// Who needs a jump's fuel now to jump out ([`leave::can_jump`]), by
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel).
     pub jump_fuel: RuleSource,
+    /// The factor on the top speed of the player and of every ship it
+    /// leads ([`World::led_speed`](crate::traffic::World::led_speed)), as
+    /// a swarmer's `_ShipMaxSpeed` reads it ([`swarm::lead`]).
+    pub led_speed: f32,
 }
 
 /// No government marked by an IFF scrambler.
@@ -579,8 +584,8 @@ pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
-    /// cloak scanner, no government marked by an IFF scrambler and the
-    /// engine's jump fuel.
+    /// cloak scanner, no government marked by an IFF scrambler, the
+    /// engine's jump fuel and a led speed of 1.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -596,6 +601,7 @@ impl<'a> Surroundings<'a> {
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
             jump_fuel: RuleSource::Engine,
+            led_speed: 1.0,
         }
     }
 

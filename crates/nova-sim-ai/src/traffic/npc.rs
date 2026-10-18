@@ -474,6 +474,14 @@ pub struct Npc {
     /// (rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13).
     /// Never saved.
     pub lost_sight: Option<u32>,
+    /// The berth ([`Npc::berth`]) of its swarm leader, the original's
+    /// +0xc906, `None` for -1: the lowest berth of a swarming class fighting
+    /// its target, kept while it stays so (see
+    /// [`swarm`](crate::ai::swarm)). A berth, not an [`NpcId`], as the
+    /// original holds a slot index: a name for a berth re-used before the
+    /// next pass reads its new ship. None at every spawn and launch
+    /// (`_AISetup` @0x7f415). Never saved.
+    pub swarm_leader: Option<u32>,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).

@@ -78,7 +78,10 @@
 //!    any goal is taken; a pirate's count wait ending at none left,
 //!    [`board_wait::lapse`]; then each plunder decided, in berth order,
 //!    [`plunder::resolve`], queued for the session
-//!    [`Traffic::take_pirate_events`]; then each NPC's high level, a
+//!    [`Traffic::take_pirate_events`]; then, on the AI timer, each
+//!    ship's swarm check ([`swarm::pass`], which a coasting ship, one
+//!    entering a gate or one assisting the player unprovoked runs too);
+//!    then each NPC's high level, a
 //!    docking or its fight, none while its AI wait runs, and each drift's
 //!    step, [`plunder::drift`]), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
@@ -165,6 +168,7 @@ pub mod weigh;
 use crate::ai::interceptor::within_reach;
 use crate::ai::lost_sight::{self, LostSight};
 use crate::ai::pursuit::{self, Pursuit, PursuitRules};
+use crate::ai::swarm;
 use crate::ai::{
     Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
     reinforcements,
@@ -585,6 +589,7 @@ impl<'a> World<'a> {
             cloak_scanner: self.cloak_scanner,
             iff_marked: self.iff_marked,
             jump_fuel: self.npc_jump_fuel,
+            led_speed: self.led_speed,
         }
     }
 }
@@ -952,6 +957,14 @@ impl Traffic {
         self.take_goals(decisions, world.player.map(|player| player.state.position));
         board_wait::lapse(&mut self.npcs, &due);
         self.plunder(plunders, &world, chance);
+        // `_AIDispatch`'s swarm check (@0x8ff26-0x8ff35) comes before the
+        // type AI, reading the targets the frame's lower slots have just
+        // written; here it reads the targets the commands below wrote on
+        // the last tick. The tick's lag after a retarget crosses no
+        // boundary the player sees.
+        swarm::pass(&mut self.npcs, |npc| {
+            decision_due(self.ticks, npc.id, self.interval)
+        });
         self.pursue(&world, &due, &keeps, chance);
         plunder::drift(&mut self.npcs, &due);
         let around = world.around(&self.npcs);
@@ -2174,6 +2187,7 @@ impl Traffic {
                 ai_wait: 0,
                 docking: None,
                 lost_sight: None,
+                swarm_leader: None,
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,
             };
