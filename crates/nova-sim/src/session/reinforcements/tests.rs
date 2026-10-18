@@ -1,6 +1,6 @@
 //! Tests of the reinforcement fleet in a session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::*;
@@ -124,7 +124,7 @@ fn reinforced() -> FakePilotCatalog {
             flags: 0,
         }],
         outfits: vec![
-            outfit(441, &[(INHIBITOR, EVERY_GOVERNMENT)]),
+            outfit(441, &[(44, -1)]),
             outfit(442, &[(INHIBITOR, 1)]),
             outfit(443, &[(INHIBITOR, 3)]),
         ],
@@ -478,6 +478,28 @@ fn comes_after_the_sale(source: RuleSource) -> bool {
     session.reinforcements_day();
     session.call_for_reinforcements(warship, false);
     timer(&session) > 0
+}
+
+#[test]
+fn only_a_mod_val_of_minus_1_sets_the_global_inhibitor_and_others_inhibit_their_class() {
+    let catalog = reinforced();
+    let reset_with = |owned: OutfitId| {
+        let mut session = flying(&catalog);
+        session.pilot.outfits.insert(owned, 1);
+        session.reset_precalced();
+        session.reinforcements
+    };
+    let global = reset_with(JAMMER);
+    assert!(global.every_government);
+    assert!(global.inhibited.is_empty(), "no class of -1 (@0xc66c)");
+    let fed = reset_with(FED_JAMMER);
+    assert!(!fed.every_government);
+    assert_eq!(fed.inhibited, BTreeSet::from([FED]), "class 1");
+    assert_eq!(
+        reset_with(OutfitId(999)),
+        Reinforcements::default(),
+        "no record, no mods"
+    );
 }
 
 #[test]

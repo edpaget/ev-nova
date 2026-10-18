@@ -355,6 +355,11 @@ mod tests {
             !calls(&pair(PIRATES, 10.0, 0.0), Goal::Idle),
             "doing nothing else"
         );
+        let mut away = pair(PIRATES, 1000.0, 1000.0);
+        away[0].state.position = crate::geometry::Vec2::new(900.0, 900.0);
+        assert!(calls(&away, Goal::Flee(n(2))), "100 off on both axes");
+        away[0].state.position = crate::geometry::Vec2::new(-900.0, -900.0);
+        assert!(!calls(&away, Goal::Flee(n(2))), "1900 off");
     }
 
     /// A duty in the player's formation.

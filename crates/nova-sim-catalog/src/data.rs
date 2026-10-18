@@ -806,8 +806,9 @@ impl TrafficCatalog for GameData {
 
     fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
         let system = self.get::<System>(id.0)?.ok()?.record;
+        // A `ReinfFleet` of -1 names none, as any of 127 or less does.
         SystemReinforcements::normalised(
-            system.reinf_fleet.map_or(-1, |fleet| fleet.0),
+            system.reinf_fleet.map_or(0, |fleet| fleet.0),
             system.reinf_time,
             system.reinf_intrval,
         )

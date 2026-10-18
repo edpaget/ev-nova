@@ -95,9 +95,9 @@ pub(super) struct Reinforcements {
     /// comes; a system not listed reads 0, none coming.
     pub(super) timers: BTreeMap<SystemId, i32>,
     /// The global inhibitor (`*0x3b510c`).
-    every_government: bool,
+    pub(super) every_government: bool,
     /// The governments inhibited (+0x82).
-    inhibited: BTreeSet<GovtId>,
+    pub(super) inhibited: BTreeSet<GovtId>,
 }
 
 impl Session {
