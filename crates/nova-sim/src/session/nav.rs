@@ -246,7 +246,7 @@ pub(super) struct NavSlot {
 /// @0xa30eb / @0xa3108, the mission computer @0xa3d54 / @0xa3d86, the
 /// text dialog @0x5b14c / @0x5b169; mission info saves them @0x9e442 and
 /// never writes them back). Ours keeps the raw selection and the Con slot
-/// noted for it ([`NavSlot`]), which together are the original's +0x6c.
+/// noted for it (`NavSlot`), which together are the original's +0x6c.
 /// Taken with [`Session::map_nav`], put back with
 /// [`Session::restore_map_nav`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
