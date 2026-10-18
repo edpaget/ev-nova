@@ -1,7 +1,9 @@
 //! The session's part in `_DamageShip`'s answer flag (see
 //! [`answer_flag`](crate::ai::answer_flag)): it weighs the fight's
 //! strikes against the traffic as they settle, before anything answers
-//! them, and eases the NPCs' stray provocation once a fight's tick.
+//! them; the NPCs' stray provocation eases once a pass, at `_HandleShip`
+//! ([`Traffic::ease_stray`](crate::traffic::Traffic::ease_stray), see the
+//! `game_work` module).
 
 use super::Session;
 use crate::chance::Chance;
@@ -10,16 +12,11 @@ use crate::combat::Strike;
 impl Session {
     /// Weighs the fight's `strikes` against the traffic in flight, rolling
     /// on `chance` ([`Traffic::weigh_strikes`](crate::traffic::Traffic::weigh_strikes)),
-    /// then eases every NPC's stray provocation
-    /// ([`Traffic::ease_stray`](crate::traffic::Traffic::ease_stray)), as
-    /// `_HandleShip` (@0x44483) follows the collision passes and the shots
-    /// (@0x43e70-0x44015, @0x44385) in `_DoPlayGameWork`. Both passes of
-    /// double time do so, as each runs `_HandleShip`.
+    /// as `_DamageShip` sets its answer flag as each hit lands.
     pub(super) fn weigh_strikes(&mut self, strikes: &mut [Strike], chance: &mut dyn Chance) {
         if !strikes.is_empty() {
             self.step_traffic(|traffic, world| traffic.weigh_strikes(&world, strikes, chance));
         }
-        self.traffic.ease_stray();
     }
 }
 

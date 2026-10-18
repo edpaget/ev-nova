@@ -378,6 +378,7 @@ mod explored;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
+mod game_work;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
@@ -478,7 +479,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
-    Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
+    Armament, Arsenal, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
@@ -490,7 +491,7 @@ use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
+    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, ShipRef, Shove, Strike,
 };
 use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
@@ -2778,108 +2779,36 @@ impl Session {
     }
 
     /// The fight's part of a game-work pass on `pass` (see
-    /// [`Session::tick_combat`] after the scans, and the `double_time`
-    /// module): the fight's tick ([`Combat::tick_on`]) and everything that
-    /// follows from it.
+    /// [`Session::tick_combat`] after the scans): the fight's phases in
+    /// [`Combat::tick_on`]'s order, by `rules`, drawing on `chance`, each
+    /// phase that lands hits settled after it, and what the pass leaves
+    /// settled once after the last (see the `game_work` module).
     fn fight(&mut self, pass: GamePass, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        let was_destroyed = self.condition == Condition::Destroyed;
-        let was_dying = matches!(self.condition, Condition::Dying { .. });
-        let player_was = self.condition;
-        let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
-        let (player_terms, terms) = self.fight_terms();
-        let field = self.field();
-        let mut stellars = self.stellar_targets();
-        let scanner = self.scanner();
-        let mut rocks = self.asteroid_targets();
-        let armor_regen = self.player_armor_regen();
-        // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
-        // (see the `afterburner` module).
-        let afterburner = self.afterburner_knockback();
-        let pilot = &mut self.pilot;
-        let mut rounds = OutfitRounds {
-            owned: &mut pilot.outfits,
-            sources: &self.ammo_outfits,
-        };
-        let mut fighters = vec![Fighter {
-            ship: ShipRef::Player,
-            ship_type: pilot.ship,
-            fleet: ShipRef::Player,
-            govt: None,
-            leader: None,
-            booty: None,
-            state: self.player,
-            hull: self.hull,
-            shield_regen: self.stats.shield_regen,
-            armor_regen,
-            trigger: if self.pod.is_some() {
-                Trigger::default()
-            } else {
-                player_trigger(self.trigger, self.jump.is_some())
-            },
-            target: self.target.map(ShipRef::Npc),
-            reserves: &mut pilot.reserves,
-            condition: &mut self.condition,
-            held_disabled: false,
-            cloaked: false,
-            attacking: None,
-            threatens_player: false,
-            plundering: false,
-            emerging: false,
-            cloak_scanner: scanner.on_screen,
-            has_cloak: false,
-            jamming: player_terms.jamming,
-            class_speed: player_terms.class_speed,
-            top_speed: player_terms.top_speed,
-            jumping: self.jump.is_some(),
-            afterburner,
-            tractor: &mut self.tractor,
-            ion: &mut self.ion,
-            armament: &mut self.armament,
-            rounds: &mut rounds,
-            drawn_heading: player_terms.drawn_heading,
-            docked: false,
-        }];
-        let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
-        fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
-        self.combat.tick_on(
-            pass,
-            &mut fighters,
-            &self.arsenal,
-            &self.govts,
-            rules,
-            field,
-            Scenery {
-                stellars: &mut stellars,
-                asteroids: &mut rocks,
-            },
-            chance,
-        );
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let start = game_work::PassStart::of(self);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.defend_player(fighters, arena, chance);
+            combat.fire_player(fighters, arena, chance);
+        });
+        self.collision_passes(pass, rules, chance);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.defend_npcs(fighters, arena, chance);
+        });
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        });
+        // `_HandleShip` eases the stray provocation (@0x35374-0x353b2)
+        // after the collision passes and the shots, and before the beams.
+        self.traffic.ease_stray();
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fire_npcs(fighters, arena, chance);
+        });
         self.traffic.after_firing(&self.arsenal);
-        self.traffic.keep_berth_exits();
-        // The lines are `_DamageShip`'s, said as each hit lands, so before
-        // the eject below can take the player into a new ship.
-        let strikes = self.combat.take_strikes();
-        self.player_downed(player_was, &strikes, &mut &mut *chance);
-        self.take_shoves();
-        self.eject_on_breakup(pass, &mut &mut *chance);
-        self.settle_player_explosion(was_destroyed, was_dying);
-        self.raise_disabled(&was, &mut &mut *chance);
-        self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
-        let sorties = self.combat.take_sorties();
-        self.launch_fighters(&sorties, &mut &mut *chance);
-        self.npc_escapes(&was, &mut &mut *chance);
-        self.sync_fleet();
-        self.lose_escorts();
-        self.lose_dying_mission_escorts();
-        self.self_repair(rules, &mut *chance);
-        self.take_out_the_destroyed(&mut &mut *chance);
-        self.orphan_fighters();
-        self.clear_lost_target();
-        self.strike_stellars(&stellars, rules.law, chance);
-        self.settle_asteroid_hits(&rocks, chance);
-        self.see_stellars();
-        self.lay_out_ships();
-        self.note_drawn();
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.close_tick(fighters, arena, chance);
+        });
+        self.fight_tail(&start, pass, rules, chance);
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
