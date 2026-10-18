@@ -403,6 +403,7 @@ mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
+mod reinforcements;
 mod rescue;
 mod sabotage;
 mod script_effects;
@@ -789,6 +790,10 @@ pub struct Session {
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
     comm_line: CommLine,
+    /// Each system's reinforcement timer and the inhibitors (see the
+    /// `reinforcements` module); never saved, as the original saves
+    /// neither.
+    reinforcements: reinforcements::Reinforcements,
     /// The events told since they were last taken.
     events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
@@ -1568,6 +1573,7 @@ impl Session {
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
             comm_line: CommLine::default(),
+            reinforcements: reinforcements::Reinforcements::default(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
@@ -2271,7 +2277,9 @@ impl Session {
     /// system raises [`Fate::Departed`] and is counted (see the
     /// `mission_ships` module). Then, unless the ship is docked, each
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
-    /// while a jump plays too. The traffic ticks in the same [`World`] the
+    /// while a jump plays too; before that, in flight or jumping, the
+    /// player's system's reinforcement clock ticks, after the frame's
+    /// calls (see the `reinforcements` module). The traffic ticks in the same [`World`] the
     /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
@@ -2305,6 +2313,7 @@ impl Session {
                 self.observe_watched();
             }
         }
+        self.tick_reinforcements(chance);
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
@@ -2370,7 +2379,7 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
-            reinforcements: None,
+            reinforcements: self.reinforcements_coming(),
         };
         f(&mut self.traffic, world);
     }
@@ -2437,7 +2446,7 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
-            reinforcements: None,
+            reinforcements: self.reinforcements_coming(),
         }
     }
 

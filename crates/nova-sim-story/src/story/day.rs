@@ -24,8 +24,9 @@ pub enum Participant {
     /// built by story-runtime phase 5, and a dominated one's defence
     /// regrowing, by rdm task planet-domination.
     Stellars,
-    /// The reinforcement countdowns (@0xb724-0xb759), once reinforcements
-    /// are built.
+    /// The reinforcement countdowns (@0xb724-0xb759): each visible
+    /// system's goes down by one, built by combat-ai-fidelity phase 5
+    /// (see `nova_sim::ai::reinforcements`).
     Reinforcements,
     /// The ranks' salaries (@0xb75b-0xb7c2): each active rank's, in ID
     /// order, built by crons-news-ranks phase 3 (see

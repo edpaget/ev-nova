@@ -75,10 +75,12 @@
 //!   its departures, fighters docking and targets lost, then
 //!   `_HandlePlayer`'s sabotage clock and eject check (see the `sabotage`
 //!   and `eject` modules), then the fight ([`GamePass::Again`]) with all
-//!   that follows from its hits. A due frame therefore steps the junk and
+//!   that follows from its hits, then the reinforcement clock
+//!   (`_HandleReinforcements` @0x44504; see the `reinforcements`
+//!   module). A due frame therefore steps the junk and
 //!   the hints twice, as the original does, and the sabotage clock, the
 //!   escape pod's countdown, the breakup's countdown and its klaxon run
-//!   on both passes too.
+//!   on both passes too, and a called fleet comes twice as fast.
 //! - On the advance pass alone (`arg == 0` jumps from @0x4402a to
 //!   @0x44350): `_HandleStatus`, `_MissionHandler`, `_HandleVoiceSound`,
 //!   `_HandleComm`, `_CalculateTargetedDamage`, `_EnterMoreShips` (the
@@ -214,7 +216,8 @@ impl Session {
         self.move_traffic_again(&mut *chance);
         self.before_fight(rules, &mut &mut *chance);
         self.fight(GamePass::Again, rules, &mut *chance);
-        self.tick_asteroids(chance);
+        self.tick_asteroids(&mut *chance);
+        self.tick_reinforcements(chance);
     }
 
     /// The traffic's part of the second pass, drawing on `chance`: the NPCs

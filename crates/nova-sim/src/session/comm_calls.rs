@@ -55,6 +55,9 @@
 //!   idle: "<class>:  <ship name>, " and `STR#` 2002 #(381 + `Rand(3)`)
 //!   and ".", with [`SimSound::ScanHail`] ([`SimMessage::ScanHail`], 400
 //!   ticks). The player's ship name is `<PSN>`'s.
+//! - **A call for reinforcements** ([`CommCall::Reinforcements`], after
+//!   the think's own call) is `_AICallForReinforcements(ship, 0)`, which
+//!   says nothing on the line itself (see the `reinforcements` module).
 //!
 //! The original makes each call inside its ship's think, against the
 //! ships as the earlier slots' thinks left them; the engine answers the
@@ -140,7 +143,7 @@ impl Session {
             match call {
                 CommCall::Distress => self.call_for_help(id, chance),
                 CommCall::PreScan => self.hail_before_scan(id, chance),
-                CommCall::Reinforcements => self.call_for_reinforcements(id),
+                CommCall::Reinforcements => self.call_for_reinforcements(id, false),
             }
         }
     }
