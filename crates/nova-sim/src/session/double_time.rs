@@ -127,6 +127,8 @@
 //! constant phase of one pass that no player can see.
 
 use super::Session;
+use super::game_work::PassStart;
+use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
 use crate::flight::Controls;
@@ -174,34 +176,58 @@ impl Session {
     }
 
     /// Runs double time's second pass under the player's `controls`, the
-    /// fight by `rules`, drawing on `chance` (see the module docs). Its
-    /// caller runs it after the advance pass's calls ([`Session::tick`]
-    /// to [`Session::tick_combat`]) while [`Session::double_time`] is on.
+    /// fight by `rules`, the NPCs answering its hits as `behaviour` says,
+    /// drawing on `chance` (see the module docs), in `_DoPlayGameWork(0)`'s
+    /// order: `_HandlePlayer`'s fight before its move
+    /// ([`Session::player_fires`]), then its move; the collision passes,
+    /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
+    /// its hits answered; the traffic's motion; `_HandleShip`'s fire;
+    /// `_HandleBeams` and what the pass leaves; then the asteroids and the
+    /// reinforcement clock. Its caller runs it after the advance pass
+    /// ([`Session::game_work`]) while [`Session::double_time`] is on.
     /// Landed, or once a jump has begun, it does nothing, as the advance
-    /// pass's calls stand still; a jump that begins on it stops it there,
+    /// pass stands still; a jump that begins on its move stops it there,
     /// and so does the escape pod's countdown running out on it, the
     /// rescue then due ([`Session::rescue_if_due`], which its caller asks
-    /// after this pass as after the advance pass's tick). Its caller
-    /// then answers the pass's strikes ([`Session::answer_strikes`]) and
-    /// runs the second-pass quote roll, the attack quotes they raise
+    /// after this pass as after the advance pass). Its caller then answers
+    /// what the pass's close struck ([`Session::answer_strikes`]) and runs
+    /// the second-pass quote roll, the attack quotes the answers raise
     /// first ([`Session::tick_quotes_again`]).
     pub fn tick_again(
         &mut self,
         controls: Controls,
+        behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
-        self.fly_player(self.pass_frame, controls, GamePass::Again);
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let pass = GamePass::Again;
+        self.before_move(self.pass_frame, pass);
+        let start = PassStart::of(self);
+        self.player_fires(pass, rules, chance);
+        self.player_move(controls, pass);
         if self.jumping().is_some() || self.rescue_due {
             return;
         }
-        self.move_traffic_again(&mut *chance);
-        self.before_fight(rules, &mut &mut *chance);
-        self.fight(GamePass::Again, rules, &mut *chance);
-        self.tick_asteroids(&mut *chance);
+        self.eject_before_fight(chance);
+        self.collision_passes(pass, rules, chance);
+        self.answer_strikes(behaviour);
+        // `_AIDispatch` runs on the advance pass alone (@0x4402a).
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        });
+        self.answer_strikes(behaviour);
+        self.move_traffic_again(chance);
+        self.npcs_fire(pass, rules, chance);
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.close_tick(fighters, arena, chance);
+        });
+        self.fight_tail(&start, pass, rules, chance);
+        self.tick_asteroids(chance);
         self.tick_reinforcements(chance);
     }
 
@@ -255,7 +281,8 @@ mod tests {
     }
 
     fn again(session: &mut Session, controls: Controls) {
-        session.tick_again(controls, Rules::default(), &mut NeverFires);
+        let behaviour = crate::ai::NovaAi::default();
+        session.tick_again(controls, &behaviour, Rules::default(), &mut NeverFires);
     }
 
     /// [`catalog`] with a double-time warp-up, `snd ` 129, of 44100 frames
@@ -772,7 +799,13 @@ mod tests {
         session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
         session.traffic.table_mut().avg_ships = 3;
         let mut chance = Draws::of(&[]);
-        session.tick_again(Controls::default(), Rules::default(), &mut chance);
+        let behaviour = crate::ai::NovaAi::default();
+        session.tick_again(
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut chance,
+        );
         assert!(chance.asked.is_empty(), "no arrival rolled");
         assert!(session.npcs().is_empty());
         session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut chance);
@@ -806,14 +839,135 @@ mod tests {
             ticks += 1;
             assert!(ticks < 20, "hit");
         }
+        // `_HandleShot`'s `_DamageShip` answers it in the pass that hits
+        // (@0x35855, @0x36106; see the module docs).
+        let npc = &session.npcs()[0];
+        assert!(npc.provoked > 0.0, "answered in the pass: {npc:?}");
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(session.strikes, [], "none left over");
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_on_the_second_pass_is_held_before_that_passs_motion() {
+        // `_HandleShot` answers the hit (`_DamageShip` @0x3be6e-0x3be7c) on
+        // either pass, before that pass's `_HandleShip` (@0x44483), which
+        // counts the hold down.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        session.target = Some(NpcId(0));
+        session.hold_trigger(Trigger {
+            primary: true,
+            ..Trigger::default()
+        });
+        let mut passes = 0;
+        while session.npcs()[0].reserves.shield.now >= 30.0 {
+            again(&mut session, Controls::default());
+            passes += 1;
+            assert!(passes < 20, "hit");
+        }
+        assert_eq!(
+            session.npcs()[0].mode,
+            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 19 }
+        );
+    }
+
+    /// Idles, and runs its point defence or not.
+    #[derive(Debug)]
+    struct Defending(bool);
+
+    impl crate::ai::Behaviour for Defending {
+        fn decide(
+            &self,
+            _npc: &crate::traffic::npc::Npc,
+            _around: &crate::ai::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> crate::ai::Goal {
+            crate::ai::Goal::Idle
+        }
+
+        fn trigger(
+            &self,
+            _npc: &crate::traffic::npc::Npc,
+            _around: &crate::ai::Surroundings,
+        ) -> Trigger {
+            Trigger {
+                point_defence: self.0,
+                ..Trigger::default()
+            }
+        }
+    }
+
+    #[test]
+    fn the_second_pass_runs_no_npc_point_defence() {
+        // The NPCs' point defence is `_AIDispatch`'s (`_AIFireTurret`
+        // @0x80b0d), which runs on the advance pass alone (@0x4402a).
+        let quad = crate::catalog::WeaponRecord {
+            id: crate::catalog::WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            ..crate::session::tests::blaster()
+        };
+        let missile = crate::catalog::WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..crate::session::tests::homing_missile(134, 1000)
+        };
+        let catalog = crate::session::tests::arming(missile, quad, 0);
+        let mut session = crate::session::tests::with_an_npc_at(&catalog, 750, 550, 180);
+        session.target = Some(NpcId(0));
+        session.hold_trigger(Trigger {
+            primary: true,
+            ..Trigger::default()
+        });
+        // Its point defence off as the player fires.
+        session.game_work(
+            Controls::default(),
+            &catalog,
+            &Defending(false),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        session.hold_trigger(Trigger::default());
+        session.traffic.npcs_mut()[0].trigger.point_defence = true;
+        assert!(session.shots().iter().any(|shot| shot.weapon.id.0 == 134));
+        session.take_combat_events();
+        let quad_fired = |events: &[CombatEvent]| {
+            events.iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Fired {
+                        ship: ShipRef::Npc(_),
+                        weapon: crate::catalog::WeaponId(133),
+                        ..
+                    }
+                )
+            })
+        };
+        session.tick_again(
+            Controls::default(),
+            &Defending(true),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(
-            session
-                .strikes
-                .iter()
-                .any(|strike| strike.by == Some(ShipRef::Player)
-                    && strike.ship == ShipRef::Npc(NpcId(0))),
-            "kept for the advance pass's answers: {:?}",
-            session.strikes
+            !quad_fired(&session.take_combat_events()),
+            "the second pass"
+        );
+        session.game_work(
+            Controls::default(),
+            &catalog,
+            &Defending(true),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(
+            quad_fired(&session.take_combat_events()),
+            "the advance pass"
         );
     }
 

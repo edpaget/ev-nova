@@ -3051,6 +3051,7 @@ pub(super) mod tests {
         npc.state.position = Vec2::new(0.0, -100_000.0);
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut NeverFires,
         );

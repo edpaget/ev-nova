@@ -10,11 +10,14 @@
 //! pass leaves is settled once, after its last phase
 //! ([`Session::fight_tail`]).
 
-use super::{FightTerms, NpcBefore, Session};
+use super::{FightTerms, NpcBefore, Session, TrafficMarks};
+use crate::ai::Behaviour;
+use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
+use crate::flight::Controls;
 
 /// What a pass's fight reads of the session as it began: whether the
 /// player was destroyed or dying, and every NPC.
@@ -39,6 +42,170 @@ impl PassStart {
 }
 
 impl Session {
+    /// One advance pass of the game's work under the player's `controls`,
+    /// in `_DoPlayGameWork(1)`'s order (see the module docs), the traffic
+    /// drawn from `catalog` and deciding as `behaviour` says, the fight by
+    /// `rules`, drawing on `chance`. Whether the escape pod's rescue
+    /// settled on it, which ends the pass there (`_HandlePlayer` @0x68ddd;
+    /// see [`Session::rescue_if_due`]).
+    ///
+    /// Landed, or with the jump under way as the pass begins or once the
+    /// move has begun it, it runs the separate parts instead
+    /// ([`Session::tick`], [`Session::rescue_if_due`],
+    /// [`Session::tick_traffic`], [`Session::tick_assistance`] and
+    /// [`Session::tick_combat`]), as the fight stands still then and the
+    /// warp's lead-in traffic is the traffic tick's.
+    pub fn game_work(
+        &mut self,
+        controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> bool {
+        if self.landed.is_some() || self.jumping().is_some() {
+            self.tick(controls);
+            if self.rescue_if_due(catalog, chance) {
+                return true;
+            }
+            self.tick_traffic(catalog, behaviour, chance);
+            self.tick_assistance(rules.disable);
+            self.tick_combat(rules, chance);
+            return false;
+        }
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        // `_HandlePlayer` (@0x43e19), up to its move.
+        self.gate = None;
+        let frame = self.pass_head();
+        let pass = GamePass::Advance {
+            double_time: self.double_time,
+        };
+        self.before_move(frame, pass);
+        self.player_exploded_this_tick = false;
+        let start = PassStart::of(self);
+        self.player_fires(pass, rules, chance);
+        self.player_move(controls, pass);
+        if self.jumping().is_some() {
+            // The jump began in the move: the rest stands still.
+            self.tick_traffic(catalog, behaviour, chance);
+            self.tick_assistance(rules.disable);
+            self.tick_combat(rules, chance);
+            return false;
+        }
+        if self.rescue_if_due(catalog, chance) {
+            return true;
+        }
+        self.eject_before_fight(chance);
+        // The collision passes (@0x43e70-0x44015).
+        self.collision_passes(pass, rules, chance);
+        self.answer_strikes(behaviour);
+        // The advance pass's AI (@0x44223-0x442ae).
+        let marks = self.traffic_think(catalog, behaviour, chance);
+        self.take_scans(rules.law, chance);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.defend_npcs(fighters, arena, chance);
+        });
+        // `_HandleShot` (@0x44385).
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        });
+        self.answer_strikes(behaviour);
+        // `_HandleShip` (@0x44483).
+        self.traffic_motion(marks, chance);
+        self.tick_assistance(rules.disable);
+        self.npcs_fire(pass, rules, chance);
+        // `_HandleBeams` (@0x4453d), and what the pass leaves.
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.close_tick(fighters, arena, chance);
+        });
+        self.fight_tail(&start, pass, rules, chance);
+        // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
+        // come after the collision passes (see the `asteroids` module).
+        self.tick_asteroids(chance);
+        false
+    }
+
+    /// `_HandlePlayer`'s fight before its move, on `pass` by `rules`,
+    /// drawing on `chance`: the repair inhibit's countdown and the
+    /// disabled player's self-repair (@0x68b3d-0x68c6c; see the
+    /// `player_repair` module), its point defence (@0x68c74,
+    /// [`Combat::defend_player`]), the sabotage clock's tick (@0x692e5;
+    /// see the `sabotage` module), its trigger and its reloads' countdown
+    /// (@0x6ab55, @0x6ae25, [`Combat::fire_player`]); then its recoil set
+    /// in its velocity (`_AdjustedAccel` @0x62f35) and the fighters its bays
+    /// launched put in the system (`_LaunchFighter` @0x62c61), all before
+    /// it moves. So it fires from where it stood, along the heading and at
+    /// the velocity the last pass left, and a sabotage that downs it still
+    /// lets its point defence fire that pass.
+    pub(super) fn player_fires(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
+        self.player_repair_tick(rules, chance);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.defend_player(fighters, arena, chance);
+        });
+        self.sabotage_tick(rules, chance);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fire_player(fighters, arena, chance);
+        });
+        self.take_shoves();
+        let sorties = self.combat.take_sorties();
+        self.launch_fighters(&sorties, chance);
+    }
+
+    /// `_HandleShip`'s fire on `pass` by `rules`, drawing on `chance`:
+    /// every NPC's stray provocation eases (@0x35374-0x353b2), after the
+    /// collision passes and the shots and before the beams, then each
+    /// NPC's reloads count down and it fires its pick
+    /// ([`Combat::fire_npcs`]), and the pick fired is cleared or kept
+    /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
+    pub(super) fn npcs_fire(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
+        self.traffic.ease_stray();
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fire_npcs(fighters, arena, chance);
+        });
+        self.traffic.after_firing(&self.arsenal);
+    }
+
+    /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
+    /// says and drawing on `chance`: on the first pass in a system not
+    /// yet set up, its population ([`Session::populate`]), which moves
+    /// from the next; otherwise the session's work before the AI, the
+    /// traffic's think half ([`Traffic::think_holding`]), and the fleets
+    /// and comm calls it brings. What its motion is read against, when it
+    /// thought.
+    ///
+    /// [`Traffic::think_holding`]: crate::traffic::Traffic::think_holding
+    fn traffic_think(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        behaviour: &(impl Behaviour + ?Sized),
+        chance: &mut dyn Chance,
+    ) -> Option<TrafficMarks> {
+        if self.traffic_due {
+            self.populate(catalog, chance);
+            return None;
+        }
+        let (strikes, marks) = self.before_traffic_ai(catalog, chance);
+        self.step_traffic(|traffic, world| {
+            traffic.think_holding(behaviour, world, &strikes, chance);
+        });
+        self.after_traffic_ai(chance);
+        Some(marks)
+    }
+
+    /// The traffic's motion, read against the `marks` its think left,
+    /// drawing on `chance`: its fly half
+    /// ([`Traffic::fly_holding`](crate::traffic::Traffic::fly_holding)) and
+    /// the session's work after it, when it thought; then the end of the
+    /// traffic tick ([`Session::traffic_tail`]).
+    fn traffic_motion(&mut self, marks: Option<TrafficMarks>, chance: &mut dyn Chance) {
+        if let Some(marks) = marks {
+            self.step_traffic(|traffic, world| traffic.fly_holding(world, &marks.still, chance));
+            self.after_traffic_motion(&marks, chance);
+        }
+        self.traffic_tail(chance);
+    }
+
     /// Every NPC as it is now, for the strikes that follow to be read
     /// against.
     fn npcs_before(&self) -> Vec<NpcBefore> {
@@ -230,13 +397,283 @@ impl Session {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use crate::chance::NeverFires;
-    use crate::combat::Rules;
+    use std::cell::RefCell;
+
+    use crate::ai::{Behaviour, Decision, Goal, NovaAi, Reaction, Surroundings};
+    use crate::catalog::WeaponRecord;
+    use crate::chance::{Chance, NeverFires};
     use crate::combat::armament::Trigger;
     use crate::combat::hull::Condition;
-    use crate::session::tests::{FIRE, armed, facing_an_npc};
+    use crate::combat::{Rules, ShipRef, Strike};
+    use crate::flight::{Controls, Turn};
+    use crate::geometry::Vec2;
+    use crate::session::Session;
+    use crate::session::tests::{FIRE, armed, blaster, facing_an_npc};
     use crate::story::{Fate, StoryEvent};
-    use crate::traffic::npc::NpcId;
+    use crate::testkit::FakePilotCatalog;
+    use crate::traffic::npc::{Mode, Npc, NpcId};
+
+    /// What a decision saw of an NPC: whether it was provoked, the ship it
+    /// targeted, and the damage aimed at it.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Seen {
+        id: NpcId,
+        provoked: bool,
+        target: Option<ShipRef>,
+        targeted: Option<i32>,
+    }
+
+    /// Nova's AI, recording what each decision saw.
+    #[derive(Debug, Default)]
+    struct Recording {
+        ai: NovaAi,
+        seen: RefCell<Vec<Seen>>,
+    }
+
+    impl Recording {
+        fn take(&self) -> Vec<Seen> {
+            std::mem::take(&mut self.seen.borrow_mut())
+        }
+    }
+
+    impl Behaviour for Recording {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.ai.decide(npc, around, chance)
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            self.seen.borrow_mut().push(Seen {
+                id: npc.id,
+                provoked: npc.provoked > 0.0,
+                target: npc.target,
+                targeted: around.targeted.get(&ShipRef::Npc(npc.id)).copied(),
+            });
+            self.ai.decision(npc, around, chance)
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            self.ai.trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            self.ai.target(npc, around)
+        }
+
+        fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+            self.ai.react(npc, strike, around)
+        }
+    }
+
+    /// A pass of `session` in flight under `controls`, by Nova's rules,
+    /// its NPCs deciding as `behaviour` says.
+    fn pass(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        controls: Controls,
+        behaviour: &impl Behaviour,
+    ) {
+        let rescued = session.game_work(
+            controls,
+            catalog,
+            behaviour,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(!rescued);
+    }
+
+    /// [`facing_an_npc`], after a pass that sets the player's speed box
+    /// (see the `afterburner` module), the player at rest.
+    fn warmed(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        pass(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &Recording::default(),
+        );
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+        session
+    }
+
+    /// Runs passes of `session`, the player's trigger held on the first
+    /// alone, until NPC 0's shield first drops: what its decisions saw on
+    /// that pass, and how many passes ran.
+    fn until_hit(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        behaviour: &Recording,
+    ) -> (Vec<Seen>, u32) {
+        session.hold_trigger(FIRE);
+        for passes in 1..=40 {
+            pass(session, catalog, Controls::default(), behaviour);
+            session.hold_trigger(Trigger::default());
+            let seen = behaviour.take();
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                return (seen, passes);
+            }
+        }
+        panic!("never hit");
+    }
+
+    #[test]
+    fn an_npc_struck_by_the_players_shot_has_answered_it_when_that_ticks_decision_runs() {
+        // The collision passes (@0x43e70-0x44015) and `_DamageShip`'s
+        // reaction block come before `_AIDispatch` (@0x4429d).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        // Aimed at it: a stray hit the answer flag forgives.
+        session.target = Some(NpcId(0));
+        let behaviour = Recording::default();
+        let (seen, _) = until_hit(&mut session, &catalog, &behaviour);
+        let npc = seen
+            .iter()
+            .find(|seen| seen.id == NpcId(0))
+            .expect("decided");
+        assert!(npc.provoked, "{npc:?}");
+        assert_eq!(npc.target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_ship_the_player_hits_in_its_gate_is_held_there_before_that_ticks_motion() {
+        // The hit's answer holds it at the gate for 20 ticks
+        // (`_DamageShip` @0x3be6e-0x3be7c), and that pass's `_HandleShip`
+        // (@0x44483) counts the hold down.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.mode = Mode::Emerging { ticks_left: 60 };
+        npc.ai_type = crate::traffic::npc::AiType::Warship;
+        session.target = Some(NpcId(0));
+        let behaviour = Recording::default();
+        until_hit(&mut session, &catalog, &behaviour);
+        assert_eq!(session.npcs()[0].mode, Mode::HeldAtGate { ticks_left: 19 });
+    }
+
+    #[test]
+    fn an_npc_pushed_by_a_shot_moves_by_the_push_in_the_tick_it_lands() {
+        // The push lands in its velocity (`_DamageShip` @0x3a9b8-0x3ab84)
+        // before `_HandleShip`'s position step (@0x34274-0x342aa).
+        for (impact, pushed) in [(0, false), (2000, true)] {
+            let catalog = FakePilotCatalog {
+                weapons: vec![WeaponRecord {
+                    impact,
+                    ..blaster()
+                }],
+                ..armed()
+            };
+            let mut session = facing_an_npc(&catalog, 180);
+            // Its class, of no mass in the fixture, given one.
+            session.traffic.npcs_mut()[0].hull.mass = 40.0;
+            let start = session.npcs()[0].state.position;
+            let behaviour = Recording::default();
+            until_hit(&mut session, &catalog, &behaviour);
+            let moved = session.npcs()[0].state.position - start;
+            assert_eq!(moved.y < 0.0, pushed, "{impact}: {moved:?}");
+            if !pushed {
+                assert_eq!(moved, Vec2::ZERO, "at rest");
+            }
+        }
+    }
+
+    #[test]
+    fn the_damage_the_ai_reads_as_aimed_counts_no_shot_the_hit_pass_took() {
+        // `_CalculateTargetedDamage` (@0x44223) runs after the collision
+        // passes: the shot that hit, life -1 (@0x36f4f), counts for none.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.target = Some(NpcId(0));
+        let behaviour = Recording::default();
+        session.hold_trigger(FIRE);
+        let mut flying = Vec::new();
+        let seen = loop {
+            pass(&mut session, &catalog, Controls::default(), &behaviour);
+            session.hold_trigger(Trigger::default());
+            let seen = behaviour.take();
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                break seen;
+            }
+            flying.extend(seen);
+            assert!(flying.len() < 40, "never hit");
+        };
+        assert!(
+            flying.iter().all(|seen| seen.targeted.is_some()),
+            "in flight: {flying:?}"
+        );
+        assert_eq!(seen[0].targeted, None, "the shot the pass took");
+    }
+
+    #[test]
+    fn the_players_shot_leaves_from_where_it_stood_before_the_ticks_move() {
+        // `_HandlePlayer` fires (@0x6ab55) before its position step
+        // (@0x6d4b0-0x6d4eb).
+        let catalog = armed();
+        let mut session = warmed(&catalog);
+        session.player.velocity = Vec2::new(3.0, 0.0);
+        let stood = session.player().position;
+        session.hold_trigger(FIRE);
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Recording::default(),
+        );
+        assert_eq!(session.player().position, stood + Vec2::new(3.0, 0.0));
+        let shot = session
+            .shots()
+            .iter()
+            .find(|shot| shot.firer == ShipRef::Player)
+            .expect("a shot");
+        assert_eq!(shot.moved_from, Some(stood));
+    }
+
+    #[test]
+    fn the_players_recoil_moves_it_in_the_tick_it_fires() {
+        // The recoil goes into the velocity (`_AdjustedAccel` @0x62f35)
+        // before the turn, thrust and position step (@0x6c770-0x6d4eb).
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                recoil: 100,
+                ..blaster()
+            }],
+            ..armed()
+        };
+        let mut session = warmed(&catalog);
+        // The player's class, of no mass in the fixture, given one.
+        session.hull.mass = 40.0;
+        let stood = session.player().position;
+        session.hold_trigger(FIRE);
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Recording::default(),
+        );
+        let velocity = session.player().velocity;
+        assert!(velocity.y > 0.0, "pushed back, down: {velocity:?}");
+        assert_eq!(session.player().position, stood + velocity);
+    }
+
+    #[test]
+    fn the_player_fires_along_its_heading_before_the_ticks_turn() {
+        // The trigger (@0x6ab55) comes before the turn (@0x6c770-0x6c8d3).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let heading = session.player().heading;
+        session.hold_trigger(FIRE);
+        let turning = Controls {
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        pass(&mut session, &catalog, turning, &Recording::default());
+        assert_ne!(session.player().heading, heading, "turned");
+        let shot = session
+            .shots()
+            .iter()
+            .find(|shot| shot.firer == ShipRef::Player)
+            .expect("a shot");
+        assert_eq!(shot.heading, heading);
+    }
 
     /// The ship fates raised and not yet settled.
     fn fates(session: &crate::session::Session) -> Vec<StoryEvent> {
@@ -245,6 +682,43 @@ mod tests {
             .into_iter()
             .filter(|event| matches!(event, StoryEvent::ShipFate { .. }))
             .collect()
+    }
+
+    /// Asserts three passes of `session` match the separate parts.
+    fn runs_the_parts(mut session: Session, catalog: &FakePilotCatalog) {
+        let mut by_parts = session.clone();
+        for _ in 0..3 {
+            pass(
+                &mut session,
+                catalog,
+                Controls::default(),
+                &NovaAi::default(),
+            );
+            by_parts.tick(Controls::default());
+            assert!(!by_parts.rescue_if_due(catalog, &mut NeverFires));
+            by_parts.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
+            by_parts.tick_assistance(Rules::default().disable);
+            by_parts.tick_combat(Rules::default(), &mut NeverFires);
+            assert_eq!(session, by_parts);
+        }
+    }
+
+    #[test]
+    fn a_landed_or_jumping_pass_runs_the_parts_as_before() {
+        let catalog = armed();
+        let mut landed = facing_an_npc(&catalog, 180);
+        crate::testkit::land_now(&mut landed).expect("lands");
+        runs_the_parts(landed, &catalog);
+        let catalog = crate::testkit::catalog();
+        let mut jumping = crate::session::tests::bound_for_131(
+            &catalog,
+            crate::session::tests::OUT,
+            Vec2::ZERO,
+            90.0,
+        );
+        jumping.begin_jump().expect("jumps");
+        assert!(jumping.in_warp_lead_in());
+        runs_the_parts(jumping, &catalog);
     }
 
     #[test]

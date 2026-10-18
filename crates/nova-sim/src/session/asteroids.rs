@@ -489,6 +489,7 @@ mod tests {
         assert_eq!(session.asteroids().count(), 1);
         session.tick_again(
             Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut NeverFires,
         );
@@ -1273,7 +1274,12 @@ mod tests {
         assert_eq!(session.shots().len(), 1, "one still shot");
         let at = drifting_in(&mut session);
         session.set_double_time_key(true);
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         let rock = slot(&session, at);
         assert_eq!(rock.strength, 100, "30 off as the pass's shots met it");
         assert_eq!(rock.position, Vec2::new(-5.0, 0.0), "then stepped");

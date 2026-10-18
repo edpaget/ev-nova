@@ -551,6 +551,7 @@ mod tests {
         session.tick(held(false, true));
         session.tick_again(
             held(false, true),
+            &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,
         );

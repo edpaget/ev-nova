@@ -453,7 +453,12 @@ mod tests {
         session.set_double_time_key(true);
         session.tick(Controls::default());
         assert_eq!(session.dock_request(), request(128, CLEARED));
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.dock_request(), request(128, CLEARED + 1));
         assert_eq!(
             session.take_messages(),
@@ -462,7 +467,12 @@ mod tests {
         );
         for _ in 0..648 {
             session.tick(Controls::default());
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         }
         assert_eq!(session.dock_request(), request(128, 0x7ff));
         session.tick(Controls::default());

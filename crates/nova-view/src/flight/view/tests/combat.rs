@@ -351,7 +351,12 @@ fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
         copy.tick_traffic(catalog, &Answering, &mut NeverFires);
         copy.tick_combat(Rules::default(), &mut NeverFires);
         let advance = left(&copy.npcs()[0]) < shield;
-        copy.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        copy.tick_again(
+            Controls::default(),
+            &nova_sim::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         (advance, left(&copy.npcs()[0]) < shield)
     };
     view.input(&key(FIRE_KEY, true));

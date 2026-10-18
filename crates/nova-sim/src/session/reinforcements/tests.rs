@@ -553,7 +553,12 @@ fn double_times_second_pass_counts_the_clock_down_again() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false);
-    session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+    session.tick_again(
+        Controls::default(),
+        &crate::ai::NovaAi::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
     assert_eq!(timer(&session), i32::from(TIME) - 1);
 }
 

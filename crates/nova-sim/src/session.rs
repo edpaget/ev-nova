@@ -1989,13 +1989,31 @@ impl Session {
     /// runs, the pod flies itself in place of the controls, the jump, the
     /// fuel and the dock approach (see the `eject` module's `pod_tick`).
     ///
-    /// This is the player's part of the advance pass; double time's
-    /// second pass runs it again ([`Session::tick_again`]).
+    /// This is the player's part of the advance pass, its fire left to
+    /// the fight ([`Session::tick_combat`]); double time's second pass
+    /// runs it again ([`Session::tick_again`]). Only
+    /// [`Session::game_work`] runs the player's fire before its move, as
+    /// `_HandlePlayer` does.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
             return;
         }
+        let frame = self.pass_head();
+        self.fly_player(
+            frame,
+            controls,
+            GamePass::Advance {
+                double_time: self.double_time,
+            },
+        );
+    }
+
+    /// The head of an advance pass in flight: the warp-ups and the
+    /// warp-out play a frame's worth, double time is latched, the
+    /// take-off grace counts down, a mission sound plays, and the frame
+    /// counter moves on. Gives the frame the pass runs on.
+    fn pass_head(&mut self) -> i16 {
         // The warp-ups and the warp-out play in real time, a frame's worth
         // on each advance pass, and the switch and the natural end read
         // them.
@@ -2007,21 +2025,25 @@ impl Session {
         let frame = self.frame;
         self.pass_frame = frame;
         self.frame = market::next_frame(frame);
-        self.fly_player(
-            frame,
-            controls,
-            GamePass::Advance {
-                double_time: self.double_time,
-            },
-        );
+        frame
     }
 
     /// The player's part of a game-work pass on `frame` under `controls`
     /// (`_HandlePlayer`, which runs on both passes; see the
     /// `double_time` module): everything [`Session::tick`] does after the
-    /// frame counter moves on. Only the advance pass steps the Red
-    /// Alert's blink, as `_HandleAlertSprite` runs on it alone.
+    /// frame counter moves on, its work before the move
+    /// ([`Session::before_move`]) then the move ([`Session::player_move`]).
     fn fly_player(&mut self, frame: i16, controls: Controls, pass: GamePass) {
+        self.before_move(frame, pass);
+        self.player_move(controls, pass);
+    }
+
+    /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: the
+    /// tribbles and perishables on a due frame, the Red Alert's check, and
+    /// its blink on the advance pass alone, as `_HandleAlertSprite` runs
+    /// on it alone, the tutorial's hints, the target brackets, and the
+    /// cargo boxes scooped and aged.
+    fn before_move(&mut self, frame: i16, pass: GamePass) {
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
@@ -2041,14 +2063,22 @@ impl Session {
         self.brackets_tick();
         self.scoop_boxes();
         self.boxes_tick();
+    }
+
+    /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
+    /// flight while its countdown runs (see the `eject` module), else the
+    /// ship's motion ([`Session::move_player`]) and the dock approach.
+    fn player_move(&mut self, controls: Controls, pass: GamePass) {
         if self.pod.is_some() {
             self.pod_tick();
             return;
         }
         self.move_player(controls, pass);
-        // After the ship moves, as `_HandlePlayer` runs the approach
-        // (@0x6a965) after it moves the ship (@0x6864d); see the
-        // `clearance` module.
+        // After the ship moves, though `_HandlePlayer` runs the approach
+        // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
+        // the `clearance` module reads as the move, is
+        // `_WrapPlayerPosition` (filed as hud-fidelity-followups' dock
+        // approach phase).
         self.dock_approach();
     }
 
@@ -2414,6 +2444,10 @@ impl Session {
     /// player's system's reinforcement clock ticks, after the frame's
     /// calls (see the `reinforcements` module). The traffic ticks in the same [`World`] the
     /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
+    ///
+    /// This runs the traffic before the fight ([`Session::tick_combat`]):
+    /// only [`Session::game_work`] runs its AI after the fight's collision
+    /// passes and its motion after the shots, as `_DoPlayGameWork` does.
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2427,26 +2461,63 @@ impl Session {
                     self.populate(catalog, chance);
                 }
             } else {
-                self.mission_ship_arrivals(catalog, None, chance);
-                self.unmark_inactive_mission_ships();
-                self.join_mission_escorts();
-                let strikes = std::mem::take(&mut self.strikes);
-                let last = self.last_npc();
-                let marks = self.mission_marks();
-                let still = self.held_through_the_warp();
+                let (strikes, marks) = self.before_traffic_ai(catalog, chance);
                 self.step_traffic(|traffic, world| {
-                    traffic.tick_holding(behaviour, world, &strikes, &still, chance);
+                    traffic.tick_holding(behaviour, world, &strikes, &marks.still, chance);
                 });
-                self.announce_fleets(chance);
-                self.answer_comm_calls(chance);
-                self.answer_pirates(&mut &mut *chance);
-                self.mission_ships_left(&marks);
-                self.resolve_person_offers(last, &mut &mut *chance);
-                self.dock_fighters();
-                self.orphan_fighters();
-                self.observe_watched();
+                self.after_traffic_ai(chance);
+                self.after_traffic_motion(&marks, chance);
             }
         }
+        self.traffic_tail(chance);
+    }
+
+    /// The session's work before the traffic's AI, reading `catalog` and
+    /// drawing on `chance`: the mission ships' arrivals, the inactive ones
+    /// unmarked, the mission escorts joined; then the strikes left for the
+    /// traffic to answer, taken, and what the traffic's motion is read
+    /// against ([`TrafficMarks`]).
+    fn before_traffic_ai(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> (Vec<Strike>, TrafficMarks) {
+        self.mission_ship_arrivals(catalog, None, chance);
+        self.unmark_inactive_mission_ships();
+        self.join_mission_escorts();
+        let strikes = std::mem::take(&mut self.strikes);
+        let marks = TrafficMarks {
+            last: self.last_npc(),
+            marks: self.mission_marks(),
+            still: self.held_through_the_warp(),
+        };
+        (strikes, marks)
+    }
+
+    /// The session's work after the traffic's AI, drawing on `chance`: the
+    /// fleets announced and the comm calls answered.
+    fn after_traffic_ai(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.announce_fleets(chance);
+        self.answer_comm_calls(chance);
+    }
+
+    /// The session's work after the traffic's motion, read against
+    /// `marks`, drawing on `chance`: the pirates answered, each mission
+    /// ship that left raising its fate, the persons' offers resolved, the
+    /// fighters docked and orphaned, and the watched ships observed.
+    fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
+        self.answer_pirates(&mut &mut *chance);
+        self.mission_ships_left(&marks.marks);
+        self.resolve_person_offers(marks.last, &mut &mut *chance);
+        self.dock_fighters();
+        self.orphan_fighters();
+        self.observe_watched();
+    }
+
+    /// The end of a traffic tick, drawing on `chance`: the reinforcement
+    /// clock's tick, the gates' sprites unless landed, and a target lost
+    /// let go.
+    fn traffic_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.tick_reinforcements(chance);
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
@@ -6223,6 +6294,15 @@ impl Session {
             .filter(|&fuel| fuel > 0)
             .map_or(0.0, |fuel| chance.below(fuel) as f32);
     }
+}
+
+/// What a traffic tick's motion is read against, as its AI began: the
+/// last NPC (for the persons' offers), the mission ships' marks (for
+/// those that leave), and the NPCs held still through the warp.
+struct TrafficMarks {
+    last: Option<NpcId>,
+    marks: Vec<(NpcId, crate::traffic::npc::MissionMark)>,
+    still: BTreeSet<NpcId>,
 }
 
 /// An NPC as it was before a fight's tick: what the tick's disablings,
@@ -10400,7 +10480,12 @@ pub(super) mod tests {
     fn in_double_time_a_due_frame_steps_tribbles_twice() {
         let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 10)]);
         let again = |session: &mut Session| {
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         };
         for _ in 0..14 {
             session.tick(Controls::default());
@@ -22084,6 +22169,84 @@ pub(super) mod tests {
         );
         session.jump = None;
         assert!(defended(&mut session), "firing once the jump is off");
+    }
+
+    #[test]
+    fn a_sabotage_kill_in_the_pre_jump_goes_off_after_the_players_point_defence() {
+        // `_HandlePlayer` runs its point defence (@0x68c74), which rests
+        // while the jump is under way (`_HandleShipPointDefense`
+        // @0x392d6), before the sabotage block (@0x692e5), whose kill
+        // gives the pre-jump up; the trigger comes after both (@0x6ab55).
+        const KILL: i16 = 261;
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let mut catalog = arming(quad, slow, 0);
+        catalog
+            .outfits
+            .push(outfit(KILL, &[(crate::sabotage::SABOTAGE_KILL, 4100)]));
+        let defended = |sabotaged: bool| {
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            if sabotaged {
+                session.pilot.outfits.insert(OutfitId(KILL), 1);
+                session.reset_precalced();
+            }
+            // The NPC fires its missile, which the point defence first
+            // sees on the next pass.
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &Attacking,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            assert!(
+                session
+                    .shots()
+                    .iter()
+                    .any(|shot| shot.weapon.id == WeaponId(134)),
+                "a missile at it"
+            );
+            session.sabotage.set_counter(crate::sabotage::FUSE);
+            session.jump = Some(Jump::PreJump {
+                to: SystemId(129),
+                bearing: None,
+                warp: None,
+            });
+            session.take_combat_events();
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &Attacking,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            let events = session.take_combat_events();
+            (quad_fired(&events, ShipRef::Player), session.jump.is_some())
+        };
+        assert_eq!(
+            defended(false),
+            (false, true),
+            "resting through the pre-jump"
+        );
+        assert_eq!(
+            defended(true),
+            (false, false),
+            "rested, then the kill gave the pre-jump up"
+        );
     }
 
     // Point defence against ships (`_HandleShipPointDefense`

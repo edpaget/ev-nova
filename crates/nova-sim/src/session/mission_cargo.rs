@@ -1361,6 +1361,7 @@ mod tests {
         session.tick_traffic(&catalog, &LookedOver, &mut chance);
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut chance,
         );

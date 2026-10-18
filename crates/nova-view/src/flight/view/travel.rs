@@ -570,7 +570,7 @@ impl<
                         break;
                     }
                     if again {
-                        session.tick_again(controls, rules, &mut self.chance);
+                        session.tick_again(controls, &*self.behaviour, rules, &mut self.chance);
                     } else {
                         session.tick(controls);
                     }

@@ -800,6 +800,27 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_the_player_launches_moves_on_its_launch_tick() {
+        // `_FirePlayerWeapon`'s bay calls `_LaunchFighter` (@0x62c61),
+        // which marks the slot active before `_AIDispatch` and
+        // `_HandleShip` (@0x4429d, @0x44483) run that frame.
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        let stood = session.player().position;
+        session.hold_fire(false, true);
+        session.game_work(
+            Controls::default(),
+            &catalog,
+            &Sitting,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        let fighters = fleet_npcs(&session);
+        assert_eq!(fighters.len(), 1, "launched");
+        assert_ne!(fighters[0].state.position, stood, "moved off the bay");
+    }
+
+    #[test]
     fn firing_the_bay_launches_a_fighter_into_the_fleet_beside_the_player() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
@@ -1328,6 +1349,7 @@ mod tests {
         let docked = (1..=600).find(|_| {
             session.tick_again(
                 Controls::default(),
+                &crate::ai::NovaAi::default(),
                 crate::Rules::default(),
                 &mut NeverFires,
             );
