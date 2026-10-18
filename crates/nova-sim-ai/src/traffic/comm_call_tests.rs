@@ -60,6 +60,39 @@ fn the_ticks_calls_are_taken_in_npc_order_once() {
     assert_eq!(traffic.take_comm_calls(), [], "taken");
 }
 
+/// NPC 0 calls for help and for reinforcements, NPC 1 for reinforcements
+/// alone.
+#[derive(Debug)]
+struct Reinforced;
+
+impl Behaviour for Reinforced {
+    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        Goal::Idle
+    }
+
+    fn decision(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Decision {
+        Decision {
+            comm_call: (npc.id == NpcId(0)).then_some(CommCall::Distress),
+            calls_reinforcements: npc.id <= NpcId(1),
+            ..Decision::default()
+        }
+    }
+}
+
+#[test]
+fn a_call_for_reinforcements_follows_the_thinks_own_call() {
+    let mut traffic = traffic(3);
+    traffic.tick_in(&Reinforced, World::new(&[]), &[], &mut Draws::of(&[]));
+    assert_eq!(
+        traffic.take_comm_calls(),
+        [
+            (NpcId(0), CommCall::Distress),
+            (NpcId(0), CommCall::Reinforcements),
+            (NpcId(1), CommCall::Reinforcements),
+        ]
+    );
+}
+
 #[test]
 fn a_ship_whose_think_is_not_due_calls_nothing() {
     let mut traffic = traffic(3);

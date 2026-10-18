@@ -6,8 +6,9 @@
 //! decides again. Fleeing, or fighting a warship or an interceptor, it
 //! calls for help on every think (`_AICallForHelp` @0x8b6cc, @0x8b71c;
 //! see [`call_for_help`](super::call_for_help)), and fleeing it calls
-//! for reinforcements too (@0x8b6dc), which
-//! rdm:phase/combat-ai-fidelity/phase-5-reinforcements adds. A stand-off ship (`shïp` `Flags2` 0x0002) never asks
+//! for reinforcements too, after the call for help (@0x8b6dc; see
+//! [`reinforcements`](super::reinforcements)). A stand-off ship (`shïp`
+//! `Flags2` 0x0002) never asks
 //! whether the chase is hopeless: `_HighLevelAIHandler` tests the bit
 //! first and jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its
 //! band instead (see [`stand_off`](super::stand_off)).
@@ -39,12 +40,14 @@ pub struct BraveTrader {
 
 impl Behaviour for BraveTrader {
     /// Its [`decide`](Self::decide) goal, with a distress call fleeing or
-    /// fighting a warship or interceptor ([`brave_call`]).
+    /// fighting a warship or interceptor ([`brave_call`]), and a call for
+    /// reinforcements fleeing (state 3, @0x8b6dc).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let goal = self.decide(npc, around, chance);
         Decision {
             goal,
             comm_call: brave_call(goal, around),
+            calls_reinforcements: matches!(goal, Goal::Flee(_)),
             ..Decision::default()
         }
     }
@@ -166,6 +169,32 @@ mod tests {
         let mut calm = provoked(100.0, 0.0);
         calm[0].provoked = 0.0;
         assert_eq!(call(&calm), None, "idle");
+    }
+
+    /// Whether the brave trader's think calls for reinforcements, among
+    /// `npcs`.
+    fn calls_reinforcements(npcs: &[Npc]) -> bool {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        BraveTrader::default()
+            .decision(&npcs[0], &around, &mut Draws::of(&[0]))
+            .calls_reinforcements
+    }
+
+    #[test]
+    fn a_fleeing_brave_trader_calls_for_reinforcements_too_and_a_fighting_one_does_not() {
+        assert!(
+            calls_reinforcements(&provoked(1251.0, 0.0)),
+            "fleeing (@0x8b6dc)"
+        );
+        assert!(
+            !calls_reinforcements(&provoked(100.0, 0.0)),
+            "fighting a warship, only for help"
+        );
+        let mut calm = provoked(100.0, 0.0);
+        calm[0].provoked = 0.0;
+        assert!(!calls_reinforcements(&calm), "idle");
     }
 
     #[test]

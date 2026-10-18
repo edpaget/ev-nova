@@ -140,6 +140,7 @@ impl Session {
             match call {
                 CommCall::Distress => self.call_for_help(id, chance),
                 CommCall::PreScan => self.hail_before_scan(id, chance),
+                CommCall::Reinforcements => self.call_for_reinforcements(id),
             }
         }
     }

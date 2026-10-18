@@ -29,7 +29,10 @@
 //! Each decision ([`Behaviour::decision`]) carries whether the think
 //! turned the ship on the player through `_AIMakeShipAttackPlayer`: the
 //! type's own, or a `ShipBehav` 0 mission ship's hunt (`_HighLevelAIHandler`
-//! @0x8d6b7), whose quote gate its mark always fails (+0xc8d2, @0x89c71).
+//! @0x8d6b7), whose quote gate its mark always fails (+0xc8d2, @0x89c71);
+//! and whether it calls for reinforcements, the type's own and
+//! `_HighLevelAIHandler`'s after it (see
+//! [`reinforcements`](crate::ai::reinforcements)).
 
 use std::rc::Rc;
 
@@ -37,7 +40,7 @@ use crate::ai::fire::FireRules;
 use crate::ai::miner::{MINER_BITS, MinerAi};
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, GateWait, Goal, Interceptor, Reaction,
-    Surroundings, Warship, WimpyTrader,
+    Surroundings, Warship, WimpyTrader, reinforcements,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -227,18 +230,24 @@ impl Behaviour for NovaAi {
     /// (`hunts_player`), turning on it through `_AIMakeShipAttackPlayer`
     /// (`_HighLevelAIHandler` @0x8d6b7), whose quote gate its mark fails
     /// (+0xc8d2, @0x89c71); every other NPC decides as its behaviour does,
-    /// its turn on the player with it.
+    /// its turn on the player with it. Either way `_HighLevelAIHandler`'s
+    /// call for reinforcements ends the think
+    /// ([`reinforcements::with_high_level_call`]), whatever type decided,
+    /// as it runs after every type's think (`_AIDispatch` @0x901e5).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        if self.hunts_player(npc, around) {
-            return Decision {
+        let decision = if self.hunts_player(npc, around) {
+            Decision {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: false,
                 comm_call: None,
-            };
-        }
-        self.thinker(npc).decision(npc, around, chance)
+                calls_reinforcements: false,
+            }
+        } else {
+            self.thinker(npc).decision(npc, around, chance)
+        };
+        reinforcements::with_high_level_call(npc, decision, around)
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -939,6 +948,41 @@ mod tests {
     }
 
     #[test]
+    fn every_think_ends_with_the_high_level_handlers_call_for_reinforcements() {
+        let mark = Marked::new(2);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let npcs = [of(1, AiType::Warship), of(2, AiType::Warship)];
+        let around = with_player(&npcs, Condition::Intact);
+        assert!(
+            ai.decision(&npcs[0], &around, &mut Draws::of(&[]))
+                .calls_reinforcements,
+            "attacking (@0x8e70d)"
+        );
+        let mut disabled = npcs.clone();
+        disabled[0].condition = Condition::Disabled;
+        let around = with_player(&disabled, Condition::Intact);
+        assert!(
+            !ai.decision(&disabled[0], &around, &mut Draws::of(&[]))
+                .calls_reinforcements,
+            "disabled (@0x8e6eb)"
+        );
+        let escorts = NovaAi::default().with_escorts(mark.clone());
+        let mut escort = of(1, AiType::WimpyTrader);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let led = [escort, of(2, AiType::Warship)];
+        let around = with_player(&led, Condition::Intact);
+        assert!(
+            escorts
+                .decision(&led[0], &around, &mut Draws::of(&[]))
+                .calls_reinforcements,
+            "an escort's think too (@0x901e5)"
+        );
+    }
+
+    #[test]
     fn a_mission_ship_of_ship_behav_0_attacks_the_player_on_every_think() {
         let mark = Marked::new(7);
         let ai = NovaAi::default().with(AiType::Warship, mark.clone());
@@ -1244,6 +1288,7 @@ mod tests {
                 dropped_target: true,
                 provokes: false,
                 comm_call: None,
+                calls_reinforcements: false,
             }
         }
     }
@@ -1264,6 +1309,7 @@ mod tests {
                 dropped_target: false,
                 provokes: false,
                 comm_call: None,
+                calls_reinforcements: true,
             },
             "the mission hunt (@0x8d6b7)"
         );

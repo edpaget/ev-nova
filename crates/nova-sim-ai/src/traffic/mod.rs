@@ -121,6 +121,7 @@ pub mod table;
 use crate::ai::interceptor::within_reach;
 use crate::ai::{
     Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
+    reinforcements,
 };
 use crate::combat::ion::Ion;
 use std::collections::{BTreeMap, BTreeSet};
@@ -370,6 +371,9 @@ pub struct World<'a> {
     /// The asteroid in slot 0 of the system's field, if any
     /// ([`Surroundings::mining_rock`]).
     pub mining_rock: Option<Asteroid>,
+    /// The system's reinforcement fleet while one called is on its way
+    /// ([`Surroundings::reinforcements`]).
+    pub reinforcements: Option<reinforcements::Coming>,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -379,8 +383,8 @@ impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
-    /// width known, the engine's [`SPAWN_RESERVE`], no cloak scanner and no
-    /// asteroid in slot 0.
+    /// width known, the engine's [`SPAWN_RESERVE`], no cloak scanner, no
+    /// asteroid in slot 0 and no reinforcements coming.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -399,6 +403,7 @@ impl<'a> World<'a> {
             arrival_hits: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
+            reinforcements: None,
         }
     }
 
@@ -442,6 +447,7 @@ impl<'a> World<'a> {
             record: self.record,
             targeted: self.targeted,
             mining_rock: self.mining_rock,
+            reinforcements: self.reinforcements,
         }
     }
 }
@@ -774,10 +780,16 @@ impl Traffic {
             self.npcs
                 .iter()
                 .zip(&decisions)
-                .filter_map(|(npc, decision)| {
+                .filter_map(|(npc, decision)| decision.map(|decision| (npc.id, decision)))
+                .flat_map(|(id, decision)| {
+                    let reinforcements = decision
+                        .calls_reinforcements
+                        .then_some(CommCall::Reinforcements);
                     decision
-                        .and_then(|decision| decision.comm_call)
-                        .map(|call| (npc.id, call))
+                        .comm_call
+                        .into_iter()
+                        .chain(reinforcements)
+                        .map(move |call| (id, call))
                 }),
         );
         let view = world.gate_view();
@@ -1531,6 +1543,8 @@ impl Traffic {
 
     /// The calls the decisions made on the message line since this was
     /// last called, in NPC order within a tick ([`Decision::comm_call`]),
+    /// each think's call for reinforcements after its own call
+    /// ([`Decision::calls_reinforcements`], [`CommCall::Reinforcements`]),
     /// for the session to answer. Taking them empties the list; entering
     /// or going on into another system drops them.
     pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall)> {
@@ -3559,6 +3573,7 @@ mod tests {
             dropped_target: true,
             provokes: false,
             comm_call: None,
+            calls_reinforcements: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

@@ -2370,6 +2370,7 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
+            reinforcements: None,
         };
         f(&mut self.traffic, world);
     }
@@ -2436,6 +2437,7 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
+            reinforcements: None,
         }
     }
 

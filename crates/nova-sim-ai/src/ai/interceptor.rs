@@ -568,6 +568,7 @@ mod tests {
                 dropped_target: false,
                 provokes: true,
                 comm_call: None,
+                calls_reinforcements: false,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -584,6 +585,7 @@ mod tests {
             dropped_target: false,
             provokes: true,
             comm_call: None,
+            calls_reinforcements: false,
         };
         let picked = |goal| Decision {
             goal,
@@ -664,6 +666,7 @@ mod tests {
                 dropped_target: true,
                 provokes: false,
                 comm_call: None,
+                calls_reinforcements: false,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );

@@ -435,11 +435,15 @@ pub struct Surroundings<'a> {
     /// miner works (`*0x3b540c`, whose +0x20 says it is live, read by
     /// `_MinerAI` @0x8b2ad-0x8b2b8; see [`miner`]).
     pub mining_rock: Option<Asteroid>,
+    /// The system's reinforcement fleet while one called is on its way
+    /// (its timer above 0), which doubles an allied ship's `MaxOdds` in
+    /// its odds retreat ([`reinforcements::odds_factor`]).
+    pub reinforcements: Option<reinforcements::Coming>,
 }
 
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
-    /// damage aimed and no asteroid in slot 0.
+    /// damage aimed, no asteroid in slot 0 and no reinforcements coming.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -451,6 +455,7 @@ impl<'a> Surroundings<'a> {
             record: 0,
             targeted: &NO_AIMED_DAMAGE,
             mining_rock: None,
+            reinforcements: None,
         }
     }
 
@@ -545,6 +550,8 @@ pub struct GateWait {
 
 /// An NPC's decision ([`Behaviour::decision`]): its goal, and whether the
 /// think turned it on the player.
+// Each flag is its own write or call of the original's think.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Decision {
     /// Its goal now.
@@ -576,6 +583,13 @@ pub struct Decision {
     /// [`call_for_help`]). The session answers it after the tick's
     /// decisions (`Session::answer_comm_calls`).
     pub comm_call: Option<CommCall>,
+    /// Whether the think calls for its system's reinforcement fleet
+    /// (`_AICallForReinforcements(ship, 0)`, see [`reinforcements`]): a
+    /// fleeing brave trader's (@0x8b6dc), and `_HighLevelAIHandler`'s
+    /// in state 3 and 4 ([`reinforcements::high_level_calls`]). The
+    /// traffic asks it after the think's own [`comm_call`](Self::comm_call)
+    /// ([`CommCall::Reinforcements`]).
+    pub calls_reinforcements: bool,
 }
 
 /// How NPCs decide what to do.

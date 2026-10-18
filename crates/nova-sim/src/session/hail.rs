@@ -632,7 +632,7 @@ impl Session {
         clippy::unused_self,
         reason = "an empty hook until reinforcements are built"
     )]
-    fn call_for_reinforcements(&self, _id: NpcId) {}
+    pub(super) fn call_for_reinforcements(&self, _id: NpcId) {}
 
     /// Gives a tick of the help each NPC assisting the player gives (see
     /// [`assist`](crate::hail::assist)), a repair raising the armour until

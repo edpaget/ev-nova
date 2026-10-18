@@ -32,6 +32,11 @@ pub enum CommCall {
     /// `_InterceptorAI`'s pre-scan hail: the interceptor has just picked
     /// the player to inspect (@0x8ce34-0x8ce4b).
     PreScan,
+    /// `_AICallForReinforcements(ship, 0)`: a call for the system's
+    /// reinforcement fleet ([`Decision::calls_reinforcements`](crate::ai::Decision::calls_reinforcements),
+    /// see [`reinforcements`](crate::ai::reinforcements)), after the
+    /// think's own call.
+    Reinforcements,
 }
 
 /// The call of a wimpy trader's or a miner's think ending in `goal`: a

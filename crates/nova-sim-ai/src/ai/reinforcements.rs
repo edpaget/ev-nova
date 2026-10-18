@@ -38,11 +38,103 @@
 //! - **The day** ([`day`]): each visible system's countdown above 0 goes
 //!   down by one (@0xb739-0xb746).
 //!
+//! **Who calls** ([`Decision::calls_reinforcements`]): a fleeing brave
+//! trader (`_BraveTraderAI` @0x8b6dc, see [`brave`](super::brave)), and
+//! after every type's think `_HighLevelAIHandler` (`_AIDispatch`
+//! @0x901e5), by the goal the think ends in ([`high_level_calls`]):
+//!
+//! - **fleeing** (state 3, @0x8df75-0x8e0dc), from a ship within 250 on
+//!   both axes, each offset cut to a whole number (@0x8e025-0x8e050),
+//!   unless it flees an ally neither it nor its quarry escorting the
+//!   player (@0x8e077-0x8e0c3, where the original stops fleeing,
+//!   rdm:phase/combat-ai-fidelity/phase-6-warship-target-selection's);
+//! - **attacking or sniping** (state 4) a ship here to be fought
+//!   ([`Surroundings::live`], the target gates @0x8e267-0x8e3f6), the ship
+//!   itself intact (`_IsDisabled` @0x8e6eb), after its fighters launch
+//!   (@0x8e6fa-0x8e70d).
+//!
 //! A ship's odds retreat waits for twice its government's `MaxOdds`
-//! while an allied fleet is coming ([`Clock::coming`]; see the
-//! [`warship`](super::warship) module).
+//! while an allied fleet is coming ([`Clock::coming`],
+//! [`Surroundings::reinforcements`]; see the [`warship`](super::warship)
+//! module).
 
+use crate::ai::{Decision, Goal, Surroundings};
 use crate::catalog::GovtId;
+use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
+use crate::traffic::npc::Npc;
+
+/// How near, in whole pixels on either axis, a ship fled from must be for
+/// the fleeing ship to call (`cmpw $0xfa` @0x8e025, @0x8e047).
+pub const FLEEING_CALL_REACH: f32 = 250.0;
+
+/// Whether `_HighLevelAIHandler` calls for reinforcements after `npc`'s
+/// think ended in `goal`, among `around` (see the module docs).
+#[must_use]
+pub fn high_level_calls(npc: &Npc, goal: Goal, around: &Surroundings) -> bool {
+    match goal {
+        Goal::Flee(from) => {
+            let near = around.state_of(from).is_some_and(|state| {
+                let off = state.position - npc.state.position;
+                off.x.trunc().abs() <= FLEEING_CALL_REACH
+                    && off.y.trunc().abs() <= FLEEING_CALL_REACH
+            });
+            near && !flees_a_stranger_ally(npc, from, around)
+        }
+        Goal::Attack(target) | Goal::Snipe(target) => {
+            npc.condition == Condition::Intact && around.live(target)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `npc`, of a government and escorting no player, flees `from`,
+/// an ally of its government that escorts no player either: the case in
+/// which `_HighLevelAIHandler` stops fleeing and makes no call
+/// (@0x8e077-0x8e0c3 → @0x8e81d).
+fn flees_a_stranger_ally(npc: &Npc, from: ShipRef, around: &Surroundings) -> bool {
+    let ShipRef::Npc(id) = from else {
+        return false;
+    };
+    npc.govt.is_some()
+        && !npc.escorts_player()
+        && around.npc(id).is_some_and(|quarry| {
+            around.govts.allies(npc.govt, quarry.govt) && !quarry.escorts_player()
+        })
+}
+
+/// A called fleet on its way to the system, as a ship's odds retreat
+/// reads it ([`Surroundings::reinforcements`]): its government.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Coming {
+    /// The fleet's government, or `None` for independent.
+    pub govt: Option<GovtId>,
+}
+
+/// The factor on a ship's `MaxOdds` in its odds retreat: 2 while a fleet
+/// allied with it is coming (`addss` @0x8bdc1, @0x8d26d), else 1.
+#[must_use]
+pub fn odds_factor(npc: &Npc, around: &Surroundings) -> f32 {
+    if around
+        .reinforcements
+        .is_some_and(|coming| around.govts.allies(npc.govt, coming.govt))
+    {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+/// `decision` with `_HighLevelAIHandler`'s call added (see
+/// [`high_level_calls`]): what every think of `npc` ends with.
+#[must_use]
+pub fn with_high_level_call(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
+    Decision {
+        calls_reinforcements: decision.calls_reinforcements
+            || high_level_calls(npc, decision.goal, around),
+        ..decision
+    }
+}
 
 /// A system's reinforcement fleet, as the call and the clock read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +321,137 @@ pub fn day(countdown: u16) -> u16 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
+    use crate::escort::{EscortDuty, FormationSlot};
+    use crate::traffic::npc::AiType;
+
+    /// A trader at the centre and a ship of `govt` at (`x`, `y`) from it.
+    fn pair(govt: GovtId, x: f32, y: f32) -> [Npc; 2] {
+        [
+            ship(1, TRADERS, AiType::Warship, 0.0, 0.0),
+            ship(2, govt, AiType::Warship, x, y),
+        ]
+    }
+
+    /// Whether `npcs[0]` calls after a think ending in `goal`.
+    fn calls(npcs: &[Npc], goal: Goal) -> bool {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        high_level_calls(&npcs[0], goal, &around)
+    }
+
+    #[test]
+    fn a_fleeing_ship_calls_within_250_whole_pixels_on_both_axes() {
+        assert!(calls(&pair(PIRATES, 250.9, -250.9), Goal::Flee(n(2))));
+        assert!(calls(&pair(PIRATES, -250.0, 0.0), Goal::Flee(n(2))));
+        assert!(!calls(&pair(PIRATES, 251.0, 0.0), Goal::Flee(n(2))));
+        assert!(!calls(&pair(PIRATES, 0.0, -251.0), Goal::Flee(n(2))));
+        assert!(
+            !calls(&pair(PIRATES, 10.0, 0.0)[..1], Goal::Flee(n(2))),
+            "from a ship gone"
+        );
+        assert!(
+            !calls(&pair(PIRATES, 10.0, 0.0), Goal::Idle),
+            "doing nothing else"
+        );
+    }
+
+    /// A duty in the player's formation.
+    fn duty() -> EscortDuty {
+        EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        }
+    }
+
+    #[test]
+    fn a_ship_fleeing_an_ally_neither_escorting_the_player_makes_no_call() {
+        assert!(
+            !calls(&pair(POLICE, 10.0, 0.0), Goal::Flee(n(2))),
+            "an ally (@0x8e0c3)"
+        );
+        let mut led_quarry = pair(POLICE, 10.0, 0.0);
+        led_quarry[1].escort = Some(duty());
+        assert!(
+            calls(&led_quarry, Goal::Flee(n(2))),
+            "an ally the player leads"
+        );
+        let mut led = pair(POLICE, 10.0, 0.0);
+        led[0].escort = Some(duty());
+        assert!(calls(&led, Goal::Flee(n(2))), "itself the player's");
+        let mut independent = pair(POLICE, 10.0, 0.0);
+        independent[0].govt = None;
+        assert!(calls(&independent, Goal::Flee(n(2))), "of no government");
+        let npcs = pair(POLICE, 10.0, 0.0);
+        let govts = govts(0, 0);
+        let sites = sites();
+        let near_player = around(&sites, &npcs, &govts, (10.0, 0.0), 0);
+        assert!(
+            high_level_calls(&npcs[0], Goal::Flee(ShipRef::Player), &near_player),
+            "the player, of no government"
+        );
+    }
+
+    #[test]
+    fn an_intact_ship_attacking_or_sniping_a_ship_here_calls() {
+        let npcs = pair(PIRATES, 2000.0, 0.0);
+        assert!(calls(&npcs, Goal::Attack(n(2))), "however far");
+        assert!(calls(&npcs, Goal::Snipe(n(2))));
+        assert!(calls(&npcs, Goal::Attack(ShipRef::Player)));
+        let mut disabled = npcs.clone();
+        disabled[0].condition = Condition::Disabled;
+        assert!(
+            !calls(&disabled, Goal::Attack(n(2))),
+            "_IsDisabled (@0x8e6eb)"
+        );
+        let mut dying = npcs.clone();
+        dying[1].condition = Condition::Destroyed;
+        assert!(!calls(&dying, Goal::Attack(n(2))), "its target gone");
+        assert!(!calls(&npcs[..1], Goal::Attack(n(2))), "its target gone");
+    }
+
+    #[test]
+    fn the_high_level_call_joins_the_types_own() {
+        let npcs = pair(PIRATES, 10.0, 0.0);
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        let attack = Decision {
+            goal: Goal::Attack(n(2)),
+            ..Decision::default()
+        };
+        assert!(with_high_level_call(&npcs[0], attack, &around).calls_reinforcements);
+        let idle = Decision::default();
+        assert!(!with_high_level_call(&npcs[0], idle, &around).calls_reinforcements);
+        let own = Decision {
+            calls_reinforcements: true,
+            ..Decision::default()
+        };
+        assert!(
+            with_high_level_call(&npcs[0], own, &around).calls_reinforcements,
+            "the type's own kept"
+        );
+    }
+
+    #[test]
+    fn an_allied_coming_fleet_doubles_the_odds_factor() {
+        let npcs = pair(PIRATES, 10.0, 0.0);
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        assert_eq!(odds_factor(&npcs[0], &around), 1.0, "none coming");
+        around.reinforcements = Some(Coming { govt: Some(POLICE) });
+        assert_eq!(odds_factor(&npcs[0], &around), 2.0, "an ally's");
+        around.reinforcements = Some(Coming {
+            govt: Some(PIRATES),
+        });
+        assert_eq!(odds_factor(&npcs[0], &around), 1.0, "not an ally's");
+        around.reinforcements = Some(Coming {
+            govt: Some(TRADERS),
+        });
+        assert_eq!(odds_factor(&npcs[0], &around), 2.0, "its own");
+    }
 
     /// Federation's fleet: `ReinfTime` 900, `ReinfIntrval` 2.
     const FLEET: Fleet = Fleet {

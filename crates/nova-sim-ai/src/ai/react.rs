@@ -56,9 +56,10 @@
 //!
 //! So Federation police answer the player's attack on a Civvies trader,
 //! since the Civvies are Federation allies. The original's distress
-//! message (`_AICallForHelp`) only tells the player, and waits for the
-//! comm messages; its reinforcements (`_AICallForReinforcements`) are
-//! not modelled yet.
+//! message (`_AICallForHelp`) only tells the player (see
+//! [`call_for_help`](super::call_for_help)); the system's reinforcement
+//! fleet comes by its own call (`_AICallForReinforcements`, see
+//! [`reinforcements`](super::reinforcements)), not by a hit.
 
 use crate::ai::{Goal, Reaction, Surroundings};
 use crate::combat::aim::{angle_off, bearing};

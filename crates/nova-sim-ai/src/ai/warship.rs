@@ -63,8 +63,10 @@
 //!   0x0010; the Bible: "retreat when shields drop below 25%"):
 //!   - the odds retreat (@0x8bcea): while attacking, with its shields
 //!     below [`ODDS_RETREAT_SHIELDS`] of their most and the odds against
-//!     it above its government's `MaxOdds` (the original doubles them
-//!     while allied reinforcements are coming; there are none here);
+//!     it above its government's `MaxOdds`, twice that while a
+//!     reinforcement fleet allied with it is coming to the system
+//!     (@0x8bd36-0x8bdc8, `_InterceptorAI` @0x8d1de-0x8d27e;
+//!     [`odds_factor`]);
 //!   - the shield retreat (@0x8be36), for a warship with no fleet lead:
 //!     shields below [`AGGRESSION_1_SHIELDS`] of their most at aggression
 //!     1, or [`AGGRESSION_2_SHIELDS`] at aggression 2. Any other
@@ -106,6 +108,7 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
+use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
 use crate::ai::target::{dropped, pick_target};
@@ -273,6 +276,7 @@ impl Hunt {
             dropped_target: self.dropped_target,
             provokes: self.provokes,
             comm_call: None,
+            calls_reinforcements: false,
         }
     }
 }
@@ -331,7 +335,7 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
     let outnumbered = govts.flag(npc.govt, retreat.odds_flag)
         && npc.goal.attacking().is_some()
         && below(ODDS_RETREAT_SHIELDS)
-        && odds_against(npc, around) > govts.max_odds(npc.govt);
+        && odds_against(npc, around) > govts.max_odds(npc.govt) * odds_factor(npc, around);
     let by_government = retreat.shields && govts.flag(npc.govt, WARSHIPS_RETREAT);
     let worn = npc.leader.is_none()
         && match npc.person {
@@ -610,6 +614,64 @@ mod tests {
         pirate.hull.strength = foe;
         pirate.goal = Goal::Attack(n(1));
         decided_by(&govts(0, police_flags), &[hunter, pirate], 0)
+    }
+
+    /// The police warship, its shields below half, fighting a pirate of
+    /// strength `foe` against its 100 (its `MaxOdds` 1), while the fleet
+    /// of `coming`, if any, is on its way: whether it retreats.
+    fn retreats_with_coming(
+        behaviour: &dyn Behaviour,
+        retreat_flag: u16,
+        foe: f32,
+        coming: Option<crate::ai::reinforcements::Coming>,
+    ) -> bool {
+        let mut hunter = police();
+        hunter.goal = Goal::Attack(n(2));
+        hunter.reserves.shield.now = 14.9;
+        hunter.aggression = 3;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.hull.strength = foe;
+        pirate.goal = Goal::Attack(n(1));
+        let npcs = [hunter, pirate];
+        let govts = govts(0, retreat_flag);
+        let sites = sites();
+        let mut around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        around.reinforcements = coming;
+        behaviour.decide(&npcs[0], &around, &mut Draws::of(&[0])) == Goal::Flee(n(2))
+    }
+
+    /// The fleet of `govt` coming.
+    fn coming(govt: crate::catalog::GovtId) -> crate::ai::reinforcements::Coming {
+        crate::ai::reinforcements::Coming { govt: Some(govt) }
+    }
+
+    #[test]
+    fn a_warships_odds_retreat_waits_for_twice_max_odds_while_allied_reinforcements_come() {
+        let warship = Warship::default();
+        let retreats = |foe, coming| retreats_with_coming(&warship, WARSHIPS_RETREAT, foe, coming);
+        assert!(retreats(150.0, None), "odds 1.5 over 1, nothing coming");
+        assert!(
+            !retreats(150.0, Some(coming(POLICE))),
+            "its own fleet coming"
+        );
+        assert!(!retreats(150.0, Some(coming(TRADERS))), "an ally's");
+        assert!(retreats(150.0, Some(coming(PIRATES))), "not an ally's");
+        assert!(retreats(201.0, Some(coming(POLICE))), "beyond twice");
+        assert!(!retreats(200.0, Some(coming(POLICE))), "at twice");
+    }
+
+    #[test]
+    fn an_interceptors_odds_retreat_waits_for_twice_max_odds_too() {
+        let interceptor = crate::ai::Interceptor::default();
+        let retreats = |foe, coming| {
+            retreats_with_coming(&interceptor, crate::govt::INTERCEPTORS_RETREAT, foe, coming)
+        };
+        assert!(retreats(150.0, None), "nothing coming");
+        assert!(
+            !retreats(150.0, Some(coming(POLICE))),
+            "an ally's (@0x8d26d)"
+        );
+        assert!(retreats(150.0, Some(coming(PIRATES))), "not an ally's");
     }
 
     #[test]
@@ -1059,6 +1121,7 @@ mod tests {
                 dropped_target: false,
                 provokes: true,
                 comm_call: None,
+                calls_reinforcements: false,
             }
         );
         assert!(
@@ -1437,6 +1500,7 @@ mod tests {
             dropped_target: false,
             provokes: turns,
             comm_call: None,
+            calls_reinforcements: false,
         }
     }
 
@@ -1512,6 +1576,7 @@ mod tests {
                 dropped_target: true,
                 provokes: false,
                 comm_call: None,
+                calls_reinforcements: false,
             }
         );
         let mut calm = grudger;
@@ -1527,6 +1592,7 @@ mod tests {
                 dropped_target: true,
                 provokes: false,
                 comm_call: None,
+                calls_reinforcements: false,
             },
             "no grudge: dropped, and nothing picked"
         );
