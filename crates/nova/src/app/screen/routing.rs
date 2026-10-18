@@ -422,8 +422,10 @@ impl AppScreen {
         None
     }
 
-    /// Routes one input, as [`Screen::input`] describes.
+    /// Routes one input, as [`Screen::input`] describes, first noting
+    /// where a pointer input puts the pointer.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
+        self.note_pointer(input);
         if let Input::Key { key, pressed, .. } = *input {
             match key {
                 Key::Command => self.command_held = pressed,
@@ -505,5 +507,20 @@ impl AppScreen {
             return ScreenAction::None;
         }
         self.shown_mut().input(input)
+    }
+
+    /// Keeps where a pointer input puts the pointer, moved back into the
+    /// classic frame from a widened flight by [`AppScreen::overlay_offset`]
+    /// (as a dialog over it takes it), so it is the point the same pixel
+    /// shows on the classic sides.
+    fn note_pointer(&mut self, input: &Input) {
+        let offset = self.overlay_offset();
+        self.pointer = match *input {
+            Input::PointerMoved(at) | Input::PointerButton { at, .. } => {
+                Some(Point::new(at.x - offset.x, at.y))
+            }
+            Input::PointerLeft => None,
+            Input::Key { .. } | Input::Text(_) => return,
+        };
     }
 }

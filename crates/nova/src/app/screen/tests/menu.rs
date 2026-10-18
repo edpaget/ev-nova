@@ -1661,3 +1661,100 @@ fn the_main_screen_stands_still_behind_a_dialog_opened_over_it() {
         );
     }
 }
+
+/// Ticks `screen` one Mac tick at a time, `ticks` times.
+fn tick_by_ticks(screen: &mut AppScreen, ticks: usize) {
+    for _ in 0..ticks {
+        screen.tick(nova_sim::mission::screens::mac_ticks(1));
+    }
+}
+
+/// Whether `at` is clear of every main-menu button's rectangle.
+fn clear_of_the_buttons(screen: &AppScreen, at: Point) -> bool {
+    let menu = screen.main_menu().expect("a main menu");
+    MenuChoice::ALL
+        .iter()
+        .all(|&choice| !menu.button_bounds(choice).contains(at))
+}
+
+#[test]
+fn the_rollover_aims_at_the_live_pointer_once_a_dialog_over_the_menu_closes() {
+    let mut screen = menu_over(data(), true);
+    let over_about = screen
+        .main_menu()
+        .expect("a main menu")
+        .press_point(MenuChoice::About);
+    screen.input(&Input::PointerMoved(over_about));
+    tick_by_ticks(&mut screen, 8);
+    assert_eq!(
+        screen.main_menu().and_then(MainMenu::rollover),
+        Some((5, 32)),
+        "over About"
+    );
+    click_at(&mut screen, over_about);
+    assert_eq!(screen.showing(), Showing::About);
+    let done = about(&screen)
+        .dialog()
+        .item_bounds(nova_view::ui::desc::DONE_ITEM)
+        .expect("Done")
+        .center();
+    assert!(
+        clear_of_the_buttons(&screen, done),
+        "Done is off the buttons"
+    );
+    click_at(&mut screen, done);
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    tick_by_ticks(&mut screen, 20);
+    assert_eq!(
+        screen.main_menu().and_then(MainMenu::rollover).map(|r| r.0),
+        Some(6),
+        "the none frame, where the pointer is now"
+    );
+}
+
+#[test]
+fn the_rollover_aims_at_the_live_pointer_back_from_a_widened_flight() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_with_dialogs(&store);
+    let widened = (1366.0, 768.0);
+    screen.set_widened_size(widened);
+    create(&mut screen, "Ada");
+    assert_eq!(screen.showing(), Showing::Flight);
+    // Over Quit as the classic frame sees it, moved on into the widened
+    // view.
+    let quit = screen
+        .main_menu()
+        .expect("a main menu")
+        .press_point(MenuChoice::Quit);
+    let offset = nova_view::view_shape::classic_offset(widened.0);
+    screen.input(&Input::PointerMoved(Point::new(quit.x + offset, quit.y)));
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    tick_by_ticks(&mut screen, 20);
+    assert_eq!(
+        screen.main_menu().and_then(MainMenu::rollover),
+        Some((2, 32)),
+        "over Quit"
+    );
+}
+
+#[test]
+fn the_rollover_aims_at_the_live_pointer_back_from_the_ship_browser() {
+    let mut screen = menu_over(data(), true);
+    let quit = screen
+        .main_menu()
+        .expect("a main menu")
+        .press_point(MenuChoice::Quit);
+    screen.input(&Input::PointerMoved(quit));
+    screen.input(&key(Key::Tab, true));
+    assert_eq!(screen.showing(), Showing::ShipBrowser);
+    screen.input(&Input::PointerLeft);
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    tick_by_ticks(&mut screen, 20);
+    assert_eq!(
+        screen.main_menu().and_then(MainMenu::rollover).map(|r| r.0),
+        Some(6),
+        "the pointer left the window on the ship browser"
+    );
+}

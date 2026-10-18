@@ -98,7 +98,9 @@ impl Screen for AppScreen {
         action
     }
 
-    /// Only the side shown ticks; a hidden one is paused. While an overlay
+    /// Only the side shown ticks; a hidden one is paused. The main menu is
+    /// first told where the pointer is ([`AppScreen::tell_menu_pointer`]).
+    /// While an overlay
     /// (the About dialog, the Preferences dialog, the New Pilot dialog or
     /// the saved pilots' list) is open, only it ticks: flight pauses under
     /// the preferences, as in the original. What the offer dialog over
@@ -118,17 +120,17 @@ impl Screen for AppScreen {
                 }
             }
         }
-        match self.overlay_mut() {
-            Some(overlay) => {
-                overlay.tick(dt);
-                // The spaceport isn't ticked under it, so says so: the
-                // original's port window comes back to the front once the
-                // overlay closes.
-                if let Some(spaceport) = &mut self.spaceport {
-                    spaceport.cover();
-                }
+        if let Some(overlay) = self.overlay_mut() {
+            overlay.tick(dt);
+            // The spaceport isn't ticked under it, so says so: the
+            // original's port window comes back to the front once the
+            // overlay closes.
+            if let Some(spaceport) = &mut self.spaceport {
+                spaceport.cover();
             }
-            None => self.shown_mut().tick(dt),
+        } else {
+            self.tell_menu_pointer();
+            self.shown_mut().tick(dt);
         }
         self.settle_offer();
         self.drop_closed_missions();

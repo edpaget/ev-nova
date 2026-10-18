@@ -542,6 +542,11 @@ pub struct AppScreen {
     /// ([`Screen::set_widened_size`](nova_view::Screen::set_widened_size)):
     /// every flight, built or to be built, draws at it.
     widened: (f32, f32),
+    /// Where the pointer is, in the classic 1024 x 768 frame, as the last
+    /// pointer input routed put it (`None` once it has left the game).
+    /// The main menu is told it before each of its ticks, wherever the
+    /// moves went meanwhile ([`AppScreen::tell_menu_pointer`]).
+    pointer: Option<Point>,
 }
 
 /// Nova's own 1024 x 768, which every screen but flight draws in.

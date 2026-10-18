@@ -99,6 +99,7 @@ impl AppScreen {
             quit_due: false,
             double_time: false,
             widened: CLASSIC_VIEW,
+            pointer: None,
         }
     }
 

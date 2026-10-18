@@ -120,6 +120,22 @@ impl AppScreen {
         ScreenAction::None
     }
 
+    /// Tells the main menu, if any, where the pointer is now
+    /// ([`MainMenu::set_pointer`](nova_view::menu::MainMenu::set_pointer)),
+    /// as `_MainScreenRolloverIdle` reads
+    /// `GetMouse` each idle (@0x16500-0x16528). Pointer moves go only to
+    /// the overlay or side shown, so without this the rollover would aim
+    /// where the pointer last was over the menu once a dialog over it
+    /// closes, the menu is switched back to, or flight returns to it.
+    /// Only its ticks read it, so telling it while it is hidden changes
+    /// nothing.
+    pub(super) fn tell_menu_pointer(&mut self) {
+        let pointer = self.pointer;
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_pointer(pointer);
+        }
+    }
+
     /// Clicks a main-menu key ([`UiSound::ButtonKeyed`]) and holds
     /// `action` until the click has played.
     pub(super) fn click_then(&mut self, action: MenuAction) {

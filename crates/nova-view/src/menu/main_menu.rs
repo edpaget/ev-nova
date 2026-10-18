@@ -339,6 +339,15 @@ impl MainMenu {
         }
     }
 
+    /// Tells the menu where the pointer is now (`None` off the window),
+    /// for the rollover's next tick, as `_MainScreenRolloverIdle` reads
+    /// `GetMouse` each idle (@0x16500-0x16528) wherever the pointer's
+    /// moves went meanwhile. A press being tracked is left alone: only a
+    /// pointer input drags it.
+    pub fn set_pointer(&mut self, at: Option<Point>) {
+        self.pointer = at;
+    }
+
     /// The button chosen, and how, once.
     pub fn take_choice(&mut self) -> Option<Chosen> {
         self.choice.take()
@@ -980,6 +989,37 @@ mod tests {
         menu.input(&Input::PointerMoved(clear_corner(1)));
         menu.tick(mac_ticks(1));
         assert_eq!(menu.rollover(), Some((6, 8)), "a clear pixel is none");
+    }
+
+    #[test]
+    fn the_rollover_aims_where_it_is_told_the_pointer_is() {
+        let mut menu = with_art();
+        menu.input(&Input::PointerMoved(menu.press_point(MenuChoice::NewPilot)));
+        menu.set_pointer(Some(menu.press_point(MenuChoice::Quit)));
+        menu.tick(mac_ticks(1));
+        assert_eq!(menu.rollover(), Some((2, 4)), "over Quit");
+        menu.set_pointer(None);
+        menu.tick(mac_ticks(3));
+        assert_eq!(menu.rollover(), Some((6, 4)), "off the window: none");
+    }
+
+    #[test]
+    fn being_told_the_pointer_neither_presses_nor_drags() {
+        let mut menu = with_art();
+        let quit = menu.press_point(MenuChoice::Quit);
+        menu.set_pointer(Some(quit));
+        assert_eq!(menu.take_sounds(), [], "no press");
+        menu.input(&button(true, quit));
+        menu.take_sounds();
+        menu.set_pointer(Some(Point::new(5.0, 5.0)));
+        assert_eq!(menu.take_sounds(), [], "not dragged off");
+        assert_eq!(click_release(&mut menu, quit), Some(MenuChoice::Quit));
+    }
+
+    /// Lets go of a press at `at`: the choice it makes.
+    fn click_release(menu: &mut MainMenu, at: Point) -> Option<MenuChoice> {
+        menu.input(&button(false, at));
+        menu.take_choice().map(|chosen| chosen.choice)
     }
 
     #[test]
