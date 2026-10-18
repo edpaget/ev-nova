@@ -141,6 +141,11 @@ pub struct Pilot {
     /// The systems at [`ExploredLevel::Charted`]: always a subset of
     /// `explored`.
     pub charted: BTreeSet<SystemId>,
+    /// The days left before each system's reinforcement fleet can be
+    /// called again (the `sÿst` runtime +0xc4, which the pilot file keeps
+    /// for every system, `_WritePilotData` @0x72aa0-0x72ac9): only those
+    /// above 0 are listed. See `nova_sim::ai::reinforcements`.
+    pub reinforcement_days: BTreeMap<SystemId, u16>,
     /// The legal record with each government that has one.
     pub legal: BTreeMap<GovtId, i16>,
     /// The legal record in each system that has one (see
@@ -243,6 +248,7 @@ impl Pilot {
             course: Vec::new(),
             explored: BTreeSet::from([system]),
             charted: BTreeSet::new(),
+            reinforcement_days: BTreeMap::new(),
             legal: character.legal.into_iter().flatten().collect(),
             system_legal: None,
             combat_rating: i64::from(character.kills),

@@ -103,6 +103,13 @@
 //!   only whether each system was explored, so the upgrade gives `[]` and
 //!   its explored systems load at level 1. Each charted system loads
 //!   explored too.
+//! - Version 30: adds the reinforcement countdowns (`reinforcement_days`,
+//!   each its `system` and `days` left), as the original's pilot file
+//!   keeps every system's +0xc4 (`_WritePilotData` @0x72aa0-0x72ac9,
+//!   `_LoadPilotData` @0x76027-0x7605b; see the session's
+//!   `reinforcements` module). The timer of a fleet on its way (+0xc8) is
+//!   not saved, as the original's isn't. An older save kept none, so the
+//!   upgrade gives `[]`. A load drops an entry of 0 days.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -201,7 +208,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 29;
+pub const CURRENT: u64 = 30;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -890,6 +897,7 @@ struct Saved {
     course: Vec<i16>,
     explored: Vec<i16>,
     charted: Vec<i16>,
+    reinforcement_days: Vec<SavedReinforcementDays>,
     legal: Vec<SavedRecord>,
     /// `None` until the records in each system are derived.
     #[serde(deserialize_with = "Option::deserialize")]
@@ -920,6 +928,33 @@ struct Saved {
     missions: Vec<SavedMission>,
     crons: Vec<SavedCron>,
     ranks: Vec<i16>,
+}
+
+/// A saved reinforcement countdown: a system and its days left.
+#[derive(Serialize, Deserialize)]
+struct SavedReinforcementDays {
+    system: i16,
+    days: u16,
+}
+
+/// The countdowns `days` holds as saved, by system.
+fn saved_reinforcement_days(days: &BTreeMap<SystemId, u16>) -> Vec<SavedReinforcementDays> {
+    days.iter()
+        .map(|(system, &days)| SavedReinforcementDays {
+            system: system.0,
+            days,
+        })
+        .collect()
+}
+
+/// The countdowns `saved` lists, those of none left out, as the pilot
+/// keeps them.
+fn reinforcement_days_of(saved: Vec<SavedReinforcementDays>) -> BTreeMap<SystemId, u16> {
+    saved
+        .into_iter()
+        .filter(|saved| saved.days > 0)
+        .map(|saved| (SystemId(saved.system), saved.days))
+        .collect()
 }
 
 /// A saved crön running or holding off: its ID and its counters.
@@ -975,6 +1010,7 @@ pub fn encode(pilot: &Pilot) -> String {
         course: pilot.course.iter().map(|system| system.0).collect(),
         explored: pilot.explored.iter().map(|system| system.0).collect(),
         charted: pilot.charted.iter().map(|system| system.0).collect(),
+        reinforcement_days: saved_reinforcement_days(&pilot.reinforcement_days),
         legal: pilot
             .legal
             .iter()
@@ -1092,7 +1128,17 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     jumped_from,
     ship_done,
     charted,
+    reinforcement_days,
 ];
+
+/// Version 29 to 30: no reinforcement countdown. An older save kept
+/// none, so every system's fleet can be called at once, as after a
+/// countdown run out.
+fn reinforcement_days(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("reinforcement_days".to_owned(), Value::Array(Vec::new()));
+    }
+}
 
 /// Version 28 to 29: nothing charted. An older save kept only whether
 /// each system had been explored, which every level-1 writer gives, so
@@ -1400,6 +1446,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         course: saved.course.into_iter().map(SystemId).collect(),
         explored: explored_of(&saved.explored, &saved.charted),
         charted: saved.charted.into_iter().map(SystemId).collect(),
+        reinforcement_days: reinforcement_days_of(saved.reinforcement_days),
         legal: saved
             .legal
             .into_iter()
@@ -1587,6 +1634,7 @@ mod tests {
             course: vec![SystemId(132), SystemId(133)],
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
             charted: BTreeSet::from([SystemId(131)]),
+            reinforcement_days: BTreeMap::from([(SystemId(130), 2), (SystemId(200), 15)]),
             legal: BTreeMap::from([(GovtId(128), -40), (GovtId(129), 300)]),
             system_legal: Some(BTreeMap::from([(SystemId(130), -12), (SystemId(131), 7)])),
             combat_rating: 12_345,
@@ -1763,9 +1811,13 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 29);
+        assert_eq!(CURRENT, 30);
         assert_eq!(value["explored"], serde_json::json!([130, 131, 200]));
         assert_eq!(value["charted"], serde_json::json!([131]));
+        assert_eq!(
+            value["reinforcement_days"],
+            serde_json::json!([{"system": 130, "days": 2}, {"system": 200, "days": 15}])
+        );
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1850,7 +1902,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 29"), "{text}");
+        assert!(text.contains("\n  \"version\": 30"), "{text}");
     }
 
     #[test]
@@ -3511,17 +3563,87 @@ mod tests {
         assert_eq!(back, pilot);
     }
 
-    /// `pilot` saved at version 28: no system is kept charted.
-    fn at_version_28(pilot: &Pilot) -> String {
+    /// `pilot` saved at version 29: no reinforcement countdown kept.
+    fn at_version_29(pilot: &Pilot) -> String {
         let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(29);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("reinforcement_days");
+        value.to_string()
+    }
+
+    /// `pilot` with no reinforcement countdown, as a save from before
+    /// version 30 loads it.
+    fn without_reinforcement_days(mut pilot: Pilot) -> Pilot {
+        pilot.reinforcement_days.clear();
+        pilot
+    }
+
+    #[test]
+    fn the_reinforcement_countdowns_survive_a_round_trip() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        assert_eq!(
+            back.reinforcement_days,
+            BTreeMap::from([(SystemId(130), 2), (SystemId(200), 15)])
+        );
+        assert_eq!(back, pilot);
+    }
+
+    #[test]
+    fn a_saved_countdown_of_none_loads_as_none_kept() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["reinforcement_days"] = serde_json::json!([
+            {"system": 130, "days": 0},
+            {"system": 131, "days": 4}
+        ]);
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert_eq!(
+            pilot.reinforcement_days,
+            BTreeMap::from([(SystemId(131), 4)])
+        );
+    }
+
+    #[test]
+    fn a_version_29_save_loads_with_no_reinforcement_countdown() {
+        let pilot = decode(&at_version_29(&seasoned())).expect("loads");
+        assert!(pilot.reinforcement_days.is_empty());
+        assert_eq!(pilot, without_reinforcement_days(seasoned()));
+    }
+
+    #[test]
+    fn a_current_save_missing_reinforcement_days_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("reinforcement_days");
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("reinforcement_days"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    /// `pilot` saved at version 28: no system is kept charted, and no
+    /// reinforcement countdown.
+    fn at_version_28(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_29(pilot)).expect("JSON");
         value["version"] = serde_json::Value::from(28);
         value.as_object_mut().expect("an object").remove("charted");
         value.to_string()
     }
 
-    /// `pilot` with nothing charted, as a save from before version 29
-    /// loads it.
-    fn uncharted(mut pilot: Pilot) -> Pilot {
+    /// `pilot` with nothing charted and no reinforcement countdown, as a
+    /// save from before version 29 loads it.
+    fn uncharted(pilot: Pilot) -> Pilot {
+        let mut pilot = without_reinforcement_days(pilot);
         pilot.charted.clear();
         pilot
     }
@@ -3616,6 +3738,7 @@ mod tests {
             serde_json::from_str(&at_version_27(&seasoned())).expect("JSON");
         value["version"] = serde_json::Value::from(CURRENT);
         value["charted"] = serde_json::json!([]);
+        value["reinforcement_days"] = serde_json::json!([]);
         let text = value.to_string();
         assert!(unusable(&text).contains("ship_done"), "{}", unusable(&text));
     }
@@ -4047,12 +4170,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 29", "\"version\": 30");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 30 }));
+        let newer = encode(&seasoned()).replace("\"version\": 30", "\"version\": 31");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 31 }));
         assert_eq!(
-            SaveError::Newer { version: 30 }.to_string(),
+            SaveError::Newer { version: 31 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 30, and this version of Nova reads up to 29)."
+             (it is version 31, and this version of Nova reads up to 30)."
         );
     }
 
