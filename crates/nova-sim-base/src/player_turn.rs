@@ -31,7 +31,7 @@
 //!
 //! The heading is then wrapped once into [0, 360) (@0x6ca9e-0x6cacf);
 //! ours brings it in whatever the turn
-//! ([`normalized`](crate::flight::normalized)), which differs only for a
+//! ([`normalized`]), which differs only for a
 //! turn of more than 360° a tick. The way it turned, −1, 0 or +1 (ebx),
 //! feeds the ship's bank (@0x6cd59, @0x6ce6b), which the engine doesn't
 //! draw yet (rdm:phase/ship-handling-fidelity/phase-10-ship-drawing):

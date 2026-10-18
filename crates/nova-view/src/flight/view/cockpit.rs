@@ -5,7 +5,7 @@
 use nova_sim::Drawn as ShipDrawn;
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    ClassRow, Condition, Controls, EscortCommand, NavMode, Npc, Reserves, Session, ShipRef,
+    ClassRow, Condition, Controls, EscortCommand, Face, NavMode, Npc, Reserves, Session, ShipRef,
     ShipState, StellarPick, SystemId, TargetPick, Turn, Vec2, glow_level, lights_level,
 };
 
@@ -35,8 +35,8 @@ use crate::{Color, DrawList, ImageKey, Input, Key, Point, UiSound};
 
 use super::{
     BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY,
-    ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FlightView, HAIL_KEY, HELP, HELP_AT,
-    HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
+    ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView, HAIL_KEY, HELP,
+    HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
     MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE,
     SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
     ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint, shown_heading, shown_position,
@@ -280,11 +280,16 @@ impl<C> FlightView<C> {
             (false, true) => Turn::Right,
             _ => Turn::None,
         };
+        let face = match (holding(FACE_TARGET_KEY), holding(Key::Alt)) {
+            (false, _) => Face::Off,
+            (true, false) => Face::Target,
+            (true, true) => Face::Stellar,
+        };
         Controls {
             thrust: holding(Key::Up),
             turn,
             reverse: holding(Key::Down),
-            ..Controls::default()
+            face,
         }
     }
 

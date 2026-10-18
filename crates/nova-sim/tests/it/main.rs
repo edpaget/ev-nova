@@ -27,4 +27,5 @@ mod stock_scan;
 mod stock_ship_goal_walk;
 mod stock_star_map;
 mod stock_storyline;
+mod stock_turning;
 mod story;

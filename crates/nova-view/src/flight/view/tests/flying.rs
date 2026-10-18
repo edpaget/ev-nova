@@ -209,6 +209,53 @@ fn left_and_right_together_cancel() {
     assert_eq!(player(&view).heading, 0.0);
 }
 
+/// Whether `view`'s ship has turned to `aim`: within a whole-degree turn
+/// of it, where the player's auto-turn stops.
+fn facing(view: &View, aim: i16) -> bool {
+    let rate = view.session().expect("flying").handling().turn_rate;
+    nova_sim::player_turn::settled(
+        player(view).heading,
+        rate,
+        aim,
+        nova_sim::player_turn::PlayerTurn::WholeDegrees,
+    )
+}
+
+#[test]
+fn a_turns_the_ship_toward_its_target_and_alt_a_toward_the_nav_stellar() {
+    assert_eq!(FACE_TARGET_KEY, Key::Char('a'));
+    let mut view = fighting(armed(2, &[]), &two_npcs());
+    tap(&mut view, Key::Tab);
+    let target = view.session().expect("flying").target().expect("targeted");
+    let toward = nova_sim::trig::intercept_angle(player(&view).position, target.state.position);
+    assert!(!facing(&view, toward), "not yet");
+    view.input(&key(FACE_TARGET_KEY, true));
+    view.input(&key(Key::Left, true));
+    ticks(&mut view, 90);
+    // The target drifts: face where it is now.
+    let target = view.session().expect("flying").target().expect("targeted");
+    let toward = nova_sim::trig::intercept_angle(player(&view).position, target.state.position);
+    assert!(facing(&view, toward), "{:?} toward {toward}", player(&view));
+    view.input(&key(Key::Left, false));
+    // Stellar 129, at (300, -200), selected: Alt-A faces it.
+    tap(&mut view, Key::Char('2'));
+    let stellar = nova_sim::trig::intercept_angle(player(&view).position, Vec2::new(300.0, -200.0));
+    view.input(&key(Key::Alt, true));
+    ticks(&mut view, 90);
+    assert!(
+        facing(&view, stellar),
+        "{:?} toward {stellar}",
+        player(&view)
+    );
+    // Let go of, the turn keys turn the ship again.
+    view.input(&key(FACE_TARGET_KEY, false));
+    view.input(&key(Key::Alt, false));
+    let before = player(&view).heading;
+    view.input(&key(Key::Right, true));
+    ticks(&mut view, 1);
+    assert_ne!(player(&view).heading, before);
+}
+
 #[test]
 fn down_turns_the_ship_against_its_motion() {
     let mut view = flight();
@@ -516,7 +563,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     );
     assert_eq!(
         HELP,
-        "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
+        "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
     );
     assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
 }

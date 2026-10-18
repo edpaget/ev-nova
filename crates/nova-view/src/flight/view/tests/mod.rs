@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::num::NonZeroU16;
 
 use crate::system::camera::VIEW_CENTER;
+use nova_sim::flight::player_step;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, FlightRules, Flyer, GateSite,
-    Handling, JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId,
-    ShipRecord, ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId,
-    TICK, Vec2, step,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, FlightRules, GateSite, Handling,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
+    ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
 
 use super::*;
@@ -911,15 +911,15 @@ fn reserves(view: &View) -> Reserves {
     view.session().expect("flying").reserves()
 }
 
-/// `state` after `ticks` steps under `controls`.
+/// `state` after `ticks` of the player's steps under `controls`.
 fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
     for _ in 0..ticks {
-        step(
+        player_step(
             &mut state,
             &handling(),
             controls,
+            None,
             FlightRules::default(),
-            Flyer::Player,
         );
     }
     state
