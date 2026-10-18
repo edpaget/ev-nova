@@ -346,3 +346,22 @@ fn by_the_other_reading_the_return_fades_over_a_menu_that_takes_input() {
     );
     assert_eq!(screen.showing(), Showing::NewPilot, "the menu takes input");
 }
+
+#[test]
+fn by_the_other_reading_a_cancel_under_the_fade_reaches_the_live_menu() {
+    let store = MemoryPilots::new();
+    let mut screen = flying(&store, RuleSource::Bible);
+    screen.input(&key(Key::Escape, true));
+    let new = screen
+        .main_menu()
+        .expect("a menu")
+        .press_point(MenuChoice::NewPilot);
+    screen.input(&left(true, new));
+    screen.cancel_pointer();
+    screen.input(&left(false, new));
+    assert_eq!(
+        screen.showing(),
+        Showing::MainMenu,
+        "the press was cancelled"
+    );
+}
