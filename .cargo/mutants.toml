@@ -46,6 +46,14 @@ exclude_re = [
     # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
     # which is `StringPatch::default()`: the same value.
     "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # `Screen::view_shape`'s default is `ViewShape::Classic`, which is
+    # `ViewShape::default()`; `Screen::set_widened_size`'s default ignores
+    # its size, which `()` does too.
+    "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
+    "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
+    # The native upscaler draws the world at `WorldResolution::Native`,
+    # which is `WorldResolution::default()`: the same value.
+    "nova-render/src/wgpu/upscale\\.rs:.*replace <impl Upscale for Native>::resolution -> WorldResolution with Default::default\\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
     # `+ 360` in place of `mod 360` lands on the same heading.
@@ -131,13 +139,18 @@ exclude_re = [
     # forwards to tested parts: the panel (`DevPanel`), the painter
     # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
     "DevTools::(new|on_window_event|run_frame|layer_mut)",
-    # The window port over a real winit window: one-line reads of its size
-    # and scale factor, a redraw request and showing or hiding the system
-    # pointer, observable only with a window.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible)",
-    # The port's default for a window with no pointer of its own does
-    # nothing already.
-    "replace WindowPort::set_pointer_visible with \\(\\)",
+    # The window port over a real winit window: one-line reads of its size,
+    # scale factor and fullscreen state, a redraw request, showing or hiding
+    # the system pointer, the fullscreen and size requests, and its
+    # monitor's modes and name, observable only with a window. The
+    # decisions in them are the tested `deepest` and `offers_exclusive`.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name)",
+    # The port's defaults for a window with no pointer of its own, that
+    # cannot go fullscreen or be sized, do nothing already.
+    "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",
+    # Its default `video_modes` is `Vec::new()`; replacing it with `vec![]`
+    # builds the same empty list, so it cannot be observed.
+    "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
@@ -154,6 +167,13 @@ exclude_re = [
     # without): replacing either body is observable only on a window
     # surface. `OffscreenGpu`'s twin of each is mutated and tested.
     "replace (SurfaceGpu::present|<impl OverlayGpu for SurfaceGpu>::submit_with) with \\(\\)$",
+    # The surface adapter's upscaler bodies delegate to `WgpuRenderer` as
+    # `OffscreenGpu`'s twins do (mutated and tested offscreen): how it
+    # draws the world, setting the upscaler, and which upscalers its
+    # device can use, each observable only with a window.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::set_upscaler with \\(\\)$",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl UpscalerProbe for SurfaceGpu>::upscalers -> Vec<Upscaler> with ",
     # The one-line edge that opens the default audio device through cpal
     # and hands it to `KiraAudio::with_manager`. Running it needs a real
     # output device, which no gating test may open; everything it hands
@@ -164,6 +184,10 @@ exclude_re = [
     # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
     "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
+    # The trait's default `offer_display` ignores its arguments already:
+    # replacing it with `()` changes nothing. So does `offer_upscalers`.
+    "replace Screen::offer_display with \\(\\)",
+    "replace Screen::offer_upscalers with \\(\\)",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.

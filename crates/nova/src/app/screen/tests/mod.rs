@@ -96,6 +96,7 @@ mod menu;
 mod missions;
 mod overlays;
 mod port;
+mod widescreen;
 
 /// One data file, `/data/Nova Data`, holding a fork.
 struct OneFile(Vec<u8>);
@@ -1056,9 +1057,9 @@ fn yes_no_template() -> DialogTemplate {
 }
 
 /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
-/// (1), the effects volume (4 to 7), the Music (8) and Sound (20)
-/// check boxes, Key Settings (16), a greyed check box (9) and the
-/// Hyperspace Effects check box (21).
+/// (1), the upscaler list's row (2), the effects volume (4 to 7), the
+/// Music (8) and Sound (20) check boxes, Key Settings (16), a greyed
+/// check box (9) and the Hyperspace Effects check box (21).
 fn prefs_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
@@ -1069,6 +1070,7 @@ fn prefs_template() -> DialogTemplate {
         .map(|_| item(0.0, 300.0, 10.0, 10.0, ItemSpec::User))
         .collect();
     items[0] = item(200.0, 230.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
+    items[1] = item(150.0, 40.0, 100.0, 18.0, ItemSpec::User);
     items[3] = item(
         150.0,
         140.0,

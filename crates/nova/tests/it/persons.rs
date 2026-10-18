@@ -62,16 +62,16 @@ use nova_sim::{
 };
 use nova_view::Key;
 use nova_view::flight::SharedChance;
-use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
 
-/// A 1024 x 768 window at scale 1: window pixels are logical units.
-struct FakeWindow;
+/// A window of the size given, at scale 1: in a 1024 x 768 one, window
+/// pixels are logical units.
+struct FakeWindow((u32, u32));
 
 impl WindowPort for FakeWindow {
     fn size_px(&self) -> (u32, u32) {
-        (1024, 768)
+        self.0
     }
 
     fn scale_factor(&self) -> f64 {
@@ -434,7 +434,7 @@ impl Chance for Script {
 
 /// The draws listing Ace and placing it 100 above the player, then
 /// listing Friend and placing it 150 above, both facing down.
-const BOTH: [u32; 8] = [99, 750, 650, 180, 99, 750, 600, 180];
+pub(crate) const BOTH: [u32; 8] = [99, 750, 650, 180, 99, 750, 600, 180];
 
 /// Every NPC idles.
 #[derive(Debug)]
@@ -456,10 +456,11 @@ impl DisableRule for Never {
     }
 }
 
-struct Game {
-    app: App<Rc<GameData>>,
+pub(crate) struct Game {
+    pub(crate) app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     frames: u64,
+    window: FakeWindow,
 }
 
 impl Game {
@@ -467,7 +468,18 @@ impl Game {
     /// from the main menu to `showing`, its traffic drawn from `draws`,
     /// the router as `router` makes it; then two frames, the second
     /// setting the system up in flight.
-    fn opened(
+    pub(crate) fn opened(
+        store: &MemoryPilots,
+        draws: &[u32],
+        showing: Showing,
+        router: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
+        Self::opened_in((1024, 768), store, draws, showing, router)
+    }
+
+    /// [`Game::opened`] in a window of `window_px` pixels.
+    pub(crate) fn opened_in(
+        window_px: (u32, u32),
         store: &MemoryPilots,
         draws: &[u32],
         showing: Showing,
@@ -490,10 +502,12 @@ impl Game {
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
             .with_chance(SharedChance::new(chance));
+        let window = FakeWindow(window_px);
         let mut game = Self {
-            app: App::new(&FakeWindow, data, router(screen)),
+            app: App::new(&window, data, router(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
+            window,
         };
         let at = game
             .app
@@ -503,7 +517,13 @@ impl Game {
             .button(MenuChoice::OpenPilot)
             .rect
             .center();
-        game.click(at);
+        // The menu is classic: its point in the window.
+        let (rect, scale) = game.app.viewport().content().expect("a content rect");
+        let px = (
+            f64::from(rect.x) + f64::from(at.x * scale),
+            f64::from(rect.y) + f64::from(at.y * scale),
+        );
+        game.click_px(px);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
         assert_eq!(game.showing(), showing);
@@ -514,7 +534,7 @@ impl Game {
 
     fn send(&mut self, event: WindowEvent) {
         assert_eq!(
-            self.app.handle(event, &mut FakeWindow, &mut self.gpu),
+            self.app.handle(event, &mut self.window, &mut self.gpu),
             Control::Continue,
             "{event:?}"
         );
@@ -528,15 +548,14 @@ impl Game {
         });
     }
 
-    fn tap(&mut self, key: Key) {
+    pub(crate) fn tap(&mut self, key: Key) {
         self.key(key, true);
         self.key(key, false);
     }
 
-    fn click(&mut self, at: Point) {
-        self.send(WindowEvent::PointerMoved {
-            px: (f64::from(at.x), f64::from(at.y)),
-        });
+    /// A click at window pixel `px`.
+    pub(crate) fn click_px(&mut self, px: (f64, f64)) {
+        self.send(WindowEvent::PointerMoved { px });
         for pressed in [true, false] {
             self.send(WindowEvent::PointerButton {
                 button: nova_view::MouseButton::Left,
@@ -545,7 +564,7 @@ impl Game {
         }
     }
 
-    fn frame(&mut self) -> Frame {
+    pub(crate) fn frame(&mut self) -> Frame {
         self.frames += 1;
         let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
         self.send(WindowEvent::Redraw { elapsed });
@@ -557,7 +576,7 @@ impl Game {
     /// approach to clear a request. The nav brackets' corners (`cicn`
     /// 10000-10003), which the press's selection draws, may be missing
     /// from the fixture, so the frames' image failures are not checked.
-    fn approach(&mut self) {
+    pub(crate) fn approach(&mut self) {
         for _ in 0..4 {
             self.frames += 1;
             let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
@@ -566,11 +585,11 @@ impl Game {
         let _ = self.app.take_failures();
     }
 
-    fn showing(&self) -> Showing {
+    pub(crate) fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
-    fn session(&self) -> &Session {
+    pub(crate) fn session(&self) -> &Session {
         self.app
             .screen()
             .flight_view()
@@ -612,7 +631,7 @@ fn texts(frame: &Frame) -> Vec<String> {
 }
 
 /// Every NPC idling.
-fn idle(screen: AppScreen) -> AppScreen {
+pub(crate) fn idle(screen: AppScreen) -> AppScreen {
     screen.with_behaviour(Rc::new(Still))
 }
 

@@ -6,6 +6,7 @@
 use nova_data::graphics::Image;
 
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// wgpu's default maximum 2D texture side, which the adapters request.
@@ -60,6 +61,14 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
     fn submit(&mut self, frame: &Frame) {
         self.gpu.submit_with(frame, self.painter);
     }
+
+    fn world_resolution(&self) -> WorldResolution {
+        self.gpu.world_resolution()
+    }
+
+    fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.gpu.set_upscaler(upscaler);
+    }
 }
 
 #[cfg(test)]
@@ -68,6 +77,7 @@ mod tests {
     use nova_view::Color;
 
     use super::*;
+    use crate::gpu::WorldSpace;
     use crate::viewport::{LogicalSize, PixelRect};
 
     /// One call a [`FakeGpu`] received.
@@ -77,12 +87,15 @@ mod tests {
         Upload(PageId, PixelRect, Image),
         Submit(Frame),
         SubmitWith(Frame, *const ()),
+        SetUpscaler(Upscaler),
     }
 
-    /// Records every call, and the painter's address for `submit_with`.
+    /// Records every call, and the painter's address for `submit_with`;
+    /// draws the world at `resolution`.
     #[derive(Default)]
     struct FakeGpu {
         calls: Vec<Call>,
+        resolution: WorldResolution,
     }
 
     impl Gpu for FakeGpu {
@@ -96,6 +109,14 @@ mod tests {
 
         fn submit(&mut self, frame: &Frame) {
             self.calls.push(Call::Submit(frame.clone()));
+        }
+
+        fn world_resolution(&self) -> WorldResolution {
+            self.resolution
+        }
+
+        fn set_upscaler(&mut self, upscaler: Upscaler) {
+            self.calls.push(Call::SetUpscaler(upscaler));
         }
     }
 
@@ -124,8 +145,40 @@ mod tests {
             },
             logical: LogicalSize { w: 32, h: 24 },
             clear: Color::rgba(1, 2, 3, 4),
+            world_space: WorldSpace::Target,
             batches: Vec::new(),
+            world: Vec::new(),
         }
+    }
+
+    #[test]
+    fn with_overlay_draws_the_world_as_its_gpu_does() {
+        for resolution in [WorldResolution::Native, WorldResolution::Logical] {
+            let mut gpu = FakeGpu {
+                resolution,
+                ..FakeGpu::default()
+            };
+            let mut painter = NoPainter;
+            let with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            assert_eq!(with.world_resolution(), resolution);
+        }
+    }
+
+    #[test]
+    fn with_overlay_sets_its_gpus_upscaler() {
+        let mut gpu = FakeGpu::default();
+        let mut painter = NoPainter;
+        {
+            let mut with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            with.set_upscaler(Upscaler::SharpBilinear);
+        }
+        assert_eq!(gpu.calls, [Call::SetUpscaler(Upscaler::SharpBilinear)]);
     }
 
     #[test]

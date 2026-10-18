@@ -10,6 +10,7 @@ use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// The offscreen target's format: plain RGBA8, not sRGB.
@@ -44,7 +45,7 @@ pub struct OffscreenGpu {
 
 impl OffscreenGpu {
     /// A `width` x `height` target on the default GPU adapter, drawing
-    /// text in `faces`.
+    /// text in `faces` and the world natively ([`Upscaler::Native`]).
     pub fn new(width: u32, height: u32, faces: &FontFaces) -> Result<Self, InitError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let (_adapter, device, queue) = acquire(&instance, None)?;
@@ -63,7 +64,7 @@ impl OffscreenGpu {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let renderer = WgpuRenderer::new(&device, &queue, FORMAT, faces);
+        let renderer = WgpuRenderer::new(&device, &queue, FORMAT, faces, Upscaler::Native);
         Ok(Self {
             device,
             queue,
@@ -156,6 +157,20 @@ impl Gpu for OffscreenGpu {
 
     fn submit(&mut self, frame: &Frame) {
         self.present(frame, None);
+    }
+
+    fn world_resolution(&self) -> WorldResolution {
+        self.renderer.world_resolution()
+    }
+
+    fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.renderer.set_upscaler(upscaler);
+    }
+}
+
+impl UpscalerProbe for OffscreenGpu {
+    fn upscalers(&self) -> Vec<Upscaler> {
+        self.renderer.upscalers()
     }
 }
 

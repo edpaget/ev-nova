@@ -20,7 +20,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, HaggleDialog,
     PlunderDialog, PlunderShown, PrefsDialog,
 };
-use nova_view::{Input, Key, Screen, ScreenAction};
+use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, desc_dialog, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
@@ -85,7 +85,8 @@ impl AppScreen {
     }
 
     /// Opens the Preferences dialog over the side shown, on the player's
-    /// preferences, first cancelling the side's pointer gesture and
+    /// preferences, listing the upscalers offered (native alone before an
+    /// offer), first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -102,7 +103,8 @@ impl AppScreen {
                     self.data.button_style(),
                     Rc::clone(&dialogs.metrics),
                 )
-            });
+            })
+            .map(|dialog| dialog.with_upscalers(&self.upscalers));
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -138,8 +140,25 @@ impl AppScreen {
         }
     }
 
-    /// The Preferences dialog's input: each change is kept, to be taken
-    /// once, and the dialog closes once OK is activated.
+    /// Offers the open Preferences dialog `modes` for its display picker,
+    /// on `current`, which the player's preferences take as the kind the
+    /// game runs fullscreen in, the player having chosen `chosen`. With no
+    /// dialog open, nothing changes.
+    pub(super) fn offer_display_to_preferences(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        if let Some(dialog) = &mut self.preferences {
+            dialog.set_display_modes(modes, current, chosen);
+            self.prefs.fullscreen = current;
+        }
+    }
+
+    /// The Preferences dialog's input: each change, and the fullscreen
+    /// kind picked as it closes, is kept, to be taken once, and the dialog
+    /// closes once OK is activated.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
         if let Some(dialog) = &mut self.preferences {
             dialog.input(input);
@@ -151,6 +170,9 @@ impl AppScreen {
                     flight.set_hyperspace_effects(prefs.hyperspace_effects);
                     flight.set_sound_prefs(prefs.sound);
                 }
+            }
+            if let Some(kind) = dialog.take_display_choice() {
+                self.display_choice = Some(kind);
             }
             if dialog.closed() {
                 self.sounds.extend(dialog.take_sounds());

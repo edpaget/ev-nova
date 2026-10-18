@@ -2,11 +2,15 @@
 
 use std::time::Duration;
 
-use nova_view::{Diagnostic, DrawList, Input, Prefs, Screen, ScreenAction, Showing, Sound};
+use nova_view::view_shape::classic_offset;
+use nova_view::{
+    Diagnostic, DrawList, FullscreenKind, Input, Point, Prefs, Screen, ScreenAction, Showing,
+    Sound, Upscaler, VideoMode, ViewShape,
+};
 
 use super::{
-    AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held, LANDED,
-    MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
+    AppScreen, CLASSIC_VIEW, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS,
+    Held, LANDED, MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
 };
 
 impl Screen for AppScreen {
@@ -140,7 +144,9 @@ impl Screen for AppScreen {
     /// map is drawn over them both, as the original's map dialog opens
     /// over the port window (`_DoBarDialog` @0x492a3), and so is a mission
     /// dialog's; over flight, a mission dialog's map is drawn over the
-    /// offer and the mission dialogs it opened from.
+    /// offer and the mission dialogs it opened from. Over a widened
+    /// flight every dialog is drawn in its 1024 x 768 frame centred in the
+    /// view ([`AppScreen::overlay_offset`]); flight places its own map.
     fn draw(&self, list: &mut DrawList) {
         if self.side == Side::Spaceport {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
@@ -164,47 +170,41 @@ impl Screen for AppScreen {
         if let Some(hint) = hint {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
-        if let Some(dialog) = &self.new_pilot {
-            dialog.draw(list);
+        // The dialogs, in their 1024 x 768 frame, centred over a widened
+        // flight.
+        let offset = self.overlay_offset();
+        let mut dialogs = DrawList::new();
+        let under_map = [
+            self.new_pilot.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.open_pilot.as_ref().map(|pilots| pilots as &dyn Screen),
+            self.load_note.as_ref().map(|note| note as &dyn Screen),
+            self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.player_info
+                .as_ref()
+                .map(|screen| screen as &dyn Screen),
+            self.missions.as_ref().map(|dialogs| dialogs as &dyn Screen),
+            self.haggle.as_ref().map(|dialog| dialog as &dyn Screen),
+        ];
+        for overlay in under_map.into_iter().flatten() {
+            overlay.draw(&mut dialogs);
         }
-        if let Some(pilots) = &self.open_pilot {
-            pilots.draw(list);
-        }
-        if let Some(note) = &self.load_note {
-            note.draw(list);
-        }
-        if let Some(dialog) = &self.plunder {
-            dialog.draw(list);
-        }
-        if let Some(dialog) = &self.assignment {
-            dialog.draw(list);
-        }
-        if let Some(dialog) = &self.comm {
-            dialog.draw(list);
-        }
-        if let Some(dialog) = &self.offer {
-            dialog.draw(list);
-        }
-        if let Some(screen) = &self.player_info {
-            screen.draw(list);
-        }
-        if let Some(dialogs) = &self.missions {
-            dialogs.draw(list);
-        }
-        if let Some(dialog) = &self.haggle {
-            dialog.draw(list);
-        }
+        list.extend_translated(&dialogs, offset);
         if map_over {
             self.shown().draw(list);
         }
+        let mut dialogs = DrawList::new();
         if let Some(about) = &self.about {
-            about.draw(list);
+            about.draw(&mut dialogs);
         }
         if let Some(dialog) = &self.preferences {
-            dialog.draw(list);
+            dialog.draw(&mut dialogs);
         }
+        list.extend_translated(&dialogs, offset);
         if let Some(fade) = &self.fade_in {
-            fade.draw(list);
+            fade.draw(list, CLASSIC_VIEW);
         }
     }
 
@@ -313,6 +313,32 @@ impl Screen for AppScreen {
         self.prefs_change.take()
     }
 
+    /// Offers the open Preferences dialog the display modes, on the kind
+    /// the game runs fullscreen in now and the kind chosen; with none
+    /// open, nothing changes.
+    fn offer_display(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        self.offer_display_to_preferences(modes, current, chosen);
+    }
+
+    /// Keeps the upscalers the device can use for every Preferences
+    /// dialog's list, and takes `running` as the player's preferences' one,
+    /// which each dialog opens on.
+    fn offer_upscalers(&mut self, listed: &[Upscaler], running: Upscaler) {
+        self.upscalers = listed.to_vec();
+        self.prefs.upscaler = running;
+    }
+
+    /// The fullscreen kind picked in the Preferences dialog, once after it
+    /// closed on the pick.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        self.display_choice.take()
+    }
+
     /// The flight's borders setting to save, once after an undocked close
     /// of its map that changed it
     /// ([`FlightView::take_map_borders_save`](nova_view::flight::FlightView::take_map_borders_save)).
@@ -361,5 +387,38 @@ impl Screen for AppScreen {
             .as_mut()
             .map(Screen::take_diagnostics)
             .unwrap_or_default()
+    }
+
+    /// Widened while flight shows, with anything over it; classic on the
+    /// main menu, the developer's sides and the spaceport, with anything
+    /// over it (see the module docs).
+    fn view_shape(&self) -> ViewShape {
+        if self.side == Side::Flight {
+            ViewShape::Widened
+        } else {
+            ViewShape::Classic
+        }
+    }
+
+    /// Keeps `size` for every flight, and tells the one built.
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        self.widened = size;
+        if let Some(flight) = &mut self.flight {
+            flight.set_view_size(size);
+        }
+    }
+}
+
+impl AppScreen {
+    /// How far right the dialogs over the side shown are drawn, their
+    /// pointer moved back by as much: their 1024 x 768 frame centred over
+    /// a widened flight, and nothing elsewhere.
+    pub(super) fn overlay_offset(&self) -> Point {
+        let x = if self.view_shape() == ViewShape::Widened {
+            classic_offset(self.widened.0)
+        } else {
+            0.0
+        };
+        Point::new(x, 0.0)
     }
 }

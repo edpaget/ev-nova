@@ -4,7 +4,7 @@
 use nova_sim::VenueOffer;
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
-use nova_view::{Input, Key, Screen, ScreenAction, Showing};
+use nova_view::{Input, Key, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
@@ -368,46 +368,51 @@ impl AppScreen {
 
     /// The input to the overlay open in front, if any: what it did, or
     /// `None` with none open. A mission dialog's map over flight is in
-    /// front of the dialogs it opened from.
+    /// front of the dialogs it opened from, and places itself; every other
+    /// overlay takes the pointer moved back by
+    /// [`AppScreen::overlay_offset`], as it is drawn moved on by it.
     fn overlay_input(&mut self, input: &Input) -> Option<ScreenAction> {
+        let offset = self.overlay_offset();
+        // The frame moves only across.
+        let moved = &input.translated(Point::new(-offset.x, 0.0));
         if self.about.is_some() {
-            return Some(self.about_input(input));
+            return Some(self.about_input(moved));
         }
         if self.preferences.is_some() {
-            return Some(self.preferences_input(input));
+            return Some(self.preferences_input(moved));
         }
         if self.player_info.is_some() {
-            return Some(self.player_info_input(input));
+            return Some(self.player_info_input(moved));
         }
         if self.haggle.is_some() {
-            return Some(self.haggle_input(input));
+            return Some(self.haggle_input(moved));
         }
         if self.comm.is_some() {
-            return Some(self.comm_input(input));
+            return Some(self.comm_input(moved));
         }
         if self.flight_dialog_map_open() {
             return Some(self.flight_dialog_map_input(input));
         }
         if self.missions.is_some() {
-            return Some(self.missions_input(input));
+            return Some(self.missions_input(moved));
         }
         if self.offer.is_some() {
-            return Some(self.offer_input(input));
+            return Some(self.offer_input(moved));
         }
         if self.plunder.is_some() {
-            return Some(self.plunder_input(input));
+            return Some(self.plunder_input(moved));
         }
         if self.assignment.is_some() {
-            return Some(self.assignment_input(input));
+            return Some(self.assignment_input(moved));
         }
         if self.new_pilot.is_some() {
-            return Some(self.new_pilot_input(input));
+            return Some(self.new_pilot_input(moved));
         }
         if self.open_pilot.is_some() {
-            return Some(self.open_pilot_input(input));
+            return Some(self.open_pilot_input(moved));
         }
         if self.load_note.is_some() {
-            return Some(self.load_note_input(input));
+            return Some(self.load_note_input(moved));
         }
         None
     }

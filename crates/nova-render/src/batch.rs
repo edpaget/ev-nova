@@ -5,11 +5,12 @@ use std::collections::{HashMap, HashSet};
 
 use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
-use nova_view::{Blend, Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
+use nova_view::{Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, Point};
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
 use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 use crate::images::{ImageError, ImageSource};
+use crate::upscale::world_space;
 use crate::viewport::{PixelRect, Viewport};
 
 /// What went wrong while rendering one frame.
@@ -70,6 +71,13 @@ impl<S: ImageSource> Renderer<S> {
     /// nothing. Text that is empty, or whose size is not a positive, finite
     /// number of pixels, is skipped, as is a stretched or tiled picture
     /// whose width or height is not a positive, finite number.
+    ///
+    /// The frame's batches keep the list's order. Each run of the list's
+    /// world commands ([`DrawList::world`]) is batched apart from the
+    /// overlay's around it, so no batch holds both, and its batches are
+    /// marked world ([`Frame::world`]). The world is drawn where `gpu`'s
+    /// resolution for it says ([`world_space`]). Text is never world, so
+    /// every text run is in target pixels.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -77,20 +85,24 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
     ) -> RenderReport {
         let mut report = RenderReport::default();
-        let Some((rect, scale)) = viewport.content() else {
+        let (Some((rect, _)), Some(scale)) = (viewport.content(), viewport.axis_scales()) else {
             return report;
         };
-        let mut batches: Vec<Batch> = Vec::new();
         let target = Target { rect, scale };
-        for command in list {
-            self.draw(command, None, target, &mut batches, gpu, &mut report);
+        let mut layers = Layers::default();
+        for (layer, command) in list.layered() {
+            let run = layers.run_in(layer);
+            self.draw(command, None, target, run, gpu, &mut report);
         }
+        let Layers { batches, world, .. } = layers.settled();
         gpu.submit(&Frame {
             target: viewport.window_px(),
             viewport: rect,
             logical: viewport.logical(),
             clear: Color::BLACK,
+            world_space: world_space(gpu.world_resolution(), viewport),
             batches,
+            world,
         });
         report
     }
@@ -151,7 +163,11 @@ impl<S: ImageSource> Renderer<S> {
                 let picture = (image, top_left, (width, height));
                 self.push_stretched(batches, picture, blend, clip, gpu, report);
             }
-            DrawCommand::TiledPicture { image, area } => {
+            DrawCommand::TiledPicture {
+                image,
+                area,
+                origin,
+            } => {
                 let area = match clip {
                     Some(clip) => meet(area, clip),
                     None => Some(area),
@@ -163,7 +179,7 @@ impl<S: ImageSource> Renderer<S> {
                     && drawable(area.height())
                     && let Some(entry) = self.entry(image, gpu, report)
                 {
-                    push_tiles(batches, &entry, area);
+                    push_tiles(batches, &entry, area, origin);
                 }
             }
             DrawCommand::Text {
@@ -174,7 +190,10 @@ impl<S: ImageSource> Renderer<S> {
                 wrap_width,
                 color,
             } => {
-                let size_px = size * scale;
+                let (across, down) = scale;
+                // Glyphs are sized by the height: the axes' scales differ
+                // only in a widened view, by under half a unit's width.
+                let size_px = size * down;
                 let line_height_px = LINE_HEIGHT * size_px;
                 // Text with nothing in it draws nothing. Nor does text
                 // whose size is zero, negative, NaN or too big to give
@@ -191,12 +210,12 @@ impl<S: ImageSource> Renderer<S> {
                     text: text.clone(),
                     font,
                     origin_px: (
-                        rect.x as f32 + origin.x * scale,
-                        rect.y as f32 + origin.y * scale,
+                        rect.x as f32 + origin.x * across,
+                        rect.y as f32 + origin.y * down,
                     ),
                     size_px,
                     line_height_px,
-                    wrap_px: wrap_width.map(|w| w * scale),
+                    wrap_px: wrap_width.map(|w| w * across),
                     color,
                     clip,
                 };
@@ -332,11 +351,52 @@ impl<S: ImageSource> Renderer<S> {
 }
 
 /// Where a frame draws: the viewport's content rect in window pixels, and
-/// how many pixels a logical unit is.
+/// how many pixels a logical unit is across and down
+/// ([`Viewport::axis_scales`]).
 #[derive(Clone, Copy, Debug)]
 struct Target {
     rect: PixelRect,
-    scale: f32,
+    scale: (f32, f32),
+}
+
+/// A frame's batches as they are made, in draw order, each run of one
+/// layer's commands batched on its own so that no batch holds both.
+#[derive(Debug, Default)]
+struct Layers {
+    /// The batches of the runs settled so far.
+    batches: Vec<Batch>,
+    /// Which of `batches` are world.
+    world: Vec<usize>,
+    /// The run being batched, and its layer.
+    run: Vec<Batch>,
+    layer: DrawLayer,
+}
+
+impl Layers {
+    /// The batches a command in `layer` extends: the current run's, once
+    /// any run of the other layer is settled.
+    fn run_in(&mut self, layer: DrawLayer) -> &mut Vec<Batch> {
+        if layer != self.layer {
+            self.settle();
+            self.layer = layer;
+        }
+        &mut self.run
+    }
+
+    /// Appends the current run's batches to the frame's.
+    fn settle(&mut self) {
+        if self.layer == DrawLayer::World {
+            let start = self.batches.len();
+            self.world.extend(start..start + self.run.len());
+        }
+        self.batches.append(&mut self.run);
+    }
+
+    /// Every run settled.
+    fn settled(mut self) -> Self {
+        self.settle();
+        self
+    }
 }
 
 /// Where `a` and `b` overlap, if they share any area.
@@ -384,14 +444,14 @@ fn cropped(entry: &AtlasEntry, dest: Rect, clip: Option<Bounds>) -> Option<(Atla
 }
 
 /// `clip`, in logical units, as window pixels inside `rect`, the
-/// viewport's content at `scale`, each edge rounded to the nearest
-/// pixel; none when nothing of it is inside.
-fn pixel_clip(rect: PixelRect, scale: f32, clip: Bounds) -> Option<PixelRect> {
-    let to_px = |origin: u32, logical: f32| (origin as f32 + logical * scale).round();
-    let left = to_px(rect.x, clip.min.x).max(rect.x as f32);
-    let top = to_px(rect.y, clip.min.y).max(rect.y as f32);
-    let right = to_px(rect.x, clip.max.x).min((rect.x + rect.w) as f32);
-    let bottom = to_px(rect.y, clip.max.y).min((rect.y + rect.h) as f32);
+/// viewport's content at `scale` across and down, each edge rounded to
+/// the nearest pixel; none when nothing of it is inside.
+fn pixel_clip(rect: PixelRect, (across, down): (f32, f32), clip: Bounds) -> Option<PixelRect> {
+    let to_px = |origin: u32, logical: f32, scale: f32| (origin as f32 + logical * scale).round();
+    let left = to_px(rect.x, clip.min.x, across).max(rect.x as f32);
+    let top = to_px(rect.y, clip.min.y, down).max(rect.y as f32);
+    let right = to_px(rect.x, clip.max.x, across).min((rect.x + rect.w) as f32);
+    let bottom = to_px(rect.y, clip.max.y, down).min((rect.y + rect.h) as f32);
     (left < right && top < bottom).then_some(PixelRect {
         x: left as u32,
         y: top as u32,
@@ -406,18 +466,17 @@ fn drawable(side: f32) -> bool {
 }
 
 /// Appends the quads tiling `area` with `entry`'s picture: copies of it
-/// edge to edge from the origin, (0, 0), each cut to `area` with its
-/// texture coordinates cut to match. A picture with no size draws
-/// nothing: its first edge, a division by 0 times 0, is NaN, which no
-/// loop runs past.
-fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds) {
+/// edge to edge from `origin`, each cut to `area` with its texture
+/// coordinates cut to match. A picture with no size draws nothing: its
+/// first edge, a division by 0 times 0, is NaN, which no loop runs past.
+fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds, origin: Point) {
     let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
     let uv = entry.uv;
     let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
-    let mut top = (area.min.y / h).floor() * h;
+    let mut top = ((area.min.y - origin.y) / h).floor().mul_add(h, origin.y);
     while top < area.max.y {
         let (y0, y1) = (top.max(area.min.y), (top + h).min(area.max.y));
-        let mut left = (area.min.x / w).floor() * w;
+        let mut left = ((area.min.x - origin.x) / w).floor().mul_add(w, origin.x);
         while left < area.max.x {
             let (x0, x1) = (left.max(area.min.x), (left + w).min(area.max.x));
             let cut = AtlasEntry {
@@ -553,10 +612,12 @@ mod tests {
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
-    use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun};
+    use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
     use crate::recording::{GpuCall, RecordingGpu};
+    use crate::upscale::WorldResolution;
     use crate::viewport::{LogicalSize, PixelRect, Viewport};
     use crate::{PackError, PageId, Uv};
+    use nova_view::DrawLayer;
 
     /// Canned frames by resource; `Missing` for anything else. Records
     /// every request.
@@ -645,9 +706,13 @@ mod tests {
         Renderer::with_page_size(images, 64)
     }
 
+    /// The one call, a submit of a frame with no world layer.
     fn only_submit(calls: &[GpuCall]) -> &Frame {
         match calls {
-            [GpuCall::Submit(frame)] => frame,
+            [GpuCall::Submit(frame)] => {
+                assert_eq!(frame.world, [0_usize; 0], "no world");
+                frame
+            }
             other => panic!("expected one submit, got {other:?}"),
         }
     }
@@ -716,11 +781,13 @@ mod tests {
                     viewport: rect(0, 0, 128, 96),
                     logical: SMALL,
                     clear: Color::BLACK,
+                    world_space: WorldSpace::Target,
                     batches: vec![Batch::Sprites {
                         page: PageId(0),
                         blend: Blend::Normal,
                         quads: expected_quads,
                     }],
+                    world: Vec::new(),
                 }),
             ]
         );
@@ -824,7 +891,9 @@ mod tests {
         let mut gpu = RecordingGpu::new();
         let report = renderer.render(list, &viewport(), &mut gpu);
         assert_eq!(report, RenderReport::default());
-        gpu.submits()[0].clone()
+        let frame = gpu.submits()[0].clone();
+        assert_eq!(frame.world, [0_usize; 0], "no world");
+        frame
     }
 
     /// The quad showing the part of the tile at `tile` (its top-left) from
@@ -879,6 +948,31 @@ mod tests {
                 tile_quad((0.0, 0.0), (0.0, 0.0), (5.0, 5.0)),
             ]
         );
+    }
+
+    #[test]
+    fn a_tiled_picture_moved_with_its_origin_draws_the_same_tiles_moved() {
+        let mut at_home = DrawList::new();
+        at_home.tiled_picture(ImageKey::pattern(130), area(10.0, 5.0, 50.0, 45.0));
+        let mut moved = DrawList::new();
+        // Far enough down that the tiling's first row moves with it.
+        moved.extend_translated(&at_home, at(170.0, 40.0));
+        let quads = |list: &DrawList| match &render_one_with(tiles(), list).batches[..] {
+            [Batch::Sprites { quads, .. }] => quads.clone(),
+            other => panic!("{other:?}"),
+        };
+        let expected: Vec<QuadInstance> = quads(&at_home)
+            .into_iter()
+            .map(|quad| QuadInstance {
+                dest: Rect {
+                    x: quad.dest.x + 170.0,
+                    y: quad.dest.y + 40.0,
+                    ..quad.dest
+                },
+                ..quad
+            })
+            .collect();
+        assert_eq!(quads(&moved), expected);
     }
 
     #[test]
@@ -979,12 +1073,13 @@ mod tests {
             uv: uv(0, 0, 0, 16),
             opened: false,
         };
-        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0));
+        let origin = at(0.0, 0.0);
+        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0), origin);
         let entry = AtlasEntry {
             rect: rect(0, 0, 16, 0),
             ..entry
         };
-        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0));
+        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0), origin);
         assert_eq!(batches, vec![]);
     }
 
@@ -1526,7 +1621,52 @@ mod tests {
         renderer.render(list, viewport, &mut gpu);
         let submits = gpu.submits();
         assert_eq!(submits.len(), 1);
+        assert_eq!(submits[0].world, [0_usize; 0], "no world");
         submits[0].clone()
+    }
+
+    #[test]
+    fn in_a_widened_view_text_dots_and_clips_meet_on_the_same_pixel_column() {
+        let viewport = Viewport::for_shape(nova_view::ViewShape::Widened, (1920, 1080), 1.0);
+        let x = 1365.0 - 10.0;
+        let clip = Bounds {
+            min: at(x, 0.0),
+            max: at(1365.0, 768.0),
+        };
+        let mut list = DrawList::new();
+        list.text("Edge", at(x, 100.0), 12.0, Some(100.0), Color::WHITE)
+            .dot(at(x, 200.0), 2.0, Color::WHITE)
+            .clipped(
+                clip,
+                DrawCommand::Text {
+                    text: "Cut".to_owned(),
+                    font: Font::Geneva,
+                    origin: at(0.0, 300.0),
+                    size: 12.0,
+                    wrap_width: None,
+                    color: Color::WHITE,
+                },
+            );
+        let frame = render_one(&list, &viewport);
+        let across = 1920.0 / 1365.0;
+        let Batch::Text(runs) = &frame.batches[0] else {
+            panic!("{frame:?}");
+        };
+        assert_eq!(runs[0].origin_px, (x * across, 100.0 * 1.406_25));
+        assert_eq!(runs[0].size_px, 12.0 * 1.406_25, "sized by the height");
+        assert_eq!(runs[0].wrap_px, Some(100.0 * across));
+        // The GPU projects quads from the logical space onto the content.
+        let dot = solid_quads(&frame)[0].corners;
+        let dot_centre = f32::midpoint(dot[0].x, dot[2].x);
+        let projected = dot_centre * frame.viewport.w as f32 / frame.logical.w as f32;
+        let Batch::Text(cut) = &frame.batches[2] else {
+            panic!("{frame:?}");
+        };
+        let column = runs[0].origin_px.0.round();
+        assert_eq!(projected.round(), column);
+        assert_eq!(cut[0].clip.x as f32, column);
+        assert_eq!(cut[0].clip.x + cut[0].clip.w, 1920, "to the window's edge");
+        assert_eq!(cut[0].clip.h, 1080);
     }
 
     #[test]
@@ -1772,6 +1912,7 @@ mod tests {
             DrawCommand::TiledPicture {
                 image: ImageKey::picture(128),
                 area: bounds(0.0, 0.0, 64.0, 48.0),
+                origin: at(0.0, 0.0),
             },
         );
         let nested = inner.iter().next().cloned().expect("one");
@@ -1988,6 +2129,223 @@ mod tests {
                 ("text", 2),
                 ("solid", 1),
                 ("sprites", 1)
+            ]
+        );
+    }
+
+    // The world layer and the overlay.
+
+    const WORLD: DrawLayer = DrawLayer::World;
+    const OVERLAY: DrawLayer = DrawLayer::Overlay;
+
+    /// Each batch's kind, size and layer, in order.
+    fn layered_shape(frame: &Frame) -> Vec<(&'static str, usize, DrawLayer)> {
+        frame
+            .batches
+            .iter()
+            .enumerate()
+            .map(|(at, batch)| {
+                let (kind, size) = match batch {
+                    Batch::Sprites { quads, .. } => ("sprites", quads.len()),
+                    Batch::Solid(quads) => ("solid", quads.len()),
+                    Batch::Text(runs) => ("text", runs.len()),
+                };
+                (kind, size, frame.layer(at))
+            })
+            .collect()
+    }
+
+    /// `list`'s one frame, rendered through `gpu`.
+    fn render_through(list: &DrawList, gpu: &mut RecordingGpu) -> Frame {
+        let mut renderer = renderer(images());
+        let report = renderer.render(list, &viewport(), gpu);
+        assert_eq!(report, RenderReport::default());
+        gpu.submits()[0].clone()
+    }
+
+    fn sprite(frame: u16) -> ImageKey {
+        ImageKey::sprite(200, frame)
+    }
+
+    #[test]
+    fn world_commands_are_batched_in_the_world_layer_in_draw_order() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0));
+        list.world(|list| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+                .or_sprite(sprite(1), at(20.0, 10.0), Color::WHITE)
+                .line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .dot(at(1.0, 1.0), 1.0, Color::WHITE)
+                .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE)
+                .picture(ImageKey::picture(128), at(1.0, 1.0));
+        });
+        list.text("b", at(0.0, 0.0), 8.0, None, Color::WHITE)
+            .sprite(sprite(2), at(30.0, 10.0), Color::WHITE);
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("sprites", 1, OVERLAY),
+                ("sprites", 1, WORLD),
+                ("sprites", 1, WORLD),
+                ("solid", 2, WORLD),
+                ("text", 1, OVERLAY),
+                ("sprites", 1, WORLD),
+                ("text", 1, OVERLAY),
+                ("sprites", 1, OVERLAY),
+            ]
+        );
+        assert_eq!(frame.world, [1, 2, 3, 5]);
+        assert_eq!(frame.world_space, WorldSpace::Target);
+    }
+
+    #[test]
+    fn no_batch_holds_both_layers() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(1.0, 1.0), 1.0, Color::WHITE);
+        });
+        list.dot(at(2.0, 2.0), 1.0, Color::WHITE);
+        list.world(|list| {
+            list.dot(at(3.0, 3.0), 1.0, Color::WHITE).sprite(
+                sprite(0),
+                at(10.0, 10.0),
+                Color::WHITE,
+            );
+        });
+        list.sprite(sprite(1), at(20.0, 10.0), Color::WHITE);
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("solid", 1, WORLD),
+                ("solid", 1, OVERLAY),
+                ("solid", 1, WORLD),
+                ("sprites", 1, WORLD),
+                ("sprites", 1, OVERLAY),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_world_drawn_between_overlays_keeps_its_place() {
+        // A dialog's map over flight: the dialog, flight's world, then its
+        // HUD and the map.
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0));
+        list.world(|list| {
+            list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE).line(
+                at(0.0, 0.0),
+                at(4.0, 0.0),
+                1.0,
+                Color::WHITE,
+            );
+        });
+        list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .picture(ImageKey::picture(128), at(1.0, 1.0));
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("sprites", 1, OVERLAY),
+                ("sprites", 1, WORLD),
+                ("solid", 1, WORLD),
+                ("solid", 1, OVERLAY),
+                ("sprites", 1, OVERLAY),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_list_with_no_world_draws_every_batch_as_the_unlayered_list_did() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0))
+            .sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+            .or_sprite(sprite(1), at(20.0, 10.0), Color::WHITE)
+            .or_sprite(sprite(2), at(21.0, 10.0), Color::WHITE)
+            .line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE);
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(frame.world, [0_usize; 0]);
+        assert_eq!(frame.in_layer(WORLD).count(), 0);
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("sprites", 2, OVERLAY),
+                ("sprites", 1, OVERLAY),
+                ("sprites", 1, OVERLAY),
+                ("solid", 1, OVERLAY),
+                ("text", 1, OVERLAY),
+            ]
+        );
+    }
+
+    /// An OR sprite (5x6, so at (7.5, 7)) in the world, and the same in
+    /// the overlay.
+    fn or_in_both_layers() -> DrawList {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.or_sprite(sprite(0), at(10.0, 10.0), Color::WHITE);
+        });
+        list.or_sprite(sprite(0), at(10.0, 10.0), Color::WHITE);
+        list
+    }
+
+    /// What each OR batch of `frame` covers, in its layer's pixels.
+    fn or_covers(frame: &Frame) -> Vec<(DrawLayer, Option<PixelRect>)> {
+        frame
+            .batches
+            .iter()
+            .enumerate()
+            .map(|(at, batch)| match batch {
+                Batch::Sprites {
+                    blend: Blend::Or,
+                    quads,
+                    ..
+                } => {
+                    let layer = frame.layer(at);
+                    (layer, frame.pixels_covered(layer, quads))
+                }
+                other => panic!("an OR batch: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_world_at_the_logical_resolution_is_a_texture_and_its_or_batches_cover_texels() {
+        let mut gpu = RecordingGpu::answering(WorldResolution::Logical);
+
+        let frame = render_through(&or_in_both_layers(), &mut gpu);
+
+        assert_eq!(frame.world_space, WorldSpace::Texture { size: (64, 48) });
+        // (7.5, 7)-(12.5, 13) in texels; twice that in the 128x96 target.
+        assert_eq!(
+            or_covers(&frame),
+            [
+                (WORLD, Some(rect(7, 7, 6, 6))),
+                (OVERLAY, Some(rect(15, 14, 10, 12))),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_native_world_is_drawn_into_the_target_and_its_or_batches_cover_target_pixels() {
+        let frame = render_through(&or_in_both_layers(), &mut RecordingGpu::new());
+
+        assert_eq!(frame.world_space, WorldSpace::Target);
+        assert_eq!(
+            or_covers(&frame),
+            [
+                (WORLD, Some(rect(15, 14, 10, 12))),
+                (OVERLAY, Some(rect(15, 14, 10, 12))),
             ]
         );
     }

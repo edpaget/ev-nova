@@ -17,12 +17,15 @@ use crate::flight::hud::{self};
 use crate::flight::jump::JumpPhase;
 use crate::flight::weapons::{self};
 use crate::galaxy::GalaxyCatalog;
+use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
-use crate::system::scene::{self};
+use crate::system::scene::{self, SystemScene};
 use crate::system::starfield;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound};
+use crate::{
+    Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
+};
 
 use super::{
     BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
@@ -248,9 +251,10 @@ impl<
 
     /// The scene, its HUD and the cursor, then the fades. With the course
     /// map open, the map's dialog over the paused scene as it would be
-    /// drawn shut, less the cursor, which the map hides; in port, where
-    /// the bar opens it, the dialog alone, for the app to draw over the
-    /// spaceport.
+    /// drawn shut, less the cursor, which the map hides, its 1024 x 768
+    /// frame centred in a widened view ([`FlightView::map_offset`]); in
+    /// port, where the bar opens it, the dialog alone, where the classic
+    /// spaceport has it, for the app to draw over the spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
             let in_port = self
@@ -260,7 +264,9 @@ impl<
             if !in_port {
                 self.draw_scene(list);
             }
-            self.map.draw(list);
+            let mut map = DrawList::new();
+            self.map.draw(&mut map);
+            list.extend_translated(&map, self.map_offset());
             self.draw_fades(list);
             return;
         }
@@ -322,6 +328,17 @@ impl<
         }
         diagnostics
     }
+
+    /// Flight widens to the window's aspect ratio
+    /// ([`ViewShape::Widened`]), showing more space.
+    fn view_shape(&self) -> ViewShape {
+        ViewShape::Widened
+    }
+
+    /// Takes the widened size as the view's ([`FlightView::set_view_size`]).
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        self.set_view_size(size);
+    }
 }
 
 impl<
@@ -355,33 +372,8 @@ impl<
             return false;
         };
         let camera = self.camera();
-        match self.jump.map(|effect| (effect, effect.phase())) {
-            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
-                starfield::draw_streaked(list, &camera, effect.direction(), effect.streak_length());
-            }
-            _ => starfield::draw(list, &camera),
-        }
+        list.world(|list| self.draw_world(list, scene, &camera));
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if let Some(message) = self.message() {
-            hud::draw_message(list, message, metrics);
-        }
-        scene::draw_stellars(list, scene, &camera, self.elapsed);
-        asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
-        boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
-        let beams = self.shown_beams(&camera);
-        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::LightningZigZag)
-        });
-        let lightning = (zig_zag, self.shot_looks.lightning());
-        weapons::draw_beams(list, &beams, &self.looks, true, lightning);
-        self.draw_sprites(list, &camera);
-        weapons::draw_beams(list, &beams, &self.looks, false, lightning);
-        self.effects.draw(list, &camera, &self.looks);
-        if let Ok(session) = &self.session {
-            let viewer = session.player().position;
-            let murk = session.effective_murk();
-            self.shot_looks.draw_smoke(list, &camera, viewer, murk);
-        }
         self.draw_brackets(list, scene, &camera);
         self.draw_red_alert(list);
         if self.session.as_ref().is_ok_and(Session::double_time) {
@@ -403,9 +395,44 @@ impl<
         }
         self.draw_help(list);
         match &self.status_bar {
-            Ok(bar) => self.draw_bar(list, bar),
-            Err(reason) => hud::draw_unavailable(list, reason),
+            Ok(bar) => self.draw_bar(list, bar, self.view.0),
+            Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
         true
+    }
+
+    /// Draws the sprite world, the scene under the HUD: the stars, the
+    /// message line, the stellars, asteroids and boxes, the beams under
+    /// the ships, the ships and shots, the beams over them, the effects
+    /// and the smoke. The message line is text, so it is overlay among
+    /// the world ([`DrawList::world`]).
+    fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+        match self.jump.map(|effect| (effect, effect.phase())) {
+            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
+                starfield::draw_streaked(list, camera, effect.direction(), effect.streak_length());
+            }
+            _ => starfield::draw(list, camera),
+        }
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        if let Some(message) = self.message() {
+            hud::draw_message(list, message, self.view, metrics);
+        }
+        scene::draw_stellars(list, scene, camera, self.elapsed);
+        asteroids::draw_asteroids(list, &self.shown_asteroids(camera), &self.looks);
+        boxes::draw_boxes(list, &self.shown_boxes(camera), &self.looks);
+        let beams = self.shown_beams(camera);
+        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::LightningZigZag)
+        });
+        let lightning = (zig_zag, self.shot_looks.lightning());
+        weapons::draw_beams(list, &beams, &self.looks, true, lightning);
+        self.draw_sprites(list, camera);
+        weapons::draw_beams(list, &beams, &self.looks, false, lightning);
+        self.effects.draw(list, camera, &self.looks);
+        if let Ok(session) = &self.session {
+            let viewer = session.player().position;
+            let murk = session.effective_murk();
+            self.shot_looks.draw_smoke(list, camera, viewer, murk);
+        }
     }
 }

@@ -22,7 +22,7 @@ use crate::flight::escorts::{EscortMenuLooks, fighters_abandoned_message};
 use crate::flight::jump::JumpEffect;
 use crate::galaxy::{GalaxyCatalog, MapCycle, MapMode, PendingPress, PressAnswer};
 use crate::system::catalog::SystemCatalog;
-use crate::{DrawList, Input, Key, Screen, UiSound};
+use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{
@@ -50,14 +50,15 @@ impl<
         + EscortMenuLooks,
 > FlightView<C>
 {
-    /// Covers the screen in the arrival's fade-in, then in the jump's
-    /// fade-out, then in the death's fade to black, as far as each shows.
+    /// Covers the view, widened or not, in the arrival's fade-in, then in
+    /// the jump's fade-out, then in the death's fade to black, as far as
+    /// each shows.
     pub(super) fn draw_fades(&self, list: &mut DrawList) {
         for effect in [&self.fade_in, &self.jump].into_iter().flatten() {
-            effect.draw_fade(list);
+            effect.draw_fade(list, self.view);
         }
         if let Some(fade) = &self.death_fade {
-            fade.draw(list);
+            fade.draw(list, self.view);
         }
     }
 
@@ -291,7 +292,11 @@ impl<
     /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
     pub(super) fn map_input(&mut self, input: &Input) {
         let selected = self.map.selected();
-        self.map_input_taken(input);
+        // The map takes the pointer in its own 1024 x 768 frame, which a
+        // widened view over flight draws centred, moved only across.
+        let offset = self.map_offset();
+        let input = input.translated(Point::new(-offset.x, 0.0));
+        self.map_input_taken(&input);
         // A click, a Tab cycle or a gate pick that changed the selection
         // takes the panels again, as the original's next
         // `_MapDialogUpdate` draws them for its `_selSystem`. After an
@@ -540,7 +545,7 @@ impl<
         let mut quotes = Vec::new();
         let mut rescued = false;
         if let Ok(session) = &mut self.session {
-            session.set_play_area(play_area());
+            session.set_play_area(play_area(self.view));
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
             session.set_double_time_key(self.double_time);

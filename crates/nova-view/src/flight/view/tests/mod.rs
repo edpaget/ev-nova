@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::num::NonZeroU16;
 
-use crate::system::camera::VIEW_CENTER;
+use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
     CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling, JunkRecord,
@@ -67,6 +67,7 @@ mod escorts;
 mod flying;
 mod hyperspace;
 mod landing;
+mod layers;
 mod map_borders;
 mod map_find;
 mod maps;
@@ -75,6 +76,7 @@ mod nav;
 mod pilot;
 mod shots;
 mod stellars;
+mod widescreen;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
 /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system

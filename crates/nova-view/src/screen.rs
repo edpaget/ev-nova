@@ -9,6 +9,9 @@ use crate::draw::DrawList;
 use crate::input::Input;
 use crate::preferences::Prefs;
 use crate::sound::Sound;
+use crate::upscaler::Upscaler;
+use crate::video_mode::{FullscreenKind, VideoMode};
+use crate::view_shape::ViewShape;
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +144,37 @@ pub trait Screen {
     fn take_prefs(&mut self) -> Option<Prefs> {
         None
     }
+    /// The display modes the current monitor offers for exclusive
+    /// fullscreen, as listed
+    /// ([`listed_modes`](crate::video_mode::listed_modes)), the kind the
+    /// game runs fullscreen in now, `current`, and the kind the player
+    /// chose, `chosen`, for the Preferences dialog's picker. The two kinds
+    /// differ when the game could not enter `chosen` and fell back to
+    /// borderless. The app offers them each time the Preferences dialog
+    /// opens. Does nothing by default.
+    fn offer_display(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        let _ = (modes, current, chosen);
+    }
+    /// The frame upscalers the running device can use, native first
+    /// (`listed`, for the Preferences dialog's list), and the one drawing
+    /// flight's world now, `running`. The app offers them once, at
+    /// startup, once it has the device; a pick comes back through
+    /// [`Screen::take_prefs`] as [`Prefs::upscaler`]. Does nothing by
+    /// default.
+    fn offer_upscalers(&mut self, listed: &[Upscaler], running: Upscaler) {
+        let _ = (listed, running);
+    }
+    /// The fullscreen kind the player picked in the Preferences dialog
+    /// since this was last taken, for the app to enter and save: each pick
+    /// is reported once. None by default.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        None
+    }
     /// The galaxy map's borders setting to save since this was last taken,
     /// if a map's close changed it, as the original's map saves
     /// `ShowMapBorders` (`_SaveMapBordersState` @0xcf110): each change is
@@ -176,13 +210,27 @@ pub trait Screen {
     fn hides_pointer(&self) -> bool {
         false
     }
+    /// The logical shape the screen draws in now, for the app to fit into
+    /// the window: [`ViewShape::Classic`], 1024x768, by default.
+    fn view_shape(&self) -> ViewShape {
+        ViewShape::Classic
+    }
+    /// The size a [`ViewShape::Widened`] screen draws at in the window as
+    /// it is now ([`widened_size`](crate::view_shape::widened_size)),
+    /// in logical units. The app tells the screen when it is built and on
+    /// every resize, whatever shape it shows, so a screen that widens
+    /// later already knows its width. Ignored by default.
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        let _ = size;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::input::Key;
-    use crate::{Color, Point};
+    use crate::video_mode::{FullscreenKind, VideoMode};
+    use crate::{Color, Point, Upscaler};
 
     /// Counts ticks and quits on Escape.
     #[derive(Default)]
@@ -298,6 +346,50 @@ mod tests {
         assert!(!screen.take_quit());
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_ignores_an_offer_of_display_modes_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        let mode = VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 60_000,
+        };
+        let exclusive = FullscreenKind::Exclusive(mode);
+        screen.offer_display(&[mode], FullscreenKind::Borderless, exclusive);
+        assert_eq!(screen.take_prefs(), None);
+        assert_eq!(screen.take_display_choice(), None);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_ignores_an_offer_of_upscalers_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        let both = [Upscaler::Native, Upscaler::SharpBilinear];
+        screen.offer_upscalers(&both, Upscaler::SharpBilinear);
+        assert_eq!(screen.take_prefs(), None);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_is_classic_and_ignores_the_widened_size_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        assert_eq!(screen.view_shape(), ViewShape::Classic);
+        screen.set_widened_size((1365.0, 768.0));
+        assert_eq!(screen.view_shape(), ViewShape::Classic);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
     }
 
     #[test]

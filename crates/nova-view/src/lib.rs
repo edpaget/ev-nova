@@ -57,7 +57,14 @@
 //! main-menu button pressed or released, the flight session's own, and a
 //! fight's, heard from where they happen. The audio side decides what each plays. The
 //! player's preferences, sound and hyperspace effects alike, are reported
-//! as a [`Prefs`] ([`preferences`]).
+//! as a [`Prefs`] ([`preferences`]), the display modes it offers for
+//! exclusive fullscreen are [`VideoMode`]s ([`video_mode`]), and the frame
+//! upscalers it lists are [`Upscaler`]s ([`upscaler`]).
+//!
+//! # Display shapes
+//!
+//! Each screen asks for a [`ViewShape`] ([`view_shape`]): flight widens to
+//! the window's aspect ratio, and every other screen keeps 1024x768.
 //!
 //! # Developer tools
 //!
@@ -87,9 +94,12 @@ pub mod system;
 pub mod text;
 mod time;
 pub mod ui;
+pub mod upscaler;
+pub mod video_mode;
+pub mod view_shape;
 
 pub use color::Color;
-pub use draw::{Blend, DrawCommand, DrawList};
+pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
@@ -98,3 +108,6 @@ pub use navigator::Navigator;
 pub use preferences::Prefs;
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};
+pub use upscaler::Upscaler;
+pub use video_mode::{FullscreenKind, MonitorMode, VideoMode, listed_modes};
+pub use view_shape::ViewShape;

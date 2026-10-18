@@ -32,7 +32,9 @@ use nova_view::ui::{
 use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::refresh_spaceport;
-use super::{ABOUT_TEXT, AppScreen, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side};
+use super::{
+    ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side,
+};
 
 impl AppScreen {
     /// Every screen over `data`, showing the ship browser.
@@ -56,6 +58,8 @@ impl AppScreen {
             prefs: Prefs::default(),
             preferences: None,
             prefs_change: None,
+            display_choice: None,
+            upscalers: vec![nova_view::Upscaler::Native],
             menu: None,
             new_pilot: None,
             open_pilot: None,
@@ -93,6 +97,7 @@ impl AppScreen {
             quit_in: None,
             quit_due: false,
             double_time: false,
+            widened: CLASSIC_VIEW,
         }
     }
 
@@ -288,9 +293,21 @@ impl AppScreen {
     /// chance, its effects on the router's effects chance, deciding as its
     /// behaviour says, disabling ships, engaging missiles and judging
     /// crimes as its rules say, naming its ship from the game data's
-    /// string lists, and laying out its HUD's text with the router's
-    /// metrics, if it has any.
+    /// string lists, laying out its HUD's text with the router's
+    /// metrics, if it has any, and in the widened size the router was last
+    /// told ([`Screen::set_widened_size`]), so its first tick already
+    /// uses it.
     pub(super) fn flight(
+        &self,
+        new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
+    ) -> FlightView<Rc<GameData>> {
+        let mut flight = self.configured_flight(new);
+        flight.set_view_size(self.widened);
+        flight
+    }
+
+    /// [`AppScreen::flight`]'s flight, before it is sized.
+    fn configured_flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
     ) -> FlightView<Rc<GameData>> {

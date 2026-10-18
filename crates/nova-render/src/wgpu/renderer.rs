@@ -11,34 +11,51 @@ use nova_data::graphics::Image;
 use wgpu::util::DeviceExt;
 
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
-use nova_view::{Blend, Color};
+use nova_view::{Blend, Color, DrawLayer};
 
 use super::fonts::{Families, font_system};
+use super::upscale::{Upscale, upscale_for};
 use crate::fonts::FontFaces;
-use crate::gpu::{Batch, Frame, PageId, TextRun};
+use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
+use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// The format every frame is drawn in, whatever the target's: the scene
 /// texture's, so the pipelines (and the OR composite) work on known 8-bit
 /// unorm channels. Only the blit to the target uses the target's format.
-const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(super) const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// The offscreen texture a frame is drawn into before one blit copies it
-/// to the target, with the bind group the blit reads it through, and the
-/// same-sized backdrop an OR batch reads what is beneath it from.
-struct Scene {
+/// A texture batches are drawn into, with the same-sized backdrop an OR
+/// batch reads what is beneath it from: the scene, or a world drawn into
+/// a texture of its own.
+struct Canvas {
     size: (u32, u32),
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    blit_group: wgpu::BindGroup,
     backdrop: wgpu::Texture,
     backdrop_group: wgpu::BindGroup,
 }
 
-/// Whether a scene of size `current` (`None` before the first frame) can
-/// draw a frame for a `target`-sized target.
-fn reuse_scene(current: Option<(u32, u32)>, target: (u32, u32)) -> bool {
-    current == Some(target)
+/// The offscreen canvas a frame is drawn into before one blit copies it
+/// to the target, with the bind group the blit reads it through.
+struct Scene {
+    canvas: Canvas,
+    blit_group: wgpu::BindGroup,
+}
+
+/// Whether a canvas of size `current` (`None` before the first frame that
+/// needs one) can draw at `size`.
+fn reuse_canvas(current: Option<(u32, u32)>, size: (u32, u32)) -> bool {
+    current == Some(size)
+}
+
+/// Where a frame's passes draw: into `canvas`, sprites and solids
+/// projected onto `content`, the first pass clearing it to `clear` when
+/// given and every pass loading it otherwise.
+struct PassTarget<'a> {
+    canvas: &'a Canvas,
+    content: PixelRect,
+    clear: Option<Color>,
 }
 
 /// One atlas page on the GPU.
@@ -63,10 +80,11 @@ enum Draw {
     },
 }
 
-/// A render pass over the scene and the draws it encodes.
+/// A render pass over a canvas (the scene, or the world's texture) and the
+/// draws it encodes.
 #[derive(Debug, PartialEq)]
 struct Pass {
-    /// For a pass opened by an OR batch, the scene pixels the batch can
+    /// For a pass opened by an OR batch, the canvas pixels the batch can
     /// touch, copied into the backdrop (at the same place) before it.
     backdrop: Option<PixelRect>,
     /// Its draws, as indices into [`Layout::draws`].
@@ -81,9 +99,15 @@ struct Pass {
 /// [`SCENE_FORMAT`], then copied to the target by one blit. An OR batch
 /// ([`Blend::Or`]) reads what is beneath it, which a pass cannot do with
 /// its own attachment, so each one ends the pass: the rectangle the core
-/// says it covers ([`Frame::pixels_covered`]) is copied from the scene to
-/// the backdrop, and a new pass draws the batch with a shader that ORs
+/// says it covers ([`Frame::pixels_covered`]) is copied from the canvas to
+/// its backdrop, and a new pass draws the batch with a shader that ORs
 /// into the backdrop's texel.
+///
+/// A world drawn into a texture of its own ([`WorldSpace::Texture`]) is
+/// drawn first, into a world canvas of the logical size; the scene is
+/// cleared, the upscaler enlarges the world onto the viewport
+/// ([`Upscale::enlarge`]), and the overlay is drawn over it
+/// (`lay_out` says in what order).
 pub struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -96,6 +120,9 @@ pub struct WgpuRenderer {
     page_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
+    /// The canvas a world drawn into a texture of its own is drawn into,
+    /// once one has been.
+    world: Option<Canvas>,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     globals_group: wgpu::BindGroup,
@@ -106,18 +133,21 @@ pub struct WgpuRenderer {
     text_atlas: TextAtlas,
     text_viewport: glyphon::Viewport,
     text_renderers: Vec<TextRenderer>,
+    upscale: Box<dyn Upscale>,
 }
 
 impl WgpuRenderer {
     /// A renderer drawing into `format` textures on `device`, with text in
     /// `faces` alone: no system font is loaded. `format` is the target's;
-    /// only the final blit draws in it.
+    /// only the final blit draws in it. `upscaler` draws flight's world
+    /// layer.
     #[must_use]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         faces: &FontFaces,
+        upscaler: Upscaler,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals_layout = globals_layout(device);
@@ -202,6 +232,7 @@ impl WgpuRenderer {
             page_layout,
             texture_layout,
             scene: None,
+            world: None,
             sampler,
             globals,
             globals_group,
@@ -212,7 +243,27 @@ impl WgpuRenderer {
             text_atlas,
             text_viewport,
             text_renderers: Vec::new(),
+            upscale: upscale_for(upscaler, device, queue),
         }
+    }
+
+    /// The resolution it draws flight's world layer at: its upscaler's.
+    #[must_use]
+    pub fn world_resolution(&self) -> WorldResolution {
+        self.upscale.resolution()
+    }
+
+    /// Draws flight's world layer with `upscaler` from the next frame on.
+    pub fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.upscale = upscale_for(upscaler, &self.device, &self.queue);
+    }
+
+    /// The upscalers it can draw the world with on its device: native and
+    /// sharp-bilinear, which needs only a filtering sampler on RGBA8
+    /// textures, as every wgpu backend has.
+    #[must_use]
+    pub fn upscalers(&self) -> Vec<Upscaler> {
+        vec![Upscaler::Native, Upscaler::SharpBilinear]
     }
 
     /// How many font faces loaded.
@@ -299,6 +350,14 @@ impl WgpuRenderer {
 
     /// Draws `frame` into `view`, a texture of the frame's target size:
     /// into the scene first, then blitted to `view`.
+    ///
+    /// A world drawn into a texture of its own is drawn into the world
+    /// canvas first (its first pass clearing it to the frame's clear
+    /// colour, as the scene's first pass does natively), each pass over
+    /// the whole texture with the same projection; then the scene is
+    /// cleared (the bars), the upscaler enlarges the world onto the
+    /// viewport, and the overlay is drawn over it, an OR batch's backdrop
+    /// taken from the enlarged world.
     pub fn draw(&mut self, frame: &Frame, view: &wgpu::TextureView) {
         self.ensure_scene(frame.target);
         self.queue.write_buffer(
@@ -307,6 +366,10 @@ impl WgpuRenderer {
             bytemuck::cast_slice(&globals(frame.logical)),
         );
         let layout = lay_out(frame);
+        if let (false, WorldSpace::Texture { size }) = (layout.world.is_empty(), frame.world_space)
+        {
+            self.ensure_world(size);
+        }
         self.prepare_text(frame.target, &layout.text);
         let instance_buffer = self.vertex_buffer("nova sprite instances", &layout.instances);
         let vertex_buffer = self.vertex_buffer("nova solid vertices", &layout.vertices);
@@ -316,50 +379,96 @@ impl WgpuRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        for (index, pass) in layout.passes.iter().enumerate() {
-            if let Some(rect) = pass.backdrop {
-                copy_to_backdrop(&mut encoder, scene, rect);
-            }
-            let load = if index == 0 {
-                wgpu::LoadOp::Clear(clear_color(frame.clear))
-            } else {
-                wgpu::LoadOp::Load
+        let world = if layout.world.is_empty() {
+            None
+        } else {
+            self.world.as_ref()
+        };
+        if let Some(world) = world {
+            let whole = PixelRect {
+                x: 0,
+                y: 0,
+                w: world.size.0,
+                h: world.size.1,
             };
-            let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("nova frame"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &scene.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let draws = &layout.draws[pass.draws.clone()];
-            self.encode(&mut render, frame, draws, buffers, scene);
+            let into_world = PassTarget {
+                canvas: world,
+                content: whole,
+                clear: Some(frame.clear),
+            };
+            self.encode_passes(
+                &mut encoder,
+                frame,
+                &layout,
+                &layout.world,
+                buffers,
+                &into_world,
+            );
+            clear(&mut encoder, &scene.canvas.view, frame.clear);
+            self.upscale.enlarge(
+                &mut encoder,
+                &world.view,
+                &scene.canvas.view,
+                frame.viewport,
+            );
         }
+        let into_scene = PassTarget {
+            canvas: &scene.canvas,
+            content: frame.viewport,
+            clear: world.is_none().then_some(frame.clear),
+        };
+        self.encode_passes(
+            &mut encoder,
+            frame,
+            &layout,
+            &layout.passes,
+            buffers,
+            &into_scene,
+        );
         blit(&mut encoder, &self.blit_pipeline, &scene.blit_group, view);
         self.queue.submit(Some(encoder.finish()));
         self.text_atlas.trim();
     }
 
+    /// Encodes `passes` of `layout` into `target`, each OR pass's backdrop
+    /// copied from the canvas first, reading sprite instances and solid
+    /// vertices from `buffers`.
+    fn encode_passes(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        layout: &Layout<'_>,
+        passes: &[Pass],
+        buffers: (&wgpu::Buffer, &wgpu::Buffer),
+        target: &PassTarget<'_>,
+    ) {
+        for (index, pass) in passes.iter().enumerate() {
+            if let Some(rect) = pass.backdrop {
+                copy_to_backdrop(encoder, target.canvas, rect);
+            }
+            let load = match target.clear {
+                Some(color) if index == 0 => wgpu::LoadOp::Clear(clear_color(color)),
+                _ => wgpu::LoadOp::Load,
+            };
+            let mut render = begin_pass(encoder, &target.canvas.view, load);
+            let draws = &layout.draws[pass.draws.clone()];
+            self.encode(&mut render, frame, draws, buffers, target);
+        }
+    }
+
     /// Encodes `draws` into `pass`, reading sprite instances and solid
-    /// vertices from `buffers`, and an OR batch's backdrop from `scene`.
+    /// vertices from `buffers`, sprites and solids projected onto the
+    /// target's content rectangle and an OR batch's backdrop read from its
+    /// canvas. Text is drawn in target pixels.
     fn encode(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         frame: &Frame,
         draws: &[Draw],
         (instance_buffer, vertex_buffer): (&wgpu::Buffer, &wgpu::Buffer),
-        scene: &Scene,
+        target: &PassTarget<'_>,
     ) {
-        let content = frame.viewport;
+        let content = target.content;
         let full = PixelRect {
             x: 0,
             y: 0,
@@ -386,7 +495,7 @@ impl WgpuRenderer {
                     pass.set_bind_group(0, &self.globals_group, &[]);
                     pass.set_bind_group(1, &page.bind_group, &[]);
                     if *blend == Blend::Or {
-                        pass.set_bind_group(2, &scene.backdrop_group, &[]);
+                        pass.set_bind_group(2, &target.canvas.backdrop_group, &[]);
                     }
                     pass.set_vertex_buffer(0, instance_buffer.slice(..));
                     pass.draw(0..6, instances.clone());
@@ -414,29 +523,49 @@ impl WgpuRenderer {
     /// Makes sure the scene is `target`-sized, creating it on the first
     /// frame and again whenever the target's size changes.
     fn ensure_scene(&mut self, target: (u32, u32)) {
-        if reuse_scene(self.scene.as_ref().map(|scene| scene.size), target) {
+        let current = self.scene.as_ref().map(|scene| scene.canvas.size);
+        if reuse_canvas(current, target) {
             return;
         }
-        let (texture, view, blit_group) = self.scene_texture(
-            "nova scene",
-            target,
+        let (canvas, blit_group) = self.canvas("nova scene", target);
+        self.scene = Some(Scene { canvas, blit_group });
+    }
+
+    /// Makes sure the world canvas is `size`, creating it on the first
+    /// frame that draws the world into a texture and again whenever the
+    /// logical size changes.
+    fn ensure_world(&mut self, size: (u32, u32)) {
+        let current = self.world.as_ref().map(|world| world.size);
+        if reuse_canvas(current, size) {
+            return;
+        }
+        let (canvas, _) = self.canvas("nova world", size);
+        self.world = Some(canvas);
+    }
+
+    /// A `size` canvas, and a bind group that reads its texture with
+    /// `textureLoad` (the blit's, for the scene).
+    fn canvas(&self, label: &str, size: (u32, u32)) -> (Canvas, wgpu::BindGroup) {
+        let (texture, view, group) = self.scene_texture(
+            label,
+            size,
             wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
         );
         let (backdrop, _, backdrop_group) = self.scene_texture(
-            "nova backdrop",
-            target,
+            label,
+            size,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
-        self.scene = Some(Scene {
-            size: target,
+        let canvas = Canvas {
+            size,
             texture,
             view,
-            blit_group,
             backdrop,
             backdrop_group,
-        });
+        };
+        (canvas, group)
     }
 
     /// A `size` texture in [`SCENE_FORMAT`] with `usage`, its view, and a
@@ -645,8 +774,37 @@ fn blit_pipeline(
     )
 }
 
-/// Copies `rect` of the scene to the same place in its backdrop.
-fn copy_to_backdrop(encoder: &mut wgpu::CommandEncoder, scene: &Scene, rect: PixelRect) {
+/// Begins a render pass over `view`, loading it as `load` says.
+fn begin_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("nova frame"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
+/// Clears `view` to `color` with an empty pass.
+fn clear(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, color: Color) {
+    begin_pass(encoder, view, wgpu::LoadOp::Clear(clear_color(color)));
+}
+
+/// Copies `rect` of the canvas to the same place in its backdrop.
+fn copy_to_backdrop(encoder: &mut wgpu::CommandEncoder, canvas: &Canvas, rect: PixelRect) {
     let at = |texture| wgpu::TexelCopyTextureInfo {
         texture,
         mip_level: 0,
@@ -658,8 +816,8 @@ fn copy_to_backdrop(encoder: &mut wgpu::CommandEncoder, scene: &Scene, rect: Pix
         aspect: wgpu::TextureAspect::All,
     };
     encoder.copy_texture_to_texture(
-        at(&scene.texture),
-        at(&scene.backdrop),
+        at(&canvas.texture),
+        at(&canvas.backdrop),
         wgpu::Extent3d {
             width: rect.w,
             height: rect.h,
@@ -698,6 +856,7 @@ fn blit(
 }
 
 /// A frame's batches laid out for the GPU.
+#[derive(Default)]
 struct Layout<'a> {
     /// Every sprite batch's instances, in one buffer.
     instances: Vec<SpriteInstance>,
@@ -707,74 +866,121 @@ struct Layout<'a> {
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
     draws: Vec<Draw>,
-    /// The render passes the draws are split into, in order: the first
-    /// clears the scene, and each OR batch opens another.
+    /// For a world drawn into a texture of its own, the render passes its
+    /// draws are split into, in order: the first clears the texture, and
+    /// each OR batch opens another. None for a world drawn into the
+    /// target, or a frame with no world.
+    world: Vec<Pass>,
+    /// The render passes over the scene the other draws are split into,
+    /// in order: the first clears the scene (unless the world's passes
+    /// come first), and each OR batch opens another.
     passes: Vec<Pass>,
 }
 
-/// Lays a frame's batches out in one instance buffer, one vertex buffer
-/// and a list of text batches, with what to draw for each batch in order,
-/// split into passes at each OR batch. An OR batch that covers no pixel
-/// is left out.
-fn lay_out(frame: &Frame) -> Layout<'_> {
-    let mut instances: Vec<SpriteInstance> = Vec::new();
-    let mut vertices: Vec<SolidVertex> = Vec::new();
-    let mut text_batches: Vec<&[TextRun]> = Vec::new();
-    let mut draws = Vec::new();
-    let mut passes = vec![Pass {
-        backdrop: None,
-        draws: 0..0,
-    }];
-    for batch in &frame.batches {
+impl<'a> Layout<'a> {
+    /// Lays out the batch at `index` of `frame` at the end of `passes`,
+    /// opening a pass for an OR batch, which is left out when it covers
+    /// no pixel in its layer.
+    fn push(&mut self, frame: &'a Frame, index: usize, passes: &mut Vec<Pass>) {
+        let batch = &frame.batches[index];
         if let Batch::Sprites {
             blend: Blend::Or,
             quads,
             ..
         } = batch
         {
-            let Some(rect) = frame.pixels_covered(quads) else {
-                continue;
+            let Some(rect) = frame.pixels_covered(frame.layer(index), quads) else {
+                return;
             };
             passes.push(Pass {
                 backdrop: Some(rect),
-                draws: draws.len()..draws.len(),
+                draws: self.draws.len()..self.draws.len(),
             });
         }
-        draws.push(match batch {
+        let draw = match batch {
             Batch::Sprites { page, blend, quads } => {
-                let start = instances.len() as u32;
-                instances.extend(quads.iter().map(SpriteInstance::from));
+                let start = self.instances.len() as u32;
+                self.instances
+                    .extend(quads.iter().map(SpriteInstance::from));
                 Draw::Sprites {
                     page: *page,
                     blend: *blend,
-                    instances: start..instances.len() as u32,
+                    instances: start..self.instances.len() as u32,
                 }
             }
             Batch::Solid(quads) => {
-                let start = vertices.len() as u32;
-                vertices.extend(quads.iter().flat_map(solid_vertices));
+                let start = self.vertices.len() as u32;
+                self.vertices.extend(quads.iter().flat_map(solid_vertices));
                 Draw::Solid {
-                    vertices: start..vertices.len() as u32,
+                    vertices: start..self.vertices.len() as u32,
                 }
             }
             Batch::Text(runs) => {
-                text_batches.push(runs);
+                self.text.push(runs);
                 Draw::Text {
-                    renderer: text_batches.len() - 1,
+                    renderer: self.text.len() - 1,
                 }
             }
-        });
+        };
+        self.draws.push(draw);
         if let Some(pass) = passes.last_mut() {
-            pass.draws.end = draws.len();
+            pass.draws.end = self.draws.len();
         }
     }
-    Layout {
-        instances,
-        vertices,
-        text: text_batches,
-        draws,
-        passes,
+
+    /// A pass opening at the next draw, with no backdrop.
+    fn fresh_pass(&self) -> Pass {
+        Pass {
+            backdrop: None,
+            draws: self.draws.len()..self.draws.len(),
+        }
     }
+}
+
+/// Lays a frame's batches out in one instance buffer, one vertex buffer
+/// and a list of text batches, with what to draw for each batch, split
+/// into passes at each OR batch. An OR batch that covers no pixel in its
+/// layer ([`Frame::pixels_covered`]: texels for a world drawn into a
+/// texture, target pixels otherwise) is left out.
+///
+/// A world drawn into the target ([`WorldSpace::Target`]) is laid out in
+/// the frame's order with the overlay, as if there were no layers.
+///
+/// A world drawn into a texture of its own ([`WorldSpace::Texture`]) is
+/// laid out first, in passes of its own ([`Layout::world`]), its batches
+/// in the frame's order; then the whole overlay, in the frame's order,
+/// into the scene the world is enlarged into. That is the only order a
+/// texture world allows without a transparent world texture, which cannot
+/// work: additive and max world batches keep the destination's alpha, so
+/// over a transparent clear they would vanish when composited. So an
+/// overlay batch that comes before the world in the frame (a mission
+/// dialog drawn before flight while its map is open over it) is drawn
+/// over the world here, where natively the world draws over it; and a
+/// second world run after an overlay run is drawn with the first, under
+/// that overlay. This differs from native on purpose
+/// (rdm:phase/display-modes-fidelity/phase-5-paused-flight-under-mission-dialogs
+/// tracks it). Text is never world (the batcher keeps it in the overlay),
+/// so it is always laid out with the overlay; no rule here singles it
+/// out.
+fn lay_out(frame: &Frame) -> Layout<'_> {
+    let mut layout = Layout::default();
+    let indices = 0..frame.batches.len();
+    let textured = matches!(frame.world_space, WorldSpace::Texture { .. });
+    let in_world = |&index: &usize| textured && frame.layer(index) == DrawLayer::World;
+    let mut world = Vec::new();
+    if indices.clone().any(|index| in_world(&index)) {
+        world.push(layout.fresh_pass());
+        for index in indices.clone().filter(in_world) {
+            layout.push(frame, index, &mut world);
+        }
+    }
+    let mut passes = vec![layout.fresh_pass()];
+    for index in indices.filter(|index| !in_world(index)) {
+        layout.push(frame, index, &mut passes);
+    }
+    layout.world = world;
+    layout.passes = passes;
+    layout
 }
 
 /// The clear colour as wgpu wants it.
@@ -839,7 +1045,7 @@ fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
 }
 
 /// A pipeline layout of `groups`, in order.
-fn pipeline_layout(
+pub(super) fn pipeline_layout(
     device: &wgpu::Device,
     label: &str,
     groups: &[&wgpu::BindGroupLayout],
@@ -854,7 +1060,7 @@ fn pipeline_layout(
 
 /// A pipeline drawing triangles from `buffers` into `format`, combined
 /// with the target by `blend` (`None` writes the fragment as it is).
-fn pipeline(
+pub(super) fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -891,10 +1097,10 @@ fn pipeline(
 
 #[cfg(test)]
 mod tests {
-    use nova_view::{Blend, Color, Point};
+    use nova_view::{Blend, Color, DrawLayer, Point};
 
     use super::*;
-    use crate::gpu::{QuadInstance, Rect, SolidQuad};
+    use crate::gpu::{QuadInstance, Rect, SolidQuad, WorldSpace};
     use crate::viewport::LogicalSize;
     use crate::{PageId, Uv};
 
@@ -958,6 +1164,8 @@ mod tests {
             },
             logical: LogicalSize { w: 32, h: 32 },
             clear: Color::BLACK,
+            world_space: WorldSpace::Target,
+            world: Vec::new(),
             batches: vec![
                 Batch::Sprites {
                     page: PageId(0),
@@ -1044,7 +1252,7 @@ mod tests {
             sprites(Blend::Or, vec![quad(5.0)]),
             sprites(Blend::Normal, vec![quad(6.0)]),
         ]);
-        let covered = |quads: &[QuadInstance]| frame.pixels_covered(quads);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(DrawLayer::Overlay, quads);
 
         let layout = lay_out(&frame);
 
@@ -1091,7 +1299,7 @@ mod tests {
                     draws: 0..0
                 },
                 Pass {
-                    backdrop: frame.pixels_covered(&[quad(2.0)]),
+                    backdrop: frame.pixels_covered(DrawLayer::Overlay, &[quad(2.0)]),
                     draws: 0..1
                 },
             ]
@@ -1152,8 +1360,270 @@ mod tests {
             },
             logical: LogicalSize { w: 32, h: 32 },
             clear: Color::BLACK,
+            world_space: WorldSpace::Target,
             batches,
+            world: Vec::new(),
         }
+    }
+
+    /// Asserts that `a` and `b` lay out alike: the same buffers, text,
+    /// draws and passes, the world's and the scene's, backdrops included.
+    #[track_caller]
+    fn assert_same_layout(a: &Layout<'_>, b: &Layout<'_>) {
+        assert_eq!(a.instances, b.instances);
+        assert_eq!(a.vertices, b.vertices);
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.draws, b.draws);
+        assert_eq!(a.world, b.world);
+        assert_eq!(a.passes, b.passes);
+    }
+
+    /// Frames whose batches are marked world in different places: an OR
+    /// batch first in the world, an OR batch first in the overlay over a
+    /// world quad, a world between two overlays, and a world first. Text
+    /// is never world (the batcher keeps it in the overlay), so a world
+    /// run that met text is split round it.
+    fn layered_frames() -> Vec<Frame> {
+        let batches = || {
+            vec![
+                sprites(Blend::Or, vec![quad(1.0)]),
+                sprites(Blend::Normal, vec![quad(2.0), quad(3.0)]),
+                Batch::Text(vec![run("a")]),
+                Batch::Solid(vec![solid(4.0)]),
+                sprites(Blend::Or, vec![quad(2.0)]),
+                sprites(Blend::Normal, vec![quad(5.0)]),
+                Batch::Text(vec![run("b")]),
+            ]
+        };
+        [vec![0, 1, 3], vec![1, 3], vec![1, 3, 5], vec![0, 1]]
+            .into_iter()
+            .map(|world| Frame {
+                world,
+                ..frame_of(batches())
+            })
+            .collect()
+    }
+
+    /// `frame` with its world drawn into a texture of the logical size.
+    fn textured(frame: Frame) -> Frame {
+        Frame {
+            world_space: WorldSpace::Texture { size: (32, 32) },
+            ..frame
+        }
+    }
+
+    #[test]
+    fn no_frame_marks_text_as_world() {
+        for frame in layered_frames() {
+            for &at in &frame.world {
+                assert!(!matches!(frame.batches[at], Batch::Text(_)), "{at}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_native_world_lays_out_in_the_frames_order_as_with_no_world() {
+        for frame in layered_frames() {
+            let unlayered = Frame {
+                world: Vec::new(),
+                ..frame.clone()
+            };
+            assert_same_layout(&lay_out(&frame), &lay_out(&unlayered));
+        }
+    }
+
+    #[test]
+    fn a_native_worlds_or_backdrop_is_in_target_pixels() {
+        let frame = Frame {
+            world: vec![0],
+            ..frame_of(vec![sprites(Blend::Or, vec![quad(2.0)])])
+        };
+        let backdrop = lay_out(&frame).passes[1].backdrop;
+        assert_eq!(
+            backdrop,
+            Some(PixelRect {
+                x: 4,
+                y: 4,
+                w: 2,
+                h: 2
+            })
+        );
+    }
+
+    #[test]
+    fn a_native_world_has_no_passes_of_its_own() {
+        for frame in layered_frames() {
+            assert_eq!(lay_out(&frame).world, []);
+        }
+    }
+
+    /// The draws `passes` encode, in order.
+    fn drawn<'a>(layout: &'a Layout<'_>, passes: &[Pass]) -> Vec<&'a Draw> {
+        passes
+            .iter()
+            .flat_map(|pass| &layout.draws[pass.draws.clone()])
+            .collect()
+    }
+
+    #[test]
+    fn a_textured_world_lays_out_first_in_its_own_passes_then_the_overlay_in_order() {
+        for frame in layered_frames() {
+            let texture_frame = textured(frame.clone());
+            let layout = lay_out(&texture_frame);
+            // The same batches, the world's first and then the overlay's,
+            // each in the frame's order, laid out natively in that order
+            // and with no OR batch, give the same draws and buffers.
+            let (world, overlay): (Vec<usize>, Vec<usize>) =
+                (0..frame.batches.len()).partition(|&at| frame.layer(at) == DrawLayer::World);
+            let plain = |at: usize| match &frame.batches[at] {
+                Batch::Sprites { page, quads, .. } => Batch::Sprites {
+                    page: *page,
+                    blend: Blend::Normal,
+                    quads: quads.clone(),
+                },
+                other => other.clone(),
+            };
+            let reordered_frame =
+                frame_of(world.iter().chain(&overlay).map(|&at| plain(at)).collect());
+            let reordered = lay_out(&reordered_frame);
+            assert_eq!(layout.instances, reordered.instances);
+            assert_eq!(layout.vertices, reordered.vertices);
+            assert_eq!(layout.text, reordered.text);
+            let blends: Vec<Option<Blend>> = world
+                .iter()
+                .chain(&overlay)
+                .map(|&at| match frame.batches[at] {
+                    Batch::Sprites { blend, .. } => Some(blend),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(layout.draws.len(), blends.len());
+            for ((draw, plain), blend) in layout.draws.iter().zip(&reordered.draws).zip(blends) {
+                match (draw, plain, blend) {
+                    (
+                        Draw::Sprites {
+                            page,
+                            blend,
+                            instances,
+                        },
+                        Draw::Sprites {
+                            page: p,
+                            instances: i,
+                            ..
+                        },
+                        Some(b),
+                    ) => assert_eq!((page, blend, instances), (p, &b, i)),
+                    _ => assert_eq!(draw, plain),
+                }
+            }
+            // The world's passes hold the world's draws, and the scene's
+            // the overlay's.
+            let draws: Vec<&Draw> = layout.draws.iter().collect();
+            assert_eq!(drawn(&layout, &layout.world), draws[..world.len()]);
+            assert_eq!(drawn(&layout, &layout.passes), draws[world.len()..]);
+            assert_eq!(layout.world[0].backdrop, None, "clears the world first");
+            assert_eq!(layout.passes[0].backdrop, None);
+        }
+    }
+
+    #[test]
+    fn an_overlay_before_a_textured_world_lays_out_after_it() {
+        // Overlay OR, world, overlay text, world solid, world OR, overlay
+        // sprite, overlay text: as a dialog's map over flight draws.
+        let frame = textured(Frame {
+            world: vec![1, 3, 4],
+            ..layered_frames().remove(0)
+        });
+
+        let layout = lay_out(&frame);
+
+        let sprite = |blend, instances| Draw::Sprites {
+            page: PageId(0),
+            blend,
+            instances,
+        };
+        assert_eq!(
+            layout.draws,
+            [
+                sprite(Blend::Normal, 0..2),
+                Draw::Solid { vertices: 0..6 },
+                sprite(Blend::Or, 2..3),
+                sprite(Blend::Or, 3..4),
+                Draw::Text { renderer: 0 },
+                sprite(Blend::Normal, 4..5),
+                Draw::Text { renderer: 1 },
+            ]
+        );
+        let instances: Vec<SpriteInstance> = [2.0, 3.0, 2.0, 1.0, 5.0]
+            .map(|n| SpriteInstance::from(&quad(n)))
+            .to_vec();
+        assert_eq!(layout.instances, instances, "one buffer, the world's first");
+        assert_eq!(layout.vertices, solid_vertices(&solid(4.0)).to_vec());
+        let rect = |x, y, w, h| Some(PixelRect { x, y, w, h });
+        assert_eq!(
+            layout.world,
+            [
+                Pass {
+                    backdrop: None,
+                    draws: 0..2
+                },
+                // quad(2.0) is (2, 2)-(3, 3): one texel a unit.
+                Pass {
+                    backdrop: rect(2, 2, 1, 1),
+                    draws: 2..3
+                },
+            ]
+        );
+        assert_eq!(
+            layout.passes,
+            [
+                Pass {
+                    backdrop: None,
+                    draws: 3..3
+                },
+                // quad(1.0) is (1, 1)-(2, 2): two target pixels a unit.
+                Pass {
+                    backdrop: rect(2, 2, 2, 2),
+                    draws: 3..7
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_textured_world_or_batch_covering_no_texel_is_left_out() {
+        let frame = textured(Frame {
+            world: vec![0, 1, 2],
+            ..frame_of(vec![
+                sprites(Blend::Normal, vec![quad(0.0)]),
+                sprites(Blend::Or, vec![quad(40.0)]),
+                sprites(Blend::Normal, vec![quad(1.0)]),
+            ])
+        });
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            layout.world,
+            [Pass {
+                backdrop: None,
+                draws: 0..2
+            }]
+        );
+        assert_eq!(layout.instances.len(), 2);
+        assert_eq!(
+            layout.passes,
+            [Pass {
+                backdrop: None,
+                draws: 2..2
+            }]
+        );
+    }
+
+    #[test]
+    fn a_textured_frame_with_no_world_lays_out_as_a_native_one() {
+        let frame = frame_of(layered_frames().remove(0).batches);
+        assert_same_layout(&lay_out(&textured(frame.clone())), &lay_out(&frame));
     }
 
     #[test]
@@ -1234,10 +1704,10 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_is_reused_only_at_the_targets_size() {
-        assert!(reuse_scene(Some((64, 64)), (64, 64)));
-        assert!(!reuse_scene(Some((64, 64)), (32, 64)));
-        assert!(!reuse_scene(Some((64, 64)), (64, 32)));
-        assert!(!reuse_scene(None, (64, 64)));
+    fn a_canvas_is_reused_only_at_its_own_size() {
+        assert!(reuse_canvas(Some((64, 64)), (64, 64)));
+        assert!(!reuse_canvas(Some((64, 64)), (32, 64)));
+        assert!(!reuse_canvas(Some((64, 64)), (64, 32)));
+        assert!(!reuse_canvas(None, (64, 64)));
     }
 }

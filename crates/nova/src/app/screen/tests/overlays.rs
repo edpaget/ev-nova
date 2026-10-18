@@ -346,6 +346,8 @@ fn quiet() -> Prefs {
         },
         hyperspace_effects: true,
         quicktime_movies: true,
+        fullscreen: nova_view::FullscreenKind::Borderless,
+        upscaler: nova_view::Upscaler::Native,
     }
 }
 
@@ -418,6 +420,108 @@ fn the_dialog_opens_on_the_prefs_the_router_was_given() {
     open_prefs(&mut screen);
     assert_eq!(prefs_dialog(&screen).prefs(), quiet());
     assert_eq!(AppScreen::new(data()).prefs(), Prefs::default());
+}
+
+#[test]
+fn an_offer_of_display_modes_shows_in_the_open_dialog_alone() {
+    let fhd = nova_view::VideoMode {
+        width: 1920,
+        height: 1080,
+        refresh_millihertz: 60_000,
+    };
+    let exclusive = nova_view::FullscreenKind::Exclusive(fhd);
+    let mut screen = with_dialogs(data()).with_prefs(quiet());
+    screen.offer_display(&[fhd], exclusive, exclusive);
+    assert!(screen.preferences().is_none());
+    assert_eq!(screen.prefs(), quiet(), "no dialog, no change");
+    open_prefs(&mut screen);
+    screen.offer_display(&[fhd], exclusive, exclusive);
+    let picker = prefs_dialog(&screen).display();
+    assert_eq!(
+        picker.entries(),
+        [nova_view::FullscreenKind::Borderless, exclusive]
+    );
+    assert_eq!(picker.selected(), exclusive);
+    assert_eq!(
+        screen.prefs(),
+        Prefs {
+            fullscreen: exclusive,
+            ..quiet()
+        },
+        "the dialog's next opening starts there"
+    );
+    assert_eq!(screen.take_prefs(), None, "an offer is no change");
+}
+
+#[test]
+fn the_upscalers_offered_are_listed_in_every_preferences_dialog_on_the_one_running() {
+    use nova_view::Upscaler::{Native, SharpBilinear};
+    let mut screen = with_dialogs(data()).with_prefs(quiet());
+    open_prefs(&mut screen);
+    assert_eq!(
+        prefs_dialog(&screen).upscalers().entries(),
+        [Native],
+        "native alone before an offer"
+    );
+    screen.input(&key(Key::Escape, true));
+    screen.offer_upscalers(&[Native, SharpBilinear], SharpBilinear);
+    assert_eq!(
+        screen.prefs(),
+        Prefs {
+            upscaler: SharpBilinear,
+            ..quiet()
+        }
+    );
+    assert_eq!(screen.take_prefs(), None, "an offer is no change");
+    for _ in 0..2 {
+        open_prefs(&mut screen);
+        let list = prefs_dialog(&screen).upscalers();
+        assert_eq!(list.entries(), [Native, SharpBilinear]);
+        assert_eq!(list.selected(), SharpBilinear);
+        screen.input(&key(Key::Escape, true));
+    }
+}
+
+#[test]
+fn an_upscaler_pick_comes_out_once_as_a_change_and_the_dialog_reopens_on_it() {
+    use nova_view::Upscaler::{Native, SharpBilinear};
+    let mut screen = with_dialogs(data()).with_prefs(quiet());
+    screen.offer_upscalers(&[Native, SharpBilinear], Native);
+    open_prefs(&mut screen);
+    let down = prefs_dialog(&screen).upscalers().rects().down.center();
+    click_at(&mut screen, down);
+    assert_eq!(screen.take_prefs(), None, "held while open");
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(
+        screen.take_prefs().map(|prefs| prefs.upscaler),
+        Some(SharpBilinear)
+    );
+    assert_eq!(screen.take_prefs(), None, "once");
+    open_prefs(&mut screen);
+    assert_eq!(prefs_dialog(&screen).upscalers().selected(), SharpBilinear);
+}
+
+#[test]
+fn a_pick_in_the_dialog_comes_out_once_after_it_closes() {
+    let fhd = nova_view::VideoMode {
+        width: 1920,
+        height: 1080,
+        refresh_millihertz: 60_000,
+    };
+    let mut screen = with_dialogs(data()).with_prefs(quiet());
+    assert_eq!(screen.take_display_choice(), None);
+    open_prefs(&mut screen);
+    let borderless = nova_view::FullscreenKind::Borderless;
+    screen.offer_display(&[fhd], borderless, borderless);
+    let down = prefs_dialog(&screen).display().rects().down.center();
+    click_at(&mut screen, down);
+    assert_eq!(screen.take_display_choice(), None, "held while open");
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.showing(), Showing::ShipBrowser, "closed");
+    let picked = nova_view::FullscreenKind::Exclusive(fhd);
+    assert_eq!(screen.take_display_choice(), Some(picked));
+    assert_eq!(screen.take_display_choice(), None, "once");
+    assert_eq!(screen.prefs().fullscreen, picked);
 }
 
 #[test]

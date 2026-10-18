@@ -5,7 +5,8 @@
 //! black (rgb 0,0,0) in `_FadeScreenOut` (@0x530f, over 1.0 s, 0x3f800000
 //! @0x5399), and back from it in `_FadeScreenIn` (@0x53b2, 1.0 s,
 //! @0x542d-0x543f). Both are synchronous, so nothing else moves while one
-//! plays. A [`ScreenFade`] draws the same over the whole window: a black
+//! plays. A [`ScreenFade`] draws the same over the whole view, flight's
+//! widened one included ([`whole_view`]): a black
 //! quad whose alpha rises or falls with the fade, drawn last so it covers
 //! everything. The original skips its fades in windowed mode; the engine
 //! draws them always, as it does the jump's white fades.
@@ -14,7 +15,6 @@ use std::time::Duration;
 
 use crate::draw::fill_rect;
 use crate::geometry::Bounds;
-use crate::system::camera::VIEW_SIZE;
 use crate::{Color, DrawList, Point};
 
 /// How long the death's fade to black and the main screen's fade back
@@ -22,11 +22,14 @@ use crate::{Color, DrawList, Point};
 /// `_FadeScreenIn` (@0x542d).
 pub const DEATH_FADE_FOR: Duration = Duration::from_secs(1);
 
-/// The whole screen, which a fade covers.
-const SCREEN: Bounds = Bounds {
-    min: Point::new(0.0, 0.0),
-    max: Point::new(VIEW_SIZE.0, VIEW_SIZE.1),
-};
+/// The whole of a view `view` logical units in size, which a fade covers.
+#[must_use]
+pub fn whole_view(view: (f32, f32)) -> Bounds {
+    Bounds {
+        min: Point::new(0.0, 0.0),
+        max: Point::new(view.0, view.1),
+    }
+}
 
 /// A fade of the whole screen to black or back from it, on display time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,14 +92,15 @@ impl ScreenFade {
         alpha
     }
 
-    /// Covers the whole screen in black at the fade's alpha, if it shows
-    /// at all.
-    pub fn draw(&self, list: &mut DrawList) {
+    /// Covers the whole of a view `view` in size in black at the fade's
+    /// alpha, if it shows at all: flight's, widened or not, or Nova's own
+    /// 1024 x 768 over the main menu.
+    pub fn draw(&self, list: &mut DrawList, view: (f32, f32)) {
         let alpha = self.alpha();
         if alpha > 0 {
             fill_rect(
                 list,
-                SCREEN,
+                whole_view(view),
                 Color {
                     a: alpha,
                     ..Color::BLACK
@@ -176,24 +180,23 @@ mod tests {
     #[test]
     fn it_covers_the_whole_screen_in_black_at_its_alpha() {
         let mut list = DrawList::new();
-        after(ScreenFade::to_black(ms(1000)), ms(500)).draw(&mut list);
+        after(ScreenFade::to_black(ms(1000)), ms(500)).draw(&mut list, (1024.0, 768.0));
+        after(ScreenFade::to_black(ms(1000)), ms(500)).draw(&mut list, (1365.0, 768.0));
         let commands: Vec<_> = list.iter().cloned().collect();
-        assert_eq!(
-            commands,
-            [DrawCommand::Line {
-                from: crate::Point::new(0.0, 384.0),
-                to: crate::Point::new(1024.0, 384.0),
-                width: 768.0,
-                color: Color::rgba(0, 0, 0, 128),
-            }]
-        );
+        let line = |width| DrawCommand::Line {
+            from: crate::Point::new(0.0, 384.0),
+            to: crate::Point::new(width, 384.0),
+            width: 768.0,
+            color: Color::rgba(0, 0, 0, 128),
+        };
+        assert_eq!(commands, [line(1024.0), line(1365.0)]);
     }
 
     #[test]
     fn a_clear_fade_draws_nothing() {
         let mut list = DrawList::new();
-        ScreenFade::to_black(ms(1000)).draw(&mut list);
-        after(ScreenFade::from_black(ms(1000)), ms(1000)).draw(&mut list);
+        ScreenFade::to_black(ms(1000)).draw(&mut list, (1024.0, 768.0));
+        after(ScreenFade::from_black(ms(1000)), ms(1000)).draw(&mut list, (1024.0, 768.0));
         assert!(list.is_empty(), "{list:?}");
     }
 
