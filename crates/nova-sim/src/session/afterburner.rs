@@ -701,6 +701,28 @@ mod tests {
         assert_eq!(session.engine_glow, GLOW_AFTERBURNER);
     }
 
+    /// The inertialess player's glow base after one tick under
+    /// `controls` from `base`, flown first to past its top speed under
+    /// the same keys, so its glow follows a speed target of cruise.
+    fn inertialess_glow_from(base: i16, controls: Controls) -> i16 {
+        let mut session = flying(&inertialess(), 90.0);
+        run(&mut session, controls, 200);
+        assert!(session.player_speed() > session.top_speed());
+        session.engine_glow = base;
+        session.tick(controls);
+        session.engine_glow
+    }
+
+    #[test]
+    fn past_top_speed_the_afterburner_holds_an_inertialess_glow_at_30_and_lifts_one_below() {
+        // Coasting: down 1, toward cruise 1, then the afterburner's 2 up.
+        assert_eq!(inertialess_glow_from(30, held(false, true)), 30);
+        assert_eq!(inertialess_glow_from(10, held(false, true)), 12);
+        // Thrusting: up 1 below cruise, toward cruise 1, then 1 up.
+        assert_eq!(inertialess_glow_from(30, held(true, true)), 30);
+        assert_eq!(inertialess_glow_from(10, held(true, true)), 13);
+    }
+
     #[test]
     fn released_at_32_the_glow_falls_1_a_tick_to_cruise_under_thrust() {
         let mut session = flying(&burner(), 90.0);
