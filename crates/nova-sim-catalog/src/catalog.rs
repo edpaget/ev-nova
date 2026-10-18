@@ -400,6 +400,12 @@ pub fn loaded_mod_val(mod_type: i16, mod_val: i16) -> i16 {
     }
 }
 
+/// The `ModType` of marines: a positive `ModVal` adds crew, a negative one
+/// defends against boarders. The player's boarding odds read it
+/// (`nova_sim_port::board`), and so does a pirate's plunder
+/// (`nova_sim::ai::plunder_contents`).
+pub const MARINES: i16 = 25;
+
 /// A ship class, raw from its `shïp`: the `nova_sim::shipyard`
 /// rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
