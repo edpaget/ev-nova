@@ -271,6 +271,7 @@ impl Session {
         self.board_class(&record, &BTreeMap::new());
         self.condition = Condition::Intact;
         self.pod = None;
+        self.pod_zeroed = false;
         self.target = None;
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
@@ -699,6 +700,15 @@ mod tests {
         assert!(session.takes(PlayerCommand::MissionInfo));
         assert!(session.press_player_info());
         assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_rescue_puts_a_zeroed_pod_word_back_to_flying() {
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        session.pod_zeroed = true;
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!((session.pod, session.pod_zeroed), (None, false));
     }
 
     #[test]

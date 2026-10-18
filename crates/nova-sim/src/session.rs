@@ -427,6 +427,7 @@ mod status_cargo;
 mod steering;
 mod stellars;
 mod story;
+mod stray_words;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
@@ -906,6 +907,13 @@ pub struct Session {
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
     /// it runs ([`crate::FateRow::saves`]).
     pod: Option<u32>,
+    /// Whether +0xc908 is 0 outside the pod, as a beam of `ExitType` 5
+    /// can leave it (see the `stray_words` module): a later such beam
+    /// steps it to 1 without a draw. Cleared wherever the original writes
+    /// -1 or 350: the eject, the rescue, a take-off or a gate's exit
+    /// (`_ResetPlayer` from `_HandlePlayerDockRequest` @0x6709b). Never
+    /// saved, as `_OpenPilotFile` writes -1 (@0x766b5).
+    pod_zeroed: bool,
     /// Whether the pod countdown has run out and the rescue is due (see
     /// the `rescue` module); never saved.
     rescue_due: bool,
@@ -1570,6 +1578,7 @@ impl Session {
             player_end: None,
             hold_expiry_due: false,
             pod: None,
+            pod_zeroed: false,
             rescue_due: false,
             rescue_desc_due: false,
             eject_held: false,
@@ -4331,9 +4340,11 @@ impl Session {
         };
         // A gate's exit joins the take-off's path before its seed
         // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
-        // (@0x6709b; see the `precalced` module).
+        // (@0x6709b; see the `precalced` module), whose `_ResetPlayer`
+        // writes -1 to +0xc908 (see the `stray_words` module).
         self.arm_strength_timer(chance);
         self.reset_precalced();
+        self.pod_zeroed = false;
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -4551,8 +4562,11 @@ impl Session {
         self.ion = Ion::default();
         self.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
-        // setup (@0x6709b; see the `precalced` module).
+        // setup (@0x6709b; see the `precalced` module), whose
+        // `_ResetPlayer` writes -1 to +0xc908 (see the `stray_words`
+        // module).
         self.reset_precalced();
+        self.pod_zeroed = false;
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;

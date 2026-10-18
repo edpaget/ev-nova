@@ -272,6 +272,9 @@ impl Session {
         self.ship_hook(old.id, ShipHook::Retire, chance);
         let escape = self.escape_ship();
         let record = self.ship_record(escape.unwrap_or(ESCAPE_POD_SHIP)).cloned();
+        // -1 or 350, either way not the 0 a stray beam leaves (see the
+        // `stray_words` module).
+        self.pod_zeroed = false;
         if let Some(ship) = escape {
             self.pod = None;
             self.say(SimMessage::EscapingIn { ship });
@@ -749,6 +752,21 @@ mod tests {
         let mut session = flying(&catalog, &[POD, AUTO]);
         to_the_breakup(&mut session, &catalog, false);
         assert_eq!(hulk(&session).pods_left, -3, "raw");
+    }
+
+    #[test]
+    fn the_eject_puts_a_zeroed_pod_word_back_into_the_pod_or_to_flying() {
+        // Into the pod: 350 (@0x6f669).
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        session.pod_zeroed = true;
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert!(!session.pod_zeroed);
+        // Into an escape ship: -1 (@0x6f563).
+        let catalog = escaping();
+        let (session, _) = escaped(&catalog, &[], |session| session.pod_zeroed = true);
+        assert_eq!((session.pod, session.pod_zeroed), (None, false));
     }
 
     #[test]

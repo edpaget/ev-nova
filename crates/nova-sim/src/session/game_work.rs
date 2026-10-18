@@ -468,6 +468,11 @@ impl Session {
         self.settle_player_explosion(start.was_destroyed, start.was_dying);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
+        // The words the pass's stray beams stepped, before the NPCs'
+        // escape pods read the crew pods left. The original steps at the
+        // beam's spawn; settling here, in the same tick before the frame
+        // is drawn, crosses no boundary (see the `stray_words` module).
+        self.step_stray_words(chance);
         self.npc_escapes(&start.npcs, chance);
         self.sync_fleet();
         self.lose_escorts();
