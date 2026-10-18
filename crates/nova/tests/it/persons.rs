@@ -504,7 +504,7 @@ impl Game {
             .with_chance(SharedChance::new(chance));
         let window = FakeWindow(window_px);
         let mut game = Self {
-            app: App::new(&window, data, router(screen)),
+            app: App::new(&window, data, router(crate::common::appeared(screen))),
             gpu: RecordingGpu::new(),
             frames: 0,
             window,

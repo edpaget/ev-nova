@@ -328,7 +328,7 @@ impl Harness {
         let handle = audio.clone();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(settings);
         Self {
-            app: App::new(&FakeWindow, data, screen).with_audio(core),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)).with_audio(core),
             gpu: RecordingGpu::new(),
             frames: 0,
             log,
@@ -626,10 +626,14 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         StellarId(128)
     );
 
-    // Take off, back to the menu, and Quit exits.
+    // Take off, back to the menu, which appears after its black second,
+    // and Quit exits.
     game.press(KeyCode::Escape);
     game.press(KeyCode::Escape);
     assert_eq!(game.showing(), Showing::MainMenu);
+    for _ in 0..frames_to(nova_view::fade::DEATH_FADE_FOR) {
+        assert_eq!(game.redraw(), Control::Continue);
+    }
     let quit = game.menu_button(MenuChoice::Quit);
     game.send(WindowEvent::PointerMoved {
         px: (f64::from(quit.x), f64::from(quit.y)),

@@ -78,6 +78,7 @@ fn x_lines(data: Rc<GameData>, rules: Rulebook) -> Vec<String> {
     let store = MemoryPilots::new();
     let mut screen = with_dialogs(data)
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared()
         .with_rules(rules);
     screen.input(&key(Key::Char('x'), true));
     screen.keyed_click_ended();

@@ -250,8 +250,9 @@ impl AppScreen {
 
     /// Takes what flight's tick ended: at the hold's expiry, the seam
     /// ([`AppScreen::at_hold_expiry`]); once the death's fade is over, the
-    /// return to the main menu (or the side flight was entered from), which
-    /// fades in from black.
+    /// return to the main menu as it appears
+    /// ([`AppScreen::return_to_main_screen`]), or, without one, to the side
+    /// flight was entered from, which fades in from black.
     pub(super) fn after_flight_tick(&mut self) {
         if self
             .flight
@@ -264,13 +265,12 @@ impl AppScreen {
             self.show_rescue_desc(id);
         }
         if self.flight.as_ref().is_some_and(FlightView::game_over) {
-            let side = if self.menu.is_some() {
-                Side::MainMenu
+            if self.menu.is_some() {
+                self.return_to_main_screen();
             } else {
-                self.return_to
-            };
-            self.end_flight(side);
-            self.fade_in = Some(ScreenFade::from_black(DEATH_FADE_FOR));
+                self.end_flight(self.return_to);
+                self.fade_in = Some(ScreenFade::from_black(DEATH_FADE_FOR));
+            }
         }
     }
 

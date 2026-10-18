@@ -224,7 +224,8 @@ fn ejected_from(
         .with_chance(above_the_player())
         .with_behaviour(Rc::new(Firing))
         .with_disable_rule(Rc::new(Never))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     screen.input(&key(Key::Escape, true));
@@ -374,11 +375,18 @@ fn above_the_player() -> SharedChance {
 /// dialogs, the killer placed above the player and firing, and no ship
 /// disabled.
 fn deadly_menu(store: &MemoryPilots) -> AppScreen {
+    deadly_menu_by(store, RuleSource::Engine)
+}
+
+/// [`deadly_menu`] with `main_screen_return_fade` read as `source`.
+fn deadly_menu_by(store: &MemoryPilots, source: RuleSource) -> AppScreen {
     with_dialogs(deadly_data())
         .with_chance(above_the_player())
         .with_behaviour(Rc::new(Firing))
         .with_disable_rule(Rc::new(Never))
+        .with_rules(Rulebook::default().with_override(RuleKey::MainScreenReturnFade, source))
         .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared()
 }
 
 fn fate(screen: &AppScreen) -> nova_sim::PlayerFate {
@@ -438,7 +446,11 @@ fn strict_landed_and_took_off(store: &MemoryPilots) -> AppScreen {
 
 /// [`landed_and_took_off`], the pilot made by `create`.
 fn landed_and_took_off_by(store: &MemoryPilots, create: fn(&mut AppScreen, &str)) -> AppScreen {
-    let mut screen = deadly_menu(store);
+    landed_and_took_off_over(deadly_menu(store), create)
+}
+
+/// [`landed_and_took_off`] on `screen`, the pilot made by `create`.
+fn landed_and_took_off_over(mut screen: AppScreen, create: fn(&mut AppScreen, &str)) -> AppScreen {
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);
@@ -450,6 +462,14 @@ fn landed_and_took_off_by(store: &MemoryPilots, create: fn(&mut AppScreen, &str)
 /// [`landed_and_took_off`], then the killer breaks its ship up.
 pub(super) fn landed_took_off_and_breaking_up(store: &MemoryPilots) -> AppScreen {
     let mut screen = landed_and_took_off(store);
+    until_breaking_up(&mut screen);
+    screen
+}
+
+/// [`landed_took_off_and_breaking_up`] with `main_screen_return_fade`
+/// read as the Bible.
+fn breaking_up_by_the_other_reading(store: &MemoryPilots) -> AppScreen {
+    let mut screen = landed_and_took_off_over(deadly_menu_by(store, RuleSource::Bible), create);
     until_breaking_up(&mut screen);
     screen
 }
@@ -476,28 +496,53 @@ fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_on
     assert_eq!(pilot(&screen), &last, "reopened as at the take-off");
 }
 
-#[test]
-fn a_dead_pilot_holds_fades_and_returns_to_the_main_menu() {
-    let store = MemoryPilots::new();
-    let mut screen = landed_took_off_and_breaking_up(&store);
-    until_exploded(&mut screen);
+/// Ticks a dead pilot from its explosion through the hold, checking
+/// flight shows unfaded, to the tick its fade begins.
+fn through_the_hold(screen: &mut AppScreen) {
+    until_exploded(screen);
     for tick in 1..=nova_sim::HOLD_TICKS {
         screen.tick(TICK);
         assert_eq!(screen.showing(), Showing::Flight, "dead tick {tick}");
-        assert_eq!(black_over(&screen), None, "dead tick {tick}");
+        assert_eq!(black_over(screen), None, "dead tick {tick}");
     }
     screen.tick(TICK);
     assert_eq!(
-        fate(&screen),
+        fate(screen),
         nova_sim::PlayerFate::Fading,
         "on the expiry's tick, straight through the seam"
     );
     assert_eq!(screen.showing(), Showing::Flight, "no dialog");
     screen.tick(Duration::from_millis(500));
-    assert_eq!(black_over(&screen), Some(128));
+    assert_eq!(black_over(screen), Some(128));
     assert_eq!(screen.showing(), Showing::Flight);
     screen.tick(Duration::from_millis(500));
     assert_eq!(screen.showing(), Showing::MainMenu, "back to the menu");
+}
+
+#[test]
+fn a_dead_pilot_holds_fades_and_returns_to_a_black_second_then_the_main_menu() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_took_off_and_breaking_up(&store);
+    through_the_hold(&mut screen);
+    assert_eq!(black_over(&screen), Some(255), "black");
+    screen.tick(Duration::from_millis(500));
+    assert_eq!(black_over(&screen), Some(255), "black through the fade");
+    choose(&mut screen, MenuChoice::NewPilot);
+    assert_eq!(screen.showing(), Showing::MainMenu, "its click dropped");
+    screen.tick(Duration::from_millis(500));
+    assert_eq!(black_over(&screen), None, "the main screen appears");
+    assert_eq!(
+        choose(&mut screen, MenuChoice::NewPilot),
+        ScreenAction::None
+    );
+    assert_eq!(screen.showing(), Showing::NewPilot, "the menu takes input");
+}
+
+#[test]
+fn by_the_other_reading_a_dead_pilot_returns_to_the_main_menu_fading_in() {
+    let store = MemoryPilots::new();
+    let mut screen = breaking_up_by_the_other_reading(&store);
+    through_the_hold(&mut screen);
     assert_eq!(black_over(&screen), Some(255), "from black");
     screen.tick(Duration::from_millis(500));
     assert_eq!(black_over(&screen), Some(128), "fading in");
@@ -511,9 +556,9 @@ fn a_dead_pilot_holds_fades_and_returns_to_the_main_menu() {
 }
 
 #[test]
-fn the_main_menu_takes_input_under_its_fade_in() {
+fn by_the_other_reading_the_main_menu_takes_input_under_its_fade_in() {
     let store = MemoryPilots::new();
-    let mut screen = landed_took_off_and_breaking_up(&store);
+    let mut screen = breaking_up_by_the_other_reading(&store);
     until_exploded(&mut screen);
     tick_until(&mut screen, 400, |screen| {
         screen.showing() == Showing::MainMenu
@@ -524,6 +569,26 @@ fn the_main_menu_takes_input_under_its_fade_in() {
         ScreenAction::None
     );
     assert_eq!(screen.showing(), Showing::NewPilot);
+}
+
+#[test]
+fn a_key_typed_during_the_death_fade_is_flights_and_never_reaches_the_main_menu() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_took_off_and_breaking_up(&store);
+    until_exploded(&mut screen);
+    tick_until(&mut screen, 400, |screen| black_over(screen).is_some());
+    assert_eq!(screen.showing(), Showing::Flight, "flight's fade to black");
+    screen.take_sounds();
+    screen.input(&key(Key::Char('n'), true));
+    screen.input(&Input::Text('n'));
+    tick_until(&mut screen, 400, |screen| {
+        screen.showing() == Showing::MainMenu
+    });
+    screen.tick(nova_view::fade::DEATH_FADE_FOR);
+    assert_eq!(black_over(&screen), None, "the main screen appeared");
+    assert_eq!(screen.take_sounds(), [], "no keyed click");
+    screen.keyed_click_ended();
+    assert_eq!(screen.showing(), Showing::MainMenu);
 }
 
 #[test]
@@ -627,6 +692,7 @@ fn a_strict_pilot_destroyed_is_deleted_before_the_main_menu_shows() {
     assert_eq!(store.deleted(), ["Ada"]);
     assert_eq!(store.keys(), Vec::<String>::new());
     assert_eq!(store.writes(), writes, "nothing written after the take-off");
+    returned(&mut screen);
     choose(&mut screen, MenuChoice::OpenPilot);
     assert_eq!(
         screen.pilot_list().expect("open").keys(),
@@ -751,7 +817,8 @@ fn took_off_over(store: &MemoryPilots, screen: AppScreen) -> AppScreen {
         .with_chance(above_the_player())
         .with_behaviour(Rc::new(Firing))
         .with_disable_rule(Rc::new(Never))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     screen.input(&key(Key::Escape, true));

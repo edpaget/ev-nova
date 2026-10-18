@@ -263,8 +263,9 @@ impl AppScreen {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {
                     // The pilot is put away: saved, and flight dropped, so
-                    // the developer's F flies a fresh, unnamed pilot.
-                    self.end_flight(Side::MainMenu);
+                    // the developer's F flies a fresh, unnamed pilot; the
+                    // main screen appears as on any return from play.
+                    self.return_to_main_screen();
                 } else {
                     self.switch_to(self.return_to);
                 }

@@ -386,7 +386,7 @@ impl Harness {
             .with_chance(chance)
             .with_pilots(Some(keeper), Rc::new(MonoMetrics));
         let harness = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
             held: Vec::new(),
@@ -406,7 +406,7 @@ impl Harness {
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(prefs_fixture::interface()), metrics);
         let harness = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
             held: Vec::new(),

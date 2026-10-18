@@ -70,7 +70,12 @@ impl Screen for AppScreen {
     /// it is answered.
     ///
     /// Command-Q quits at once, silently, on every side and under every
-    /// overlay.
+    /// overlay, but while the main menu appears, when it waits for the
+    /// appear's end with the other keys it holds.
+    ///
+    /// While the main menu appears (at start-up, and on a return from
+    /// play), every input goes to the appear first, which drops it, holds
+    /// it for when it ends, or passes it on (see `appear`).
     ///
     /// Before anything else sees it, a Caps Lock press, on any side and
     /// under any overlay, turns double time on or off for flight, built or
@@ -86,6 +91,9 @@ impl Screen for AppScreen {
         // The original is inside Quit's `Delay`, then exits.
         if self.quit_in.is_some() || self.quit_due {
             return ScreenAction::None;
+        }
+        if let Some(action) = self.appear_input(input) {
+            return action;
         }
         if let Some(hold) = self.menu_hold {
             self.hold_input(hold, input);
@@ -105,8 +113,10 @@ impl Screen for AppScreen {
     /// the saved pilots' list) is open, only it ticks: flight pauses under
     /// the preferences, as in the original. What the offer dialog over
     /// flight asked for is acted on, and the mission dialogs over flight
-    /// dropped once closed, on the tick a movie of theirs ends. A fade back from black after a
-    /// death moves on. Then what flight's tick ended is taken: the seam at
+    /// dropped once closed, on the tick a movie of theirs ends. While the
+    /// main menu appears unseen it doesn't tick, but waits, and the
+    /// appear moves on, replaying what it held once it ends. A fade back
+    /// from black after a death without a main menu moves on. Then what flight's tick ended is taken: the seam at
     /// the hold's expiry, and the return to the main menu once the death's
     /// fade is over. What the set expressions queued is settled, and a
     /// save that is due is made.
@@ -128,12 +138,13 @@ impl Screen for AppScreen {
             if let Some(spaceport) = &mut self.spaceport {
                 spaceport.cover();
             }
-        } else {
+        } else if !self.appear_holds_menu() {
             self.tell_menu_pointer();
             self.shown_mut().tick(dt);
         }
         self.settle_offer();
         self.drop_closed_missions();
+        self.advance_appear(dt);
         self.advance_fade_in(dt);
         self.after_flight_tick();
         self.settle_script();
@@ -144,7 +155,7 @@ impl Screen for AppScreen {
     /// help line, or the spaceport), then the overlay open: the New Pilot
     /// dialog, the saved pilots' list or the load's note, then the About
     /// dialog or the Preferences dialog; then the fade back from black
-    /// after a death, over everything. Under the spaceport, flight's status
+    /// after a death, and the main menu's appear, over everything. Under the spaceport, flight's status
     /// bar is drawn at the right edge ([`FlightView::draw_status_bar`](nova_view::flight::FlightView::draw_status_bar)), as
     /// the original's port dialog leaves it beside the dialog and its shops
     /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
@@ -216,11 +227,19 @@ impl Screen for AppScreen {
         if let Some(fade) = &self.fade_in {
             fade.draw(list, CLASSIC_VIEW);
         }
+        if let Some(appear) = &self.appear {
+            appear.draw(list, CLASSIC_VIEW);
+        }
     }
 
-    /// While the main menu waits, the cancel waits too, in its place
-    /// among the inputs.
+    /// While the main menu appears, the cancel ends a return's wait for
+    /// the button, and the menu under it holds nothing to cancel; while
+    /// the main menu waits, the cancel waits too, in its place among the
+    /// inputs.
     fn cancel_pointer(&mut self) {
+        if self.appear_cancel_pointer() {
+            return;
+        }
         if self.menu_hold.is_some() {
             self.held.push(Held::CancelPointer);
             return;

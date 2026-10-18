@@ -1501,7 +1501,7 @@ impl Boarder {
             .with_chance(chance);
         let screen = router(screen);
         Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         }

@@ -14,6 +14,7 @@ use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
+use nova_view::menu::appear::Appear;
 use nova_view::menu::{MainMenu, MainScreenSource, PilotList};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
@@ -90,6 +91,8 @@ impl AppScreen {
                 Prefs::default().quicktime_movies,
             ),
             fade_in: None,
+            appear: None,
+            button_down: false,
             player_info: None,
             command_held: false,
             keys_held: MenuKeys::default(),
@@ -374,6 +377,9 @@ impl AppScreen {
     /// warning saying why. Its logo picks on the router's effects chance
     /// ([`AppScreen::with_effects_chance`]), drawing nothing the
     /// simulation rolls.
+    ///
+    /// The game opens on the menu as it appears: the second's fade from
+    /// black over it, and its slides after (see the module docs).
     #[must_use]
     pub fn with_pilots(
         mut self,
@@ -388,10 +394,12 @@ impl AppScreen {
                 None
             }
         };
-        let screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
+        let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
             .with_chance(self.effects_chance.clone());
+        screen.appear();
         Self {
             side: Side::MainMenu,
+            appear: Some(Appear::start_up()),
             menu: Some(Menu {
                 screen,
                 metrics,

@@ -4,7 +4,9 @@ use super::*;
 
 /// The router with the main menu over `store`, and dialogs.
 fn menu_with_dialogs(store: &MemoryPilots) -> AppScreen {
-    with_dialogs(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+    with_dialogs(data())
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared()
 }
 
 #[test]
@@ -487,7 +489,7 @@ fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
     );
     create(&mut screen, "Ada");
     lay_out(&mut screen, led_berth_1());
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
     assert!(screen.flight_view().is_none(), "put away");
     create(&mut screen, "Bea");
@@ -512,7 +514,7 @@ fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
     lay_out(&mut screen, led_berth_1());
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     screen.input(&key(Key::Tab, true));
     screen.input(&key(Key::Char('f'), true));
     assert_eq!(screen.showing(), Showing::Flight);
@@ -570,7 +572,8 @@ fn an_opened_pilot_is_never_shown_the_tutorial() {
 fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     let bit_5 = nova_sim::Bit::new(5).expect("a bit");
     assert!(pilot(&screen).control_bit(bit_5), "toggled once");
@@ -580,7 +583,8 @@ fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
     // Opening the pilot runs no OnStart: a second toggle would clear it.
     assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
     let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     choose(&mut screen, MenuChoice::OpenPilot);
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::Flight);
@@ -735,7 +739,8 @@ fn the_new_pilot_dialog_comes_from_the_interface_file_when_there_is_one() {
     assert_eq!(without.showing(), Showing::NewPilot, "the built-in one");
     let mut missing = AppScreen::new(data())
         .with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     choose(&mut missing, MenuChoice::NewPilot);
     assert_eq!(missing.showing(), Showing::NewPilot, "the built-in one");
     assert_eq!(
@@ -761,7 +766,7 @@ fn a_name_already_saved_is_refused_whatever_its_case() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
     let writes = store.writes();
     create(&mut screen, "ada");
@@ -889,7 +894,7 @@ fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_th
     assert!(screen.load_note().is_none());
     assert_eq!(flown_system(&screen), nova_sim::SystemId(129));
     // Back on the menu and open again: the repaired save loads plainly.
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
     open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight, "the note shows once");
@@ -1090,7 +1095,9 @@ fn pilots_that_cannot_be_listed_say_why() {
 
 #[test]
 fn without_a_store_new_pilot_flies_unsaved_and_open_pilot_lists_nothing() {
-    let mut screen = AppScreen::new(data()).with_pilots(None, Rc::new(MonoMetrics));
+    let mut screen = AppScreen::new(data())
+        .with_pilots(None, Rc::new(MonoMetrics))
+        .appeared();
     assert_eq!(screen.showing(), Showing::MainMenu);
     choose(&mut screen, MenuChoice::OpenPilot);
     assert_eq!(
@@ -1169,7 +1176,7 @@ fn the_developer_flight_is_a_fresh_unnamed_pilot_never_saved() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     let ada = store.text("Ada");
     let writes = store.writes();
     screen.input(&key(Key::Tab, true));
@@ -1418,12 +1425,12 @@ fn the_course_maps_zoom_carries_into_the_next_pilot_new_or_opened() {
     );
     let zoomed = zoom_the_course_map_out(&mut screen);
     assert_eq!(zoomed, 0.5625 * 1.333_333);
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
     create(&mut screen, "Bea");
     assert_eq!(flight(&screen).course_map_zoom(), Some(zoomed), "New Pilot");
     let again = zoom_the_course_map_out(&mut screen);
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(flight(&screen).course_map_zoom(), Some(again), "Open Pilot");
@@ -1451,12 +1458,12 @@ fn the_borders_setting_reaches_each_flight_and_a_change_carries_into_the_next_pi
         "the flight's, forwarded"
     );
     assert_eq!(screen.take_map_borders_save(), None, "taken");
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
     create(&mut screen, "Bea");
     assert!(flight(&screen).map_borders_shown(), "New Pilot");
     flip_the_borders(&mut screen);
-    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
     open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(!flight(&screen).map_borders_shown(), "Open Pilot");
@@ -1488,7 +1495,9 @@ fn menu_over(data: Rc<GameData>, dialogs: bool) -> AppScreen {
     } else {
         AppScreen::new(data)
     };
-    let mut screen = screen.with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    let mut screen = screen
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     screen.take_warnings();
     ui_sounds(&mut screen);
     screen
@@ -1571,8 +1580,9 @@ fn the_menu_draws_the_art_and_without_it_the_stand_in_with_a_warning() {
     let mut screen = menu(&store);
     assert!(screen.main_menu().expect("a main menu").draws_art());
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
-    let mut screen =
-        AppScreen::new(bare_data()).with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    let mut screen = AppScreen::new(bare_data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     assert!(!screen.main_menu().expect("a main menu").draws_art());
     assert_eq!(
         screen.take_warnings(),
@@ -1606,10 +1616,12 @@ fn the_logo_picks_on_the_effects_chance_given_before_or_after_the_menu() {
     let store = MemoryPilots::new();
     let after = AppScreen::new(data())
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared()
         .with_effects_chance(last_roll());
     let before = AppScreen::new(data())
         .with_effects_chance(last_roll())
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     for mut screen in [Box::new(after), Box::new(before)] {
         screen.tick(nova_sim::mission::screens::mac_ticks(5));
         assert_eq!(
@@ -1729,6 +1741,7 @@ fn the_rollover_aims_at_the_live_pointer_back_from_a_widened_flight() {
     let offset = nova_view::view_shape::classic_offset(widened.0);
     screen.input(&Input::PointerMoved(Point::new(quit.x + offset, quit.y)));
     screen.input(&key(Key::Escape, true));
+    screen.tick(nova_view::fade::DEATH_FADE_FOR);
     assert_eq!(screen.showing(), Showing::MainMenu);
     tick_by_ticks(&mut screen, 20);
     assert_eq!(

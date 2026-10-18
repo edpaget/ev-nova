@@ -936,7 +936,7 @@ impl Game {
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
             .with_chance(SharedChance::new(chance));
         let mut game = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         };
@@ -2816,7 +2816,7 @@ fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
         .with_pilots(Some(keeper), Rc::new(MonoMetrics))
         .with_chance(SharedChance::new(Rc::new(RefCell::new(Nothing))));
     let mut game = Game {
-        app: App::new(&FakeWindow, data, screen),
+        app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         frames: 0,
     };

@@ -20,6 +20,15 @@
 //! While Quit's delay runs, the close quits at once too: Quit is already
 //! under way.
 //!
+//! While the main menu appears, the appear answers first (see `appear`).
+//! At start-up the close waits for the fade's end, as the drain after
+//! `_DoMainScreen`'s fade reads the close-box click and asks, `_gameLoaded`
+//! being set (@0x569ef-0x56a55, @0x47411), and then it is replayed as a
+//! held close is ([`AppScreen::replay_close`]). On a return from play, by
+//! the engine's reading, it is dropped and the window stays open, as
+//! `_EnterGameFromMainScreen` flushes the mouseDowns (@0x1a5a8,
+//! @0x1a6af); by the other reading it is asked as on the menu.
+//!
 //! While the main menu waits on a keyed click (or on E's release), the
 //! close waits with the other inputs ([`Held::Close`]). The original's
 //! click spins on `_ST_IsSoundPlaying` with only `_BusyIdle`, which is
@@ -57,9 +66,14 @@ impl AppScreen {
     /// nothing over it, it opens the quit question instead, cancelling the
     /// menu's pointer and letting go of its keys, and stays.
     ///
-    /// While the main menu waits on a keyed click, the close waits too and
-    /// the window stays open ([`AppScreen::replay_close`]).
+    /// While the main menu appears, the appear answers first, holding or
+    /// dropping the close with the window kept open; while the main menu
+    /// waits on a keyed click, the close waits too and the window stays
+    /// open ([`AppScreen::replay_close`]).
     pub(super) fn close_asked(&mut self) -> bool {
+        if let Some(quits) = self.appear_close() {
+            return quits;
+        }
         if self.menu_hold.is_some() {
             self.held.push(Held::Close);
             return false;

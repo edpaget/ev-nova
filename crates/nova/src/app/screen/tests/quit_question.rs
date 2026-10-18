@@ -6,7 +6,9 @@ use nova_view::ui::yes_no::{NO_ITEM, QUESTION_ITEM, QUIT_QUESTION, YES_ITEM};
 
 /// The router with the main menu over `store`, and dialogs.
 fn asking_menu(store: &MemoryPilots) -> AppScreen {
-    with_dialogs(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+    with_dialogs(data())
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared()
 }
 
 /// Clicks item `item` of the open quit question.
@@ -145,7 +147,8 @@ fn without_the_yes_no_dialog_a_close_quits_at_once() {
     assert_eq!(screen.showing(), Showing::MainMenu);
     let mut screen = AppScreen::new(data())
         .with_dialogs(Rc::new(NoYesNo), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     assert!(screen.close_requested());
 }
 

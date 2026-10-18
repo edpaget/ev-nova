@@ -412,7 +412,9 @@ fn without_any_metrics_a_boarding_is_let_go() {
 /// captured.
 fn captured(store: &MemoryPilots) -> AppScreen {
     let mut screen = boardable(
-        with_dialogs(boarding_data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)),
+        with_dialogs(boarding_data())
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+            .appeared(),
     )
     .with_chance(under_a_new_pilot())
     .with_boarding_rule(Rc::new(Sure));

@@ -19,7 +19,8 @@
 //! screen, drawn from the game data's art, or a stand-in without it
 //! ([`MainMenu`]). Closing the window on the menu asks `STR#` 140 #10 in
 //! the Yes/No dialog and quits only on Yes; closing it anywhere else, or
-//! Command-Q anywhere, quits at once (see `quit_question`). Escape in
+//! Command-Q anywhere, quits at once (see `quit_question`), but while the
+//! menu appears, below. Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -50,10 +51,23 @@
 //! each of a sabotaged player's outfits over the stopped flight, one
 //! after another, and begins flight's fade to black as the last closes,
 //! or with none on the same tick. When the fade is over the router drops flight, as
-//! Escape's put-away does, and returns to the main menu (or, without one,
-//! the side flight was entered from), which fades in from black over
-//! [`DEATH_FADE_FOR`](nova_view::fade::DEATH_FADE_FOR), taking input under the fade, as the original's
-//! `_EnterGameFromMainScreen` (0x1a471) fades the main screen in.
+//! Escape's put-away does, and returns to the main menu as it appears
+//! (below), or, without one, to the side flight was entered from, which
+//! fades in from black over
+//! [`DEATH_FADE_FOR`](nova_view::fade::DEATH_FADE_FOR), taking input under the fade.
+//!
+//! The main menu appears as the original's main screen does
+//! ([`Appear`](nova_view::menu::appear::Appear), see `appear`): at
+//! start-up it fades in from black over a second, its slides playing
+//! after, the clicks and plain keys made meanwhile dropped and its
+//! Command keys and the window's close kept for when it ends; on each
+//! return from play, by the engine's reading of `main_screen_return_fade`,
+//! the screen stays black while the primary button is held and through
+//! the second's fade, the main screen appearing when it ends, the keys
+//! typed meanwhile reaching it after and its pointer events dropped, as
+//! `_EnterGameFromMainScreen` (0x1a471) brings the main screen back. By
+//! the rule's other reading the return fades in over the menu, which
+//! takes input under the fade.
 //!
 //! # The developer's sides
 //!
@@ -276,6 +290,7 @@ use nova_sim::{
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
+use nova_view::menu::appear::Appear;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList};
 use nova_view::movie::Movies;
 use nova_view::ships::ShipBrowser;
@@ -293,6 +308,7 @@ use nova_view::ui::{
 use nova_view::{Color, Input, Key, Navigator, Point, Prefs, Sound};
 use nova_view::{FullscreenKind, Upscaler};
 
+mod appear;
 mod build;
 mod flight;
 mod menu;
@@ -515,9 +531,16 @@ pub struct AppScreen {
     /// another is given ([`AppScreen::with_movie_player`]), on as the
     /// preferences say.
     movies: Movies,
-    /// The fade back from black over the side shown after a death, while
-    /// it plays.
+    /// The fade back from black over the developer's side shown after a
+    /// death without a main menu, while it plays.
     fade_in: Option<ScreenFade>,
+    /// How the main menu appears, at start-up and on a return from play,
+    /// while it does.
+    appear: Option<Appear>,
+    /// Whether the primary mouse button is down, as the last pointer
+    /// input routed or cancel put it: a return from play waits for it to
+    /// be let go of (`StillDown`).
+    button_down: bool,
     /// The player info screen over flight, while it is open.
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.

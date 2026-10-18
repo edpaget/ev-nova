@@ -376,7 +376,7 @@ impl Harness {
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
         Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         }

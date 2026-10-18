@@ -288,7 +288,7 @@ impl Harness {
             fullscreen: Vec::new(),
         };
         Self {
-            app: App::new(&window, data, screen)
+            app: App::new(&window, data, crate::common::appeared(screen))
                 .with_audio(core)
                 .with_settings(keeper),
             window,

@@ -4,7 +4,7 @@
 use nova_sim::VenueOffer;
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
-use nova_view::{Input, Key, Point, Screen, ScreenAction, Showing};
+use nova_view::{Input, Key, MouseButton, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
@@ -426,16 +426,9 @@ impl AppScreen {
     /// where a pointer input puts the pointer.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
         self.note_pointer(input);
-        if let Input::Key { key, pressed, .. } = *input {
-            match key {
-                Key::Command => self.command_held = pressed,
-                Key::Char('s') => self.keys_held.s = pressed,
-                Key::Char('l') => self.keys_held.l = pressed,
-                Key::Char('e') => self.keys_held.e = pressed,
-                _ => {}
-            }
-        }
-        // Command-Q quits at once, silently, wherever it is pressed, as
+        self.note_keys(input);
+        // Command-Q quits at once, silently, wherever it is pressed (the
+        // main menu's appear holds it first, for when the appear ends), as
         // `_HandleQuitEvent` @0xcc958 does on the main screen (`_gPause`
         // set, @0xcc97e). In play the original asks first (@0xcc9f5),
         // which the engine doesn't yet
@@ -509,11 +502,32 @@ impl AppScreen {
         self.shown_mut().input(input)
     }
 
+    /// Keeps whether Command and the physical S, L and E keys are held.
+    pub(super) fn note_keys(&mut self, input: &Input) {
+        if let Input::Key { key, pressed, .. } = *input {
+            match key {
+                Key::Command => self.command_held = pressed,
+                Key::Char('s') => self.keys_held.s = pressed,
+                Key::Char('l') => self.keys_held.l = pressed,
+                Key::Char('e') => self.keys_held.e = pressed,
+                _ => {}
+            }
+        }
+    }
+
     /// Keeps where a pointer input puts the pointer, moved back into the
     /// classic frame from a widened flight by [`AppScreen::overlay_offset`]
     /// (as a dialog over it takes it), so it is the point the same pixel
-    /// shows on the classic sides.
-    fn note_pointer(&mut self, input: &Input) {
+    /// shows on the classic sides; and whether the primary button is down.
+    pub(super) fn note_pointer(&mut self, input: &Input) {
+        if let Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            ..
+        } = *input
+        {
+            self.button_down = pressed;
+        }
         let offset = self.overlay_offset();
         self.pointer = match *input {
             Input::PointerMoved(at) | Input::PointerButton { at, .. } => {

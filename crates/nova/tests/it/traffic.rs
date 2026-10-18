@@ -410,7 +410,7 @@ impl Harness {
             .with_behaviour(behaviour)
             .with_pilots(Some(keeper), Rc::new(MonoMetrics));
         let mut harness = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         };
