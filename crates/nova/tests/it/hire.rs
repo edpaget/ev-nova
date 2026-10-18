@@ -41,6 +41,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -607,7 +608,7 @@ impl Game {
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
-        self.click(crate::common::enter_ship_at(self.app.screen()));
+        self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight, "resumed in flight");
         if showing == Showing::Spaceport {
             // L requests clearance, a second L lands.
@@ -1092,3 +1093,5 @@ fn with_a_full_fleet_the_bars_hire_escort_asks_nothing() {
         assert_eq!(game.hiring(), opens, "{count} escorts");
     }
 }
+
+crate::common::entry_harness!(Game, click, frame);

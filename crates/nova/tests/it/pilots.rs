@@ -18,6 +18,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::screen::QUIT_DELAY;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
@@ -575,7 +576,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     );
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     let pilot = game.pilot();
     assert_eq!(pilot.name(), "Ada P");
@@ -619,7 +620,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     assert_eq!(game.showing(), Showing::OpenPilot);
     assert!(texts(&game.frame()).contains(&"Ada P".to_owned()));
     game.press(KeyCode::Enter);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert!(game.app.screen().spaceport_view().is_none());
     assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
@@ -694,7 +695,7 @@ fn a_new_app_opens_holding_the_last_pilot_saved_and_enter_ship_flies_it() {
     let held = game.app.screen().game_in_progress().expect("a game held");
     assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
     assert_menu_drawn(&mut game);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.pilot().name(), "Ada");
     assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
@@ -763,7 +764,7 @@ fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.ship().position, nova_sim::Vec2::new(50.0, 50.0));
     assert_eq!(
@@ -777,7 +778,7 @@ fn a_new_pilot_reopened_before_it_lands_resumes_over_the_stellar_its_first_save_
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.pilot().stellar(), Some(StellarId(128)));
     assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over it");
@@ -804,7 +805,7 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
 
     game.type_name("Ada");
     game.press(KeyCode::Enter);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(
         game.music(),
@@ -819,3 +820,5 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     game.frame();
     assert_eq!(game.music(), [], "spent for the rest of the run");
 }
+
+crate::common::entry_harness!(Harness, click, frame);

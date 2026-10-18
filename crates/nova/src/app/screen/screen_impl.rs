@@ -58,7 +58,8 @@ impl Screen for AppScreen {
     /// or opened is held on the menu, not flying; New Pilot over a pilot
     /// held asks `STR#` 140 #8 first, and a note over the menu (`STR#` 140
     /// #52 or #34) takes every event until Return, Escape or OK dismisses
-    /// it. Enter Ship (E after its click, or a click) flies the pilot held,
+    /// it. Enter Ship (E after its click, or a click) enters play with the
+    /// pilot held, through the entry's fades and any intro (see `entry`),
     /// and refuses with snd 153 when none is held or it is dying. Escape
     /// in flight goes back to the menu, by the engine's reading of
     /// `escape_to_main_screen`, saving the pilot and holding it. Escape on
@@ -79,7 +80,11 @@ impl Screen for AppScreen {
     ///
     /// While the main menu appears (at start-up, and on a return from
     /// play), every input goes to the appear first, which drops it, holds
-    /// it for when it ends, or passes it on (see `appear`).
+    /// it for when it ends, or passes it on (see `appear`). While play is
+    /// entered from the main menu, every input goes to the entry first,
+    /// which drops it, holds it for the handover, or gives it to the
+    /// intro's text; flight sees none from before its fade-in ends (see
+    /// `entry`).
     ///
     /// Before anything else sees it, a Caps Lock press, on any side and
     /// under any overlay, turns double time on or off for flight, built or
@@ -96,6 +101,9 @@ impl Screen for AppScreen {
         if self.quit_in.is_some() || self.quit_due {
             return ScreenAction::None;
         }
+        if let Some(action) = self.entry_input(input) {
+            return action;
+        }
         if let Some(action) = self.appear_input(input) {
             return action;
         }
@@ -103,11 +111,7 @@ impl Screen for AppScreen {
             self.hold_input(hold, input);
             return ScreenAction::None;
         }
-        self.double_time_key(input);
-        let action = self.route(input);
-        self.settle_script();
-        self.save_if_due();
-        action
+        self.routed_input(input)
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -119,7 +123,9 @@ impl Screen for AppScreen {
     /// flight asked for is acted on, and the mission dialogs over flight
     /// dropped once closed, on the tick a movie of theirs ends. While the
     /// main menu appears unseen it doesn't tick, but waits, and the
-    /// appear moves on, replaying what it held once it ends. A fade back
+    /// appear moves on, replaying what it held once it ends. While play is
+    /// entered, neither the menu nor flight ticks, and the entry moves on:
+    /// its fades, the intro, the handover and its warm-up frame. A fade back
     /// from black after a death without a main menu moves on. Then what flight's tick ended is taken: the seam at
     /// the hold's expiry, and the return to the main menu once the death's
     /// fade is over. What the set expressions queued is settled, and a
@@ -142,13 +148,14 @@ impl Screen for AppScreen {
             if let Some(spaceport) = &mut self.spaceport {
                 spaceport.cover();
             }
-        } else if !self.appear_holds_menu() {
+        } else if !self.appear_holds_menu() && !self.entry_holds() {
             self.tell_menu_pointer();
             self.shown_mut().tick(dt);
         }
         self.settle_offer();
         self.drop_closed_missions();
         self.advance_appear(dt);
+        self.advance_entry(dt);
         self.advance_fade_in(dt);
         self.after_flight_tick();
         self.settle_script();
@@ -234,6 +241,7 @@ impl Screen for AppScreen {
         if let Some(appear) = &self.appear {
             appear.draw(list, CLASSIC_VIEW);
         }
+        self.draw_entry(list);
     }
 
     /// While the main menu appears, the cancel ends a return's wait for
@@ -241,6 +249,9 @@ impl Screen for AppScreen {
     /// the main menu waits, the cancel waits too, in its place among the
     /// inputs.
     fn cancel_pointer(&mut self) {
+        if self.entry_cancel_pointer() {
+            return;
+        }
         if self.appear_cancel_pointer() {
             return;
         }
@@ -258,6 +269,9 @@ impl Screen for AppScreen {
     /// too, in its place among the inputs; while E's wait holds, it
     /// counts as E's release.
     fn release_keys(&mut self) {
+        if self.entry_release_keys() {
+            return;
+        }
         if self.appear_release_keys() {
             return;
         }
@@ -319,6 +333,7 @@ impl Screen for AppScreen {
     /// The sounds of the screens closed since, then of every live screen.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds = std::mem::take(&mut self.sounds);
+        sounds.extend(self.take_entry_sounds());
         sounds.extend(self.ships.take_sounds());
         sounds.extend(self.galaxy.take_sounds());
         let open = [
@@ -409,6 +424,9 @@ impl Screen for AppScreen {
     /// the spaceport (`_HideTheCursor` @0x55a73), never under a dialog
     /// opened over it.
     fn hides_pointer(&self) -> bool {
+        if let Some(hides) = self.entry_hides_pointer() {
+            return hides;
+        }
         match self.showing() {
             Showing::Movie => match &self.missions {
                 Some(missions) => missions.hides_pointer(),
@@ -465,6 +483,17 @@ impl Screen for AppScreen {
 }
 
 impl AppScreen {
+    /// `input` routed as the router routes it with nothing holding it:
+    /// Caps Lock's double time, the route, then what the set expressions
+    /// queued settled and a save that is due made.
+    pub(super) fn routed_input(&mut self, input: &Input) -> ScreenAction {
+        self.double_time_key(input);
+        let action = self.route(input);
+        self.settle_script();
+        self.save_if_due();
+        action
+    }
+
     /// How far right the dialogs over the side shown are drawn, their
     /// pointer moved back by as much: their 1024 x 768 frame centred over
     /// a widened flight, and nothing elsewhere.

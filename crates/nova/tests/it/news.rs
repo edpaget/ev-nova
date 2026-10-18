@@ -20,6 +20,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -428,7 +429,7 @@ impl Game {
         game.click(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
-        game.click(crate::common::enter_ship_at(game.app.screen()));
+        game.enter_ship();
         assert_eq!(game.showing(), Showing::Flight);
         game
     }
@@ -693,3 +694,5 @@ fn an_independent_stellars_news_shows_over_the_default_picture() {
     let frame = game.frame();
     assert_eq!(news_backdrop(&game, &frame), Some(DEFAULT_NEWS));
 }
+
+crate::common::entry_harness!(Game, click, frame);

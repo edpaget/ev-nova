@@ -32,6 +32,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -518,7 +519,7 @@ impl Game {
         game.click_menu(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
-        game.click_menu(crate::common::enter_ship_at(game.app.screen()));
+        game.enter_ship();
         assert_eq!(game.showing(), showing);
         game.frame();
         game.frame();
@@ -764,3 +765,5 @@ fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_bac
     assert!(shown.iter().any(|text| text == "Friend"), "{shown:?}");
     assert!(!shown.iter().any(|text| text == "Ace"), "{shown:?}");
 }
+
+crate::common::entry_harness!(Game, click_menu, frame);

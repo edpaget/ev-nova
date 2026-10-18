@@ -20,9 +20,14 @@
 //! as it was. A pilot whose load had to fall back for data the save
 //! references and the game data lacks ([`nova_sim::Session::load`], under
 //! the router's rules) shows the note `STR#` 140 #52 over the menu.
-//! Enter Ship (E, or a click) flies the game held, in space over the
-//! stellar it last landed on, with no spaceport opened; with none, or a
-//! pilot dying, it plays snd 153 and stays. Escape on the menu does
+//! Enter Ship (E, or a click) enters play with the game held, in space
+//! over the stellar it last landed on, with no spaceport opened, as
+//! `_EnterGameFromMainScreen` does (see `entry`): the main screen fades to
+//! black, a pilot that hasn't seen the intro screen sees it (by
+//! [`RuleKey::IntroForReopenedPilot`](nova_sim::RuleKey::IntroForReopenedPilot),
+//! the last New Pilot's in this run, or the first `chär`'s), and flight
+//! shows with a frozen, key-ignoring first frame and fades in from black;
+//! with no game, or a pilot dying, it plays snd 153 and stays. Escape on the menu does
 //! nothing. Quit quits after [`QUIT_DELAY`], and each of the menu's keys
 //! first waits for its click to play (see `menu_input`); a click on Enter
 //! Ship, Preferences or About does what E, P or A does, and a held P, A
@@ -308,6 +313,7 @@ pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::menu::appear::Appear;
+use nova_view::menu::intro::CharacterIntro;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList};
 use nova_view::movie::Movies;
 use nova_view::ships::ShipBrowser;
@@ -327,6 +333,7 @@ use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
 mod build;
+mod entry;
 mod flight;
 mod game;
 mod launch;
@@ -566,6 +573,13 @@ pub struct AppScreen {
     /// How the main menu appears, at start-up and on a return from play,
     /// while it does.
     appear: Option<Appear>,
+    /// Play being entered from the main screen, while it is (see
+    /// `entry`).
+    entry: Option<entry::Entering>,
+    /// The intro of the last pilot New Pilot made in this run, the
+    /// original's intro globals (`_GetCharResourceIntroIDs` @0x193ad);
+    /// none at launch (`_InitMainScreen` @0x16101-0x1612d).
+    new_pilot_intro: Option<CharacterIntro>,
     /// Whether the primary mouse button is down, as the last pointer
     /// input routed or cancel put it: a return from play waits for it to
     /// be let go of (`StillDown`).

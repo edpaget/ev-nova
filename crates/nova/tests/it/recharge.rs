@@ -19,6 +19,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -617,7 +618,7 @@ fn at_beta_prime(store: &MemoryPilots, cash: i32) -> Harness {
         game.type_key(code, Some(letter));
     }
     game.press(KeyCode::Enter);
-    game.click(crate::common::enter_ship_at(game.app.screen()));
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert_eq!(game.fuel(), Gauge::full(300.0));
@@ -687,3 +688,5 @@ fn a_pilot_short_of_credits_is_refused_and_told_why() {
         "{shown:?}"
     );
 }
+
+crate::common::entry_harness!(Harness, click, frame);

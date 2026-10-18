@@ -92,6 +92,7 @@ mod appear;
 mod death;
 mod dialog_maps;
 mod encounters;
+mod entry;
 mod flight;
 mod game;
 mod launch;
@@ -1400,14 +1401,48 @@ pub(crate) fn open_held(screen: &mut AppScreen) {
     screen.input(&key(Key::Enter, true));
 }
 
-/// Enters play with the pilot the main menu holds: a click on Enter Ship.
+/// Enters play with the pilot the main menu holds: a click on Enter Ship,
+/// then the entry stepped through ([`through_entry`]).
 pub(crate) fn enter_ship(screen: &mut AppScreen) {
     choose(screen, MenuChoice::EnterShip);
+    through_entry(screen);
     assert_eq!(screen.showing(), Showing::Flight);
+}
+
+/// Steps play's entry through: ticks of a tenth of a second until the
+/// router no longer enters play, the skip key tapped while the intro's
+/// pictures show and Return while its text does. Bounded, so an entry
+/// that never ends fails.
+pub(crate) fn through_entry(screen: &mut AppScreen) {
+    for _ in 0..1000 {
+        if !screen.entering() {
+            return;
+        }
+        let tap = match screen.showing() {
+            Showing::Intro => Some(nova_view::menu::intro::SKIP_KEY),
+            Showing::IntroText => Some(Key::Enter),
+            _ => None,
+        };
+        if let Some(tapped) = tap {
+            screen.input(&key(tapped, true));
+            screen.input(&key(tapped, false));
+        }
+        screen.tick(std::time::Duration::from_millis(100));
+    }
+    panic!("play is still being entered");
 }
 
 fn pilot(screen: &AppScreen) -> &nova_sim::Pilot {
     flight(screen).pilot().expect("flying")
+}
+
+/// `pilot` as its last save has it, from before entering play marked
+/// the intro seen.
+fn unseen(pilot: &nova_sim::Pilot) -> nova_sim::Pilot {
+    nova_sim::Pilot {
+        seen_intro: false,
+        ..pilot.clone()
+    }
 }
 
 pub(crate) fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {

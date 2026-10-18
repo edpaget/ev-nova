@@ -11,6 +11,7 @@ use std::ops::RangeInclusive;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::{GameData, ShipId, SystemId};
 use nova_render::recording::RecordingGpu;
@@ -517,7 +518,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
-    driver.click(crate::common::enter_ship_at(driver.app.screen()));
+    driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
     let session = driver.flight().session().expect("flying");
     assert_eq!(session.landed(), None);
@@ -662,7 +663,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
-    driver.click(crate::common::enter_ship_at(driver.app.screen()));
+    driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
     driver.press(Key::Char('l'));
     // Two redraws, at least a tick, for the dock approach to clear the
@@ -756,7 +757,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     driver.press(Key::Enter);
-    driver.click(crate::common::enter_ship_at(driver.app.screen()));
+    driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
     driver.press(Key::Char('l'));
     // Two redraws, at least a tick, for the dock approach to clear the
@@ -854,3 +855,5 @@ fn a_finales_texts_show_over_earths_spaceport_before_its_q_leaves() {
         Some("A mysterious force transports you to an unknown location...")
     );
 }
+
+crate::common::entry_harness!(Driver, click, redraw);

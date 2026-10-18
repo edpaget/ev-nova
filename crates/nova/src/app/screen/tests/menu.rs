@@ -557,7 +557,9 @@ fn new_pilot_asks_for_a_name_then_flies_and_saves_the_pilot() {
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(pilot(&screen).name(), "Ada");
     assert_eq!(store.keys(), ["Ada"], "saved at once");
-    assert_eq!(saved(&store, "Ada"), *pilot(&screen));
+    // Entering play marks the intro seen, which only the next save keeps.
+    assert!(pilot(&screen).seen_intro());
+    assert_eq!(saved(&store, "Ada"), unseen(pilot(&screen)));
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
 }
 
@@ -605,7 +607,11 @@ fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
     let bit_5 = nova_sim::Bit::new(5).expect("a bit");
     assert!(pilot(&screen).control_bit(bit_5), "toggled once");
     assert!(pilot(&screen).has_explored(nova_sim::SystemId(129)));
-    assert_eq!(saved(&store, "Ada"), *pilot(&screen), "saved with them");
+    assert_eq!(
+        saved(&store, "Ada"),
+        unseen(pilot(&screen)),
+        "saved with them"
+    );
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
     // Opening the pilot runs no OnStart: a second toggle would clear it.
     assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
@@ -840,8 +846,12 @@ fn open_pilot_lists_the_saved_pilots_and_resumes_the_chosen_one_where_it_landed(
     enter_ship(&mut screen);
     assert_eq!(
         screen.take_sounds(),
-        [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)],
-        "Enter Ship's click, and no landing sound"
+        [
+            Sound::Ui(UiSound::ButtonDown),
+            Sound::Ui(UiSound::ButtonUp),
+            Sound::Ui(UiSound::MainScreenSoundsHalted)
+        ],
+        "Enter Ship's click, the main screen's sounds halted, and no landing sound"
     );
     assert_eq!(screen.showing(), Showing::Flight, "in space, no spaceport");
     assert!(screen.spaceport.is_none());

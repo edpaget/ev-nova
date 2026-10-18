@@ -93,6 +93,9 @@ impl AppScreen {
     /// waits on a keyed click, the close waits too and the window stays
     /// open ([`AppScreen::replay_close`]).
     pub(super) fn close_asked(&mut self) -> bool {
+        if let Some(quits) = self.entry_close() {
+            return quits;
+        }
         if let Some(quits) = self.appear_close() {
             return quits;
         }

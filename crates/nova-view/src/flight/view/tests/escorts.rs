@@ -55,6 +55,17 @@ fn each_key_asks_the_session_for_its_command() {
 }
 
 #[test]
+fn shutting_the_escort_menu_closes_it() {
+    let mut view = fighters_out();
+    tap(&mut view, MENU_KEY);
+    assert!(view.escort_menu().is_open());
+    view.shut_escort_menu();
+    assert!(!view.escort_menu().is_open());
+    view.shut_escort_menu();
+    assert!(!view.escort_menu().is_open(), "shut stays shut");
+}
+
+#[test]
 fn option_c_sends_the_fighters_home_and_c_alone_back_to_formation() {
     let mut view = fighters_out();
     option(&mut view, ESCORT_RECALL_KEY);

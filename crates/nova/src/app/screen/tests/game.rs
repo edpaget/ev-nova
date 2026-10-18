@@ -401,20 +401,30 @@ fn e_after_its_click_enters_play_with_the_loaded_pilot() {
     assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed]);
     assert_eq!(screen.showing(), Showing::MainMenu, "the click plays first");
     screen.keyed_click_ended();
+    assert!(screen.entering());
+    assert_eq!(
+        ui_sounds(&mut screen),
+        [UiSound::MainScreenSoundsHalted],
+        "no refusal"
+    );
+    through_entry(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(pilot(&screen).name(), "Ada");
     assert!(screen.game_in_progress().is_none(), "moved into flight");
-    assert_eq!(ui_sounds(&mut screen), [], "no refusal");
     screen.tick(TICK);
     assert!(flight(&screen).message().is_some(), "it ticks now");
 }
 
 #[test]
-fn a_click_on_enter_ship_enters_at_once() {
+fn a_click_on_enter_ship_enters_once_the_entry_has_run() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create_held(&mut screen, "Ada");
     choose(&mut screen, MenuChoice::EnterShip);
+    assert!(screen.entering());
+    assert_eq!(screen.showing(), Showing::MainMenu, "fading out");
+    through_entry(&mut screen);
+    assert!(!screen.entering());
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(pilot(&screen).name(), "Ada");
 }

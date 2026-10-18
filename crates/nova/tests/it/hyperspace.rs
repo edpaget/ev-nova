@@ -30,6 +30,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
 use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
@@ -446,7 +447,7 @@ impl Harness {
             self.send(WindowEvent::Text(c));
         }
         self.press(Key::Enter);
-        self.click(crate::common::enter_ship_at(self.app.screen()));
+        self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight);
     }
 
@@ -1148,7 +1149,7 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
     harness.choose(MenuChoice::OpenPilot);
     assert_eq!(harness.showing(), Showing::OpenPilot);
     harness.press(Key::Enter);
-    harness.click(crate::common::enter_ship_at(harness.app.screen()));
+    harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().pilot().name(), "Ada");
     harness.jump_to_beta();
@@ -1234,7 +1235,7 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     let mut harness = Harness::on_the_menu(SharedChance::default(), &store);
     harness.choose(MenuChoice::OpenPilot);
     harness.press(Key::Enter);
-    harness.click(crate::common::enter_ship_at(harness.app.screen()));
+    harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(129));
@@ -1546,3 +1547,5 @@ fn escape_on_the_hypergate_map_enters_the_gate_too() {
     assert_eq!(harness.session().system(), SystemId(130));
     assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
 }
+
+crate::common::entry_harness!(Harness, click, frame);

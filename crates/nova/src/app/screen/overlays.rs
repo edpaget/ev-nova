@@ -93,7 +93,7 @@ impl AppScreen {
     /// @0x1acb1, [`nova_sim::Session::plain_text`]), as the original reads
     /// the player globals of the pilot loaded; with none, as before any
     /// pilot ([`start_up_words`]).
-    fn main_screen_words(&mut self, id: i16) -> Result<String, String> {
+    pub(super) fn main_screen_words(&mut self, id: i16) -> Result<String, String> {
         if let Some(game) = self.game.as_mut().filter(|game| game.session().is_ok()) {
             let text = game.load_description(id)?;
             return Ok(game

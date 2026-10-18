@@ -46,9 +46,9 @@ impl AppScreen {
     /// - Typed E with the physical E key held waits for its release
     ///   (@0x1ac32-0x1ac57) before it clicks; typed with the E key up
     ///   (another layout) it clicks at once. Then it is Enter Ship
-    ///   (`_MainScreenChoice(3)`, [`AppScreen::enter_ship`]): it flies the
-    ///   game held, or, with none or a dying pilot, refuses with
-    ///   [`UiSound::EnterRefused`].
+    ///   (`_MainScreenChoice(3)`, [`AppScreen::enter_ship`]): it enters
+    ///   play with the game held, through the entry, or, with none or a
+    ///   dying pilot, refuses with [`UiSound::EnterRefused`].
     ///
     /// With Command held, the typed keys and A and X go to the
     /// original's menus and do nothing here.

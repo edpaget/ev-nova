@@ -9,7 +9,8 @@
 //! and hold it, never showing it, as `_DoNewPilot` (@0x18b0a) and
 //! `_MainScreenChoice(1)` return to the main screen with the pilot
 //! loaded. Enter Ship moves the game into the flight slot and shows it
-//! (`_MainScreenChoice(3)`, @0x1aa71). A return from play started from
+//! (`_MainScreenChoice(3)`, @0x1aa71), once the entry's fade out and any
+//! intro have run (see `entry`). A return from play started from
 //! the menu (the death's, or Escape's under the engine's reading of
 //! [`RuleKey::EscapeToMainScreen`](nova_sim::RuleKey::EscapeToMainScreen))
 //! puts the pilot away and moves the flight back into the game slot, as
@@ -31,7 +32,6 @@ use std::rc::Rc;
 use nova_data::GameData;
 use nova_sim::Pilot;
 use nova_view::flight::FlightView;
-use nova_view::{Sound, UiSound};
 
 use super::{AppScreen, Side};
 
@@ -71,25 +71,6 @@ impl AppScreen {
         })
     }
 
-    /// Enter Ship, as `_MainScreenChoice(3)` runs it (@0x1aa71): with a
-    /// game in progress whose pilot isn't dying ([`FlightView::is_dying`],
-    /// `_IsDying` @0x253d), any flight shown is dropped, keeping its
-    /// settings, and the game is flown from the main menu, which a return
-    /// from play comes back to. The menu lets go of its keys and pointer
-    /// as it hides, as `_FlushKeys` (@0x1aa7a) empties the key map; the
-    /// game heard no press while it was held. Otherwise it beeps
-    /// `_beepSnd[3]` (@0x1aa89-0x1aaac): [`UiSound::EnterRefused`].
-    pub(super) fn enter_ship(&mut self) {
-        if self.game.as_ref().is_none_or(FlightView::is_dying) {
-            self.sounds.push(Sound::Ui(UiSound::EnterRefused));
-            return;
-        }
-        self.drop_flight();
-        self.flight = self.game.take();
-        self.return_to = Side::MainMenu;
-        self.switch_to(Side::Flight);
-    }
-
     /// Leaves play for the main menu keeping the pilot: puts it away
     /// (saved, or a strict pilot dying deleted, [`AppScreen::put_away_pilot`])
     /// before anything can show the menu or list the pilots, shows the
@@ -126,7 +107,10 @@ impl AppScreen {
     /// (`_SavePilotFile` @0x1935f) and returns to the main screen with the
     /// pilot loaded; choice 0 runs no sweep after it (@0x1a795-0x1a7d2).
     /// What the settling then makes due is saved too, as after any input.
+    /// Its intro is remembered for the entry
+    /// ([`AppScreen::remember_new_pilot_intro`]).
     pub(super) fn hold_new_pilot(&mut self, mut flight: FlightView<Rc<GameData>>) {
+        self.remember_new_pilot_intro();
         flight.begin();
         flight.take_save_due();
         self.hold_game(flight);

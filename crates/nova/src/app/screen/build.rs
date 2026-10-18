@@ -94,6 +94,8 @@ impl AppScreen {
             ),
             fade_in: None,
             appear: None,
+            entry: None,
+            new_pilot_intro: None,
             button_down: false,
             player_info: None,
             command_held: false,
@@ -560,6 +562,9 @@ impl AppScreen {
     /// Which screen is showing.
     #[must_use]
     pub fn showing(&self) -> Showing {
+        if let Some(showing) = self.entry_showing() {
+            return showing;
+        }
         if self.about.is_some() {
             // The X text is no About box: it leaves the music playing.
             return if self.about_text == ABOUT_TEXT {
