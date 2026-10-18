@@ -10,7 +10,7 @@
 //!
 //! +0xc908 is two things:
 //!
-//! - On an NPC it is the crew pods left ([`Npc::pods_left`]), written raw
+//! - On an NPC it is the crew pods left ([`Npc::pods_left`](crate::Npc::pods_left)), written raw
 //!   from its class's `PodCount` (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe),
 //!   so a negative count steps through the draw.
 //! - On the player it is the escape-pod countdown, -1 while flying
