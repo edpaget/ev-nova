@@ -1705,6 +1705,23 @@ mod tests {
     }
 
     #[test]
+    fn after_a_fallback_closing_untouched_reports_nothing_at_all() {
+        let [_, fhd] = modes();
+        for close in [key(Key::Enter), key(Key::Escape)] {
+            let mut dialog = fallen_back(fhd);
+            dialog.input(&close);
+            assert!(dialog.closed());
+            assert_eq!(dialog.take_change(), None, "{close:?}");
+            assert_eq!(dialog.take_display_choice(), None, "{close:?}");
+        }
+        let mut dialog = fallen_back(fhd);
+        let ok = ok(&dialog);
+        click(&mut dialog, ok);
+        assert_eq!(dialog.take_change(), None, "OK");
+        assert_eq!(dialog.take_display_choice(), None, "OK");
+    }
+
+    #[test]
     fn after_a_fallback_picking_borderless_or_the_saved_mode_is_a_choice() {
         let [_, fhd] = modes();
         let mut dialog = fallen_back(fhd);

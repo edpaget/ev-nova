@@ -846,3 +846,95 @@ fn the_picker_lists_the_monitors_modes_and_ok_enters_the_one_picked_and_saves_it
         FullscreenKind::Exclusive(mode(1920, 1080, 60_000))
     );
 }
+
+/// The settings `seeded` saves, with the game fullscreen in 1920x1080 at
+/// 60 Hz chosen on another monitor, which [`MONITOR`] also lists.
+fn seeded_on_another_monitor() -> MemorySettings {
+    let store = seeded();
+    let (mut keeper, _) = SettingsKeeper::open(store.clone());
+    let settings = GameSettings {
+        fullscreen: true,
+        fullscreen_kind: FullscreenSetting::Exclusive {
+            mode: mode(1920, 1080, 60_000),
+            monitor: Some("LG HDR 4K".to_owned()),
+        },
+        ..keeper.settings()
+    };
+    keeper.change(settings).expect("seeds");
+    store
+}
+
+impl Harness {
+    /// The game started over `store` as the runner starts it, its window
+    /// restored, its startup warnings taken.
+    fn launched(store: &MemorySettings) -> (Self, Vec<String>) {
+        let mut harness = Self::new(store);
+        harness.app.restore_window(&mut harness.window);
+        let warnings = harness.app.take_warnings();
+        (harness, warnings)
+    }
+
+    /// Opens the Preferences, steps the display picker by `steps` (Down
+    /// for each `true`, Up for each `false`) and presses Return.
+    fn pick(&mut self, steps: &[bool]) {
+        self.command_comma();
+        for _ in 0..5 {
+            self.press(Key::Tab);
+        }
+        for &down in steps {
+            self.press(if down { Key::Down } else { Key::Up });
+        }
+        self.press(Key::Enter);
+        assert_ne!(self.showing(), Showing::Preferences, "closed");
+    }
+}
+
+#[test]
+fn after_a_fallback_launch_the_stock_dialog_saves_borderless_or_the_mode_picked() {
+    let fhd = Some(FullscreenKind::Exclusive(mode(1920, 1080, 60_000)));
+    let borderless = Some(FullscreenKind::Borderless);
+
+    // Closed untouched: the saved kind stays.
+    let store = seeded_on_another_monitor();
+    let (mut harness, warnings) = Harness::launched(&store);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("1920 x 1080, 60 Hz"), "{warnings:?}");
+    assert_eq!(harness.window.fullscreen, [borderless]);
+    harness.command_comma();
+    assert_eq!(
+        harness.dialog().display().selected(),
+        FullscreenKind::Borderless,
+        "what runs"
+    );
+    harness.press(Key::Enter);
+    assert_eq!(harness.window.fullscreen, [borderless]);
+    assert_eq!(
+        saved(&store)["fullscreen_kind"]["exclusive"]["monitor"],
+        "LG HDR 4K"
+    );
+
+    // Borderless, picked: saved, and the next launch is quiet.
+    let store = seeded_on_another_monitor();
+    let (mut harness, _) = Harness::launched(&store);
+    harness.pick(&[true, false]);
+    assert_eq!(saved(&store)["fullscreen_kind"], "borderless");
+    assert_eq!(saved(&store)["fullscreen"], true);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+    let (_, warnings) = Harness::launched(&store);
+    assert_eq!(warnings, Vec::<String>::new(), "quiet");
+
+    // The saved mode, picked: entered on this monitor and saved with its
+    // name.
+    let store = seeded_on_another_monitor();
+    let (mut harness, _) = Harness::launched(&store);
+    harness.pick(&[true, true]);
+    assert_eq!(harness.window.fullscreen, [borderless, fhd]);
+    assert_eq!(
+        saved(&store)["fullscreen_kind"]["exclusive"]["monitor"],
+        MONITOR
+    );
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+    let (relaunched, warnings) = Harness::launched(&store);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(relaunched.window.fullscreen, [fhd], "reopens in the mode");
+}
