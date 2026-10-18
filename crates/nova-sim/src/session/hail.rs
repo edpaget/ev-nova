@@ -86,7 +86,6 @@ use crate::hail::{
     HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, assist,
     attitude, reply,
 };
-use crate::hyperspace::JUMP_FUEL;
 use crate::landing;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
@@ -716,15 +715,13 @@ fn repair(
     }
 }
 
-/// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0): it jumps out
-/// with a jump's fuel, or else decides as its idle block does, which
-/// lands; its target, fire command and provocation are gone.
+/// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0-0x7e2e7): it
+/// jumps out (state 2), whatever its fuel, as the original tests none;
+/// its target, fire command and provocation are gone. A warship that
+/// cannot jump lands or stops on its next think
+/// (`nova_sim::ai::warship`); the other types keep leaving.
 pub(super) fn make_leave(npc: &mut Npc) {
-    npc.goal = if npc.reserves.fuel.now >= JUMP_FUEL {
-        Goal::JumpOut
-    } else {
-        Goal::Idle
-    };
+    npc.goal = Goal::JumpOut;
     npc.target = None;
     npc.trigger = Trigger::default();
     npc.provoked = 0.0;
@@ -1662,6 +1659,23 @@ mod tests {
     }
 
     #[test]
+    fn a_bribed_ship_with_an_empty_tank_leaves_all_the_same() {
+        // `_AIMakeShipLeave` (@0x7e2b0) sets state 2 with no fuel test.
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        npc(&mut session).reserves.fuel.now = 0.0;
+        hail(&mut session, &catalog);
+        session
+            .answer(1, &catalog, &HailOptions::default(), &mut Draws::of(&[99]))
+            .expect("open");
+        haggle(&mut session, &catalog, Haggle::Accept);
+        let spared = &session.npcs()[0];
+        assert!(spared.spared);
+        assert_eq!(spared.goal, Goal::JumpOut);
+        assert_eq!(spared.target, None);
+    }
+
+    #[test]
     fn a_bribe_paid_spares_the_player_for_the_rest_of_the_ships_stay() {
         let catalog = hailable();
         let mut session = pirate(&catalog, PIRATES);
@@ -1707,17 +1721,6 @@ mod tests {
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
         });
-    }
-
-    #[test]
-    fn a_spared_ship_without_a_jumps_fuel_decides_as_its_idle_block_does() {
-        let catalog = hailable();
-        let mut session = pirate(&catalog, PIRATES);
-        npc(&mut session).reserves.fuel.now = 50.0;
-        hail(&mut session, &catalog);
-        press(&mut session, &catalog, 1, 99);
-        haggle(&mut session, &catalog, Haggle::Accept);
-        assert_eq!(session.npcs()[0].goal, Goal::Idle);
     }
 
     #[test]
@@ -2598,7 +2601,7 @@ mod tests {
         let released = npc(&mut session).clone();
         assert_eq!(released.escort, None);
         assert_eq!(released.ai_type, AiType::WimpyTrader, "its InherentAI");
-        assert_eq!(released.goal, Goal::JumpOut, "with a jump's fuel");
+        assert_eq!(released.goal, Goal::JumpOut);
         assert_eq!(released.target, None);
         assert_eq!(released.govt, None);
         assert!(session.take_save_due());
@@ -2661,14 +2664,14 @@ mod tests {
     }
 
     #[test]
-    fn released_without_a_jumps_fuel_it_decides_again() {
+    fn released_with_an_empty_tank_it_leaves_all_the_same() {
         let catalog = hailable();
         let mut session = escorting(&catalog);
-        npc(&mut session).reserves.fuel.now = 99.0;
+        npc(&mut session).reserves.fuel.now = 0.0;
         hail(&mut session, &catalog);
         session.answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]));
         session.hang_up();
-        assert_eq!(npc(&mut session).goal, Goal::Idle);
+        assert_eq!(npc(&mut session).goal, Goal::JumpOut);
     }
 
     #[test]

@@ -586,8 +586,7 @@ impl Session {
     /// ([`Session::destroy_cargo_share`], `_DoCommDialog` @0x96864), any
     /// ship type by the engine reading of [`RuleKey::ReleaseCargoShare`]
     /// and only a trader by the other; then it leaves the fleet and the
-    /// system (`_AIMakeShipLeave`), jumping out with a jump's fuel, or
-    /// else deciding as its idle block does.
+    /// system (`_AIMakeShipLeave`), jumping out whatever its fuel.
     pub(super) fn release(&mut self, id: NpcId) {
         if !self.is_escort(id) {
             return;

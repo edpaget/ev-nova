@@ -35,8 +35,9 @@
 //!   ([`select_nearest_any_stellar`]), leaving out +0x92, which in the
 //!   engine is only ever the gate it came out of ([`Npc::emerges_from`]).
 //!   With a stellar, and not leaving or fleeing (states 2 and 3), it lands
-//!   there (state 1). Otherwise it leaves with a jump's fuel (state 2),
-//!   or stops (state 6). The first test's state 6 comes before this one,
+//!   there (state 1). Otherwise it leaves (state 2) when it can jump
+//!   ([`leave::can_jump`], the inlined `_AIShipHasFuelForJump`
+//!   @0x8b3ba-0x8b41f), or stops (state 6, @0x8b452). The first test's state 6 comes before this one,
 //!   so an Asteroid Miner that can't scoop lands even after fleeing.
 //!
 //! No `PlaySound` or `_beepSnd` call is anywhere in it; the distress
@@ -47,19 +48,18 @@
 //! - State 17, scooping boxes while `_miningBoxesActive` is set
 //!   (@0x8b331-0x8b344): rdm:phase/asteroids/phase-5-ai-mining. The core
 //!   treats boxes as inactive.
-//! - The exact `_AIShipHasFuelForJump` (@0x8b3ba-0x8b41f) and state 2's
-//!   +0x50 clamp and +0xa4 stamp: rdm:phase/combat-ai-fidelity/phase-11-leave-by-hyperspace.
-//!   The idle block's jump-fuel reading stands in.
+//! - State 2's +0x50 clamp and +0xa4 stamp (@0x8b307-0x8b329,
+//!   @0x8b428-0x8b44a), the warp stage's:
+//!   rdm:phase/ship-handling-fidelity/phase-8-warp-out.
 //! - +0x92's "last landed" write (@0x8b3ae): a ship that lands leaves the
 //!   system here.
 
 use crate::ai::call_for_help::when_fleeing;
-use crate::ai::{Behaviour, Decision, Goal, Surroundings, provoked_by};
+use crate::ai::{Behaviour, Decision, Goal, Surroundings, leave, provoked_by};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::hyperspace::JUMP_FUEL;
 use crate::traffic::destination::select_nearest_any_stellar;
 use crate::traffic::npc::Npc;
 
@@ -176,7 +176,7 @@ fn shuttle(npc: &Npc, around: &Surroundings, state: Goal, nav: Option<StellarId>
     });
     match nav {
         Some(stellar) if !matches!(state, Goal::JumpOut | Goal::Flee(_)) => Goal::Land(stellar),
-        _ if npc.reserves.fuel.now >= JUMP_FUEL => Goal::JumpOut,
+        _ if leave::can_jump(npc, around.jump_fuel) => Goal::JumpOut,
         _ => Goal::Idle,
     }
 }
@@ -340,11 +340,33 @@ mod tests {
     }
 
     #[test]
-    fn a_shuttle_with_no_stellar_leaves_with_a_jumps_fuel_and_stops_without() {
+    fn a_shuttle_with_no_stellar_leaves_when_it_can_jump_and_stops_when_it_cannot() {
         let mut shuttle = miner(SCOOPS, false);
         assert_eq!(deciding(&shuttle, &[], None), Goal::JumpOut);
-        shuttle.reserves.fuel.now = JUMP_FUEL - 1.0;
+        shuttle.reserves.fuel.now = 0.0;
+        assert_eq!(
+            deciding(&shuttle, &[], None),
+            Goal::JumpOut,
+            "an empty tank, by its class's Fuel"
+        );
+        shuttle.class_fuel = 99;
         assert_eq!(deciding(&shuttle, &[], None), Goal::Idle, "state 6");
+    }
+
+    #[test]
+    fn a_shuttle_flown_by_a_person_that_starts_with_zero_fuel_needs_a_jumps_fuel() {
+        let mut shuttle = miner(SCOOPS, false);
+        shuttle.person = Some(crate::traffic::npc::NpcPerson {
+            zero_fuel: true,
+            ..crate::traffic::npc::NpcPerson::of(
+                &nova_sim_catalog::fixture::person(151, 128),
+                false,
+            )
+        });
+        shuttle.reserves.fuel.now = JUMP_FUEL - 1.0;
+        assert_eq!(deciding(&shuttle, &[], None), Goal::Idle);
+        shuttle.reserves.fuel.now = JUMP_FUEL;
+        assert_eq!(deciding(&shuttle, &[], None), Goal::JumpOut);
     }
 
     #[test]
@@ -357,7 +379,7 @@ mod tests {
                 Goal::JumpOut,
                 "{goal:?}"
             );
-            shuttle.reserves.fuel.now = 0.0;
+            shuttle.class_fuel = 0;
             assert_eq!(
                 deciding(&shuttle, &stellars(), None),
                 Goal::Idle,

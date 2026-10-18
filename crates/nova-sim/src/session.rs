@@ -5328,7 +5328,7 @@ impl Session {
         self.ship_hook(self.pilot.ship, ShipHook::Retire, chance);
         let paint_last = self.hook_rules().purchase_paint_order == RuleSource::Engine;
         let old_mass = self.fields.mass;
-        self.drop_fighters(|_, _| false);
+        self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
         let fits = self.arsenal.stock_fits(ship, &self.outfits);
         let Purchase {

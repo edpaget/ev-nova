@@ -80,7 +80,6 @@ use crate::flight::ShipState;
 use crate::gate::GateKind;
 use crate::govt::Governments;
 use crate::handling::Handling;
-use crate::hyperspace::JUMP_FUEL;
 use crate::landing::is_landable as landable;
 use crate::reserves::Reserves;
 use crate::rulebook::RuleSource;
@@ -857,8 +856,12 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 /// - An escort follows its lead while the lead is in the system; once it
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
-///   landable, a gate it enters that is still there, a jump it still
-///   has the fuel for, or a hold.
+///   landable, a gate it enters that is still there, a jump out, or a
+///   hold. A leaving ship (state 2) keeps leaving whether or not it can
+///   jump: no type's idle block tests it again (`_WimpyTraderAI`
+///   @0x8b06c, `_BraveTraderAI` @0x8b4d6 and `_InterceptorAI` @0x8d010
+///   pick only in state 0); the warship's and the pirate's own re-tests
+///   are theirs ([`warship`], [`pirate`]).
 /// - Otherwise it heads for a stellar picked at random among
 ///   `_SelectRandomStellarDest`'s candidates (@0x805de): landable, within
 ///   999 of the centre on each axis, not uninhabited unless a gate, not
@@ -878,7 +881,12 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 ///   @0x8b4d6), and `_AICheckParentExists` (@0x8926a-0x89281) never
 ///   clears the goal of a ship with no leader. Only provocation, or a
 ///   hunter's government's word, lifts it.
-/// - A ship that would jump without a jump's fuel stays idle.
+/// - A ship that would jump but cannot ([`leave::can_jump`]: its class's
+///   `Fuel` 99 or less, held in another's tractor beam, or a person that
+///   starts with zero fuel and has less than a jump's) stays idle, as
+///   the idle blocks' inlined `_AIShipHasFuelForJump` sends it to state 6
+///   (`_WimpyTraderAI` @0x8b11d-0x8b1a3). Any other ship jumps with an
+///   empty tank.
 pub fn idle_admitting(
     npc: &Npc,
     around: &Surroundings,
@@ -893,18 +901,32 @@ pub fn idle_admitting(
     if can_still_fly(npc, around) {
         return npc.goal;
     }
-    let leave = if npc.reserves.fuel.now >= JUMP_FUEL {
+    let leave = if leave::can_jump(npc, around.jump_fuel) {
         Goal::JumpOut
     } else {
         Goal::Idle
     };
+    random_stellar(npc, around, chance, admit).unwrap_or(leave)
+}
+
+/// A stellar picked at random for `npc` among `around`'s, admitting
+/// `admit`, as `_SelectRandomStellarDest` picks (@0x805de; see
+/// [`idle_admitting`]): one `below(candidates)` draw, a hypergate or
+/// wormhole entered ([`Goal::EnterGate`]), any other landed on. `None`,
+/// drawing nothing, when there is no candidate.
+pub(crate) fn random_stellar(
+    npc: &Npc,
+    around: &Surroundings,
+    chance: &mut dyn Chance,
+    admit: Admit,
+) -> Option<Goal> {
     let candidates = destination::candidates(npc.govt, around.sites, around.govts, admit);
     if candidates.is_empty() {
-        return leave;
+        return None;
     }
     let len = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     let pick = chance.below(len) as usize;
-    candidates.get(pick).map_or(leave, |site| {
+    candidates.get(pick).map(|site| {
         if GateKind::of(site.flags2).is_some() {
             Goal::EnterGate(site.id)
         } else {
@@ -923,7 +945,7 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 
 /// Whether `npc` can still fly its goal among `around`: a stellar still
 /// there and landable, a gate still there (state 20 tests no landability
-/// again), a jump it has the fuel for, or a hold. Idling, following
+/// again), a jump out (state 2 tests no fuel), or a hold. Idling, following
 /// once the lead is gone, fighting and inspecting are no goals to keep.
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
@@ -932,8 +954,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .iter()
             .any(|site| site.id == stellar && landable(site)),
         Goal::EnterGate(gate) => around.sites.iter().any(|site| site.id == gate),
-        Goal::JumpOut => npc.reserves.fuel.now >= JUMP_FUEL,
-        Goal::Hold => true,
+        Goal::JumpOut | Goal::Hold => true,
         _ => false,
     }
 }
@@ -1239,13 +1260,64 @@ mod tests {
         );
     }
 
+    /// `npc` flown by a person that starts with zero fuel.
+    fn zero_fuelled(mut npc: Npc) -> Npc {
+        npc.person = Some(crate::traffic::npc::NpcPerson {
+            zero_fuel: true,
+            ..crate::traffic::npc::NpcPerson::of(
+                &nova_sim_catalog::fixture::person(151, 128),
+                false,
+            )
+        });
+        npc
+    }
+
+    #[test]
+    fn a_ship_with_nowhere_to_land_jumps_with_an_empty_tank_by_its_classs_fuel() {
+        for ai_type in [AiType::WimpyTrader, AiType::Warship] {
+            let mut dry = npc(1, ai_type);
+            dry.class_fuel = 300;
+            dry.reserves.fuel.now = 0.0;
+            assert_eq!(decide(&dry, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
+            dry.class_fuel = 99;
+            dry.reserves.fuel.now = 300.0;
+            assert_eq!(decide(&dry, &[], &[], &mut Draws::of(&[])), Goal::Idle);
+        }
+    }
+
+    #[test]
+    fn a_person_that_starts_with_zero_fuel_jumps_with_a_jumps_fuel_and_stays_idle_without() {
+        for ai_type in [AiType::WimpyTrader, AiType::Warship] {
+            let mut short = zero_fuelled(npc(1, ai_type));
+            short.reserves.fuel.now = 99.9;
+            assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Idle);
+            short.reserves.fuel.now = 100.0;
+            assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_without_a_jumps_fuel_that_would_jump_stays_idle() {
+        let mut short = npc(1, AiType::WimpyTrader);
+        short.reserves.fuel.now = 99.9;
+        let npcs = [short.clone()];
+        let around = Surroundings {
+            jump_fuel: RuleSource::Bible,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(idle(&short, &around, &mut Draws::of(&[])), Goal::Idle);
+        short.reserves.fuel.now = 100.0;
+        assert_eq!(idle(&short, &around, &mut Draws::of(&[])), Goal::JumpOut);
+    }
+
     #[test]
     fn a_ship_without_a_jumps_fuel_that_would_jump_stays_idle() {
         for ai_type in [AiType::WimpyTrader, AiType::Warship] {
             let mut short = npc(1, ai_type);
-            short.reserves.fuel.now = 99.9;
+            short.class_fuel = 99;
             assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Idle);
-            short.reserves.fuel.now = 100.0;
+            short.class_fuel = 100;
+            short.reserves.fuel.now = 0.0;
             assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
         }
         // A trader with somewhere to land needs no fuel.
@@ -1350,6 +1422,33 @@ mod tests {
     }
 
     #[test]
+    fn a_leaving_ship_that_cannot_jump_keeps_leaving_as_no_idle_block_tests_state_2() {
+        // `_WimpyTraderAI`, `_BraveTraderAI` and `_InterceptorAI` pick
+        // only in state 0 (@0x8b06c, @0x8b4d6, @0x8d010).
+        let deciders: [(AiType, &dyn Behaviour); 3] = [
+            (AiType::WimpyTrader, &WimpyTrader::default()),
+            (AiType::BraveTrader, &BraveTrader::default()),
+            (AiType::Interceptor, &Interceptor::default()),
+        ];
+        for (ai_type, decider) in deciders {
+            let mut stranded = zero_fuelled(npc(1, ai_type));
+            stranded.goal = Goal::JumpOut;
+            stranded.reserves.fuel.now = 0.0;
+            let mut chance = Draws::of(&[]);
+            for sites in [sites(), Vec::new()] {
+                let npcs = [stranded.clone()];
+                let around = Surroundings::new(&sites, &npcs);
+                assert_eq!(
+                    decider.decide(&stranded, &around, &mut chance),
+                    Goal::JumpOut,
+                    "{decider:?}"
+                );
+            }
+            assert!(chance.asked.is_empty(), "no new pick");
+        }
+    }
+
+    #[test]
     fn a_held_ship_of_every_ai_type_keeps_its_hold_drawing_nothing() {
         let deciders: [(AiType, &dyn Behaviour); 5] = [
             (AiType::WimpyTrader, &Peaceful),
@@ -1382,10 +1481,6 @@ mod tests {
                 "{gone}"
             );
         }
-        let mut stranded = npc(1, AiType::Warship);
-        stranded.goal = Goal::JumpOut;
-        stranded.reserves.fuel.now = 50.0;
-        assert_eq!(decide(&stranded, &[], &[], &mut Draws::of(&[])), Goal::Idle);
         for goal in [
             Goal::Follow(NpcId(7)),
             Goal::Idle,

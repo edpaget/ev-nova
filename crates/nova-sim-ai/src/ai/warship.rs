@@ -104,6 +104,11 @@
 //!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
 //! - With no target it goes about its business ([`idle`](super::idle)),
 //!   short of ammunition or not: the out-of-ammo retreat needs a target.
+//! - **Leaving with no way to jump** (@0x8bf8c-0x8c0de), last: a warship
+//!   whose think ends in leaving ([`Goal::JumpOut`], state 2) but cannot
+//!   jump ([`leave::can_jump`]) lands on or enters a stellar picked at
+//!   random, or stops with none ([`grounded`]). The other types keep
+//!   leaving (see [`idle`](super::idle)).
 //!
 //! A held ship ([`Goal::Hold`], the original's goal 10 with no leader)
 //! still hears its government's word and answers its attacker, but looks
@@ -123,7 +128,7 @@ use crate::ai::reinforcements::odds_factor;
 use crate::ai::target::select_target;
 use crate::ai::target::{Pick, TargetRules, dropped, pick_target};
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, out_of_ammo, react,
+    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, out_of_ammo, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -408,6 +413,22 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
     outnumbered || worn
 }
 
+/// What a warship whose think ends in `goal` does when it is leaving
+/// and cannot jump ([`leave::can_jump`]), among `around`, picking on
+/// `chance` (`_WarshipAI` @0x8bf8c-0x8c0de, after the hunt and the idle
+/// block): it heads for a stellar picked as the idle block picks
+/// ([`random_stellar`](super::random_stellar), `_SelectRandomStellarDest(ship,
+/// 0, 0)` @0x8c025), or stops ([`Goal::Idle`], state 6) with none. The
+/// original tests the fuel again before it stops (@0x8c058-0x8c0b2), which
+/// cannot pass after the first test failed, so its leave there
+/// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands.
+fn grounded(npc: &Npc, goal: Goal, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    if goal != Goal::JumpOut || leave::can_jump(npc, around.jump_fuel) {
+        return goal;
+    }
+    super::random_stellar(npc, around, chance, Admit::All).unwrap_or(Goal::Idle)
+}
+
 /// Nova's warship (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Warship {
@@ -456,8 +477,9 @@ impl Behaviour for Warship {
             chance,
         )
         .or(|| idle(npc, around, chance));
+        let goal = grounded(npc, decision.goal, around, chance);
         Decision {
-            goal: out_of_ammo::drop_when_dry(npc, decision.goal),
+            goal: out_of_ammo::drop_when_dry(npc, goal),
             ..decision
         }
     }
@@ -483,7 +505,7 @@ mod tests {
     use crate::ai::fixture::{
         NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, short_of_ammo, sites,
     };
-    use crate::catalog::{StellarId, WeaponId, WeaponRecord};
+    use crate::catalog::{LandingSite, StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
@@ -492,7 +514,7 @@ mod tests {
     use crate::rulebook::RuleSource;
     use crate::traffic::npc::{AiType, Mode, NpcId};
     use nova_sim_base::fixture::Draws;
-    use nova_sim_catalog::fixture::weapon;
+    use nova_sim_catalog::fixture::{planet, weapon};
 
     const P: ShipRef = ShipRef::Player;
 
@@ -1810,5 +1832,58 @@ mod tests {
             turning(Goal::Idle, true),
             "fully dry without 0x0080, it drops the player at once"
         );
+    }
+
+    // Leaving with no way to jump (`_WarshipAI` @0x8bf8c-0x8c0de).
+
+    /// The police warship leaving, its class's `Fuel` `class_fuel`, among
+    /// `sites` with no player, deciding on `chance`.
+    fn leaving(class_fuel: i16, sites: &[LandingSite], chance: &mut Draws) -> Goal {
+        let mut warship = police();
+        warship.goal = Goal::JumpOut;
+        warship.class_fuel = class_fuel;
+        let govts = govts(0, 0);
+        let npcs = [warship.clone()];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(sites, &npcs)
+        };
+        Warship::default().decide(&warship, &around, chance)
+    }
+
+    #[test]
+    fn a_leaving_warship_that_cannot_jump_heads_for_a_stellar_picked_at_random() {
+        let two = [planet(128, -300.0, -300.0), planet(129, 300.0, 300.0)];
+        for (draw, stellar) in [(0, 128), (1, 129)] {
+            let mut chance = Draws::of(&[draw]);
+            assert_eq!(
+                leaving(0, &two, &mut chance),
+                Goal::Land(StellarId(stellar))
+            );
+            assert_eq!(chance.asked, [2], "one pick among the two");
+        }
+        let gate = LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..planet(300, 100.0, 0.0)
+        };
+        assert_eq!(
+            leaving(99, &[gate], &mut Draws::of(&[0])),
+            Goal::EnterGate(StellarId(300))
+        );
+    }
+
+    #[test]
+    fn a_leaving_warship_that_cannot_jump_with_nowhere_to_land_stops() {
+        let mut chance = Draws::of(&[]);
+        assert_eq!(leaving(0, &[], &mut chance), Goal::Idle);
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn a_leaving_warship_that_can_jump_keeps_leaving_drawing_nothing() {
+        let mut chance = Draws::of(&[]);
+        let two = [planet(128, -300.0, -300.0), planet(129, 300.0, 300.0)];
+        assert_eq!(leaving(100, &two, &mut chance), Goal::JumpOut);
+        assert!(chance.asked.is_empty());
     }
 }

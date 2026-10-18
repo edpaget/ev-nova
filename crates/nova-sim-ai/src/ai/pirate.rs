@@ -21,7 +21,13 @@
 //!   ([`plunder_target::find`]), then the warship's target
 //!   ([`pick_target`] with none kept, `_SelectWarshipTarget`), then its
 //!   business ([`idle`]), its target left cleared
-//!   ([`Decision::clears_target`]). A pirate holding ([`Goal::Hold`])
+//!   ([`Decision::clears_target`]). A pirate leaving ([`Goal::JumpOut`])
+//!   that cannot jump ([`leave::can_jump`]) stops ([`Goal::Idle`]), as the
+//!   idle block's inlined `_AIShipHasFuelForJump` (@0x8c53f) sends it to
+//!   state 6 (@0x8c5c9); one that can keeps leaving, with the goal-2
+//!   writes (@0x8c59b-0x8c5bd). The idle block's stellar pick for a
+//!   pirate that has not visited one (@0x8c472-0x8c51f) is
+//!   rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols's. A pirate holding ([`Goal::Hold`])
 //!   with no target so leaves the hold. A pirate with any other goal and a
 //!   target set keeps both and thinks no more (@0x8c34d → @0x8c5e8): one
 //!   bound to land that an NPC's hit gave a target lands on, holding the
@@ -92,7 +98,7 @@ use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::hopeless_chase;
 use crate::ai::target::{TargetRules, pick_target, spares};
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, plunder_target, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, plunder_target, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -185,8 +191,14 @@ pub fn think(
             goal: if goal == Goal::Hold { Goal::Idle } else { goal },
             ..npc.clone()
         };
+        // The idle block tests the fuel of a pirate it does not send to a
+        // stellar (@0x8c52d-0x8c5d2): it leaves (state 2) or stops (6).
+        let goal = match idle(&idler, around, chance) {
+            Goal::JumpOut if !leave::can_jump(npc, around.jump_fuel) => Goal::Idle,
+            goal => goal,
+        };
         return Decision {
-            goal: idle(&idler, around, chance),
+            goal,
             clears_target: true,
             ..Decision::default()
         };
@@ -723,6 +735,30 @@ mod tests {
             only(plunder(n(2)))
         );
         assert_eq!(decided(&[idle, hitter]), dropped().goal_of(IDLE));
+    }
+
+    #[test]
+    fn leaving_with_no_target_it_stops_when_it_cannot_jump_and_leaves_when_it_can() {
+        // The idle block's fuel test (@0x8c52d-0x8c5d2): state 2 or 6.
+        let mut leaving = holding(Goal::JumpOut, None);
+        leaving.reserves.fuel.now = 0.0;
+        assert_eq!(
+            decided(&[leaving.clone()]),
+            dropped().goal_of(Goal::JumpOut)
+        );
+        leaving.class_fuel = 99;
+        assert_eq!(decided(&[leaving.clone()]), dropped());
+        leaving.class_fuel = 300;
+        leaving.person = Some(crate::traffic::npc::NpcPerson {
+            zero_fuel: true,
+            ..crate::traffic::npc::NpcPerson::of(
+                &nova_sim_catalog::fixture::person(151, 128),
+                false,
+            )
+        });
+        assert_eq!(decided(&[leaving.clone()]), dropped(), "a person with none");
+        leaving.reserves.fuel.now = 100.0;
+        assert_eq!(decided(&[leaving]), dropped().goal_of(Goal::JumpOut));
     }
 
     #[test]
