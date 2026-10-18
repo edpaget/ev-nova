@@ -380,8 +380,12 @@ impl PilotPanelArea {
         self.text(list, text, at, self.looks.label);
     }
 
-    /// Draws `text` from `at`, its baseline, in `color`.
+    /// Draws `text` from `at`, its baseline, in `color`; an empty text
+    /// draws nothing, as `DrawString` of an empty string draws nothing.
     fn text(&self, list: &mut DrawList, text: &str, at: Point, color: Color) {
+        if text.is_empty() {
+            return;
+        }
         let size = self.looks.size;
         list.text_in(
             self.looks.font,
@@ -657,6 +661,21 @@ mod tests {
             )]
         );
         assert_eq!(PilotPanelArea::new(looks()).pilot(), &PanelPilot::None);
+    }
+
+    #[test]
+    fn an_empty_text_draws_nothing() {
+        let mut empty = model(ShipId(133));
+        empty.ship_name = String::new();
+        let list = drawn(&showing(PanelPilot::Alive(Box::new(empty))), true);
+        let drawn: Vec<String> = texts(&list).into_iter().map(|(text, ..)| text).collect();
+        assert_eq!(drawn.len(), 13);
+        assert!(!drawn.contains(&String::new()));
+        let mut area = PilotPanelArea::new(PanelLooks::stock(PanelLabels::default()));
+        area.show(PanelPilot::None, &Ships::default());
+        let mut list = DrawList::new();
+        area.draw(&mut list, CENTER, true, &MonoMetrics);
+        assert!(list.is_empty(), "no #276");
     }
 
     #[test]
