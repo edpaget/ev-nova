@@ -26,7 +26,7 @@ use super::persons::{self, PersonLink, PersonRules};
 use crate::catalog::outfit_mods;
 use crate::catalog::{
     DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
-    ShipRecord, SystemId, TrafficCatalog, tally,
+    ShipRecord, SystemId, SystemReinforcements, TrafficCatalog, tally,
 };
 use crate::chance::Chance;
 use crate::cloak::CloakGear;
@@ -318,10 +318,14 @@ pub struct SpawnTable {
     /// when one spawns (see [`spawn`](crate::traffic::spawn)), so a bit
     /// set in the system counts without resolving the table again.
     pub link_fleets: BTreeSet<FleetId>,
-    /// The fleets it can spawn, from either list, and the escort-strength
+    /// The fleets it can spawn, from either list, the escort-strength
     /// timer's `flët` 382 and 383 wherever they exist (see
-    /// [`strength`](crate::traffic::strength)).
+    /// [`strength`](crate::traffic::strength)), and its reinforcement
+    /// fleet.
     pub fleets: BTreeMap<FleetId, FleetRecord>,
+    /// Its reinforcement fleet, if it has one (see
+    /// [`reinforcements`](crate::ai::reinforcements)).
+    pub reinforcements: Option<SystemReinforcements>,
     /// Every ship type its `düde`s, fleets and persons name that has a
     /// record.
     pub ships: BTreeMap<ShipId, ShipKind>,
@@ -394,6 +398,8 @@ impl SpawnTable {
             .filter_map(|&(id, _)| Some((id, spawn_dude(catalog, id)?)))
             .collect();
         let named: BTreeSet<_> = decoded.fleets.iter().map(|&(id, _)| id).collect();
+        let reinforcements = catalog.system_reinforcements(system);
+        let reinforcing = reinforcements.map(|kept| kept.fleet);
         let mut link_fleets = BTreeSet::new();
         let mut fleets = BTreeMap::new();
         for fleet in catalog.fleets() {
@@ -401,7 +407,11 @@ impl SpawnTable {
             if linked {
                 link_fleets.insert(fleet.id);
             }
-            if linked || named.contains(&fleet.id) || ESCORT_STRENGTH_FLEETS.contains(&fleet.id) {
+            if linked
+                || named.contains(&fleet.id)
+                || ESCORT_STRENGTH_FLEETS.contains(&fleet.id)
+                || reinforcing == Some(fleet.id)
+            {
                 fleets.insert(fleet.id, fleet);
             }
         }
@@ -436,6 +446,7 @@ impl SpawnTable {
             dude_fleets: decoded.fleets,
             link_fleets,
             fleets,
+            reinforcements,
             ships,
             persons,
             person_slots,
@@ -1559,6 +1570,81 @@ mod tests {
         for id in [204, 205, 206] {
             assert!(table.ship_types().contains(&ShipId(id)), "ship {id}");
         }
+    }
+
+    /// [`Traffic`] with system 130's reinforcement fleet 129, led by ship
+    /// 207 and linking to system 132 alone.
+    struct Reinforced(Traffic);
+
+    impl TrafficCatalog for Reinforced {
+        fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+            self.0.system_traffic(id)
+        }
+
+        fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+            (id == SystemId(130)).then_some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        }
+
+        fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+            self.0.dude(id)
+        }
+
+        fn fleets(&self) -> Vec<FleetRecord> {
+            let mut fleets = self.0.fleets();
+            fleets.push(FleetRecord {
+                id: FleetId(129),
+                lead: Some(ShipId(207)),
+                escorts: Vec::new(),
+                govt: Some(GovtId(128)),
+                link_syst: 132,
+                appear_on: Test::default(),
+                quote: None,
+                flags: 0,
+            });
+            fleets
+        }
+
+        fn persons(&self) -> Vec<PersonRecord> {
+            self.0.persons()
+        }
+    }
+
+    #[test]
+    fn a_table_keeps_its_systems_reinforcement_fleet_and_its_ships() {
+        let mut ships = records();
+        ships.push(ship(207, FAST));
+        let resolve = |system| {
+            SpawnTable::resolve(
+                &Reinforced(Traffic::default()),
+                SystemId(system),
+                Some(GovtId(128)),
+                &relations(),
+                &ships,
+                &[],
+                &Arsenal::default(),
+                &NovaPersons::default(),
+                &BTreeSet::new(),
+            )
+        };
+        let table = resolve(130);
+        assert_eq!(
+            table.reinforcements,
+            Some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        );
+        assert!(table.fleets.contains_key(&FleetId(129)));
+        assert!(!table.link_fleets.contains(&FleetId(129)), "not linked");
+        assert!(table.ship_types().contains(&ShipId(207)));
+        let elsewhere = resolve(131);
+        assert_eq!(elsewhere.reinforcements, None);
+        assert!(!elsewhere.fleets.contains_key(&FleetId(129)));
     }
 
     #[test]

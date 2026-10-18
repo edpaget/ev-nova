@@ -114,6 +114,7 @@ pub mod gate_entry;
 pub mod npc;
 pub mod persons;
 pub mod quote;
+mod reinforcing;
 pub mod spawn;
 pub mod strength;
 pub mod table;
@@ -126,7 +127,7 @@ use crate::ai::{
 use crate::combat::ion::Ion;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
+use crate::catalog::{FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
 use crate::combat::armament::Trigger;
@@ -1102,16 +1103,36 @@ impl Traffic {
         let Some(id) = strength::fleet_for(world.escort_tons) else {
             return;
         };
+        self.bring_fleet(
+            id,
+            spawn::FleetCall::ANNOUNCED_INTERCEPTOR,
+            world,
+            gate,
+            chance,
+        );
+    }
+
+    /// Fleet `id` comes among `world`'s stellars as `call` says, its
+    /// `AppearOn` asked by `gate`, rolled on `chance` ([`spawn::fleet`]),
+    /// each ship taking a slot below `world`'s reserve ([`Traffic::add`]'s
+    /// cap): the one spawn path of the escort-strength fleet and the
+    /// system's reinforcement fleet, as both are `_HyperSpawnFleet(sys,
+    /// fleet, 4, 1)` (@0x43d90-0x43dcf, @0x390c2-0x390e0).
+    fn bring_fleet(
+        &mut self,
+        id: FleetId,
+        call: spawn::FleetCall,
+        world: &World,
+        gate: Gate,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let mut fleet = Vec::new();
         spawn::fleet(
             &self.table,
             id,
             gate,
             world.stellars(),
-            spawn::FleetCall {
-                lead_ai: Some(AiType::Interceptor),
-                announced: true,
-            },
+            call,
             chance,
             &mut fleet,
         );
