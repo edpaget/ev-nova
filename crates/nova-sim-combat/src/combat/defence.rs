@@ -160,8 +160,10 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 
 /// The missile among `shots` that point defence `spec` on `defender`, at
 /// `at` with `hull`, engages, if any (`_HandleShipPointDefense`
-/// @0x393b1-0x394bd): a homing shot not jammed ([`Jam::Clear`]), that point
-/// defence can target (no `Flags` 0x0080), whose damage is aimed at the
+/// @0x393b1-0x394bd): a homing shot not jammed ([`Jam::Clear`]), with life
+/// left (not [`Shot::expired`]: the missile loop skips a life of 0.0 or
+/// less, @0x393bb-0x393c7, so one whose move spent it, waiting for its end
+/// of life, is passed over), that point defence can target (no `Flags` 0x0080), whose damage is aimed at the
 /// defender or at its fleet's lead ([`Shot::aimed_at`], shot +0x2a, not
 /// its quarry), within the weapon's [`engagement_range`] and not in a
 /// blind spot ([`blind_spot`], by the table's bearing to it,
@@ -195,6 +197,7 @@ pub fn choose<'a>(
         let aimed = shot.aimed_at == Some(defender.ship) || shot.aimed_at == Some(defender.fleet);
         let candidate = shot.weapon.guidance == Guidance::Homing
             && shot.jam == Jam::Clear
+            && !shot.expired()
             && !shot.weapon.pd_immune()
             && aimed
             && distance <= in_range
@@ -501,11 +504,12 @@ mod tests {
 
     /// A shot numbered `id` of a homing missile fired by `ENEMY` of
     /// government 140 at `target`, its quarry and the ship its damage is
-    /// aimed at, at (`x`, `y`).
+    /// aimed at, at (`x`, `y`), with 30 ticks of life left.
     fn missile(id: u32, x: f32, y: f32, target: Option<ShipRef>) -> Shot {
         let spec = WeaponSpec::new(&WeaponRecord {
             guidance: 1,
             durability: 4,
+            count: 30,
             ..weapon(134)
         });
         Shot {
@@ -638,6 +642,26 @@ mod tests {
         assert_eq!(picked(&at(Some(ShipRef::Player)), 0, 0), None);
         assert_eq!(picked(&at(None), 0, 0), None, "at nothing");
         assert_eq!(picked(&[], 0, 0), None);
+    }
+
+    #[test]
+    fn point_defence_passes_over_a_missile_its_move_spent() {
+        // `_HandleShipPointDefense` skips a shot of life 0.0 or less
+        // (@0x393bb-0x393c7): one whose move spent it waits for its end of
+        // life in the next `_HandleShot`.
+        let fresh = missile(1, 0.0, -100.0, Some(DEFENDER));
+        let lifetime = fresh.weapon.lifetime;
+        let spent = Shot {
+            age: lifetime,
+            ..fresh
+        };
+        assert!(spent.expired());
+        assert_eq!(picked(&[spent], 0, 0), None, "spent");
+        let last = Shot {
+            age: lifetime - 1,
+            ..fresh
+        };
+        assert_eq!(picked(&[last], 0, 0), Some(ShotId(1)), "a tick left");
     }
 
     #[test]
