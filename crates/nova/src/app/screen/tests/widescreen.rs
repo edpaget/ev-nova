@@ -1,3 +1,4 @@
+use super::death::{landed_took_off_and_breaking_up, until_exploded};
 use super::encounters::{boarded, hailing};
 use super::port::{in_the_bar_by, scrolled_to};
 use super::*;
@@ -193,4 +194,18 @@ fn the_bars_map_over_the_spaceport_stays_classic_at_a_widened_size() {
         Some(nova_sim::NavMode::Hyperspace(Some(SystemId(129)))),
         "a click at its classic place plots"
     );
+}
+
+#[test]
+fn deaths_fade_out_of_widened_flight_ends_on_the_classic_main_menu() {
+    let store = MemoryPilots::new();
+    let mut screen = widened(landed_took_off_and_breaking_up(&store));
+    assert_eq!(screen.view_shape(), ViewShape::Widened, "dying in flight");
+    until_exploded(&mut screen);
+    for _ in 0..=nova_sim::HOLD_TICKS {
+        screen.tick(TICK);
+    }
+    screen.tick(Duration::from_millis(1000));
+    assert_eq!(screen.showing(), Showing::MainMenu, "back to the menu");
+    assert_eq!(screen.view_shape(), ViewShape::Classic, "in a tick");
 }

@@ -140,6 +140,37 @@ fn a_screen_switching_back_to_classic_is_pillarboxed_again() {
 }
 
 #[test]
+fn a_screen_turning_classic_in_a_frames_tick_draws_that_frame_pillarboxed() {
+    // As the router does when death's fade ends flight on the main menu.
+    let mut window = FakeWindow::new((1920, 1080), 1.0);
+    let mut app = shaped(&window, ViewShape::Widened);
+    app.screen.shape_on_tick = Some(ViewShape::Classic);
+    let gpu = redraw(&mut app, &mut window);
+    let frame = &gpu.submits()[0];
+    assert_eq!(frame.logical, nova_render::LOGICAL);
+    assert_eq!(
+        frame.viewport,
+        PixelRect {
+            x: 240,
+            y: 0,
+            w: 1440,
+            h: 1080
+        }
+    );
+}
+
+#[test]
+fn a_screen_widening_in_a_frames_tick_draws_that_frame_widened() {
+    let mut window = FakeWindow::new((1920, 1080), 1.0);
+    let mut app = shaped(&window, ViewShape::Classic);
+    app.screen.shape_on_tick = Some(ViewShape::Widened);
+    let gpu = redraw(&mut app, &mut window);
+    let frame = &gpu.submits()[0];
+    assert_eq!(frame.logical, nova_render::LogicalSize { w: 1365, h: 768 });
+    assert_eq!(frame.viewport, full((1920, 1080)));
+}
+
+#[test]
 fn a_click_across_a_widened_window_lands_under_the_pointer() {
     let mut window = FakeWindow::new((1920, 1080), 1.0);
     let mut app = shaped(&window, ViewShape::Widened);

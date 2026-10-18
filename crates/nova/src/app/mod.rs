@@ -734,6 +734,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             self.quit();
             return Control::Exit;
         }
+        // A tick can change the shape, as death's fade ends flight on the
+        // main menu: this frame draws in the new one.
         self.refit_shape();
         let resync = self.resync_pointer();
         // A dialog a keyed click opened shows its modes from its first
@@ -1065,6 +1067,8 @@ mod tests {
         widened: Vec<(f32, f32)>,
         /// The shape to switch to on its next input, if any.
         shape_on_input: Option<ViewShape>,
+        /// The shape to switch to on its next tick, if any.
+        shape_on_tick: Option<ViewShape>,
     }
 
     impl Screen for RecordingScreen {
@@ -1081,6 +1085,9 @@ mod tests {
 
         fn tick(&mut self, dt: Duration) {
             self.ticks.push(dt);
+            if let Some(shape) = self.shape_on_tick.take() {
+                self.shape = shape;
+            }
         }
 
         fn draw(&self, list: &mut DrawList) {

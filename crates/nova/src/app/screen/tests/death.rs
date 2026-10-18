@@ -404,7 +404,7 @@ fn until_breaking_up(screen: &mut AppScreen) {
 }
 
 /// Ticks `screen` until the player's ship has exploded.
-fn until_exploded(screen: &mut AppScreen) {
+pub(super) fn until_exploded(screen: &mut AppScreen) {
     tick_until(screen, 240, |screen| {
         fate(screen) == nova_sim::PlayerFate::Exploded
     });
@@ -447,7 +447,7 @@ fn landed_and_took_off_by(store: &MemoryPilots, create: fn(&mut AppScreen, &str)
 }
 
 /// [`landed_and_took_off`], then the killer breaks its ship up.
-fn landed_took_off_and_breaking_up(store: &MemoryPilots) -> AppScreen {
+pub(super) fn landed_took_off_and_breaking_up(store: &MemoryPilots) -> AppScreen {
     let mut screen = landed_and_took_off(store);
     until_breaking_up(&mut screen);
     screen
