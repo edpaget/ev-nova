@@ -60,6 +60,7 @@ use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
 mod combat;
+mod comm_line;
 mod controls;
 mod dialog_map;
 mod docked;

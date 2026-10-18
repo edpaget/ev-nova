@@ -102,8 +102,30 @@ impl<C> FlightView<C> {
 
     /// Shows `text` as the message, from now, for `ticks` of flight,
     /// replacing whatever was shown, as `_DisplayComm` does
-    /// (@0x9024b-0x90256).
+    /// (@0x9024b-0x90256), and sets the session's message line to it
+    /// ([`Session::comm_shown`]): a line the view raises itself, or one
+    /// it composes from the session's at an arrival, a take-off or a
+    /// settling, where nothing counts down between the session raising
+    /// the parts and the view showing the whole. The lines the session
+    /// raised in a frame's steps are relayed ([`FlightView::relay`]).
+    ///
+    /// Every write to the message slot goes through this, `relay`,
+    /// [`FlightView::clear_message`], [`FlightView::acknowledge_message`]
+    /// or [`FlightView::blank_message`], so the session's line stays in
+    /// step with the slot.
     pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
+        self.relay(text, ticks);
+        if let Ok(session) = &mut self.session {
+            session.comm_shown(ticks);
+        }
+    }
+
+    /// Shows `text`, a line the session raised and has already set its
+    /// message line to, for `ticks`, leaving the session's line alone: a
+    /// relay comes after the frame's steps have counted it down, and in a
+    /// fixed order (the comm notes, the quotes, the messages), so setting
+    /// it again would undo the session's count.
+    pub(super) fn relay(&mut self, text: impl Into<String>, ticks: u16) {
         self.message = Some(Message {
             text: text.into(),
             said_at: crate::time::ticks(self.elapsed),
@@ -113,7 +135,8 @@ impl<C> FlightView<C> {
 
     /// Clears the message line when it holds `text`, as the original
     /// clears one message by name (`_HandlePlayer` @0x6b231-0x6b2a7,
-    /// @0x6dedb-0x6df29).
+    /// @0x6dedb-0x6df29): it shows an empty line for 1 tick, the
+    /// session's line too.
     pub(super) fn clear_message(&mut self, text: &str) {
         if self
             .message
@@ -121,7 +144,29 @@ impl<C> FlightView<C> {
             .is_some_and(|message| message.text == text)
         {
             self.message = None;
+            if let Ok(session) = &mut self.session {
+                session.comm_shown(1);
+            }
         }
+    }
+
+    /// Return (`ackComm`): clears the message line, and the session's
+    /// for a tick while a line shows ([`Session::comm_acknowledged`],
+    /// `_HandlePlayer` @0x6dd22-0x6dd65).
+    pub(super) fn acknowledge_message(&mut self) {
+        self.message = None;
+        if let Ok(session) = &mut self.session {
+            session.comm_acknowledged();
+        }
+    }
+
+    /// Empties the message slot at a change the session settles its line
+    /// for itself: a landing, which sets it to 0
+    /// (`_HandlePlayerDockRequest` @0x66d7f); the take-off after it, from
+    /// that 0; and an arrival, whose own line the session raised and the
+    /// view shows next ([`FlightView::say_for`]).
+    pub(super) fn blank_message(&mut self) {
+        self.message = None;
     }
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
@@ -237,16 +282,35 @@ impl<C> FlightView<C> {
 
     /// Shows the session's messages since they were last taken, each in
     /// turn, in the original's words; an arrival's waits for its arrival
-    /// to be caught up with ([`FlightView::arrived`]).
+    /// to be caught up with ([`FlightView::arrived`]). Called right after
+    /// a press or a settling raised them, with nothing counted down
+    /// since, it sets the session's line to the last shown
+    /// ([`FlightView::say_for`]); after a frame's steps,
+    /// [`FlightView::relay_messages`] leaves the line alone.
     pub(super) fn say_messages(&mut self) {
+        for (text, ticks) in self.worded_messages() {
+            self.say_for(text, ticks);
+        }
+    }
+
+    /// Shows the session's messages raised in a frame's steps, as
+    /// [`FlightView::say_messages`] does, but relayed
+    /// ([`FlightView::relay`]): the session set its line as it raised
+    /// each, and the steps have counted it down since.
+    pub(super) fn relay_messages(&mut self) {
+        for (text, ticks) in self.worded_messages() {
+            self.relay(text, ticks);
+        }
+    }
+
+    /// The session's messages since they were last taken, worded.
+    fn worded_messages(&mut self) -> Vec<(String, u16)> {
         let messages = self
             .session
             .as_mut()
             .map(Session::take_messages)
             .unwrap_or_default();
-        for (text, ticks) in self.word(messages) {
-            self.say_for(text, ticks);
-        }
+        self.word(messages)
     }
 
     /// The words of each of `messages`, in order, with its ticks, the

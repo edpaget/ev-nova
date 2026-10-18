@@ -767,7 +767,7 @@ impl<C> FlightView<C> {
     /// @0x6dd00-0x6dd6a) and hides the floating map (@0x6dd6a-0x6dd75),
     /// during a jump too.
     fn acknowledge(&mut self) {
-        self.message = None;
+        self.acknowledge_message();
         self.escort_menu.close();
         self.floating.hide();
     }

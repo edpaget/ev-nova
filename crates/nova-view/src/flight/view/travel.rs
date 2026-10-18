@@ -618,11 +618,13 @@ impl<
                 show_gate_frames(scene, session);
             }
         }
+        // The session set its line as it raised each of these, and the
+        // steps have counted it down since: relayed, not set again.
         for note in &notes {
-            self.say_for(comm_message(note), MESSAGE_TICKS);
+            self.relay(comm_message(note), MESSAGE_TICKS);
         }
         for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_TICKS);
+            self.relay(quote.text, HAIL_QUOTE_TICKS);
         }
         if rescued {
             // Laid out in the system the rescue took the pod to, from where
@@ -631,7 +633,7 @@ impl<
             self.catch_up();
             self.map.recentre();
         }
-        self.say_messages();
+        self.relay_messages();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
     }
@@ -765,7 +767,7 @@ impl<
                 ))
             })
             .collect();
-        self.message = None;
+        self.blank_message();
         let Some(scene) = &self.scene else {
             return;
         };
@@ -1086,7 +1088,7 @@ impl<
         let system = self.catch_up().system;
         self.place_ship();
         self.read_npc_sheets();
-        self.message = None;
+        self.blank_message();
         self.redraw_status();
         if let Some(held) = held
             && self.hud_waits()
@@ -1215,7 +1217,7 @@ impl<
             Ok(LandPress::Outcome(LandOutcome::Requested { .. })) => {}
             Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.pending_landing = Some(stellar);
-                self.message = None;
+                self.blank_message();
                 self.effects.clear();
                 self.flashes.clear();
                 self.redraw_status();
