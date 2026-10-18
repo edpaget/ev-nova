@@ -39,7 +39,7 @@ use std::collections::BTreeMap;
 
 use super::Session;
 use crate::ai::pursuit::Pursuit;
-use crate::ai::{Goal, afterburner, leave};
+use crate::ai::{Goal, afterburner, leave, swarm};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::chance::Chance;
@@ -72,7 +72,8 @@ impl Session {
 
     /// Puts the fighter of `sortie` in the system, its afterburner rolled
     /// on `chance` as `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736,
-    /// see [`afterburner`]): its number, or none when it found no room or
+    /// see [`afterburner`]), none at a berth another ship still names as
+    /// its swarm leader ([`swarm::named`]): its number, or none when it found no room or
     /// no record of its ship type. A dying NPC's last launch comes this way
     /// too (see the `npc_escape` module).
     pub(super) fn launch_fighter(
@@ -80,7 +81,7 @@ impl Session {
         sortie: &Sortie,
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
-        self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
+        let berth = self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
         let record = self.ship_record(sortie.ship).cloned()?;
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
         let kind = table::kind(&record, &self.outfits, &self.arsenal);
@@ -117,7 +118,10 @@ impl Session {
             side.yardstick,
             own,
         );
-        npc.afterburner = afterburner::has_afterburner(&kind.hull, side.rating, yardstick, chance);
+        // A berth another ship names as its swarm leader gives none, unrolled
+        // (@0x64ff-0x6539).
+        npc.afterburner = !swarm::named(berth, self.traffic.npcs())
+            && afterburner::has_afterburner(&kind.hull, side.rating, yardstick, chance);
         match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
@@ -911,6 +915,29 @@ mod tests {
                 "{flags:#x}"
             );
         }
+    }
+
+    #[test]
+    fn a_fighter_launched_at_a_berth_a_swarmer_still_names_has_no_afterburner() {
+        // `_AIHasAfterburner`'s first test (@0x64ff-0x6539): the ship at
+        // berth 2 names berth 1, free, which the fighter takes.
+        let mut catalog = carrying();
+        for record in &mut catalog.hulls {
+            if record.id == VIPER {
+                record.flags = 0x0040;
+            }
+        }
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        let mut swarmer = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
+        swarmer.swarm_leader = Some(1);
+        session.traffic.add_npc_at(swarmer, 2);
+        launch(&mut session);
+        let fighter = fleet_npcs(&session)
+            .first()
+            .cloned()
+            .expect("a fighter launched");
+        assert_eq!(fighter.berth, 1);
+        assert!(!fighter.afterburner);
     }
 
     #[test]

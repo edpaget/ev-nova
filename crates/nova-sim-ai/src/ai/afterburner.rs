@@ -5,7 +5,9 @@
 //! the `EV Nova` executable; see [`pursuit`](crate::ai::pursuit)).
 //!
 //! - **The afterburner** ([`has_afterburner`]), rolled as a ship spawns:
-//!   none for a planet-type class (`shïp` `Flags` 0x0400, @0x6554); one
+//!   first none, unrolled, at a berth another ship still names as its
+//!   swarm leader (@0x64ff-0x6539, [`swarm::named`](crate::ai::swarm::named),
+//!   which each roll's caller asks); none for a planet-type class (`shïp` `Flags` 0x0400, @0x6554); one
 //!   for a class of [`AFTERBURNER_ALWAYS`] (0x0040, @0x6559); for one of
 //!   [`AFTERBURNER_BY_RATING`] (0x0020), one while the rating over the
 //!   yardstick is at least `Rand(`[`RATING_ROLL`]`)` +
@@ -32,9 +34,6 @@
 //!
 //! # Not modelled
 //!
-//! - `_AIHasAfterburner`'s swarm-leader test (@0x64ff-0x6539): a ship
-//!   another names as its swarm leader +0xc906 has none. The engine has
-//!   no swarms (rdm phase combat-ai-fidelity/phase-14-swarming).
 //! - The player's escorts' flag, which `_SpawnEscort` (@0x3ff51) and
 //!   `_DoShipCapture` (@0x4123e) roll and a jump keeps: here they have
 //!   none (rdm phase combat-ai-fidelity/phase-17-left-out-of-phase-7).

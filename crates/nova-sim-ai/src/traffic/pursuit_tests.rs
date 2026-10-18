@@ -64,7 +64,7 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
     );
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.pursuit.kept, Some(Kept::Rush));
-    let frame = frame_of(ship, &player.state, false).expect("a fight");
+    let frame = frame_of(ship, &player.state, false, None).expect("a fight");
     assert_eq!(
         frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
         [Manoeuvre::Approach]
@@ -78,7 +78,7 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         &mut Ranged::of(&[]),
     );
     let ship = &traffic.npcs()[0];
-    let frame = frame_of(ship, &player.state, false).expect("a fight");
+    let frame = frame_of(ship, &player.state, false, None).expect("a fight");
     assert_eq!(
         frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
         [Manoeuvre::Rush]

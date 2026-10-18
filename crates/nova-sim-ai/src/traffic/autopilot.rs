@@ -76,7 +76,9 @@
 //!   to the table bearing from its attacker to itself, by less than a
 //!   turn and [`FLEE_THRUST`], as a stand-off ship backing away inside
 //!   the dogfight box does, never running out to jump (see
-//!   [`stand_off`](crate::ai::stand_off)); each in whole degrees,
+//!   [`stand_off`](crate::ai::stand_off)); swarming (sub 0x12,
+//!   @0x852eb-0x8533d), by less than a turn and [`SWARM_THRUST`], at its
+//!   plain acceleration and own top speed; each in whole degrees,
 //!   strictly ([`fire::off_by`]). Breaking off it thrusts every tick at
 //!   [`BREAK_THRUST`] times its acceleration; rushing, at [`RUSH_THRUST`]
 //!   times it, up to [`RUSH_SPEED`] times its top speed. Sniping, it
@@ -166,8 +168,10 @@
 //!   is gone, so the ship thrusts as usual (@0x34a8a-0x34bbb), never bursts
 //!   (@0x34bc0-0x34d32), never reaches `_AIMakeShipStopJumping` (@0x82e77)
 //!   and never takes its Rand(30)+30 wait (@0x34d5c-0x34d8b). Only
-//!   sub-goal 0x12's formation thrust (@0x8533d, an NPC formation the
-//!   engine does not model) and the braking thrusts of sub-goals 1 and 0xe
+//!   sub-goal 0x12's swarm thrust (@0x8533d, which a held swarmer with a
+//!   swarm leader not its own leader flies: rdm
+//!   phase escort-fleet-fidelity/phase-12-held-ship-goal-4-burst) and the
+//!   braking thrusts of sub-goals 1 and 0xe
 //!   (@0x853fe, @0x8551e, @0x85552, @0x87137, which run only at a speed
 //!   of 0.35 or more, never at rest) leave +0x34 alone and would burst.
 //! - A ship with no lead, its glide or burst over, holds its course
@@ -194,6 +198,7 @@
 
 use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
+use crate::ai::swarm::SwarmLead;
 use crate::ai::{Goal, fire, fire::Manoeuvre};
 use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, ShipId, StellarId};
@@ -236,6 +241,9 @@ pub const DOGFIGHT_THRUST: f32 = 15.0;
 /// How far beyond a turn, in degrees, a ship fleeing close still thrusts
 /// (20.0 @0xdd668).
 pub const FLEE_THRUST: f32 = 20.0;
+/// How far beyond a turn, in whole degrees, a swarmer flying at its swarm
+/// leader still thrusts (20.0 @0xdd668, sub 0x12 @0x85322).
+pub const SWARM_THRUST: f32 = 20.0;
 /// The least a leaderless ship holds its course after its glide in or
 /// burst out of a gate, in ticks (`Rand(30) + 30`, @0x34d74-0x34d81).
 pub const POST_BURST_WAIT: u32 = 30;
@@ -323,8 +331,9 @@ impl TopSpeeds {
 /// ship its goal is about (the lead it follows, the ship it fights or
 /// inspects) at `other`, when it is there, disabled as `other_disabled`
 /// says (a stand-off ship's band halves against a disabled target, see
-/// [`stand_off`](crate::ai::stand_off)), at its top speed
-/// `speeds.own`, its burst out of a gate or glide in capped at
+/// [`stand_off`](crate::ai::stand_off)), with `swarm` its swarm lead
+/// ([`swarm::lead`](crate::ai::swarm::lead)) for a frame its step has not
+/// worked out, at its top speed `speeds.own`, its burst out of a gate or glide in capped at
 /// [`TopSpeeds::burst_cap`], under the flight rules `flight` (its thrust
 /// [`FlightRules::handling`]'s, which every plan here reads), by
 /// `readings` of the disputed rules (a moving sniper with a last gun
@@ -336,8 +345,9 @@ impl TopSpeeds {
 /// it flies and its move is undone after, as `_HandleShip` zeroes it and
 /// skips the move (@0x34209-0x3423b) before the AI and the thrust run.
 // Each is a separate input of the tick: the ship, the system's stellars
-// and gate widths, its quarry and whether it is disabled, its top speeds,
-// the flight rules, the disputed rules' readings and the dice.
+// and gate widths, its quarry, whether it is disabled and its swarm lead,
+// its top speeds, the flight rules, the disputed rules' readings and the
+// dice.
 #[allow(clippy::too_many_arguments)]
 pub fn fly(
     npc: &mut Npc,
@@ -345,49 +355,32 @@ pub fn fly(
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
     other_disabled: bool,
+    swarm: Option<SwarmLead>,
     speeds: TopSpeeds,
     flight: FlightRules,
     readings: Readings,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let rules = (flight, readings);
+    let quarry = (other, other_disabled, swarm);
     if !npc.immobile {
-        return fly_mobile(
-            npc,
-            sites,
-            type_widths,
-            other,
-            other_disabled,
-            speeds,
-            rules,
-            chance,
-        );
+        return fly_mobile(npc, sites, type_widths, quarry, speeds, rules, chance);
     }
     let at = npc.state.position;
     npc.state.velocity = Vec2::ZERO;
-    let outcome = fly_mobile(
-        npc,
-        sites,
-        type_widths,
-        other,
-        other_disabled,
-        speeds,
-        rules,
-        chance,
-    );
+    let outcome = fly_mobile(npc, sites, type_widths, quarry, speeds, rules, chance);
     npc.state.position = at;
     outcome
 }
 
-/// [`fly`] for a ship that may move, under the flight rules and the
-/// disputed rules' readings `(flight, readings)`.
-#[allow(clippy::too_many_arguments)]
+/// [`fly`] for a ship that may move, at its quarry `(other,
+/// other_disabled, swarm)`, under the flight rules and the disputed rules'
+/// readings `(flight, readings)`.
 fn fly_mobile(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
-    other: Option<&ShipState>,
-    other_disabled: bool,
+    (other, other_disabled, swarm): (Option<&ShipState>, bool, Option<SwarmLead>),
     speeds: TopSpeeds,
     (flight, readings): (FlightRules, Readings),
     chance: &mut (impl Chance + ?Sized),
@@ -445,8 +438,8 @@ fn fly_mobile(
         Goal::Plunder { .. } if other_disabled => brake(&state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
-                if let Some(body) =
-                    pursuit::frame_of(npc, target, other_disabled).and_then(|frame| frame.last())
+                if let Some(body) = pursuit::frame_of(npc, target, other_disabled, swarm)
+                    .and_then(|frame| frame.last())
                 {
                     let flown = Flown {
                         handling: &handling,
@@ -716,6 +709,7 @@ fn fight(
         Manoeuvre::Approach => APPROACH_THRUST * handling.turn_rate,
         Manoeuvre::Dogfight => handling.turn_rate + DOGFIGHT_THRUST,
         Manoeuvre::Flee => handling.turn_rate + FLEE_THRUST,
+        Manoeuvre::Swarm => handling.turn_rate + SWARM_THRUST,
         // Breaking off and rushing thrust whatever the heading.
         Manoeuvre::BreakOff | Manoeuvre::Rush => f32::INFINITY,
         Manoeuvre::Snipe => {
@@ -1291,6 +1285,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             rules,
             Readings::default(),
@@ -1311,6 +1306,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -2092,6 +2088,7 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&player),
                 false,
+                None,
                 top,
                 FlightRules::default(),
                 Readings::default(),
@@ -2257,6 +2254,7 @@ mod tests {
             &BTreeMap::new(),
             None,
             false,
+            None,
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -2269,6 +2267,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
@@ -2304,6 +2303,7 @@ mod tests {
                         &BTreeMap::new(),
                         None,
                         false,
+                        None,
                         speeds,
                         FlightRules::default(),
                         Readings::default(),
@@ -2328,6 +2328,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
@@ -2378,6 +2379,7 @@ mod tests {
                     &BTreeMap::new(),
                     None,
                     false,
+                    None,
                     speeds,
                     FlightRules::default(),
                     Readings::default(),
@@ -2395,6 +2397,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
@@ -2481,6 +2484,7 @@ mod tests {
             widths,
             None,
             false,
+            None,
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -3323,6 +3327,7 @@ mod tests {
             &BTreeMap::new(),
             Some(other),
             disabled,
+            None,
             speeds,
             FlightRules::default(),
             Readings::default(),
@@ -3491,6 +3496,7 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&target),
                 false,
+                None,
                 TopSpeeds::own_of(&ship),
                 FlightRules::default(),
                 Readings {

@@ -31,9 +31,10 @@
 //!   [`snipe`]); fleeing close, the turret pass alone; breaking off, the
 //!   turret pass alone inside [`pursuit::FIRE_BOX`] on both axes; rushing,
 //!   inside it the turret pass then the gun pass within [`GUN_FACING`],
-//!   outside it the missile pass within [`GUN_FACING`]
-//!   (`_LowLevelAIHandler` substates 7, 6, 0xe, 5, 0x10 and 0x11). A ship
-//!   running out from its attacker runs none.
+//!   outside it the missile pass within [`GUN_FACING`]; swarming, the
+//!   missile pass alone, with no facing test (`_LowLevelAIHandler`
+//!   substates 7, 6, 0xe, 5, 0x10, 0x11 and 0x12). A ship running out from
+//!   its attacker runs none.
 //! - **The gun pass** (`_AIFireGun`), past its preamble (a target live
 //!   in the system and seen), makes the gun it finds the pick; then any
 //!   pick, found or kept, raises the flag (@0x80213-0x8021d), its
@@ -111,7 +112,7 @@
 //!   the manoeuvre reaches a turret, before any check of the target
 //!   (`_AIFireTurret` calls `_HandleShipPointDefense` @0x80b0d):
 //!   dogfighting, sniping, fleeing, and approaching while facing within
-//!   [`GUN_FACING`].
+//!   [`GUN_FACING`]; never swarming.
 //! - **A missile** (1, `_AIFireMissile` @0x8115d): none at a target whose
 //!   ship type is untargetable unless the shooter's ship type carries a
 //!   scanner with `ModVal` bit 0x0004 (@0x811a7-0x811cd,
@@ -175,6 +176,7 @@
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
+use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{Surroundings, pursuit};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
@@ -246,15 +248,24 @@ pub enum Manoeuvre {
     BreakOff,
     /// Rushing its target on its afterburner (0x11).
     Rush,
+    /// Flying at a point ahead of its swarm leader (0x12, see
+    /// [`swarm`](crate::ai::swarm)).
+    Swarm,
 }
 
 /// The manoeuvre `npc`'s high level starts its frame with at a ship at
-/// `at`, disabled as `at_disabled` says ([`pursuit::high_level`]): none
+/// `at`, disabled as `at_disabled` says, with `swarm` its swarm lead
+/// ([`pursuit::high_level`]): none
 /// for a goal that is no fight, or for a ship running out from its
 /// attacker beyond [`pursuit::FLEE_REACH`].
 #[must_use]
-pub fn manoeuvre(npc: &Npc, at: &ShipState, at_disabled: bool) -> Option<Manoeuvre> {
-    match pursuit::high_level(npc, at, at_disabled)? {
+pub fn manoeuvre(
+    npc: &Npc,
+    at: &ShipState,
+    at_disabled: bool,
+    swarm: Option<SwarmLead>,
+) -> Option<Manoeuvre> {
+    match pursuit::high_level(npc, at, at_disabled, swarm)? {
         pursuit::Start::Sub(manoeuvre) => Some(manoeuvre),
         pursuit::Start::BreakOff { .. } => Some(Manoeuvre::BreakOff),
         pursuit::Start::RunningOut => None,
@@ -584,8 +595,13 @@ fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
         return false;
     };
     around.state_of(ship).is_some_and(|at| {
-        pursuit::frame_of(npc, &at, disabled_not_dying(around, ship))
-            .is_some_and(|frame| frame.iter().any(|body| body.manoeuvre == Manoeuvre::Snipe))
+        pursuit::frame_of(
+            npc,
+            &at,
+            disabled_not_dying(around, ship),
+            swarm::lead(npc, around),
+        )
+        .is_some_and(|frame| frame.iter().any(|body| body.manoeuvre == Manoeuvre::Snipe))
     })
 }
 
@@ -637,7 +653,7 @@ pub fn after_firing(npc: &mut Npc, arsenal: &Arsenal) {
 /// (`_LowLevelAIHandler` substate 6, @0x85f17), sniping at rest (0xe,
 /// @0x8730e-0x87324; moving, it brakes and runs none, @0x87329), fleeing (5, @0x85d5c-0x85d72), and approaching only
 /// while facing within [`GUN_FACING`] turns of the heading it wants (7,
-/// @0x868d3-0x868f6).
+/// @0x868d3-0x868f6); never swarming (0x12, @0x85343-0x85357).
 fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
     let Some(ship) = npc.goal.quarry() else {
         return false;
@@ -645,7 +661,8 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
     let Some(at) = around.state_of(ship) else {
         return false;
     };
-    let Some(frame) = pursuit::frame_of(npc, &at, disabled_not_dying(around, ship)) else {
+    let swarm = swarm::lead(npc, around);
+    let Some(frame) = pursuit::frame_of(npc, &at, disabled_not_dying(around, ship), swarm) else {
         return false;
     };
     frame.iter().any(|body| match body.manoeuvre {
@@ -653,6 +670,7 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
         Manoeuvre::Snipe => !snipe::moving(&npc.state),
         Manoeuvre::BreakOff | Manoeuvre::Rush => in_fire_box(npc, &at),
         Manoeuvre::Dogfight | Manoeuvre::Flee => true,
+        Manoeuvre::Swarm => false,
     })
 }
 
@@ -765,6 +783,9 @@ impl Passes {
                     self.missile(sight);
                 }
             }
+            // Under state 4 with a target, its missile pass alone, with no
+            // facing test (@0x85343-0x85357).
+            Manoeuvre::Swarm => self.missile(sight),
         }
     }
 
@@ -818,7 +839,12 @@ fn sight<'a>(
 ) -> Option<(Sight<'a>, pursuit::Frame)> {
     let ship = npc.goal.quarry()?;
     let sight = sight_of(npc, ship, around, rules)?;
-    let frame = pursuit::frame_of(npc, &sight.at, disabled_not_dying(around, ship))?;
+    let frame = pursuit::frame_of(
+        npc,
+        &sight.at,
+        disabled_not_dying(around, ship),
+        swarm::lead(npc, around),
+    )?;
     Some((sight, frame))
 }
 
@@ -1594,7 +1620,7 @@ mod tests {
                 state: from,
                 ..shooter(&[], goal)
             };
-            manoeuvre(&npc, &at(x, y), false)
+            manoeuvre(&npc, &at(x, y), false, None)
         };
         assert_eq!(
             of(Goal::Attack(target), 165.0, -165.0),
@@ -1637,7 +1663,7 @@ mod tests {
             position: SHOOTER + Vec2::new(x, y),
             ..ShipState::default()
         };
-        manoeuvre(npc, &at, disabled)
+        manoeuvre(npc, &at, disabled, None)
     }
 
     #[test]

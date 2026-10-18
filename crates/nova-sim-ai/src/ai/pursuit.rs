@@ -1,7 +1,7 @@
 //! How an NPC fights, frame by frame: `_LowLevelAIHandler`'s substates
-//! 5, 6, 0x10, 0x11 and 7 (@0x85c62-0x869ff in the `EV Nova`
-//! executable) and the substate `_HighLevelAIHandler` leaves them in
-//! (@0x8e3fc-0x8e6dc, @0x8e017-0x8e06b).
+//! 0x12, 5, 6, 0x10, 0x11 and 7 (@0x85247-0x85361, @0x85c62-0x869ff in
+//! the `EV Nova` executable) and the substate `_HighLevelAIHandler`
+//! leaves them in (@0x8e3fc-0x8e6dc, @0x8e017-0x8e06b).
 //!
 //! Each tick a fighting NPC's step ([`step`]) works out its frame
 //! ([`Frame`]): the bodies the low level runs, in its block order, each
@@ -15,9 +15,13 @@
 //! - **The high level** ([`high_level`]), every think: attacking, a
 //!   stand-off ship keeps its band ([`stand_off::keep`]: back away (5),
 //!   approach (7) or snipe (0xe)) and never keeps a pursuit; any other
-//!   outside [`DOGFIGHT_BOX`] on either axis approaches (7) unless it is
-//!   rushing (0x11, @0x8e68d-0x8e697), and inside dogfights (6) unless it
-//!   is breaking off (0x10, @0x8e6cf-0x8e6dc). Sniping, it snipes (0xe).
+//!   outside [`DOGFIGHT_BOX`] on either axis swarms (0x12) when its class
+//!   swarms and its swarm leader is not its own leader
+//!   ([`swarm::lead`], @0x8e63c-0x8e679), dropping a kept rush, else
+//!   approaches (7) unless it is rushing (0x11, @0x8e68d-0x8e697), and
+//!   inside dogfights (6) unless it is breaking off (0x10,
+//!   @0x8e6cf-0x8e6dc). Sniping, it snipes (0xe); a plunderer never
+//!   swarms, as nothing else writes 0x12.
 //!   Plundering an intact ship (goal 0xd, [`Goal::Plunder`],
 //!   @0x8ea49-0x8eb3a), it keeps no band: outside [`DOGFIGHT_BOX`] it
 //!   snipes when the chase is hopeless, else approaches unless rushing;
@@ -33,6 +37,17 @@
 //!   pass (no `_AIFireTurret`, so no point defence either). Nothing else clears a
 //!   kept pursuit: not a new target, nor a goal change in itself, as
 //!   nothing but these rewrites touches +0xc8ca in state 4.
+//! - **Swarm** (0x12, [`Manoeuvre::Swarm`]), the chain's first block: it
+//!   wants `_CalcInterceptAngle` to its swarm lead's aim, [`SWARM_AHEAD`]
+//!   of its own top speeds ahead of its swarm leader along the leader's
+//!   whole-degree heading ([`SwarmLead::aim`]), thrusts its plain
+//!   acceleration while off it by less than its turn and
+//!   [`SWARM_THRUST`](crate::traffic::autopilot::SWARM_THRUST) whole
+//!   degrees, at its own top speed, and fires its missile pass alone with
+//!   no facing test, so no point defence (@0x85247-0x8535c). It keeps the
+//!   substate, so no other block runs. Its branch with no swarm leader
+//!   (substate 0, no thrust or turn, @0x8535e) is reached by no frame here
+//!   (see [`swarm`]).
 //! - **Flee close** (5, [`Manoeuvre::Flee`]): it wants the table bearing
 //!   from its attacker to itself and runs its turret pass; with an
 //!   afterburner ([`Npc::afterburner`]) and its attacker within
@@ -68,7 +83,8 @@
 //!
 //! - The swarm's `_AIMaintainFormation` and +0xc8d4 copy in subs 5, 0x11
 //!   and 7 (@0x85c87-0x85cbf, @0x8660b-0x8663d, @0x867e0-0x86818): rdm
-//!   phase combat-ai-fidelity/phase-14-swarming.
+//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14, after NPC
+//!   formation parents and glow.
 //! - Inertialess flight's branches: sub 6's speed match within 100
 //!   (@0x85ff3-0x860a6), the joust's skip outside 165 (@0x86143-0x86150)
 //!   and 0x10's exit outside 165 (@0x864bd-0x86513). The engine has no
@@ -83,6 +99,9 @@
 
 use crate::ai::afterburner;
 use crate::ai::fire::{self, DOGFIGHT_BOX, GUN_FACING, Manoeuvre};
+#[cfg(doc)]
+use crate::ai::swarm::SWARM_AHEAD;
+use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{Goal, Surroundings, stand_off};
 use crate::catalog::WeaponId;
 use crate::chance::Chance;
@@ -229,10 +248,16 @@ fn whole_off(offset: f32) -> i32 {
 }
 
 /// The substate `npc`'s high level leaves it in, at a ship at `at`,
-/// disabled as `disabled` says (see the module docs): where its frame
-/// starts. None for a goal that is no fight.
+/// disabled as `disabled` says, with `swarm` its swarm lead
+/// ([`swarm::lead`]) (see the module docs): where its frame starts. None
+/// for a goal that is no fight.
 #[must_use]
-pub fn high_level(npc: &Npc, at: &ShipState, disabled: bool) -> Option<Start> {
+pub fn high_level(
+    npc: &Npc,
+    at: &ShipState,
+    disabled: bool,
+    swarm: Option<SwarmLead>,
+) -> Option<Start> {
     let off = at.position - npc.state.position;
     if matches!(npc.goal, Goal::Attack(_) | Goal::Snipe(_))
         && let Some(band) = stand_off::band(npc, disabled)
@@ -243,6 +268,8 @@ pub fn high_level(npc: &Npc, at: &ShipState, disabled: bool) -> Option<Start> {
         Goal::Attack(_) => {
             let outside = off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX;
             Some(Start::Sub(match (outside, npc.pursuit.kept) {
+                // The swarm test comes before the kept rush (@0x8e63c-0x8e697).
+                (true, _) if swarms(npc, swarm) => Manoeuvre::Swarm,
                 (true, Some(Kept::Rush)) => Manoeuvre::Rush,
                 (true, _) => Manoeuvre::Approach,
                 (false, Some(Kept::BreakOff { heading })) => {
@@ -271,6 +298,14 @@ pub fn high_level(npc: &Npc, at: &ShipState, disabled: bool) -> Option<Start> {
     }
 }
 
+/// Whether `npc` swarms on `swarm` outside the dogfight box
+/// (@0x8e63c-0x8e679): its class swarms and its swarm leader is not its
+/// own leader. The original also needs +0x8c of -1, a ship that is no
+/// stellar's defender, which every ship here is.
+fn swarms(npc: &Npc, swarm: Option<SwarmLead>) -> bool {
+    npc.hull.swarms && swarm.is_some_and(|lead| !lead.leads_it)
+}
+
 /// Where a frame starts (see [`high_level`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Start {
@@ -287,17 +322,23 @@ pub enum Start {
 
 /// The frame `npc` flies at a ship at `at` before its step has run this
 /// tick (see [`step`]): its stored frame while it is for its goal, else
-/// the high level's substate alone, its lead from the pick it holds and
-/// its approach's by the engine. None for a goal that is no fight.
+/// the high level's substate alone, with `swarm` its swarm lead, its lead
+/// from the pick it holds and its approach's by the engine. None for a
+/// goal that is no fight.
 #[must_use]
-pub fn frame_of(npc: &Npc, at: &ShipState, disabled: bool) -> Option<Frame> {
+pub fn frame_of(
+    npc: &Npc,
+    at: &ShipState,
+    disabled: bool,
+    swarm: Option<SwarmLead>,
+) -> Option<Frame> {
     if let Some(frame) = npc.pursuit.frame
         && frame.goal == npc.goal
     {
         return Some(frame);
     }
-    let start = high_level(npc, at, disabled)?;
-    let looks = Looks::of(npc, at, npc.pick, RuleSource::Engine);
+    let start = high_level(npc, at, disabled, swarm)?;
+    let looks = Looks::of(npc, at, npc.pick, RuleSource::Engine, swarm);
     Some(match start {
         Start::Sub(manoeuvre) => Frame::of(npc.goal, &[looks.body(manoeuvre)]),
         Start::BreakOff { heading } => Frame::of(
@@ -317,17 +358,30 @@ struct Looks {
     bearing: i16,
     dogfight: i16,
     approach: i16,
+    swarm: i16,
 }
 
 impl Looks {
     /// `npc`'s headings at a ship at `at`, leading with `pick` as its
-    /// pick and its approach by `approach_lead`.
-    fn of(npc: &Npc, at: &ShipState, pick: Option<WeaponId>, approach_lead: RuleSource) -> Self {
+    /// pick and its approach by `approach_lead`, flying at its `swarm`
+    /// lead's aim (`_CalcInterceptAngle(self, P)`, @0x852d6), or with none
+    /// the bearing, which no frame then reads.
+    fn of(
+        npc: &Npc,
+        at: &ShipState,
+        pick: Option<WeaponId>,
+        approach_lead: RuleSource,
+        swarm: Option<SwarmLead>,
+    ) -> Self {
+        let bearing = trig::intercept_angle(npc.state.position, at.position);
         Self {
             away: trig::intercept_angle(at.position, npc.state.position),
-            bearing: trig::intercept_angle(npc.state.position, at.position),
+            bearing,
             dogfight: fire::dogfight_lead(npc, at, pick),
             approach: fire::approach_lead(npc, at, pick, approach_lead),
+            swarm: swarm.map_or(bearing, |lead| {
+                trig::intercept_angle(npc.state.position, lead.aim)
+            }),
         }
     }
 
@@ -338,6 +392,7 @@ impl Looks {
             Manoeuvre::Flee => self.away,
             Manoeuvre::Dogfight => self.dogfight,
             Manoeuvre::Approach => self.approach,
+            Manoeuvre::Swarm => self.swarm,
             Manoeuvre::Rush | Manoeuvre::Snipe | Manoeuvre::BreakOff => self.bearing,
         };
         Body { manoeuvre, heading }
@@ -434,10 +489,17 @@ pub fn step(
         return Pursuit::default();
     };
     let disabled = around.condition_of(ship) == Some(Condition::Disabled);
-    let Some(start) = high_level(npc, &at, disabled) else {
+    let swarm = swarm::lead(npc, around);
+    let Some(start) = high_level(npc, &at, disabled, swarm) else {
         return Pursuit::default();
     };
-    let looks = Looks::of(npc, &at, fire::lead_pick(npc, around), rules.approach_lead);
+    let looks = Looks::of(
+        npc,
+        &at,
+        fire::lead_pick(npc, around),
+        rules.approach_lead,
+        swarm,
+    );
     let (target_slot, target_mass) = match ship {
         ShipRef::Player => (0, around.player.map_or(0.0, |player| player.hull.mass)),
         ShipRef::Npc(id) => around
@@ -465,6 +527,11 @@ pub fn step(
         }
     };
     let mut bodies: Vec<Body> = Vec::with_capacity(2);
+    // Sub 0x12 (@0x85247-0x85361), the chain's first block: it keeps the
+    // substate, so no later block runs.
+    if sub == Sub::Body(Manoeuvre::Swarm) {
+        bodies.push(looks.body(Manoeuvre::Swarm));
+    }
     // Sub 5 (@0x85c62-0x85e0b).
     if sub == Sub::Body(Manoeuvre::Flee) {
         bodies.push(looks.body(Manoeuvre::Flee));
@@ -1044,7 +1111,7 @@ mod tests {
             position: AT + off,
             ..ShipState::default()
         };
-        high_level(npc, &at, disabled)
+        high_level(npc, &at, disabled, None)
     }
 
     #[test]
@@ -1165,14 +1232,198 @@ mod tests {
         let mut stepped = npc.clone();
         stepped.pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
         assert_eq!(
-            frame_of(&stepped, &at, false).map(|frame| frame.iter().count()),
+            frame_of(&stepped, &at, false, None).map(|frame| frame.iter().count()),
             Some(2)
         );
         stepped.goal = Goal::Attack(OTHER);
         assert_eq!(
-            frame_of(&stepped, &at, false).map(|frame| frame.iter().count()),
+            frame_of(&stepped, &at, false, None).map(|frame| frame.iter().count()),
             Some(1),
             "the high level's substate alone"
+        );
+    }
+
+    // Swarming (substate 0x12).
+
+    /// A swarming fighter attacking the player, naming berth 1 as its
+    /// swarm leader.
+    fn swarmer() -> Npc {
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.hull.swarms = true;
+        npc.swarm_leader = Some(1);
+        npc
+    }
+
+    /// The swarm leader at berth 1: NPC 7, 100 left of [`AT`], facing
+    /// 90.9 (whole 90, right across the screen).
+    fn swarm_leader() -> Npc {
+        let mut leader = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
+        leader.berth = 1;
+        leader.hull.swarms = true;
+        leader.state.position = AT + Vec2::new(-100.0, 0.0);
+        leader.state.heading = 90.9;
+        leader
+    }
+
+    /// A lead not led by the swarm leader, aiming at `aim`.
+    #[allow(clippy::unnecessary_wraps)]
+    fn aiming(aim: Vec2) -> Option<SwarmLead> {
+        Some(SwarmLead {
+            aim,
+            leads_it: false,
+        })
+    }
+
+    /// Where `npc`'s high level starts at the player `off` from [`AT`]
+    /// with `swarm`.
+    fn swarm_start(npc: &Npc, off: Vec2, swarm: Option<SwarmLead>) -> Option<Start> {
+        let at = ShipState {
+            position: AT + off,
+            ..ShipState::default()
+        };
+        high_level(npc, &at, false, swarm)
+    }
+
+    /// 400 above [`AT`]: outside the dogfight box.
+    const FAR: Vec2 = Vec2::new(0.0, -400.0);
+
+    #[test]
+    fn outside_165_a_swarmer_with_a_swarm_leader_flies_at_15_top_speeds_ahead_of_it() {
+        let npc = swarmer();
+        let leader = swarm_leader();
+        let npcs = [npc.clone(), leader.clone()];
+        let around = Surroundings {
+            player: Some(player_off(FAR, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let pursuit = step(&npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Swarm]);
+        assert_eq!(pursuit.kept, None);
+        let aim = leader.state.position + trig::accel(90, npc.stats.handling.max_speed * 15.0);
+        assert_eq!(
+            pursuit
+                .frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.heading),
+            Some(trig::intercept_angle(AT, aim))
+        );
+        // Either axis outside the box will do.
+        for off in [Vec2::new(165.1, 0.0), Vec2::new(0.0, -165.1)] {
+            assert_eq!(
+                swarm_start(&npc, off, aiming(AT)),
+                Some(Start::Sub(Manoeuvre::Swarm)),
+                "{off:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_kept_rush_outside_165_gives_way_to_the_swarm() {
+        let mut npc = burning(swarmer());
+        npc.pursuit.kept = Some(Kept::Rush);
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Swarm))
+        );
+        let leader = swarm_leader();
+        let npcs = [npc.clone(), leader];
+        let around = Surroundings {
+            player: Some(player_off(FAR, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut chance = Ranged::of(&[]);
+        let pursuit = step(&npc, &around, PursuitRules::default(), &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Swarm]);
+        assert_eq!(pursuit.kept, None, "the rush is dropped");
+        assert!(chance.asked.is_empty(), "no rush roll");
+    }
+
+    #[test]
+    fn a_swarmer_led_by_its_own_swarm_leader_approaches() {
+        let npc = swarmer();
+        let led = Some(SwarmLead {
+            aim: AT,
+            leads_it: true,
+        });
+        assert_eq!(
+            swarm_start(&npc, FAR, led),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_swarmer_with_no_swarm_leader_approaches() {
+        assert_eq!(
+            swarm_start(&swarmer(), FAR, None),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_ship_that_does_not_swarm_approaches() {
+        let mut npc = swarmer();
+        npc.hull.swarms = false;
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn inside_165_a_swarmer_dogfights() {
+        assert_eq!(
+            swarm_start(&swarmer(), Vec2::new(165.0, -165.0), aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Dogfight))
+        );
+    }
+
+    #[test]
+    fn a_stand_off_swarmer_keeps_its_band() {
+        let mut npc = swarmer();
+        npc.hull.stands_off = true;
+        // No weapons: a band of none, so beyond the box it approaches.
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_plunderer_never_swarms() {
+        let npc = Npc {
+            goal: PLUNDER,
+            ..swarmer()
+        };
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_sniper_never_swarms() {
+        let npc = Npc {
+            goal: Goal::Snipe(ShipRef::Player),
+            ..swarmer()
+        };
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Snipe))
+        );
+    }
+
+    #[test]
+    fn a_swarm_frame_is_worked_out_from_the_lead_before_the_step_runs() {
+        let npc = swarmer();
+        let at = player_off(FAR, 0.0).state;
+        let aim = Vec2::new(900.0, 200.0);
+        let frame = frame_of(&npc, &at, false, aiming(aim)).expect("a fight");
+        assert_eq!(
+            frame.last(),
+            Some(Body {
+                manoeuvre: Manoeuvre::Swarm,
+                heading: trig::intercept_angle(AT, aim),
+            })
         );
     }
 
@@ -1294,6 +1545,7 @@ mod tests {
             &std::collections::BTreeMap::new(),
             Some(&side.state),
             false,
+            None,
             TopSpeeds::own_of(npc),
             crate::flight::FlightRules::default(),
             crate::traffic::autopilot::Readings::default(),
@@ -1358,5 +1610,121 @@ mod tests {
             "{:?}",
             ship.state
         );
+    }
+
+    /// `npc`, naming [`swarm_leader`] as its swarm leader, stepped at the
+    /// player `off` from [`AT`] beside it, then the trigger it holds.
+    fn triggered_in_swarm(npc: &Npc, off: Vec2) -> Trigger {
+        let npcs = [npc.clone(), swarm_leader()];
+        let around = Surroundings {
+            player: Some(player_off(off, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut stepped = npc.clone();
+        stepped.pursuit = step(npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        assert_eq!(bodies(&stepped.pursuit), [Manoeuvre::Swarm]);
+        trigger(&stepped, &around, FireRules::default())
+    }
+
+    #[test]
+    fn a_swarmer_fires_its_missile_with_no_facing_test_and_no_gun_or_turret() {
+        // Facing down, away from the player 290 above.
+        let off = Vec2::new(0.0, -290.0);
+        let mut npc = armed(swarmer(), &[128, 130, 131]);
+        npc.state.heading = 180.0;
+        let swarming = triggered_in_swarm(&npc, off);
+        assert_eq!((swarming.only, swarming.point_defence), (id(131), false));
+        // A gun and a turret in reach are never picked.
+        let gunner = Npc {
+            armament: armed(swarmer(), &[128, 130]).armament,
+            ..npc.clone()
+        };
+        let held = triggered_in_swarm(&gunner, off);
+        assert_eq!((held.only, held.point_defence), (None, false));
+    }
+
+    #[test]
+    fn a_swarmer_whose_target_is_gone_fires_nothing() {
+        let npc = Npc {
+            goal: Goal::Attack(OTHER),
+            ..armed(swarmer(), &[131])
+        };
+        let npcs = [npc.clone(), swarm_leader()];
+        let around = Surroundings::new(&[], &npcs);
+        let mut stepped = npc.clone();
+        stepped.pursuit.frame = Some(Frame::of(
+            npc.goal,
+            &[Body {
+                manoeuvre: Manoeuvre::Swarm,
+                heading: 0,
+            }],
+        ));
+        let held = trigger(&stepped, &around, FireRules::default());
+        assert_eq!((held.only, held.point_defence), (None, false));
+    }
+
+    /// `npc` flown a tick on a stored swarm frame wanting `heading`, the
+    /// player [`FAR`] above.
+    fn flown_swarming(npc: &Npc, heading: i16) -> Npc {
+        let side = player_off(FAR, 0.0);
+        let mut ship = npc.clone();
+        ship.pursuit.frame = Some(Frame::of(
+            npc.goal,
+            &[Body {
+                manoeuvre: Manoeuvre::Swarm,
+                heading,
+            }],
+        ));
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&side.state),
+            false,
+            None,
+            TopSpeeds::own_of(npc),
+            crate::flight::FlightRules::default(),
+            crate::traffic::autopilot::Readings::default(),
+            &mut Ranged::of(&[]),
+        );
+        ship
+    }
+
+    #[test]
+    fn a_swarmer_thrusts_fully_while_off_by_less_than_its_turn_and_20_whole_degrees() {
+        // FAST turns 3 a tick: within 23 whole degrees it thrusts its plain
+        // 900 / 5000 = 0.18 and turns toward the heading wanted.
+        let npc = swarmer();
+        let ship = flown_swarming(&npc, 22);
+        assert_eq!(ship.state.heading, 3.0);
+        assert!(
+            (ship.state.velocity.length() - 0.18).abs() < 1e-6,
+            "{:?}",
+            ship.state
+        );
+        // At 23, strictly, it turns without thrust; 22.9 is 22 whole.
+        let ship = flown_swarming(&npc, 23);
+        assert_eq!(ship.state.heading, 3.0);
+        assert_eq!(ship.state.velocity, Vec2::ZERO);
+        let ship = flown_swarming(&npc, -23);
+        assert_eq!(ship.state.velocity, Vec2::ZERO, "either way");
+        let mut turned = npc.clone();
+        turned.state.heading = 0.9;
+        assert_eq!(flown_swarming(&turned, 23).state.velocity, Vec2::ZERO);
+        // At its top speed along its heading, the push adds nothing.
+        let mut fast = npc;
+        let top = fast.stats.handling.max_speed;
+        fast.state.velocity = Vec2::new(0.0, -top);
+        let ship = flown_swarming(&fast, 0);
+        assert!(
+            (ship.state.velocity.length() - top).abs() < 1e-5,
+            "{:?}",
+            ship.state
+        );
+    }
+
+    #[test]
+    fn the_swarm_flight_names_its_window() {
+        assert_eq!(autopilot::SWARM_THRUST, 20.0);
     }
 }

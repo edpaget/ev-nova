@@ -168,7 +168,7 @@ pub mod weigh;
 use crate::ai::interceptor::within_reach;
 use crate::ai::lost_sight::{self, LostSight};
 use crate::ai::pursuit::{self, Pursuit, PursuitRules};
-use crate::ai::swarm;
+use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{
     Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
     reinforcements,
@@ -199,7 +199,7 @@ use plunder::{HighLevel, PirateEvent};
 use plunder_dock::DockOutcome;
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
-use table::{SpawnPerson, SpawnTable};
+use table::{ShipKind, SpawnPerson, SpawnTable};
 
 /// The ship-table slots a traffic spawn leaves free:
 /// `_GenericRandomShipSpawn(arg1, reserve)` (@0x3c89f) searches only the
@@ -387,6 +387,25 @@ fn starting_goal(hunts: bool, held: bool) -> Goal {
     } else {
         Goal::Idle
     }
+}
+
+/// The reserves and condition a new ship of `kind`, flown by `person` if
+/// any, starts with ([`Traffic::add`]): its person's, else full and
+/// intact; set up `derelict` ([`NewShip::derelict`]), disabled, its shield
+/// gone and its armour cut ([`derelict_armor`]).
+fn starting_reserves(
+    kind: &ShipKind,
+    person: Option<&SpawnPerson>,
+    derelict: bool,
+) -> (crate::reserves::Reserves, Condition) {
+    let mut reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
+    let mut condition = person.map_or(Condition::Intact, |person| person.condition);
+    if derelict {
+        reserves.shield.now = 0.0;
+        reserves.armor.now = derelict_armor(kind.base_armor, kind.hull.tough);
+        condition = Condition::Disabled;
+    }
+    (reserves, condition)
 }
 
 /// The cloak a new ship starts with ([`Traffic::add`]): fading in when
@@ -1208,11 +1227,17 @@ impl Traffic {
             .filter(|npc| npc.condition == Condition::Disabled)
             .map(|npc| npc.id)
             .collect();
+        let around = world.around(&self.npcs);
+        let leads: Vec<Option<SwarmLead>> = self
+            .npcs
+            .iter()
+            .map(|npc| swarm::lead(npc, &around))
+            .collect();
         let outcomes = self
             .npcs
             .iter_mut()
-            .zip(speeds)
-            .map(|(npc, speeds)| {
+            .zip(speeds.into_iter().zip(leads))
+            .map(|(npc, (speeds, swarm))| {
                 let other = match npc.goal {
                     _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
@@ -1251,6 +1276,7 @@ impl Traffic {
                     world.type_widths,
                     other.as_ref(),
                     other_disabled,
+                    swarm,
                     speeds,
                     world.flight,
                     autopilot::Readings {
@@ -2096,13 +2122,7 @@ impl Traffic {
                 placed.push(None);
                 continue;
             };
-            let mut reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
-            let mut condition = person.map_or(Condition::Intact, |person| person.condition);
-            if ship.derelict {
-                reserves.shield.now = 0.0;
-                reserves.armor.now = derelict_armor(kind.base_armor, kind.hull.tough);
-                condition = Condition::Disabled;
-            }
+            let (reserves, condition) = starting_reserves(kind, person, ship.derelict);
             let traits = person
                 .map(|person| NpcPerson::of(&person.record, grudges.contains(&person.record.id)));
             let id = NpcId(self.next_id);
@@ -2113,8 +2133,12 @@ impl Traffic {
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             let name = person.map(|person| person.record.name.clone());
-            let afterburner =
-                AfterburnerRoll::has(afterburners.as_deref_mut(), &ship, kind, person);
+            let afterburner = AfterburnerRoll::has(
+                afterburners.as_deref_mut(),
+                &ship,
+                kind,
+                (person, swarm::named(berth, &self.npcs)),
+            );
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             let npc = Npc {

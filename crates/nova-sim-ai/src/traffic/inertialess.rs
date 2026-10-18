@@ -229,6 +229,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             rules,
             crate::traffic::autopilot::Readings::default(),

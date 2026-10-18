@@ -393,6 +393,7 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             flight,
             readings,
