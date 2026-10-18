@@ -397,6 +397,47 @@ mod tests {
     }
 
     #[test]
+    fn a_jump_to_a_system_at_the_same_map_place_turns_to_0_before_it_begins() {
+        let mut catalog = pegasus();
+        catalog.star_map[1] = star(131, (0.0, 0.0), &[132]);
+        // By the original's co-located reading 130 stands for 131 at their
+        // shared place, so the link reaches 131 only by the other one.
+        let mut session = flying(&catalog, 90.0).with_rules(
+            Rulebook::default().with_override(RuleKey::ColocatedResolution, RuleSource::Bible),
+        );
+        session.player.position = Vec2::new(0.0, 5000.0);
+        session.set_nav(NavMode::Hyperspace(Some(SystemId(131))));
+        session.begin_jump().expect("jumps");
+        assert_eq!(
+            session.preparing_jump(),
+            Some(SystemId(131)),
+            "turning first, as _CalcInterceptAngle gives 0"
+        );
+        let mut ticks = 0;
+        while session.jumping().is_none() {
+            let before = session.player.heading;
+            session.tick(Controls::default());
+            ticks += 1;
+            assert!(ticks < 100, "never jumped: {:?}", session.player);
+            if session.preparing_jump().is_some() {
+                assert_eq!(session.aim, 0);
+                assert_eq!(session.player.heading, before - 2.0, "2° a tick toward 0");
+            }
+        }
+        let heading = session.player.heading;
+        assert!(
+            crate::player_turn::settled(
+                heading,
+                2.5,
+                0,
+                crate::player_turn::PlayerTurn::WholeDegrees
+            ),
+            "jumped facing {heading}"
+        );
+        assert!(ticks > 40, "jumped after {ticks} ticks");
+    }
+
+    #[test]
     fn a_disabled_player_pressing_the_face_key_aims_but_does_not_turn() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);

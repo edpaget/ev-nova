@@ -281,7 +281,7 @@ fn down_turns_the_ship_against_its_motion() {
     ticks(&mut view, 5);
     assert_eq!(player(&view).heading, stopped, "it stays there");
     assert_eq!(view.frame(), Some(17));
-    // Left or Right overrides it.
+    // Left is held off while reverse aims: the heading stays put.
     view.input(&key(Key::Left, true));
     ticks(&mut view, 1);
     assert!((player(&view).heading - 177.0).abs() < 1e-3);
