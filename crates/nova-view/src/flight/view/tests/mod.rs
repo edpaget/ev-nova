@@ -823,6 +823,14 @@ impl CombatLooks for FakeCatalog {
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         self.cursor_sheet.clone()
     }
+
+    /// The escape pods' sheet: `rlëD` 1095, of 36 rotations.
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        Ok(EffectSheet {
+            image_id: 1095,
+            frames: NonZeroU16::new(36).expect("non-zero"),
+        })
+    }
 }
 
 /// The escort menu in its own colours, so tests can tell them.

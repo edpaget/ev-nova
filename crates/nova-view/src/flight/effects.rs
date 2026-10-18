@@ -70,6 +70,12 @@
 //!   drawn opaque; only a shot's trail (@0x35ea6) passes another, and
 //!   rdm:phase/weapons-fidelity/phase-24-shots-and-beams-drawn owns it.
 //!
+//! - A dying NPC's escape pod ([`CombatEvent::PodEjected`]) is heard as
+//!   `snd ` 372 from where its ship is
+//!   ([`ESCAPE_POD_SOUND`](nova_sim::sound::ESCAPE_POD_SOUND)), whether
+//!   or not the pool keeps it, and set adrift ([`pods`](super::pods)),
+//!   under the caps at most [`MAX_PODS`](super::pods::MAX_PODS) of them.
+//!
 //! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
 //! The effects draw on their own [`Chance`], never on the simulation's.
@@ -81,6 +87,7 @@ use nova_sim::combat::weapon::Explosion as Blast;
 use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
+use super::pods::{EscapePods, Pod};
 use super::weapons::{LOOPED_SOUND, translucent};
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
@@ -225,6 +232,8 @@ pub struct Effects {
     /// or freed, each holds its count of the pool until it is cleared
     /// (see the module docs).
     lifeless: usize,
+    /// The NPCs' escape pods adrift (see [`pods`](super::pods)).
+    pods: EscapePods,
 }
 
 impl Effects {
@@ -285,10 +294,18 @@ impl Effects {
                 }
             }
             CombatEvent::Particles(burst) => self.spray(&burst, scene.caps, chance),
+            // `_HandleShip` plays the pod's sound whether or not
+            // `_SpawnEscapePod` found it a slot (@0x351fa, @0x35300).
+            CombatEvent::PodEjected { at, velocity, .. } => {
+                let at = point(at);
+                self.sounds
+                    .push(heard(nova_sim::sound::ESCAPE_POD_SOUND, at, scene.player));
+                self.pods
+                    .spawn(at, point(velocity), scene.caps, looks, chance);
+            }
             // A hit's shield flash is the flight view's
             // ([`ShieldFlash`](super::flash::ShieldFlash)).
             CombatEvent::Fired { sound: None, .. }
-            | CombatEvent::PodEjected { .. }
             | CombatEvent::Disabled { .. }
             | CombatEvent::BreakingUp { .. }
             | CombatEvent::Hit { .. } => {}
@@ -435,6 +452,7 @@ impl Effects {
     /// `scene`, under its caps or not.
     pub fn step(&mut self, dying: &[Dying], scene: &Scene, looks: &Looks, chance: &mut dyn Chance) {
         let player = scene.player;
+        self.pods.step();
         self.playing.retain(|_, left| {
             *left = left.saturating_sub(1);
             *left > 0
@@ -499,6 +517,18 @@ impl Effects {
         }
     }
 
+    /// Draws the escape pods adrift, as `looks` says, where `camera` shows
+    /// them, in their place among the sprites (see [`pods`](super::pods)).
+    pub fn draw_pods(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
+        self.pods.draw(list, camera, looks);
+    }
+
+    /// The escape pods adrift.
+    #[must_use]
+    pub fn pods(&self) -> &[Pod] {
+        self.pods.pods()
+    }
+
     /// The explosions going off.
     #[must_use]
     pub fn explosions(&self) -> &[Explosion] {
@@ -518,8 +548,10 @@ impl Effects {
     }
 
     /// Clears everything: the explosions, the debris, the sounds, the
-    /// looped sounds playing, and the particles of no life the caps count.
+    /// looped sounds playing, the particles of no life the caps count, and
+    /// the escape pods.
     pub fn clear(&mut self) {
+        self.pods.clear();
         self.explosions.clear();
         self.particles.clear();
         self.sounds.clear();
@@ -626,6 +658,7 @@ mod tests {
             boxes: BTreeMap::new(),
             asteroids: BTreeMap::new(),
             cursor: None,
+            pod: None,
         }
     }
 
@@ -661,6 +694,72 @@ mod tests {
     fn steps(effects: &mut Effects, n: u32) {
         for _ in 0..n {
             effects.step(&[], &scene(), &looks(), &mut Script::default());
+        }
+    }
+
+    /// `looks` with the escape pods' sheet, `rlëD` 1095 of 36 rotations.
+    fn pod_looks() -> Looks {
+        Looks {
+            pod: Some(Ok(EffectSheet {
+                image_id: 1095,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+            })),
+            ..looks()
+        }
+    }
+
+    /// A pod ejected at (`x`, 0) at rest.
+    fn ejected(x: f32) -> CombatEvent {
+        CombatEvent::PodEjected {
+            ship: ShipRef::Npc(NpcId(1)),
+            at: Vec2::new(x, 0.0),
+            velocity: Vec2::ZERO,
+        }
+    }
+
+    #[test]
+    fn an_ejected_pod_is_heard_as_snd_372_and_set_adrift() {
+        let mut effects = Effects::default();
+        effects.apply(
+            &ejected(30.0),
+            &scene(),
+            &pod_looks(),
+            &mut Script::default(),
+        );
+        assert_eq!(
+            effects.take_sounds(),
+            [CombatSound {
+                sound: SoundId(372),
+                offset: (30, 0),
+            }]
+        );
+        assert_eq!(effects.pods().len(), 1);
+        let life = effects.pods()[0].life;
+        effects.step(&[], &scene(), &pod_looks(), &mut Script::default());
+        assert_eq!(effects.pods()[0].life, life - 1, "it steps with the rest");
+        let mut list = DrawList::new();
+        effects.draw_pods(&mut list, &Camera::centred_on(PLAYER), &pod_looks());
+        assert!(
+            list.into_iter().any(|command| matches!(
+                command,
+                DrawCommand::Sprite { image, .. } if image.id == 1095
+            )),
+            "drawn from its sheet"
+        );
+        effects.clear();
+        assert!(effects.pods().is_empty(), "cleared with the rest");
+    }
+
+    #[test]
+    fn under_the_caps_a_33rd_pod_is_not_kept_but_is_heard() {
+        for (caps, kept) in [(true, 32), (false, 33)] {
+            let mut effects = Effects::default();
+            let scene = Scene { caps, ..scene() };
+            for _ in 0..33 {
+                effects.apply(&ejected(0.0), &scene, &pod_looks(), &mut Script::default());
+            }
+            assert_eq!(effects.pods().len(), kept, "caps {caps}");
+            assert_eq!(effects.take_sounds().len(), 33, "every one heard");
         }
     }
 

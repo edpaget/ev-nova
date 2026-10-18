@@ -474,6 +474,7 @@ mod tests {
             boxes: BTreeMap::new(),
             asteroids: BTreeMap::new(),
             cursor: None,
+            pod: None,
         }
     }
 

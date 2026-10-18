@@ -19,12 +19,11 @@
 //!
 //! In order, for each NPC in the system's order:
 //!
-//! 1. **The person's pod** ([`person_pod_due`]): a
-//!    [`CombatEvent::PodEjected`] (`_SpawnEscapePod` @0x351c3), its
-//!    crew's pods left as they were.
+//! 1. **The person's pod** ([`person_pod_due`]): a [`PodEjected`]
+//!    (`_SpawnEscapePod` @0x351c3), its crew's pods left as they were.
 //! 2. **A crew pod** ([`crew_pod_due`], on the pass's frame counter): one
-//!    fewer pod left ([`Npc::pods_left`]), and a
-//!    [`CombatEvent::PodEjected`] (@0x352bf-0x352c9).
+//!    fewer pod left ([`Npc::pods_left`]), and a [`PodEjected`]
+//!    (@0x352bf-0x352c9).
 //! 3. **The escape ship** ([`escape_roll_due`], [`escape_ship_bay`]): on
 //!    `Rand(3) == 0` its bay's fighter leaves it as any fighter launches
 //!    (see the `fighters` module), along its heading turned by the bay's
@@ -54,6 +53,8 @@
 //! `_gameFrozen` (@0x35091), which the engine has no state for; and the
 //! `_gSpeedMult` division of the interval (@0x3527a-0x35298), a division
 //! by 1 at the engine's tick.
+//!
+//! [`PodEjected`]: crate::combat::CombatEvent::PodEjected
 
 use super::{NpcBefore, Session};
 use crate::chance::Chance;

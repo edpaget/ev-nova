@@ -218,6 +218,14 @@ impl CombatLooks for GameData {
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         effect_sheet(self, CURSOR_SPIN)
     }
+
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
+        Ok(EffectSheet {
+            image_id: sheet.image_id,
+            frames: sheet.rotations,
+        })
+    }
 }
 
 /// `spïn` `id`'s sheet in `data`, as an effect's, or why it cannot be

@@ -27,6 +27,8 @@
 //!   armour and fuel bars and the system's name.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
 //!   `_DrawCenteredText`'s centring.
+//! - [`pods`]: the NPCs' escape pods adrift, from the fight's
+//!   `PodEjected` events: their drift, their fade and their pool.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
@@ -51,6 +53,7 @@ pub mod floating;
 pub mod hud;
 pub mod jump;
 mod pen;
+pub mod pods;
 pub mod radar;
 pub mod sprite;
 pub mod target;

@@ -7,7 +7,8 @@
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`put_player_over`], for bringing the player over a ship to board it;
 //! [`cloak`], for setting a ship's cloak directly; [`hide`], for
-//! making a ship's type one whose `Cost` is -1; and
+//! making a ship's type one whose `Cost` is -1; [`place`], for putting a
+//! ship somewhere directly; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites.
 
@@ -71,6 +72,16 @@ pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
 pub fn hide(session: &mut Session, id: NpcId) {
     if let Some(npc) = session.npc_mut(id) {
         npc.hull.hidden = true;
+    }
+}
+
+/// Puts NPC `id` in `session` at `at`, at rest, if it is in the system:
+/// for a test that needs a ship somewhere the traffic did not place it,
+/// such as in front of the player once it has flown out.
+pub fn place(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.state.position = at;
+        npc.state.velocity = crate::geometry::Vec2::ZERO;
     }
 }
 

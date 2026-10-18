@@ -275,6 +275,7 @@ impl<
         scene::draw_stellars(list, scene, &camera, self.elapsed);
         asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
         boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
+        self.effects.draw_pods(list, &camera, &self.looks);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
         self.draw_ships(list, &camera);
