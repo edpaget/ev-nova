@@ -13937,9 +13937,12 @@ mod tests {
         combat.ended_shots = 5;
         combat.ended_beams = 5;
         combat.stood.insert(B, Vec2::new(1.0, 2.0));
+        let ended = combat.shots[0];
+        combat.hide(ended);
         combat.clear();
         assert_eq!((combat.ended_shots, combat.ended_beams), (0, 0));
         assert_eq!(combat.shots(), []);
+        assert_eq!(combat.hidden, [], "the shots point defence ended");
         assert_eq!(combat.stood, BTreeMap::new(), "where the ships stood");
     }
 

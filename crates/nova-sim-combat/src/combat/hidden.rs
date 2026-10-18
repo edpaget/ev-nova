@@ -54,10 +54,16 @@ impl Combat {
     /// Every hidden shot is then let go, as `_HandleShot` frees it before
     /// any later pass.
     ///
-    /// The original interleaves them with the live shots by slot; here
-    /// they come after the live shots of the same pass, and their blasts'
-    /// hits land after the live proximities. Everything settles inside
-    /// the collision passes, before any frame is drawn.
+    /// The original interleaves them with the live shots by slot, each
+    /// shot meeting the stellars and then the asteroids (one loop over the
+    /// slots, @0x371e0-0x37765). Here they meet the asteroids after the
+    /// live shots of the same pass, and their blasts' hits land after the
+    /// live proximities. But they meet the stellars before the live
+    /// shots, as `Combat::strike_stellars` runs after this pass. Where a
+    /// hidden and a live shot reach the same stellar or asteroid with one
+    /// hit left, this can pick a different shot to down it than the
+    /// original's slot order, and so a different shot is spent and another
+    /// flies on (rdm weapons-fidelity phase 40).
     pub(super) fn test_hidden(
         &mut self,
         fighters: &[Fighter],

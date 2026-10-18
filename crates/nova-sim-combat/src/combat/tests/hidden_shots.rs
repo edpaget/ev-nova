@@ -91,6 +91,7 @@ fn beside_the_missile() -> [Ship; 2] {
 fn a_missile_a_point_defence_shot_downs_breaks_an_asteroid_in_its_fuses_reach_that_tick() {
     let mut combat = Combat::default();
     let (pd, missile) = pd_meets(&mut combat, fused_missile(30));
+    assert!(combat.targeted_damage().contains_key(&A), "live, it counts");
     let mut ships = beside_the_missile();
     // 20 pixels from the missile, beyond its 10-pixel radius.
     let mut rocks = [rock(0, 23.0, 0.0)];
@@ -247,6 +248,7 @@ fn a_missile_a_point_defence_beam_downs_sets_off_an_asteroid_in_the_next_tick() 
     };
     tick_once(&mut combat, &mut ships, &mut rocks);
     let missile = combat.shots()[0].id;
+    assert!(combat.targeted_damage().contains_key(&A), "live, it counts");
     let events = tick_once(&mut combat, &mut ships, &mut rocks);
     assert_eq!(shot_down(&events).len(), 1, "{events:?}");
     assert_eq!(rocks[0].strength, 10, "not yet");
@@ -299,10 +301,83 @@ fn a_missile_a_beam_downs_before_its_first_move_is_still_tested() {
 
 #[test]
 fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
+    // B's missile at A, which A's beam downs; C, A's escort, defends A's
+    // missiles too (`defence::choose` reads the defender's fleet), and its
+    // ready beam takes the missile while it is live.
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = arena(&arsenal, &govts, Rules::default());
+    let scene = || {
+        let mut combat = Combat::default();
+        let missile = put(
+            &mut combat,
+            frail_missile(),
+            B,
+            Vec2::new(0.0, -100.0),
+            Vec2::ZERO,
+        );
+        combat.shots[0].target = Some(A);
+        combat.shots[0].aimed_at = Some(A);
+        let mut escort = Ship::at(3, 0.0, -50.0).armed(pd_beam());
+        escort.fleet = A;
+        escort.trigger = QUIET;
+        let ships = [
+            Ship::at(1, 0.0, 0.0).armed(pd_beam()),
+            Ship::at(2, 1000.0, 1000.0),
+            escort,
+        ];
+        (combat, missile, ships)
+    };
+    // C's point defence, run alone.
+    let c_takes = |combat: &mut Combat, ships: &mut [Ship; 3], missile: ShotId| {
+        ships[0].trigger = QUIET;
+        ships[0].trigger.point_defence = false;
+        ships[2].trigger = QUIET;
+        let beams_before = combat.beams().len();
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+        drop(fighters);
+        combat.beams()[beams_before..]
+            .iter()
+            .any(|beam| beam.firer == C && beam.aiming == Aiming::Shot(missile))
+    };
+
+    let (mut combat, missile, mut ships) = scene();
+    assert!(drawn_shot(&combat, missile), "live");
+    assert!(
+        combat.targeted_damage().contains_key(&A),
+        "live, it counts: {:?}",
+        combat.targeted_damage()
+    );
+    assert!(
+        c_takes(&mut combat, &mut ships, missile),
+        "live, C takes it"
+    );
+
+    let (mut combat, missile, mut ships) = scene();
+    ships[2].trigger.point_defence = false;
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    drop(fighters);
+    assert_eq!(combat.hidden.len(), 1, "kept hidden");
+    assert!(!drawn_shot(&combat, missile));
+    assert_eq!(combat.targeted_damage(), BTreeMap::new(), "hidden, none");
+    assert!(
+        !c_takes(&mut combat, &mut ships, missile),
+        "{:?}",
+        combat.beams()
+    );
+}
+
+#[test]
+fn clearing_the_fight_lets_go_of_the_hidden_shots() {
+    // A beam downs a missile beside an asteroid, keeping it hidden; the
+    // ship then leaves the system, and the next system's first proximity
+    // pass, beside an asteroid at the same spot, tests nothing.
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let arena = arena(&arsenal, &govts, Rules::default());
     let mut combat = Combat::default();
-    let missile = put(
+    put(
         &mut combat,
         frail_missile(),
         B,
@@ -314,27 +389,19 @@ fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
     let mut ships = [
         Ship::at(1, 0.0, 0.0).armed(pd_beam()),
         Ship::at(2, 1000.0, 1000.0),
-        Ship::at(3, 0.0, -50.0).armed(pd_beam()),
     ];
-    ships[2].trigger.point_defence = false;
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
     combat.close_tick(&mut fighters, arena, &mut NeverFires);
     drop(fighters);
     assert_eq!(combat.hidden.len(), 1, "kept hidden");
-    assert!(!drawn_shot(&combat, missile));
-    assert_eq!(combat.targeted_damage(), BTreeMap::new());
-    // C's point defence, run now, finds nothing to take.
+    combat.clear();
+    combat.take_events();
+    let mut rocks = [rock(0, 20.0, -100.0)];
     ships[0].trigger = QUIET;
-    ships[2].trigger = QUIET;
-    let beams_before = combat.beams().len();
-    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
-    drop(fighters);
-    let taken = combat.beams()[beams_before..]
-        .iter()
-        .any(|beam| beam.aiming == Aiming::Shot(missile));
-    assert!(!taken, "{:?}", combat.beams());
+    test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
+    assert_eq!(rocks[0].strength, 10, "untouched: {rocks:?}");
+    assert_eq!(explosions(&combat.take_events()), []);
 }
 
 #[test]
