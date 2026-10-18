@@ -1,5 +1,6 @@
-//! The main screen from the stock game data (`NOVA_DATA`). Each test
-//! skips, passing, when the data is absent.
+//! The main screen from the stock game data (`NOVA_DATA`) and the Yes/No
+//! dialog from the stock interface file beside it. Each test skips,
+//! passing, when the data is absent.
 
 #![allow(clippy::float_cmp)]
 
@@ -7,13 +8,15 @@ use crate::common;
 
 use std::rc::Rc;
 
-use nova_data::GameData;
+use nova_data::records::string_list::StrList;
+use nova_data::{GameData, InterfaceData, Record};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::menu::{MainMenu, MainScreenArt, MainScreenSource, MenuChoice};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::DescriptionSource;
+use nova_view::ui::yes_no::{QUESTION_ITEM, QUIT_QUESTION, YES_NO_DIALOG};
+use nova_view::ui::{DescriptionSource, DialogResources, YesNoDialog};
 use nova_view::{
-    DrawCommand, DrawList, ImageKey, ImageKind, Input, MouseButton, Screen, Sound, UiSound,
+    DrawCommand, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Screen, Sound, UiSound,
 };
 
 /// The stock game data and its main-screen art, when `NOVA_DATA` is set.
@@ -22,6 +25,13 @@ fn stock() -> Option<(GameData, MainScreenArt)> {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let art = data.main_screen_art().expect("the stock art resolves");
     Some((data, art))
+}
+
+/// The stock interface file, when `NOVA_DATA` is set and it is beside it.
+fn interface() -> Option<InterfaceData> {
+    let dir = common::nova_data()?;
+    let path = common::interface_file(&dir)?;
+    Some(InterfaceData::open(&path).expect("the interface file opens"))
 }
 
 /// A button as the phase recorded it: sprite, `cölr` 128 position and
@@ -139,4 +149,46 @@ fn the_stock_main_menu_draws_pict_8000_and_the_six_buttons_frame_0() {
         logo,
         Some(Bounds::at(Point::new(191.0, 162.0), 654.0, 209.0))
     );
+}
+
+#[test]
+fn str_140_10_is_the_quit_question() {
+    let Some(ui) = interface() else {
+        return;
+    };
+    let res = ui
+        .resources()
+        .get(StrList::TYPE, 140)
+        .expect("STR# 140 is in the interface file");
+    let list = nova_data::decode_bytes::<StrList>(res.data())
+        .expect("decodes")
+        .record;
+    assert_eq!(list.strings[9].as_str(), QUIT_QUESTION);
+}
+
+#[test]
+fn the_yes_no_dialog_asks_in_stock_dlog_3002s_item_3_and_return_answers_yes() {
+    let (Some(ui), Some((data, _))) = (interface(), stock()) else {
+        return;
+    };
+    let template = ui.dialog_template(YES_NO_DIALOG).expect("converts");
+    let mut dialog = YesNoDialog::new(
+        &template,
+        QUIT_QUESTION,
+        data.button_style(),
+        Rc::new(MonoMetrics),
+    );
+    let shown = dialog.dialog().text(QUESTION_ITEM).expect("the question");
+    assert_eq!(shown.lines().join(" "), QUIT_QUESTION);
+    assert_eq!(
+        Some(shown.rect()),
+        dialog.dialog().item_bounds(QUESTION_ITEM),
+        "in item 3"
+    );
+    dialog.input(&Input::Key {
+        key: Key::Enter,
+        pressed: true,
+        repeat: false,
+    });
+    assert_eq!(dialog.take_answer(), Some(true));
 }

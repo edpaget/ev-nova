@@ -51,6 +51,9 @@ pub enum Showing {
     /// A note over the main menu, such as the warning that an opened
     /// pilot's load had to fall back, before its flight shows.
     Note,
+    /// A question in the Yes/No dialog over the main menu, such as
+    /// whether to quit, asked as the window's close is.
+    Question,
     /// The plunder dialog, over flight, which it pauses.
     Plunder,
     /// The captured-ship assignment dialog, over flight, which it pauses.
@@ -188,6 +191,13 @@ pub trait Screen {
     fn now_showing(&self) -> Option<Showing> {
         None
     }
+    /// The user asked to close the window: whether the app quits now
+    /// (`true`, by default). A screen that answers `false` stays open, and
+    /// quits later, if it does, through [`Screen::take_quit`] or an
+    /// input's [`ScreenAction::Quit`], such as after asking whether to.
+    fn close_requested(&mut self) -> bool {
+        true
+    }
     /// The app is about to quit, whichever way: the screen's last chance
     /// to keep what should outlive it, such as saving the pilot. Does
     /// nothing by default.
@@ -312,6 +322,14 @@ mod tests {
     fn a_screen_leaves_the_system_pointer_shown_by_default() {
         let screen: &dyn Screen = &Counter::default();
         assert!(!screen.hides_pointer());
+    }
+
+    #[test]
+    fn a_close_quits_at_once_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        assert!(screen.close_requested());
+        assert!(!screen.take_quit());
     }
 
     #[test]

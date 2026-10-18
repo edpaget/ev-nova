@@ -183,8 +183,8 @@ impl AppScreen {
     }
 
     /// The overlay open over the side shown, if any: the About dialog, the
-    /// Preferences dialog, the New Pilot dialog, the saved pilots' list or
-    /// the load's note.
+    /// Preferences dialog, the New Pilot dialog, the saved pilots' list,
+    /// the load's note or the quit question, or one of flight's.
     pub(super) fn overlay_mut(&mut self) -> Option<&mut dyn Screen> {
         if let Some(about) = &mut self.about {
             return Some(about);
@@ -219,7 +219,12 @@ impl AppScreen {
         if let Some(list) = &mut self.open_pilot {
             return Some(list);
         }
-        self.load_note.as_mut().map(|note| note as &mut dyn Screen)
+        if let Some(note) = &mut self.load_note {
+            return Some(note);
+        }
+        self.question
+            .as_mut()
+            .map(|question| question as &mut dyn Screen)
     }
 
     /// The About dialog's input; it closes once Done is activated.

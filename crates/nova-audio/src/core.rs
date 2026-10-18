@@ -563,7 +563,8 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, the new pilot's name
-/// entry, the saved pilots' list and a note over the main menu, and the plunder,
+/// entry, the saved pilots' list, a note and a question over the main
+/// menu, and the plunder,
 /// assignment, comm, haggle and offer dialogs, the mission texts and the
 /// mission info screen over flight.
 fn is_overlay(showing: Showing) -> bool {
@@ -574,6 +575,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::NewPilot
             | Showing::OpenPilot
             | Showing::Note
+            | Showing::Question
             | Showing::Plunder
             | Showing::Assignment
             | Showing::Comm
@@ -624,6 +626,7 @@ fn has_music(scene: Showing) -> bool {
         | Showing::NewPilot
         | Showing::OpenPilot
         | Showing::Note
+        | Showing::Question
         | Showing::Plunder
         | Showing::Assignment
         | Showing::Comm
@@ -2090,6 +2093,7 @@ mod tests {
             Showing::NewPilot,
             Showing::OpenPilot,
             Showing::Note,
+            Showing::Question,
         ] {
             let (mut core, log) = original();
             core.update(Some(overlay), &[]);
@@ -2171,6 +2175,7 @@ mod tests {
             Showing::NewPilot,
             Showing::OpenPilot,
             Showing::Note,
+            Showing::Question,
         ] {
             core.update(Some(overlay), &[]);
             core.update(Some(Showing::MainMenu), &[]);

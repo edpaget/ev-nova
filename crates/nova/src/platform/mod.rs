@@ -14,7 +14,7 @@
 mod runner;
 mod window;
 
-pub use runner::Runner;
+pub use runner::{Runner, event_loop};
 pub use window::WinitWindow;
 
 use std::time::Duration;

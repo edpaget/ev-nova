@@ -30,8 +30,9 @@ use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
 use nova_render::{FontFaces, ImageSource, Upscaler};
 use winit::application::ApplicationHandler;
+use winit::error::EventLoopError;
 use winit::event::WindowEvent as WinitEvent;
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use super::window::WinitWindow;
@@ -158,6 +159,29 @@ fn open(
     )
     .map_err(|error| gpu_failure(&error))?;
     Ok((WinitWindow(window), gpu))
+}
+
+/// The event loop the game runs on.
+///
+/// On macOS it has no default menu. winit 0.30's
+/// (`platform_impl/macos/menu.rs`) gives its Quit item, Command-Q, the
+/// action `terminate:`,
+/// which `AppKit` handles before the window sees the key: the process ends
+/// through `applicationWillTerminate:` with no close request and no key
+/// event, so the screen never hears of it and the pilot flying is not
+/// saved. Without that menu Command-Q reaches the router as keys, which
+/// quits at once and saves, as `_HandleQuitEvent` @0xcc958 quits the main
+/// screen. Nothing else on the default menu (Hide, Hide Others, Show All,
+/// Services) is a key the game reads. It needs the OS, so no test runs
+/// it.
+pub fn event_loop() -> Result<EventLoop<()>, EventLoopError> {
+    let mut builder = EventLoop::builder();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        builder.with_default_menu(false);
+    }
+    builder.build()
 }
 
 impl<S: ImageSource> ApplicationHandler for Runner<S> {

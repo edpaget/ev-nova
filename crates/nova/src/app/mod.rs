@@ -590,8 +590,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// the keys it holds down, since their releases will not arrive. Pointer events go to the screen in logical
     /// units, and are dropped in the bars. A redraw ticks the screen by the
     /// time since the last redraw, renders its draw list through `gpu` and
-    /// asks the window for the next redraw. Closing the window, or a screen
-    /// asking to quit, exits.
+    /// asks the window for the next redraw. Closing the window asks the
+    /// screen first ([`Screen::close_requested`]): it exits at once unless
+    /// the screen keeps it open, to quit later if it asks to. A screen
+    /// asking to quit exits.
     ///
     /// The original's `_MyModalDialog` also redraws the whole status bar
     /// on an update event for its game window (@0x59b17-0x59be6:
@@ -601,7 +603,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// (@0x59a58), or a Quit the player declines (`_QuitAEVTHandler`
     /// @0x56228-0x56258). Ours redraws the whole frame every frame, in a
     /// window or fullscreen, so a resume needs no redraw of its own, and a
-    /// close quits without asking; that redraw isn't ported. The main
+    /// declined close redraws nothing either; that redraw isn't ported. The main
     /// screen's leaves the bar to be drawn at the start of flight, as ours
     /// does.
     ///
@@ -674,8 +676,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(Control::Continue)
             }
             WindowEvent::CloseRequested => {
-                self.quit();
-                game(Control::Exit)
+                if self.screen.close_requested() {
+                    self.quit();
+                    return game(Control::Exit);
+                }
+                self.feed_audio();
+                self.take_screen_warnings();
+                game(Control::Continue)
             }
             WindowEvent::FocusLost => {
                 self.fullscreen.focus_lost(window);
@@ -1091,6 +1098,10 @@ mod tests {
         hides_pointer: bool,
         /// Whether to ask to quit, once, outside an input's action.
         asks_quit: bool,
+        /// Whether a close keeps the window open.
+        keeps_open: bool,
+        /// How many closes it was asked about.
+        closes: usize,
         /// How many inputs had arrived at each draw.
         drawn_after: std::cell::RefCell<Vec<usize>>,
         /// The shape it draws in.
@@ -1154,6 +1165,12 @@ mod tests {
 
         fn take_quit(&mut self) -> bool {
             std::mem::take(&mut self.asks_quit)
+        }
+
+        fn close_requested(&mut self) -> bool {
+            self.closes += 1;
+            self.warnings.push(format!("close {}", self.closes));
+            !self.keeps_open
         }
 
         fn view_shape(&self) -> ViewShape {
@@ -1381,6 +1398,32 @@ mod tests {
     }
 
     #[test]
+    fn a_close_the_screen_keeps_open_goes_on_until_it_asks_to_quit() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = App::new(
+            &window,
+            NoImages,
+            RecordingScreen {
+                keeps_open: true,
+                quit_on: Some(Key::Char('y')),
+                ..RecordingScreen::default()
+            },
+        );
+        assert_eq!(
+            handle(&mut app, &mut window, WindowEvent::CloseRequested),
+            Control::Continue
+        );
+        assert_eq!(app.screen().quits, 0, "not quitting");
+        assert_eq!(app.take_warnings(), ["close 1"], "what it reported");
+        assert_eq!(
+            handle(&mut app, &mut window, key(Key::Char('y'), true)),
+            Control::Exit,
+            "the answer quits"
+        );
+        assert_eq!(app.screen().quits, 1);
+    }
+
+    #[test]
     fn typed_text_reaches_the_screen_after_its_key() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
@@ -1486,7 +1529,12 @@ mod tests {
             Control::Exit
         );
         assert_eq!(app.screen().quits, 1);
-        assert_eq!(app.take_warnings(), ["quit 1"], "what quitting reported");
+        assert_eq!(app.screen().closes, 1, "asked first");
+        assert_eq!(
+            app.take_warnings(),
+            ["close 1", "quit 1"],
+            "what quitting reported"
+        );
     }
 
     #[test]

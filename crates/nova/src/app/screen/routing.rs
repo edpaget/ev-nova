@@ -416,6 +416,9 @@ impl AppScreen {
         if self.load_note.is_some() {
             return Some(self.load_note_input(moved));
         }
+        if self.question.is_some() {
+            return Some(self.question_input(moved));
+        }
         None
     }
 
@@ -429,6 +432,20 @@ impl AppScreen {
                 Key::Char('e') => self.keys_held.e = pressed,
                 _ => {}
             }
+        }
+        // Command-Q quits at once, silently, wherever it is pressed, as
+        // `_HandleQuitEvent` @0xcc958 does on the main screen (`_gPause`
+        // set, @0xcc97e). In play the original asks first (@0xcc9f5),
+        // which the engine doesn't yet
+        // (rdm:phase/main-screen-fidelity/phase-1-ask-before-quitting-play).
+        if let Input::Key {
+            key: Key::Char('q'),
+            pressed: true,
+            ..
+        } = *input
+            && self.command_held
+        {
+            return ScreenAction::Quit;
         }
         if let Some(action) = self.overlay_input(input) {
             return action;

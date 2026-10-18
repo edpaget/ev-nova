@@ -27,7 +27,7 @@ use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
-    HaggleDialog, PlunderDialog, PrefsDialog,
+    HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
 };
 use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
 
@@ -64,6 +64,7 @@ impl AppScreen {
             new_pilot: None,
             open_pilot: None,
             load_note: None,
+            question: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
             effects_chance: SharedChance::default(),
@@ -424,6 +425,13 @@ impl AppScreen {
         self.load_note.as_ref()
     }
 
+    /// The quit question the window's close asked over the main menu,
+    /// while it is open.
+    #[must_use]
+    pub fn question(&self) -> Option<&YesNoDialog> {
+        self.question.as_ref()
+    }
+
     /// Changes the pilot with `change` while the ship is landed, as a
     /// spaceport screen does, and says whether it did; the pilot is saved
     /// after the next input or tick.
@@ -594,6 +602,9 @@ impl AppScreen {
         }
         if self.load_note.is_some() {
             return Showing::Note;
+        }
+        if self.question.is_some() {
+            return Showing::Question;
         }
         match self.side {
             Side::MainMenu => Showing::MainMenu,

@@ -20,6 +20,8 @@
 //!   a scrolling box with a Done button.
 //! - [`note`]: the note alert ([`NoteDialog`], `DLOG` 3000): a line of
 //!   text and an OK button.
+//! - [`yes_no`]: the Yes/No dialog ([`YesNoDialog`], `DLOG` 3002): a
+//!   question, OK for yes and Cancel for no.
 //! - [`text_field`]: a one-line [`TextField`] that typed characters fill
 //!   and Backspace empties.
 //! - [`edit_dialog`]: the edit-field modal shell ([`EditDialog`]) the
@@ -84,6 +86,7 @@ pub mod text_field;
 pub mod text_input;
 pub mod toggle;
 pub mod volume;
+pub mod yes_no;
 
 pub use button::{Button, ButtonImages, ButtonSkin, ButtonStyle, ButtonTracker};
 pub use catalog::{DescriptionSource, DialogResources};
@@ -104,3 +107,4 @@ pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};
 pub use text_field::TextField;
 pub use text_input::{TextInputDialog, TextInputOutcome};
+pub use yes_no::YesNoDialog;

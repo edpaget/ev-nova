@@ -17,7 +17,9 @@
 //! to play (see `menu_input`); a click on Enter Ship, Preferences or
 //! About does what E, P or A does. The menu is the original's main
 //! screen, drawn from the game data's art, or a stand-in without it
-//! ([`MainMenu`]). Escape in
+//! ([`MainMenu`]). Closing the window on the menu asks `STR#` 140 #10 in
+//! the Yes/No dialog and quits only on Yes; closing it anywhere else, or
+//! Command-Q anywhere, quits at once (see `quit_question`). Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -286,7 +288,7 @@ use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
-    PrefsDialog,
+    PrefsDialog, YesNoDialog,
 };
 use nova_view::{Color, Input, Key, Navigator, Point, Prefs, Sound};
 use nova_view::{FullscreenKind, Upscaler};
@@ -296,6 +298,7 @@ mod flight;
 mod menu;
 mod overlays;
 mod port_dialogs;
+mod quit_question;
 mod routing;
 mod screen_impl;
 
@@ -452,6 +455,9 @@ pub struct AppScreen {
     /// The note that an opened pilot's load fell back (`STR#` 140 #52),
     /// while it is open over the main menu, its flight built behind it.
     load_note: Option<NoteDialog>,
+    /// The quit question (`STR#` 140 #10) the window's close asks over
+    /// the main menu, while it is open.
+    question: Option<YesNoDialog>,
     /// The warnings since they were last taken.
     warnings: Vec<String>,
     /// What each flight rolls each day's events and its traffic on.

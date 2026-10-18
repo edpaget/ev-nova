@@ -97,6 +97,7 @@ mod menu;
 mod missions;
 mod overlays;
 mod port;
+mod quit_question;
 mod widescreen;
 
 /// One data file, `/data/Nova Data`, holding a fork.

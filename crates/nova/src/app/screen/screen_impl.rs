@@ -65,7 +65,12 @@ impl Screen for AppScreen {
     /// replayed after, and input during the delay is dropped. I and P work
     /// on the menu, and Tab goes to the ship browser; on the ship browser
     /// and the galaxy map, Escape goes back to the menu instead of
-    /// quitting.
+    /// quitting. Closing the window on the menu asks whether to quit
+    /// ([`Screen::close_requested`]); the question takes every event until
+    /// it is answered.
+    ///
+    /// Command-Q quits at once, silently, on every side and under every
+    /// overlay.
     ///
     /// Before anything else sees it, a Caps Lock press, on any side and
     /// under any overlay, turns double time on or off for flight, built or
@@ -178,6 +183,9 @@ impl Screen for AppScreen {
             self.new_pilot.as_ref().map(|dialog| dialog as &dyn Screen),
             self.open_pilot.as_ref().map(|pilots| pilots as &dyn Screen),
             self.load_note.as_ref().map(|note| note as &dyn Screen),
+            self.question
+                .as_ref()
+                .map(|question| question as &dyn Screen),
             self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
             self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
@@ -263,9 +271,17 @@ impl Screen for AppScreen {
         }
     }
 
-    /// Whether Quit's delay has run out, or a replayed input quit.
+    /// Whether Quit's delay has run out, a replayed input quit, or the
+    /// quit question was answered yes.
     fn take_quit(&mut self) -> bool {
         std::mem::take(&mut self.quit_due)
+    }
+
+    /// On the main menu with nothing over it, the window's close asks
+    /// `STR#` 140 #10 in the Yes/No dialog and keeps the window open;
+    /// anywhere else it quits at once (see `quit_question`).
+    fn close_requested(&mut self) -> bool {
+        self.close_asked()
     }
 
     /// The sounds of the screens closed since, then of every live screen.
@@ -282,6 +298,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &mut dyn Screen),
             self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
             self.load_note.as_mut().map(|note| note as &mut dyn Screen),
+            self.question
+                .as_mut()
+                .map(|question| question as &mut dyn Screen),
             self.about.as_mut().map(|about| about as &mut dyn Screen),
             self.preferences
                 .as_mut()

@@ -1,7 +1,9 @@
 //! `nova`: opens the game data and shows it in a window, starting on the
 //! main menu. New Pilot asks for the pilot's name and flies a new pilot
 //! from the first `chär`; Open Pilot lists the saved pilots and resumes
-//! the one chosen where it was; Quit (or Escape) quits. In flight, Escape
+//! the one chosen where it was; Quit (or Escape) quits, and so does
+//! Command-Q, at once. Closing the window on the main menu asks whether
+//! to quit first. In flight, Escape
 //! goes back to the menu. I shows the About text in the game's own dialog,
 //! and P the Preferences dialog, which turns sound and music on or off and
 //! sets their volumes.
@@ -86,7 +88,7 @@ use nova::config::{Os, pilots_dir, settings_path};
 use nova::developer::flight_overlays;
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
-use nova::platform::Runner;
+use nova::platform::{Runner, event_loop};
 use nova::rulebook::game_rulebook;
 use nova::saves::FilePilots;
 use nova::settings::game_settings;
@@ -100,7 +102,6 @@ use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
-use winit::event_loop::EventLoop;
 
 /// The audio core over the default device, playing `data`'s sounds and
 /// the soundtrack in `dir`, with as many voices as `rulebook` says; none
@@ -217,7 +218,7 @@ fn main() -> ExitCode {
     #[cfg(feature = "dev-tools")]
     let runner = runner.with_dev_tools(Rc::clone(&data));
     let mut runner = runner;
-    let result = EventLoop::new().and_then(|event_loop| event_loop.run_app(&mut runner));
+    let result = event_loop().and_then(|event_loop| event_loop.run_app(&mut runner));
     match result {
         Ok(()) => {
             let exit = exit::exit(runner.open_failure());
