@@ -532,6 +532,73 @@ mod tests {
         assert_eq!(fast.player.velocity, velocity, "`_ShipCanExpiditeJumps`");
     }
 
+    // An inertialess ship.
+
+    #[test]
+    fn an_inertialess_ships_velocity_follows_its_heading_and_its_glow_its_speed_past_the_move_off()
+    {
+        // Step 7 (@0x6d343-0x6d43a): after the move-off, the velocity is
+        // pulled toward heading × speed and the glow follows the speed.
+        let catalog = FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(crate::handling::ShipFields {
+                    flags2: crate::stats::INERTIALESS_HULL,
+                    ..FAST
+                }),
+            )],
+            ..catalog()
+        };
+        let mut session = jumping(&catalog);
+        assert!(session.player_inertialess());
+        tick_to(&mut session, 100);
+        assert_eq!(session.player.heading, 90.0, "facing the bearing");
+        let speed = session.top_speed() / 2.0;
+        session.player_speed = speed;
+        session.player.velocity = Vec2::new(0.0, -2.0);
+        session.engine_glow = 10;
+        let handling = session.flying_handling();
+        let caps = session.player_caps();
+        let flight = session.flight_rules();
+        let mut dragged = session.player;
+        dragged.velocity = drag(dragged.velocity, WARP_DRAG);
+        let mut inertialess = dragged;
+        let mut followed = speed;
+        inertialess_advance(
+            &mut inertialess,
+            &mut followed,
+            &handling,
+            0.0,
+            caps,
+            flight,
+            Flyer::Player,
+        );
+        let mut plain = dragged;
+        advance(&mut plain, &handling, false, caps, flight, Flyer::Player);
+        assert_ne!(inertialess.velocity, plain.velocity);
+        let raises = JumpRaises {
+            brake: false,
+            move_off: true,
+        };
+        let follow = Follow::Speed {
+            speed: followed,
+            max_speed: handling.max_speed,
+        };
+        let glow = ramp_jump_glow(10, raises, Some(follow), false, false);
+        assert_ne!(glow, ramp_jump_glow(10, raises, None, false, false));
+        let at = session.player.position;
+        tick(&mut session);
+        let v = warp::move_off_speed(mac_ticks(101), warp::warp_factor(0), 364, false);
+        assert_eq!(session.player.velocity, inertialess.velocity);
+        assert_eq!(session.player_speed(), followed);
+        assert_eq!(
+            session.player.position,
+            at + trig::accel(90, v) + inertialess.velocity,
+            "the move-off, then the move at the velocity"
+        );
+        assert_eq!(session.engine_glow, glow);
+    }
+
     // The move-off.
 
     /// Ticks `session` until its warp clock reads `clock`.
