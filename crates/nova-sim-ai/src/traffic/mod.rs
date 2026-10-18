@@ -1505,6 +1505,12 @@ impl Traffic {
     /// ship the player hit in its gate is held, and seen, on the frame of
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
+    ///
+    /// A call (an answered strike not direct, the boarding's Good
+    /// Samaritan call) sets only what its reaction says, on the ship
+    /// called on too: it cuts no wait and asks no quote, as
+    /// `_DoGoodSamaritan` writes only the goal +0xc8c8 and the target +0x70
+    /// (@0x82b82-0x82b97).
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
         let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.answered).collect();
         if strikes.is_empty() {
@@ -1532,7 +1538,8 @@ impl Traffic {
         for (at, reactions) in reactions.into_iter().enumerate() {
             for (reaction, strike) in reactions.into_iter().zip(&strikes) {
                 let id = self.npcs[at].id;
-                let on_itself = reaction.target.is_some() && strike.ship == ShipRef::Npc(id);
+                let on_itself =
+                    strike.direct && reaction.target.is_some() && strike.ship == ShipRef::Npc(id);
                 let attacks_player = on_itself && strike.by == Some(ShipRef::Player);
                 if let Some(target) = reaction.target {
                     self.npcs[at].target = Some(target);
@@ -6575,6 +6582,53 @@ mod tests {
         );
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
         assert_eq!(traffic.npcs()[0].target, None);
+    }
+
+    #[test]
+    fn a_call_the_ship_itself_answers_sets_its_goal_and_target_but_cuts_no_wait_and_asks_no_quote()
+    {
+        // `_DoGoodSamaritan` writes goal 4 and the target alone
+        // (@0x82b82-0x82b97): no wait cut (+0x4c), no
+        // `_AIMakeShipAttackPlayer`.
+        /// Answers every strike as a Good Samaritan.
+        #[derive(Debug)]
+        struct Samaritan;
+        impl Behaviour for Samaritan {
+            fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+                npc.goal
+            }
+            fn react(&self, _: &Npc, _: &Strike, _: &Surroundings) -> Reaction {
+                Reaction {
+                    target: Some(ShipRef::Player),
+                    provoked: 0.0,
+                    goal: Some(Goal::Attack(ShipRef::Player)),
+                }
+            }
+        }
+        let held = Mode::Coasting { ticks_left: 100 };
+        let mut traffic = quoting_traffic(1);
+        traffic.npcs[0].mode = held;
+        let call = Strike {
+            direct: false,
+            ..struck(0, 0.0)
+        };
+        traffic.answer(&Samaritan, &World::new(&[]), &[call]);
+        let npc = &traffic.npcs()[0];
+        assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(npc.mode, held, "no wait cut");
+        assert_eq!(traffic.take_attack_quotes(), [], "no quote asked");
+        let mut traffic = quoting_traffic(1);
+        traffic.npcs[0].mode = held;
+        traffic.answer(&Samaritan, &World::new(&[]), &[struck(0, 0.0)]);
+        assert_eq!(
+            traffic.npcs()[0].mode,
+            Mode::Coasting {
+                ticks_left: autopilot::HIT_WAIT
+            },
+            "a direct hit's"
+        );
+        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "a direct hit's");
     }
 
     #[test]
