@@ -49,9 +49,11 @@
 //!   @0x829a0-0x829b2, never arises.) There is no limit on range. The original calls the same `_DoGoodSamaritan`
 //!   when the player boards a ship, after the crime
 //!   (`_HandlePlayerBoardAttempt`), so the session queues a strike of no
-//!   damage, direct and intended, for a boarding
-//!   (`nova_sim::Session::board`), which the blessing
-//!   holds back alike.
+//!   damage for a boarding (`nova_sim::Session::board`), intended but not
+//!   direct, as it never passes `_DamageShip`: it draws no victim's or
+//!   lead's reaction, only the Samaritans', the ship boarded and its lead
+//!   among them, as the loop @0x82891-0x82ba8 leaves out no slot. The
+//!   blessing holds it back alike.
 //!   The Bible's "piracy police" are the interceptors alone: "acts as
 //!   'piracy police' by attacking any ship that fires on or attempts to
 //!   board another, non-enemy ship" (`düde` AI type 4). Which applies is
@@ -83,8 +85,11 @@ pub const FOCUS_ANGLE: f32 = 44.0;
 
 /// How `npc` answers `strike` among `around`, the Good Samaritans being
 /// those `piracy_police` says (see the module docs): as the
-/// [`victim`] for a hit on itself or its escort, else as a Good
-/// Samaritan.
+/// [`victim`] for a direct hit on itself or its escort, else as a Good
+/// Samaritan. A strike not direct, the boarding's call, draws no victim's
+/// reaction, so the ship boarded and its lead answer it as Samaritans or
+/// not at all, as `_DoGoodSamaritan`'s loop excludes no slot
+/// (@0x82891-0x82ba8).
 #[must_use]
 pub fn answer(
     npc: &Npc,
@@ -92,7 +97,7 @@ pub fn answer(
     around: &Surroundings,
     piracy_police: RuleSource,
 ) -> Reaction {
-    if hits(npc, strike, around) {
+    if strike.direct && hits(npc, strike, around) {
         return victim(npc, strike, around);
     }
     let polices = match piracy_police {
@@ -119,7 +124,9 @@ pub fn answer(
 ///
 /// Unless it [keeps to its own target](ignores), it takes the attacker as
 /// its target and the damage as provocation; a hit by no ship does
-/// nothing. The player's hit on the ship itself also turns it on the
+/// nothing, as does a strike not direct ([`Strike::direct`]): the
+/// boarding's call, which never passes `_DamageShip`. The player's hit on
+/// the ship itself also turns it on the
 /// player at once (`Goal::Attack(Player)`): `_AIMakeShipAttackPlayer`
 /// (@0x3be66-0x3be69) sets goal 4 on the victim, never on its lead
 /// (@0x89d3e), whatever goal it had. Its one other change, clearing a
@@ -129,7 +136,7 @@ pub fn answer(
 /// ([`Npc::pursuit`]).
 #[must_use]
 pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-    if !hits(npc, strike, around) {
+    if !strike.direct || !hits(npc, strike, around) {
         return Reaction::default();
     }
     // A hit by no ship provokes no one (`_DamageShip` sets a target only
@@ -185,16 +192,15 @@ fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
 }
 
 /// Whether `npc` answers the player's attack on `victim` among `around`
-/// (see the module docs).
+/// (see the module docs). The victim itself is not left out, as the loop
+/// @0x82891-0x82ba8 leaves out no slot: a direct hit's victim never asks,
+/// as [`answer`] takes it as the victim first, so only the boarding's
+/// call reaches here for it.
 fn good_samaritan(npc: &Npc, victim: ShipRef, around: &Surroundings) -> bool {
     let ShipRef::Npc(victim_id) = victim else {
         return false;
     };
-    if victim_id == npc.id
-        || npc.ai_type.trades()
-        || npc.goal.attacking().is_some()
-        || around.npc(victim_id).is_none()
-    {
+    if npc.ai_type.trades() || npc.goal.attacking().is_some() || around.npc(victim_id).is_none() {
         return false;
     }
     let govts = around.govts;
@@ -816,6 +822,105 @@ mod tests {
             samaritan(&relations(0, NOSY), None, AiType::Warship, None),
             Reaction::default(),
             "an independent is not nosy"
+        );
+    }
+
+    // The boarding's call.
+
+    /// The Good Samaritan call of the player's boarding of `victim`:
+    /// intended and answered, of no damage, but not direct, as it never
+    /// passes `_DamageShip` (`_DoGoodSamaritan` @0x65ed9).
+    fn call(victim: ShipRef) -> Strike {
+        Strike {
+            direct: false,
+            damage: 0.0,
+            ..strike(victim, ShipRef::Player)
+        }
+    }
+
+    /// A trader lead (1) of a warship escort (2) of the traders, and a
+    /// police warship (3) far off.
+    fn escorted(lead: AiType) -> [Npc; 3] {
+        let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        [
+            ship(1, Some(TRADERS), lead, 0.0),
+            escort,
+            ship(3, Some(POLICE), AiType::Warship, 3000.0),
+        ]
+    }
+
+    #[test]
+    fn a_boarding_call_draws_no_hit_reaction_from_the_ship_or_its_lead() {
+        // `_DoGoodSamaritan` writes goal 4 and the target alone, on the
+        // slots its gates pass (@0x82b82-0x82b97): no victim's reaction.
+        let govts = relations(0, 0);
+        let npcs = escorted(AiType::WimpyTrader);
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let boarded = call(n(2));
+        assert_eq!(
+            victim(&npcs[1], &boarded, &around),
+            Reaction::default(),
+            "the ship boarded"
+        );
+        assert_eq!(
+            victim(&npcs[0], &boarded, &around),
+            Reaction::default(),
+            "its lead"
+        );
+        assert_eq!(
+            victim(&npcs[1], &strike(n(2), ShipRef::Player), &around),
+            TURNS,
+            "a direct hit still turns it"
+        );
+    }
+
+    #[test]
+    fn a_boarding_call_makes_a_warship_lead_and_the_ship_itself_samaritans_and_a_trader_lead_nothing()
+     {
+        // The loop @0x82891-0x82ba8 excludes no slot: the lead and the
+        // ship boarded pass the gates as any other ship does.
+        let govts = relations(0, 0);
+        let boarded = call(n(2));
+        let warship_lead = escorted(AiType::Warship);
+        assert_eq!(
+            answered(&govts, &warship_lead, 0, &boarded),
+            ANSWERS,
+            "a warship lead"
+        );
+        assert_eq!(
+            answered(&govts, &warship_lead, 1, &boarded),
+            ANSWERS,
+            "the warship boarded"
+        );
+        assert_eq!(
+            answered(&govts, &warship_lead, 2, &boarded),
+            ANSWERS,
+            "an allied police warship"
+        );
+        assert_eq!(
+            answered(&govts, &escorted(AiType::WimpyTrader), 0, &boarded),
+            Reaction::default(),
+            "a trader lead"
+        );
+        assert_eq!(
+            answered_by(RuleSource::Bible, &govts, &warship_lead, 0, &boarded),
+            Reaction::default(),
+            "a warship lead, by the Bible"
+        );
+        assert_eq!(
+            answered_by(
+                RuleSource::Bible,
+                &govts,
+                &escorted(AiType::Interceptor),
+                0,
+                &boarded
+            ),
+            ANSWERS,
+            "an interceptor lead, by the Bible"
         );
     }
 
