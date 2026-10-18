@@ -44,6 +44,7 @@
 
 mod data;
 mod fonts;
+mod frame_commands;
 mod metrics;
 mod offscreen;
 mod overlay;

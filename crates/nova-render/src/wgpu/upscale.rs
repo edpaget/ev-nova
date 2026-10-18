@@ -2,6 +2,7 @@
 //! the target. [`Native`] never has one to enlarge;
 //! [`SharpBilinear`] does.
 
+use super::frame_commands::WgpuCommands;
 use super::sharp_bilinear::SharpBilinear;
 use crate::upscale::{Upscaler, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
@@ -19,13 +20,19 @@ pub trait Upscale {
     fn resolution(&self) -> WorldResolution;
 
     /// Enlarges `world`, the whole world texture, onto `onto`, a
-    /// rectangle of `target`, with commands recorded into `encoder`.
+    /// rectangle of `target`, with commands recorded into `commands`'s
+    /// encoder, or in a command buffer of its own put after what the frame
+    /// recorded so far
+    /// ([`FrameCommands::insert`](super::frame_commands::FrameCommands::insert)).
+    /// A warning to show (a
+    /// fallback, say) goes into `warnings`.
     fn enlarge(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        commands: &mut WgpuCommands<'_>,
         world: &wgpu::TextureView,
         target: &wgpu::TextureView,
         onto: PixelRect,
+        warnings: &mut Vec<String>,
     );
 }
 
@@ -42,10 +49,11 @@ impl Upscale for Native {
     /// Never asked: a native world has no texture of its own.
     fn enlarge(
         &mut self,
-        _encoder: &mut wgpu::CommandEncoder,
+        _commands: &mut WgpuCommands<'_>,
         _world: &wgpu::TextureView,
         _target: &wgpu::TextureView,
         _onto: PixelRect,
+        _warnings: &mut Vec<String>,
     ) {
     }
 }

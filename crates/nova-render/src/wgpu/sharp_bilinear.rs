@@ -10,6 +10,7 @@
 use bytemuck::Zeroable;
 use wgpu::util::DeviceExt;
 
+use super::frame_commands::WgpuCommands;
 use super::renderer::{SCENE_FORMAT, pipeline, pipeline_layout};
 use super::upscale::Upscale;
 use crate::upscale::{Upscaler, WorldResolution, resolution_of};
@@ -132,9 +133,24 @@ impl Upscale for SharpBilinear {
         resolution_of(Upscaler::SharpBilinear)
     }
 
-    /// Writes the parameters for `world`'s size and `onto`, then draws
-    /// one pass over `target`, loading what is there, its viewport `onto`.
+    /// Draws into the frame's current encoder ([`Self::enlarge_into`]).
     fn enlarge(
+        &mut self,
+        commands: &mut WgpuCommands<'_>,
+        world: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        onto: PixelRect,
+        _warnings: &mut Vec<String>,
+    ) {
+        self.enlarge_into(commands.encoder(), world, target, onto);
+    }
+}
+
+impl SharpBilinear {
+    /// Writes the parameters for `world`'s size and `onto`, then draws
+    /// one pass over `target` into `encoder`, loading what is there, its
+    /// viewport `onto`.
+    pub(super) fn enlarge_into(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         world: &wgpu::TextureView,

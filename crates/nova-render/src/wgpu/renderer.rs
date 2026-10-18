@@ -14,6 +14,7 @@ use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
 use nova_view::{Blend, Color, DrawLayer};
 
 use super::fonts::{Families, font_system};
+use super::frame_commands::{DeviceEncoders, WgpuCommands};
 use super::upscale::{Upscale, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
@@ -385,9 +386,7 @@ impl WgpuRenderer {
 
         let scene = self.scene.as_ref().expect("ensured above");
         let buffers = (&instance_buffer, &vertex_buffer);
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut commands = WgpuCommands::new(DeviceEncoders(&self.device));
         let world = if layout.world.is_empty() {
             None
         } else {
@@ -406,19 +405,20 @@ impl WgpuRenderer {
                 clear: Some(frame.clear),
             };
             self.encode_passes(
-                &mut encoder,
+                commands.encoder(),
                 frame,
                 &layout,
                 &layout.world,
                 buffers,
                 &into_world,
             );
-            clear(&mut encoder, &scene.canvas.view, frame.clear);
+            clear(commands.encoder(), &scene.canvas.view, frame.clear);
             self.upscale.enlarge(
-                &mut encoder,
+                &mut commands,
                 &world.view,
                 &scene.canvas.view,
                 frame.viewport,
+                &mut self.warnings,
             );
         }
         let into_scene = PassTarget {
@@ -427,15 +427,20 @@ impl WgpuRenderer {
             clear: world.is_none().then_some(frame.clear),
         };
         self.encode_passes(
-            &mut encoder,
+            commands.encoder(),
             frame,
             &layout,
             &layout.passes,
             buffers,
             &into_scene,
         );
-        blit(&mut encoder, &self.blit_pipeline, &scene.blit_group, view);
-        self.queue.submit(Some(encoder.finish()));
+        blit(
+            commands.encoder(),
+            &self.blit_pipeline,
+            &scene.blit_group,
+            view,
+        );
+        self.queue.submit(commands.finish());
         self.text_atlas.trim();
     }
 
