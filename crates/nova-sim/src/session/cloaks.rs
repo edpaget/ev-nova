@@ -31,7 +31,10 @@
 //!   uncloak it (a cloak that decloaks when hit), in that order. A
 //!   blast's or a death shockwave's strike does neither, being no direct
 //!   hit ([`Strike::direct`]): both sit in `_DamageShip`'s blocks that its
-//!   arg +0x20 skips (@0x3b44d, @0x3bf1f).
+//!   arg +0x20 skips (@0x3b44d, @0x3bf1f). Cloak-when-hit is in the
+//!   reaction block (@0x3bb95-0x3bbdd), so it needs the strike answered
+//!   ([`Strike::answered`], see the `answer_flag` module) too; the decloak
+//!   comes after the block, and any direct hit makes it.
 
 use super::Session;
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
@@ -158,9 +161,12 @@ impl Session {
             };
             let can_cloak = npc.can_cloak();
             // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
-            // hit only for a ship source (@0x3bb9f), as if it were attacking.
-            let attacking = strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
-            cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, attacking);
+            // hit only for a ship source (@0x3bb9f), as if it were
+            // attacking; nor does an unanswered one, whose reaction block
+            // is skipped.
+            let holds =
+                !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
+            cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds);
         }
     }
 }
@@ -172,8 +178,41 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::mission::ships::ShipBehav;
     use crate::session::Session;
-    use crate::session::tests::{CLOAKED, armed, facing_an_npc, holding_260, scanning};
+    use crate::session::tests::{CAN_CLOAK, CLOAKED, armed, facing_an_npc, holding_260, scanning};
     use crate::traffic::npc::MissionMark;
+
+    #[test]
+    fn an_unanswered_hit_never_cloaks_its_ship_but_still_uncloaks_it() {
+        // A clear answer flag skips the reaction block, cloak-when-hit
+        // with it (@0x3bb95-0x3bbdd), but not the decloak (@0x3bf1f).
+        use crate::cloak::{CLOAK_WHEN_HIT, Cloak, CloakGear};
+        use crate::combat::fixture::strike;
+        use crate::combat::{ShipRef, Strike};
+        use crate::traffic::npc::NpcId;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let hit = strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        let unanswered = Strike {
+            answered: false,
+            ..hit
+        };
+        session.traffic.npcs_mut()[0].cloak_gear = CloakGear {
+            flags2: CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        session.cloak_hits(&[unanswered]);
+        assert_eq!(session.npcs()[0].cloak, Cloak::default());
+        session.cloak_hits(&[hit]);
+        assert_eq!(session.npcs()[0].cloak.direction, 1, "answered");
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = CloakGear {
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        session.cloak_hits(&[unanswered]);
+        assert_eq!(session.npcs()[0].cloak.direction, -1);
+    }
 
     /// Marks `session`'s NPC 0 a mission escort that has joined the
     /// player's formation.

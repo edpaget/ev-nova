@@ -464,6 +464,8 @@ fn fighter(
         pick: None,
         target: None,
         provoked: 0.0,
+        // `_LaunchFighter` zeroes +0xc910 (@0x3d952).
+        stray: 0.0,
         aggression: 0,
         inspected: None,
         booty: None,

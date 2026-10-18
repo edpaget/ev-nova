@@ -253,14 +253,30 @@ impl Behaviour for Answering {
     }
 }
 
+/// [`armed`] with a volley the answer flag answers at a ship the player
+/// can't target, hidden in its gate: two guns of 5 energy damage firing
+/// together, each of `Reload` 30, at ships of govt 140, of `ShootPenalty`
+/// 5. The first hit of the volley is a stray one, forgiven below 50
+/// stray provocation with no roll, and adds 1.75 × 30 to it; the second,
+/// on the same tick, reads 52.5 and is answered (see
+/// `nova_sim::ai::answer_flag`).
+fn volleying() -> FakeCatalog {
+    let mut catalog = armed(1, &[BLASTER, UNSEEN]);
+    for weapon in &mut catalog.weapons {
+        weapon.energy_dmg = 5;
+        weapon.reload = 30;
+    }
+    let mut govt = damaging().govts.remove(0);
+    govt.penalties.shoot = 5;
+    catalog.govts = vec![govt];
+    catalog
+}
+
 #[test]
 fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
     // The original answers the hit inside `_HandleShot` (@0x44385),
     // before the display pass draws the frame.
-    let mut catalog = armed(1, &[BLASTER]);
-    for weapon in &mut catalog.weapons {
-        weapon.energy_dmg = 5;
-    }
+    let mut catalog = volleying();
     catalog.sites.push(LandingSite {
         flags2: nova_sim::gate::HYPERGATE,
         exit_angle: 90,
@@ -296,16 +312,12 @@ fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
     panic!("never hit");
 }
 
-/// [`armed`] with blasters of 5 energy damage and hypergate 141 at
-/// (0, -110), straight ahead of the player, `with` changes made. A shot
-/// hits on the pass after the one it moves into its target on, and at
-/// this distance that move falls on a frame's advance pass, so the hit
-/// falls on its second.
+/// [`volleying`] with hypergate 141 at (0, -110), straight ahead of the
+/// player, `with` changes made. A shot hits on the pass after the one it
+/// moves into its target on, and at this distance that move falls on a
+/// frame's advance pass, so the hit falls on its second.
 fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
-    let mut catalog = armed(1, &[BLASTER]);
-    for weapon in &mut catalog.weapons {
-        weapon.energy_dmg = 5;
-    }
+    let mut catalog = volleying();
     catalog.sites.push(LandingSite {
         flags2: nova_sim::gate::HYPERGATE,
         exit_angle: 90,
@@ -2838,6 +2850,8 @@ fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
     let (_, chance) = scripted(&placed(750, 650, 0));
     let mut view = FlightView::new(damaging()).with_chance(chance);
     view.tick(TICK);
+    // Aimed at it: a stray hit the answer flag forgives.
+    tap(&mut view, TARGET_KEY);
     view.input(&key(FIRE_KEY, true));
     let mut answered = false;
     for _ in 0..120 {

@@ -14,6 +14,8 @@
 //! - [`target`]: whom a warship or interceptor attacks: the player, by its
 //!   government's relations and the player's legal record, or an NPC.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
+//! - [`answer_flag`]: whether a ship hit answers the hit at all, and the
+//!   player's stray provocation.
 //! - [`react`]: how a ship hit answers, and how others come to its help.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
@@ -23,6 +25,7 @@
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
 //!   fight with their carrier; [`NovaAi`] routes every one to it.
 
+pub mod answer_flag;
 pub mod brave;
 pub mod carried;
 pub mod escort;
@@ -40,7 +43,7 @@ pub mod wimpy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use crate::catalog::{GovtId, LandingSite, RankId, RankRecord, StellarId};
+use crate::catalog::{EscortClass, GovtId, LandingSite, RankId, RankRecord, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
@@ -375,6 +378,13 @@ pub struct PlayerSide {
     /// refresh took them (`nova_sim::Session::blessing`):
     /// [`Surroundings::blessed`] reads it.
     pub blessing: Blessing,
+    /// The ship it targets, the original's player +0x70, if any: the
+    /// answer flag reads it ([`answer_flag`]).
+    pub target: Option<ShipRef>,
+    /// Its ship type's class as an escort, the original's ship class +0xe
+    /// ([`EscortClass::of`]): the reaction's entry test reads whether it is
+    /// a fighter ([`answer_flag`]).
+    pub class: EscortClass,
 }
 
 /// No governments at all.
@@ -1249,6 +1259,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         };
         around.player = Some(player);
         assert!(around.live(P));

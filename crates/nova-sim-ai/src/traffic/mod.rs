@@ -120,6 +120,7 @@ pub mod snipe;
 pub mod spawn;
 pub mod strength;
 pub mod table;
+pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings};
@@ -374,6 +375,15 @@ pub struct World<'a> {
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
     /// ship (see [`cloak::visible`]).
     pub cloak_scanner: bool,
+    /// Whether a `ShootPenalty` above 0 holds back the roll that forgives
+    /// the player's stray hit
+    /// ([`RuleKey::StrayShootPenalty`](crate::RuleKey::StrayShootPenalty),
+    /// see [`answer_flag`](crate::ai::answer_flag)).
+    pub stray_shoot_penalty: RuleSource,
+    /// Whether two independents are kin
+    /// ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin), see
+    /// [`answer_flag`](crate::ai::answer_flag)).
+    pub independent_kin: RuleSource,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -403,6 +413,8 @@ impl<'a> World<'a> {
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
             cloak_scanner: false,
+            stray_shoot_penalty: RuleSource::Engine,
+            independent_kin: RuleSource::Engine,
         }
     }
 
@@ -1102,9 +1114,10 @@ impl Traffic {
         self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was a
-    /// direct hit, as `behaviour` says, now, as [`Traffic::tick_in`]'s step 2 does: the
-    /// hit's own step (see `nova_sim::Session::answer_strikes`).
+    /// Each intact NPC answers each of `strikes` in `world` that was
+    /// answered ([`Strike::answered`]), as `behaviour` says, now, as
+    /// [`Traffic::tick_in`]'s step 2 does: the hit's own step (see
+    /// `nova_sim::Session::answer_strikes`).
     pub fn answer(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1114,11 +1127,12 @@ impl Traffic {
         self.react(behaviour, world, strikes);
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was a
-    /// direct hit ([`Strike::direct`]: a shot's or beam's, not a blast's
-    /// or a death shockwave's, which skip `_DamageShip`'s reaction block
-    /// @0x3b44d), as `behaviour` says, all against the NPCs as they were
-    /// before; by the
+    /// Each intact NPC answers each of `strikes` in `world` that was
+    /// answered ([`Strike::answered`]: `_DamageShip`'s answer flag, see
+    /// [`weigh_strikes`](Traffic::weigh_strikes), which a blast's or a
+    /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
+    /// flag skips the whole reaction block, @0x3baea), as `behaviour`
+    /// says, all against the NPCs as they were before; by the
     /// other reading of [`World::arrival_hits`] only those that have
     /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
     /// a target) cuts its wait, in its gate, held at it or holding its
@@ -1163,7 +1177,7 @@ impl Traffic {
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
-        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.direct).collect();
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.answered).collect();
         if strikes.is_empty() {
             return;
         }
@@ -1704,6 +1718,9 @@ impl Traffic {
                 pick: self.berth_picks.seed(berth),
                 target: hunts.then_some(ShipRef::Player),
                 provoked: 0.0,
+                // `_RandomShipSpawn` @0x3c50c, `_GenericRandomShipSpawn`
+                // @0x3ca7a.
+                stray: 0.0,
                 aggression: ship.aggression,
                 inspected: None,
                 booty: ship.booty,
@@ -2947,9 +2964,11 @@ mod tests {
     fn a_strike_that_provokes_nothing_is_answered_by_no_one() {
         let mut traffic = populated(2, 1);
         let fighting = Fighting::deciding(Goal::Idle);
+        // No direct hit, so the weighing leaves it unanswered.
         let shockwave = Strike {
             direct: false,
             intended: false,
+            answered: false,
             ..struck(1, 4.0)
         };
         traffic.tick_in(
@@ -3039,6 +3058,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         };
         let world = World {
             player: Some(player),
@@ -3098,6 +3119,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         };
         let world = World {
             player: Some(player),
@@ -3770,6 +3793,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unanswered_hit_draws_no_answer_from_its_ship_its_lead_or_a_samaritan() {
+        // A clear answer flag skips `_DamageShip`'s whole reaction block
+        // (@0x3baea-0x3baf1): the victim's, its lead's and the Good
+        // Samaritans' parts alike.
+        let mut traffic = populated(3, 1);
+        traffic.npcs[1].leader = Some(traffic.npcs[0].id);
+        let fighting = Fighting::deciding(Goal::Idle);
+        let unanswered = Strike {
+            answered: false,
+            ..struck(1, 1.0)
+        };
+        traffic.answer(&fighting, &World::new(&[]), &[unanswered, struck(2, 1.0)]);
+        let reacted: Vec<String> = fighting.log.borrow().clone();
+        assert_eq!(
+            reacted,
+            [0, 1, 2].map(|id| format!("react {id} Npc(NpcId(2))"))
+        );
+        assert_eq!(traffic.npcs[1].target, None, "the escort hit");
+    }
+
+    #[test]
     fn only_an_arrived_intact_npc_answers_a_strike_by_the_other_reading() {
         assert_eq!(
             reacting(RuleSource::Bible),
@@ -4356,6 +4400,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         }
     }
 

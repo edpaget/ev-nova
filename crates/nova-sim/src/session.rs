@@ -352,6 +352,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod answer_flag;
 mod asteroids;
 mod aux_ships;
 mod brackets;
@@ -449,11 +450,11 @@ use crate::board::{
     check_board,
 };
 use crate::catalog::{
-    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, GateSite, GovtId,
-    JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord,
-    OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
-    ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog,
-    WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, EscortClass,
+    GateSite, GovtId, JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts,
+    NebulaRecord, OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility,
+    TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -2384,6 +2385,8 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
+            stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
+            independent_kin: self.rules.source_for(RuleKey::IndependentKin),
         };
         f(&mut self.traffic, world);
     }
@@ -2449,11 +2452,16 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
+            stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
+            independent_kin: self.rules.source_for(RuleKey::IndependentKin),
         }
     }
 
-    /// The player's ship as an NPC sees it.
+    /// The player's ship as an NPC sees it: its class a freighter, as
+    /// [`EscortClass::of`] works out a ship of no record, without a
+    /// record of its ship type.
     fn player_side(&self) -> PlayerSide {
+        let record = self.ship_record(self.pilot.ship);
         PlayerSide {
             state: self.player,
             condition: self.condition,
@@ -2462,10 +2470,13 @@ impl Session {
             handling: self.stats.handling,
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
-            untargetable: self
-                .ship_record(self.pilot.ship)
+            untargetable: record
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
             blessing: self.blessing(),
+            target: self.target.map(ShipRef::Npc),
+            class: record.map_or(EscortClass::Freighter, |record| {
+                EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
+            }),
         }
     }
 
@@ -2705,7 +2716,7 @@ impl Session {
             self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
         }
         self.raise_disabled(&was, &mut &mut *chance);
-        self.settle_strikes(strikes, &was, rules.law);
+        self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
         self.sync_fleet();
@@ -2875,10 +2886,19 @@ impl Session {
     }
 
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
-    /// before it: refilling the invincible, holding persons' grudges,
-    /// convicting the player by `law`, crediting kills and letting each
-    /// hit NPC's cloak take its hit; then keeps them for the app.
-    fn settle_strikes(&mut self, mut strikes: Vec<Strike>, was: &[NpcBefore], law: &dyn LegalCode) {
+    /// before it: weighing whether each is answered, rolling on `chance`
+    /// (see the `answer_flag` module), refilling the invincible, holding
+    /// persons' grudges, convicting the player by `law`, crediting kills
+    /// and letting each hit NPC's cloak take its hit; then keeps them for
+    /// the app.
+    fn settle_strikes(
+        &mut self,
+        mut strikes: Vec<Strike>,
+        was: &[NpcBefore],
+        law: &dyn LegalCode,
+        chance: &mut dyn Chance,
+    ) {
+        self.weigh_strikes(&mut strikes, chance);
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, was, law);
@@ -15895,6 +15915,8 @@ pub(super) mod tests {
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
+        // Aimed at it: a stray hit the answer flag forgives.
+        session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         for _ in 0..60 {
             session.tick_combat(Rules::default(), &mut NeverFires);
@@ -15972,10 +15994,14 @@ pub(super) mod tests {
         });
     }
 
-    /// The fight's ticks with the trigger held until NPC 0's shield drops.
+    /// The fight's ticks with the trigger held until NPC 0's shield drops,
+    /// each fired with NPC 0 the player's target (again, should a cloak or
+    /// a gate have let it go), so the hit is no stray one, which the
+    /// answer flag forgives (see the `answer_flag` module).
     fn shoot_until_hit(session: &mut Session) {
         session.hold_trigger(FIRE);
         for _ in 0..60 {
+            session.target = Some(NpcId(0));
             session.tick_combat(Rules::default(), &mut NeverFires);
             if session.npcs()[0].reserves.shield.now < 30.0 {
                 return;
@@ -17111,6 +17137,8 @@ pub(super) mod tests {
     fn npcs_answer_the_fights_strikes_on_the_next_traffic_tick_once() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
+        // Aimed at it: a stray hit the answer flag forgives.
+        session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         let spy = Spy::default();
         let mut hits = 0;
@@ -17986,7 +18014,7 @@ pub(super) mod tests {
 
     /// A cloak and fuel: a ship of it can cloak, and none of its AI-cloak
     /// conditions fire.
-    const CAN_CLOAK: crate::cloak::CloakGear = crate::cloak::CloakGear {
+    pub(super) const CAN_CLOAK: crate::cloak::CloakGear = crate::cloak::CloakGear {
         device: true,
         decloaks_when_hit: false,
         on_radar: false,
@@ -18361,6 +18389,9 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
+        // Aimed at it: a stray hit the answer flag forgives, cloaking
+        // nothing.
+        session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         let shield = session.npcs()[0].reserves.shield.now;
         for _ in 0..20 {
@@ -18378,6 +18409,7 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.goal = Goal::Attack(ShipRef::Player);
+        fighting.target = Some(NpcId(0));
         fighting.hold_trigger(FIRE);
         for _ in 0..20 {
             fighting.tick_combat(Rules::default(), &mut NeverFires);
@@ -22495,6 +22527,8 @@ pub(super) mod tests {
                 .find(|npc| npc.id == id)
                 .map(|npc| npc.goal)
         };
+        // Aimed at the trader: a stray hit the answer flag forgives.
+        session.target = Some(trader);
         session.hold_trigger(FIRE);
         let mut fled = false;
         let mut picked_while_fleeing = None;

@@ -281,6 +281,7 @@ impl Session {
             pick: None,
             target: None,
             provoked: 0.0,
+            stray: 0.0,
             aggression: 0,
             inspected: None,
             booty: None,

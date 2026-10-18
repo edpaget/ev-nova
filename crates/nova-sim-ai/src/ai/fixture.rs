@@ -1,7 +1,7 @@
 //! Ships and governments the AI types' tests share.
 
 use crate::ai::{Blessed, Blessing, PlayerSide, Surroundings};
-use crate::catalog::{GovtId, GovtRecord, LandingSite};
+use crate::catalog::{EscortClass, GovtId, GovtRecord, LandingSite};
 use crate::combat::ShipRef;
 use crate::combat::armament::Armament;
 use crate::combat::hull::{Condition, HullSpec};
@@ -83,6 +83,8 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         yardstick: 0,
         untargetable: false,
         blessing: Blessing::NONE,
+        target: None,
+        class: EscortClass::Freighter,
     }
 }
 

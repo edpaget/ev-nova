@@ -1066,6 +1066,10 @@ fn attacking_a_trader_brings_the_police_costs_the_record_and_r_finds_the_threat(
             .find(|npc| npc.id == id)
             .map(|npc| (npc.goal, npc.condition))
     };
+    // Aimed at the trader: a stray hit the answer flag forgives.
+    harness.key(Key::Tab, true);
+    harness.key(Key::Tab, false);
+    assert_eq!(harness.session().target().map(|npc| npc.id), Some(trader));
     harness.key(Key::Space, true);
     let (mut fled, mut answered, mut disabled) = (false, false, false);
     for _ in 0..1200 {

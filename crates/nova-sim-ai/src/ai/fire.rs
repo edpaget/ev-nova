@@ -968,6 +968,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         }
     }
 

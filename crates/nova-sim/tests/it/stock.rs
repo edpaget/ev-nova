@@ -5578,6 +5578,8 @@ fn stock_pick_at(
         yardstick: 0,
         untargetable: false,
         blessing: nova_sim::rank::Blessing::NONE,
+        target: None,
+        class: nova_sim::escort::EscortClass::Freighter,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

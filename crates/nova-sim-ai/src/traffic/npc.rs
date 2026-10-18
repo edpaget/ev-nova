@@ -267,6 +267,12 @@ pub struct Npc {
     /// The shield and armour damage it has taken while it fights: none
     /// once it goes back to an idle goal or is disabled.
     pub provoked: f32,
+    /// Its stray provocation, the original's +0xc910: 1.75 × the weight of
+    /// each stray hit of the player's on it, easing by 0.5 a tick, and
+    /// none once it answers a hit; the player's stray hit is answered only
+    /// from 50 (see [`answer_flag`](crate::ai::answer_flag)). It starts at
+    /// none at every spawn and launch, and is never saved.
+    pub stray: f32,
     /// How aggressive it is: 0, 2 or 3 for traffic; 1, 2 or 4 for a
     /// person.
     pub aggression: u8,
