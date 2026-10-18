@@ -2212,6 +2212,22 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_help_holds_the_message_line_for_its_note() {
+        let catalog = hailable();
+        let mut session = helped(&catalog, Help::Refuel, 0.0);
+        session.pilot.reserves.fuel.now = 150.0;
+        assert!(session.comm_line().free_for_calls(), "free before");
+        session.tick_assistance(&NovaDisable);
+        assert_eq!(session.take_comm().len(), 1);
+        for tick in 1..super::super::comm_calls::NOTE_TICKS {
+            session.count_down_comm_line();
+            assert!(!session.comm_line().free_for_calls(), "{tick} counted");
+        }
+        session.count_down_comm_line();
+        assert!(session.comm_line().free_for_calls(), "the note counted");
+    }
+
+    #[test]
     fn a_player_already_above_a_jumps_fuel_gains_nothing_and_the_refuel_is_done() {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 0.0);
