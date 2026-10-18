@@ -41,7 +41,8 @@ pub enum Showing {
     About,
     /// The Preferences dialog, over another screen.
     Preferences,
-    /// The main menu: New Pilot, Open Pilot and Quit.
+    /// The main menu: New Pilot, Open Pilot, Quit, Enter Ship,
+    /// Preferences and About.
     MainMenu,
     /// The new pilot's name entry, over the main menu.
     NewPilot,

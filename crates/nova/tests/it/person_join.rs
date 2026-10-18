@@ -645,9 +645,7 @@ impl Game {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(MenuChoice::OpenPilot)
-            .rect
-            .center();
+            .press_point(MenuChoice::OpenPilot);
         game.click(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);

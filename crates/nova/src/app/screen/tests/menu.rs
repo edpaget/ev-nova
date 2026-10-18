@@ -69,9 +69,7 @@ fn input_during_the_quit_delay_does_nothing() {
     let new_pilot = screen
         .main_menu()
         .expect("a main menu")
-        .button(MenuChoice::NewPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::NewPilot);
     click_at(&mut screen, new_pilot);
     screen.input(&Input::Text('o'));
     screen.input(&key(Key::Char('p'), true));
@@ -242,9 +240,7 @@ fn a_pointer_cancelled_during_a_keyed_click_is_cancelled_in_its_place() {
     let at = screen
         .main_menu()
         .expect("a main menu")
-        .button(MenuChoice::NewPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::NewPilot);
     let button = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
@@ -1210,9 +1206,7 @@ fn the_menus_sounds_come_through_the_router() {
     let at = screen
         .main_menu()
         .expect("a main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     assert_eq!(press_and_release(&mut screen, at), [vec![DOWN], vec![UP]]);
     let cancel = screen
         .pilot_list()
@@ -1229,9 +1223,7 @@ fn the_menus_sounds_come_through_the_router() {
     let at = screen
         .main_menu()
         .expect("a main menu")
-        .button(MenuChoice::NewPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::NewPilot);
     assert_eq!(press_and_release(&mut screen, at), [vec![DOWN], vec![UP]]);
     let ok = screen
         .new_pilot()
@@ -1477,4 +1469,195 @@ fn the_borders_are_on_for_a_router_given_no_setting() {
     create(&mut screen, "Ada");
     assert!(flight(&screen).map_borders_shown());
     assert_eq!(screen.take_map_borders_save(), None);
+}
+
+// The pointer's Enter Ship, Preferences and About.
+
+/// Game data with no main-screen art, only the About text: the menu
+/// draws the stand-in.
+fn bare_data() -> Rc<GameData> {
+    loaded(&ForkBuilder::new().resource(Desc::TYPE, ABOUT_TEXT, None, &about_text()))
+}
+
+/// The router with the main menu over `data`, with dialogs or not, the
+/// stand-in's warning taken.
+fn menu_over(data: Rc<GameData>, dialogs: bool) -> AppScreen {
+    let store = MemoryPilots::new();
+    let screen = if dialogs {
+        with_dialogs(data)
+    } else {
+        AppScreen::new(data)
+    };
+    let mut screen = screen.with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    screen.take_warnings();
+    ui_sounds(&mut screen);
+    screen
+}
+
+/// The About text's lines, if it is open.
+fn about_lines(screen: &AppScreen) -> Option<Vec<String>> {
+    screen.about().map(|about| {
+        about
+            .dialog()
+            .scroll_text()
+            .expect("the text")
+            .lines()
+            .to_vec()
+    })
+}
+
+#[test]
+fn the_pointers_enter_ship_preferences_and_about_reach_what_e_p_and_a_reach() {
+    for data in [data(), bare_data()] {
+        let keyed = |press: Input| {
+            let mut screen = menu_over(Rc::clone(&data), true);
+            screen.input(&press);
+            screen.keyed_click_ended();
+            let mut sounds = ui_sounds(&mut screen);
+            sounds.retain(|&sound| sound != UiSound::ButtonKeyed);
+            (screen.showing(), sounds, about_lines(&screen))
+        };
+        let clicked = |choice: MenuChoice| {
+            let mut screen = menu_over(Rc::clone(&data), true);
+            assert_eq!(choose(&mut screen, choice), ScreenAction::None);
+            let mut sounds = ui_sounds(&mut screen);
+            assert_eq!(
+                sounds.drain(..2).collect::<Vec<_>>(),
+                [UiSound::ButtonDown, UiSound::ButtonUp],
+                "{choice:?}'s click"
+            );
+            (screen.showing(), sounds, about_lines(&screen))
+        };
+        let enter = clicked(MenuChoice::EnterShip);
+        assert_eq!(
+            enter,
+            (Showing::MainMenu, vec![UiSound::EnterRefused], None),
+            "refused with no pilot"
+        );
+        assert_eq!(enter, keyed(Input::Text('e')));
+        let preferences = clicked(MenuChoice::Preferences);
+        assert_eq!(preferences.0, Showing::Preferences);
+        assert_eq!(preferences, keyed(key(Key::Char('p'), true)));
+        let about = clicked(MenuChoice::About);
+        assert_eq!(about.0, Showing::About);
+        assert_eq!(
+            about.2.as_ref().map(|lines| lines[2].clone()),
+            Some("line 2  [Error]".to_owned()),
+            "munged as before any pilot"
+        );
+        assert_eq!(about, keyed(key(Key::Char('a'), true)));
+    }
+}
+
+#[test]
+fn without_dialogs_the_pointers_preferences_and_about_open_nothing() {
+    for data in [data(), bare_data()] {
+        for choice in [MenuChoice::Preferences, MenuChoice::About] {
+            let mut screen = menu_over(Rc::clone(&data), false);
+            choose(&mut screen, choice);
+            assert_eq!(screen.showing(), Showing::MainMenu, "{choice:?}");
+            assert_eq!(
+                ui_sounds(&mut screen),
+                [UiSound::ButtonDown, UiSound::ButtonUp],
+                "{choice:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_menu_draws_the_art_and_without_it_the_stand_in_with_a_warning() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    assert!(screen.main_menu().expect("a main menu").draws_art());
+    assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    let mut screen =
+        AppScreen::new(bare_data()).with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    assert!(!screen.main_menu().expect("a main menu").draws_art());
+    assert_eq!(
+        screen.take_warnings(),
+        ["nova: drawing the stand-in main menu: no cölr 128"]
+    );
+}
+
+/// A source whose rolls are always the last outcome.
+struct LastRoll;
+
+impl nova_sim::Chance for LastRoll {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        n - 1
+    }
+
+    fn roll(&mut self, sides: u16) -> u16 {
+        sides - 1
+    }
+}
+
+fn last_roll() -> SharedChance {
+    SharedChance::new(Rc::new(std::cell::RefCell::new(LastRoll)))
+}
+
+#[test]
+fn the_logo_picks_on_the_effects_chance_given_before_or_after_the_menu() {
+    let store = MemoryPilots::new();
+    let after = AppScreen::new(data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .with_effects_chance(last_roll());
+    let before = AppScreen::new(data())
+        .with_effects_chance(last_roll())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    for mut screen in [Box::new(after), Box::new(before)] {
+        screen.tick(nova_sim::mission::screens::mac_ticks(5));
+        assert_eq!(
+            screen.main_menu().and_then(MainMenu::logo_frame),
+            Some(6),
+            "the last of the six others"
+        );
+    }
+}
+
+#[test]
+fn the_main_screen_stands_still_behind_a_dialog_opened_over_it() {
+    for open in [MenuChoice::Preferences, MenuChoice::About] {
+        let mut screen = menu_over(data(), true);
+        let quit = screen
+            .main_menu()
+            .expect("a main menu")
+            .press_point(MenuChoice::Quit);
+        screen.input(&Input::PointerMoved(quit));
+        screen.tick(nova_sim::mission::screens::mac_ticks(4));
+        let menu = screen.main_menu().expect("a main menu");
+        let (logo, rollover) = (menu.logo_frame(), menu.rollover());
+        assert_eq!(rollover, Some((2, 16)), "fading in over Quit");
+        let mut before = DrawList::new();
+        menu.draw(&mut before);
+        // Opened from the keyboard, the pointer still over Quit.
+        let press = if open == MenuChoice::About {
+            key(Key::Char('a'), true)
+        } else {
+            key(Key::Char('p'), true)
+        };
+        screen.input(&press);
+        screen.keyed_click_ended();
+        assert_ne!(screen.showing(), Showing::MainMenu, "{open:?} is open");
+        for _ in 0..10 {
+            screen.tick(nova_sim::mission::screens::mac_ticks(1));
+        }
+        let menu = screen.main_menu().expect("a main menu");
+        assert_eq!(
+            (menu.logo_frame(), menu.rollover()),
+            (logo, rollover),
+            "{open:?}: frozen, as no dialog loop idles the main screen"
+        );
+        let all = drawn(&screen);
+        assert_eq!(
+            all.iter().take(before.len()).collect::<Vec<_>>(),
+            before.iter().collect::<Vec<_>>(),
+            "{open:?}: drawn as it stood"
+        );
+    }
 }

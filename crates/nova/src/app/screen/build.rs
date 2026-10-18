@@ -14,7 +14,7 @@ use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
-use nova_view::menu::{MainMenu, PilotList};
+use nova_view::menu::{MainMenu, MainScreenSource, PilotList};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
@@ -109,9 +109,13 @@ impl AppScreen {
     }
 
     /// The router with each flight's explosions and debris rolled on
-    /// `chance`, apart from the simulation's.
+    /// `chance`, apart from the simulation's, and the main menu's logo
+    /// picked on it, whether the menu was given before or after.
     #[must_use]
-    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+    pub fn with_effects_chance(mut self, effects_chance: SharedChance) -> Self {
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_chance(effects_chance.clone());
+        }
         Self {
             effects_chance,
             ..self
@@ -362,13 +366,28 @@ impl AppScreen {
     /// screens lay out their text with `metrics` when there are no
     /// dialogs. With no `pilots` (nowhere to keep them), New Pilot still
     /// flies, saving nothing, and Open Pilot lists nothing.
+    ///
+    /// The menu is drawn from the game data's main-screen art; without
+    /// it (plug-in data that lacks it, say) it draws the stand-in, with a
+    /// warning saying why. Its logo picks on the router's effects chance
+    /// ([`AppScreen::with_effects_chance`]), drawing nothing the
+    /// simulation rolls.
     #[must_use]
     pub fn with_pilots(
-        self,
+        mut self,
         pilots: Option<PilotKeeper<Box<dyn PilotStore>>>,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        let screen = MainMenu::new(self.data.button_style(), Rc::clone(&metrics));
+        let art = match self.data.main_screen_art() {
+            Ok(art) => Some(art),
+            Err(reason) => {
+                self.warnings
+                    .push(format!("nova: drawing the stand-in main menu: {reason}"));
+                None
+            }
+        };
+        let screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
+            .with_chance(self.effects_chance.clone());
         Self {
             side: Side::MainMenu,
             menu: Some(Menu {

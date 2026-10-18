@@ -14,7 +14,10 @@
 //! built behind the note, doesn't tick meanwhile, and quitting with the
 //! note open saves the repaired pilot. Quit quits after
 //! [`QUIT_DELAY`], and each of the menu's keys first waits for its click
-//! to play (see `menu_input`). Escape in
+//! to play (see `menu_input`); a click on Enter Ship, Preferences or
+//! About does what E, P or A does. The menu is the original's main
+//! screen, drawn from the game data's art, or a stand-in without it
+//! ([`MainMenu`]). Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -343,17 +346,14 @@ enum Side {
     Spaceport,
 }
 
-/// What a main-menu key does once its click has played.
+/// What a main-menu key does once its click has played, or a click on
+/// a button at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
-    /// The menu's own choice: New Pilot, Open Pilot or Quit.
+    /// One of the six buttons, by its key (N, O, Q, E, P or A) or a
+    /// click: the key and the click reach the same arm of
+    /// `_MainScreenChoice`, so the same result.
     Choice(MenuChoice),
-    /// E: Enter Ship, which with no pilot loaded is refused.
-    Enter,
-    /// P: the Preferences.
-    Preferences,
-    /// A: the About text.
-    About,
     /// X: `dësc` 32766.
     Text,
 }

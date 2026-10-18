@@ -10,6 +10,8 @@ use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
     open_port_dialogs, open_port_map, refresh_spaceport, refresh_status_bar,
 };
+use nova_view::menu::MenuChoice;
+
 use super::{AppScreen, ENTERED, LANDED, MenuAction, PREFERENCES_KEY, Side};
 
 impl AppScreen {
@@ -327,7 +329,7 @@ impl AppScreen {
             // goes to the original's menus (`MenuKey`), which do not.
             // It opens once the click has played.
             if self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held {
-                self.click_then(MenuAction::Preferences);
+                self.click_then(MenuAction::Choice(MenuChoice::Preferences));
             } else {
                 self.open_preferences();
             }

@@ -433,9 +433,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(choice)
-            .rect
-            .center();
+            .press_point(choice);
         self.click(at);
     }
 

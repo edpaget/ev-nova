@@ -58,14 +58,18 @@ pub use nova_sim::{SimSound, SoundId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSound {
     /// A main-menu button was pressed: the pointer went down on it
-    /// (`_TrackMainScreenButtons` @0x195b9). Only the main menu's buttons
+    /// (@0x19687), or onto it with the press held, from off every button
+    /// or straight from another (@0x19974), in
+    /// `_TrackMainScreenButtons` @0x195b9. Only the main menu's buttons
     /// raise it; a key that activates a button never does (see the module
     /// docs).
     ButtonDown,
-    /// A pressed main-menu button popped back up: the pointer was let go,
-    /// on the button or off it (`_TrackMainScreenButtons` @0x195b9). Only
-    /// the main menu's buttons raise it; a key that activates a button
-    /// never does (see the module docs).
+    /// A pressed main-menu button popped back up: the held press was
+    /// dragged off every button (@0x19ac4), or let go of over a button,
+    /// choosing it (@0x19c38), in `_TrackMainScreenButtons` @0x195b9; a
+    /// press let go of off every button is silent. Only the main menu's
+    /// buttons raise it; a key that activates a button never does (see
+    /// the module docs).
     ButtonUp,
     /// A key activated a main-menu button: `_PlayMainScreenClickSound`
     /// @0x177af, which plays snd 600, then 601 once 600 has ended. The

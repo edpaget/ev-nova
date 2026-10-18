@@ -131,13 +131,14 @@ fn deadly_fork(items: &[(i16, [i16; 3])]) -> ForkBuilder {
     put(&mut dude, 0x28, &[100]);
     let mut spin = vec![0; Spin::SIZE.expect("fixed")];
     spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
-    let fork = items
-        .iter()
-        .fold(ForkBuilder::new(), |fork, &(outfit, mods)| {
+    let fork = items.iter().fold(
+        with_main_screen(ForkBuilder::new()),
+        |fork, &(outfit, mods)| {
             let mut record = vec![0; Outfit::SIZE.expect("fixed")];
             put(&mut record, 0x06, &mods);
             fork.resource(Outfit::TYPE, outfit, Some(b"Bomb"), &record)
-        });
+        },
+    );
     fork.resource(Ship::TYPE, 128, Some(b"First"), &player)
         .resource(Ship::TYPE, 129, Some(b"Killer"), &killer)
         .resource(Weapon::TYPE, 128, Some(b"Blaster"), &weapon)

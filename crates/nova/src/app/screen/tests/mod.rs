@@ -22,6 +22,7 @@ use nova_sim::{RuleKey, RuleSource};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::map::ENTER_BUTTON;
 use nova_view::geometry::Bounds;
+use nova_view::menu::fixture::main_screen_resources;
 use nova_view::ships::{ShipBrowser, ShipId};
 use nova_view::sound::SimSound;
 use nova_view::spaceport::layout::LEAVE_ITEM;
@@ -349,7 +350,8 @@ fn game_data_fork(
     }
     let mut spin = vec![0; Spin::SIZE.expect("fixed")];
     spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
-    fork.resource(Ship::TYPE, 129, Some(b"Second"), &ship)
+    with_main_screen(fork)
+        .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
         .resource(Ship::TYPE, 128, Some(b"First"), &average)
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
         .resource(ShipAnim::TYPE, 128, None, &anim)
@@ -363,6 +365,16 @@ fn game_data_fork(
         .resource(Spin::TYPE, 650, None, &spin)
         .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
         .resource(Desc::TYPE, MENU_X_TEXT, None, &x_text())
+}
+
+/// `fork` with the main menu's art, so the menu draws the original's
+/// screen.
+fn with_main_screen(fork: ForkBuilder) -> ForkBuilder {
+    main_screen_resources()
+        .into_iter()
+        .fold(fork, |fork, (ty, id, data)| {
+            fork.resource(ty, id, None, &data)
+        })
 }
 
 /// The game data of `fork`'s resources.
@@ -1288,12 +1300,7 @@ pub(crate) fn menu(store: &MemoryPilots) -> AppScreen {
 }
 
 fn choose(screen: &mut AppScreen, choice: MenuChoice) -> ScreenAction {
-    let at = screen
-        .main_menu()
-        .expect("a main menu")
-        .button(choice)
-        .rect
-        .center();
+    let at = screen.main_menu().expect("a main menu").press_point(choice);
     let mut action = ScreenAction::None;
     for pressed in [true, false] {
         action = screen.input(&Input::PointerButton {

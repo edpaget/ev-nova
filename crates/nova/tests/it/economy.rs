@@ -52,6 +52,7 @@ use nova_sim::{
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
+use nova_view::menu::fixture::main_screen_resources;
 use nova_view::spaceport::{OutfitterScreen, ShipyardScreen, TradeScreen};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -325,6 +326,8 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, state + 100, pict(13, 25, [0, 0, 0])));
         resources.push((PICT, state + 102, pict(13, 25, [0, 0, 0])));
     }
+    // The main menu's art, so the menu draws the original's screen.
+    resources.extend(main_screen_resources());
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -611,9 +614,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(choice)
-            .rect
-            .center()
+            .press_point(choice)
     }
 
     fn showing(&self) -> Showing {

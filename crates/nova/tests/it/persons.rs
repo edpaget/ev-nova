@@ -514,9 +514,7 @@ impl Game {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(MenuChoice::OpenPilot)
-            .rect
-            .center();
+            .press_point(MenuChoice::OpenPilot);
         // The menu is classic: its point in the window.
         let (rect, scale) = game.app.viewport().content().expect("a content rect");
         let px = (

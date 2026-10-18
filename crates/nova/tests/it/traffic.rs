@@ -419,9 +419,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(MenuChoice::NewPilot)
-            .rect
-            .center();
+            .press_point(MenuChoice::NewPilot);
         harness.click(at);
         for c in "Trader".chars() {
             harness.send(WindowEvent::Text(c));

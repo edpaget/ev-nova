@@ -513,9 +513,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
@@ -659,9 +657,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
@@ -755,9 +751,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
