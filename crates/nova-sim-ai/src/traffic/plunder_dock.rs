@@ -650,13 +650,14 @@ mod tests {
     #[test]
     fn approaching_reads_the_bearing_and_the_box_from_the_victim_where_it_is() {
         let victim = at(1000.0, -1000.0, 0.0, 0.0, 0.0);
-        // 150 below it, moving across: inside the box it corrects.
+        // 150 below it, moving across: inside the box it corrects to 333,
+        // left of it, where the bearing, 0, would be to its right.
         let (ship, _) = flown(
-            pirate(at(1000.0, -850.0, 2.0, 0.0, 90.0), DockSub::Approach),
+            pirate(at(1000.0, -850.0, 2.0, 0.0, 340.0), DockSub::Approach),
             &victim,
             &[],
         );
-        assert_eq!(ship.state.heading, 87.0, "turning towards 333");
+        assert_eq!(ship.state.heading, 337.0, "turning towards 333");
         // 250 below it, outside: it turns to the bearing, 0.
         let (ship, _) = flown(
             pirate(at(1000.0, -750.0, 2.0, 0.0, 10.0), DockSub::Approach),
@@ -702,6 +703,22 @@ mod tests {
         };
         assert_eq!(heading_after(moving(15)), 180.0, "15 is not above 15");
         assert_ne!(heading_after(moving(16)), 180.0, "16 is");
+        // To the right of it, the bearing 90: 95 is 5 off, the difference
+        // of the two, not their sum.
+        let right = at(150.0, 0.0, 0.0, 0.0, 0.0);
+        let velocity = (0_i16..1800)
+            .map(|tenth| flight::facing(f32::from(tenth) * 0.1) * 0.5)
+            .find(|velocity| trig::intercept_angle(Vec2::ZERO, *velocity * 100.0) == 95)
+            .expect("some heading reads so");
+        let (ship, _) = flown(
+            pirate(
+                at(0.0, 0.0, velocity.x, velocity.y, 180.0),
+                DockSub::Approach,
+            ),
+            &right,
+            &[],
+        );
+        assert_eq!(ship.state.heading, 180.0);
     }
 
     #[test]
