@@ -9,6 +9,9 @@
 //! - **Disabled** (`_IsDisabled`): goal and sub-goal 0, travel stellar and
 //!   target -1 (@0x8b217-0x8b23e): [`Goal::Idle`]. The traffic never
 //!   decides for a disabled ship, so only this core's own test reaches it.
+//! - **Waiting** in goal 0x16 ([`Goal::CountWait`]): it keeps waiting
+//!   (@0x8b24a). Only a pirate takes goal 0x16, and `_AIDispatch` sends a
+//!   miner to this AI before a pirate's (@0x8ff64), so no ship reaches it.
 //! - **Provoked** (+0x96 > 0 with a target): state 3, [`Goal::Flee`] from
 //!   its attacker ([`provoked_by`]), then a tail call to `_AICallForHelp`
 //!   (@0x8b46c-0x8b483): its [`Decision::comm_call`] (see
@@ -44,8 +47,6 @@
 //! - State 17, scooping boxes while `_miningBoxesActive` is set
 //!   (@0x8b331-0x8b344): rdm:phase/asteroids/phase-5-ai-mining. The core
 //!   treats boxes as inactive.
-//! - The `CountWait` return (goal 0x16, @0x8b24a): the engine has no such
-//!   goal until rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board.
 //! - The exact `_AIShipHasFuelForJump` (@0x8b3ba-0x8b41f) and state 2's
 //!   +0x50 clamp and +0xa4 stamp: rdm:phase/combat-ai-fidelity/phase-11-leave-by-hyperspace.
 //!   The idle block's jump-fuel reading stands in.
@@ -109,6 +110,9 @@ impl Behaviour for MinerAi {
 pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
     if npc.condition != Condition::Intact {
         return Goal::Idle;
+    }
+    if let Goal::CountWait { .. } = npc.goal {
+        return npc.goal;
     }
     if let Some(attacker) = provoked_by(npc, around) {
         // `_MinerAI` tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483):
@@ -248,6 +252,29 @@ mod tests {
         let npcs = [zephyr.clone()];
         let around = Surroundings::new(&[], &npcs);
         assert_eq!(MinerAi.target(&zephyr, &around), None);
+    }
+
+    #[test]
+    fn a_miner_in_its_count_wait_keeps_it_whatever_it_is() {
+        // `_MinerAI` returns on goal 0x16 (@0x8b24a), before its
+        // provocation and its bits.
+        for bits in [MINES, SCOOPS, MINER_BITS] {
+            for can_scoop in [false, true] {
+                let mut waiting = miner(bits, can_scoop);
+                waiting.goal = Goal::CountWait { ticks_left: 7 };
+                waiting.provoked = 5.0;
+                waiting.target = Some(n(2));
+                let attacker = ship(2, PIRATES, AiType::Warship, 0.0, 100.0);
+                let npcs = [waiting.clone(), attacker];
+                let around = Surroundings::new(&[], &npcs);
+                assert_eq!(
+                    decide(&waiting, &around),
+                    waiting.goal,
+                    "{bits} {can_scoop}"
+                );
+                assert_eq!(deciding(&waiting, &stellars(), Some(rock())), waiting.goal);
+            }
+        }
     }
 
     #[test]

@@ -85,7 +85,8 @@
 //!    player.
 //! 6. **Help allies** (@0x8a418-0x8a60b): the ship T that the first other
 //!    ship of a government allied with its own (its own included) attacks
-//!    or flees from, when its own friend strength times its government's
+//!    or flees from (goals 3 and 4, @0x8a494-0x8a4a2: never one
+//!    plundering), when its own friend strength times its government's
 //!    `MaxOdds` is no less than T's (@0x8a5ab). T may be the player, but
 //!    never a ship it spares (below), nor the ship itself; it is any ship
 //!    seen (@0x8a538), so a downed or breaking-up T is taken and then
@@ -484,7 +485,12 @@ fn helped(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRe
                 && govts.allies(npc.govt, ally.govt)
         })
         .find_map(|ally| {
-            let foe = ally.goal.quarry()?;
+            // Goals 3 and 4 alone (@0x8a494-0x8a4a2): a plunder (0xd) is
+            // no fight to help in.
+            let foe = ally
+                .goal
+                .quarry()
+                .filter(|_| ally.goal.plundering().is_none())?;
             if blessed && leads_or_is_player(foe, around) {
                 return None;
             }
@@ -1158,6 +1164,30 @@ mod tests {
             Some(P),
             "its own kind"
         );
+    }
+
+    #[test]
+    fn a_ship_never_helps_an_ally_plundering_only_one_attacking_sniping_or_fleeing() {
+        // The ally's goal must be 3 or 4 (`sub 3; cmp 1` @0x8a494-0x8a4a2):
+        // goal 0xd is neither.
+        let mut trader = ship(2, ALLY, 1000.0, 0.0);
+        let pirate = ship(4, NEUTRAL, 3000.0, 0.0);
+        for (goal, helped) in [
+            (Goal::Attack(n(4)), Some(n(4))),
+            (Goal::Snipe(n(4)), Some(n(4))),
+            (Goal::Flee(n(4)), Some(n(4))),
+            (
+                Goal::Plunder {
+                    ship: n(4),
+                    hopeless: false,
+                },
+                None,
+            ),
+        ] {
+            trader.goal = goal;
+            let npcs = [me(), trader.clone(), pirate.clone()];
+            assert_eq!(chosen(0, &npcs, None, 0, (0.0, -100.0)), helped, "{goal:?}");
+        }
     }
 
     #[test]

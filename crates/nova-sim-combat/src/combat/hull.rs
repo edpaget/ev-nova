@@ -269,6 +269,12 @@ pub struct HullSpec {
     /// `shïp` (`nova_sim::traffic::table::kind`), and it is none
     /// otherwise.
     pub inherent_ai: i16,
+    /// Its class's `Crew` (the original's class +0x9f2), which a pirate's
+    /// plunder tests read (see `nova_sim::ai::pirate`): it plunders only a
+    /// ship whose class has a crew above none. Like
+    /// [`inherent_ai`](Self::inherent_ai), the spawn table sets it from
+    /// the `shïp`, and the session for the player's ship; none otherwise.
+    pub crew: i16,
 }
 
 impl Default for HullSpec {
@@ -302,6 +308,7 @@ impl Default for HullSpec {
             turret_shots_over: false,
             afterburner: 0,
             inherent_ai: 0,
+            crew: 0,
         }
     }
 }
@@ -340,6 +347,7 @@ impl HullSpec {
             turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
             afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
             inherent_ai: 0,
+            crew: 0,
         }
     }
 
@@ -544,6 +552,11 @@ mod tests {
             (0x0040, 0x0020)
         );
         assert_eq!(HullSpec::new(&hull(140)).inherent_ai, 0);
+        assert_eq!(
+            HullSpec::new(&hull(140)).crew,
+            0,
+            "a hull record carries no crew"
+        );
     }
 
     #[test]

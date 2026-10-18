@@ -242,8 +242,9 @@ impl<'a> Hail<'a> {
     /// The hail of `npc` among `around`, of `dispositions`, in
     /// conversation `talk`, the player needing `need`, of `mission` when
     /// it is a mission ship ([`Hail::mission`]). It is busy while
-    /// it attacks, snipes at, flees from or assists a ship, keeps
-    /// formation (goals 10 and 12), or an NPC attacks or snipes at it
+    /// it attacks, snipes at, flees from, plunders or assists a ship, keeps
+    /// formation (goals 10 and 12), waits as a pirate (goal 0x16), or an
+    /// NPC attacks or snipes at it
     /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
     /// player is threatened while any NPC threatens it.
     ///
@@ -287,7 +288,10 @@ impl<'a> Hail<'a> {
             dispositions,
             busy: npc.goal.fights()
                 || assisting_player
-                || matches!(npc.goal, Goal::Formation { .. } | Goal::Hold)
+                || matches!(
+                    npc.goal,
+                    Goal::Formation { .. } | Goal::Hold | Goal::CountWait { .. }
+                )
                 || attacked,
             assisting_player,
             player_threatened: around
@@ -919,6 +923,11 @@ mod tests {
             Goal::Formation {
                 guard: Some(ShipRef::Npc(NpcId(5))),
             },
+            Goal::Plunder {
+                ship: ShipRef::Npc(NpcId(5)),
+                hopeless: false,
+            },
+            Goal::CountWait { ticks_left: 3 },
         ] {
             let npcs = [flying(1, goal)];
             assert!(hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");

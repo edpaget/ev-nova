@@ -119,7 +119,7 @@ impl Behaviour for Interceptor {
             npc,
             around,
             retreat,
-            Some(self.always_attacks),
+            self.always_attacks,
             self.target,
             chance,
         );
@@ -574,6 +574,9 @@ mod tests {
                 provokes: true,
                 comm_call: None,
                 calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -591,6 +594,9 @@ mod tests {
             provokes: true,
             comm_call: None,
             calls_reinforcements: false,
+            board_wait: None,
+            clears_target: false,
+            keeps_pursuit: false,
         };
         let picked = |goal| Decision {
             goal,
@@ -672,6 +678,9 @@ mod tests {
                 provokes: false,
                 comm_call: None,
                 calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );

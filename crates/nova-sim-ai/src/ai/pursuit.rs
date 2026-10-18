@@ -18,6 +18,13 @@
 //!   outside [`DOGFIGHT_BOX`] on either axis approaches (7) unless it is
 //!   rushing (0x11, @0x8e68d-0x8e697), and inside dogfights (6) unless it
 //!   is breaking off (0x10, @0x8e6cf-0x8e6dc). Sniping, it snipes (0xe).
+//!   Plundering an intact ship (goal 0xd, [`Goal::Plunder`],
+//!   @0x8ea49-0x8eb3a), it keeps no band: outside [`DOGFIGHT_BOX`] it
+//!   snipes when the chase is hopeless, else approaches unless rushing;
+//!   inside it dogfights unless breaking off or **rushing**, both kept
+//!   (`sub - 0x10 <= 1` @0x8eb28). Plundering a disabled ship it flies no
+//!   fight: it docks (@0x8e873-0x8ea44), which
+//!   rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder builds.
 //!   Fleeing, within [`FLEE_REACH`] of its attacker on both axes, the
 //!   offsets truncated, it flees close (5, @0x8e017-0x8e06b); beyond, it
 //!   runs out (substates 1, 3 and 4), which run no pass (no
@@ -243,6 +250,19 @@ pub fn high_level(npc: &Npc, at: &ShipState, disabled: bool) -> Option<Start> {
             }))
         }
         Goal::Snipe(_) => Some(Start::Sub(Manoeuvre::Snipe)),
+        // Goal 0xd against an intact ship (@0x8ea49-0x8eb3a); against a
+        // disabled one it docks (@0x8e873-0x8ea44), phase 10's.
+        Goal::Plunder { .. } if disabled => None,
+        Goal::Plunder { hopeless, .. } => {
+            let outside = off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX;
+            Some(match (outside, npc.pursuit.kept) {
+                (true, _) if hopeless => Start::Sub(Manoeuvre::Snipe),
+                (_, Some(Kept::Rush)) => Start::Sub(Manoeuvre::Rush),
+                (true, _) => Start::Sub(Manoeuvre::Approach),
+                (false, Some(Kept::BreakOff { heading })) => Start::BreakOff { heading },
+                (false, None) => Start::Sub(Manoeuvre::Dogfight),
+            })
+        }
         Goal::Flee(_) if within_whole(off, FLEE_REACH) => Some(Start::Sub(Manoeuvre::Flee)),
         Goal::Flee(_) => Some(Start::RunningOut),
         _ => None,
@@ -1004,6 +1024,135 @@ mod tests {
         let sniped = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
         assert_eq!(bodies(&sniped), [Manoeuvre::Snipe]);
         assert_eq!(sniped.kept, None);
+    }
+
+    const PLUNDER: Goal = Goal::Plunder {
+        ship: ShipRef::Player,
+        hopeless: false,
+    };
+    const HOPELESS: Goal = Goal::Plunder {
+        ship: ShipRef::Player,
+        hopeless: true,
+    };
+
+    /// Where `npc`'s high level starts its frame at a ship `off` from
+    /// [`AT`], disabled as `disabled` says.
+    fn start_at(npc: &Npc, off: Vec2, disabled: bool) -> Option<Start> {
+        let at = ShipState {
+            position: AT + off,
+            ..ShipState::default()
+        };
+        high_level(npc, &at, disabled)
+    }
+
+    #[test]
+    fn a_plunderer_inside_165_dogfights_keeping_a_break_off_and_a_rush() {
+        let inside = Vec2::new(165.0, -165.0);
+        let mut npc = fighter(PLUNDER, 0.0);
+        assert_eq!(
+            start_at(&npc, inside, false),
+            Some(Start::Sub(Manoeuvre::Dogfight))
+        );
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        assert_eq!(
+            start_at(&npc, inside, false),
+            Some(Start::BreakOff { heading: 135 })
+        );
+        npc.pursuit.kept = Some(Kept::Rush);
+        assert_eq!(
+            start_at(&npc, inside, false),
+            Some(Start::Sub(Manoeuvre::Rush)),
+            "`sub - 0x10 <= 1` keeps 0x11 too (@0x8eb28)"
+        );
+        let attacker = Npc {
+            goal: AT_PLAYER,
+            ..npc.clone()
+        };
+        assert_eq!(
+            start_at(&attacker, inside, false),
+            Some(Start::Sub(Manoeuvre::Dogfight)),
+            "an attacker drops its rush inside"
+        );
+        let hopeless = Npc {
+            goal: HOPELESS,
+            pursuit: Pursuit::default(),
+            ..npc
+        };
+        assert_eq!(
+            start_at(&hopeless, inside, false),
+            Some(Start::Sub(Manoeuvre::Dogfight)),
+            "never a snipe inside"
+        );
+    }
+
+    #[test]
+    fn outside_165_a_plunderer_approaches_unless_rushing_and_snipes_when_hopeless() {
+        for outside in [Vec2::new(165.1, 0.0), Vec2::new(0.0, -165.1)] {
+            let mut npc = fighter(PLUNDER, 0.0);
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Approach)),
+                "{outside:?}"
+            );
+            npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Approach))
+            );
+            npc.pursuit.kept = Some(Kept::Rush);
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Rush))
+            );
+            npc.goal = HOPELESS;
+            assert_eq!(
+                start_at(&npc, outside, false),
+                Some(Start::Sub(Manoeuvre::Snipe)),
+                "the hopeless test comes first (@0x8eace)"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plunderer_keeps_no_stand_off_band() {
+        let mut npc = fighter(PLUNDER, 0.0);
+        npc.hull.stands_off = true;
+        npc.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..nova_sim_catalog::fixture::weapon(128)
+            }),
+            1,
+        )]);
+        let attacker = Npc {
+            goal: AT_PLAYER,
+            ..npc.clone()
+        };
+        let off = Vec2::new(0.0, -600.0);
+        assert_eq!(
+            start_at(&attacker, off, false),
+            Some(Start::Sub(Manoeuvre::Snipe)),
+            "within its band, an attacker snipes"
+        );
+        assert_eq!(
+            start_at(&npc, off, false),
+            Some(Start::Sub(Manoeuvre::Approach))
+        );
+        assert_eq!(
+            start_at(&npc, Vec2::new(0.0, -100.0), false),
+            Some(Start::Sub(Manoeuvre::Dogfight)),
+            "no backing away"
+        );
+    }
+
+    #[test]
+    fn a_plunderer_of_a_disabled_ship_flies_no_fight_until_phase_10_docks_it() {
+        for goal in [PLUNDER, HOPELESS] {
+            let npc = burning(fighter(goal, 0.0));
+            assert_eq!(start_at(&npc, Vec2::new(0.0, -100.0), true), None);
+            assert_eq!(start_at(&npc, Vec2::new(0.0, -600.0), true), None);
+        }
     }
 
     #[test]

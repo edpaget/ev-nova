@@ -76,13 +76,20 @@
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
 //!   sub-goal 0xe, @0x8709d-0x87334).
+//! - [`Goal::Plunder`] of an intact ship flies as an attack, or as a
+//!   snipe when hopeless, by its frame (see [`pursuit`]); of a disabled
+//!   one it closes on it as [`Goal::Inspect`] does, firing nothing, a
+//!   stand-in for goal 0xd's docking (`_HighLevelAIHandler`
+//!   @0x8e873-0x8ea44), which rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder
+//!   builds.
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
 //!   either axis, truncated (its frame has no body): it runs out from the
 //!   centre and jumps once past its jump distance with the fuel.
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, under its top speed's cap.
-//! - [`Goal::Idle`], [`Goal::Mine`] (order 1 for now, see its docs), or a
+//! - [`Goal::Idle`], [`Goal::Mine`] (order 1 for now, see its docs),
+//!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c), or a
 //!   goal it cannot fly (a stellar, lead, player or carrier that is not
 //!   there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
@@ -309,7 +316,13 @@ pub fn fly(
             Some(other) => follow(&state, &handling, other),
             None => brake(&state, &handling),
         },
-        Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) => match other {
+        // Goal 0xd's docking (@0x8e873-0x8ea44) is phase 10's: until
+        // then a plunderer closes on its disabled victim, firing nothing.
+        Goal::Plunder { .. } if other_disabled => match other {
+            Some(other) => follow(&state, &handling, other),
+            None => brake(&state, &handling),
+        },
+        Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
                 if let Some(body) =
                     pursuit::frame_of(npc, target, other_disabled).and_then(|frame| frame.last())
@@ -355,7 +368,8 @@ pub fn fly(
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
-        Goal::Idle | Goal::Mine => brake(&state, &handling),
+        // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c).
+        Goal::Idle | Goal::Mine | Goal::CountWait { .. } => brake(&state, &handling),
         Goal::Hold => Controls::default(),
     };
     flight::step(&mut npc.state, &handling, controls);
@@ -725,12 +739,17 @@ fn burst(
 /// ([`Mode::Coasting`]) has a wait to cut: a glide or burst has none
 /// (+0x4c = -1, @0x8dd83). A ship the player hit in its gate was cut as
 /// it was held, but a Good Samaritan held there kept its wait
-/// (@0x82b82-0x82b97), which a later hit cuts.
+/// (@0x82b82-0x82b97), which a later hit cuts. A pirate's count wait
+/// ([`Goal::CountWait`], goal 0x16) is cut the same way: `_DamageShip`
+/// reads no goal.
 pub(crate) fn cut_wait(npc: &mut Npc) {
     if let Mode::Coasting { ticks_left }
     | Mode::Emerging { ticks_left }
     | Mode::HeldAtGate { ticks_left } = &mut npc.mode
     {
+        *ticks_left = (*ticks_left).min(HIT_WAIT);
+    }
+    if let Goal::CountWait { ticks_left } = &mut npc.goal {
         *ticks_left = (*ticks_left).min(HIT_WAIT);
     }
 }
@@ -1528,6 +1547,22 @@ mod tests {
         fly(&mut wreck, &[], None);
         assert_eq!(wreck.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "held too");
         assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1 });
+    }
+
+    #[test]
+    fn a_hit_cuts_a_pirates_count_wait_to_20() {
+        // `_DamageShip` reads no goal (@0x3be6e-0x3be7c): goal 0x16's
+        // +0x4c is cut as any other.
+        for (left, cut) in [(120, 20), (21, 20), (20, 20), (19, 19), (0, 0)] {
+            let mut pirate = npc(
+                AVERAGE,
+                Goal::CountWait { ticks_left: left },
+                at(0.0, 0.0, 0.0, 0.0, 0.0),
+            );
+            cut_wait(&mut pirate);
+            assert_eq!(pirate.goal, Goal::CountWait { ticks_left: cut }, "{left}");
+            assert_eq!(pirate.mode, Mode::Flying);
+        }
     }
 
     #[test]
@@ -2945,6 +2980,87 @@ mod tests {
                 ship.state.velocity.length() < 0.5,
                 "{goal:?}: {:?}",
                 ship.state
+            );
+        }
+    }
+
+    /// `npc` flown `ticks` ticks at a target at `other`, disabled as
+    /// `disabled` says: where it ends up.
+    fn flown_for(mut npc: Npc, other: &ShipState, disabled: bool, ticks: u32) -> ShipState {
+        for _ in 0..ticks {
+            fly_at_quarry(&mut npc, other, disabled);
+        }
+        npc.state
+    }
+
+    #[test]
+    fn plundering_an_intact_ship_flies_as_an_attack_and_a_hopeless_one_as_a_snipe() {
+        let start = at(0.0, 0.0, 1.0, -0.5, 30.0);
+        let plunder = |hopeless| Goal::Plunder {
+            ship: FOE,
+            hopeless,
+        };
+        for target in [
+            at(400.0, -300.0, 0.0, 0.0, 0.0),
+            at(60.0, 40.0, 0.0, 0.0, 90.0),
+        ] {
+            assert_eq!(
+                flown_for(npc(FAST, plunder(false), start), &target, false, 30),
+                flown_for(npc(FAST, Goal::Attack(FOE), start), &target, false, 30),
+                "{target:?}"
+            );
+        }
+        let far = at(900.0, -600.0, 0.0, 0.0, 0.0);
+        let sniped = flown_for(npc(FAST, Goal::Snipe(FOE), start), &far, false, 30);
+        assert_eq!(
+            flown_for(npc(FAST, plunder(true), start), &far, false, 30),
+            sniped
+        );
+        assert_ne!(
+            flown_for(npc(FAST, plunder(false), start), &far, false, 30),
+            sniped
+        );
+    }
+
+    #[test]
+    fn plundering_a_disabled_ship_closes_on_it_as_an_inspection_until_phase_10_docks() {
+        let start = at(0.0, 0.0, 1.0, -0.5, 30.0);
+        let victim = at(400.0, -300.0, 0.0, 0.0, 0.0);
+        for hopeless in [false, true] {
+            let plunder = Goal::Plunder {
+                ship: FOE,
+                hopeless,
+            };
+            let closed = flown_for(npc(FAST, plunder, start), &victim, true, 300);
+            assert_eq!(
+                closed,
+                flown_for(npc(FAST, Goal::Inspect(FOE), start), &victim, true, 300)
+            );
+            assert!(
+                (closed.position - victim.position).length() <= FOLLOW_DISTANCE * 1.1,
+                "{closed:?}"
+            );
+            assert_ne!(
+                closed,
+                flown_for(npc(FAST, plunder, start), &victim, false, 300),
+                "intact, it fights"
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_wait_brakes_as_an_idle_ship_does() {
+        let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
+        for ticks_left in [0, 1, 120] {
+            assert_eq!(
+                flown_for(
+                    npc(FAST, Goal::CountWait { ticks_left }, start),
+                    &start,
+                    false,
+                    40
+                ),
+                flown_for(npc(FAST, Goal::Idle, start), &start, false, 40),
+                "{ticks_left}"
             );
         }
     }

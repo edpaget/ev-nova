@@ -195,4 +195,18 @@ mod tests {
         assert_eq!(session.player_side().class, EscortClass::Freighter);
         assert_eq!(session.pilot.ship, ShipId(128));
     }
+
+    #[test]
+    fn the_player_side_carries_its_ship_types_crew_for_the_pirates() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        for crew in [-1, 0, 7] {
+            let mut record = ship(session.pilot.ship.0, FAST);
+            record.crew = crew;
+            session.ships = vec![record];
+            assert_eq!(session.player_side().hull.crew, crew);
+        }
+        session.ships = vec![ship(129, FAST)];
+        assert_eq!(session.player_side().hull.crew, 0, "no record of its own");
+    }
 }

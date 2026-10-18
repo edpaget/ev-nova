@@ -54,6 +54,8 @@ pub mod miner;
 pub mod nova;
 pub mod odds;
 pub mod out_of_ammo;
+pub mod pirate;
+pub mod plunder_target;
 pub mod pursuit;
 pub mod react;
 pub mod reinforcements;
@@ -284,20 +286,60 @@ pub enum Goal {
     /// chase and kill (orders 0x13 and 0x14, @0x8f832-0x8f903) and the
     /// shots that hit no ship.
     Mine,
+    /// Disable this ship to board it: a pirate's goal 0xd (see
+    /// [`pirate`]), which it takes against a trader, a former escort of the
+    /// player's or the player, whose class has a crew. Against the ship
+    /// intact it flies as an attack (`_HighLevelAIHandler`
+    /// @0x8ea49-0x8eb3a, see [`pursuit`]), sniping (sub-goal 0xe) when
+    /// `hopeless`, but it is no attack to the readers of goal 4
+    /// ([`Goal::attacking`]); its shots disable and never destroy (see
+    /// `nova_sim_combat::combat::plunder`). Against the ship disabled it
+    /// closes on it, firing nothing, until
+    /// rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder docks it.
+    Plunder {
+        /// The ship it disables.
+        ship: ShipRef,
+        /// Whether the chase is hopeless, outside the dogfight box
+        /// (`_AIEvalHopelessChase` @0x8eace): it snipes.
+        hopeless: bool,
+    },
+    /// Wait while another ship boards the ship it would plunder: a
+    /// pirate's goal 0x16, its +0x4c the ticks left (see
+    /// [`board_wait`](crate::traffic::board_wait)). It brakes, targets and
+    /// fires nothing, and fights nothing: its quarry is none.
+    CountWait {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
 }
 
 impl Goal {
-    /// The ship it fights, attacking, sniping at or fleeing from it; none
-    /// for any other goal.
+    /// The ship it fights, attacking, sniping at, fleeing from or
+    /// plundering it; none for any other goal.
     #[must_use]
     pub fn quarry(self) -> Option<ShipRef> {
         match self {
-            Self::Attack(ship) | Self::Snipe(ship) | Self::Flee(ship) => Some(ship),
+            Self::Attack(ship)
+            | Self::Snipe(ship)
+            | Self::Flee(ship)
+            | Self::Plunder { ship, .. } => Some(ship),
             _ => None,
         }
     }
 
-    /// The ship it attacks or snipes at, if any.
+    /// The ship it plunders, `_AIShipIsPlundering` (@0x89841, goal 0xd),
+    /// if any.
+    #[must_use]
+    pub fn plundering(self) -> Option<ShipRef> {
+        match self {
+            Self::Plunder { ship, .. } => Some(ship),
+            _ => None,
+        }
+    }
+
+    /// The ship it attacks or snipes at, if any: the original's goal 4,
+    /// which `_IsShipAttacking` (@0x82f6a) and `_IsShipFightingMe`
+    /// (@0x827fa) test. A plunder (goal 0xd) is none.
     #[must_use]
     pub fn attacking(self) -> Option<ShipRef> {
         match self {
@@ -343,7 +385,9 @@ impl Goal {
             | Self::Formation { .. }
             | Self::Dock(_)
             | Self::Hold
-            | Self::Mine => false,
+            | Self::Mine
+            | Self::Plunder { .. }
+            | Self::CountWait { .. } => false,
         }
     }
 
@@ -363,17 +407,28 @@ impl Goal {
     /// | 0xb (jump with parent) | `_AIMakeShipJumpWithParent` @0x82bc7 | none: an escort follows its lead out |
     /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
     /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
+    ///
+    /// A plunder (goal 0xd) and a count wait (0x16) are none of them.
     #[must_use]
     pub fn spares_player_threat(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Inspect(_)
-                | Self::Assist(_)
-                | Self::Dock(_)
-                | Self::Follow(_)
-                | Self::Formation { .. }
-                | Self::Hold
-        )
+            | Self::Assist(_)
+            | Self::Dock(_)
+            | Self::Follow(_)
+            | Self::Formation { .. }
+            | Self::Hold => true,
+            Self::Idle
+            | Self::Land(_)
+            | Self::EnterGate(_)
+            | Self::JumpOut
+            | Self::Attack(_)
+            | Self::Snipe(_)
+            | Self::Flee(_)
+            | Self::Mine
+            | Self::Plunder { .. }
+            | Self::CountWait { .. } => false,
+        }
     }
 }
 
@@ -682,6 +737,23 @@ pub struct Decision {
     /// traffic asks it after the think's own [`comm_call`](Self::comm_call)
     /// ([`CommCall::Reinforcements`]).
     pub calls_reinforcements: bool,
+    /// The ship it would plunder, when the think found another ship had
+    /// boarded it: `_PirateWarshipAI`'s wait loop (@0x8c68c-0x8c730), which
+    /// the traffic runs in slot order
+    /// ([`board_wait::resolve`](crate::traffic::board_wait::resolve)),
+    /// waiting ([`Goal::CountWait`]) when a ship boards it; otherwise the
+    /// think's [`goal`](Self::goal) stands.
+    pub board_wait: Option<ShipRef>,
+    /// Whether the think left the ship with no target (+0x70 = -1) though
+    /// its goal is no fight: `_PirateWarshipAI`'s search (@0x8c35d) finding
+    /// nothing. The traffic clears [`Npc::target`] as it takes the goal; a
+    /// goal it keeps with a target keeps the target.
+    pub clears_target: bool,
+    /// Whether the think dropped its fight leaving its sub-goal as it was:
+    /// `_PirateWarshipAI`'s disabled-warship drop writes the goal and the
+    /// target alone (@0x8c839-0x8c842), so a kept rush or break-off
+    /// ([`Npc::pursuit`]) carries over to its next fight.
+    pub keeps_pursuit: bool,
 }
 
 /// How NPCs decide what to do.
@@ -1348,6 +1420,35 @@ mod tests {
             assert!(!idle.fights());
         }
         assert!(Goal::Flee(n).fights());
+    }
+
+    #[test]
+    fn a_plunder_fights_its_victim_without_attacking_it() {
+        let n = ShipRef::Npc(NpcId(3));
+        for hopeless in [false, true] {
+            let plunder = Goal::Plunder { ship: n, hopeless };
+            assert_eq!(plunder.quarry(), Some(n), "a target to fight");
+            assert!(plunder.fights());
+            assert_eq!(plunder.attacking(), None, "goal 0xd is not goal 4");
+            assert_eq!(plunder.plundering(), Some(n));
+            assert!(!plunder.scooping());
+            assert!(!plunder.spares_player_threat(), "0xd isn't in the list");
+        }
+        for other in [Goal::Attack(n), Goal::Snipe(n), Goal::Flee(n), Goal::Idle] {
+            assert_eq!(other.plundering(), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn a_count_wait_fights_nothing_and_is_not_spared_as_a_threat() {
+        for ticks_left in [0, 1, 120] {
+            let wait = Goal::CountWait { ticks_left };
+            assert_eq!((wait.quarry(), wait.attacking()), (None, None));
+            assert!(!wait.fights());
+            assert_eq!(wait.plundering(), None);
+            assert!(!wait.scooping());
+            assert!(!wait.spares_player_threat(), "0x16 isn't in the list");
+        }
     }
 
     #[test]

@@ -6,7 +6,9 @@
 //! @0x8986d): Attack or Defend while it fights, Return to Hangar in any
 //! state but attacking. Here:
 //!
-//! - While its carrier attacks or snipes at a ship, a fighter attacks
+//! - While its carrier attacks or snipes at a ship, or plunders one still
+//!   intact (goal 0xd, which `_AIIssueEscortOrders` orders as goal 4
+//!   until the target is disabled, @0x89968-0x8997e), a fighter attacks
 //!   its own target while that ship is live in the system, else the
 //!   carrier's.
 //! - When the carrier does neither, it flies back and docks
@@ -22,6 +24,7 @@ use crate::ai::fire::FireRules;
 use crate::ai::{Behaviour, GateWait, Goal, Reaction, Surroundings, escort, fire, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
+use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::traffic::npc::Npc;
 
@@ -41,7 +44,13 @@ impl Behaviour for CarriedAi {
         let Some(carrier) = carrier else {
             return Goal::Idle;
         };
-        match carrier.goal.attacking() {
+        let plundered = carrier.goal.plundering().filter(|&ship| {
+            !matches!(
+                around.condition_of(ship),
+                Some(Condition::Disabled | Condition::Dying { .. })
+            )
+        });
+        match carrier.goal.attacking().or(plundered) {
             Some(quarry) => {
                 Goal::Attack(npc.target.filter(|&own| around.live(own)).unwrap_or(quarry))
             }
@@ -139,6 +148,29 @@ mod tests {
         let goal = CarriedAi::default().decide(&npcs[1], &around, &mut chance);
         assert_eq!(chance.asked, [0_u32; 0], "no draws");
         goal
+    }
+
+    #[test]
+    fn with_its_carrier_plundering_an_intact_ship_a_fighter_attacks_it_and_a_disabled_one_docks() {
+        // `_AIIssueEscortOrders` orders a plundering leader's escorts as an
+        // attacking one's, but to return (order 3) once its target is
+        // disabled (@0x89968-0x8997e).
+        let plunder = Goal::Plunder {
+            ship: n(3),
+            hopeless: true,
+        };
+        let npcs = [carrier(plunder), fighter(Goal::Idle, None), trader()];
+        assert_eq!(decide(&npcs), Goal::Attack(n(3)));
+        let mut wreck = trader();
+        wreck.condition = crate::combat::hull::Condition::Disabled;
+        let npcs = [carrier(plunder), fighter(Goal::Idle, None), wreck.clone()];
+        assert_eq!(decide(&npcs), Goal::Dock(n(1)));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
+        let npcs = [carrier(plunder), fighter(Goal::Idle, None), wreck];
+        assert_eq!(decide(&npcs), Goal::Dock(n(1)), "`_IsDisabled` holds");
     }
 
     #[test]

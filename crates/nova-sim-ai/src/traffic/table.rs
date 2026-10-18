@@ -572,6 +572,7 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         escort_class: EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass),
         hull: HullSpec {
             inherent_ai: record.inherent_ai,
+            crew: record.crew,
             ..arsenal.hull(record.id)
         },
         armament,
@@ -1273,6 +1274,20 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_kind_carries_its_class_crew_beside_its_inherent_ai() {
+        for crew in [-1, 0, 1, 40] {
+            let record = ShipRecord {
+                crew,
+                inherent_ai: 2,
+                ..ship(200, FAST)
+            };
+            let kind = kind(&record, &[], &arsenal());
+            assert_eq!(kind.hull.crew, crew, "the pirate's tests read it");
+            assert_eq!(kind.hull.inherent_ai, 2);
+        }
+    }
+
+    #[test]
     fn each_ship_type_named_gets_its_escort_class() {
         let table = resolved();
         assert_eq!(
@@ -1452,8 +1467,10 @@ mod tests {
             armed.hull,
             HullSpec {
                 inherent_ai: 1,
+                crew: 3,
                 ..arsenal().hull(ShipId(200))
-            }
+            },
+            "the fixture's crew of 3"
         );
         assert!(
             (armed.hull.hit_radius - 9.9).abs() < 1e-5,
@@ -1480,6 +1497,7 @@ mod tests {
             unarmed.hull,
             HullSpec {
                 inherent_ai: 2,
+                crew: 3,
                 ..HullSpec::default()
             }
         );

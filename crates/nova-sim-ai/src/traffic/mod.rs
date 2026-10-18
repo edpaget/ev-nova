@@ -23,6 +23,8 @@
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //! - [`snipe`]: how a sniper flies, braking or at rest.
+//! - [`board_wait`]: a pirate's wait while another ship boards the ship it
+//!   would plunder.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter_in`]) replaces them with its initial population, its
@@ -64,9 +66,12 @@
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
 //!    gate to leave, one that is not intact, or one assisting the player
 //!    while
-//!    unprovoked (until it is done, or provoked): first every goal (each
-//!    decision that turns on the player asking its person's quote gate,
-//!    [`Traffic::turn_with_quote`], before any goal is taken), then, each NPC
+//!    unprovoked (until it is done, or provoked): first every goal (a
+//!    pirate's wait on a boarded victim settled in berth order,
+//!    [`board_wait::resolve`]; each decision that turns on the player
+//!    asking its person's quote gate, [`Traffic::turn_with_quote`], before
+//!    any goal is taken; a pirate's count wait ending at none left,
+//!    [`board_wait::lapse`]), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
@@ -80,7 +85,8 @@
 //!    uncloaks, and its fade steps;
 //! 6. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
-//!    assists, or escorts in formation), a fighter docking its carrier;
+//!    assists, or escorts in formation), a fighter docking its carrier,
+//!    and a tick off each pirate's count wait ([`board_wait::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
 //! 7. and the removal of those that landed, jumped out, entered a gate or
@@ -109,6 +115,7 @@ pub mod autopilot;
 pub mod berth_exits;
 pub mod berth_kept;
 pub mod berth_picks;
+pub mod board_wait;
 #[cfg(test)]
 mod comm_call_tests;
 pub mod destination;
@@ -848,11 +855,16 @@ impl Traffic {
             })
             .collect();
         let around = world.around(&self.npcs);
-        let decisions: Vec<Option<Decision>> = self
+        let mut decisions: Vec<Option<Decision>> = self
             .npcs
             .iter()
             .zip(&due)
             .map(|(npc, &due)| due.then(|| behaviour.decision(npc, &around, &mut &mut *chance)))
+            .collect();
+        board_wait::resolve(&self.npcs, &mut decisions);
+        let keeps: Vec<bool> = decisions
+            .iter()
+            .map(|decision| decision.is_some_and(|decision| decision.keeps_pursuit))
             .collect();
         let turning: Vec<(NpcId, bool)> = self
             .npcs
@@ -870,7 +882,8 @@ impl Traffic {
             self.ask_quote_gate(id, dropped_target, view);
         }
         self.take_goals(decisions, world.player.map(|player| player.state.position));
-        self.pursue(&world, &due, chance);
+        board_wait::lapse(&mut self.npcs, &due);
+        self.pursue(&world, &due, &keeps, chance);
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
             .npcs
@@ -937,7 +950,15 @@ impl Traffic {
     /// rolling on `chance` ([`pursuit::step`]): `_LowLevelAIHandler` runs
     /// in the same frame as the think (`_AIDispatch` @0x901e5-0x901f4),
     /// after the goal and before the passes and the flight read its frame.
-    fn pursue(&mut self, world: &World, due: &[bool], chance: &mut (impl Chance + ?Sized)) {
+    /// One whose decision `keeps` its pursuit ([`Decision::keeps_pursuit`])
+    /// holds on to the substate it kept.
+    fn pursue(
+        &mut self,
+        world: &World,
+        due: &[bool],
+        keeps: &[bool],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let around = world.around(&self.npcs);
         let rules = PursuitRules {
             approach_lead: world.approach_lead,
@@ -948,9 +969,16 @@ impl Traffic {
             .zip(due)
             .map(|(npc, &due)| due.then(|| pursuit::step(npc, &around, rules, &mut *chance)))
             .collect();
-        for (npc, pursuit) in self.npcs.iter_mut().zip(pursuits) {
+        for ((npc, pursuit), &keep) in self.npcs.iter_mut().zip(pursuits).zip(keeps) {
             if let Some(pursuit) = pursuit {
-                npc.pursuit = pursuit;
+                npc.pursuit = if keep {
+                    Pursuit {
+                        kept: npc.pursuit.kept,
+                        ..pursuit
+                    }
+                } else {
+                    pursuit
+                };
             }
         }
     }
@@ -988,6 +1016,7 @@ impl Traffic {
         self.cloaks(player, &states, think);
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
         let outcomes = self.fly_all(world, player, &states, still, chance);
+        board_wait::count_down(&mut self.npcs);
         self.release_followers(&entering);
         self.departed = self
             .npcs
@@ -1660,11 +1689,18 @@ impl Traffic {
     /// remembers it, and has scanned the player when it was inspecting the
     /// player within its reach; one whose decision provokes it
     /// ([`Decision::provokes`]) has a provocation of 1, the word's +0x96
-    /// (@0x8b7e5, @0x8cb9d); and one that does not fight loses its
-    /// provocation.
+    /// (@0x8b7e5, @0x8cb9d); one that does not fight loses its
+    /// provocation; and one whose decision clears its target
+    /// ([`Decision::clears_target`]) loses it.
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
-            let Some(Decision { goal, provokes, .. }) = decision else {
+            let Some(Decision {
+                goal,
+                provokes,
+                clears_target,
+                ..
+            }) = decision
+            else {
                 continue;
             };
             if let Goal::Inspect(ship) = npc.goal
@@ -1682,6 +1718,9 @@ impl Traffic {
             }
             if !goal.fights() {
                 npc.provoked = 0.0;
+            }
+            if clears_target {
+                npc.target = None;
             }
             npc.goal = goal;
         }
@@ -3855,6 +3894,9 @@ mod tests {
             provokes: false,
             comm_call: None,
             calls_reinforcements: false,
+            board_wait: None,
+            clears_target: false,
+            keeps_pursuit: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

@@ -29,6 +29,7 @@ mod stock_mission_ships;
 mod stock_missions;
 mod stock_murk;
 mod stock_news;
+mod stock_pirates;
 mod stock_pursuit;
 mod stock_ranks;
 mod stock_reinforcements;

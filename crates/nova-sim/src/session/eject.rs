@@ -524,6 +524,10 @@ fn retargeted(goal: Goal, to: ShipRef) -> Goal {
         Goal::Attack(ShipRef::Player) => Goal::Attack(to),
         Goal::Snipe(ShipRef::Player) => Goal::Snipe(to),
         Goal::Flee(ShipRef::Player) => Goal::Flee(to),
+        Goal::Plunder {
+            ship: ShipRef::Player,
+            hopeless,
+        } => Goal::Plunder { ship: to, hopeless },
         other => other,
     }
 }
@@ -1436,9 +1440,14 @@ mod tests {
             let sniper = aimed(session, Goal::Snipe(ShipRef::Player), Some(ShipRef::Player));
             let fleeing = aimed(session, Goal::Flee(ShipRef::Player), None);
             let hired = escort(session);
-            ids = Some((attacker, sniper, fleeing, hired));
+            let plundering = Goal::Plunder {
+                ship: ShipRef::Player,
+                hopeless: true,
+            };
+            let pirate = aimed(session, plundering, Some(ShipRef::Player));
+            ids = Some((attacker, sniper, fleeing, hired, pirate));
         });
-        let (attacker, sniper, fleeing, hired) = ids.expect("set up");
+        let (attacker, sniper, fleeing, hired, pirate) = ids.expect("set up");
         let hulk = ShipRef::Npc(hulk(&session).id);
         let npc = |id| session.npc(id).expect("here");
         assert_eq!(
@@ -1452,6 +1461,17 @@ mod tests {
         assert_eq!(
             (npc(fleeing).target, npc(fleeing).goal),
             (None, Goal::Flee(hulk))
+        );
+        assert_eq!(
+            (npc(pirate).target, npc(pirate).goal),
+            (
+                Some(hulk),
+                Goal::Plunder {
+                    ship: hulk,
+                    hopeless: true
+                }
+            ),
+            "goal 0xd kept, +0x70 the hulk"
         );
         assert!(session.npc(hired).expect("here").escorts_player(), "kept");
         assert_eq!(session.fleet, [Some(hired)]);

@@ -577,6 +577,7 @@ impl FightTerms {
         let fleet = npc.fleet();
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
+        let plundering = npc.goal.plundering().is_some();
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let cloak_device = npc.cloak_gear.device;
@@ -620,6 +621,7 @@ impl FightTerms {
             cloaked: cloak.is_cloaked(),
             attacking,
             threatens_player: self.threatens_player,
+            plundering,
             emerging,
             cloak_scanner,
             has_cloak: cloak_device,
@@ -2505,7 +2507,12 @@ impl Session {
             state: self.player,
             condition: self.condition,
             reserves: self.pilot.reserves,
-            hull: self.hull,
+            // Its class's `Crew`, which a pirate's plunder tests read
+            // (`_AIFindShipToPlunder` @0x7fe04, `_PirateWarshipAI` @0x8c667).
+            hull: HullSpec {
+                crew: record.map_or(0, |record| record.crew),
+                ..self.hull
+            },
             handling: self.stats.handling,
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
@@ -2706,6 +2713,7 @@ impl Session {
             cloaked: false,
             attacking: None,
             threatens_player: false,
+            plundering: false,
             emerging: false,
             cloak_scanner: scanner.on_screen,
             has_cloak: false,
@@ -22189,20 +22197,29 @@ pub(super) mod tests {
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;
-        for (goal, attacking) in [
-            (Goal::Attack(player), Some(player)),
-            (Goal::Snipe(player), Some(player)),
-            (Goal::Flee(player), None),
-            (Goal::Inspect(player), None),
-            (Goal::Idle, None),
+        let plunder = |hopeless| Goal::Plunder {
+            ship: player,
+            hopeless,
+        };
+        for (goal, attacking, plundering) in [
+            (Goal::Attack(player), Some(player), false),
+            (Goal::Snipe(player), Some(player), false),
+            (Goal::Flee(player), None, false),
+            (Goal::Inspect(player), None, false),
+            (Goal::Idle, None, false),
+            (plunder(false), None, true),
+            (plunder(true), None, true),
+            (Goal::CountWait { ticks_left: 3 }, None, false),
         ] {
             npc.goal = goal;
+            let fighter = terms(false).fighter(&mut npc);
             assert_eq!(
-                terms(false).fighter(&mut npc).attacking,
-                attacking,
-                "{goal:?}"
+                (fighter.attacking, fighter.plundering),
+                (attacking, plundering),
+                "{goal:?}: point defence reads goal 4 alone"
             );
         }
+        npc.goal = Goal::Idle;
         assert!(terms(true).fighter(&mut npc).threatens_player);
         assert!(!terms(false).fighter(&mut npc).threatens_player);
         let fighter = terms(false).fighter(&mut npc);

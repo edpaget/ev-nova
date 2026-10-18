@@ -774,10 +774,16 @@ impl Npc {
     /// ship's thrust and fire (@0x34a54-0x34a72): the fight fires only its
     /// fighter bays and point defence, its pick kept
     /// ([`fire::gated`](crate::ai::fire::gated)). The waits the engine
-    /// doesn't fly yet (a landed ship's stay, the pirates' holds, a
-    /// launched fighter's, a plundered escort's, the warp out after a
-    /// leader) will count here once built (rdm weapons-fidelity
+    /// doesn't fly yet (a landed ship's stay, the pirates' holds after a
+    /// plunder, a launched fighter's, a plundered escort's, the warp out
+    /// after a leader) will count here once built (rdm weapons-fidelity
     /// phase 17's findings).
+    ///
+    /// A pirate's count wait ([`Goal::CountWait`]) runs it while ticks are
+    /// left: it is the original's +0x4c too, read so by
+    /// `_ExtendedIsThreatToPlayer` (@0x81bed). `_HandleShip` exempts it from
+    /// its gate ([`Npc::count_wait`]), and so does
+    /// [`fire::gated`](crate::ai::fire::gated).
     #[must_use]
     pub fn wait_running(&self) -> bool {
         matches!(
@@ -786,7 +792,16 @@ impl Npc {
                 | Mode::HeldAtGate { .. }
                 | Mode::Coasting { .. }
                 | Mode::EnteringGate { .. }
-        )
+        ) || matches!(self.goal, Goal::CountWait { ticks_left } if ticks_left > 0)
+    }
+
+    /// Whether it is in its count wait, goal 0x16 ([`Goal::CountWait`]):
+    /// `_AIIsShipDoingCountWait` (@0x89857), which `_HandleShip` reads to
+    /// let it turn, thrust and fire while its wait runs (@0x3443f-0x34454,
+    /// @0x34a54-0x34a72).
+    #[must_use]
+    pub fn count_wait(&self) -> bool {
+        matches!(self.goal, Goal::CountWait { .. })
     }
 
     /// Whether it is waiting at the gate it comes out of
@@ -1720,6 +1735,54 @@ mod tests {
             !at_escort.threatens_player_extended(std::slice::from_ref(&at_escort), true),
             "a ship nobody leads"
         );
+    }
+
+    #[test]
+    fn a_pirate_plundering_the_player_threatens_it_and_one_in_its_count_wait_does_not() {
+        let plunder = Npc {
+            goal: Goal::Plunder {
+                ship: ShipRef::Player,
+                hopeless: false,
+            },
+            ..plain(1)
+        };
+        assert!(
+            plunder.threatens_player_among(&[]),
+            "0xd is no excluded state"
+        );
+        assert!(plunder.threatens_player_extended(&[], true));
+        // A hit sets its target to the player (`_DamageShip` @0x3be5d), but
+        // its wait (+0x4c) runs, and the next frame clears the target.
+        let waiting = Npc {
+            goal: Goal::CountWait { ticks_left: 20 },
+            target: Some(ShipRef::Player),
+            ..plain(1)
+        };
+        assert!(!waiting.threatens_player_extended(&[], true));
+        let done = Npc {
+            goal: Goal::CountWait { ticks_left: 0 },
+            ..waiting
+        };
+        assert!(done.threatens_player_extended(&[], true), "its wait is out");
+    }
+
+    #[test]
+    fn a_count_wait_runs_its_wait_while_ticks_are_left_and_is_always_a_count_wait() {
+        for (ticks_left, running) in [(0, false), (1, true), (120, true)] {
+            let waiting = Npc {
+                goal: Goal::CountWait { ticks_left },
+                ..plain(1)
+            };
+            assert_eq!(waiting.wait_running(), running, "{ticks_left}");
+            assert!(waiting.count_wait(), "{ticks_left}");
+        }
+        assert!(!plain(1).count_wait());
+        assert!(!plain(1).wait_running());
+        let coasting = Npc {
+            mode: Mode::Coasting { ticks_left: 3 },
+            ..plain(1)
+        };
+        assert!(coasting.wait_running() && !coasting.count_wait());
     }
 
     #[test]

@@ -45,7 +45,9 @@
 //!   launches ([`Armament::bay_to_launch`]) becomes the pick, with no
 //!   flag, before the passes (@0x8e6fa, @0x81411): a later find overrides
 //!   it, and a gun pass finding nothing fires it, which then finds it
-//!   reloading after its launch.
+//!   reloading after its launch. A plunderer (goal 0xd) launches only as
+//!   it snipes, after the passes (@0x87329-0x8732f): the bay overrides
+//!   their find, and fires if a pass raised the flag.
 //! - **The wait gate** ([`gated`], `_HandleShip` @0x34a54-0x34a72): while
 //!   its AI wait runs ([`Npc::wait_running`]) the fight fires nothing of
 //!   its trigger but its fighter bays and its point defence, and its pick
@@ -150,15 +152,17 @@
 //!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
 //!   @0x80c5b), else uninitialised stack: here the bearing.
 //! - The whole-degree truncation in the arc test (@0x80c7f, @0x80c95).
-//! - `_LowLevelAIHandler`'s second `_AILaunchFighter` in the snipe, after
-//!   its passes (@0x8732f), which writes the bay over the frame's pick
-//!   only when the attack block's launch failed or under goal 0xd: the
-//!   engine's sorties never fail and it has no goal 0xd (rdm phase
-//!   weapons-fidelity/phase-30-snipe-left-out-of-phase-17).
-//! - The goal-22 and escape-pod (class 0x2ff) exemptions from the wait
-//!   gate (@0x34a5d-0x34a72): the engine has neither (rdm phases
-//!   combat-ai-fidelity/phase-9-pirates-disable-and-board and
-//!   ship-handling-fidelity/phase-7-npc-escape-pods-and-escape-ships).
+//! - `_LowLevelAIHandler`'s second `_AILaunchFighter` in the snipe under
+//!   goal 4, after its passes (@0x8732f), which writes the bay over the
+//!   frame's pick only when the attack block's launch failed: the engine's
+//!   sorties never fail (rdm phase
+//!   weapons-fidelity/phase-30-snipe-left-out-of-phase-17). Under goal 0xd
+//!   it is the only launch, and is built: a hopeless plunderer sniping
+//!   launches its fighters after its passes, the bay its pick.
+//! - The escape pod's (class 0x2ff) exemption from the wait gate
+//!   (@0x34a69-0x34a72): the engine has no NPC escape pod (rdm phase
+//!   ship-handling-fidelity/phase-7-npc-escape-pods-and-escape-ships). A
+//!   pirate's count wait (goal 22) is exempt ([`gated`]).
 //! - `_ShipTurnRate`'s own factors, which [`suitable_missile`] reads
 //!   through the target's turn rate: rdm
 //!   system-traffic-fidelity/phase-17-npc-skill-and-speed-factors.
@@ -525,11 +529,12 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
     let bays = launches(npc, around);
-    let (only, keep) = pick(npc, around, rules, bays);
+    let after = launches_after_snipe(npc, around);
+    let (only, keep) = pick(npc, around, rules, (bays, after));
     Trigger {
         only,
         keep,
-        bays,
+        bays: bays || after,
         point_defence: asks_turret(npc, around),
         ..Trigger::default()
     }
@@ -541,7 +546,7 @@ pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
 /// never its pick either.
 #[must_use]
 pub fn trigger_holding_fighters(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
-    let (only, keep) = pick(npc, around, rules, false);
+    let (only, keep) = pick(npc, around, rules, (false, false));
     Trigger {
         only,
         keep,
@@ -557,9 +562,26 @@ fn launches(npc: &Npc, around: &Surroundings) -> bool {
     npc.goal.attacking().is_some_and(|ship| around.live(ship))
 }
 
+/// Whether `npc` launches its fighters after its passes: plundering a
+/// ship live in the system while it snipes, as the snipe substate ends
+/// every frame with `_AILaunchFighter` (@0x87329-0x8732f), which under
+/// goal 0xd is the only launch, its high level making none. Under goal 4
+/// it is a second call, which launches only when the high level's failed:
+/// rdm:phase/weapons-fidelity/phase-30-snipe-left-out-of-phase-17.
+fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
+    let Some(ship) = npc.goal.plundering().filter(|&ship| around.live(ship)) else {
+        return false;
+    };
+    around.state_of(ship).is_some_and(|at| {
+        pursuit::frame_of(npc, &at, disabled(around, ship))
+            .is_some_and(|frame| frame.iter().any(|body| body.manoeuvre == Manoeuvre::Snipe))
+    })
+}
+
 /// The part of `npc`'s trigger the fight fires: all of it, but while its
 /// AI wait runs ([`Npc::wait_running`]) only its fighter bays and its
-/// point defence, its pick kept. `_HandleShip` jumps past its thrust and
+/// point defence, its pick kept; a pirate's count wait is exempt
+/// ([`Npc::count_wait`], @0x34a5d-0x34a67). `_HandleShip` jumps past its thrust and
 /// its whole fire block while +0x4c is above 0 (@0x34a54-0x34a72 →
 /// @0x3501f), so the pick is neither fired nor cleared (@0x35012); the
 /// point defence (`_AIFireTurret` → `_HandleShipPointDefense` @0x80b0d)
@@ -567,7 +589,7 @@ fn launches(npc: &Npc, around: &Surroundings) -> bool {
 #[must_use]
 pub fn gated(npc: &Npc) -> Trigger {
     let trigger = npc.trigger;
-    if !npc.wait_running() {
+    if !npc.wait_running() || npc.count_wait() {
         return trigger;
     }
     Trigger {
@@ -643,13 +665,14 @@ fn disabled(around: &Surroundings, ship: ShipRef) -> bool {
 }
 
 /// The weapon [`trigger`] fires, if any, and the pick `npc` holds after
-/// its passes, by `rules`, its bay written as its pick first when it
-/// `launches` (see the module docs).
+/// its passes, by `rules`, its bay written as its pick before them when it
+/// launches first, and after them when it launches last (see the module
+/// docs).
 fn pick(
     npc: &Npc,
     around: &Surroundings,
     rules: FireRules,
-    launches: bool,
+    (launches, after): (bool, bool),
 ) -> (Option<WeaponId>, Option<WeaponId>) {
     let mut passes = Passes {
         pick: npc.pick,
@@ -665,6 +688,11 @@ fn pick(
         for body in frame.iter() {
             passes.run(&sight, body);
         }
+    }
+    // The snipe's `_AILaunchFighter` under goal 0xd, after its passes
+    // (@0x8732f): the bay is the pick, the flag as the passes left it.
+    if after && let Some(bay) = npc.armament.bay_to_launch(&npc.rounds) {
+        passes.pick = Some(bay);
     }
     (passes.pick.filter(|_| passes.flag), passes.pick)
 }
@@ -2264,6 +2292,73 @@ mod tests {
     }
 
     #[test]
+    fn a_hopeless_plunderer_launches_its_fighters_after_its_snipes_passes_and_never_otherwise() {
+        // Goal 0xd's high level makes no launch (goal 4's is @0x8e6fa);
+        // the snipe's own after its passes is the only one
+        // (@0x87329-0x8732f), the bay written over the passes' pick with
+        // no flag (@0x81411).
+        let carrier = |gun: WeaponRecord, hopeless: bool| {
+            let goal = Goal::Plunder {
+                ship: ShipRef::Player,
+                hopeless,
+            };
+            let mut npc = shooter(&[gun, bay(150)], goal);
+            npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+            npc
+        };
+        let found = trigger_at_player(&carrier(gun(128, 1, 1), true), 0.0, -200.0);
+        assert_eq!(
+            (found.only, found.keep, found.bays),
+            (id(150), id(150), true),
+            "the gun's flag fires the bay"
+        );
+        let out = trigger_at_player(&carrier(short(128), true), 0.0, -200.0);
+        assert_eq!((out.only, out.keep, out.bays), (None, id(150), true));
+        let mut moving = carrier(gun(128, 1, 1), true);
+        moving.state.velocity = Vec2::new(0.36, 0.0);
+        let braking = trigger_at_player(&moving, 0.0, -200.0);
+        assert_eq!(
+            (braking.only, braking.keep, braking.bays),
+            (None, id(150), true)
+        );
+        let mut reloading = carrier(gun(128, 1, 1), true);
+        reloading.armament.hold(WeaponId(150));
+        let held = trigger_at_player(&reloading, 0.0, -200.0);
+        assert_eq!(
+            (held.only, held.keep),
+            (id(128), id(128)),
+            "no launch, its gun"
+        );
+        for (y, what) in [(-200.0, "approaching"), (-100.0, "dogfighting")] {
+            let plain = trigger_at_player(&carrier(gun(128, 1, 1), false), 0.0, y);
+            assert_eq!((plain.only, plain.bays), (id(128), false), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_plunderer_fires_nothing_at_a_disabled_victim_until_phase_10_docks_it() {
+        let mut npc = shooter(
+            &[gun(128, 1, 1), bay(150)],
+            Goal::Plunder {
+                ship: ShipRef::Player,
+                hopeless: true,
+            },
+        );
+        npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+        let npcs = [npc.clone()];
+        let mut player = player_at(SHOOTER.x, SHOOTER.y - 200.0, 50.0);
+        player.condition = Condition::Disabled;
+        let around = Surroundings {
+            player: Some(player),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            trigger(&npc, &around, FireRules::default()),
+            Trigger::default()
+        );
+    }
+
+    #[test]
     fn a_dogfighter_launching_a_bay_leads_from_the_bay_and_wants_the_plain_bearing() {
         // Holding its gun at a crossing target in the box, a carrier whose
         // bay is ready launches it before its low level (@0x8e6fa,
@@ -3086,6 +3181,17 @@ mod tests {
             npc.mode = mode;
             assert_eq!(gated(&npc), FULL, "{mode:?}");
         }
+    }
+
+    #[test]
+    fn a_pirates_count_wait_is_exempt_from_the_wait_gate() {
+        // `_AIIsShipDoingCountWait` lets its trigger through (@0x34a5d-0x34a67).
+        let mut npc = shooter(&[gun(128, 1, 1)], Goal::CountWait { ticks_left: 5 });
+        npc.trigger = FULL;
+        assert!(npc.wait_running());
+        assert_eq!(gated(&npc), FULL);
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 5 };
+        assert_eq!(gated(&npc), FULL, "its wait is one, its goal exempts it");
     }
 
     // The snipe.

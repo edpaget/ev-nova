@@ -307,6 +307,7 @@ pub mod hull;
 pub mod impact;
 pub mod ion;
 pub mod jamming;
+pub mod plunder;
 pub mod projectile;
 pub mod report;
 pub mod shockwave;
@@ -332,6 +333,7 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
 use jamming::Jamming;
+use plunder::Plunderer;
 use projectile::{
     BombLaunch, DecayStep, Fuse, Guide, Jam, LockAngle, Meeting, ProximityFuse, Shot, ShotId,
     ShotLayer, Sight, Source, Target,
@@ -774,6 +776,11 @@ pub struct Fighter<'a> {
     /// @0x81b70): only then does its point defence fire at the player
     /// ([`defence::choose_ship`]). Never the player's own.
     pub threatens_player: bool,
+    /// Whether it plunders, a pirate's goal 0xd (`_AIShipIsPlundering`
+    /// @0x89841): its shots leave disable-only, its beams at its target
+    /// too, and its and its escorts' hits on their targets can't kill
+    /// ([`plunder`]). Never the player.
+    pub plundering: bool,
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
@@ -1654,7 +1661,7 @@ impl Combat {
     #[allow(clippy::too_many_arguments)]
     fn launch(
         &mut self,
-        (side, ties): (Side, Ties),
+        (side, ties, plunderer): (Side, Ties, Plunderer),
         muzzle: &mut Muzzle,
         launch: &Launch,
         (quarry, aimed_at): (Option<Quarry>, Option<ShipRef>),
@@ -1699,6 +1706,7 @@ impl Combat {
                 aimed_at,
                 ..Beam::launch(weapon, ship, fleet, &from, aiming)
             };
+            beam.disable_only |= plunder::beam_disables(plunderer, aimed_at, targets);
             self.beam_exit(muzzle, &mut beam, toward, chance);
             self.beams.push(beam);
             false
@@ -1743,6 +1751,7 @@ impl Combat {
             if let Some(Quarry::Ship(_)) = quarry {
                 shot.layer = ShotLayer::Shots;
             }
+            shot.disable_only |= plunder::shot_disables(plunderer, aimed_at, targets);
             shot.roll_at_launch(self.field.interference, chance);
             // A dropped bomb or rocket reads no heading, so it is never sent
             // broadside, as the gate it fails holds the broadside
@@ -2002,7 +2011,7 @@ impl Combat {
         chance: &mut dyn Chance,
     ) {
         let (state, hull) = (fighter.state, fighter.hull);
-        let sides = (fighter.side(), fighter.ties());
+        let sides = (fighter.side(), fighter.ties(), Plunderer::of(fighter));
         let drawn = fighter.drawn_heading;
         let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
         let mut destructs = false;
@@ -2077,6 +2086,7 @@ impl Combat {
             let (state, hull) = (fighter.state, fighter.hull);
             let side = fighter.side();
             let ties = fighter.ties();
+            let plunderer = Plunderer::of(fighter);
             let guard = fighter.guard();
             let shots = &self.shots;
             let candidates = &candidates;
@@ -2113,7 +2123,7 @@ impl Combat {
                 let drawn = fighter.drawn_heading;
                 let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
                 let shot = self.launch(
-                    (side, ties),
+                    (side, ties, plunderer),
                     &mut muzzle,
                     &launch,
                     (Some(quarry), aimed_at),
@@ -2496,7 +2506,14 @@ impl Combat {
         self.ended_shots += ended;
         self.shots = kept;
         for (parent, target) in released {
-            self.release(&parent, target, sides, arsenal, chance);
+            // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):
+            // its plunder as it is now, not the parent's flag.
+            let owner = fighters
+                .iter()
+                .find(|fighter| fighter.ship == parent.firer)
+                .filter(|_| matches!(parent.source, Source::Ship(_)))
+                .map_or_else(Plunderer::default, Plunderer::of);
+            self.release(&parent, (target, owner), sides, arsenal, chance);
         }
         hits
     }
@@ -2633,6 +2650,13 @@ impl Combat {
                 .filter(|_| landed.direct)
                 .and_then(|by| fighters.iter().find(|fighter| fighter.ship == by))
                 .map(|firer| firer.state.position);
+            // A plunderer's real hit on its target (`_DamageShip`
+            // @0x3a895-0x3a9a3).
+            let spared = landed.direct && plunder::cant_kill(landed.by, landed.ship, fighters);
+            let hit = Hit {
+                cant_kill: landed.hit.cant_kill || spared,
+                ..landed.hit
+            };
             let fighter = &mut fighters[index];
             if let Some(dose) = landed.ion {
                 fighter.ion.take(dose, fighter.state.position);
@@ -2654,13 +2678,7 @@ impl Combat {
             let was_disabled = fighter.held_disabled
                 || *fighter.condition != Condition::Intact
                 || damage::disabled(fighter.reserves.armor, &fighter.hull, rule);
-            damage::take(
-                fighter.reserves,
-                landed.hit,
-                &fighter.hull,
-                rule,
-                was_disabled,
-            );
+            damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
             self.strikes.push(Strike {
                 ship: landed.ship,
                 by: landed.by,
@@ -2844,7 +2862,7 @@ impl Combat {
     fn release(
         &mut self,
         parent: &Shot,
-        target: Option<ShipRef>,
+        (target, owner): (Option<ShipRef>, Plunderer),
         sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
@@ -2896,6 +2914,7 @@ impl Combat {
                 break;
             }
             shot.id = self.next_id();
+            shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, chance);
             self.shots.push(shot);
         }
@@ -3577,6 +3596,7 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod exit_steps;
+    mod plunder_fire;
     mod strike_terms;
     mod weapon_glow;
 
@@ -3601,6 +3621,7 @@ mod tests {
         cloaked: bool,
         attacking: Option<ShipRef>,
         threatens_player: bool,
+        plundering: bool,
         emerging: bool,
         cloak_scanner: bool,
         has_cloak: bool,
@@ -3656,6 +3677,7 @@ mod tests {
                 cloaked: false,
                 attacking: None,
                 threatens_player: false,
+                plundering: false,
                 emerging: false,
                 cloak_scanner: false,
                 has_cloak: false,
@@ -3708,6 +3730,7 @@ mod tests {
                 cloaked: self.cloaked,
                 attacking: self.attacking,
                 threatens_player: self.threatens_player,
+                plundering: self.plundering,
                 emerging: self.emerging,
                 cloak_scanner: self.cloak_scanner,
                 has_cloak: self.has_cloak,

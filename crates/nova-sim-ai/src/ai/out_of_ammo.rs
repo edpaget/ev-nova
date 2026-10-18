@@ -23,16 +23,17 @@
 //!     holds its ship as the target, @0x8ce34-0x8ce42), and with none,
 //!     patrolling, holding or idle, it stops ([`after_patrol`]); leaving
 //!     by hyperspace (state 2) it leaves.
-//!   - A warship of a government with `Flags` 0x1000 ([`PLUNDERS`])
-//!     thinks as `_PirateWarshipAI` (`_AIDispatch` @0x8ffc8-0x8fff0), which
-//!     has no `Flags2` 0x0080 test: it never retreats so.
+//!   - A leaderless warship of a government with `Flags` 0x1000
+//!     ([`PLUNDERS`]) thinks as `_PirateWarshipAI` (`_AIDispatch`
+//!     @0x8ffc8-0x8fff0, [`pirate`](super::pirate)), which has no `Flags2`
+//!     0x0080 test: it never retreats so.
 //! - **The fully-dry drop**: a warship attacking (state 4) with
 //!   [`AmmoLeft::Dry`] goes to state 0, sub 0, target and travel stellar
 //!   -1: [`Goal::Idle`] ([`drop_when_dry`]). With `Flags2` 0x0080 the
 //!   retreat has already made state 4 into 3, so the drop reaches only a
-//!   ship without it. `_PirateWarshipAI` drops the same way (@0x8c848-0x8c887,
-//!   its state 0xd too, rdm combat-ai-fidelity phase 9's); the interceptor
-//!   has no drop.
+//!   ship without it. `_PirateWarshipAI` drops the same way (@0x8c848-0x8c887),
+//!   its plunder (goal 0xd) too ([`pirate`](super::pirate)); the
+//!   interceptor has no drop.
 
 use crate::ai::Goal;
 use crate::ai::fire::{AmmoLeft, ammo_left};

@@ -9,9 +9,10 @@
 //!   hyperspace, while the player is in the system, by its government's
 //!   `Flags`, 0x0004 first. Its gate is the jump state +0x50 in
 //!   (-900, 0] (0xdda4c, 0xdd054; [`Npc::in_hyperspace`]), not
-//!   provocation (+0x96), so a provoked ship takes it too. A plunderer's
-//!   government ([`PLUNDERS`]) gives none: `_AIDispatch` sends its
-//!   warships to `_PirateWarshipAI` (@0x8ffc8-0x8fff0), which has no word.
+//!   provocation (+0x96), so a provoked ship takes it too. A leaderless
+//!   warship of a plunderer's government (`Flags` 0x1000) never thinks
+//!   here: `_AIDispatch` sends it to `_PirateWarshipAI` (@0x8ffc8-0x8fff0,
+//!   [`pirate`](super::pirate)), which has no word.
 //!   - **0x0004**: unless it already threatens the player or a ship the
 //!     player leads ([`Npc::threatens_player_among`], the original's
 //!     `_IsThreatToPlayer` @0x8b7b7, @0x8cb66), it turns on the player
@@ -108,14 +109,12 @@
 //! still hears its government's word and answers its attacker, but looks
 //! for no target: `_SelectWarshipTarget` runs only for goals 0, 1, 2,
 //! 6 and 0x14 (@0x8b835-0x8b875, @0x8bb56-0x8bba2, @0x8bbab-0x8bbc2), so
-//! with no word and no provocation it holds ([`idle`](super::idle)). A
-//! warship of a government with `Flags` 0x1000 ([`PLUNDERS`]) thinks as
-//! `_PirateWarshipAI` (`_AIDispatch` @0x8ffc8-0x8fff0), which with no
-//! target goes straight to its plunder and target search and its
-//! destination pick (@0x8c339-0x8c35d): it decides as if idle, leaving
-//! the hold on its first think. It takes no government's word and has no
-//! out-of-ammo retreat, but drops a target fully dry (@0x8c848-0x8c887).
-//! Its plunder itself isn't modelled here.
+//! with no word and no provocation it holds ([`idle`](super::idle)).
+//!
+//! A fleet's escort of a government with `Flags` 0x1000 thinks here,
+//! word and retreats included, as every fleet escort does until
+//! rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts gives them
+//! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
@@ -129,7 +128,7 @@ use crate::ai::{
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
-use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, PLUNDERS, WARSHIPS_RETREAT};
+use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, WARSHIPS_RETREAT};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
@@ -163,11 +162,10 @@ pub struct Retreat {
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
-/// says and taking its government's word on the player when `word` is
-/// some, which says whether it reaches a blessed player
+/// says and taking its government's word on the player, which reaches a
+/// blessed player as `always_attacks` says
 /// ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)):
 /// its goal, or none when it has nothing to fight (see the module docs).
-/// A plunderer's warship takes no word (`_PirateWarshipAI` has none).
 ///
 /// After a word, the retreat judges the ship by the goal the word has
 /// just given it, an attack on its new target: the original sets the
@@ -195,12 +193,11 @@ pub fn hunt(
     npc: &Npc,
     around: &Surroundings,
     retreat: Retreat,
-    word: Option<RuleSource>,
+    always_attacks: RuleSource,
     rules: TargetRules,
     chance: &mut dyn Chance,
 ) -> Hunt {
-    let always_attacks = word;
-    let word = word.and_then(|always_attacks| government_word(npc, around, always_attacks));
+    let word = government_word(npc, around, always_attacks);
     let dropped_target = word == Some(Word::DropTarget);
     let word_provokes = word == Some(Word::TakePlayer);
     let nothing = |turns_on_player| Hunt {
@@ -283,10 +280,10 @@ fn releases_blessed(
     npc: &Npc,
     ship: ShipRef,
     around: &Surroundings,
-    always_attacks: Option<RuleSource>,
+    always_attacks: RuleSource,
 ) -> bool {
     ship == ShipRef::Player
-        && always_attacks == Some(RuleSource::Bible)
+        && always_attacks == RuleSource::Bible
         && around.govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER)
         && around.blessed(npc.govt)
 }
@@ -326,6 +323,9 @@ impl Hunt {
             provokes: self.provokes,
             comm_call: None,
             calls_reinforcements: false,
+            board_wait: None,
+            clears_target: false,
+            keeps_pursuit: false,
         }
     }
 }
@@ -440,29 +440,21 @@ impl Behaviour for Warship {
 
     /// Its [`hunt`], or with nothing to fight its business ([`idle`]),
     /// the hunt's call on the player kept either way; an attack fully dry
-    /// is dropped ([`out_of_ammo::drop_when_dry`]). A plunderer's warship
-    /// takes no word and has no out-of-ammo retreat, as
-    /// `_PirateWarshipAI`.
+    /// is dropped ([`out_of_ammo::drop_when_dry`]).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        let plunders = around.govts.flag(npc.govt, PLUNDERS);
         let retreat = Retreat {
             person_coward: self.person_coward,
-            out_of_ammo: !plunders,
             ..WARSHIP_RETREAT
         };
-        let plunderer;
-        let npc = if npc.goal == Goal::Hold && plunders {
-            plunderer = Npc {
-                goal: Goal::Idle,
-                ..npc.clone()
-            };
-            &plunderer
-        } else {
-            npc
-        };
-        let word = (!plunders).then_some(self.always_attacks);
-        let decision =
-            hunt(npc, around, retreat, word, self.target, chance).or(|| idle(npc, around, chance));
+        let decision = hunt(
+            npc,
+            around,
+            retreat,
+            self.always_attacks,
+            self.target,
+            chance,
+        )
+        .or(|| idle(npc, around, chance));
         Decision {
             goal: out_of_ammo::drop_when_dry(npc, decision.goal),
             ..decision
@@ -540,20 +532,6 @@ mod tests {
             Goal::Attack(P),
             "its government's word"
         );
-    }
-
-    #[test]
-    fn a_held_warship_of_a_plundering_government_decides_as_its_type() {
-        let mut held = police();
-        held.govt = Some(TRADERS);
-        held.goal = Goal::Hold;
-        let govts = govts(PLUNDERS, 0);
-        assert_eq!(
-            decided_by(&govts, &[held.clone()], 0),
-            Goal::Land(StellarId(128))
-        );
-        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
-        assert_eq!(decided_by(&govts, &[held, pirate], 0), Goal::Attack(n(2)));
     }
 
     #[test]
@@ -1169,6 +1147,9 @@ mod tests {
                 provokes: true,
                 comm_call: None,
                 calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
             }
         );
         assert!(
@@ -1202,20 +1183,6 @@ mod tests {
         assert_eq!(
             worded(NEVER, &[hunting, pirate()], INTACT),
             Goal::Attack(P),
-            "nor a 0x0040 word"
-        );
-    }
-
-    #[test]
-    fn a_plundering_warship_takes_no_word() {
-        // `_AIDispatch` sends it to `_PirateWarshipAI` (@0x8ffc8-0x8fff0),
-        // which has none; rdm combat-ai-fidelity phase 9 reroutes it.
-        let npcs = [attacking(n(2)), pirate()];
-        assert_eq!(worded(ALWAYS | PLUNDERS, &npcs, INTACT), Goal::Attack(n(2)));
-        let hunting = [attacking(n(3)), hired()];
-        assert_eq!(
-            worded(NEVER | PLUNDERS, &hunting, INTACT),
-            Goal::Attack(n(3)),
             "nor a 0x0040 word"
         );
     }
@@ -1639,6 +1606,9 @@ mod tests {
             provokes: turns,
             comm_call: None,
             calls_reinforcements: false,
+            board_wait: None,
+            clears_target: false,
+            keeps_pursuit: false,
         }
     }
 
@@ -1715,6 +1685,9 @@ mod tests {
                 provokes: false,
                 comm_call: None,
                 calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
             }
         );
         let mut calm = grudger;
@@ -1731,6 +1704,9 @@ mod tests {
                 provokes: false,
                 comm_call: None,
                 calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
             },
             "no grudge: dropped, and nothing picked"
         );
@@ -1827,25 +1803,6 @@ mod tests {
             worded_decision(ALWAYS, &npcs, Condition::Intact, 0.0),
             turning(Goal::Idle, true),
             "fully dry without 0x0080, it drops the player at once"
-        );
-    }
-
-    #[test]
-    fn a_plundering_warship_drops_its_target_fully_dry_but_never_retreats_out_of_ammunition() {
-        // `_PirateWarshipAI` has the drop (@0x8c848-0x8c887) but no
-        // `Flags2` 0x0080 test.
-        let fight = Goal::Attack(n(2));
-        assert_eq!(
-            worded(PLUNDERS, &[short(fight, DRY, true), pirate()], INTACT),
-            Goal::Idle
-        );
-        assert_eq!(
-            worded(
-                PLUNDERS,
-                &[short(fight, ONLY_UNLIMITED, true), pirate()],
-                INTACT
-            ),
-            fight
         );
     }
 }
