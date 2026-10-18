@@ -272,6 +272,34 @@ mod tests {
         assert_eq!(sounds(&mut session), [SimSound::CaptureAssigned]);
     }
 
+    #[test]
+    fn a_boarding_let_go_closes_silently_and_resets() {
+        use crate::scan::Latches;
+        let catalog = boardable();
+        let mut session = quiet(&catalog);
+        crate::session::precalced::tests::convicted(&mut session);
+        session.let_go_of_boarding();
+        assert_eq!(session.boarding(), None);
+        assert_eq!(session.aboard, None);
+        assert_eq!(sounds(&mut session), []);
+        assert_eq!(session.scan_latches, Latches::ARMED, "the close's reset");
+        let mut captured = captured(&catalog);
+        captured.let_go_of_boarding();
+        assert_eq!(
+            captured.assign(Assignment::Escort, &mut Draws::of(&[])),
+            None,
+            "a capture awaiting its assignment let go too"
+        );
+    }
+
+    #[test]
+    fn the_flight_counts_its_own_line_down_a_tick() {
+        let mut session = quiet(&boardable());
+        session.comm_shown(10);
+        session.comm_ticked();
+        assert_eq!(session.comm_line(), line(1));
+    }
+
     // The loop.
 
     #[test]

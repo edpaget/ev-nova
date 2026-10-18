@@ -556,6 +556,14 @@ mod tests {
             [(Good::Commodity(0), 4), (Good::Commodity(3), 6)],
             "the player's six words copied to the old ship (@0x412e2-0x412fe)"
         );
+        let mut session = swapping(&catalog, RuleSource::Engine);
+        session.pilot.cargo.insert(Good::Commodity(6), 3);
+        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        assert_eq!(
+            session.pilot().held(Good::Commodity(6)),
+            3,
+            "past the six words the ships hold, a good stays with the player"
+        );
         let mut session = swapping(&catalog, RuleSource::Bible);
         session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
         assert_eq!(

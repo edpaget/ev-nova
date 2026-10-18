@@ -6213,7 +6213,6 @@ impl Session {
         let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
         // Where the player was, which the old ship takes (@0x411bd-0x411ea).
         let left = self.player;
-        let fuel_old = self.capture_fuel(&record).old;
         let old = self.old_ship_escort();
         // The commodities go to the old ship, and the player takes the
         // captured ship's below, as `capture_cargo` reads: before the
@@ -6230,12 +6229,10 @@ impl Session {
             self.retire_for_capture(record.id, chance);
         }
         let defaults = pilot::tally(record.defaults.iter().copied());
-        // The capacity worked out afresh, if the cache doesn't hold one:
-        // the old outfits', read before they change (@0x41786).
-        let fuel = CaptureFuel {
-            old: fuel_old,
-            ..self.capture_fuel(&record)
-        };
+        // The capacities the fuel is drawn below, the cache's (the old
+        // ship's) or the one worked out afresh from the old outfits, read
+        // before they change (@0x41786).
+        let fuel = self.capture_fuel(&record);
         let records = &self.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
         // whatever the ship-change rules say, and tops the stock weapons
