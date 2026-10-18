@@ -4,8 +4,10 @@
 //! Every button is a 4 x 3 `rlëD` of two frames whose frame 0 has clear
 //! corners ([`BUTTON_SIZE`], [`CLEAR_CORNER`]), the logo a 2 x 1 `PICT`
 //! strip of seven frames, the rollover a 3 x 2 `rlëD` of seven frames,
-//! and the background a 4 x 2 `PICT`, each placed by `cölr` 128 as the
-//! constants below say. [`main_screen_art`] is that art as the game
+//! each slide a 2 x 1 `PICT` strip of [`SLIDE_FRAMES`] frames, and the
+//! background a 4 x 2 `PICT`, each placed by `cölr` 128 as the constants
+//! below say. The slides' counts, 3, 2 and 3, start them at -1, -2 and
+//! -3 (-2.5 truncated toward zero). [`main_screen_art`] is that art as the game
 //! data's port reads it.
 
 use std::io;
@@ -22,7 +24,7 @@ use nova_rsrc::{Fork, ForkReader, ResType};
 
 use super::art::{
     BACKGROUND_PICT, BUTTON_SPINS, COLORS_ID, LOGO_SPIN, MainScreenArt, MainScreenSource,
-    ROLLOVER_SPIN,
+    ROLLOVER_SPIN, SLIDE_SPINS,
 };
 
 /// The buttons' `rlëD`s, New Pilot's first.
@@ -58,8 +60,16 @@ pub const ROLLOVER_SIZE: (u16, u16) = (3, 2);
 pub const ROLLOVER_FRAMES: u16 = 7;
 /// Where the rollover goes, from `menuTopCorner`.
 pub const ROLLOVER_POSITION: (i16, i16) = (150, 100);
+/// The slides' `PICT`s, the top row's first.
+pub const SLIDE_PICTS: [i16; 3] = [8030, 8031, 8032];
+/// Each slide frame's size.
+pub const SLIDE_FRAME: (u16, u16) = (2, 1);
+/// How many frames each slide has, one under another.
+pub const SLIDE_FRAMES: [u16; 3] = [3, 2, 3];
+/// Where each slide goes, from `menuTopCorner`.
+pub const SLIDE_POSITIONS: [(i16, i16); 3] = [(110, 50), (110, 60), (110, 70)];
 
-/// The main screen's resources: `cölr` 128, `spïn` 600 to 607, their
+/// The main screen's resources: `cölr` 128, `spïn` 600 to 610, their
 /// `rlëD`s and `PICT`s, and `PICT` 8000.
 #[must_use]
 pub fn main_screen_resources() -> Vec<(ResType, i16, Vec<u8>)> {
@@ -87,6 +97,10 @@ pub fn main_screen_resources() -> Vec<(ResType, i16, Vec<u8>)> {
         spin_record(ROLLOVER_SPRITE, ROLLOVER_SIZE, (1, ROLLOVER_FRAMES)),
     ));
     resources.push((RLED, ROLLOVER_SPRITE, rollover_sheet()));
+    for ((spin, id), frames) in SLIDE_SPINS.into_iter().zip(SLIDE_PICTS).zip(SLIDE_FRAMES) {
+        resources.push((Spin::TYPE, spin, spin_record(id, SLIDE_FRAME, (1, frames))));
+        resources.push((PICT, id, picture((SLIDE_FRAME.0, SLIDE_FRAME.1 * frames))));
+    }
     resources
 }
 
@@ -140,7 +154,7 @@ impl ForkReader for OneFile {
     }
 }
 
-/// A `cölr` placing the buttons, the logo and the rollover, its button
+/// A `cölr` placing the buttons, the logo, the rollover and the slides, its button
 /// style the stock one ([`ButtonStyle::STOCK`](crate::ui::ButtonStyle::STOCK)),
 /// so adding it to other test data leaves their buttons as they were.
 fn colors() -> Vec<u8> {
@@ -159,6 +173,9 @@ fn colors() -> Vec<u8> {
     }
     put(0xE0, LOGO_POSITION);
     put(0xE4, ROLLOVER_POSITION);
+    for (index, position) in SLIDE_POSITIONS.into_iter().enumerate() {
+        put(0xE8 + 4 * index, position);
+    }
     bytes
 }
 

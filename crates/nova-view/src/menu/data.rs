@@ -1,5 +1,5 @@
 //! The main screen's port over the game data ([`GameData`]): `cölr` 128,
-//! `spïn` 600 to 607 and what they name, decoded only as far as the core
+//! `spïn` 600 to 610 and what they name, decoded only as far as the core
 //! needs (the sizes, and the buttons' frame-0 masks). Thin lookups; the
 //! decisions are the core's.
 
@@ -9,8 +9,8 @@ use nova_data::records::colors::Colors;
 use nova_data::records::spin::Spin;
 
 use super::art::{
-    BACKGROUND_PICT, BUTTON_SPINS, ButtonArt, COLORS_ID, LOGO_SPIN, LogoArt, MainScreenArt,
-    MainScreenSource, ROLLOVER_SPIN, RolloverArt, SpriteMask,
+    BACKGROUND_PICT, BUTTON_SPINS, ButtonArt, COLORS_ID, LOGO_SPIN, MainScreenArt,
+    MainScreenSource, PictFrames, ROLLOVER_SPIN, RolloverArt, SLIDE_SPINS, SpriteMask,
 };
 use crate::geometry::Point;
 
@@ -38,30 +38,20 @@ impl MainScreenSource for GameData {
             });
         }
         let buttons: [ButtonArt; 6] = buttons.try_into().map_err(|_| "six buttons".to_owned())?;
-        let logo_spin = spin(self, LOGO_SPIN)?;
-        let logo_picture = self.resource(PICT, logo_spin.sprites_id).ok_or_else(|| {
-            format!(
-                "spïn {LOGO_SPIN} names PICT {}, which is missing",
-                logo_spin.sprites_id
-            )
-        })?;
-        decode_pict(logo_picture.resource.data())
-            .map_err(|err| format!("PICT {}: {err}", logo_spin.sprites_id))?;
-        let tiles = |n: i16| u16::try_from(n).unwrap_or(0).max(1);
-        let (columns, rows) = (tiles(logo_spin.x_tiles), tiles(logo_spin.y_tiles));
+        let logo = pict_frames(self, LOGO_SPIN, point(colors.logo))?;
+        let mut slides = Vec::with_capacity(SLIDE_SPINS.len());
+        for (spin_id, position) in SLIDE_SPINS.into_iter().zip(colors.slide) {
+            slides.push(pict_frames(self, spin_id, point(position))?);
+        }
+        let slides: [PictFrames; 3] = slides.try_into().map_err(|_| "three slides".to_owned())?;
         let rollover_spin = spin(self, ROLLOVER_SPIN)?;
         let rollover = sheet(self, ROLLOVER_SPIN, &rollover_spin)?;
         Ok(MainScreenArt {
             background: BACKGROUND_PICT,
             background_size: (background.width(), background.height()),
             buttons,
-            logo: LogoArt {
-                picture: logo_spin.sprites_id,
-                frame_size: (f32::from(logo_spin.x_size), f32::from(logo_spin.y_size)),
-                columns,
-                frames: columns.saturating_mul(rows),
-                position: point(colors.logo),
-            },
+            logo,
+            slides,
             rollover: RolloverArt {
                 sprite: rollover_spin.sprites_id,
                 frame_size: (
@@ -73,6 +63,26 @@ impl MainScreenSource for GameData {
             },
         })
     }
+}
+
+/// The `PICT` of frames `spïn` `id` names, decoded to check it, its
+/// frames placed at `position`: the frame size from the `spïn`, and the
+/// frame count from its tiles, as `_GetSpriteInfo` reads them.
+fn pict_frames(data: &GameData, id: i16, position: Point) -> Result<PictFrames, String> {
+    let spin = spin(data, id)?;
+    let found = data
+        .resource(PICT, spin.sprites_id)
+        .ok_or_else(|| format!("spïn {id} names PICT {}, which is missing", spin.sprites_id))?;
+    decode_pict(found.resource.data()).map_err(|err| format!("PICT {}: {err}", spin.sprites_id))?;
+    let tiles = |n: i16| u16::try_from(n).unwrap_or(0).max(1);
+    let (columns, rows) = (tiles(spin.x_tiles), tiles(spin.y_tiles));
+    Ok(PictFrames {
+        picture: spin.sprites_id,
+        frame_size: (f32::from(spin.x_size), f32::from(spin.y_size)),
+        columns,
+        frames: columns.saturating_mul(rows),
+        position,
+    })
 }
 
 /// `spïn` `id`.
@@ -112,7 +122,8 @@ mod tests {
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SIZE, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME,
         LOGO_FRAMES, LOGO_PICT, LOGO_POSITION, ROLLOVER_FRAMES, ROLLOVER_POSITION, ROLLOVER_SIZE,
-        ROLLOVER_SPRITE, game_data as game, main_screen_resources,
+        ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_FRAMES, SLIDE_PICTS, SLIDE_POSITIONS,
+        game_data as game, main_screen_resources,
     };
 
     /// The fixture's resources without (`ty`, `id`).
@@ -159,7 +170,7 @@ mod tests {
         assert_eq!(positions, BUTTON_POSITIONS.map(point));
         assert_eq!(
             art.logo,
-            LogoArt {
+            PictFrames {
                 picture: LOGO_PICT,
                 frame_size: (f32::from(LOGO_FRAME.0), f32::from(LOGO_FRAME.1)),
                 columns: 1,
@@ -176,6 +187,34 @@ mod tests {
                 position: point(ROLLOVER_POSITION),
             }
         );
+    }
+
+    #[test]
+    fn the_slides_resolve_from_colr_128_and_spins_608_to_610() {
+        let art = game(&main_screen_resources())
+            .main_screen_art()
+            .expect("resolves");
+        let expected = [0, 1, 2].map(|slide| PictFrames {
+            picture: SLIDE_PICTS[slide],
+            frame_size: (f32::from(SLIDE_FRAME.0), f32::from(SLIDE_FRAME.1)),
+            columns: 1,
+            frames: SLIDE_FRAMES[slide],
+            position: point(SLIDE_POSITIONS[slide]),
+        });
+        assert_eq!(art.slides, expected);
+    }
+
+    #[test]
+    fn the_fixtures_slides_are_strips_of_their_frames() {
+        let data = crate::menu::fixture::main_screen_data();
+        for (id, frames) in SLIDE_PICTS.into_iter().zip(SLIDE_FRAMES) {
+            let strip = picture(&data, id).expect("decodes");
+            assert_eq!(
+                (strip.width(), strip.height()),
+                (u32::from(SLIDE_FRAME.0), u32::from(SLIDE_FRAME.1 * frames)),
+                "{id}"
+            );
+        }
     }
 
     #[test]
@@ -239,6 +278,12 @@ mod tests {
                 without(RLED, ROLLOVER_SPRITE),
                 "spïn 607 names rlëD 8020, which is missing",
             ),
+            (without(Spin::TYPE, 608), "no spïn 608"),
+            (without(Spin::TYPE, 610), "no spïn 610"),
+            (
+                without(PICT, SLIDE_PICTS[1]),
+                "spïn 609 names PICT 8031, which is missing",
+            ),
         ];
         for (data, expected) in cases {
             assert_eq!(data.main_screen_art(), Err(expected.to_owned()));
@@ -256,6 +301,12 @@ mod tests {
         let broken = replacing(PICT, LOGO_PICT, &[0, 4]);
         let error = broken.main_screen_art().expect_err("undecodable");
         assert!(error.starts_with("PICT 8010: "), "{error}");
+        let broken = replacing(PICT, SLIDE_PICTS[2], &[0, 4]);
+        let error = broken.main_screen_art().expect_err("undecodable");
+        assert!(error.starts_with("PICT 8032: "), "{error}");
+        let broken = replacing(Spin::TYPE, 609, &[0, 4]);
+        let error = broken.main_screen_art().expect_err("undecodable");
+        assert!(error.starts_with("spïn 609: "), "{error}");
         let broken = replacing(Spin::TYPE, 600, &[0, 4]);
         let error = broken.main_screen_art().expect_err("undecodable");
         assert!(error.starts_with("spïn 600: "), "{error}");

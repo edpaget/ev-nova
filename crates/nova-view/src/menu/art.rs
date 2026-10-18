@@ -5,8 +5,10 @@
 //! game data: `PICT` 8000 behind everything, the six buttons' `spïn` 600
 //! to 605 (each an `rlëD` whose frame 0 is up and frame 1 down), the
 //! logo's `spïn` 606 (a `PICT` of frames), the rollover's `spïn` 607 (an
-//! `rlëD`, a frame per button and a last one for none), and their
-//! positions from `cölr` 128, offsets from `menuTopCorner`
+//! `rlëD`, a frame per button and a last one for none), the three slides'
+//! `spïn` 608 to 610 (each a `PICT` of frames, a row of buttons sliding
+//! in, `_GetSpriteInfo(608 + i)` @0x178fa), and their positions from
+//! `cölr` 128, offsets from `menuTopCorner`
 //! ([`interface_background`](super::background::interface_background)).
 //!
 //! The buttons are hit-tested per pixel against frame 0's mask:
@@ -29,6 +31,8 @@ pub const BUTTON_SPINS: [i16; 6] = [600, 601, 602, 603, 604, 605];
 pub const LOGO_SPIN: i16 = 606;
 /// The rollover's `spïn`.
 pub const ROLLOVER_SPIN: i16 = 607;
+/// The slides' `spïn`s, the top row's first.
+pub const SLIDE_SPINS: [i16; 3] = [608, 609, 610];
 /// The `cölr` the positions come from.
 pub const COLORS_ID: i16 = 128;
 
@@ -134,11 +138,11 @@ pub struct ButtonArt {
     pub mask: SpriteMask,
 }
 
-/// The logo: `PICT` `picture`, a grid of `frames` frames of
-/// `frame_size`, `columns` across, drawn at `position` from
-/// `menuTopCorner`.
+/// A `PICT` of frames, the logo or a slide: `PICT` `picture`, a grid of
+/// `frames` frames of `frame_size`, `columns` across, drawn at `position`
+/// from `menuTopCorner`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LogoArt {
+pub struct PictFrames {
     /// The `PICT`'s ID.
     pub picture: i16,
     /// Each frame's width and height.
@@ -148,11 +152,11 @@ pub struct LogoArt {
     /// How many frames there are.
     pub frames: u16,
     /// Where a frame's top-left goes, from `menuTopCorner` (`cölr` 128's
-    /// `LogoX & Y`).
+    /// `LogoX & Y`, or a slide's `Slide1x & y` to `Slide3x & y`).
     pub position: Point,
 }
 
-impl LogoArt {
+impl PictFrames {
     /// Where frame `frame`'s top-left is in the picture.
     #[must_use]
     pub fn frame_origin(&self, frame: u16) -> Point {
@@ -190,7 +194,10 @@ pub struct MainScreenArt {
     /// order.
     pub buttons: [ButtonArt; 6],
     /// The logo.
-    pub logo: LogoArt,
+    pub logo: PictFrames,
+    /// The three slides, the top row's first: the rows of buttons sliding
+    /// in as the screen appears.
+    pub slides: [PictFrames; 3],
     /// The rollover.
     pub rollover: RolloverArt,
 }
@@ -286,7 +293,7 @@ mod tests {
 
     #[test]
     fn a_logo_frame_lies_along_its_row_then_down() {
-        let logo = LogoArt {
+        let logo = PictFrames {
             picture: 8010,
             frame_size: (10.0, 4.0),
             columns: 2,
