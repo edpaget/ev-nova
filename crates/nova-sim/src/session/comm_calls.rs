@@ -491,7 +491,18 @@ mod tests {
             &|session, _| session.condition = Condition::Destroyed,
             Some(TRADERS),
             CALLER,
-            "the player dying",
+            "the player destroyed",
+        );
+        silent(
+            &|session, _| {
+                session.condition = Condition::Dying {
+                    ticks_left: 10,
+                    starting: false,
+                };
+            },
+            Some(TRADERS),
+            CALLER,
+            "the player breaking up",
         );
         silent(
             &|session, trader| {
