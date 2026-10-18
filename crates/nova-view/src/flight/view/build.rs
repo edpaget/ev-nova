@@ -112,6 +112,18 @@ impl<
         }
     }
 
+    /// Opens the last pilot at launch, once it is loaded, as
+    /// `_OpenLastPilotFile` and `_DoMainScreen`'s once-a-launch setup do
+    /// ([`Session::open_at_launch`]) on the flight's chance: every active
+    /// mission's auxiliary ships restart in the unguarded form
+    /// (@0x765d4-0x76637), and the player's system is explored (@0x1affe).
+    /// A session that failed opens nothing.
+    pub fn open_at_launch(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.open_at_launch(&mut self.chance);
+        }
+    }
+
     /// The flight of `session`, or why it could not start. No session
     /// starts landed, so flight's first frame redraws the bar, as
     /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.

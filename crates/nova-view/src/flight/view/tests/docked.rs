@@ -1704,8 +1704,9 @@ fn a_failed_flight_resumes_nothing() {
     assert!(script.borrow().asked.is_empty(), "nothing drawn");
 }
 
-#[test]
-fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance() {
+/// A catalog of mission 130 with two auxiliary ships, and a pilot that
+/// has accepted it.
+fn aux_errand() -> (impl Fn() -> FakeCatalog, Pilot) {
     let errands = || {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
@@ -1726,20 +1727,37 @@ fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance()
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
         view.pilot().expect("flying").clone()
     };
-    let aux = |view: &View| {
-        view.pilot()
-            .expect("flying")
-            .missions()
-            .get(0)
-            .expect("held")
-            .aux
+    (errands, pilot)
+}
+
+/// Mission 130's auxiliary ships in `view`.
+fn aux_of(view: &View) -> nova_sim::mission::aux_ships::AuxShips {
+    view.pilot()
+        .expect("flying")
+        .missions()
+        .get(0)
+        .expect("held")
+        .aux
+}
+
+/// A flight that failed to start, on `chance`.
+fn broken_flight(chance: SharedChance) -> View {
+    let broken = FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
     };
+    FlightView::new(broken).with_chance(chance)
+}
+
+#[test]
+fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance() {
+    let (errands, pilot) = aux_errand();
     let (script, chance) = scripted(&[9]);
     let mut view = FlightView::with_pilot(errands(), pilot).with_chance(chance);
-    assert_eq!(aux(&view).countdown, 139, "the accept's draw");
+    assert_eq!(aux_of(&view).countdown, 139, "the accept's draw");
     view.open_on_main_screen();
     assert_eq!(
-        aux(&view),
+        aux_of(&view),
         nova_sim::mission::aux_ships::AuxShips {
             countdown: 79,
             arrived: 0,
@@ -1748,12 +1766,30 @@ fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance()
     );
     assert_eq!(script.borrow().asked, [70]);
     let (script, chance) = scripted(&[]);
-    let broken = FakeCatalog {
-        character: Err(StartError::NoCharacter),
-        ..catalog()
-    };
-    let mut broken = FlightView::new(broken).with_chance(chance);
-    broken.open_on_main_screen();
+    broken_flight(chance).open_on_main_screen();
+    assert!(
+        script.borrow().asked.is_empty(),
+        "a failed flight draws nothing"
+    );
+}
+
+#[test]
+fn opening_at_launch_restarts_the_aux_countdown_on_the_flights_chance() {
+    let (errands, pilot) = aux_errand();
+    let (script, chance) = scripted(&[4]);
+    let mut view = FlightView::with_pilot(errands(), pilot).with_chance(chance);
+    view.open_at_launch();
+    assert_eq!(
+        aux_of(&view),
+        nova_sim::mission::aux_ships::AuxShips {
+            countdown: 74,
+            arrived: 0,
+            left: 2
+        }
+    );
+    assert_eq!(script.borrow().asked, [70]);
+    let (script, chance) = scripted(&[]);
+    broken_flight(chance).open_at_launch();
     assert!(
         script.borrow().asked.is_empty(),
         "a failed flight draws nothing"

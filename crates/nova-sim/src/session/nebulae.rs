@@ -121,6 +121,17 @@ impl Session {
         }
     }
 
+    /// `_DoMainScreen`'s once-a-launch exploration of the player's system
+    /// (`_ExploreNebulaeFromSystem(current)` @0x1affe), part of
+    /// [`Session::open_at_launch`]: `Explored` for the current system,
+    /// visible or not, explored or not. A nebula the load's sweep explored
+    /// already is not admitted again as it settles.
+    pub(super) fn explore_here(&mut self) {
+        self.raise(StoryEvent::Explored {
+            system: self.pilot.system,
+        });
+    }
+
     /// Withdraws the `Explored` events raised and not yet settled, keeping
     /// every other: a new pilot's, by the engine's reading of
     /// [`RuleKey::NebulaNewPilot`] (see the module docs).
@@ -522,6 +533,56 @@ mod tests {
                 .any(|note| matches!(note, ScriptNote::EventsDropped { .. }))
         );
         assert!(bit(&session, 7));
+    }
+
+    // The launch.
+
+    /// [`around_131`]'s pilot loaded at 131, its load's sweep settled
+    /// (which explores nebula 128, as the load explores 131), with bit 7
+    /// cleared again.
+    fn loaded_at_131() -> (FakePilotCatalog, Session) {
+        let catalog = nebulous(vec![around_131("")]);
+        let mut pilot = Pilot::new(&catalog, "").expect("starts");
+        pilot.system = SystemId(131);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        settle(&mut session, &catalog);
+        assert!(explored(&session, 128), "the sweep's");
+        run(&mut session, "!b7");
+        let _ = session.take_save_due();
+        (catalog, session)
+    }
+
+    #[test]
+    fn the_launch_explores_the_players_system() {
+        let (_, mut session) = loaded_at_131();
+        session.open_at_launch(&mut NeverFires);
+        assert_eq!(
+            session.story_raised(),
+            [StoryEvent::Explored {
+                system: SystemId(131)
+            }]
+        );
+    }
+
+    #[test]
+    fn the_launch_runs_the_on_explore_of_a_nebula_over_the_players_system_left_unexplored() {
+        let (catalog, mut session) = loaded_at_131();
+        session.pilot.galaxy.set_nebula_explored(N128, false);
+        session.galaxy.set_overlay(session.pilot.galaxy.clone());
+        session.open_at_launch(&mut NeverFires);
+        assert!(!session.take_save_due(), "the launch makes no save due");
+        settle(&mut session, &catalog);
+        assert!(explored(&session, 128));
+        assert!(bit(&session, 7), "its OnExplore ran");
+    }
+
+    #[test]
+    fn a_nebula_the_sweep_explored_runs_no_more_at_the_launch() {
+        let (catalog, mut session) = loaded_at_131();
+        session.open_at_launch(&mut NeverFires);
+        settle(&mut session, &catalog);
+        assert!(!bit(&session, 7), "once in all: the sweep's");
+        assert!(!session.take_save_due(), "no save is due");
     }
 
     // A new pilot and the gates.
