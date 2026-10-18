@@ -91,6 +91,64 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
     );
 }
 
+/// NPC `id` at `berth` of a swarming class, at the centre facing up.
+fn swarming(id: u32, berth: u32) -> Npc {
+    let mut ship = npc(id, ShipStats::new(FAST, &[]));
+    ship.berth = berth;
+    ship.hull.swarms = true;
+    ship
+}
+
+#[test]
+fn a_swarmer_whose_step_did_not_run_flies_at_its_own_swarm_leaders_aim_not_the_approach() {
+    use crate::ai::pursuit::{Body, Frame};
+    // Decisions four ticks apart: on tick 0 none of NPCs 1, 2, 3 and 5 is
+    // due, so no pursuit step stores a frame for its goal and the flight
+    // works one out from the swarm lead the traffic hands it.
+    let mut traffic = Traffic::with_interval(4);
+    // Two swarm leaders facing up, 1000 left (berth 1) and 1000 right
+    // (berth 2) of the centre: their swarmers' aims are up-left and
+    // up-right, the player straight up, so the approach wants no turn.
+    let mut left = swarming(1, 1);
+    left.state.position = Vec2::new(-1000.0, 0.0);
+    let mut right = swarming(2, 2);
+    right.state.position = Vec2::new(1000.0, 0.0);
+    // The swarmer on the left leader holds a frame for a goal it no longer
+    // has; the one on the right holds none.
+    let mut on_left = swarming(3, 3);
+    on_left.goal = Goal::Attack(ShipRef::Player);
+    on_left.swarm_leader = Some(1);
+    on_left.pursuit.frame = Some(Frame {
+        goal: Goal::Attack(ShipRef::Npc(crate::traffic::npc::NpcId(2))),
+        bodies: [
+            Some(Body {
+                manoeuvre: Manoeuvre::Approach,
+                heading: 0,
+            }),
+            None,
+        ],
+    });
+    let mut on_right = swarming(5, 4);
+    on_right.goal = Goal::Attack(ShipRef::Player);
+    on_right.swarm_leader = Some(2);
+    traffic.npcs = vec![left, right, on_left, on_right];
+    let world = World {
+        player: Some(player_at(Vec2::new(0.0, -2000.0))),
+        ..World::new(&[])
+    };
+    traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
+    let heading = |id: u32| {
+        traffic
+            .npcs()
+            .iter()
+            .find(|ship| ship.id.0 == id)
+            .map(|ship| ship.state.heading)
+    };
+    // FAST turns 3 a tick, each towards its own swarm leader's aim: left
+    // and right, where the approach at the player would hold 0.
+    assert_eq!((heading(3), heading(5)), (Some(357.0), Some(3.0)));
+}
+
 #[test]
 fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
     use crate::catalog::{WeaponId, WeaponRecord};
