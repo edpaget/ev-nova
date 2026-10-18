@@ -155,13 +155,14 @@ exclude_re = [
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
     "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
-    # The surface adapter's raw calls, as whole bodies only: pages and
-    # uploads delegate to `WgpuRenderer` (tested offscreen), and `submit`
+    # The surface adapter's raw calls, as whole bodies only: pages,
+    # uploads and clearing the pages delegate to `WgpuRenderer` (tested
+    # offscreen), and `submit`
     # is the raw configure / get_current_texture / present calls on a
     # window surface, which needs a display. Its decisions are the tested
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|submit) with \\(\\)$",
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|submit) with \\(\\)$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window
@@ -379,4 +380,20 @@ exclude_re = [
     # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
     # same tail.
     "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
+    # Super-xBR computes every texel the same way whichever thread computes
+    # it, so how its work is split changes how fast it runs, never a byte
+    # (pinned by `any_number_of_threads_enlarges_to_the_same_bytes`): the
+    # threads the machine has (1 or 0, which `max(1)` makes 1), each
+    # frame's share of them, a band's length (any length tiles the plane,
+    # as each texel's index is `band * band_len + n`), and whether one band
+    # is computed on the calling thread.
+    "nova-render/src/super_xbr\\.rs:.*replace threads -> usize with (0|1)$",
+    "nova-render/src/super_xbr\\.rs:.*replace / with (%|\\*) in enlarge_all$",
+    "nova-render/src/super_xbr\\.rs:189:30: replace \\* with (\\+|/) in Plane::from_fn$",
+    "nova-render/src/super_xbr\\.rs:196:25: replace <= with > in Plane::from_fn$",
+    # The shaders add 0.000001 to the edge strength only so a strength of
+    # 0 divides by something; the preset's is 3, where 3.000001 and
+    # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
+    # texel shows.
+    "nova-render/src/super_xbr\\.rs:442:55: replace \\+ with - in kernel$",
 ]

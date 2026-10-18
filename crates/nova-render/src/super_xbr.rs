@@ -148,7 +148,7 @@ fn enlarge_with(image: &Image, threads: usize) -> Image {
 
 /// The fewest texels a thread computes in a pass: smaller bands would
 /// spend more starting threads than they save.
-const MIN_BAND_TEXELS: usize = 16 * 1024;
+const MIN_BAND_TEXELS: usize = 16_384;
 
 /// A premultiplied RGBA texel, each channel 0 to 1.
 type Texel = [f32; 4];
@@ -399,9 +399,9 @@ fn hv_wd(wp: [f32; 6], [i1, i2, i3, i4, e1, e2, e3, e4]: [f32; 8]) -> f32 {
         + wp[2] * (df(i1, e2) + df(i3, e4) + df(e1, i2) + df(e3, i4))
 }
 
-/// GLSL's `smoothstep`.
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+/// GLSL's `smoothstep(0.0, edge1, x)`, the only way the passes call it.
+fn smoothstep(edge1: f32, x: f32) -> f32 {
+    let t = (x / edge1).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
@@ -439,7 +439,7 @@ fn kernel(window: &Window<Texel>, pass: &Pass) -> Texel {
     );
     let hv_edge = hv_wd(wp, [l.f, l.i, l.e, l.h, l.c, l.i5, l.b, l.h5])
         - hv_wd(wp, [l.e, l.f, l.h, l.i, l.d, l.f4, l.g, l.i4]);
-    let edge_strength = smoothstep(0.0, pass.strength + 0.000_001, d_edge.abs());
+    let edge_strength = smoothstep(pass.strength + 0.000_001, d_edge.abs());
     let (w1, w2) = (pass.weight1, pass.weight2);
     let two = [-w1, w1 + 0.5, w1 + 0.5, -w1];
     let four = [-w2, w2 + 0.25, w2 + 0.25, -w2];
@@ -749,6 +749,57 @@ mod tests {
         assert_eq!(level(&doubled, 4, 2), 0.0);
         assert_eq!(level(&doubled, 1, 1), b);
         assert_eq!(level(&doubled, 5, 3), 0.0);
+    }
+
+    /// Pass 1 at (3, 2) again, on planes that vary across both axes, so
+    /// the axis blend it picks (c3 or c4) shows in the colour.
+    ///
+    /// ```text
+    /// O rows: (0, 0.6, 0.8), (0, 0.2, 0.8), (0, 0.2, 0.8); Dg rows, each
+    /// (0.1, 0.5, 0.8). Taps: E = 0.2, I = 0.8, C = 0.6, G = 0.2, F4 = 0.8,
+    /// H5 = 0.8, P0 = 0, P3 = 0.8; F = P1 = H = P2 = 0.5, B = D = 0.1,
+    /// I4 = I5 = 0.8.
+    ///
+    /// d_edge = (0.4 + 0 + 0 + 0) - (0.3 + 0.4 + 0.4 + 0.3) = -1.0 < 0:
+    ///   c1 = w1 . (P2, H, F, P1) = 0.5; edge_strength =
+    ///   smoothstep(0, 3.000001, 1) = 0.259259.
+    /// hv_edge = (|f-c| + |i-i5| + |e-b| + |h-h5|)
+    ///         - (|e-d| + |f-f4| + |h-g| + |i-i4|)
+    ///         = (0.1 + 0 + 0.1 + 0.3) - (0.1 + 0.3 + 0.3 + 0) = -0.2 < 0:
+    ///   c3 = w2 . (D+G, E+H, F+I, F4+I4)
+    ///      = -0.3v + 0.7(v + .25) + 1.3(v + .25) - 1.6v = 0.5 + 0.1v
+    ///      = 0.508753 (c4 would be 0.5 - 0.3v = 0.473740).
+    /// colour = mix(0.5, 0.508753, 1 - 0.259259) = 0.506484, inside
+    ///   [0.2, 0.8]. With c4 it would be 0.480548.
+    /// ```
+    #[test]
+    fn pass_1_blends_along_the_weaker_axis_by_hyllians_formula() {
+        let original = greys(&[&[0.0, 0.6, 0.8], &[0.0, 0.2, 0.8], &[0.0, 0.2, 0.8]]);
+        let diagonal = greys(&[&[0.1, 0.5, 0.8], &[0.1, 0.5, 0.8], &[0.1, 0.5, 0.8]]);
+        let doubled = pass1(&original, &diagonal, 1);
+        assert_near(level(&doubled, 3, 2), 0.506_484);
+    }
+
+    /// The shaders' `hv_wd` with pass 0's weights, on levels that are exact
+    /// in binary.
+    ///
+    /// ```text
+    /// i1 = 1, i2 = 0.5, i3 = 0.25, i4 = 0, e1 = 0.75, e2 = 0.125, e3 = 1,
+    /// e4 = 0.5; wp = (2, 1, -1, 4, -1, 1).
+    ///
+    /// wp4 (|i1-i2| + |i3-i4|) = 4 (0.5 + 0.25) = 3
+    /// wp1 (|i1-e1| + |i2-e2| + |i3-e3| + |i4-e4|)
+    ///     = 2 (0.25 + 0.375 + 0.75 + 0.5) = 3.75
+    /// wp3 (|i1-e2| + |i3-e4| + |e1-i2| + |e3-i4|)
+    ///     = -1 (0.875 + 0.25 + 0.25 + 1) = -2.375
+    /// hv_wd = 3 + 3.75 - 2.375 = 4.375
+    /// ```
+    #[test]
+    fn hv_wd_is_hyllians_axis_edge_detector() {
+        let levels = [1.0, 0.5, 0.25, 0.0, 0.75, 0.125, 1.0, 0.5];
+        assert_eq!(hv_wd(PASS0.wp, levels), 4.375);
+        // Pass 1's weights keep the second sum alone.
+        assert_eq!(hv_wd(PASS1.wp, levels), 1.875);
     }
 
     /// Pass 2 at (1, 1) of a 3x3 plane, white but for its bottom-right 2x2:

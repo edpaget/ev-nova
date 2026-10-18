@@ -11,7 +11,7 @@ use std::rc::Rc;
 use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
 use nova_render::{
-    Enlarger, ImageError, ImageSource, NativeDetail, Renderer, Viewport, enlarger_for,
+    Enlarger, Gpu, ImageError, ImageSource, NativeDetail, Renderer, Viewport, enlarger_for,
     wgpu::OffscreenGpu,
 };
 use nova_view::geometry::Bounds;
@@ -158,6 +158,24 @@ fn with_super_xbr_flat_images_cover_the_pixels_they_cover_at_native_in_their_col
         assert!(anything_drawn(&native));
         assert!(native == enlarged, "at scale {scale}");
     }
+}
+
+#[test]
+fn cleared_pages_draw_nothing() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let mut list = DrawList::new();
+    list.picture(ImageKey::picture(1), at(2.0, 2.0));
+    let mut renderer = Renderer::new(Scene);
+    assert!(anything_drawn(&frame(&mut renderer, &list, &mut gpu)));
+
+    // The renderer still thinks its picture is placed, so this frame
+    // samples a page the GPU no longer has: it draws nothing.
+    gpu.clear_pages();
+    let cleared = frame(&mut renderer, &list, &mut gpu);
+
+    assert!(!anything_drawn(&cleared), "no page left to draw from");
 }
 
 #[test]
