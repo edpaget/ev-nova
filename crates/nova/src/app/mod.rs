@@ -3252,6 +3252,39 @@ mod tests {
     }
 
     #[test]
+    fn the_shortcut_into_a_saved_mode_the_monitor_lacks_warns_and_keeps_the_kind() {
+        let mut window = on_monitor();
+        let store = saved_fhd(false, "LG HDR 4K");
+        let mut app = app(&window)
+            .with_os(Os::Windows)
+            .with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
+        let warnings = app.take_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("1920 x 1080, 60 Hz"), "{warnings:?}");
+        let saved = stored(&store);
+        assert!(saved.fullscreen);
+        assert_eq!(saved.fullscreen_kind, fhd_on("LG HDR 4K"), "kept");
+    }
+
+    #[test]
+    fn a_chosen_mode_the_monitor_no_longer_lists_enters_borderless_with_a_warning() {
+        let mut window = on_monitor();
+        let store = MemorySettings::new();
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(qhd()))])
+            .with_settings(keeper(&store));
+        press_on(&mut app, &mut window, Key::Char('p'));
+        window.modes.clear();
+        press_on(&mut app, &mut window, Key::Space);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
+        let warnings = app.take_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("2560 x 1440, 144 Hz"), "{warnings:?}");
+    }
+
+    #[test]
     fn quitting_from_an_exclusive_mode_leaves_it_first_and_saves_nothing() {
         type Quit = fn(&mut TestApp, &mut FakeWindow) -> Control;
         let close: Quit = |app, window| handle(app, window, WindowEvent::CloseRequested);
