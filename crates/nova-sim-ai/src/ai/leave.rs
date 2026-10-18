@@ -245,6 +245,16 @@ mod tests {
     fn within_1000_of_the_centre_it_runs_out_and_exactly_1000_is_within() {
         assert_eq!(leg(&at(0.0, -1000.0, 0.0, 0.0), true), Leg::RunOut);
         assert_eq!(leg(&at(600.0, 800.0, 9.0, 9.0), false), Leg::RunOut);
+        assert_eq!(
+            leg(&at(800.0, -800.0, 0.0, 0.0), false),
+            Leg::Jump,
+            "1131 out"
+        );
+        assert_eq!(
+            leg(&at(-700.0, 700.0, 0.0, 0.0), false),
+            Leg::RunOut,
+            "990 out"
+        );
         assert_eq!(leg(&at(0.0, 0.0, 0.0, 0.0), false), Leg::RunOut);
         assert_eq!(
             leg(&at(f32::NAN, 0.0, 0.0, 0.0), false),

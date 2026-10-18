@@ -102,7 +102,6 @@ fn run_out(state: &ShipState, handling: &Handling) -> Controls {
     Controls {
         thrust: fire::off_by(state.heading, out).abs() < handling.turn_rate + RUN_OUT_THRUST,
         turn: steer(state.heading, f32::from(out), handling),
-        reverse: false,
         ..Controls::default()
     }
 }

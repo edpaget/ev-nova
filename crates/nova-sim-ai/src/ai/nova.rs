@@ -1724,6 +1724,18 @@ mod tests {
             },
             "the mission hunt (@0x8d6b7)"
         );
+        let gives_up = NovaAi::default().with(AiType::Warship, Rc::new(Turning));
+        let disabled = with_player(&hunters, Condition::Disabled);
+        let gave_up = gives_up.decision(&hunters[0], &disabled, &mut Draws::of(&[]));
+        assert_eq!(
+            (
+                gave_up.goal,
+                gave_up.turns_on_player,
+                gave_up.dropped_target
+            ),
+            (Goal::JumpOut, false, true),
+            "giving up, it turns on nobody; the rest is its type's"
+        );
         let ai = NovaAi::default().with(AiType::BraveTrader, Rc::new(Turning));
         let brave = [of(2, AiType::BraveTrader)];
         let around_brave = with_player(&brave, Condition::Intact);

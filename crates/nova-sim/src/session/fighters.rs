@@ -1857,6 +1857,21 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_a_fighter_not_in_the_system_follows_by_its_ship_types_fuel() {
+        let catalog = two_bays();
+        let mut session = both_out(&catalog, RuleSource::Engine);
+        for index in 0..2 {
+            let id = session.fleet[index].take().expect("placed");
+            session.traffic.remove(id);
+        }
+        assert_eq!(
+            jumped_with(&mut session, &catalog),
+            [VIPER],
+            "the Viper's type holds a jump's fuel, the Dart's none"
+        );
+    }
+
+    #[test]
     fn by_the_other_jump_fuel_reading_a_fighter_with_an_empty_tank_is_abandoned() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);

@@ -2,8 +2,9 @@
 //! a waiting NPC holds its fire through the fight, as `_HandleShip` skips
 //! its fire block while its AI wait +0x4c runs (@0x34a54-0x34a72; see
 //! [`fire::gated`](crate::ai::fire::gated)), and the traffic flies its
-//! snipers by the rulebook's reading (see
-//! [`snipe`](crate::traffic::snipe)), and its approaches and spawned
+//! snipers, and judges whether its leavers can jump, by the rulebook's
+//! readings (see [`snipe`](crate::traffic::snipe) and
+//! [`leave`](crate::ai::leave)), and its approaches and spawned
 //! afterburners by its readings (see [`pursuit`](crate::ai::pursuit) and
 //! [`afterburner`](crate::ai::afterburner)).
 
@@ -94,6 +95,19 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_snipe_brake_lead() {
         assert_eq!(session.world().snipe_brake_lead, source);
         let mut flown = None;
         session.step_traffic(|_, world| flown = Some(world.snipe_brake_lead));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_jump_fuel() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::NpcJumpFuel, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().npc_jump_fuel, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.npc_jump_fuel));
         assert_eq!(flown, Some(source));
     }
 }
