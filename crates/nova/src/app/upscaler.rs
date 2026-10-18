@@ -290,6 +290,43 @@ mod tests {
         assert_eq!(app.screen.offers, [(vec![NATIVE], NATIVE)]);
     }
 
+    const METAL_FX: Upscaler = Upscaler::MetalFxSpatial;
+
+    #[test]
+    fn a_stored_metal_fx_on_a_device_without_it_starts_native_with_one_warning() {
+        let (store, text) = holding("metalfx_spatial");
+        let mut gpu = RecordingGpu::probing(&[SHARP]);
+        let mut app = restored(&store, &mut gpu);
+        assert_eq!(gpu.upscaler(), NATIVE);
+        assert_eq!(
+            frame(&mut app, &mut gpu, 16).world_space,
+            WorldSpace::Target
+        );
+        assert_eq!(
+            app.take_warnings(),
+            [
+                "nova: the frame upscaler \"metalfx_spatial\" in the settings is not \
+                 available on this device; drawing natively"
+            ]
+        );
+        assert_eq!(store.text(), Some(text), "kept");
+        assert_eq!(app.screen.offers, [(vec![NATIVE, SHARP], NATIVE)]);
+    }
+
+    #[test]
+    fn a_stored_metal_fx_on_a_device_with_it_runs_and_all_three_are_listed() {
+        let (store, _) = holding("metalfx_spatial");
+        let mut gpu = RecordingGpu::probing(&[SHARP, METAL_FX]);
+        let mut app = restored(&store, &mut gpu);
+        assert_eq!(gpu.upscaler(), METAL_FX);
+        assert_eq!(frame(&mut app, &mut gpu, 16).world_space, texture());
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+        assert_eq!(
+            app.screen.offers,
+            [(vec![NATIVE, SHARP, METAL_FX], METAL_FX)]
+        );
+    }
+
     #[test]
     fn an_unknown_stored_choice_starts_native_with_one_warning_and_is_kept() {
         let (store, text) = holding("warp_drive");

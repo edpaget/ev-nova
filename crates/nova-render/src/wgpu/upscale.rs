@@ -59,7 +59,9 @@ pub(super) fn upscale_for(
 ) -> Box<dyn Upscale> {
     match choice {
         Upscaler::Native => Box::new(Native),
-        Upscaler::SharpBilinear => Box::new(SharpBilinear::new(device, queue)),
+        Upscaler::SharpBilinear | Upscaler::MetalFxSpatial => {
+            Box::new(SharpBilinear::new(device, queue))
+        }
     }
 }
 

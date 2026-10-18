@@ -17,6 +17,11 @@ pub enum Upscaler {
     /// whole scales, a one-pixel blend on the seams between texels at
     /// fractional ones.
     SharpBilinear,
+    /// The world is drawn at the logical resolution, then enlarged onto
+    /// the viewport with MetalFX's spatial scaler: edge-adaptive, with
+    /// built-in sharpening. macOS on Metal only; elsewhere it is never
+    /// offered.
+    MetalFxSpatial,
 }
 
 impl Upscaler {
@@ -27,6 +32,7 @@ impl Upscaler {
         match self {
             Self::Native => "Scaling: Native",
             Self::SharpBilinear => "Scaling: Sharp-bilinear",
+            Self::MetalFxSpatial => "Scaling: MetalFX",
         }
     }
 }
@@ -44,5 +50,6 @@ mod tests {
     fn each_label_names_the_scaling_it_chooses() {
         assert_eq!(Upscaler::Native.label(), "Scaling: Native");
         assert_eq!(Upscaler::SharpBilinear.label(), "Scaling: Sharp-bilinear");
+        assert_eq!(Upscaler::MetalFxSpatial.label(), "Scaling: MetalFX");
     }
 }

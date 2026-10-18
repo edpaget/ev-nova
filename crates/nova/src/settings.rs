@@ -20,7 +20,9 @@
 //! the world drawn natively.
 //!
 //! `frame_upscaler` is the name of the upscaler drawing flight's world:
-//! `"native"` or `"sharp_bilinear"`. A name this game does not have is
+//! `"native"`, `"sharp_bilinear"` or `"metalfx_spatial"` (macOS's
+//! MetalFX, which a device without it doesn't offer: the app then draws
+//! natively and says so once at startup). A name this game does not have is
 //! kept as it is and saved back unchanged; the app draws natively and
 //! says so once at startup.
 //!
@@ -60,6 +62,7 @@ impl UpscalerSetting {
         match self.0.as_str() {
             "native" => Some(Upscaler::Native),
             "sharp_bilinear" => Some(Upscaler::SharpBilinear),
+            "metalfx_spatial" => Some(Upscaler::MetalFxSpatial),
             _ => None,
         }
     }
@@ -78,6 +81,7 @@ impl From<Upscaler> for UpscalerSetting {
         let name = match upscaler {
             Upscaler::Native => "native",
             Upscaler::SharpBilinear => "sharp_bilinear",
+            Upscaler::MetalFxSpatial => "metalfx_spatial",
         };
         Self(name.to_owned())
     }
@@ -822,6 +826,7 @@ mod tests {
         for (upscaler, name) in [
             (Upscaler::Native, "native"),
             (Upscaler::SharpBilinear, "sharp_bilinear"),
+            (Upscaler::MetalFxSpatial, "metalfx_spatial"),
         ] {
             let store = MemorySettings::new();
             let (mut keeper, _) = SettingsKeeper::open(store.clone());
@@ -888,12 +893,16 @@ mod tests {
 
     #[test]
     fn the_prefs_never_set_the_stored_frame_upscaler() {
-        for stored in ["native", "sharp_bilinear", "warp_drive"] {
+        for stored in ["native", "sharp_bilinear", "metalfx_spatial", "warp_drive"] {
             let settings = GameSettings {
                 frame_upscaler: upscaler_named(stored),
                 ..GameSettings::default()
             };
-            for upscaler in [Upscaler::Native, Upscaler::SharpBilinear] {
+            for upscaler in [
+                Upscaler::Native,
+                Upscaler::SharpBilinear,
+                Upscaler::MetalFxSpatial,
+            ] {
                 let chosen = settings.clone().with_prefs(Prefs {
                     upscaler,
                     ..Prefs::default()
@@ -918,6 +927,7 @@ mod tests {
             .upscaler
         };
         assert_eq!(shown("sharp_bilinear"), Upscaler::SharpBilinear);
+        assert_eq!(shown("metalfx_spatial"), Upscaler::MetalFxSpatial);
         assert_eq!(shown("native"), Upscaler::Native);
         assert_eq!(shown("warp_drive"), Upscaler::Native);
         assert_eq!(shown(""), Upscaler::Native);

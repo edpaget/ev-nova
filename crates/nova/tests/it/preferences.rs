@@ -990,6 +990,7 @@ fn after_a_fallback_launch_the_stock_dialog_saves_borderless_or_the_mode_picked(
 
 const NATIVE: Upscaler = Upscaler::Native;
 const SHARP: Upscaler = Upscaler::SharpBilinear;
+const METAL_FX: Upscaler = Upscaler::MetalFxSpatial;
 
 /// Flight's world in a texture of the 1024 x 768 window's logical size.
 const TEXTURE: WorldSpace = WorldSpace::Texture { size: (1024, 768) };
@@ -1046,6 +1047,12 @@ fn the_upscaler_list_shows_exactly_what_the_probe_offers_native_first() {
     both.command_comma();
     assert_eq!(both.dialog().upscalers().entries(), [NATIVE, SHARP]);
     assert_eq!(both.dialog().upscalers().selected(), NATIVE);
+    let (mut all, _) = Harness::launched_probing(&store, &[SHARP, METAL_FX]);
+    all.command_comma();
+    assert_eq!(
+        all.dialog().upscalers().entries(),
+        [NATIVE, SHARP, METAL_FX]
+    );
 }
 
 #[test]
@@ -1055,7 +1062,7 @@ fn the_widest_upscaler_label_fits_its_row() {
     harness.command_comma();
     let row = harness.dialog().upscalers().rects().value;
     let metrics = GlyphonMetrics::new(&FontFaces::bundled());
-    for upscaler in [NATIVE, SHARP] {
+    for upscaler in [NATIVE, SHARP, METAL_FX] {
         let width = metrics.width(Font::Geneva, TEXT_SIZE, upscaler.label());
         assert!(
             width <= row.width(),
@@ -1111,7 +1118,7 @@ fn an_upscaler_picked_is_saved_and_still_draws_after_a_restart() {
 
 #[test]
 fn a_stored_upscaler_unknown_or_unavailable_starts_native_with_one_warning_and_is_kept() {
-    for name in ["sharp_bilinear", "warp_drive"] {
+    for name in ["sharp_bilinear", "metalfx_spatial", "warp_drive"] {
         let store = seeded_with_upscaler(name);
         let before = store.text();
         let writes = store.writes();
