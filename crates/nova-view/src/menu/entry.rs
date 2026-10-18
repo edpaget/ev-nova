@@ -43,15 +43,22 @@
 //!   down or up, for the intro ([`IntroKeys`]).
 //! - Every plain key, click and text input is otherwise dropped: flight
 //!   never sees an input from before its fade-in ends.
-//! - Command keys (Command-Q, Command-comma) and the window's close are
-//!   held, in order, for the handover. The intro text's opening drops
+//! - Command chords and the window's close are held, in order, for the
+//!   handover. A chord is held as the command it names
+//!   ([`Deferred::Command`]), never as key presses and releases: in the
+//!   original a Command key goes to `MenuKey` and never reaches the key
+//!   map flight polls, so it leaves no key down in flight, whether
+//!   Command or the window's focus is let go of first. The router takes
+//!   the chords it has commands for (Command-Q, Command-comma) and
+//!   ignores the rest, Command-Escape and Command-arrow among them.
+//!   The intro text's opening drops
 //!   everything held (`FlushEvents(0xff7f)` @0x5ae67), and a close is
 //!   dropped once the intro has run, as its flush after the text
 //!   (`FlushEvents` 3, 5, 1 and 2 @0x1711a-0x17165) drops pointer events.
 //! - The text takes every input once its fade-in ends; what arrives
 //!   during the fade-in reaches it then ([`Entry::take_for_text`]).
-//! - Command keys and the close that arrive during flight's fade-in are
-//!   held until it ends.
+//! - Command chords and the close that arrive during flight's fade-in
+//!   are held until it ends.
 //! - The window losing focus, or the pointer's cancel, lets go of the
 //!   tracked keys and button.
 //!
@@ -87,8 +94,10 @@ pub enum Verdict {
 /// Something an [`Entry`] kept for the handover or the fade-in's end.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Deferred {
-    /// An input: a Command key's.
-    Input(Input),
+    /// A Command chord: the key pressed with Command down, for the router
+    /// to take as a menu command (Command-Q, Command-comma) or ignore.
+    /// It is never replayed as a key press, so it leaves no key down.
+    Command(Key),
     /// The window's close.
     Close,
 }
@@ -319,7 +328,10 @@ impl Entry {
     }
 
     /// What becomes of `input`, Command being held as `command_held`
-    /// says. The intro's keys are noted either way.
+    /// says. The intro's keys are noted either way. Outside the intro's
+    /// text, a key's first press with Command down is held as a
+    /// [`Deferred::Command`]; Command itself, repeats and every release
+    /// are dropped.
     pub fn input(&mut self, input: &Input, command_held: bool) -> Verdict {
         self.keys.note(input);
         match self.stage {
@@ -340,13 +352,16 @@ impl Entry {
             | Stage::HandoverDue
             | Stage::FadingIn(_) => {}
         }
-        let command =
-            matches!(*input, Input::Key { key, .. } if key == Key::Command || command_held);
-        if command {
-            self.held.push(Deferred::Input(*input));
-            Verdict::Held
-        } else {
-            Verdict::Drop
+        match *input {
+            Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            } if command_held && key != Key::Command => {
+                self.held.push(Deferred::Command(key));
+                Verdict::Held
+            }
+            _ => Verdict::Drop,
         }
     }
 
@@ -497,6 +512,15 @@ mod tests {
             key,
             pressed,
             repeat: false,
+        }
+    }
+
+    /// An OS repeat of `key`, held down.
+    fn held(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: true,
         }
     }
 
@@ -718,23 +742,38 @@ mod tests {
     }
 
     #[test]
-    fn command_keys_and_the_close_are_held_for_the_handover() {
-        let command_q = key(Key::Char('q'), true);
+    fn command_chords_and_the_close_are_held_for_the_handover() {
         let mut entry = Entry::new(None);
-        assert_eq!(entry.input(&key(Key::Command, true), false), Verdict::Held);
-        assert_eq!(entry.input(&command_q, true), Verdict::Held);
+        assert_eq!(entry.input(&key(Key::Command, true), false), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::Char('q'), true), true), Verdict::Held);
         assert_eq!(entry.input(&Input::Text('q'), true), Verdict::Drop);
         assert_eq!(entry.close(), Verdict::Held);
-        assert_eq!(entry.input(&key(Key::Command, false), true), Verdict::Held);
+        assert_eq!(
+            entry.input(&key(Key::Char('q'), false), true),
+            Verdict::Drop
+        );
+        assert_eq!(entry.input(&key(Key::Command, false), true), Verdict::Drop);
         entry.tick(SECOND);
         assert_eq!(
             entry.handed_over(),
-            [
-                Deferred::Input(key(Key::Command, true)),
-                Deferred::Input(command_q),
-                Deferred::Close,
-                Deferred::Input(key(Key::Command, false)),
-            ]
+            [Deferred::Command(Key::Char('q')), Deferred::Close]
+        );
+    }
+
+    #[test]
+    fn a_chords_repeats_and_releases_are_dropped_command_up_first_or_not() {
+        let mut entry = Entry::new(None);
+        assert_eq!(entry.input(&key(Key::Up, true), true), Verdict::Held);
+        assert_eq!(entry.input(&held(Key::Up), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::Up, false), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::Escape, true), true), Verdict::Held);
+        assert_eq!(entry.input(&key(Key::Command, false), false), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::Escape, false), false), Verdict::Drop);
+        entry.tick(SECOND);
+        assert_eq!(
+            entry.handed_over(),
+            [Deferred::Command(Key::Up), Deferred::Command(Key::Escape)],
+            "as commands, never as keys down or up"
         );
     }
 
@@ -763,8 +802,8 @@ mod tests {
         through_pictures(&mut entry);
         assert_eq!(
             entry.handed_over(),
-            [Deferred::Input(key(Key::Char(','), true))],
-            "the closes dropped, the Command key kept"
+            [Deferred::Command(Key::Char(','))],
+            "the closes dropped, the Command chord kept"
         );
         let mut texted = unseen(&CharacterIntro {
             text: Some(5),
@@ -822,7 +861,7 @@ mod tests {
         entry.tick(ms(1));
         assert_eq!(
             entry.take_held(),
-            [Deferred::Input(command_q), Deferred::Close]
+            [Deferred::Command(Key::Char('q')), Deferred::Close]
         );
         assert_eq!(entry.input(&command_q, true), Verdict::Drop, "done");
         assert_eq!(entry.close(), Verdict::Drop);

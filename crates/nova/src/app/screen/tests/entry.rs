@@ -405,6 +405,107 @@ fn letting_go_of_the_keys_or_the_pointer_during_the_entry_reaches_nothing_else()
     assert_eq!(screen.showing(), Showing::Flight);
 }
 
+/// The main menu on [`trading_data`] over `store`, holding a pilot that
+/// has seen the intro and carries 5 tons of food, Enter Ship just
+/// clicked.
+fn entering_with_cargo(store: &MemoryPilots) -> AppScreen {
+    let data = trading_data();
+    let mut pilot = nova_sim::Pilot::new(data.as_ref(), "Ada").expect("a pilot");
+    pilot.seen_intro = true;
+    pilot.cargo.insert(FOOD, 5);
+    store.put("Ada", &nova_sim::save::encode(&pilot));
+    let mut screen =
+        appeared(AppScreen::new(data).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)));
+    open_held(&mut screen);
+    choose(&mut screen, MenuChoice::EnterShip);
+    screen
+}
+
+/// Ticks `screen` through the handover and flight's fade-in, and checks
+/// that play runs on: flight shows, and the game wasn't handed back to
+/// the main menu.
+fn into_play(screen: &mut AppScreen) {
+    screen.tick(SECOND);
+    screen.tick(SECOND);
+    assert!(!screen.entering());
+    assert_eq!(screen.showing(), Showing::Flight, "play runs on");
+    assert!(screen.game_in_progress().is_none(), "not returned");
+}
+
+/// Checks that flight holds no arrow down: the ship doesn't thrust or
+/// turn on its own.
+fn no_arrow_held(screen: &mut AppScreen) {
+    let before = ship(screen);
+    screen.tick(TICK * 3);
+    let after = ship(screen);
+    assert_eq!(after.velocity, before.velocity, "no thrust");
+    assert_eq!(after.heading.to_bits(), before.heading.to_bits(), "no turn");
+}
+
+#[test]
+fn command_tab_away_during_the_entry_leaves_command_up_in_flight() {
+    let store = MemoryPilots::new();
+    let mut screen = entering_with_cargo(&store);
+    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::Tab, true));
+    screen.release_keys();
+    into_play(&mut screen);
+    no_arrow_held(&mut screen);
+    assert_eq!(pilot(&screen).held(FOOD), 5, "carried into play");
+    tap(&mut screen, nova_view::flight::view::JETTISON_KEY);
+    screen.tick(TICK);
+    assert_eq!(
+        pilot(&screen).held(FOOD),
+        5,
+        "K alone jettisons nothing: Command isn't down"
+    );
+}
+
+#[test]
+fn an_arrow_let_go_of_after_command_during_the_entry_isnt_held_in_flight() {
+    let store = MemoryPilots::new();
+    let mut screen = entering_with_cargo(&store);
+    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::Up, false));
+    into_play(&mut screen);
+    no_arrow_held(&mut screen);
+}
+
+#[test]
+fn command_comma_during_the_entry_opens_the_preferences_over_play() {
+    let store = MemoryPilots::new();
+    let mut screen = opening_with(&store, data(), Rulebook::default());
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    choose(&mut screen, MenuChoice::EnterShip);
+    screen.input(&key(Key::Command, true));
+    tap(&mut screen, PREFERENCES_KEY);
+    screen.input(&key(Key::Command, false));
+    assert!(screen.preferences().is_none(), "held");
+    screen.tick(SECOND);
+    assert!(screen.game_in_progress().is_none(), "handed over");
+    assert!(screen.preferences().is_some(), "replayed at the handover");
+    assert!(!screen.take_quit());
+}
+
+#[test]
+fn command_escape_during_the_entry_doesnt_leave_play() {
+    let store = MemoryPilots::new();
+    let mut screen = entering_with_cargo(&store);
+    screen.input(&key(Key::Command, true));
+    tap(&mut screen, Key::Escape);
+    screen.input(&key(Key::Command, false));
+    screen.tick(SECOND);
+    assert_eq!(screen.showing(), Showing::Flight, "handed over");
+    screen.input(&key(Key::Command, true));
+    tap(&mut screen, Key::Escape);
+    screen.input(&key(Key::Command, false));
+    into_play(&mut screen);
+    no_arrow_held(&mut screen);
+}
+
 #[test]
 fn flights_fade_in_covers_the_widened_view_and_the_fade_out_the_classic_one() {
     let store = MemoryPilots::new();

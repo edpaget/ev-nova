@@ -44,11 +44,14 @@
 //! return, under the engine's reading of `escape_to_main_screen`, runs
 //! no fresh one.
 //!
-//! **What the entry held** (Command keys, the window's close) is replayed
-//! into the router at the handover, where `_IterateInGameEventLoop(-1)`
-//! (@0x1a446) drains the original's queue, so what they open shows over
-//! flight's fade-in; what it holds during the fade-in is replayed as it
-//! ends. The replay goes past the entry, which is set aside meanwhile.
+//! **What the entry held** (Command chords, the window's close) is
+//! replayed into the router at the handover, where
+//! `_IterateInGameEventLoop(-1)` (@0x1a446) drains the original's queue,
+//! so what they open shows over flight's fade-in; what it holds during
+//! the fade-in is replayed as it ends. The replay goes past the entry,
+//! which is set aside meanwhile. A chord replays as the menu command it
+//! names, never as keys into flight, which so holds no key down from the
+//! entry.
 //!
 //! Ordering: the main-screen sound halt lands one audio feed after a
 //! keyed click's 601, which the click's end raised: inaudible, and before
@@ -65,10 +68,10 @@ use nova_view::flight::FlightView;
 use nova_view::menu::entry::{Deferred, Entry, Verdict};
 use nova_view::menu::intro::{CharacterIntro, Intro, IntroSource};
 use nova_view::ui::DescDialog;
-use nova_view::{DrawList, Input, Screen, ScreenAction, Showing, Sound, UiSound};
+use nova_view::{DrawList, Input, Key, Screen, ScreenAction, Showing, Sound, UiSound};
 
 use super::port_dialogs::desc_dialog;
-use super::{AppScreen, CLASSIC_VIEW, Side};
+use super::{AppScreen, CLASSIC_VIEW, PREFERENCES_KEY, Side};
 
 /// An entry running, and its intro's text while it is open.
 #[derive(Clone, Debug)]
@@ -358,8 +361,9 @@ impl AppScreen {
     }
 
     /// Replays `held` into the router past the entry, set aside
-    /// meanwhile: each input routed as any is, a quit it asks kept for
-    /// [`Screen::take_quit`], and each close asked as a close now is.
+    /// meanwhile: each Command chord taken as the menu command it names
+    /// ([`AppScreen::entry_command`]), and each close asked as a close
+    /// now is, a quit either asks kept for [`Screen::take_quit`].
     fn replay_entry(&mut self, held: Vec<Deferred>) {
         if held.is_empty() {
             return;
@@ -367,11 +371,7 @@ impl AppScreen {
         let entering = self.entry.take();
         for deferred in held {
             match deferred {
-                Deferred::Input(input) => {
-                    if self.routed_input(&input) == ScreenAction::Quit {
-                        self.quit_due = true;
-                    }
-                }
+                Deferred::Command(key) => self.entry_command(key),
                 Deferred::Close => {
                     if self.close_asked() {
                         self.quit_due = true;
@@ -380,5 +380,19 @@ impl AppScreen {
             }
         }
         self.entry = entering;
+    }
+
+    /// A Command chord on `key` held by the entry, taken as a menu
+    /// command, as the original's `MenuKey` takes it, and never routed as
+    /// a key, so flight's keys stay up: Command-Q quits, as it does
+    /// wherever it is pressed ([`AppScreen::route`]), and Command-comma
+    /// opens the Preferences, with dialogs
+    /// ([`AppScreen::preferences_key`]). Any other chord does nothing.
+    fn entry_command(&mut self, key: Key) {
+        match key {
+            Key::Char('q') => self.quit_due = true,
+            PREFERENCES_KEY => self.open_preferences(),
+            _ => {}
+        }
     }
 }
