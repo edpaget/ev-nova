@@ -34,7 +34,7 @@
 //! failure; Open Pilot's note `STR#` 140 #52 is `_MainScreenChoice`'s, not
 //! the launch's. The original's player globals then hold the repaired or
 //! partly read pilot with no game in progress, where the engine holds
-//! nothing (rdm:phase/main-screen-fidelity, the launch's left-outs).
+//! nothing (rdm:phase/main-screen-fidelity/phase-4-launch-left-outs).
 //!
 //! Left out of `_OpenLastPilotFile` and `_DoMainScreen`'s setup, with
 //! nothing for the engine to do: the resets before the load (a fresh
