@@ -580,6 +580,28 @@ mod tests {
     }
 
     #[test]
+    fn under_the_circle_cap_the_brake_thrusts_along_the_heading_itself() {
+        let circle = FlightRules {
+            speed_cap: SpeedCap::Circle,
+            ..FlightRules::default()
+        };
+        let mut state = ship(Vec2::new(0.0, -3.0), 185.7);
+        assert!(fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            circle,
+            None,
+        ));
+        let pushed = Vec2::new(0.0, -3.0) + facing(185.7) * SHIP.accel;
+        assert_eq!(state.velocity, dragged(pushed));
+        let whole_degree = Vec2::new(0.0, -3.0) + crate::trig::accel(185, SHIP.accel);
+        assert_ne!(state.velocity, dragged(whole_degree), "not the 185° push");
+    }
+
+    #[test]
     fn braking_turns_against_the_motion_then_slows_the_ship_below_the_jump_speed() {
         // Facing along its motion, up, at top speed.
         let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
