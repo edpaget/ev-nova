@@ -2392,4 +2392,88 @@ mod tests {
         assert_eq!(by(RuleSource::Engine), Some(n(3)));
         assert_eq!(by(RuleSource::Bible), None);
     }
+
+    #[test]
+    fn an_arriving_or_jumping_in_enemy_is_no_candidate() {
+        let mut arriving = ship(2, ENEMY, 100.0, 0.0);
+        arriving.mode = Mode::JumpingIn { tick: 0 };
+        let npcs = [me(), arriving.clone(), ship(3, RIVAL, 900.0, 0.0)];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
+        let mut xeno = npcs.clone();
+        xeno[0].govt = Some(XENO);
+        assert_eq!(
+            chosen(0, &xeno, None, 0, (0.0, -5000.0)),
+            Some(n(3)),
+            "nor a xenophobe's"
+        );
+    }
+
+    #[test]
+    fn the_xenophobe_steps_own_pick_decides_whether_it_turns_on_the_player() {
+        // Step 7 takes the wreck nearest, for destroying weapons; the
+        // call is step 5's, made when its own nearest is the player.
+        let picked = |near: Npc| {
+            let govts = govts(0);
+            let mut xeno = ship(1, XENO, 0.0, 0.0);
+            xeno.armament = destroying();
+            let mut wreck = ship(2, RIVAL, 10.0, 0.0);
+            wreck.condition = Condition::Disabled;
+            let npcs = [xeno, wreck, near];
+            let around = Surroundings {
+                player: Some(player(0.0, -100.0)),
+                govts: &govts,
+                system_govt: Some(ME),
+                ..Surroundings::new(&[], &npcs)
+            };
+            pick(&npcs[0], None, &around)
+        };
+        let wreck = |turns_on_player| {
+            Some(Pick {
+                ship: n(2),
+                turns_on_player,
+            })
+        };
+        assert_eq!(
+            picked(ship(3, ENEMY, 0.0, 30.0)),
+            wreck(false),
+            "an enemy nearer than the player: no call"
+        );
+        let mut escort = ship(3, ENEMY, 0.0, 30.0);
+        escort.leader = Some(NpcId(1));
+        assert_eq!(picked(escort), wreck(true), "its own escort is none");
+        let mut pod = ship(3, ENEMY, 0.0, 30.0);
+        pod.ship = ESCAPE_POD_SHIP;
+        assert_eq!(picked(pod), wreck(true), "class 0x2ff is none");
+    }
+
+    #[test]
+    fn help_scales_the_ships_strength_by_its_max_odds() {
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                max_odds: 200,
+                ..govt(140)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                ..govt(141)
+            },
+        ]);
+        let mut trader = ship(2, ALLY, 1000.0, 0.0);
+        trader.goal = Goal::Attack(n(3));
+        trader.hull.strength = 0.0;
+        let mut pirate = ship(3, NEUTRAL, 3000.0, 0.0);
+        pirate.hull.strength = 150.0;
+        let npcs = [me(), trader, pirate];
+        let around = Surroundings {
+            player: Some(player(0.0, -5000.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            select(&npcs[0], None, &around),
+            Some(n(3)),
+            "100 x 2 against 150"
+        );
+    }
 }

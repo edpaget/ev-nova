@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_AIShipFriendStrength` doubles only a weight above 0 (@0x8279b);
+    # doubling a weight of 0 still adds 0, and the threat test it skips
+    # changes nothing, so `>=` can't be told from `>`.
+    "odds.rs:.*replace > with >= in friend_strength",
     # `_AICallForHelp`'s threat gate (`_ExtendedIsThreatToShip(ship,
     # player)` @0x830b1) asks whether the player is intact: a ship that
     # threatens the player fails the like gate before it

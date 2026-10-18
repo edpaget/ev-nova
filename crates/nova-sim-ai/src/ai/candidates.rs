@@ -125,6 +125,11 @@ mod tests {
         assert_eq!(distance(at(0.5, 0.5), at(-0.4, 0.4)), 0);
         assert_eq!(distance(at(10.0, 0.0), at(0.0, 0.0)), 100);
         assert_eq!(
+            distance(at(5.0, 7.0), at(3.0, 4.0)),
+            4 + 9,
+            "the offset, not the sum"
+        );
+        assert_eq!(
             distance(at(0.0, 0.0), at(50_000.0, 50_000.0)),
             5_000_000_000,
             "no 32-bit wrap"
