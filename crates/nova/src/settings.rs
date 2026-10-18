@@ -1,7 +1,8 @@
 //! The player's settings, all of them, kept in one settings file.
 //!
-//! - [`GameSettings`]: the sound settings ([`AudioSettings`]) and whether
-//!   hyperspace jumps play their white fades.
+//! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
+//!   hyperspace jumps play their white fades, and whether the game runs
+//!   fullscreen.
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -10,8 +11,9 @@
 //!   somewhere to save.
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
-//! `music_volume` and `hyperspace_effects`; files saved before the last
-//! one existed load unchanged, with the hyperspace effects on.
+//! `music_volume`, `hyperspace_effects` and `fullscreen`; files saved
+//! before the last two existed load unchanged, with the hyperspace effects
+//! on and the game windowed.
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
 use nova_view::Prefs;
@@ -25,14 +27,18 @@ pub struct GameSettings {
     /// Whether hyperspace jumps fade to white and back: the original's
     /// Hyperspace Effects preference.
     pub hyperspace_effects: bool,
+    /// Whether the game runs borderless fullscreen rather than in a window.
+    pub fullscreen: bool,
 }
 
 impl Default for GameSettings {
-    /// The default sound settings, with the hyperspace effects on.
+    /// The default sound settings, with the hyperspace effects on, in a
+    /// window.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
             hyperspace_effects: true,
+            fullscreen: false,
         }
     }
 }
@@ -48,12 +54,14 @@ impl GameSettings {
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
-    /// at its chosen level as [`AudioSettings::with_prefs`] does.
+    /// at its chosen level as [`AudioSettings::with_prefs`] does. The
+    /// settings the dialog does not show, such as fullscreen, are kept.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
             audio: self.audio.with_prefs(prefs.sound),
             hyperspace_effects: prefs.hyperspace_effects,
+            ..self
         }
     }
 }
@@ -61,6 +69,7 @@ impl GameSettings {
 /// The settings as saved: JSON, every field optional (a missing one takes
 /// its default). Other fields, such as the rules' `rules` and
 /// `rule_overrides`, are kept and saved back as they were.
+#[allow(clippy::struct_excessive_bools)] // one per key of the file
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Saved {
@@ -69,6 +78,7 @@ struct Saved {
     effects_volume: f32,
     music_volume: f32,
     hyperspace_effects: bool,
+    fullscreen: bool,
     #[serde(flatten)]
     others: Others,
 }
@@ -91,6 +101,7 @@ impl From<GameSettings> for Saved {
             effects_volume: audio.effects_volume.amplitude(),
             music_volume: audio.music_volume.amplitude(),
             hyperspace_effects: settings.hyperspace_effects,
+            fullscreen: settings.fullscreen,
             others: Others::new(),
         }
     }
@@ -107,6 +118,7 @@ impl From<Saved> for GameSettings {
                 music_volume: Volume::new(saved.music_volume),
             },
             hyperspace_effects: saved.hyperspace_effects,
+            fullscreen: saved.fullscreen,
         }
     }
 }
@@ -250,6 +262,7 @@ mod tests {
         GameSettings {
             audio,
             hyperspace_effects: false,
+            fullscreen: false,
         }
     }
 
@@ -264,6 +277,7 @@ mod tests {
             GameSettings {
                 audio: AudioSettings::default(),
                 hyperspace_effects: true,
+                fullscreen: false,
             }
         );
     }
@@ -284,6 +298,7 @@ mod tests {
             r#"{"sound": "yes"}"#,
             r#"{"music_volume": "loud"}"#,
             r#"{"hyperspace_effects": "no"}"#,
+            r#"{"fullscreen": "yes"}"#,
             r#"{"sound": false"#,
         ] {
             let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
@@ -327,6 +342,7 @@ mod tests {
                     ..AudioSettings::default()
                 },
                 hyperspace_effects: true,
+                fullscreen: false,
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -346,8 +362,49 @@ mod tests {
                     ..AudioSettings::default()
                 },
                 hyperspace_effects: true,
+                fullscreen: false,
             }
         );
+    }
+
+    #[test]
+    fn the_game_starts_windowed() {
+        assert!(!GameSettings::default().fullscreen);
+    }
+
+    #[test]
+    fn a_file_without_the_fullscreen_field_loads_windowed() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().fullscreen);
+    }
+
+    #[test]
+    fn fullscreen_is_saved_and_read_back_after_a_restart_both_ways() {
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let fullscreen = GameSettings {
+            fullscreen: true,
+            ..GameSettings::default()
+        };
+        keeper.change(fullscreen).expect("saves");
+        assert_eq!(json(&store)["fullscreen"], true);
+        let (mut restarted, warning) = SettingsKeeper::open(store.clone());
+        assert_eq!((restarted.settings(), warning), (fullscreen, None));
+        restarted.change(GameSettings::default()).expect("saves");
+        let (restarted, _) = SettingsKeeper::open(store.clone());
+        assert!(!restarted.settings().fullscreen);
+        assert_eq!(store.writes(), 2);
+    }
+
+    #[test]
+    fn choosing_preferences_keeps_fullscreen() {
+        let settings = GameSettings {
+            fullscreen: true,
+            ..plain(quiet())
+        };
+        assert!(settings.with_prefs(Prefs::default()).fullscreen);
     }
 
     #[test]
@@ -376,6 +433,7 @@ mod tests {
                 "effects_volume": 0.25,
                 "music_volume": 0.5,
                 "hyperspace_effects": false,
+                "fullscreen": false,
             })
         );
     }
@@ -427,6 +485,7 @@ mod tests {
             .change(GameSettings {
                 audio: quiet(),
                 hyperspace_effects: true,
+                fullscreen: false,
             })
             .expect("saves");
         keeper
@@ -534,6 +593,7 @@ mod tests {
                 ..AudioSettings::default()
             },
             hyperspace_effects: false,
+            fullscreen: false,
         };
         assert_eq!((settings, warning), (expected, None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");

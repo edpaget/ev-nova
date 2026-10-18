@@ -34,8 +34,8 @@ use winit::event::WindowEvent as WinitEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
 
-use super::translate;
 use super::window::WinitWindow;
+use super::{text_event, window_events};
 use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
@@ -172,10 +172,12 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                     Some(core) => app.with_audio(core),
                     None => app,
                 };
-                let app = match self.settings.take() {
+                let mut app = match self.settings.take() {
                     Some(keeper) => app.with_settings(keeper),
                     None => app,
                 };
+                // Fullscreen if the player quit fullscreen.
+                app.restore_window(&mut window);
                 #[cfg(feature = "dev-tools")]
                 let (app, dev_tools) = match self.dev_catalog.take() {
                     Some(catalog) => (
@@ -205,64 +207,70 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
             return;
         };
         let raw = event;
-        let event = match &raw {
-            WinitEvent::RedrawRequested => Some(WindowEvent::Redraw {
-                elapsed: self.start.elapsed(),
-            }),
-            other => translate(other, &running.window),
-        };
-        // A redraw while the developer overlay shows first runs the egui
-        // panel over the pilot flying, catching the game up after an edit,
-        // then submits through a GPU that paints it over the frame.
-        let handled = event.map(|event| {
-            #[cfg(feature = "dev-tools")]
-            if let (WindowEvent::Redraw { .. }, Some(dev_tools)) = (event, &mut running.dev_tools)
-                && running.app.dev_overlay().is_some_and(DevOverlay::visible)
-            {
-                let window = &running.window.0;
-                running
-                    .app
-                    .pilot_desk_frame(|overlay, desk| dev_tools.run_frame(window, overlay, desk));
-                let mut gpu = WithOverlay {
-                    gpu: &mut running.gpu,
-                    painter: dev_tools.layer_mut(),
-                };
-                return running
-                    .app
-                    .handle_routed(event, &mut running.window, &mut gpu);
+        // The fullscreen report goes first (see `window_events`); what the
+        // event itself did decides whether the overlay sees it raw.
+        let events: Vec<WindowEvent> =
+            window_events(&raw, &running.window, self.start.elapsed()).collect();
+        let mut handled = None;
+        let mut exit = false;
+        for event in events {
+            let this = running.handle(event);
+            exit |= this.control == Control::Exit;
+            if !matches!(event, WindowEvent::FullscreenChanged { .. }) {
+                handled = Some(this);
             }
-            running
-                .app
-                .handle_routed(event, &mut running.window, &mut running.gpu)
-        });
+        }
         // The text a key press types follows the key.
         let typed = match &raw {
             WinitEvent::KeyboardInput { event, .. } => {
-                super::text_event(event.text.as_deref(), event.state)
+                text_event(event.text.as_deref(), event.state)
             }
             _ => None,
         };
-        let typed = typed.map(|event| {
-            running
-                .app
-                .handle_routed(event, &mut running.window, &mut running.gpu)
-        });
+        if let Some(event) = typed {
+            exit |= running.handle(event).control == Control::Exit;
+        }
         #[cfg(feature = "dev-tools")]
         if let Some(dev_tools) = &mut running.dev_tools
             && running.app.overlay_wants(handled.as_ref())
         {
             dev_tools.on_window_event(&running.window.0, &raw);
         }
+        #[cfg(not(feature = "dev-tools"))]
+        let _ = handled;
         for (key, error) in running.app.take_failures() {
             eprintln!("nova: image {key:?}: {error}");
         }
         for warning in running.app.take_warnings() {
             eprintln!("{warning}");
         }
-        let exits = |handled: Option<Handled>| handled.is_some_and(|h| h.control == Control::Exit);
-        if exits(handled) || exits(typed) {
+        if exit {
             event_loop.exit();
         }
+    }
+}
+
+impl<S: ImageSource> Running<S> {
+    /// Hands the app one event. A redraw while the developer overlay shows
+    /// first runs the egui panel over the pilot flying, catching the game
+    /// up after an edit, then submits through a GPU that paints it over
+    /// the frame.
+    fn handle(&mut self, event: WindowEvent) -> Handled {
+        #[cfg(feature = "dev-tools")]
+        if let (WindowEvent::Redraw { .. }, Some(dev_tools)) = (event, &mut self.dev_tools)
+            && self.app.dev_overlay().is_some_and(DevOverlay::visible)
+        {
+            let window = &self.window.0;
+            self.app
+                .pilot_desk_frame(|overlay, desk| dev_tools.run_frame(window, overlay, desk));
+            let mut gpu = WithOverlay {
+                gpu: &mut self.gpu,
+                painter: dev_tools.layer_mut(),
+            };
+            return self.app.handle_routed(event, &mut self.window, &mut gpu);
+        }
+        self.app
+            .handle_routed(event, &mut self.window, &mut self.gpu)
     }
 }
 
@@ -381,6 +389,7 @@ mod tests {
                 ..AudioSettings::default()
             },
             hyperspace_effects: false,
+            fullscreen: false,
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);

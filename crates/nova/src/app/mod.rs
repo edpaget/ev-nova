@@ -43,6 +43,17 @@
 //! warnings the screen reports ([`Screen::take_warnings`]), which the app
 //! takes after every input and frame.
 //!
+//! # Fullscreen
+//!
+//! The platform's fullscreen shortcut (Control+Command+F on macOS, Alt+Enter
+//! or F11 elsewhere) toggles borderless fullscreen through the
+//! [`WindowPort`], whatever shows, and never reaches the screen or the
+//! overlay. The system can change the state itself, and says so with
+//! [`WindowEvent::FullscreenChanged`]. Leaving, either way, gives the
+//! window back its size from before. Each change is saved as
+//! [`GameSettings::fullscreen`] through the settings keeper, if any, and
+//! [`App::restore_window`] opens the game the way the player left it.
+//!
 //! # Diagnostics
 //!
 //! An app built [`App::with_diagnostics`] writes each diagnostic the
@@ -65,11 +76,14 @@ use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
 
+mod fullscreen;
 pub mod screen;
 
 pub use screen::{AppScreen, Showing, start_screen};
 
+use crate::config::Os;
 use crate::settings::{GameKeeper, GameSettings};
+use fullscreen::{Fullscreen, Shortcut};
 
 /// What the app needs from the window.
 pub trait WindowPort {
@@ -83,6 +97,24 @@ pub trait WindowPort {
     /// Does nothing by default, for a window with no pointer of its own.
     fn set_pointer_visible(&mut self, visible: bool) {
         let _ = visible;
+    }
+    /// Makes the window borderless fullscreen on its current display
+    /// (`true`), or a window again. Does nothing by default, for a window
+    /// that cannot go fullscreen.
+    fn set_fullscreen(&mut self, on: bool) {
+        let _ = on;
+    }
+    /// Whether the window is fullscreen, as the system now says; `false`
+    /// by default.
+    fn is_fullscreen(&self) -> bool {
+        false
+    }
+    /// Asks for the window's inner size to become `size_px`, in physical
+    /// pixels as [`WindowPort::size_px`]. The system may refuse or adjust
+    /// it; a [`WindowEvent::Resized`] says what it did. Does nothing by
+    /// default.
+    fn request_inner_size(&mut self, size_px: (u32, u32)) {
+        let _ = size_px;
     }
 }
 
@@ -131,6 +163,14 @@ pub enum WindowEvent {
     /// The window stopped receiving keyboard input; the releases of any
     /// keys held down will not arrive.
     FocusLost,
+    /// Whether the window is fullscreen, as the system now reports it. The
+    /// system can change it without the app asking (a window button, a
+    /// menu), so the adapter reports it often, the same state again
+    /// included; the app acts only on a change.
+    FullscreenChanged {
+        /// Whether it is now fullscreen.
+        fullscreen: bool,
+    },
     /// The user asked to close the window.
     CloseRequested,
 }
@@ -178,6 +218,7 @@ pub struct App<S, C = AppScreen> {
     settings: Option<GameKeeper>,
     warnings: Vec<String>,
     diagnostics: Option<Box<dyn Write>>,
+    fullscreen: Fullscreen,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -197,6 +238,42 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             settings: None,
             warnings: Vec::new(),
             diagnostics: None,
+            fullscreen: Fullscreen::new(Os::current(), window.size_px()),
+        }
+    }
+
+    /// The app reading `os`'s fullscreen shortcut, rather than the one of
+    /// the system it was built for.
+    #[must_use]
+    pub fn with_os(mut self, os: Os) -> Self {
+        self.fullscreen.set_os(os);
+        self
+    }
+
+    /// Puts the window, just opened, in the state the player left it in:
+    /// fullscreen when the settings kept say so. Its size now is the one
+    /// given back on leaving.
+    pub fn restore_window(&mut self, window: &mut impl WindowPort) {
+        let saved = self
+            .settings
+            .as_ref()
+            .is_some_and(|keeper| keeper.settings().fullscreen);
+        if saved && !self.fullscreen.is_on() {
+            self.fullscreen.toggle(window);
+        }
+    }
+
+    /// Saves whether the game is fullscreen through the keeper, if there
+    /// is one; a failed save is kept as a warning.
+    fn save_fullscreen(&mut self) {
+        if let Some(keeper) = &mut self.settings {
+            let settings = GameSettings {
+                fullscreen: self.fullscreen.is_on(),
+                ..keeper.settings()
+            };
+            if let Err(warning) = keeper.change(settings) {
+                self.warnings.push(warning);
+            }
         }
     }
 
@@ -330,10 +407,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// windows that window gets one only when something invalidates it:
     /// the main screen, a resume from the background in full screen
     /// (@0x59a58), or a Quit the player declines (`_QuitAEVTHandler`
-    /// @0x56228-0x56258). Ours always runs in a window, with no full-screen
-    /// mode, and a close quits without asking, so that redraw is
-    /// unreachable and isn't ported. The main screen's leaves the bar to
-    /// be drawn at the start of flight, as ours does.
+    /// @0x56228-0x56258). Ours redraws the whole frame every frame, in a
+    /// window or fullscreen, so a resume needs no redraw of its own, and a
+    /// close quits without asking; that redraw isn't ported. The main
+    /// screen's leaves the bar to be drawn at the start of flight, as ours
+    /// does.
     ///
     /// With a developer overlay, see [`App::handle_routed`].
     pub fn handle(
@@ -373,6 +451,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 size_px,
                 scale_factor,
             } => {
+                self.fullscreen.resized(size_px);
                 self.viewport = Viewport::new(LOGICAL, size_px, scale_factor);
                 game(Control::Continue)
             }
@@ -381,24 +460,22 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(Control::Exit)
             }
             WindowEvent::FocusLost => {
+                self.fullscreen.focus_lost();
                 self.screen.release_keys();
+                game(Control::Continue)
+            }
+            WindowEvent::FullscreenChanged { fullscreen } => {
+                if self.fullscreen.observed(fullscreen, window) {
+                    self.save_fullscreen();
+                }
                 game(Control::Continue)
             }
             WindowEvent::Key {
                 key,
                 pressed,
                 repeat,
-            } => match self.route_key(key, pressed, repeat) {
-                Routing::Game => game(self.route(Input::Key {
-                    key,
-                    pressed,
-                    repeat,
-                })),
-                routing => Handled {
-                    control: Control::Continue,
-                    routing,
-                },
-            },
+            } => self.handle_key(key, pressed, repeat, window),
+            WindowEvent::Text(_) if self.fullscreen.drops_text() => game(Control::Continue),
             WindowEvent::Text(c) => {
                 if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
                     return overlay;
@@ -459,6 +536,44 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 window.request_redraw();
                 game(resync)
             }
+        }
+    }
+
+    /// Handles a key: the fullscreen shortcut first, whatever shows, and
+    /// otherwise the overlay or the screen, as [`App::route_key`] says.
+    fn handle_key(
+        &mut self,
+        key: Key,
+        pressed: bool,
+        repeat: bool,
+        window: &mut impl WindowPort,
+    ) -> Handled {
+        let taken = Handled {
+            control: Control::Continue,
+            routing: Routing::Game,
+        };
+        match self.fullscreen.key(key, pressed, repeat) {
+            Shortcut::Toggle => {
+                self.fullscreen.toggle(window);
+                self.save_fullscreen();
+                return taken;
+            }
+            Shortcut::Swallowed => return taken,
+            Shortcut::None => {}
+        }
+        match self.route_key(key, pressed, repeat) {
+            Routing::Game => Handled {
+                control: self.route(Input::Key {
+                    key,
+                    pressed,
+                    repeat,
+                }),
+                routing: Routing::Game,
+            },
+            routing => Handled {
+                control: Control::Continue,
+                routing,
+            },
         }
     }
 
@@ -625,12 +740,15 @@ mod tests {
     use super::*;
 
     /// A window of settable size that counts redraw requests and records
-    /// each time the pointer is shown or hidden.
+    /// each time the pointer is shown or hidden, each fullscreen request
+    /// and each size request.
     struct FakeWindow {
         size_px: (u32, u32),
         scale_factor: f64,
         redraws: usize,
         pointer_shown: Vec<bool>,
+        fullscreen: Vec<bool>,
+        size_requests: Vec<(u32, u32)>,
     }
 
     impl FakeWindow {
@@ -640,6 +758,8 @@ mod tests {
                 scale_factor,
                 redraws: 0,
                 pointer_shown: Vec::new(),
+                fullscreen: Vec::new(),
+                size_requests: Vec::new(),
             }
         }
     }
@@ -659,6 +779,14 @@ mod tests {
 
         fn set_pointer_visible(&mut self, visible: bool) {
             self.pointer_shown.push(visible);
+        }
+
+        fn set_fullscreen(&mut self, on: bool) {
+            self.fullscreen.push(on);
+        }
+
+        fn request_inner_size(&mut self, size_px: (u32, u32)) {
+            self.size_requests.push(size_px);
         }
     }
 
@@ -1912,6 +2040,7 @@ mod tests {
             GameSettings {
                 audio: AudioSettings::default().with_prefs(effects_at(4).sound),
                 hyperspace_effects: false,
+                fullscreen: false,
             }
         );
         let saved: serde_json::Value =
@@ -2070,6 +2199,248 @@ mod tests {
             &mut RecordingGpu::new(),
         );
         assert_eq!(store.writes(), 1);
+    }
+
+    // Fullscreen.
+
+    use crate::config::Os;
+
+    const MAC_SHORTCUT: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
+
+    /// Presses `chord`'s keys in order, then releases them in reverse.
+    fn chord<C: Screen>(app: &mut App<NoImages, C>, window: &mut FakeWindow, chord: &[Key]) {
+        let mut gpu = RecordingGpu::new();
+        for key in chord {
+            app.handle_routed(self::key(*key, true), window, &mut gpu);
+        }
+        for key in chord.iter().rev() {
+            app.handle_routed(self::key(*key, false), window, &mut gpu);
+        }
+    }
+
+    fn reported(fullscreen: bool) -> WindowEvent {
+        WindowEvent::FullscreenChanged { fullscreen }
+    }
+
+    fn saved_fullscreen(store: &MemorySettings) -> bool {
+        let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
+        saved.settings().fullscreen
+    }
+
+    fn key_input(key: Key, pressed: bool) -> Input {
+        Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn the_shortcut_goes_fullscreen_and_never_reaches_the_screen() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window).with_os(Os::MacOs);
+        let mut gpu = RecordingGpu::new();
+        for key in MAC_SHORTCUT {
+            let handled = app.handle_routed(self::key(key, true), &mut window, &mut gpu);
+            assert_eq!(handled, handled_game(), "{key:?}");
+        }
+        handle(&mut app, &mut window, WindowEvent::Text('f'));
+        handle(&mut app, &mut window, key(Key::Char('f'), false));
+        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(
+            app.screen().inputs,
+            [key_input(Key::Control, true), key_input(Key::Command, true)],
+            "the modifiers only"
+        );
+        handle(&mut app, &mut window, key(Key::Command, false));
+        handle(&mut app, &mut window, WindowEvent::Text('g'));
+        assert_eq!(
+            app.screen().inputs[2..],
+            [key_input(Key::Command, false), Input::Text('g')],
+            "later text arrives"
+        );
+    }
+
+    fn handled_game() -> Handled {
+        handled(Control::Continue, Routing::Game)
+    }
+
+    #[test]
+    fn alt_enter_and_f11_toggle_on_windows() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window).with_os(Os::Windows);
+        chord(&mut app, &mut window, &[Key::Alt, Key::Enter]);
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        assert_eq!(window.fullscreen, [true, false]);
+        assert_eq!(
+            app.screen().inputs,
+            [key_input(Key::Alt, true), key_input(Key::Alt, false)]
+        );
+    }
+
+    #[test]
+    fn the_shortcut_saves_each_change_and_gives_back_the_old_size() {
+        let mut window = FakeWindow::new((2048, 1536), 2.0);
+        let store = MemorySettings::new();
+        let mut app = app(&window)
+            .with_os(Os::MacOs)
+            .with_settings(keeper(&store));
+        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        assert!(saved_fullscreen(&store));
+        assert_eq!(store.writes(), 1);
+        window.size_px = (3024, 1964);
+        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        assert!(!saved_fullscreen(&store));
+        assert_eq!(store.writes(), 2);
+        assert_eq!(window.fullscreen, [true, false]);
+        assert_eq!(window.size_requests, [(2048, 1536)]);
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_systems_changes_are_saved_and_a_repeated_report_does_nothing() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = app(&window).with_settings(keeper(&store));
+        assert_eq!(
+            app.handle_routed(reported(false), &mut window, &mut RecordingGpu::new()),
+            handled_game()
+        );
+        assert_eq!(store.writes(), 0, "windowed already");
+        handle(&mut app, &mut window, reported(true));
+        assert!(saved_fullscreen(&store));
+        handle(&mut app, &mut window, reported(true));
+        assert_eq!(store.writes(), 1, "no change, no save");
+        handle(&mut app, &mut window, reported(false));
+        assert!(!saved_fullscreen(&store));
+        assert_eq!(window.size_requests, [(1024, 768)]);
+        assert_eq!(window.fullscreen, Vec::<bool>::new(), "the system did it");
+        for _ in 0..3 {
+            handle(&mut app, &mut window, reported(false));
+        }
+        assert_eq!(store.writes(), 2);
+        assert_eq!(window.size_requests.len(), 1);
+        assert_eq!(app.screen().inputs, [], "the screen hears nothing of it");
+    }
+
+    #[test]
+    fn a_report_on_every_frame_saves_nothing_and_asks_nothing_until_it_changes() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = app(&window)
+            .with_os(Os::MacOs)
+            .with_settings(keeper(&store));
+        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        for frame in 1..=5 {
+            handle(&mut app, &mut window, reported(true));
+            let elapsed = Duration::from_millis(16 * frame);
+            handle(&mut app, &mut window, WindowEvent::Redraw { elapsed });
+        }
+        assert_eq!(store.writes(), 1);
+        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(window.size_requests, Vec::<(u32, u32)>::new());
+        handle(&mut app, &mut window, reported(false));
+        assert_eq!(store.writes(), 2, "the system's exit, seen on a frame");
+        assert_eq!(window.size_requests, [(1024, 768)]);
+    }
+
+    #[test]
+    fn the_size_given_back_is_the_windows_not_the_displays() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        let resized = |size_px| WindowEvent::Resized {
+            size_px,
+            scale_factor: 2.0,
+        };
+        handle(&mut app, &mut window, resized((1600, 1200)));
+        handle(&mut app, &mut window, reported(true));
+        handle(&mut app, &mut window, resized((3024, 1964)));
+        assert_eq!(app.viewport().window_px(), (3024, 1964), "drawn fullscreen");
+        handle(&mut app, &mut window, reported(false));
+        assert_eq!(window.size_requests, [(1600, 1200)]);
+    }
+
+    #[test]
+    fn the_shortcut_works_with_the_overlay_showing() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window).with_os(Os::Windows);
+        handle(
+            &mut app,
+            &mut window,
+            key(nova_view::devtools::TOGGLE_KEY, true),
+        );
+        assert!(visible(&app));
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        assert_eq!(window.fullscreen, [true]);
+    }
+
+    #[test]
+    fn losing_focus_forgets_the_shortcuts_modifiers() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window).with_os(Os::Windows);
+        handle(&mut app, &mut window, key(Key::Alt, true));
+        handle(&mut app, &mut window, WindowEvent::FocusLost);
+        handle(&mut app, &mut window, key(Key::Enter, true));
+        assert_eq!(window.fullscreen, Vec::<bool>::new());
+        assert_eq!(app.screen().releases, 1);
+    }
+
+    #[test]
+    fn without_a_keeper_the_shortcut_still_toggles_and_a_failed_save_is_a_warning() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window).with_os(Os::Windows);
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+        let store = MemorySettings::new();
+        let mut app = self::app(&window)
+            .with_os(Os::Windows)
+            .with_settings(keeper(&store));
+        store.fail_writes(true);
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        handle(&mut app, &mut window, reported(false));
+        let message = "nova: cannot save the settings: the disk is full".to_owned();
+        assert_eq!(app.take_warnings(), [message.clone(), message]);
+    }
+
+    #[test]
+    fn restoring_the_window_goes_fullscreen_only_when_saved_so() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::holding(r#"{"fullscreen": true}"#);
+        let mut app = app(&window).with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(store.writes(), 0, "already saved so");
+        handle(&mut app, &mut window, reported(true));
+        assert_eq!(window.fullscreen, [true], "once");
+        assert_eq!(store.writes(), 0);
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::holding(r#"{"fullscreen": false}"#);
+        let mut app = self::app(&window).with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        let mut unkept = self::app(&window);
+        unkept.restore_window(&mut window);
+        assert_eq!(window.fullscreen, Vec::<bool>::new());
+    }
+
+    #[test]
+    fn choosing_preferences_while_fullscreen_keeps_it_saved() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = prefs_app(&window, &[MUSIC_OFF]).with_settings(keeper(&store));
+        handle_prefs(&mut app, &mut window, reported(true));
+        handle_prefs(&mut app, &mut window, key(Key::Space, true));
+        let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
+        assert!(!saved.settings().audio.music, "the preference saved");
+        assert!(saved.settings().fullscreen, "and fullscreen kept");
+    }
+
+    fn handle_prefs(
+        app: &mut App<NoImages, PrefsScreen>,
+        window: &mut FakeWindow,
+        event: WindowEvent,
+    ) {
+        app.handle(event, window, &mut RecordingGpu::new());
     }
 
     // The pilot desk.

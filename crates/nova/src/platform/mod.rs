@@ -4,12 +4,20 @@
 //! Translation is pure and unit-tested; the window and the runner only
 //! forward to the app. A key press that types a character becomes two
 //! events: the key ([`key_event`]), then its text ([`text_event`]).
+//!
+//! The system can make the window fullscreen, or a window again, without
+//! the app asking, and winit sends no event for it. So [`window_events`]
+//! reports the window's state, [`WindowEvent::FullscreenChanged`], ahead
+//! of every resize, occlusion and redraw, and the app acts only on a
+//! change.
 
 mod runner;
 mod window;
 
 pub use runner::Runner;
 pub use window::WinitWindow;
+
+use std::time::Duration;
 
 use winit::event::{ElementState, WindowEvent as WinitEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -46,6 +54,34 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
+}
+
+/// The app's events for winit's `event`, in the order the app takes them,
+/// with a redraw at `elapsed`, the time since the app started.
+///
+/// A resize, an occlusion and a redraw are led by the window's fullscreen
+/// state as the system now reports it: the app must know it is fullscreen
+/// before it takes the display's size, or it would keep that as the
+/// window's own. The redraw's report is there because macOS clears the
+/// state only once its exit animation ends, after that animation's
+/// resizes; every frame reports it, so an exit is always seen.
+pub fn window_events(
+    event: &WinitEvent,
+    window: &impl WindowPort,
+    elapsed: Duration,
+) -> impl Iterator<Item = WindowEvent> {
+    let fullscreen = matches!(
+        event,
+        WinitEvent::Resized(_) | WinitEvent::Occluded(_) | WinitEvent::RedrawRequested
+    )
+    .then(|| WindowEvent::FullscreenChanged {
+        fullscreen: window.is_fullscreen(),
+    });
+    let event = match event {
+        WinitEvent::RedrawRequested => Some(WindowEvent::Redraw { elapsed }),
+        other => translate(other, window),
+    };
+    fullscreen.into_iter().chain(event)
 }
 
 /// A key going down or up; `repeat` is winit's flag for a press the OS
@@ -168,6 +204,8 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::F3) => Key::Function(3),
         PhysicalKey::Code(KeyCode::F4) => Key::Function(4),
         PhysicalKey::Code(KeyCode::F5) => Key::Function(5),
+        // The fullscreen shortcut off a Mac.
+        PhysicalKey::Code(KeyCode::F11) => Key::Function(11),
         _ => Key::Other,
     }
 }
@@ -185,12 +223,19 @@ pub fn map_button(button: winit::event::MouseButton) -> MouseButton {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
+
     use winit::event::{DeviceId, MouseButton as WinitButton};
 
     use super::*;
 
-    struct Window;
+    /// An 800x600-pixel window at two pixels a point, fullscreen or not.
+    struct Window {
+        fullscreen: bool,
+    }
+
+    const WINDOWED: Window = Window { fullscreen: false };
 
     impl WindowPort for Window {
         fn size_px(&self) -> (u32, u32) {
@@ -202,6 +247,10 @@ mod tests {
         }
 
         fn request_redraw(&mut self) {}
+
+        fn is_fullscreen(&self) -> bool {
+            self.fullscreen
+        }
     }
 
     #[test]
@@ -256,6 +305,7 @@ mod tests {
             (KeyCode::F3, Key::Function(3)),
             (KeyCode::F4, Key::Function(4)),
             (KeyCode::F5, Key::Function(5)),
+            (KeyCode::F11, Key::Function(11)),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::Digit5, Key::Other),
             (KeyCode::F6, Key::Other),
@@ -481,7 +531,7 @@ mod tests {
     fn a_resize_carries_the_windows_scale_factor() {
         let event = WinitEvent::Resized(PhysicalSize::new(1280, 960));
         assert_eq!(
-            translate(&event, &Window),
+            translate(&event, &WINDOWED),
             Some(WindowEvent::Resized {
                 size_px: (1280, 960),
                 scale_factor: 2.0
@@ -496,20 +546,20 @@ mod tests {
             position: PhysicalPosition::new(12.5, 40.0),
         };
         assert_eq!(
-            translate(&moved, &Window),
+            translate(&moved, &WINDOWED),
             Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
         );
         let left = WinitEvent::CursorLeft {
             device_id: DeviceId::dummy(),
         };
-        assert_eq!(translate(&left, &Window), Some(WindowEvent::PointerLeft));
+        assert_eq!(translate(&left, &WINDOWED), Some(WindowEvent::PointerLeft));
         let pressed = WinitEvent::MouseInput {
             device_id: DeviceId::dummy(),
             state: ElementState::Pressed,
             button: WinitButton::Right,
         };
         assert_eq!(
-            translate(&pressed, &Window),
+            translate(&pressed, &WINDOWED),
             Some(WindowEvent::PointerButton {
                 button: MouseButton::Right,
                 pressed: true
@@ -521,7 +571,7 @@ mod tests {
             button: WinitButton::Left,
         };
         assert_eq!(
-            translate(&released, &Window),
+            translate(&released, &WINDOWED),
             Some(WindowEvent::PointerButton {
                 button: MouseButton::Left,
                 pressed: false
@@ -532,7 +582,7 @@ mod tests {
     #[test]
     fn closing_is_close_requested() {
         assert_eq!(
-            translate(&WinitEvent::CloseRequested, &Window),
+            translate(&WinitEvent::CloseRequested, &WINDOWED),
             Some(WindowEvent::CloseRequested)
         );
     }
@@ -540,16 +590,84 @@ mod tests {
     #[test]
     fn losing_focus_is_focus_lost_and_gaining_it_is_nothing() {
         assert_eq!(
-            translate(&WinitEvent::Focused(false), &Window),
+            translate(&WinitEvent::Focused(false), &WINDOWED),
             Some(WindowEvent::FocusLost)
         );
-        assert_eq!(translate(&WinitEvent::Focused(true), &Window), None);
+        assert_eq!(translate(&WinitEvent::Focused(true), &WINDOWED), None);
     }
 
     #[test]
     fn redraws_and_other_events_are_not_translated() {
         // The runner adds the elapsed time to redraws itself.
-        assert_eq!(translate(&WinitEvent::RedrawRequested, &Window), None);
-        assert_eq!(translate(&WinitEvent::Focused(true), &Window), None);
+        assert_eq!(translate(&WinitEvent::RedrawRequested, &WINDOWED), None);
+        assert_eq!(translate(&WinitEvent::Focused(true), &WINDOWED), None);
+    }
+
+    const AT: Duration = Duration::from_millis(250);
+
+    fn events(raw: &WinitEvent, fullscreen: bool) -> Vec<WindowEvent> {
+        window_events(raw, &Window { fullscreen }, AT).collect()
+    }
+
+    #[test]
+    fn a_resize_reports_the_windows_fullscreen_state_before_the_new_size() {
+        let raw = WinitEvent::Resized(PhysicalSize::new(3024, 1964));
+        for fullscreen in [true, false] {
+            assert_eq!(
+                events(&raw, fullscreen),
+                [
+                    WindowEvent::FullscreenChanged { fullscreen },
+                    WindowEvent::Resized {
+                        size_px: (3024, 1964),
+                        scale_factor: 2.0
+                    }
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn an_occlusion_reports_the_windows_fullscreen_state_alone() {
+        for fullscreen in [true, false] {
+            for occluded in [true, false] {
+                assert_eq!(
+                    events(&WinitEvent::Occluded(occluded), fullscreen),
+                    [WindowEvent::FullscreenChanged { fullscreen }]
+                );
+            }
+        }
+    }
+
+    /// macOS clears the state only once its exit animation ends, after
+    /// that animation's resizes; every frame reports it, so the exit is
+    /// seen.
+    #[test]
+    fn every_redraw_reports_the_fullscreen_state_first_then_the_time() {
+        for fullscreen in [true, false] {
+            assert_eq!(
+                events(&WinitEvent::RedrawRequested, fullscreen),
+                [
+                    WindowEvent::FullscreenChanged { fullscreen },
+                    WindowEvent::Redraw { elapsed: AT }
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn other_events_report_no_fullscreen_state() {
+        let left = WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        };
+        assert_eq!(events(&left, true), [WindowEvent::PointerLeft]);
+        assert_eq!(
+            events(&WinitEvent::Focused(false), true),
+            [WindowEvent::FocusLost]
+        );
+        assert_eq!(events(&WinitEvent::Focused(true), true), []);
+        assert_eq!(
+            events(&WinitEvent::CloseRequested, true),
+            [WindowEvent::CloseRequested]
+        );
     }
 }

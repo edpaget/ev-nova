@@ -178,6 +178,7 @@ fn seeded() -> MemorySettings {
                 music_volume: level_volume(6),
             },
             hyperspace_effects: true,
+            fullscreen: false,
         })
         .expect("seeds");
     store
