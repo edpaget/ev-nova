@@ -909,8 +909,9 @@
 //! days, and only landing there again is refused until it regenerates. A
 //! pilot saved docked there resumes in flight over it.
 //!
-//! The galaxy map has no service, trade or colour mode and no stellar
-//! panel yet; when built, they read `is_landable`. Defence fleets,
+//! The galaxy map's panel reads `landable` for its ports, goods and
+//! services (`nova_sim::map_panel`), and its colour code `is_landable`;
+//! it has no service or trade mode yet. Defence fleets,
 //! stellar weapons and the AI's stellar targets do not exist yet (rdm
 //! task planet-domination, story-runtime phase 13); the original's
 //! readers are listed below for them. Shots at stellars are story-runtime

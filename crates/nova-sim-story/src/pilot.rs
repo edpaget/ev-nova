@@ -94,6 +94,25 @@ use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
 
+/// How far a system is explored: the original's `sÿst` +0x90, which
+/// takes 0, 1 or 2 and is only ever raised.
+///
+/// A jump's arrival, a gate's exit, `X` and a new pilot raise a system to
+/// [`Explored`](Self::Explored) (level 1); a take-off and every map grant
+/// to [`Charted`](Self::Charted) (level 2). Only the galaxy map's panel
+/// tells the two apart: a level-1 system's goods and services read
+/// `<Unknown>` there (`_MapDialogUpdate` @0x10f34, @0x1107d, @0x11110).
+/// Every other reader asks only whether a system is explored at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ExploredLevel {
+    /// Level 0: never been in, never charted.
+    Unexplored,
+    /// Level 1: been in, or explored by `X`.
+    Explored,
+    /// Level 2: taken off from, or charted by a map.
+    Charted,
+}
+
 /// Everything about the player that a save keeps.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pilot {
@@ -116,8 +135,12 @@ pub struct Pilot {
     pub reserves: Reserves,
     /// The systems still to jump to, in order, ending at the destination.
     pub course: Vec<SystemId>,
-    /// Every system the pilot has been in.
+    /// Every system the pilot has been in: those at
+    /// [`ExploredLevel::Explored`] or above.
     pub explored: BTreeSet<SystemId>,
+    /// The systems at [`ExploredLevel::Charted`]: always a subset of
+    /// `explored`.
+    pub charted: BTreeSet<SystemId>,
     /// The legal record with each government that has one.
     pub legal: BTreeMap<GovtId, i16>,
     /// The legal record in each system that has one (see
@@ -219,6 +242,7 @@ impl Pilot {
             reserves: stats.full(),
             course: Vec::new(),
             explored: BTreeSet::from([system]),
+            charted: BTreeSet::new(),
             legal: character.legal.into_iter().flatten().collect(),
             system_legal: None,
             combat_rating: i64::from(character.kills),
@@ -397,9 +421,53 @@ impl Pilot {
         self.explored.contains(&system)
     }
 
-    /// Marks `system` explored, and says whether it was new.
+    /// Marks `system` explored, and says whether it was new: raises it to
+    /// [`ExploredLevel::Explored`], leaving a charted system charted.
     pub fn explore(&mut self, system: SystemId) -> bool {
         self.explored.insert(system)
+    }
+
+    /// Every system charted (level 2), by ascending ID: each is explored
+    /// too.
+    pub fn charted(&self) -> impl Iterator<Item = SystemId> + '_ {
+        self.charted.iter().copied()
+    }
+
+    /// Whether `system` is charted (level 2).
+    #[must_use]
+    pub fn has_charted(&self, system: SystemId) -> bool {
+        self.charted.contains(&system)
+    }
+
+    /// Raises `system` to [`ExploredLevel::Charted`], exploring it too,
+    /// and says whether it was not charted before.
+    pub fn chart(&mut self, system: SystemId) -> bool {
+        self.explored.insert(system);
+        self.charted.insert(system)
+    }
+
+    /// `system`'s explored level (the original's `sÿst` +0x90; see the
+    /// [`ExploredLevel`] docs).
+    #[must_use]
+    pub fn explored_level(&self, system: SystemId) -> ExploredLevel {
+        if self.charted.contains(&system) {
+            ExploredLevel::Charted
+        } else if self.explored.contains(&system) {
+            ExploredLevel::Explored
+        } else {
+            ExploredLevel::Unexplored
+        }
+    }
+
+    /// Raises `system` to `level` when it is lower, as every writer of
+    /// the original's level does, and says whether it rose: a level is
+    /// never lowered.
+    pub fn raise_explored(&mut self, system: SystemId, level: ExploredLevel) -> bool {
+        match level {
+            ExploredLevel::Unexplored => false,
+            ExploredLevel::Explored => self.explore(system),
+            ExploredLevel::Charted => self.chart(system),
+        }
     }
 
     /// The legal record with `govt`: 0 when it has none.
@@ -1019,6 +1087,63 @@ mod tests {
             pilot.explored().collect::<Vec<_>>(),
             [SystemId(130), SystemId(131), SystemId(132)]
         );
+    }
+
+    #[test]
+    fn charting_raises_to_level_2_and_implies_explored() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert!(pilot.chart(SystemId(132)));
+        assert!(!pilot.chart(SystemId(132)), "already charted");
+        assert!(pilot.has_explored(SystemId(132)));
+        assert!(pilot.has_charted(SystemId(132)));
+        assert_eq!(pilot.charted().collect::<Vec<_>>(), [SystemId(132)]);
+        assert_eq!(
+            pilot.explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(132)]
+        );
+    }
+
+    #[test]
+    fn exploring_a_charted_system_leaves_it_charted() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot.chart(SystemId(131));
+        assert!(!pilot.explore(SystemId(131)), "already explored");
+        assert_eq!(pilot.explored_level(SystemId(131)), ExploredLevel::Charted);
+    }
+
+    #[test]
+    fn raising_the_explored_level_never_lowers_it() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert!(pilot.raise_explored(SystemId(131), ExploredLevel::Charted));
+        assert!(!pilot.raise_explored(SystemId(131), ExploredLevel::Explored));
+        assert!(!pilot.raise_explored(SystemId(131), ExploredLevel::Unexplored));
+        assert_eq!(pilot.explored_level(SystemId(131)), ExploredLevel::Charted);
+        assert!(pilot.raise_explored(SystemId(132), ExploredLevel::Explored));
+        assert!(pilot.raise_explored(SystemId(132), ExploredLevel::Charted));
+        assert!(!pilot.raise_explored(SystemId(133), ExploredLevel::Unexplored));
+        assert!(!pilot.has_explored(SystemId(133)));
+    }
+
+    #[test]
+    fn the_explored_level_takes_three_values_in_order() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot.chart(SystemId(131));
+        assert_eq!(
+            pilot.explored_level(SystemId(132)),
+            ExploredLevel::Unexplored
+        );
+        assert_eq!(pilot.explored_level(SystemId(130)), ExploredLevel::Explored);
+        assert_eq!(pilot.explored_level(SystemId(131)), ExploredLevel::Charted);
+        assert!(ExploredLevel::Unexplored < ExploredLevel::Explored);
+        assert!(ExploredLevel::Explored < ExploredLevel::Charted);
+    }
+
+    #[test]
+    fn a_new_pilot_starts_at_level_1() {
+        let pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(pilot.explored_level(SystemId(130)), ExploredLevel::Explored);
+        assert_eq!(pilot.charted().count(), 0);
+        assert!(!pilot.has_charted(SystemId(130)));
     }
 
     #[test]

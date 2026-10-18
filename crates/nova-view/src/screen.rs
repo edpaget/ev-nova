@@ -141,6 +141,13 @@ pub trait Screen {
     fn take_prefs(&mut self) -> Option<Prefs> {
         None
     }
+    /// The galaxy map's borders setting to save since this was last taken,
+    /// if a map's close changed it, as the original's map saves
+    /// `ShowMapBorders` (`_SaveMapBordersState` @0xcf110): each change is
+    /// reported once. None by default.
+    fn take_map_borders_save(&mut self) -> Option<bool> {
+        None
+    }
     /// Which screen is showing, for a screen that routes between others;
     /// `None` by default.
     fn now_showing(&self) -> Option<Showing> {
@@ -202,6 +209,11 @@ mod tests {
         fn draw(&self, list: &mut DrawList) {
             list.dot(Point::new(0.0, 0.0), 1.0, Color::WHITE);
         }
+    }
+
+    #[test]
+    fn a_screen_reports_no_map_borders_save_by_default() {
+        assert_eq!(Counter::default().take_map_borders_save(), None);
     }
 
     #[test]

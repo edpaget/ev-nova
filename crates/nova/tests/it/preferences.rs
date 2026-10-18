@@ -177,6 +177,7 @@ fn seeded() -> MemorySettings {
             },
             hyperspace_effects: true,
             quicktime_movies: true,
+            map_borders: true,
         })
         .expect("seeds");
     store

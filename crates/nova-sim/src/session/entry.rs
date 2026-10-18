@@ -82,6 +82,7 @@ use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::pilot::ExploredLevel;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 #[cfg(doc)]
@@ -689,9 +690,9 @@ impl Session {
             self.pilot.stellar = placement.stellar;
         }
         if resets.has(Reset::Explore) {
-            // With its place's head, by the engine (see the `explored`
-            // module).
-            self.explore_place(system);
+            // At level 1, with its place's head, by the engine (see the
+            // `explored` module).
+            self.explore_place(system, ExploredLevel::Explored);
         }
         match resets.course {
             CourseStep::Keep => {}

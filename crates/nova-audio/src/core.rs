@@ -296,6 +296,11 @@ impl<A: Audio> AudioCore<A> {
                 sound,
                 until_stopped: false,
             } => self.play(Some(sound), at::PORT_AMBIENT),
+            UiSound::MapCentred => self.play(self.table.map_centre, at::MAP_CENTRE),
+            UiSound::MapSystemFound => self.play(self.table.map_found, at::MAP_FOUND),
+            UiSound::MapSystemNotFound => {
+                self.play(self.table.map_not_found, at::MAP_NOT_FOUND);
+            }
             UiSound::PortAmbient {
                 sound,
                 until_stopped: true,
@@ -742,6 +747,22 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn the_map_filters_beeps_play_at_their_priorities() {
+        use crate::priority as at;
+        let cases = [
+            (Sound::Ui(UiSound::MapCentred), at::MAP_CENTRE),
+            (Sound::Ui(UiSound::MapSystemFound), at::MAP_FOUND),
+            (Sound::Ui(UiSound::MapSystemNotFound), at::MAP_NOT_FOUND),
+        ];
+        for (sound, priority) in cases {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[sound]);
+            let played = drain_prioritised(&log);
+            assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
+        }
     }
 
     #[test]
@@ -1544,6 +1565,47 @@ mod tests {
         assert_eq!(
             drain(&log),
             [play(300, EFFECTS), play(301, EFFECTS)],
+            "the table's"
+        );
+    }
+
+    #[test]
+    fn the_map_beeps_as_space_centres_it_and_find_finds_or_not() {
+        const MAP: [Sound; 3] = [
+            Sound::Ui(UiSound::MapCentred),
+            Sound::Ui(UiSound::MapSystemFound),
+            Sound::Ui(UiSound::MapSystemNotFound),
+        ];
+        let (mut core, log) = original();
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(154, EFFECTS), play(154, EFFECTS), play(153, EFFECTS)]
+        );
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(154, 0.5), play(154, 0.5), play(153, 0.5)],
+            "at the effects volume"
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &MAP);
+        assert_eq!(drain(&log), [], "sound off");
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            map_centre: Some(SoundId(300)),
+            map_found: Some(SoundId(301)),
+            map_not_found: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(None, &MAP);
+        assert_eq!(
+            drain(&log),
+            [play(300, EFFECTS), play(301, EFFECTS), play(302, EFFECTS)],
             "the table's"
         );
     }

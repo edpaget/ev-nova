@@ -31,9 +31,12 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{DescMovie, MissionInfo, MissionShown};
+use nova_sim::{DescMovie, MapMarks, MissionInfo, MissionShown};
 
 use crate::draw::DrawList;
+#[cfg(doc)]
+use crate::flight::FlightView;
+use crate::flight::MapOpener;
 use crate::input::Input;
 use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
@@ -154,11 +157,15 @@ impl MissionDialogs {
         for shown in texts {
             match shown.into() {
                 MissionShown::Text(text) => {
-                    self.queue_desc(&DescShown {
-                        text: text.text,
-                        graphic: text.graphic,
-                        movie: text.movie,
-                    });
+                    let map = text.map;
+                    self.queue_desc_with_map(
+                        &DescShown {
+                            text: text.text,
+                            graphic: text.graphic,
+                            movie: text.movie,
+                        },
+                        map,
+                    );
                     self.texts.push_back(Stage::Closed);
                 }
                 MissionShown::Movie(movie) => self.queue_movie(&movie),
@@ -200,8 +207,15 @@ impl MissionDialogs {
     }
 
     /// Queues `shown`: its movie before it, its dialog (none for an empty
-    /// text, which plays no movie after), and its movie after it.
+    /// text, which plays no movie after), and its movie after it. It
+    /// opens no map.
     fn queue_desc(&mut self, shown: &DescShown) {
+        self.queue_desc_with_map(shown, None);
+    }
+
+    /// [`MissionDialogs::queue_desc`], its dialog opening the map marked
+    /// `map` on the map key, or none.
+    fn queue_desc_with_map(&mut self, shown: &DescShown, map: Option<MapMarks>) {
         let movie = |after: bool| shown.movie.as_ref().filter(|movie| movie.after == after);
         if let Some(before) = movie(false) {
             self.queue_movie(before);
@@ -215,7 +229,7 @@ impl MissionDialogs {
             self.style,
             Rc::clone(&self.metrics),
         ) {
-            self.texts.push_back(Stage::Text(dialog));
+            self.texts.push_back(Stage::Text(dialog.with_map(map)));
         }
         if let Some(after) = movie(true) {
             self.queue_movie(after);
@@ -288,8 +302,17 @@ impl MissionDialogs {
 
     /// Opens the mission info screen on `info`, laid out by its template,
     /// or showing why it cannot be; with nothing to list, it does not
-    /// open.
+    /// open. Its map key opens the map
+    /// ([`MissionDialogs::open_info_with_map`]).
     pub fn open_info(&mut self, info: MissionInfo) {
+        self.open_info_with_map(info, true);
+    }
+
+    /// [`MissionDialogs::open_info`], its map key opening the map when
+    /// `map_allowed`: not when it opens over an offer or the mission
+    /// computer, as `_missionDialog` is set then
+    /// ([`MissionInfoScreen::with_map_allowed`]).
+    pub fn open_info_with_map(&mut self, info: MissionInfo, map_allowed: bool) {
         if info.rows.is_empty() {
             return;
         }
@@ -297,7 +320,8 @@ impl MissionDialogs {
             .info_template
             .clone()
             .map(|template| (template, Rc::clone(&self.metrics)));
-        let mut screen = MissionInfoScreen::new(layout, info, self.style);
+        let mut screen =
+            MissionInfoScreen::new(layout, info, self.style).with_map_allowed(map_allowed);
         self.sounds.extend(screen.take_sounds());
         self.info = Some(screen);
     }
@@ -334,6 +358,23 @@ impl MissionDialogs {
         if let Some(screen) = &mut self.info {
             screen.show_text(slot, text);
         }
+    }
+
+    /// The map the text shown or the mission info screen asked for since
+    /// this was last taken, once: the accept's briefing's, marked as the
+    /// session queued it, or mission info's, for its selected slot. A
+    /// mission dialog's map ([`FlightView::open_dialog_map`]) opens over
+    /// them, and they stay open under it.
+    pub fn take_map_request(&mut self) -> Option<MapOpener> {
+        let text = self.texts.iter_mut().find_map(|stage| match stage {
+            Stage::Text(text) => text.take_map_request(),
+            Stage::Movie(_) | Stage::Closed => None,
+        });
+        let info = self
+            .info
+            .as_mut()
+            .and_then(MissionInfoScreen::take_map_request);
+        text.map(MapOpener::Briefing).or(info)
     }
 
     /// The mission text shown, if any: none while a movie plays.
@@ -452,10 +493,11 @@ impl Screen for MissionDialogs {
 
 #[cfg(test)]
 mod tests {
-    use nova_sim::{InfoRow, MissionId, MissionText, MissionTextKind};
+    use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
 
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::flight::MapOpener;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
     use crate::movie::fixture::{Call, FRAME, MockMoviePlayer};
@@ -547,6 +589,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }
     }
 
@@ -602,6 +645,59 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn the_briefings_map_key_asks_for_its_marked_map_and_another_texts_none() {
+        let m = crate::flight::view::MAP_KEY;
+        let marks = MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: true,
+        };
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![
+            MissionText {
+                map: Some(marks),
+                ..brief(128, "Off you go.")
+            },
+            brief(129, "Pity."),
+        ]);
+        dialogs.input(&key(m));
+        assert_eq!(dialogs.take_map_request(), Some(MapOpener::Briefing(marks)));
+        assert_eq!(dialogs.take_map_request(), None, "once");
+        assert_eq!(
+            shown(&dialogs).as_deref(),
+            Some("Off you go."),
+            "open under it"
+        );
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(m));
+        assert_eq!(dialogs.take_map_request(), None, "no map from this one");
+        assert_eq!(dialogs.take_sounds(), [], "silent");
+    }
+
+    #[test]
+    fn mission_infos_map_key_asks_for_the_map_of_its_selected_slot_unless_refused() {
+        let m = crate::flight::view::MAP_KEY;
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        dialogs.input(&key(m));
+        assert_eq!(
+            dialogs.take_map_request(),
+            Some(MapOpener::MissionInfo(Some(2)))
+        );
+        let mut dialogs = dialogs_with_info_over_a_mission_dialog();
+        dialogs.input(&key(m));
+        assert_eq!(dialogs.take_map_request(), None);
+        assert!(dialogs.info().is_some(), "still open");
+    }
+
+    /// [`dialogs`] with the mission info screen open over an offer or the
+    /// computer, where it opens no map.
+    fn dialogs_with_info_over_a_mission_dialog() -> MissionDialogs {
+        let mut dialogs = dialogs();
+        dialogs.open_info_with_map(info(), false);
+        dialogs
     }
 
     #[test]

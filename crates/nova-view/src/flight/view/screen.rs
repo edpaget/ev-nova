@@ -77,7 +77,8 @@ impl<
             return self.refuse_player_info();
         }
         if self.map_open {
-            if press == Some(MAP_KEY) {
+            // M types into Find while it is open.
+            if press == Some(MAP_KEY) && !self.map.finding() {
                 self.close_map();
             } else {
                 self.map_input(input);
@@ -206,6 +207,8 @@ impl<
             }
         }
         if self.map_open {
+            // The map's own frame: its borders' null events.
+            self.map.tick(dt);
             return;
         }
         if self.hold_expired() {
@@ -243,12 +246,102 @@ impl<
         self.advance_hud();
     }
 
+    /// The scene, its HUD and the cursor, then the fades. With the course
+    /// map open, the map's dialog over the paused scene as it would be
+    /// drawn shut, less the cursor, which the map hides; in port, where
+    /// the bar opens it, the dialog alone, for the app to draw over the
+    /// spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
+            let in_port = self
+                .session
+                .as_ref()
+                .is_ok_and(|session| session.landed().is_some());
+            if !in_port {
+                self.draw_scene(list);
+            }
             self.map.draw(list);
             self.draw_fades(list);
             return;
         }
+        if self.draw_scene(list) {
+            self.cursor.draw(list, &self.looks);
+            self.draw_fades(list);
+        }
+    }
+
+    /// Abandons any gesture on the course map, and forgets where the
+    /// pointer was: flight stops getting pointer moves while it is hidden
+    /// or covered, so the cursor sprite is not drawn (and nothing is
+    /// hovered) at that stale point until the next move, which the app
+    /// sends when flight shows again.
+    fn cancel_pointer(&mut self) {
+        self.map.cancel_pointer();
+        self.cursor.left();
+    }
+
+    /// Lets go of every flight key: the ship stops thrusting and turning,
+    /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
+    /// course map doesn't take no longer closes it.
+    fn release_keys(&mut self) {
+        self.held.clear();
+        self.map.release_keys();
+        self.map_key_held = false;
+    }
+
+    /// The session's sounds (thrust, landing, taking off and jumping),
+    /// then the interface's (the escort menu's, the floating map's zooms,
+    /// the player info refused, the course map's beeps), then the fight's.
+    /// The course map has no buttons that sound.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        let mut sounds: Vec<Sound> = self
+            .session
+            .as_mut()
+            .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
+            .unwrap_or_default();
+        sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
+        sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
+        sounds
+    }
+
+    /// Flight hides the system's pointer over the window for its cursor
+    /// sprite (`_HandleMouse` @0x38007-0x38017 hides it inside the
+    /// window), unless the map is open, the flight never started or the
+    /// cursor's sheet could not be read.
+    fn hides_pointer(&self) -> bool {
+        !self.map_open && self.session.is_ok() && self.looks.cursor_sheet().is_some()
+    }
+
+    /// What could not be read of the looks, then the session's
+    /// diagnostics, each once.
+    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        let mut diagnostics = std::mem::take(&mut self.unread_looks);
+        if let Ok(session) = &mut self.session {
+            let sim = session.take_diagnostics().into_iter();
+            diagnostics.extend(sim.map(Diagnostic::Sim));
+        }
+        diagnostics
+    }
+}
+
+impl<
+    C: PilotCatalog
+        + TrafficCatalog
+        + CombatCatalog
+        + AsteroidCatalog
+        + CommCatalog
+        + CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks,
+> FlightView<C>
+{
+    /// Draws the scene and its HUD, the cursor and the fades left out:
+    /// whether there was a scene to draw, or only why flight could not
+    /// start.
+    fn draw_scene(&self, list: &mut DrawList) -> bool {
         let Some(scene) = &self.scene else {
             let reason = self.session().err().unwrap_or_default();
             list.text(
@@ -259,7 +352,7 @@ impl<
                 Color::ERROR,
             );
             self.draw_help(list);
-            return;
+            return false;
         };
         let camera = self.camera();
         match self.jump.map(|effect| (effect, effect.phase())) {
@@ -313,60 +406,6 @@ impl<
             Ok(bar) => self.draw_bar(list, bar),
             Err(reason) => hud::draw_unavailable(list, reason),
         }
-        self.cursor.draw(list, &self.looks);
-        self.draw_fades(list);
-    }
-
-    /// Abandons any gesture on the course map, and forgets where the
-    /// pointer was: flight stops getting pointer moves while it is hidden
-    /// or covered, so the cursor sprite is not drawn (and nothing is
-    /// hovered) at that stale point until the next move, which the app
-    /// sends when flight shows again.
-    fn cancel_pointer(&mut self) {
-        self.map.cancel_pointer();
-        self.cursor.left();
-    }
-
-    /// Lets go of every flight key: the ship stops thrusting and turning,
-    /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
-    /// course map doesn't take no longer closes it.
-    fn release_keys(&mut self) {
-        self.held.clear();
-        self.map.release_keys();
-        self.map_key_held = false;
-    }
-
-    /// The session's sounds (thrust, landing, taking off and jumping),
-    /// then the interface's (the escort menu's, the floating map's zooms,
-    /// the player info refused), then the fight's. The course map has no
-    /// buttons that sound.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        let mut sounds: Vec<Sound> = self
-            .session
-            .as_mut()
-            .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
-            .unwrap_or_default();
-        sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
-        sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
-        sounds
-    }
-
-    /// Flight hides the system's pointer over the window for its cursor
-    /// sprite (`_HandleMouse` @0x38007-0x38017 hides it inside the
-    /// window), unless the map is open, the flight never started or the
-    /// cursor's sheet could not be read.
-    fn hides_pointer(&self) -> bool {
-        !self.map_open && self.session.is_ok() && self.looks.cursor_sheet().is_some()
-    }
-
-    /// What could not be read of the looks, then the session's
-    /// diagnostics, each once.
-    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        let mut diagnostics = std::mem::take(&mut self.unread_looks);
-        if let Ok(session) = &mut self.session {
-            let sim = session.take_diagnostics().into_iter();
-            diagnostics.extend(sim.map(Diagnostic::Sim));
-        }
-        diagnostics
+        true
     }
 }

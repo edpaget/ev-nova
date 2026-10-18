@@ -153,6 +153,7 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        gravity: 0,
         animation: crate::catalog::SiteAnimation::default(),
     }
 }
@@ -312,6 +313,7 @@ pub fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 pub fn govt(id: i16) -> GovtRecord {
     GovtRecord {
         id: GovtId(id),
+        name: String::new(),
         flags: 0,
         flags2: 0,
         crime_tol: 0,

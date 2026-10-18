@@ -90,6 +90,7 @@ pub struct WgpuRenderer {
     sprite_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     or_pipeline: wgpu::RenderPipeline,
+    max_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     page_layout: wgpu::BindGroupLayout,
@@ -164,6 +165,7 @@ impl WgpuRenderer {
         let sprite_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Normal);
         let additive_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Additive);
         let or_pipeline = sprite_pipeline_with(&or_layout, "or_fs", Blend::Or);
+        let max_pipeline = sprite_pipeline_with(&sprite_layout, "max_fs", Blend::Max);
         let solid_pipeline = pipeline(
             device,
             &solid_layout,
@@ -194,6 +196,7 @@ impl WgpuRenderer {
             sprite_pipeline,
             additive_pipeline,
             or_pipeline,
+            max_pipeline,
             solid_pipeline,
             blit_pipeline,
             page_layout,
@@ -378,6 +381,7 @@ impl WgpuRenderer {
                         Blend::Normal => &self.sprite_pipeline,
                         Blend::Additive => &self.additive_pipeline,
                         Blend::Or => &self.or_pipeline,
+                        Blend::Max => &self.max_pipeline,
                     });
                     pass.set_bind_group(0, &self.globals_group, &[]);
                     pass.set_bind_group(1, &page.bind_group, &[]);
@@ -798,7 +802,9 @@ fn set_viewport(pass: &mut wgpu::RenderPass<'_>, rect: PixelRect) {
 /// output straight (unpremultiplied) alpha, so additive is destination +
 /// source x source alpha, keeping the destination's alpha. An OR batch's
 /// shader has already combined it with the backdrop, so it is written as
-/// it is.
+/// it is. Max takes the larger of each colour channel of the destination
+/// and the source, which its shader has premultiplied, keeping the
+/// destination's alpha.
 fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
     match blend {
         Blend::Normal => Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -808,6 +814,20 @@ fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
                 dst_factor: wgpu::BlendFactor::One,
                 operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
+        // WebGPU requires `One` factors for `Max`, so `max_fs` scales the
+        // colour by its alpha itself.
+        Blend::Max => Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Max,
             },
             alpha: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::Zero,
@@ -1182,6 +1202,27 @@ mod tests {
                     src_factor: wgpu::BlendFactor::SrcAlpha,
                     dst_factor: wgpu::BlendFactor::One,
                     operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn blend_state_takes_the_larger_of_each_channel_and_keeps_the_alpha_for_max() {
+        // WebGPU requires `One` factors for `Max`; `max_fs` has already
+        // scaled the colour by its alpha.
+        assert_eq!(
+            blend_state(Blend::Max),
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Max,
                 },
                 alpha: wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::Zero,

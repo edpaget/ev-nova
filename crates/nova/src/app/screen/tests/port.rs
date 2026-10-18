@@ -687,10 +687,16 @@ fn cancelling_the_hire_screen_resets_and_the_shops_show_it() {
 /// [`data`] with system 128 linked to 129, landed at Alpha Prime's
 /// bar, the bar open.
 fn in_the_bar() -> AppScreen {
+    in_the_bar_by(Rulebook::default())
+}
+
+/// [`in_the_bar`], its rules read as `rules` says.
+fn in_the_bar_by(rules: Rulebook) -> AppScreen {
     let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
     let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
     built.put_u16(alpha + 0x04, 129);
     let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+        .with_rules(rules)
         .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
     land(&mut screen);
     click_port_item(&mut screen, 10);
@@ -699,8 +705,78 @@ fn in_the_bar() -> AppScreen {
 }
 
 #[test]
-fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
+fn the_bars_map_ticks_its_borders_and_saves_no_change() {
+    use nova_sim::map_borders::Next;
     let mut screen = in_the_bar();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert_eq!(screen.showing(), Showing::FlightMap);
+    let passes = || flight(&screen).course_map().border_passes().next();
+    assert_eq!(passes(), Next::Unstarted, "the open's coarse pass");
+    screen.tick(Duration::from_millis(16));
+    let passes = flight(&screen).course_map().border_passes().next();
+    assert_eq!(passes, Next::Idle, "the router ticks the flight under it");
+    for k in [Key::Char('b'), MAP] {
+        screen.input(&key(k, true));
+        screen.input(&key(k, false));
+    }
+    assert!(!flight(&screen).map_open());
+    assert!(!flight(&screen).map_borders_shown());
+    assert_eq!(screen.take_map_borders_save(), None, "docked");
+}
+
+#[test]
+fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
+    let mut screen = in_the_bar();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    for pressed in [true, false] {
+        screen.input(&key(Key::Char('f'), pressed));
+    }
+    assert!(flight(&screen).map_finding());
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::FlightMap, "Escape types nothing");
+    command_comma(&mut screen);
+    assert!(screen.preferences().is_none(), "no Preferences over Find");
+    assert!(flight(&screen).map_finding());
+    screen.input(&key(Key::Enter, true));
+    assert!(!flight(&screen).map_finding());
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Spaceport, "closed once Find is");
+}
+
+/// Where `system` is on flight's open map, scrolled well into item 3 with
+/// the arrows first: the map opens at 0.5625 and shows little of the
+/// galaxy.
+fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
+    let shown = nova_view::galaxy::dialog::map_area().grown(-12.0);
+    for _ in 0..200 {
+        let map = flight(screen).course_map();
+        let at = map
+            .transform()
+            .world_to_screen(map.model().system(system).expect("on the map").position());
+        let arrow = if at.x < shown.min.x {
+            Key::Left
+        } else if at.x > shown.max.x {
+            Key::Right
+        } else if at.y < shown.min.y {
+            Key::Up
+        } else if at.y > shown.max.y {
+            Key::Down
+        } else {
+            return at;
+        };
+        screen.input(&key(arrow, true));
+        screen.input(&key(arrow, false));
+    }
+    panic!("{system:?} never scrolled into item 3");
+}
+
+#[test]
+fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
+    // The planner's click writes the nav in port, which the bar puts back.
+    let mut screen =
+        in_the_bar_by(Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible));
     let nav = |screen: &AppScreen| {
         flight(screen)
             .session()
@@ -713,26 +789,26 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     assert_eq!(screen.showing(), Showing::FlightMap);
     assert!(spaceport(&screen).open_bar().is_some(), "the bar beneath");
     let mut list = DrawList::new();
+    flight(&screen).draw_status_bar(&mut list);
+    spaceport(&screen).draw(&mut list);
     flight(&screen).course_map().draw(&mut list);
     assert_eq!(
         drawn(&screen).iter().cloned().collect::<Vec<_>>(),
         list.iter().cloned().collect::<Vec<_>>(),
-        "the map drawn alone"
+        "the status bar and the spaceport, the bar open, under the map"
     );
     screen.input(&key(MAP, false));
-    let map = flight(&screen).course_map();
-    let beta = map
-        .view()
-        .world_to_screen(map.model().system(SystemId(129)).expect("Beta").position());
+    let beta = scrolled_to(&mut screen, SystemId(129));
+    let empty = nova_view::Point::new(beta.x - 40.0, beta.y);
     let left = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
-        at: beta,
+        at: empty,
     };
     screen.input(&left(true));
     screen.cancel_pointer();
     screen.input(&left(false));
-    assert_eq!(nav(&screen), landed, "the map's click abandoned");
+    assert_eq!(nav(&screen), landed, "a press on empty space plots nothing");
     for pressed in [true, false] {
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,

@@ -9,6 +9,7 @@ use nova_data::records::nebula::Nebula;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record, StoreEntry};
+use nova_sim::Governments;
 
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, SystemEntry,
@@ -53,6 +54,7 @@ impl GalaxyCatalog for GameData {
         Galaxy {
             systems,
             govt_colors,
+            govts: Governments::read(self),
             nebulae,
             problems,
         }
@@ -108,13 +110,16 @@ fn nebula(
     if PICTURED_NEBULAE.contains(&entry.id) {
         // In range, the IDs run from 9500 to 9723, well inside an i16.
         let first = FIRST_NEBULA_PICT + (entry.id - PICTURED_NEBULAE.start()) * PICTURES_PER_NEBULA;
-        for id in first..first + PICTURES_PER_NEBULA {
+        for slot in 0..PICTURES_PER_NEBULA {
+            let id = first + slot;
             let Some(resource) = data.resource(PICT, id) else {
                 continue;
             };
             match decode_pict(resource.resource.data()) {
                 Ok(image) => pictures.push(NebulaPicture {
                     id,
+                    // 0 to 6.
+                    slot: slot as u8,
                     width: image.width(),
                     height: image.height(),
                 }),
@@ -160,6 +165,8 @@ mod tests {
     use nova_data::{GameData, Record};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
+
+    use nova_sim::govt::{NO_INFLUENCE, SMALL_INFLUENCE};
 
     use super::*;
     use crate::galaxy::catalog::{
@@ -461,22 +468,40 @@ mod tests {
                 pictures: vec![
                     NebulaPicture {
                         id: 9500,
+                        slot: 0,
                         width: 15,
                         height: 12
                     },
                     NebulaPicture {
                         id: 9502,
+                        slot: 2,
                         width: 60,
                         height: 50
                     },
                     NebulaPicture {
                         id: 9506,
+                        slot: 6,
                         width: 120,
                         height: 100
                     },
                 ],
             }]
         );
+    }
+
+    #[test]
+    fn a_nebula_missing_its_first_picture_keeps_its_other_slots() {
+        let data = store(&[
+            (Nebula::TYPE, 129, None, nebula(0, 0, 10, 10)),
+            (PICT, 9508, None, picture(3, 4)),
+            (PICT, 9510, None, picture(5, 6)),
+        ]);
+        let slots: Vec<(i16, u8)> = data.galaxy().nebulae[0]
+            .pictures
+            .iter()
+            .map(|p| (p.id, p.slot))
+            .collect();
+        assert_eq!(slots, [(9508, 1), (9510, 3)]);
     }
 
     #[test]
@@ -552,6 +577,27 @@ mod tests {
             "{:?}",
             galaxy.problems
         );
+    }
+
+    #[test]
+    fn the_governments_are_read_whole_for_the_borders() {
+        let mut fed = govt(0x002C_2CAF);
+        put_i16s(&mut fed, 0x04, &[0x0002]);
+        put_i16s(&mut fed, 0x18, &[1, -1, -1, -1, 2, -1, -1, -1]);
+        let mut civvies = govt(0x00CF_0C0C);
+        put_i16s(&mut civvies, 0x04, &[0x0004]);
+        put_i16s(&mut civvies, 0x18, &[2, -1, -1, -1, -1, -1, -1, -1]);
+        let data = store(&[
+            (Govt::TYPE, 128, Some("Federation"), fed),
+            (Govt::TYPE, 129, Some("Civvies"), civvies),
+        ]);
+        let galaxy = data.galaxy();
+        assert_eq!(galaxy.govts, Governments::read(&data));
+        let (fed, civvies) = (Some(GovtId(128)), Some(GovtId(129)));
+        assert!(galaxy.govts.flag2(fed, SMALL_INFLUENCE));
+        assert!(galaxy.govts.flag2(civvies, NO_INFLUENCE));
+        assert!(galaxy.govts.allies(fed, civvies), "128 allied with class 2");
+        assert_eq!(galaxy.govt_colors[&GovtId(129)], 0x00CF_0C0C);
     }
 
     #[test]

@@ -88,8 +88,10 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod death;
+mod dialog_maps;
 mod encounters;
 mod flight;
+mod map_find;
 mod menu;
 mod missions;
 mod overlays;
@@ -543,7 +545,7 @@ fn click_system(screen: &mut AppScreen, id: i16) {
         .system(SystemId(id))
         .expect("a system")
         .position();
-    let at = map.view().world_to_screen(position);
+    let at = map.transform().world_to_screen(position);
     for pressed in [true, false] {
         let input = Input::PointerButton {
             button: MouseButton::Left,
@@ -605,8 +607,8 @@ fn a_held_tab_reaches_neither_screen() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
     let map = screen.galaxy_map();
-    let view = *map.view();
-    let at = map.view().world_to_screen(
+    let view = *map.view().expect("the viewer");
+    let at = map.transform().world_to_screen(
         map.model()
             .system(SystemId(129))
             .expect("a system")
@@ -623,7 +625,11 @@ fn a_held_tab_reaches_neither_screen() {
     screen.input(&held(Key::Tab));
     screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
     assert_eq!(screen.showing(), Showing::GalaxyMap);
-    assert_ne!(*screen.galaxy_map().view(), view, "the drag goes on");
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "the drag goes on"
+    );
 }
 
 #[test]
@@ -632,22 +638,34 @@ fn held_keys_reach_the_screen_shown() {
     screen.input(&held(Key::Right));
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
     screen.input(&key(Key::Tab, true));
-    let fitted = *screen.galaxy_map().view();
+    let fitted = *screen.galaxy_map().view().expect("the viewer");
     screen.input(&held(Key::Right));
-    assert_ne!(*screen.galaxy_map().view(), fitted, "the map pans");
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "the map pans"
+    );
 }
 
 #[test]
 fn keys_reach_only_the_screen_shown() {
     let mut screen = AppScreen::new(data());
-    let fitted = *screen.galaxy_map().view();
+    let fitted = *screen.galaxy_map().view().expect("the viewer");
     assert_eq!(screen.input(&key(Key::Right, true)), ScreenAction::None);
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
-    assert_eq!(*screen.galaxy_map().view(), fitted, "the map stays put");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "the map stays put"
+    );
 
     screen.input(&key(Key::Tab, true));
     screen.input(&key(Key::Right, true));
-    assert_ne!(*screen.galaxy_map().view(), fitted, "the map pans");
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "the map pans"
+    );
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
 }
 
@@ -658,13 +676,16 @@ fn each_screen_keeps_its_state_across_a_round_trip() {
     screen.input(&key(Key::Tab, true));
     click_system(&mut screen, 129);
     screen.input(&key(Key::Char('='), true));
-    let (view, selected) = (*screen.galaxy_map().view(), screen.galaxy_map().selected());
+    let (view, selected) = (
+        *screen.galaxy_map().view().expect("the viewer"),
+        screen.galaxy_map().selected(),
+    );
     assert_eq!(selected, Some(SystemId(129)));
 
     screen.input(&key(Key::Tab, true));
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
     screen.input(&key(Key::Tab, true));
-    assert_eq!(*screen.galaxy_map().view(), view);
+    assert_eq!(*screen.galaxy_map().view().expect("the viewer"), view);
     assert_eq!(screen.galaxy_map().selected(), selected);
 }
 
@@ -673,8 +694,8 @@ fn switching_away_cancels_a_drag_whose_release_the_other_screen_gets() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
     let map = screen.galaxy_map();
-    let view = *map.view();
-    let at = map.view().world_to_screen(
+    let view = *map.view().expect("the viewer");
+    let at = map.transform().world_to_screen(
         map.model()
             .system(SystemId(129))
             .expect("a system")
@@ -692,7 +713,11 @@ fn switching_away_cancels_a_drag_whose_release_the_other_screen_gets() {
     screen.input(&key(Key::Tab, true));
     assert_eq!(screen.showing(), Showing::GalaxyMap);
     screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
-    assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "no drag"
+    );
     assert_eq!(screen.galaxy_map().selected(), None);
 }
 
@@ -817,7 +842,7 @@ fn releasing_the_keys_reaches_the_screen_shown() {
 fn cancelling_the_pointer_reaches_the_screen_shown() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
-    let view = *screen.galaxy_map().view();
+    let view = *screen.galaxy_map().view().expect("the viewer");
     screen.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: true,
@@ -825,7 +850,11 @@ fn cancelling_the_pointer_reaches_the_screen_shown() {
     });
     screen.cancel_pointer();
     screen.input(&Input::PointerMoved(Point::new(150.0, 100.0)));
-    assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "no drag"
+    );
 }
 
 #[test]

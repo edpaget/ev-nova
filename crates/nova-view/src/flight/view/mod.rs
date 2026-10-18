@@ -242,16 +242,31 @@
 //!   `_DrawMap` draws of the known and explored systems, coloured by
 //!   `_ColorCodeSystem`, with the mission systems taken as it opens
 //!   ([`Session::map_mission_systems`]), taken again on the frame after
-//!   the galaxy, the explored or known systems, the course or the nav
-//!   change, and after a plot, a Tab or a hypergate map click. A system
-//!   clicked on the map becomes the destination: the session plots the
-//!   course there and the map shows it, and the hop it cues as the
-//!   selected link. The panel says which systems are unexplored. The
+//!   the galaxy, the explored, charted or known systems, the course or
+//!   the nav change, and after a plot, a Tab or a hypergate map click. A
+//!   system clicked on the map becomes the destination: the session plots
+//!   the course there and the map shows it, and the hop it cues as the
+//!   selected link. Its info panels are the session's for the system it
+//!   selects ([`Session::map_panel`], [`GalaxyMap::show_panel`]), taken
+//!   with each drawing and whenever a click, a Tab or a gate pick changes
+//!   the selection, measured by the flight's text metrics. The
 //!   map's nebulae are the session's galaxy's ([`Session::galaxy`]),
 //!   active and explored, rebuilt on the frame after each change to it;
 //!   its panel's course line is the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
-//!   for it.
+//!   for it. Space centres it on the current system and selects it
+//!   ([`UiSound::MapCentred`]), and Done closes it as Return does. F, S
+//!   or its Find button open Find, which takes every input while it is
+//!   open, M and Escape included; the session searches what the
+//!   original's `_DoSystemSearch` does ([`Session::find_map_system`]),
+//!   and the map selects and centres on a system found
+//!   ([`UiSound::MapSystemFound`], or [`UiSound::MapSystemNotFound`]).
+//!   Closing the map drops an open Find. A mission dialog opens the same
+//!   map on its map key, docked or in flight
+//!   ([`FlightView::open_dialog_map`]): marked with the green mission
+//!   system and the arrow flag the dialog gives it, opening and closing
+//!   in silence, its close followed by the dialog's own restore of the
+//!   nav (see [`MapOpener`]'s module).
 //! - The HUD's nav area shows the session's nav mode and its selection
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
@@ -564,9 +579,11 @@ use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
+use dialog_map::MapOpened;
 
 mod build;
 mod cockpit;
+mod dialog_map;
 mod docked;
 mod interface;
 mod messages;
@@ -576,6 +593,8 @@ mod shots;
 mod sprites;
 mod travel;
 
+pub use dialog_map::MapOpener;
+pub(crate) use dialog_map::is_map_press;
 pub use messages::*;
 
 /// The developer overlays: the system's title and the help line.
@@ -858,6 +877,7 @@ impl NavFlash {
 struct MapSeen {
     system: SystemId,
     explored: Vec<SystemId>,
+    charted: Vec<SystemId>,
     known: BTreeSet<SystemId>,
     course: Vec<SystemId>,
     nav: NavMode,
@@ -869,6 +889,7 @@ impl MapSeen {
         Self {
             system: session.system(),
             explored: session.pilot().explored().collect(),
+            charted: session.pilot().charted().collect(),
             known: session.known().clone(),
             course: session.course().to_vec(),
             nav: session.nav_mode(),
@@ -962,10 +983,13 @@ pub struct FlightView<C> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
-    /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
-    /// whose close puts back the nav the bar opened with; cleared as the
-    /// map closes ([`FlightView::close_map`]).
-    bar_map: bool,
+    /// How the map shown was opened (by M, the bar or a mission dialog,
+    /// with its marks) and the nav as it opened: taken as each map opens,
+    /// dropped as it closes ([`FlightView::close_map`]).
+    map_opened: Option<MapOpened>,
+    /// The borders setting the course map's last undocked close changed
+    /// to, not yet taken ([`FlightView::take_map_borders_save`]).
+    map_borders_save: Option<bool>,
     /// The mission systems the course map's red arrows mark, taken as it
     /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
     /// (@0x124a0; [`Session::map_mission_systems`]).

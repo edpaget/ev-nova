@@ -5,7 +5,7 @@ use std::time::Duration;
 use nova_view::{Diagnostic, DrawList, Input, Prefs, Screen, ScreenAction, Showing, Sound};
 
 use super::{
-    AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held,
+    AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held, LANDED,
     MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
 };
 
@@ -32,6 +32,12 @@ impl Screen for AppScreen {
     ///
     /// In the spaceport, every event goes to it; leaving it takes off,
     /// back into flight, letting go of its keys.
+    ///
+    /// M on a mission dialog (an offer, the mission computer, mission info
+    /// or the accept's briefing) opens flight's course map over it, docked
+    /// or over flight ([`FlightView::open_dialog_map`](nova_view::flight::FlightView::open_dialog_map)): every event
+    /// goes to the map until it closes (Escape, M, Return or Done), and
+    /// then to the dialog again.
     ///
     /// With dialogs, an I press outside flight opens the About dialog
     /// over the side shown, cancelling and letting go on it as Tab does.
@@ -130,12 +136,24 @@ impl Screen for AppScreen {
     /// after a death, over everything. Under the spaceport, flight's status
     /// bar is drawn at the right edge ([`FlightView::draw_status_bar`](nova_view::flight::FlightView::draw_status_bar)), as
     /// the original's port dialog leaves it beside the dialog and its shops
-    /// cover its left edge (`_DoPortDialog` @0x5fbca).
+    /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
+    /// map is drawn over them both, as the original's map dialog opens
+    /// over the port window (`_DoBarDialog` @0x492a3), and so is a mission
+    /// dialog's; over flight, a mission dialog's map is drawn over the
+    /// offer and the mission dialogs it opened from.
     fn draw(&self, list: &mut DrawList) {
-        if self.side == Side::Spaceport && !self.port_map_open() {
+        if self.side == Side::Spaceport {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
+            if self.port_map_open() {
+                self.spaceport.as_ref().expect(LANDED).draw(list);
+            }
         }
-        self.shown().draw(list);
+        // A mission dialog's map over flight is drawn over the dialogs it
+        // opened from, after them.
+        let map_over = self.flight_dialog_map_open();
+        if !map_over {
+            self.shown().draw(list);
+        }
         let hint = match (self.side, self.dialogs.is_some()) {
             (Side::Ships | Side::Galaxy, true) => Some(HINT),
             (Side::Ships | Side::Galaxy, false) => Some(HINT_WITHOUT_DIALOGS),
@@ -175,6 +193,9 @@ impl Screen for AppScreen {
         }
         if let Some(dialog) = &self.haggle {
             dialog.draw(list);
+        }
+        if map_over {
+            self.shown().draw(list);
         }
         if let Some(about) = &self.about {
             about.draw(list);
@@ -290,6 +311,15 @@ impl Screen for AppScreen {
     /// change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.prefs_change.take()
+    }
+
+    /// The flight's borders setting to save, once after an undocked close
+    /// of its map that changed it
+    /// ([`FlightView::take_map_borders_save`](nova_view::flight::FlightView::take_map_borders_save)).
+    fn take_map_borders_save(&mut self) -> Option<bool> {
+        self.flight
+            .as_mut()
+            .and_then(nova_view::flight::FlightView::take_map_borders_save)
     }
 
     fn now_showing(&self) -> Option<Showing> {

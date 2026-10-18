@@ -74,11 +74,17 @@
 //! one (@0xe278-0xe2b0). `_DoSystemMap` (@0x124a0) and `_ShowFloatingMap`
 //! (@0x114ea) run it as each map opens (`Session::map_mission_systems`).
 //!
-//! `_greenMissionSyst` and `_multiArrowsOnSingleSystem` are written only
-//! by the mission dialogs' maps, which set them and put them back before
-//! returning (to −1 and to 1), and by `_InitMissions` (@0x97bc9-0x97bd8)
-//! and `_ResetPlayer` (@0x1d8f5): on the in-flight maps there is no green
-//! system, with multiple arrows allowed.
+//! `_greenMissionSyst` and `_multiArrowsOnSingleSystem` ([`MapMarks`])
+//! are written only by the mission dialogs' maps, which set them and put
+//! them back before returning (to −1 and to 1), and by `_InitMissions`
+//! (@0x97bc9-0x97bd8) and `_ResetPlayer` (@0x1d8f5): on the in-flight
+//! maps there is no green system, with multiple arrows allowed
+//! ([`MapMarks::NONE`]). The offer, the mission computer, mission info
+//! and the accept's briefing each give their map its marks
+//! (`Session::offer_map_marks` and its kin), and the map passes them to
+//! the drawing (`Session::map_drawing`) and to the click
+//! (`Session::map_click`), which accepts the green system as it does a
+//! mission system (@0x12f82-0x12f8a).
 //!
 //! [`RuleKey::MapLinkPairing`]: crate::RuleKey::MapLinkPairing
 //! [`gate::hypergate_offers`]: crate::gate::hypergate_offers
@@ -105,6 +111,38 @@ pub const HIDES_ARROW: u16 = 0x0002;
 /// The mission `Flags` bit that marks the special ships' system with an
 /// arrow too (@0xe278).
 pub const MARKS_SHIPS: u16 = 0x0200;
+/// The mission `Flags` bit that marks the mission's destination with the
+/// green arrow on the map its dialog opens (`mïsn` +0x50 bit 8, read as
+/// the copy's +0x19 or +0x59 bit 0): by the offer (`_OfferOneMission`
+/// @0xa307c), the mission computer (`_DoMissionDialog` @0xa3d0d), mission
+/// info (`_DoMissionInfoDialog` @0x9e40c) and the accept's briefing
+/// (`_DoMissionAccept` @0xa1ea8). Nothing else reads it.
+pub const MARKS_DESTINATION: u16 = 0x0100;
+
+/// What a map marks beside the mission systems: the green mission system
+/// (`_greenMissionSyst`) and whether a system with the green arrow keeps
+/// its red one (`_multiArrowsOnSingleSystem`). Only the mission dialogs'
+/// maps set them, each for the map it opens, and put them back before
+/// returning; `_InitMissions` (@0x97bc9-0x97bd8) and `_ResetPlayer`
+/// (@0x1d8f5) leave [`MapMarks::NONE`]. So ours holds neither between
+/// maps: each map opens with the marks its opener gives, and every other
+/// map with none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapMarks {
+    /// The system the green arrow marks, raw, if any.
+    pub green: Option<SystemId>,
+    /// Whether the green system keeps its red arrow.
+    pub multi_arrows: bool,
+}
+
+impl MapMarks {
+    /// What the in-flight maps mark, and what the resets leave: no green
+    /// system (−1), multiple arrows allowed (1).
+    pub const NONE: Self = Self {
+        green: None,
+        multi_arrows: true,
+    };
+}
 
 /// How long the hypergate arrows' head strokes are (8.0, @0xf339).
 pub const ARROW_HEAD: f32 = 8.0;
@@ -527,6 +565,18 @@ mod tests {
             .map(|system| system.id)
             .collect();
         assert_eq!(red, ids(&[138, 139]));
+    }
+
+    #[test]
+    fn no_marks_are_no_green_system_with_multiple_arrows_allowed() {
+        assert_eq!(
+            MapMarks::NONE,
+            MapMarks {
+                green: None,
+                multi_arrows: true,
+            }
+        );
+        assert_eq!(MARKS_DESTINATION, 0x0100);
     }
 
     #[test]

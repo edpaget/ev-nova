@@ -531,16 +531,23 @@ impl<C> FlightView<C> {
     /// @0x114cb) with the mission systems taken now (@0x114ea), and the
     /// system selected now ([`Session::floating_preselection`],
     /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
+    /// It marks no green system, with multiple arrows allowed
+    /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from
+    /// `_HandlePlayer`, never under a mission dialog's map.
     /// The frame shows that drawing until the next show: its course and
     /// mode-3 link are those of the last show, not live, as the
     /// original's frame image is drawn only then (at a show, Hyper Select,
     /// a click and a zoom, each of which shows it again here).
     fn show_floating_map(&mut self) {
         self.floating.show(self.mac_now());
+        // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
+        // system as it draws (@0x11338-0x1136d), so the course map opens
+        // there next.
+        self.map.recentre();
         if let Ok(session) = &self.session {
             self.floating.preselect(session.floating_preselection());
             let missions = session.map_mission_systems();
-            let drawing = session.map_drawing(None, &missions);
+            let drawing = session.map_drawing(None, &missions, nova_sim::MapMarks::NONE);
             self.floating_picture = Some(MapPicture::of(&drawing));
         }
     }

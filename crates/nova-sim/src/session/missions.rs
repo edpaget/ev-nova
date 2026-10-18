@@ -694,8 +694,16 @@ impl Session {
         self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
         // `BriefText`, filled for the slot after `OnAccept` and the charge
-        // (@0xa1e0b-0xa1f13, @0xa1e56).
-        self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot), chance);
+        // (@0xa1e0b-0xa1f13, @0xa1e56), opening the map marked for the
+        // mission accepted (@0xa1e8d-0xa1eda, @0xa1f0e).
+        let map = self.briefing_map_marks(slot);
+        self.show_mission_text_with_map(
+            MissionTextKind::Brief,
+            record.id,
+            Some(slot),
+            Some(map),
+            chance,
+        );
         self.load_at_accept(slot, record, chance);
         let in_dialog = self.offer_dialog_open
             || self.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
@@ -2822,6 +2830,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: None,
         }
     }
 

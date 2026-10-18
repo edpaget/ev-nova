@@ -6,7 +6,7 @@ use nova_data::GameData;
 use nova_sim::{MissionInfo, text_tags};
 use nova_view::Screen;
 use nova_view::flight::FlightView;
-use nova_view::spaceport::SpaceportView;
+use nova_view::spaceport::{PortMap, SpaceportView};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::mission_dialogs::MissionDialogs;
 use nova_view::ui::{DescDialog, DescriptionSource};
@@ -33,14 +33,22 @@ pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightV
     }
 }
 
-/// Opens `flight`'s course map over `spaceport` when the bar's map key
-/// asked for it (`_BarFilter` item 8, `_DoSystemMap` @0x492b2), the
-/// spaceport letting go of its gesture and keys as it is covered.
-pub(super) fn open_bar_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
-    if spaceport.take_map_request() {
-        spaceport.cancel_pointer();
-        spaceport.release_keys();
-        flight.open_bar_map();
+/// Opens `flight`'s course map over `spaceport` when a map key there asked
+/// for it ([`SpaceportView::take_map_request`]): the bar's (`_BarFilter`
+/// item 8, `_DoSystemMap` @0x492b2), or a mission dialog's, an offer's,
+/// the computer's, mission info's or the briefing's
+/// ([`FlightView::open_dialog_map`]), the spaceport letting go of its
+/// gesture and keys as it is covered. The screen that asked stays open
+/// under the map and has the input again once it closes.
+pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    let Some(map) = spaceport.take_map_request() else {
+        return;
+    };
+    spaceport.cancel_pointer();
+    spaceport.release_keys();
+    match map {
+        PortMap::Bar => flight.open_bar_map(),
+        PortMap::Dialog(opener) => flight.open_dialog_map(opener),
     }
 }
 

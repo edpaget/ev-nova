@@ -2541,7 +2541,7 @@ impl Boarder {
             .model()
             .system(nova_sim::SystemId(id))
             .expect("on the map");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Flies out from the centre to the minimum jump distance: turns to
@@ -2582,12 +2582,16 @@ impl Boarder {
         panic!("never got out: {:?}", self.session().player());
     }
 
-    /// Plots a course to Beta on flight's map, flies out and jumps there.
+    /// Plots a course to Beta on flight's map (M, a Shift-click, M), flies
+    /// out and jumps there.
     fn jump_to_beta(&mut self) {
         self.tap(Key::Char('m'));
         let beta = self.on_map(129);
+        self.key(Key::Shift, true);
         self.click(beta);
+        self.key(Key::Shift, false);
         self.tap(Key::Char('m'));
+        assert_eq!(self.session().course(), [nova_sim::SystemId(129)]);
         self.fly_out();
         self.tap(Key::Char('j'));
         for _ in 0..600 {
@@ -2643,8 +2647,11 @@ fn an_escort_command_given_during_a_jump_says_what_the_escorts_will_do() {
     let mut game = escorted(&store, &[], &[130], |screen| screen);
     game.tap(Key::Char('m'));
     let beta = game.on_map(129);
+    game.key(Key::Shift, true);
     game.click(beta);
+    game.key(Key::Shift, false);
     game.tap(Key::Char('m'));
+    assert_eq!(game.session().course(), [nova_sim::SystemId(129)]);
     game.fly_out();
     game.tap(Key::Char('j'));
     for _ in 0..600 {

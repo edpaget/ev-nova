@@ -1,31 +1,32 @@
 //! [`Pen`]: sets lines of text in one font into a draw list, placed by
 //! their baselines as the original places them: a line's top is its size
-//! above its baseline. The HUD's panels share it.
+//! above its baseline. The HUD's panels share it, and so does the galaxy
+//! map's info panel (`galaxy::panel`).
 
 use crate::text::TextMetrics;
 use crate::{Color, DrawList, Font, Point};
 
 /// Sets lines of text in one font into a draw list, measured by the
 /// metrics, if any.
-pub(super) struct Pen<'a, 'b> {
+pub(crate) struct Pen<'a, 'b> {
     /// Where the text goes.
-    pub(super) list: &'a mut DrawList,
+    pub(crate) list: &'a mut DrawList,
     /// The font every line is set in.
-    pub(super) font: Font,
+    pub(crate) font: Font,
     /// Measures the lines, for centring and setting against the right.
-    pub(super) metrics: Option<&'b dyn TextMetrics>,
+    pub(crate) metrics: Option<&'b dyn TextMetrics>,
 }
 
 impl Pen<'_, '_> {
     /// How wide `text` is at `size`: nothing without metrics.
-    pub(super) fn width(&self, text: &str, size: f32) -> f32 {
+    pub(crate) fn width(&self, text: &str, size: f32) -> f32 {
         self.metrics
             .map_or(0.0, |metrics| metrics.width(self.font, size, text))
     }
 
     /// Sets `text` from `x` on `baseline` at `size` in `color`, and gives
     /// where it ends.
-    pub(super) fn at(&mut self, text: &str, x: f32, baseline: f32, size: f32, color: Color) -> f32 {
+    pub(crate) fn at(&mut self, text: &str, x: f32, baseline: f32, size: f32, color: Color) -> f32 {
         let top = baseline - size;
         self.list
             .text_in(self.font, text, Point::new(x, top), size, None, color);
@@ -37,7 +38,7 @@ impl Pen<'_, '_> {
     /// `MoveTo(trunc((left + right) / 2) − trunc(StringWidth / 2),
     /// baseline)`, each half truncated toward zero, then `DrawString`,
     /// which never wraps. Without metrics it starts at `left`.
-    pub(super) fn centred_text(
+    pub(crate) fn centred_text(
         &mut self,
         text: &str,
         left: f32,

@@ -39,8 +39,11 @@
 //!   selected and the course cued.
 //! - The cue ([`Session::cue_course`], `_CueNextHyperRouteDest`
 //!   @0xe2dc-0xe35f): when the course's first hop is a system the ship
-//!   can jump to from here, mode 3 with it selected (@0xe33c-0xe34d);
-//!   otherwise nothing changes. It makes no sound.
+//!   can jump to from here, mode 3 with it selected (@0xe33c-0xe34d).
+//!   When the first hop has no visible system at its place, by
+//!   [`RuleKey::CueUnplacedHop`]'s engine reading, mode 3 with the first
+//!   Con slot that has none either, which reads as no destination (a −1
+//!   = −1 match, @0xe334). Otherwise nothing changes. It makes no sound.
 //! - Hyper Select, `\` ([`Session::select_next_system`],
 //!   @0x69bb2-0x69cec): with links, [`SimSound::HyperSelected`]
 //!   (@0x69c89), and mode 3 with the next link selected, cycling from the
@@ -114,11 +117,31 @@
 //!   the raw selection) and puts them back after each map opened from it
 //!   (@0x492b7-0x492d3), keeping the save for the next map. Its own close
 //!   restores nothing (@0x49414-0x4946f).
-//! - A map click ([`Session::plot_course`], `_DoSystemMap`
-//!   @0x136d7-0x137c7): a route cues its first hop, the original's click on
-//!   a system the current one lists (@0x137b3-0x137bb), or its cue as the
-//!   map closes for a longer route (@0x13c16); no route lets go of the
-//!   selection and keeps the mode (@0x13788-0x13790).
+//! - The mission dialogs' maps ([`Session::map_nav`],
+//!   [`Session::restore_map_nav`]): the offer (@0xa30eb-0xa30f7 /
+//!   @0xa3108-0xa3110), the mission computer (@0xa3d54-0xa3d60 /
+//!   @0xa3d86-0xa3d9e) and the accept's briefing text (`_ShowTextDialog`
+//!   @0x5b14c-0x5b158 / @0x5b169-0x5b17d) save both before the map they
+//!   open and write them back after it, over whatever the map's click or
+//!   its close's cue wrote; the course is never saved, so a Shift-click's
+//!   course stays. Mission info saves them (@0x9e442-0x9e44e) and writes
+//!   them back only under `_missionDialog` (@0x9e45f-0x9e476), which its
+//!   own map guard rules out, so its map's nav writes stand. Docked, the
+//!   map's own close first puts back the +0x6c it saved as it opened
+//!   (`_DoSystemMap` @0x12349, @0x13bee-0x13c06), after the bar's redraw;
+//!   the flight view does both.
+//! - A plain click on the course map in flight ([`Session::map_click`],
+//!   `_DoSystemMap` @0x136d7-0x137c7): mode 3 with the system picked when
+//!   the ship can jump there, the slot noted the first at its place
+//!   (@0x13739-0x137bb); otherwise the selection let go, the mode kept
+//!   (@0x13788-0x13790). Docked it writes neither (@0x136ec). A
+//!   Shift-click writes neither, in flight or docked; the cue as the map
+//!   closes (@0x13c16) selects the course's first hop. By
+//!   [`RuleKey::MapPlotting`]'s other reading the click plots
+//!   ([`Session::plot_course`]): a route cues its first hop, and no route
+//!   lets go of the selection and keeps the mode.
+//! - Clear Route ([`Session::clear_route`], @0x12c69-0x12dbf): the
+//!   selection let go, the mode kept, the course cleared.
 //! - The galaxy map's Tab or `\` ([`Session::cycle_map_selection`],
 //!   `_MapFilter` @0x13f0f-0x13fac): mode 3 with the next Con slot that
 //!   holds a link, stepping on from +0x6c, or with nothing; in silence,
@@ -136,10 +159,11 @@
 //!
 //! **Left out.** The floating map's preselect
 //! (`_ShowFloatingMap` @0x11488), which only its names would read (the
-//! galaxy-map-fidelity roadmap's); the map panel's titles by the mode
-//! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
+//! galaxy-map-fidelity roadmap's); and the destroyed player's and the ship swap's per-frame clears
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). Mode 4, the hypergate map's, is
-//! never drawn.
+//! never drawn. The map panel's title reads the mode
+//! (`_MapDialogUpdate` @0x10b68-0x10c76; see the
+//! [`map_panel`](crate::map_panel) module).
 //!
 //! Of the landed `M`:
 //!
@@ -175,8 +199,9 @@
 //! Of the port dialogs' save and restore: the original's mode 3 +0x6c is
 //! a link slot of the current system, where ours keeps the system, and
 //! mode 3 docked has no original, so its restore is not modelled apart;
-//! each dialog's Map button (`_DoSystemMap`, with its own save and
-//! restore), as ours has no map in port; and the flag at
+//! the shops' map key (`_DoSystemMap`, with its own save and restore), as
+//! ours opens no map from them (the computer's is a mission dialog's map,
+//! above); and the flag at
 //! @0x5ffb2-0x5ffba that gates the mission computer's branch, before its
 //! save (@0x5ffc0-0x5ffd0), as ours opens the computer only where the
 //! port offers Mission BBS.
@@ -197,7 +222,11 @@ use crate::{RuleKey, RuleSource, StellarPick};
 
 /// How many Con slots a `sÿst` has, `Con1-Con16`: the slots the
 /// original's link cycles step through.
-const CON_SLOTS: usize = 16;
+pub(super) const CON_SLOTS: usize = 16;
+
+/// The IDs a Con slot can name: any other is an empty slot, as the loader
+/// sets it to −1 (`_LoadObjectData` @0x7806d-0x780b8).
+const SYSTEM_IDS: std::ops::RangeInclusive<i16> = 128..=2175;
 
 /// The Con slot a mode-3 selection was written from, as the original
 /// keeps it at +0x6c where ours keeps the system. A setter that knows the
@@ -212,16 +241,34 @@ pub(super) struct NavSlot {
     selected: SystemId,
 }
 
+/// The nav mode and its selection a mission dialog saves before the map
+/// it opens and writes back after it (+0x6a and +0x6c: the offer
+/// @0xa30eb / @0xa3108, the mission computer @0xa3d54 / @0xa3d86, the
+/// text dialog @0x5b14c / @0x5b169; mission info saves them @0x9e442 and
+/// never writes them back). Ours keeps the raw selection and the Con slot
+/// noted for it (`NavSlot`), which together are the original's +0x6c.
+/// Taken with [`Session::map_nav`], put back with
+/// [`Session::restore_map_nav`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavedNav {
+    nav: NavMode,
+    slot: Option<NavSlot>,
+}
+
 impl Session {
     /// The player's nav mode and its selection, a hyperspace selection
     /// resolved by place: the visible system at its place, or none when
-    /// there is none (see the module docs).
+    /// there is none or it isn't in the catalog, as
+    /// `_FindActiveCoLocatedSystem` gives −1 for a system with no `sÿst`
+    /// (see the module docs).
     #[must_use]
     pub fn nav_mode(&self) -> NavMode {
         match self.nav {
-            NavMode::Hyperspace(selected) => {
-                NavMode::Hyperspace(selected.and_then(|system| self.galaxy.same_place(system)))
-            }
+            NavMode::Hyperspace(selected) => NavMode::Hyperspace(
+                selected
+                    .filter(|&system| self.galaxy.exists(system))
+                    .and_then(|system| self.galaxy.same_place(system)),
+            ),
             mode => mode,
         }
     }
@@ -337,6 +384,43 @@ impl Session {
         }
     }
 
+    /// The nav as it stands, for a mission dialog to put back after the
+    /// map it opens ([`Session::restore_map_nav`]): the mode and the raw
+    /// selection with the Con slot noted for it (see [`SavedNav`]). It
+    /// changes nothing.
+    #[must_use]
+    pub fn map_nav(&self) -> SavedNav {
+        SavedNav {
+            nav: self.nav,
+            slot: self.nav_slot,
+        }
+    }
+
+    /// Puts back the nav a mission dialog saved before the map it opened
+    /// ([`Session::map_nav`]), mode, selection and noted slot exactly as
+    /// saved, as the offer, the mission computer and the text dialog
+    /// write +0x6a and +0x6c back after `_DoSystemMap` returns (see the
+    /// module's **Setters**). The course is never saved, so a Shift-click's
+    /// course stays.
+    pub fn restore_map_nav(&mut self, saved: SavedNav) {
+        self.nav = saved.nav;
+        self.nav_slot = saved.slot;
+    }
+
+    /// Puts back the selection saved as a map opened ([`Session::map_nav`]),
+    /// keeping the mode, as `_DoSystemMap`'s close in port writes back the
+    /// +0x6c it saved as it opened, and +0x6a not (@0x12349,
+    /// @0x13bee-0x13c06): while the mode is the one saved, the nav as saved,
+    /// its noted slot with it. Docked, the map writes the mode only by
+    /// [`RuleKey::MapPlotting`]'s other reading, which has no original;
+    /// there the selection saved belongs to another mode and nothing
+    /// changes.
+    pub fn restore_map_selection(&mut self, saved: SavedNav) {
+        if std::mem::discriminant(&self.nav) == std::mem::discriminant(&saved.nav) {
+            self.restore_map_nav(saved);
+        }
+    }
+
     /// Puts back the nav saved as the bar opened ([`Session::open_bar`]),
     /// mode and selection exactly as saved, as a map opened from the bar
     /// closes (see the module's **Setters**). The save is kept, as the
@@ -357,6 +441,9 @@ impl Session {
     /// cycle steps on from ([`Session::cycle_map_selection`]).
     pub fn cue_course(&mut self) {
         let Some(&hop) = self.course_shown().first() else {
+            if !self.pilot.course.is_empty() {
+                self.cue_unplaced_hop();
+            }
             return;
         };
         if self
@@ -365,16 +452,57 @@ impl Session {
             .jumps(self.pilot.system, self.hyperlinks)
             .contains(&hop)
         {
-            self.set_nav(NavMode::Hyperspace(Some(hop)));
-            self.nav_slot = self.galaxy.same_place(hop).and_then(|place| {
-                let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
-                Some(NavSlot {
-                    system: self.pilot.system,
-                    slot,
-                    selected: hop,
-                })
+            self.select_at_place(hop);
+        }
+    }
+
+    /// The cue of a first hop with no visible system at its place, as
+    /// [`RuleKey::CueUnplacedHop`] says. By the engine,
+    /// `_CueNextHyperRouteDest` resolves the hop to −1 (@0xe2fa) and
+    /// matches it against each Con slot's own resolution (@0xe334): the
+    /// first of the current system's [`CON_SLOTS`] that is set and names a
+    /// system with no visible system at its place, or an ID in 128-2175
+    /// with no `sÿst`, gives mode 3 with that slot, raw, and the slot noted
+    /// (@0xe33c-0xe34d). An ID outside 128-2175 is an empty slot, as the
+    /// loader sets it to −1 (`_LoadObjectData` @0x7806d-0x780b8). The
+    /// selection reads as none ([`Session::nav_mode`]), J refuses it, and
+    /// the map draws no mode-3 link for it, as `_DrawMap` skips a slot
+    /// resolving to −1 (@0xec25-0xec2b). By the other reading nothing
+    /// changes.
+    fn cue_unplaced_hop(&mut self) {
+        if self.rules.source_for(RuleKey::CueUnplacedHop) != RuleSource::Engine {
+            return;
+        }
+        let slots = self.galaxy.con_slots(self.pilot.system);
+        let dead = slots.iter().take(CON_SLOTS).position(|&slot| {
+            SYSTEM_IDS.contains(&slot.0)
+                && (!self.galaxy.exists(slot) || self.galaxy.same_place(slot).is_none())
+        });
+        if let Some(slot) = dead {
+            let selected = slots[slot];
+            self.set_nav(NavMode::Hyperspace(Some(selected)));
+            self.nav_slot = Some(NavSlot {
+                system: self.pilot.system,
+                slot,
+                selected,
             });
         }
+    }
+
+    /// Mode 3 with `system` selected, the Con slot noted
+    /// ([`NavSlot`]) the first of the current system's whose system stands
+    /// at its place, as `_CueNextHyperRouteDest` (@0xe30f-0xe344) and the
+    /// map's click (`_DoSystemMap` @0x13739-0x137bb) write +0x6c.
+    pub(super) fn select_at_place(&mut self, system: SystemId) {
+        self.set_nav(NavMode::Hyperspace(Some(system)));
+        self.nav_slot = self.galaxy.same_place(system).and_then(|place| {
+            let slot = self.slot_at(|slot| self.galaxy.same_place(slot) == Some(place))?;
+            Some(NavSlot {
+                system: self.pilot.system,
+                slot,
+                selected: system,
+            })
+        });
     }
 
     /// Runs `_HandlePlayer`'s Nav Off / Hyperspace Mode block for one
@@ -671,7 +799,8 @@ mod tests {
     use crate::sound::SimSound;
     use crate::targeting::TargetPick;
     use crate::testkit::{
-        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, land_now, star, starting,
+        FakePilotCatalog, begin_jump_now, catalog, click_stellar, fly_out, hideable, land_now,
+        star, starting,
     };
     use crate::{RuleKey, RuleSource, Rulebook};
 
@@ -1311,6 +1440,60 @@ mod tests {
         );
     }
 
+    // A mission dialog's map's save and restore.
+
+    #[test]
+    fn a_dialogs_map_nav_is_put_back_with_its_slot_and_the_course_kept() {
+        let mut session = Session::start(&hub()).expect("starts");
+        // `hub`'s 130 lists 131 in slots 1 and 2: the second is noted.
+        let noted = NavSlot {
+            system: SystemId(130),
+            slot: 2,
+            selected: SystemId(131),
+        };
+        session.nav = hyperspace(131);
+        session.nav_slot = Some(noted);
+        let saved = session.map_nav();
+        assert_eq!(session.nav, hyperspace(131), "saving changes nothing");
+        session.select_at_place(SystemId(134));
+        session.pilot.course = ids(&[135]);
+        session.restore_map_nav(saved);
+        assert_eq!(session.nav, hyperspace(131));
+        assert_eq!(session.nav_slot, Some(noted), "the slot with it");
+        assert_eq!(session.course(), ids(&[135]), "the course kept");
+    }
+
+    #[test]
+    fn a_dialogs_map_nav_puts_back_any_mode_raw() {
+        for before in [NavMode::Off, stellar(128), NavMode::Hyperspace(None)] {
+            let mut session = Session::start(&hub()).expect("starts");
+            session.nav = before;
+            let saved = session.map_nav();
+            session.select_at_place(SystemId(134));
+            session.restore_map_nav(saved);
+            assert_eq!(session.nav, before, "{before:?}");
+            assert_eq!(session.nav_slot, None, "{before:?}: none noted");
+        }
+    }
+
+    #[test]
+    fn the_maps_put_back_of_its_selection_keeps_the_mode() {
+        // Clear Route docked lets go of the selection, keeping the mode:
+        // the put-back gives it back.
+        let (_, mut session) = landed();
+        let saved = session.map_nav();
+        session.clear_route();
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None));
+        session.restore_map_selection(saved);
+        assert_eq!(session.nav_mode(), stellar(128));
+        // In another mode now, which only the planner's plotting gives
+        // docked, the selection saved names nothing of it.
+        let saved = session.map_nav();
+        session.set_nav(hyperspace(131));
+        session.restore_map_selection(saved);
+        assert_eq!(session.nav_mode(), hyperspace(131), "left as it is");
+    }
+
     // The map.
 
     #[test]
@@ -1357,6 +1540,100 @@ mod tests {
             assert_eq!(session.nav_mode(), before, "no course");
         }
         assert_eq!(session.take_sounds(), [], "silent");
+    }
+
+    /// `catalog` [`hideable`]'s session, its course's first hop 132
+    /// hidden alone at its place.
+    fn unplaced(mut catalog: FakePilotCatalog, source: RuleSource) -> Session {
+        hideable(&mut catalog);
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::CueUnplacedHop, source));
+        assert!(hide(&mut session, &catalog, &[132]));
+        session.pilot.course = ids(&[132]);
+        quiet(session)
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_selects_the_first_dead_slot_by_the_engine() {
+        // `hub`'s 130 lists 134, 131, 131, 130, 999 and 135: 999, in the
+        // ID range with no `sÿst`, is the first slot with nothing at its
+        // place (@0xe334).
+        let mut session = unplaced(hub(), RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(999), "the raw slot");
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Hyperspace(None),
+            "no destination"
+        );
+        assert_eq!(
+            session
+                .map_drawing(None, &[], crate::MapMarks::NONE)
+                .mode3_link,
+            None,
+            "no link drawn"
+        );
+        assert_eq!(session.take_sounds(), [], "silent");
+        fly_out(&mut session);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+        assert!(session.cycle_map_selection());
+        assert_eq!(session.nav, hyperspace(135), "after the slot noted");
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_selects_a_slot_to_a_hidden_system_with_nothing_at_its_place() {
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131, 132]);
+        let mut session = unplaced(catalog, RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(132));
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_passes_over_empty_slots_and_ids_out_of_range() {
+        // -1 and 50 are empty slots in the original (@0x7806d-0x780b8).
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131, -1, 50, 999]);
+        let mut session = unplaced(catalog, RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.nav, hyperspace(999));
+    }
+
+    #[test]
+    fn the_cue_of_an_unplaced_hop_changes_nothing_by_the_other_reading_or_with_no_dead_slot() {
+        let mut session = unplaced(hub(), RuleSource::Bible);
+        session.nav = stellar(128);
+        session.cue_course();
+        assert_eq!(session.nav, stellar(128), "by the other reading");
+
+        for source in RuleSource::ALL {
+            let mut session = unplaced(catalog(), source);
+            session.nav = stellar(128);
+            session.cue_course();
+            assert_eq!(session.nav, stellar(128), "130 lists 131 alone, {source:?}");
+        }
+    }
+
+    #[test]
+    fn a_placed_first_hop_cues_as_ever_by_both_readings() {
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog())
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::CueUnplacedHop, source));
+            session.pilot.course = ids(&[131, 132]);
+            session.cue_course();
+            assert_eq!(session.nav_mode(), hyperspace(131), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_selection_not_in_the_catalog_reads_as_none() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.nav = hyperspace(999);
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+        assert_eq!(session.map_preselection(), None);
     }
 
     #[test]

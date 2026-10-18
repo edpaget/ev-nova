@@ -1,8 +1,11 @@
-//! The map's view: which part of the galaxy the map area shows, and at
-//! what scale.
+//! The viewer's view: which part of the galaxy its map area shows, and at
+//! what scale; and the [`Transform`] every map draws through. The
+//! in-flight maps look where their dialog's place says instead
+//! ([`place`](super::place)).
 //!
-//! The map area is the logical rectangle (0, 0) to ([`MAP_WIDTH`],
-//! [`MAP_HEIGHT`]); the info panel fills the rest of the screen below it.
+//! The viewer's map area is the logical rectangle (0, 0) to
+//! ([`MAP_WIDTH`], [`MAP_HEIGHT`]); its info panel fills the rest of the
+//! screen below it.
 //! The view keeps the map (world) point drawn at the map area's centre and
 //! one of Nova's seven map scales:
 //!
@@ -37,8 +40,10 @@ pub const FIT_MARGIN: f32 = 24.0;
 pub const PAN_STEP: f32 = 64.0;
 
 /// Where a map draws a world point: `screen + (p - world) x scale`. The
-/// course map's is its view's ([`MapView::transform`]); the floating map
-/// centres its own on the current system.
+/// viewer's is its view's ([`MapView::transform`]), an in-flight map's
+/// its place's ([`MapPlace::transform`](super::place::MapPlace::transform));
+/// the floating map centres its own
+/// on the current system.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     /// Where `world` is drawn.
@@ -183,6 +188,15 @@ impl MapView {
         let scale = self.scale();
         let moved = Point::new(self.center.x + dx / scale, self.center.y + dy / scale);
         self.center = self.limits.clamp(moved);
+    }
+
+    /// Centres the view on the world point `at`, stopping at the edge of
+    /// the galaxy's bounds and keeping the zoom, as Space and Find set the
+    /// original's `_mapScroll` to a system's position (`_MapFilter`
+    /// @0x1411e-0x14153, `_DoSystemSearch` @0x12080-0x120aa). A system is
+    /// always inside the bounds.
+    pub fn centre_on(&mut self, at: Point) {
+        self.center = self.limits.clamp(at);
     }
 }
 
@@ -363,6 +377,17 @@ mod tests {
             assert!(close(view.world_to_screen(p), before), "zoom {zoom}");
             view.zoom_in();
         }
+    }
+
+    #[test]
+    fn centring_on_a_point_keeps_the_zoom_and_stops_at_the_galaxys_edges() {
+        let mut view = MapView::fit(Some(stock()));
+        view.zoom_in();
+        let zoom = view.zoom();
+        view.centre_on(at(-100.0, 250.0));
+        assert_eq!((view.center(), view.zoom()), (at(-100.0, 250.0), zoom));
+        view.centre_on(at(1000.0, -1000.0));
+        assert_eq!(view.center(), at(587.0, -330.0), "clamped");
     }
 
     #[test]

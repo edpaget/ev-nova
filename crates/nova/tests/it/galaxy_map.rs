@@ -28,9 +28,11 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_view::flight::radar::IRect;
 use nova_view::galaxy::NEUTRAL;
+use nova_view::galaxy::borders::draw_cells;
 use nova_view::galaxy::map::{BUTTON, ENTER_BUTTON, SYSTEM_INSET};
+use nova_view::galaxy::nebulae::{NebulaFrame, nebula_rect};
 use nova_view::oval::{oval_fill_pixels, oval_frame_pixels, runs};
-use nova_view::{Key, MouseButton, Point};
+use nova_view::{Blend, Key, MouseButton, Point};
 
 const BLUE: u32 = 0x002C_2CAF;
 
@@ -198,7 +200,7 @@ impl Harness {
     fn system_at(&self, id: i16) -> Point {
         let map = self.app.screen().galaxy_map();
         let system = map.model().system(SystemId(id)).expect("a system");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Sends a redraw 1/60 s after the last and returns its frame.
@@ -295,7 +297,7 @@ fn rgba(color: nova_view::Color) -> [f32; 4] {
 
 #[test]
 fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
-    let (harness, frame) = Harness::open_map();
+    let (mut harness, frame) = Harness::open_map();
     let shape: Vec<(&str, usize)> = frame
         .batches
         .iter()
@@ -305,14 +307,26 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
             Batch::Text(runs) => ("text", runs.len()),
         })
         .collect();
-    // The nebula; 2 links and each system's oval, a row at a time, its
-    // black fill then its frame; the 3 names, twice; the panel's background
-    // and separator; the panel's 3 lines and the router's hint.
+    // The borders' cells, one rect each; the nebula; 2 links and each
+    // system's oval, a row at a time, its black fill then its frame; the 3
+    // names, twice; the panel's background and separator; the panel's 3
+    // lines and the router's hint.
     let oval = IRect::new(0, 0, 2 * SYSTEM_INSET, 2 * SYSTEM_INSET);
     let rows = runs(&oval_fill_pixels(oval)).len() + runs(&oval_frame_pixels(oval, 1)).len();
+    let map = harness.app.screen().galaxy_map();
+    let mut cells = nova_view::DrawList::new();
+    draw_cells(
+        &mut cells,
+        map.border_cells(),
+        (0, 0),
+        IRect::new(0, 0, 1024, 608),
+        map.model().govt_colors(),
+    );
+    assert!(!cells.is_empty(), "the viewer's borders, on by default");
     assert_eq!(
         shape,
         [
+            ("solid", cells.len()),
             ("sprites", 1),
             ("solid", 2 + 3 * rows),
             ("text", 6),
@@ -320,21 +334,39 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
             ("text", 4)
         ]
     );
+    // The rest is the map's own drawing: the borders off.
+    harness.press(Key::Char('b'));
+    let frame = harness.frame();
 
-    // 600 x 300 fits at 133%; the nebula fills its scaled rectangle.
-    let view = *harness.app.screen().galaxy_map().view();
+    // 600 x 300 fits at 133%; the nebula fills its scaled rectangle,
+    // truncated as `_MapDialogUpdate` truncates it, with `addMax`.
+    let map = harness.app.screen().galaxy_map();
+    let view = *map.view().expect("the viewer");
     assert_eq!(view.zoom(), 4);
+    let frame_of_view = NebulaFrame {
+        origin: Point::new(0.0, 0.0),
+        centre: (512, 304),
+        zoom: view.transform().zoom(),
+        scroll: (f64::from(view.center().x), f64::from(view.center().y)),
+        area: IRect::new(0, 0, 1024, 608),
+    };
+    let rect = nebula_rect(&map.model().catalog_nebulae()[0], &frame_of_view);
     let corner = view.world_to_screen(Point::new(-20.0, -20.0));
-    let Batch::Sprites { quads, .. } = &frame.batches[0] else {
+    assert_eq!(
+        (rect.left, rect.top),
+        (corner.x.trunc() as i32, corner.y.trunc() as i32)
+    );
+    let Batch::Sprites { quads, blend, .. } = &frame.batches[0] else {
         panic!("{:?}", frame.batches[0]);
     };
+    assert_eq!(*blend, Blend::Max);
     assert_eq!(
         quads[0].dest,
         Rect {
-            x: corner.x,
-            y: corner.y,
-            w: 60.0 * view.scale(),
-            h: 60.0 * view.scale(),
+            x: rect.left as f32,
+            y: rect.top as f32,
+            w: (rect.right - rect.left) as f32,
+            h: (rect.bottom - rect.top) as f32,
         }
     );
 
@@ -353,7 +385,10 @@ fn tab_opens_the_map_and_its_nebula_lines_dots_and_text_reach_the_gpu() {
 
 #[test]
 fn keys_reach_the_map() {
-    let (mut harness, before) = Harness::open_map();
+    let (mut harness, _) = Harness::open_map();
+    // The borders off, so that the black fills are the systems' ovals.
+    harness.press(Key::Char('b'));
+    let before = harness.frame();
 
     harness.press(Key::Right);
     let after = harness.frame();
@@ -377,7 +412,16 @@ fn keys_reach_the_map() {
     let at_133 = apart(&after);
     harness.press(Key::Char('='));
     let zoomed = harness.frame();
-    assert_eq!(harness.app.screen().galaxy_map().view().zoom(), 5);
+    assert_eq!(
+        harness
+            .app
+            .screen()
+            .galaxy_map()
+            .view()
+            .expect("the viewer")
+            .zoom(),
+        5
+    );
     // Whole pixels, each point truncated.
     assert!((apart(&zoomed) - at_133 * 4.0 / 3.0).abs() <= 1.0);
     assert!(shows(&zoomed, "Zoom 178%"), "{:?}", texts(&zoomed));
@@ -473,7 +517,7 @@ fn the_map_keeps_its_view_and_selection_across_a_tab_round_trip() {
     let alpha = harness.system_at(128);
     harness.click(alpha);
     let map = harness.app.screen().galaxy_map();
-    let (view, selected) = (*map.view(), map.selected());
+    let (view, selected) = (*map.view().expect("the viewer"), map.selected());
 
     harness.press(Key::Tab);
     assert_eq!(harness.app.screen().showing(), Showing::ShipBrowser);
@@ -483,7 +527,10 @@ fn the_map_keeps_its_view_and_selection_across_a_tab_round_trip() {
     let frame = harness.frame();
 
     let map = harness.app.screen().galaxy_map();
-    assert_eq!((*map.view(), map.selected()), (view, selected));
+    assert_eq!(
+        (*map.view().expect("the viewer"), map.selected()),
+        (view, selected)
+    );
     assert_eq!(selected, Some(SystemId(128)));
     assert!(shows(&frame, "Alpha (sÿst 128)"), "{:?}", texts(&frame));
 }

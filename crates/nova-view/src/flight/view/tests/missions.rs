@@ -718,6 +718,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
     catalog.dudes[0].1.govt = Some(GovtId(140));
     catalog.govts = vec![nova_sim::GovtRecord {
         id: GovtId(140),
+        name: String::new(),
         flags: 0,
         flags2: 0,
         crime_tol: 0,
@@ -1470,10 +1471,11 @@ fn a_move_while_landed_is_laid_out_once_the_ship_takes_off() {
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
     assert!(
-        view.course_map()
-            .explored()
-            .is_some_and(|explored| explored.contains(&SystemId(131))),
-        "the take-off explores"
+        view.session()
+            .expect("flying")
+            .pilot()
+            .has_charted(SystemId(131)),
+        "the take-off charts"
     );
 }
 

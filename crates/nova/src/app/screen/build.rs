@@ -13,6 +13,7 @@ use nova_sim::{
 use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
+use nova_view::galaxy::find::FIND_DIALOG;
 use nova_view::menu::{MainMenu, PilotList};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
@@ -25,10 +26,10 @@ use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, HaggleDialog,
-    PlunderDialog, PrefsDialog,
+    AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
+    HaggleDialog, PlunderDialog, PrefsDialog,
 };
-use nova_view::{Input, Key, Navigator, Prefs, Screen, Showing};
+use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::refresh_spaceport;
 use super::{ABOUT_TEXT, AppScreen, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side};
@@ -45,6 +46,8 @@ impl AppScreen {
             data,
             flight: None,
             slot_sprites: SlotSprites::default(),
+            course_map_zoom: None,
+            map_borders: true,
             dialogs: None,
             about: None,
             about_text: ABOUT_TEXT,
@@ -309,11 +312,24 @@ impl AppScreen {
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
             .with_sound_prefs(self.prefs.sound)
-            .with_double_time(self.double_time);
+            .with_double_time(self.double_time)
+            .with_find(self.find_template(), self.data.button_style())
+            .with_map_borders(self.map_borders);
+        let flight = match self.course_map_zoom {
+            Some(zoom) => flight.with_course_map_zoom(zoom),
+            None => flight,
+        };
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
         }
+    }
+
+    /// The maps' Find dialog, `DLOG` 3005, from the dialogs, if they
+    /// were given and have it; `None` lays it out from its fallback.
+    pub(super) fn find_template(&self) -> Option<DialogTemplate> {
+        let dialogs = self.dialogs.as_ref()?;
+        dialogs.resources.dialog_template(FIND_DIALOG).ok()
     }
 
     /// The metrics the router's text is laid out by: the dialogs', or the
@@ -416,19 +432,37 @@ impl AppScreen {
     }
 
     /// The router with dialogs: I opens the About text in a dialog built
-    /// from `dialogs`, its text laid out by `metrics`. Without dialogs, I
-    /// does nothing.
+    /// from `dialogs`, its text laid out by `metrics`, and the galaxy
+    /// viewer's Find is laid out from them (`DLOG` 3005, or its
+    /// fallback) and measured by `metrics`. Without dialogs, I does
+    /// nothing, and the viewer's Find never opens.
     #[must_use]
     pub fn with_dialogs(
         self,
         dialogs: Rc<dyn DialogResources>,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
+        let template = dialogs.dialog_template(FIND_DIALOG).ok();
+        let galaxy = self
+            .galaxy
+            .with_metrics(Rc::clone(&metrics))
+            .with_find(template, self.data.button_style());
         Self {
             dialogs: Some(Dialogs {
                 resources: dialogs,
                 metrics,
             }),
+            galaxy,
+            ..self
+        }
+    }
+
+    /// The router with each flight's course map showing the borders or
+    /// not, as the player's `ShowMapBorders` setting says.
+    #[must_use]
+    pub fn with_map_borders(self, map_borders: bool) -> Self {
+        Self {
+            map_borders,
             ..self
         }
     }
@@ -490,6 +524,9 @@ impl AppScreen {
         if self.comm.is_some() {
             return Showing::Comm;
         }
+        if self.flight_dialog_map_open() {
+            return Showing::FlightMap;
+        }
         if let Some(missions) = &self.missions {
             if missions.playing() {
                 return Showing::Movie;
@@ -544,22 +581,55 @@ impl AppScreen {
         if !self.port_map_open() {
             return false;
         }
+        self.map_over_input(input);
+        true
+    }
+
+    /// The input to flight's course map open over something: an Escape
+    /// press closes it ([`FlightView::close_map`]), unless its Find is
+    /// open, and anything else goes to it ([`FlightView::port_map_input`]).
+    fn map_over_input(&mut self, input: &Input) {
         let flight = self.flight.as_mut().expect(ENTERED);
         let escape = Input::Key {
             key: Key::Escape,
             pressed: true,
             repeat: false,
         };
-        if *input == escape {
+        // Find, while open, takes Escape too, doing nothing with it.
+        if *input == escape && !flight.map_finding() {
             flight.close_map();
         } else {
             flight.port_map_input(input);
         }
-        true
+    }
+
+    /// Whether a mission dialog's map is open over flight
+    /// ([`FlightView::open_dialog_map`]): over the offer from a ship or the
+    /// mission dialogs, which stay open under it.
+    pub(super) fn flight_dialog_map_open(&self) -> bool {
+        self.side == Side::Flight
+            && self
+                .flight
+                .as_ref()
+                .is_some_and(FlightView::dialog_map_open)
+    }
+
+    /// The input to a mission dialog's map over flight, before anything
+    /// open under it sees it: as flight's own map takes it, the Preferences
+    /// keys first unless Find is open, then the map's
+    /// ([`AppScreen::port_map_input`]'s).
+    pub(super) fn flight_dialog_map_input(&mut self, input: &Input) -> ScreenAction {
+        let finding = self.flight.as_ref().is_some_and(FlightView::map_finding);
+        if !finding && self.preferences_key(input) {
+            return ScreenAction::None;
+        }
+        self.map_over_input(input);
+        ScreenAction::None
     }
 
     /// Whether flight's course map is open over the spaceport: the bar's
-    /// map ([`FlightView::open_bar_map`]).
+    /// map ([`FlightView::open_bar_map`]) or a mission dialog's
+    /// ([`FlightView::open_dialog_map`]).
     pub(super) fn port_map_open(&self) -> bool {
         self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)
     }
@@ -602,8 +672,9 @@ impl AppScreen {
 
     /// The screen of the side shown: flight's while its course map is
     /// open over the spaceport ([`AppScreen::port_map_open`]), so the
-    /// spaceport neither ticks nor draws beneath it, paused as under any
-    /// modal dialog. The bar's offer wait pausing under it too is ours'
+    /// spaceport doesn't tick beneath it, paused as under any modal
+    /// dialog, though it is drawn beneath it, as under the other modal
+    /// dialogs. The bar's offer wait pausing under it too is ours'
     /// existing reading
     /// (rdm:phase/missions-fidelity/phase-15-offer-timer-under-nested-dialogs).
     pub(super) fn shown(&self) -> &dyn Screen {

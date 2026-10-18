@@ -11,7 +11,10 @@
 //! offer's name in item 5 and its text in item 4; and Accept (item 1,
 //! `STR#` 150 #26) and Leave (item 7, #1). Items 6, 9 and 10 (the map,
 //! player info and mission info) lie outside the dialog, reached only by
-//! keys. The screen enables its buttons itself.
+//! keys: M ([`MAP_KEY`](crate::flight::view::MAP_KEY), a press) asks for
+//! the course map marked for the selected offer, or for none with no row
+//! selected ([`MissionComputerScreen::take_map_request`]). The screen
+//! enables its buttons itself.
 //!
 //! What it shows is the session's [`MissionComputer`], decided in
 //! `nova-sim`. Accept asks for the selected mission
@@ -30,7 +33,9 @@
 //! one's `QuickBrief` in item 4, which shows its deadline through `<DL>`;
 //! and Done (item 1, `STR#` 150 #5) and Abort (item 5, #35), greyed unless
 //! the selected mission can be aborted (`_DrawMissionInfoButtons`
-//! @0x28359). Item 6, the map, lies outside it. What it shows is the
+//! @0x28359). Item 6, the map, lies outside it: M asks for the course map
+//! marked for the selected mission ([`MissionInfoScreen::take_map_request`]),
+//! unless the screen was opened over an offer or the computer. What it shows is the
 //! session's [`MissionInfo`]; Abort asks for the selected slot
 //! ([`MissionInfoScreen::take_abort`]), with no confirmation, and whoever
 //! holds the session aborts it and hands the info back
@@ -50,6 +55,8 @@ use super::layout::LEAVE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::MapOpener;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -142,6 +149,9 @@ pub struct MissionComputerScreen {
     info_requested: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info_requested: bool,
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
+    /// the selected row's offer, until it is taken.
+    map_request: Option<MapOpener>,
     /// The offer shown selected whose text is to be loaded, until it is
     /// taken.
     text_request: Option<MissionId>,
@@ -198,6 +208,7 @@ impl MissionComputerScreen {
             accepted: None,
             info_requested: false,
             player_info_requested: false,
+            map_request: None,
             text_request: None,
             closed: false,
         };
@@ -252,6 +263,16 @@ impl MissionComputerScreen {
     /// (`_MissionFilter` @0x9f82c, `_DoMissionDialog` @0xa3ffc).
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.player_info_requested)
+    }
+
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
+    /// since this was last asked, once, with the selected row's offer, or
+    /// none with no row selected: `_MissionFilter` gives item 6
+    /// (@0x9f7fa-0x9f818), and `_DoMissionDialog` opens the course map
+    /// marked for that offer, or for none (@0xa3c7b-0xa3daa; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)).
+    pub fn take_map_request(&mut self) -> Option<MapOpener> {
+        self.map_request.take()
     }
 
     /// Shows `computer` in place of the one shown, keeping the selected
@@ -347,6 +368,10 @@ impl Screen for MissionComputerScreen {
             self.closed = true;
             return ScreenAction::None;
         }
+        if is_map_press(input) {
+            self.map_request = Some(MapOpener::Computer(self.selected_mission()));
+            return ScreenAction::None;
+        }
         if is_mission_info_press(input) {
             self.info_requested = true;
             return ScreenAction::None;
@@ -439,6 +464,12 @@ pub struct MissionInfoScreen {
     /// The slot shown selected whose text is to be loaded, until it is
     /// taken.
     text_request: Option<u8>,
+    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) may open the
+    /// map: not when the screen is opened over an offer or the computer.
+    map_allowed: bool,
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
+    /// the selected slot, until it is taken.
+    map_request: Option<MapOpener>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -486,6 +517,8 @@ impl MissionInfoScreen {
             },
             abort: None,
             text_request: None,
+            map_allowed: true,
+            map_request: None,
             closed: false,
             sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
         };
@@ -521,6 +554,31 @@ impl MissionInfoScreen {
     #[must_use]
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// This screen, letting [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// open the map or not: `_DoMissionInfoDialog` opens none while
+    /// `_missionDialog` is set (@0x9e3c6-0x9e3cd), as it is when the
+    /// screen is opened over an offer (its item 7) or the computer (its
+    /// item 10).
+    #[must_use]
+    pub fn with_map_allowed(self, allowed: bool) -> Self {
+        Self {
+            map_allowed: allowed,
+            ..self
+        }
+    }
+
+    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
+    /// since this was last asked, once, with the selected slot, if any:
+    /// `_MissionInfoFilter` gives item 6 (@0x9d70a-0x9d72d), and
+    /// `_DoMissionInfoDialog` opens the course map marked for that
+    /// mission (@0x9e3bc-0x9e4d8; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)),
+    /// unless the map isn't allowed ([`MissionInfoScreen::with_map_allowed`]),
+    /// when the key does nothing.
+    pub fn take_map_request(&mut self) -> Option<MapOpener> {
+        self.map_request.take()
     }
 
     /// The slot Abort asked for since this was last taken, once.
@@ -624,6 +682,14 @@ impl Screen for MissionInfoScreen {
     /// Up, Down and a press on the list go to the list; everything else
     /// goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if is_map_press(input) {
+            if self.map_allowed {
+                self.map_request = Some(MapOpener::MissionInfo(
+                    self.selected_row().map(|row| row.slot),
+                ));
+            }
+            return ScreenAction::None;
+        }
         let Ok(laid) = &mut self.laid else {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -1386,6 +1452,93 @@ mod tests {
         assert!(!screen.take_info_request(), "once");
         assert!(!screen.closed());
         assert_eq!(screen.take_accept(), None);
+    }
+
+    /// A press, a repeat and a release of [`MAP_KEY`](crate::flight::view::MAP_KEY), in that order.
+    fn map_keys() -> [Input; 3] {
+        let m = crate::flight::view::MAP_KEY;
+        [
+            Input::Key {
+                key: m,
+                pressed: true,
+                repeat: true,
+            },
+            Input::Key {
+                key: m,
+                pressed: false,
+                repeat: false,
+            },
+            key(m),
+        ]
+    }
+
+    #[test]
+    fn the_map_key_in_the_computer_asks_for_the_map_with_its_selected_offer() {
+        let mut screen = screen();
+        let [repeat, release, press] = map_keys();
+        for input in [repeat, release] {
+            screen.input(&input);
+            assert_eq!(screen.take_map_request(), None, "{input:?}");
+        }
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::Computer(Some(MissionId(130))))
+        );
+        assert_eq!(screen.take_map_request(), None, "once");
+        screen.input(&key(Key::Down));
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::Computer(Some(MissionId(131))))
+        );
+        assert!(!screen.closed());
+        assert!(!screen.take_info_request());
+        assert_eq!(screen.take_accept(), None);
+        assert_eq!(screen.take_sounds(), [], "silent");
+        let mut empty = screen_of(MissionComputer {
+            rows: Vec::new(),
+            today: String::new(),
+        });
+        empty.input(&press);
+        assert_eq!(
+            empty.take_map_request(),
+            Some(MapOpener::Computer(None)),
+            "no row selected"
+        );
+    }
+
+    #[test]
+    fn the_map_key_in_mission_info_asks_for_the_map_with_its_selected_slot_unless_refused() {
+        let mut screen = info_screen();
+        screen.take_sounds();
+        let [repeat, release, press] = map_keys();
+        for input in [repeat, release] {
+            screen.input(&input);
+            assert_eq!(screen.take_map_request(), None, "{input:?}");
+        }
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(Some(0)))
+        );
+        assert_eq!(screen.take_map_request(), None, "once");
+        screen.input(&key(Key::Down));
+        screen.input(&press);
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(Some(3)))
+        );
+        assert!(!screen.closed());
+        assert_eq!(screen.take_sounds(), [], "silent");
+        let mut refused = info_screen().with_map_allowed(false);
+        refused.input(&press);
+        assert_eq!(
+            refused.take_map_request(),
+            None,
+            "opened over an offer or the computer (@0x9e3c6-0x9e3cd)"
+        );
+        assert!(!refused.closed());
     }
 
     #[test]

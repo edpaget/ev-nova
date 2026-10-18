@@ -130,7 +130,7 @@ impl<S: ImageSource> Renderer<S> {
             }
             DrawCommand::Picture { image, top_left } => {
                 let picture = (image, top_left, None);
-                self.push_picture(batches, picture, clip, gpu, report);
+                self.push_picture(batches, picture, Blend::Normal, clip, gpu, report);
             }
             DrawCommand::StretchedPicture {
                 image,
@@ -138,12 +138,18 @@ impl<S: ImageSource> Renderer<S> {
                 width,
                 height,
             } => {
-                // A rectangle with no drawable size draws nothing, so
-                // its picture is not even loaded.
-                if drawable(width) && drawable(height) {
-                    let picture = (image, top_left, Some((width, height)));
-                    self.push_picture(batches, picture, clip, gpu, report);
-                }
+                let picture = (image, top_left, (width, height));
+                self.push_stretched(batches, picture, Blend::Normal, clip, gpu, report);
+            }
+            DrawCommand::BlendedPicture {
+                image,
+                top_left,
+                width,
+                height,
+                blend,
+            } => {
+                let picture = (image, top_left, (width, height));
+                self.push_stretched(batches, picture, blend, clip, gpu, report);
             }
             DrawCommand::TiledPicture { image, area } => {
                 let area = match clip {
@@ -227,12 +233,32 @@ impl<S: ImageSource> Renderer<S> {
         }
     }
 
+    /// Appends a stretched picture's quad, `(image, top_left, size)`,
+    /// combined by `blend`. A rectangle with no drawable size draws
+    /// nothing, so its picture is not even loaded.
+    fn push_stretched(
+        &mut self,
+        batches: &mut Vec<Batch>,
+        (image, top_left, (width, height)): (ImageKey, Point, (f32, f32)),
+        blend: Blend,
+        clip: Option<Bounds>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        if drawable(width) && drawable(height) {
+            let picture = (image, top_left, Some((width, height)));
+            self.push_picture(batches, picture, blend, clip, gpu, report);
+        }
+    }
+
     /// Appends a picture's quad: `(image, top_left, size)`, drawn at `size`
-    /// when given and at the picture's own size otherwise.
+    /// when given and at the picture's own size otherwise, combined by
+    /// `blend`.
     fn push_picture(
         &mut self,
         batches: &mut Vec<Batch>,
         (image, top_left, size): (ImageKey, Point, Option<(f32, f32)>),
+        blend: Blend,
         clip: Option<Bounds>,
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
@@ -246,7 +272,7 @@ impl<S: ImageSource> Renderer<S> {
                 h,
             };
             if let Some((entry, dest)) = cropped(&entry, dest, clip) {
-                push_quad(batches, &entry, dest, Color::WHITE, Blend::Normal);
+                push_quad(batches, &entry, dest, Color::WHITE, blend);
             }
         }
     }
@@ -1200,6 +1226,161 @@ mod tests {
                 (Blend::Normal, 1)
             ]
         );
+    }
+
+    #[test]
+    fn a_max_picture_lowers_to_a_max_batch_at_its_rectangle() {
+        let mut list = DrawList::new();
+        list.blended_picture(ImageKey::picture(128), at(-2.5, 3.0), 20.0, 1.5, Blend::Max);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Max,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: -2.5,
+                        y: 3.0,
+                        w: 20.0,
+                        h: 1.5,
+                    },
+                    uv: uv(0, 0, 8, 4),
+                    tint: WHITE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_max_picture_after_a_solid_keeps_its_place() {
+        let mut list = DrawList::new();
+        list.dot(at(5.0, 5.0), 4.0, Color::WHITE).blended_picture(
+            ImageKey::picture(128),
+            at(0.0, 0.0),
+            16.0,
+            8.0,
+            Blend::Max,
+        );
+
+        let frame = render_one(&list, &viewport());
+
+        let kinds: Vec<Option<Blend>> = frame
+            .batches
+            .iter()
+            .map(|batch| match batch {
+                Batch::Sprites { blend, .. } => Some(*blend),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, [None, Some(Blend::Max)]);
+        assert!(matches!(frame.batches[0], Batch::Solid(_)));
+    }
+
+    #[test]
+    fn overlapping_max_pictures_share_a_batch() {
+        // A fixed-function max sees earlier quads of the same draw, so it
+        // needs no split as OR's copy of what is beneath does.
+        let mut list = DrawList::new();
+        for x in [0.0, 4.0, 8.0] {
+            list.blended_picture(ImageKey::picture(128), at(x, 0.0), 16.0, 8.0, Blend::Max);
+        }
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(sprite_blends(&frame), [(Blend::Max, 3)]);
+    }
+
+    #[test]
+    fn a_blended_picture_lowers_to_its_own_blend() {
+        let mut list = DrawList::new();
+        for (y, blend) in [
+            (0.0, Blend::Normal),
+            (10.0, Blend::Additive),
+            (20.0, Blend::Or),
+            (30.0, Blend::Max),
+        ] {
+            list.blended_picture(ImageKey::picture(128), at(0.0, y), 16.0, 8.0, blend);
+        }
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [
+                (Blend::Normal, 1),
+                (Blend::Additive, 1),
+                (Blend::Or, 1),
+                (Blend::Max, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clipped_max_picture_is_cropped_with_its_texture_coordinates() {
+        // 8x4 stretched to 16x8: each texel two units wide and tall.
+        let mut list = DrawList::new();
+        list.clipped(
+            bounds(4.0, 2.0, 40.0, 40.0),
+            DrawCommand::BlendedPicture {
+                image: ImageKey::picture(128),
+                top_left: at(0.0, 0.0),
+                width: 16.0,
+                height: 8.0,
+                blend: Blend::Max,
+            },
+        );
+
+        let frame = render_one(&list, &viewport());
+
+        let page = 64.0;
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Max,
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: 4.0,
+                        y: 2.0,
+                        w: 12.0,
+                        h: 6.0,
+                    },
+                    uv: Uv {
+                        u0: 2.0 / page,
+                        v0: 1.0 / page,
+                        u1: 8.0 / page,
+                        v1: 4.0 / page,
+                    },
+                    tint: WHITE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_blended_picture_with_no_drawable_size_draws_and_loads_nothing() {
+        let mut list = DrawList::new();
+        for (w, h) in [
+            (0.0, 4.0),
+            (4.0, 0.0),
+            (-1.0, 4.0),
+            (4.0, -1.0),
+            (f32::NAN, 4.0),
+            (4.0, f32::INFINITY),
+        ] {
+            list.blended_picture(ImageKey::picture(128), at(0.0, 0.0), w, h, Blend::Max);
+        }
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+        assert_eq!(renderer.images().calls(), []);
     }
 
     #[test]

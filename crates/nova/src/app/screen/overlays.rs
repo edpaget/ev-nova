@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use nova_sim::{HailView, OfferPrompt, Take, Taken};
-use nova_view::flight::FlightView;
+use nova_view::flight::{FlightView, MapOpener};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
@@ -213,7 +213,8 @@ impl AppScreen {
     }
 
     /// Flight's input: an Escape press closes flight's map when it is
-    /// open, and otherwise goes back; everything else goes to flight
+    /// open (unless its Find is, which takes it), and otherwise goes
+    /// back; everything else goes to flight
     /// (where L, the stellar slot keys and a click select the navigation
     /// target). When it lands, the
     /// spaceport shows.
@@ -224,8 +225,13 @@ impl AppScreen {
             repeat,
         } = *input
         {
+            let flight = self.flight.as_mut().expect(ENTERED);
+            // Find, while open, takes Escape too, doing nothing with it.
+            if flight.map_finding() {
+                flight.input(input);
+                return ScreenAction::None;
+            }
             if pressed && !repeat {
-                let flight = self.flight.as_mut().expect(ENTERED);
                 if flight.map_open() {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {
@@ -333,6 +339,12 @@ impl AppScreen {
     pub(super) fn missions_input(&mut self, input: &Input) -> ScreenAction {
         let missions = self.missions.as_mut().expect("open");
         missions.input(input);
+        if let Some(opener) = missions.take_map_request() {
+            missions.cancel_pointer();
+            self.open_flight_dialog_map(opener);
+            return ScreenAction::None;
+        }
+        let missions = self.missions.as_mut().expect("open");
         abort_and_refresh(missions, self.flight.as_mut());
         self.load_flight_info_text();
         if self
@@ -453,6 +465,12 @@ impl AppScreen {
             self.open_flight_player_info();
             return;
         }
+        if dialog.take_map_request() {
+            let mission = dialog.prompt().mission;
+            dialog.cancel_pointer();
+            self.open_flight_dialog_map(MapOpener::Offer(mission));
+            return;
+        }
         let Some(choice) = dialog.take_choice() else {
             return;
         };
@@ -475,6 +493,18 @@ impl AppScreen {
         self.show_mission_texts();
         if self.missions.is_none() {
             self.offer = None;
+        }
+    }
+
+    /// Opens flight's course map for `opener`, a mission dialog over
+    /// flight ([`FlightView::open_dialog_map`]): the offer from a ship,
+    /// mission info or the accept's briefing, which stays open under it;
+    /// the keys held let go. Its input goes to the map before them
+    /// ([`AppScreen::flight_dialog_map_input`]).
+    fn open_flight_dialog_map(&mut self, opener: MapOpener) {
+        self.release_keys();
+        if let Some(flight) = &mut self.flight {
+            flight.open_dialog_map(opener);
         }
     }
 

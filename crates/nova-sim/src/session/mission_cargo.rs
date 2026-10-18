@@ -509,6 +509,8 @@ mod tests {
         }
     }
 
+    /// `mission`'s `kind` text: a briefing opens the map, marking none of
+    /// these missions, which lack `Flags` 0x0100.
     fn text(kind: MissionTextKind, mission: i16, text: &str) -> MissionText {
         MissionText {
             kind,
@@ -516,6 +518,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: (kind == MissionTextKind::Brief).then_some(crate::MapMarks::NONE),
         }
     }
 

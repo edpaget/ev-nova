@@ -384,8 +384,13 @@ mod hooks;
 mod hover;
 mod jump_collapse;
 mod map;
+mod map_borders;
+mod map_click;
+mod map_panel;
+mod map_search;
 mod mission_cargo;
 mod mission_escorts;
+mod mission_map;
 mod mission_screens;
 mod mission_ships;
 mod missions;
@@ -416,6 +421,8 @@ mod target_panel;
 mod tutorial;
 
 pub use hooks::HookRules;
+pub use map_click::{MapClicked, MapPress};
+pub use nav::SavedNav;
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
@@ -510,7 +517,7 @@ use crate::outfitter::{
     OutfitVisit, Outfitter, Reselection, SaleAlert, Shop, outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
-use crate::pilot::{self, Escort, Pilot};
+use crate::pilot::{self, Escort, ExploredLevel, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
@@ -3291,11 +3298,11 @@ impl Session {
     /// no route the course is cleared, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
-    /// The original selects at the click only a system the current one
-    /// lists (@0x137b3-0x137bb), and cues a longer route as its map closes
-    /// (@0x13c16); here the cue comes at the click. The map covers the
-    /// whole screen and hides the HUD, so the difference crosses no
-    /// boundary the player sees.
+    /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
+    /// other reading ([`Session::map_click`]), and a helper for tests and
+    /// tools. The original has no planner: its click selects only a system
+    /// the current one lists (@0x137b3-0x137bb), a Shift-click adds a hop
+    /// at a time, and the course is cued as the map closes (@0x13c16).
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
         match self
             .galaxy
@@ -4352,9 +4359,10 @@ impl Session {
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
         }
-        // With its place's head, by the engine (`_PlayerLandOnStellar`
-        // @0x63457-0x634a7; see the `explored` module).
-        self.explore_place(self.pilot.system);
+        // At level 2, with its place's head, by the engine
+        // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
+        // @0x634b1-0x634c8; see the `explored` module).
+        self.explore_place(self.pilot.system, ExploredLevel::Charted);
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });

@@ -266,6 +266,12 @@ impl TradeScreen {
         std::mem::take(&mut self.player_info) || offer
     }
 
+    /// The mission of the offer open over it, when the offer's map key
+    /// asked for the map since this was last asked, once.
+    pub fn take_offer_map_request(&mut self) -> Option<MissionId> {
+        self.offering.as_mut()?.take_map_request()
+    }
+
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.

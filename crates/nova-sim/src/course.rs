@@ -7,7 +7,8 @@
 //! (0x12103-0x121a2) shifts the course left once slot 1's stand-in is the
 //! player's system's stand-in. Slot 1 is the next hop. The engine's
 //! course is the original's slots 1 and up, so its first hop is the
-//! original's slot 1.
+//! original's slot 1. How a Shift-click on the course map writes the
+//! course is the [`map_route`](crate::map_route) module's.
 //!
 //! **Rewrite and cut** ([`rewritten`]). `_HandleStellarSystemVisibility`
 //! runs it first (@0x32ab3-0x32b0d), so every rebuild point runs it. For

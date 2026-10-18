@@ -139,6 +139,15 @@ pub const AIRLOCK: Priority = Priority::new(8);
 pub const MAP_OPEN: Priority = Priority::new(1);
 /// The course map closing, `_beepSnd[0]`: `_HandlePlayer` @0x6a85a.
 pub const MAP_CLOSE: Priority = Priority::new(1);
+/// A map centred on Space, `_beepSnd[4]`: `_MapFilter`'s
+/// `PlaySound(.., 1, ..)` @0x140fe-0x14119.
+pub const MAP_CENTRE: Priority = Priority::new(1);
+/// A system found by the map's search, `_beepSnd[4]`: `_DoSystemSearch`'s
+/// `PlaySound(.., 1, ..)` @0x120b6, played @0x120f3.
+pub const MAP_FOUND: Priority = Priority::new(1);
+/// No system found by the map's search, `_beepSnd[3]`: `_DoSystemSearch`'s
+/// `PlaySound(.., 1, ..)` @0x120d8, played @0x120f3.
+pub const MAP_NOT_FOUND: Priority = Priority::new(1);
 /// The spaceport's ambient sound, `_planetSnd`: the planet param block
 /// `_LoadSounds` fills with 0x7d00 (@0x1c1b8), played by
 /// `ST_PlaySoundParam` from `_PortFilter` (@0x4f0e8, @0x4f106) and the
@@ -195,6 +204,9 @@ mod tests {
             (AIRLOCK, 8, "airlock"),
             (MAP_OPEN, 1, "map open"),
             (MAP_CLOSE, 1, "map close"),
+            (MAP_CENTRE, 1, "map centre"),
+            (MAP_FOUND, 1, "map found"),
+            (MAP_NOT_FOUND, 1, "map not found"),
             (PORT_AMBIENT, 32_000, "port ambient"),
         ];
         for (priority, number, what) in pinned {

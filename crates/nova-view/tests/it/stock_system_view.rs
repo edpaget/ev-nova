@@ -142,7 +142,7 @@ fn every_stock_system_can_be_entered_from_the_map_and_left() {
     for &id in raw.keys() {
         let map = navigator.map();
         let system = map.model().system(SystemId(id)).expect("on the map");
-        let dot = map.view().world_to_screen(system.position());
+        let dot = map.transform().world_to_screen(system.position());
         let stack = map.model().stack(SystemId(id)).len();
         // Start from empty space, then click until it is selected.
         click(&mut navigator, Point::new(-100.0, -100.0));

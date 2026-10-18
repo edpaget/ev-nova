@@ -21,7 +21,13 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     assert!(view.map_open());
     let mut map = DrawList::new();
     view.course_map().draw(&mut map);
-    assert_eq!(drawn(&view), map, "only the map");
+    let list = drawn(&view);
+    let over = list.len() - map.len();
+    assert_eq!(
+        list.iter().skip(over).collect::<Vec<_>>(),
+        map.iter().collect::<Vec<_>>(),
+        "the map over everything"
+    );
     // Holding M, or letting it go, keeps it open.
     view.input(&held(MAP));
     view.input(&key(MAP, false));
@@ -39,11 +45,15 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
     ticks(&mut view, 3);
     let flying = player(&view);
     tap(&mut view, MAP);
-    let fitted = *view.course_map().view();
+    let fitted = view.course_map().transform();
     ticks(&mut view, 30);
     assert_eq!(player(&view), flying, "paused");
     view.input(&key(Key::Left, true));
-    assert_ne!(*view.course_map().view(), fitted, "Left pans the map");
+    assert_ne!(
+        view.course_map().transform(),
+        fitted,
+        "Left scrolls the map"
+    );
     view.input(&key(LAND, true));
     view.input(&key(JUMP, true));
     assert_eq!(view.message(), None);
@@ -55,24 +65,172 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
 }
 
 #[test]
-fn a_click_on_a_system_plots_the_course_there_and_the_map_shows_it() {
+fn a_plain_click_on_a_linked_system_selects_it_in_mode_3_and_redraws_the_nav_at_once() {
     let mut view = flight();
     tap(&mut view, MAP);
-    let alpha = on_map(&view, 131);
+    assert_eq!(nav(&view), [hud::NAV_OFF]);
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    assert!(view.map_open());
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+    assert_eq!(
+        nav(&view),
+        [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED],
+        "drawn while the map is open"
+    );
+    assert_eq!(course(&view), [], "the course untouched");
+    assert_eq!(view.course_map().route(), []);
+}
+
+#[test]
+fn a_plain_click_on_an_unlinked_known_system_lets_go_of_the_selection_and_keeps_the_course() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    know(&mut view, 132);
+    tap(&mut view, MAP);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
+    assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+    assert_eq!(course(&view), [SystemId(131)], "the course kept");
+    assert_eq!(view.course_map().route(), [SystemId(131)]);
+}
+
+#[test]
+fn a_click_on_an_unknown_system_two_jumps_away_drags_and_selects_nothing() {
+    let mut view = FlightView::new(FakeCatalog {
+        onward: true,
+        ..catalog()
+    });
+    tap(&mut view, MAP);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
+    assert_eq!(
+        view.course_map().selected(),
+        Some(SystemId(130)),
+        "the preselect"
+    );
+    assert_eq!(nav_mode(&view), NavMode::Off);
+}
+
+#[test]
+fn shift_clicks_build_a_course_cueing_nothing_until_the_close_and_the_jump_goes_there() {
+    let mut view = FlightView::new(FakeCatalog {
+        onward: true,
+        ..catalog()
+    });
+    run_set(&mut view, "X131");
+    tap(&mut view, MAP);
+    for hop in [131, 132] {
+        let at = on_map(&mut view, hop);
+        shift_click(&mut view, at);
+        assert_eq!(nav_mode(&view), NavMode::Off, "nothing cued at {hop}");
+    }
+    assert_eq!(course(&view), [SystemId(131), SystemId(132)]);
+    assert_eq!(view.course_map().route(), [SystemId(131), SystemId(132)]);
+    assert_eq!(view.course_map().selected(), Some(SystemId(132)));
+    tap(&mut view, MAP);
+    assert_eq!(
+        nav_mode(&view),
+        NavMode::Hyperspace(Some(SystemId(131))),
+        "cued"
+    );
+    fly_out(&mut view);
+    jump_now(&mut view);
+    tick_to_arrival(&mut view);
+    assert_eq!(system_of(&view), SystemId(131));
+}
+
+#[test]
+fn a_plain_click_after_a_shift_built_course_selects_and_the_close_cues_the_first_hop_back() {
+    let mut view = FlightView::new(FakeCatalog {
+        fan: true,
+        ..catalog()
+    });
+    tap(&mut view, MAP);
+    let alpha = on_map(&mut view, 131);
+    shift_click(&mut view, alpha);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
+    assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
+    tap(&mut view, MAP);
+    assert_eq!(
+        nav_mode(&view),
+        NavMode::Hyperspace(Some(SystemId(131))),
+        "the close's cue (@0x13c16)"
+    );
+    assert_eq!(course(&view), [SystemId(131)]);
+}
+
+#[test]
+fn a_shift_click_at_the_current_systems_place_empties_the_course_and_keeps_clear_route() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    let alpha = on_map(&mut view, 131);
+    shift_click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a hop written");
+    let sol = on_map(&mut view, 130);
+    shift_click(&mut view, sol);
+    assert_eq!(course(&view), []);
+    assert_eq!(view.course_map().route(), []);
+    assert!(clear_route_enabled(&view), "the latch kept");
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)), "kept");
+}
+
+#[test]
+fn by_the_planner_a_click_on_a_system_plots_the_course_there_and_the_map_shows_it() {
+    let mut view = planner(flight());
+    tap(&mut view, MAP);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     assert!(view.map_open());
     let course = [SystemId(131)];
     assert_eq!(view.session().expect("flying").course(), course);
     assert_eq!(view.course_map().route(), course);
     assert_eq!(view.course_map().current(), Some(SystemId(130)));
-    let barnard = on_map(&view, 132);
+    assert_eq!(
+        nav_mode(&view),
+        NavMode::Hyperspace(Some(SystemId(131))),
+        "cued at once"
+    );
+    know(&mut view, 132);
+    let barnard = on_map(&mut view, 132);
     click(&mut view, barnard);
     assert_eq!(view.session().expect("flying").course(), []);
-    assert_eq!(view.course_map().route(), []);
+    assert_eq!(view.course_map().route(), [], "no route there");
+}
+
+#[test]
+fn by_the_planner_a_click_with_no_route_disables_clear_route() {
+    let mut view = planner(flight());
+    tap(&mut view, MAP);
+    assert!(!clear_route_enabled(&view), "no course");
+    let alpha = on_map(&mut view, 131);
+    click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a course plotted");
+    know(&mut view, 132);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
+    assert_eq!(view.course_map().route(), [], "no route there");
+    assert!(!clear_route_enabled(&view), "no course to clear");
+}
+
+#[test]
+fn by_the_engine_no_click_turns_clear_route_off() {
+    let mut view = flight();
+    tap(&mut view, MAP);
+    let alpha = on_map(&mut view, 131);
+    shift_click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a hop written");
+    click(&mut view, alpha);
+    assert!(clear_route_enabled(&view), "a plain click keeps the latch");
+    know(&mut view, 132);
+    let barnard = on_map(&mut view, 132);
+    click(&mut view, barnard);
     assert!(
-        texts(&drawn(&view)).contains(&"No hyperspace route".to_owned()),
-        "{:?}",
-        texts(&drawn(&view))
+        clear_route_enabled(&view),
+        "an unlinked plain click keeps it"
     );
 }
 
@@ -80,24 +238,31 @@ fn a_click_on_a_system_plots_the_course_there_and_the_map_shows_it() {
 fn closing_the_map_abandons_its_drag() {
     let mut view = flight();
     tap(&mut view, MAP);
-    let alpha = on_map(&view, 131);
+    let empty = Point::new(250.0, 150.0);
     view.input(&Input::PointerButton {
         button: crate::MouseButton::Left,
         pressed: true,
-        at: alpha,
+        at: empty,
     });
     view.close_map();
     assert!(!view.map_open());
     tap(&mut view, MAP);
+    let place = view.course_map().place().expect("in flight").scroll();
+    view.input(&Input::PointerMoved(Point::new(300.0, 150.0)));
     view.input(&Input::PointerButton {
         button: crate::MouseButton::Left,
         pressed: false,
-        at: alpha,
+        at: empty,
     });
+    assert_eq!(
+        view.course_map().place().expect("in flight").scroll(),
+        place,
+        "no drag"
+    );
     assert_eq!(
         view.course_map().selected(),
         Some(SystemId(130)),
-        "no click: the preselect"
+        "the preselect"
     );
     assert_eq!(view.session().expect("flying").course(), []);
 }
@@ -107,7 +272,18 @@ fn opening_the_map_selects_the_current_system_when_nothing_is_selected_in_mode_3
     let mut view = flight();
     tap(&mut view, MAP);
     assert_eq!(view.course_map().selected(), Some(SystemId(130)));
-    assert!(texts(&drawn(&view)).contains(&"Sol (sÿst 130)".to_owned()));
+    // The panel is Sol's: its ports are Earth and the Moon.
+    assert!(
+        matches!(
+            view.course_map().panel().map(|panel| &panel.strip),
+            Some(nova_sim::map_panel::Strip::Info {
+                ports: nova_sim::map_panel::Ports::Listed(names),
+                ..
+            }) if names.len() == 2
+        ),
+        "{:?}",
+        view.course_map().panel()
+    );
     assert_eq!(hyper_selected_links(&view), []);
     tap(&mut view, MAP);
     plot(&mut view, 131);
@@ -137,26 +313,34 @@ fn opening_the_map_selects_and_draws_the_system_hyper_selected() {
     assert_eq!(map.route(), [SystemId(131)], "the course kept");
     assert_eq!(
         hyper_selected_links(&view),
-        [(on_map(&view, 130), on_map(&view, 132))]
+        [(on_map_now(&view, 130), on_map_now(&view, 132))]
     );
-    assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
+    assert_eq!(
+        map.panel().map(|panel| panel.column.body.clone()),
+        Some(nova_sim::map_panel::ColumnBody::Unknown),
+        "the panel is Barnard's, unexplored"
+    );
 }
 
 #[test]
 fn a_click_on_the_map_draws_the_link_it_cues() {
     let mut view = flight();
     tap(&mut view, MAP);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     assert!(view.map_open());
     assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
-    assert_eq!(hyper_selected_links(&view), [(on_map(&view, 130), alpha)]);
+    assert_eq!(
+        hyper_selected_links(&view),
+        [(on_map_now(&view, 130), on_map_now(&view, 131))]
+    );
 }
 
 #[test]
-fn a_click_on_the_preselected_systems_place_selects_the_first_system_there() {
+fn a_click_at_a_shared_place_selects_the_lowest_accepted_system_every_time() {
     // `_DoSystemMap`'s click (@0x12dd4-0x1314b) never reads the
-    // preselect: it takes the first visible system at the place.
+    // preselect, and has no stack cycling: it takes the lowest visible
+    // system at the place it accepts, as the system standing there.
     let mut view = FlightView::new(FakeCatalog {
         reborn: true,
         ..catalog()
@@ -165,17 +349,23 @@ fn a_click_on_the_preselected_systems_place_selects_the_first_system_there() {
     assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
     tap(&mut view, MAP);
     assert_eq!(view.course_map().selected(), Some(SystemId(131)));
-    let alpha = on_map(&view, 131);
-    assert_eq!(alpha, on_map(&view, 133), "Alpha Reborn stands there too");
+    let alpha = on_map(&mut view, 131);
+    assert_eq!(
+        alpha,
+        on_map(&mut view, 133),
+        "Alpha Reborn stands there too"
+    );
     click(&mut view, alpha);
     assert_eq!(view.course_map().selected(), Some(SystemId(131)), "not 133");
-    assert_eq!(course(&view), [SystemId(131)]);
+    assert_eq!(course(&view), [], "a plain click");
     click(&mut view, alpha);
     assert_eq!(
         view.course_map().selected(),
-        Some(SystemId(133)),
-        "a click again moves on"
+        Some(SystemId(131)),
+        "a click again is the same click"
     );
+    shift_click(&mut view, alpha);
+    assert_eq!(course(&view), [SystemId(131)]);
 }
 
 #[test]
@@ -618,7 +808,7 @@ fn the_sabotage_death_descs_come_from_the_pilots_outfits() {
 
 #[test]
 fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
-    let mut view = FlightView::new(multi_jumping()).with_overlays(TITLED);
+    let mut view = planner(FlightView::new(multi_jumping())).with_overlays(TITLED);
     plot(&mut view, 132);
     assert_eq!(
         view.session().expect("flying").course(),
@@ -1192,7 +1382,7 @@ fn map_and_jump_in_a_flight_that_never_started_do_nothing_much() {
     assert_eq!(view.message(), None);
     tap(&mut view, MAP);
     assert!(view.map_open());
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     assert_eq!(view.course_map().route(), []);
 }
@@ -1213,23 +1403,26 @@ fn the_stellars_go_on_animating_while_the_jump_plays() {
 }
 
 #[test]
-fn cancelling_the_pointer_abandons_a_click_on_the_open_map() {
+fn cancelling_the_pointer_abandons_a_drag_on_the_open_map() {
     let mut view = flight();
     tap(&mut view, MAP);
-    let alpha = on_map(&view, 131);
+    let empty = Point::new(250.0, 150.0);
     let left = |pressed| Input::PointerButton {
         button: crate::MouseButton::Left,
         pressed,
-        at: alpha,
+        at: empty,
     };
     view.input(&left(true));
     view.cancel_pointer();
+    let place = view.course_map().place().expect("in flight").scroll();
+    view.input(&Input::PointerMoved(Point::new(300.0, 150.0)));
     view.input(&left(false));
     assert_eq!(
-        view.course_map().selected(),
-        Some(SystemId(130)),
-        "no click: the preselect"
+        view.course_map().place().expect("in flight").scroll(),
+        place,
+        "no drag"
     );
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
     assert_eq!(view.session().expect("flying").course(), []);
     assert!(view.map_open());
 }
@@ -1375,7 +1568,7 @@ fn the_course_map_makes_no_map_sound_on_its_own_input_or_ms_repeats() {
     for k in [Key::Up, Key::Down, Key::Left, Key::Right] {
         tap(&mut view, k);
     }
-    let somewhere = on_map(&view, 131);
+    let somewhere = on_map(&mut view, 131);
     click(&mut view, somewhere);
     assert!(view.map_open());
     assert_eq!(map_sounds(&mut view), []);
@@ -1411,7 +1604,7 @@ fn the_hypergate_map_makes_no_map_sound() {
     land_now(&mut view);
     assert_eq!(view.course_map().mode(), MapMode::Hypergate);
     assert_eq!(map_sounds(&mut view), [], "opened");
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
     assert_eq!(system_of(&view), SystemId(131));
@@ -1525,7 +1718,7 @@ fn i_while_disabled_is_taken() {
 fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
     assert!(!view.map_open());
@@ -1556,7 +1749,7 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
 fn the_ship_flies_under_a_hypergates_fade_in() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     tap(&mut view, MAP);
     assert_eq!(
@@ -1582,7 +1775,7 @@ fn a_hypergate_whose_gates_system_is_hidden_is_picked_by_the_one_at_its_place() 
     view.tick(TICK);
     land_now(&mut view);
     assert_eq!(view.course_map().mode(), MapMode::Hypergate);
-    let reborn = on_map(&view, 133);
+    let reborn = on_map(&mut view, 133);
     click(&mut view, reborn);
     tap(&mut view, MAP);
     assert_eq!(system_of(&view), SystemId(133));
@@ -1594,7 +1787,7 @@ fn a_hypergate_whose_gates_system_is_hidden_is_picked_by_the_one_at_its_place() 
 fn escape_on_the_hypergate_map_enters_the_gate_too() {
     let mut view = FlightView::new(gated());
     land_now(&mut view);
-    let alpha = on_map(&view, 131);
+    let alpha = on_map(&mut view, 131);
     click(&mut view, alpha);
     view.close_map();
     assert_eq!(system_of(&view), SystemId(131));

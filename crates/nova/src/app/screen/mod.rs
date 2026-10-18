@@ -379,6 +379,7 @@ enum Held {
 /// a Tab press (not on its key repeats) and decides what an Escape press
 /// does.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // Each a setting or a state the router keeps.
 pub struct AppScreen {
     side: Side,
     /// The side flight was last entered from, which Escape goes back to.
@@ -397,6 +398,14 @@ pub struct AppScreen {
     /// original's sprites outlive a pilot, `_InitSprites` running once at
     /// launch (see [`nova_sim::ship_layer`]).
     slot_sprites: SlotSprites,
+    /// The course map's zoom the last flight put away left, which each
+    /// new flight's map opens at: the original's `_mapZoom` is set once,
+    /// by its data, and never reset by a new or loaded pilot.
+    course_map_zoom: Option<f64>,
+    /// Whether the course map shows the borders: the player's
+    /// `ShowMapBorders` as the run started, then as the last flight put
+    /// away left it, so a change made docked lasts for the run.
+    map_borders: bool,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
     /// The About dialog, or the main menu's X text, while it is open.

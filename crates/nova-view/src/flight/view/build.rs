@@ -29,6 +29,8 @@ use crate::flight::hud::{self};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::catalog::SystemCatalog;
 use crate::text::TextMetrics;
+use crate::ui::button::ButtonStyle;
+use crate::ui::dialog::DialogTemplate;
 use crate::{Diagnostic, Key, ScreenAction, SoundPrefs};
 
 use super::{
@@ -75,15 +77,14 @@ impl<
     }
 
     /// Begins a new pilot's game as [`Session::begin`] does, on the
-    /// flight's chance, and shows on the course map any system it
-    /// explored: for a pilot just created, before its first save. The
+    /// flight's chance: for a pilot just created, before its first save.
+    /// The
     /// ship, which the beginning puts at (50, 50), is drawn there from the
     /// first frame, not on its way from where the view was read. A
     /// session that failed begins nothing.
     pub fn begin(&mut self) {
         if let Ok(session) = &mut self.session {
             session.begin(&self.catalog, &mut self.chance);
-            self.map.show_explored(session.pilot().explored());
             self.place_ship();
         }
     }
@@ -129,9 +130,20 @@ impl<
             .unwrap_or_default();
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
+            map.set_nebula_pick(session.rules().source_for(nova_sim::RuleKey::NebulaPicture));
+            map.set_border_rules(
+                session.rules().source_for(nova_sim::RuleKey::MapBorderPace),
+                session
+                    .rules()
+                    .source_for(nova_sim::RuleKey::MapFindBorders),
+            );
             map.show_galaxy(session.galaxy());
             map.show_course(session.system(), &session.course_shown());
-            map.show_explored(session.pilot().explored());
+            // Entering the game draws the floating map, and a new or
+            // loaded pilot sets `_mapScroll`, to the current system
+            // (`_EnterGameFromMainScreen` @0x19faa, `_DoNewPilot`
+            // @0x19054, `_LoadPilotData` @0x7537b).
+            map.recentre();
         }
         let looks = match &session {
             Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
@@ -154,8 +166,9 @@ impl<
             map,
             map_open: false,
             map_key_held: false,
-            bar_map: false,
+            map_opened: None,
             map_missions: Vec::new(),
+            map_borders_save: None,
             map_seen: None,
             floating_picture: None,
             jump: None,
@@ -231,13 +244,23 @@ impl<
     /// The flight with every disputed rule reading as `rules` says
     /// ([`Session::with_rules`]). The stellars of the scene shown are
     /// drawn again by the new rules, which say how a destroyed stellar
-    /// with no `DeadType` sheet draws, but not laid out again.
+    /// with no `DeadType` sheet draws, but not laid out again; the course
+    /// map's nebulae take their picture by the new
+    /// [`RuleKey::NebulaPicture`](nova_sim::RuleKey::NebulaPicture), and
+    /// its borders their pace and Find's pass by
+    /// [`RuleKey::MapBorderPace`](nova_sim::RuleKey::MapBorderPace) and
+    /// [`RuleKey::MapFindBorders`](nova_sim::RuleKey::MapFindBorders).
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
+        let pick = rules.source_for(nova_sim::RuleKey::NebulaPicture);
+        let pace = rules.source_for(nova_sim::RuleKey::MapBorderPace);
+        let find = rules.source_for(nova_sim::RuleKey::MapFindBorders);
         let mut view = Self {
             session: self.session.map(|session| session.with_rules(rules)),
             ..self
         };
+        view.map.set_nebula_pick(pick);
+        view.map.set_border_rules(pace, find);
         view.show_destroyed();
         view
     }
@@ -315,11 +338,44 @@ impl<
         }
     }
 
-    /// The flight with the HUD's text measured by `metrics`.
+    /// The flight with the HUD's text, and the course map's panels',
+    /// measured by `metrics`.
     #[must_use]
     pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
         Self {
+            map: self.map.with_metrics(Rc::clone(&metrics)),
             metrics: Some(Metrics(metrics)),
+            ..self
+        }
+    }
+
+    /// The flight with the course map at `zoom`, the run's: `_mapZoom` is
+    /// never reset, so a new or loaded pilot's map opens at the zoom the
+    /// last flight's was left at ([`GalaxyMap::with_zoom`]).
+    #[must_use]
+    pub fn with_course_map_zoom(self, zoom: f64) -> Self {
+        Self {
+            map: self.map.with_zoom(zoom),
+            ..self
+        }
+    }
+
+    /// The flight with the course map's borders shown or not, as the
+    /// player's `ShowMapBorders` setting says
+    /// ([`GalaxyMap::show_borders_setting`]).
+    #[must_use]
+    pub fn with_map_borders(mut self, shown: bool) -> Self {
+        self.map.show_borders_setting(shown);
+        self
+    }
+
+    /// The flight with the course map's Find laid out from `template`
+    /// (stock `DLOG` 3005), or its fallback for `None`, and the map's
+    /// buttons labelled in `style` ([`GalaxyMap::with_find`]).
+    #[must_use]
+    pub fn with_find(self, template: Option<DialogTemplate>, style: ButtonStyle) -> Self {
+        Self {
+            map: self.map.with_find(template, style),
             ..self
         }
     }

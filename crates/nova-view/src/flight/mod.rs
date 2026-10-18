@@ -62,7 +62,7 @@ pub mod hud;
 pub mod jump;
 pub mod lightning;
 pub mod murk;
-mod pen;
+pub(crate) mod pen;
 pub mod radar;
 pub mod shot_fade;
 pub mod smoke;
@@ -81,4 +81,4 @@ pub use catalog::{
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sprite::rotation_frame;
-pub use view::{FlightOverlays, FlightView, SharedChance};
+pub use view::{FlightOverlays, FlightView, MapOpener, SharedChance};

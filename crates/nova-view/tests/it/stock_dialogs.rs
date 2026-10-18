@@ -914,3 +914,83 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(CAP_HEIGHT, 40.0);
     }
 }
+
+#[test]
+fn the_maps_find_dialog_lays_out_from_dlog_3005_as_recorded() {
+    use nova_view::galaxy::FindDialog;
+    use nova_view::galaxy::find::{CANCEL_ITEM, FIELD_ITEM, FIND_DIALOG, FIND_ITEM, PROMPT_ITEM};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(FIND_DIALOG)
+            .expect("converts");
+        assert_eq!(template.placement, Placement::Center, "{}", path.display());
+        let dialog = FindDialog::new(&template, ButtonStyle::STOCK, mono()).expect("builds");
+        let bounds = dialog.dialog().bounds();
+        assert_eq!((bounds.width(), bounds.height()), (284.0, 105.0));
+        assert_eq!(bounds.min, Point::new(370.0, 331.0), "centred");
+        let at = |x, y, w, h| Some(rect(x, y, w, h).offset(bounds.min));
+        let item = |n| dialog.dialog().item_bounds(n);
+        assert_eq!(item(FIND_ITEM), at(165.0, 72.0, 70.0, 20.0), "Find");
+        assert_eq!(item(CANCEL_ITEM), at(83.0, 72.0, 70.0, 20.0), "Cancel");
+        assert_eq!(item(FIELD_ITEM), at(60.0, 38.0, 200.0, 16.0), "the field");
+        assert_eq!(dialog.field().text(), "");
+        let prompt = match &template.items[PROMPT_ITEM - 1].kind {
+            ItemSpec::StaticText(text) => text.clone(),
+            kind => panic!("{kind:?}"),
+        };
+        assert_eq!(prompt, nova_view::galaxy::find::PROMPT);
+        let texts: Vec<String> = drawn(&dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        for shown in ["Find", "Cancel", nova_view::galaxy::find::PROMPT] {
+            assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
+        }
+    }
+}
+
+#[test]
+fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
+    use nova_view::galaxy::buttons::MapButton;
+    use nova_view::galaxy::dialog::{DIALOG_SIZE, MAP_DIALOG, MAP_ITEM};
+    use nova_view::galaxy::panel::{INFO_COLUMN, INFO_STRIP, placed};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(MAP_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        let size = (template.bounds.width(), template.bounds.height());
+        assert_eq!(size, DIALOG_SIZE, "{name}");
+        assert_eq!(template.items.len(), 10, "{name}");
+        let corner = Point::new(0.0, 0.0);
+        let item = |n: usize| template.items[n - 1].bounds;
+        let expected = [
+            (1, placed(MapButton::Done.item(), corner)),
+            (2, placed(INFO_STRIP, corner)),
+            (3, placed(MAP_ITEM, corner)),
+            (4, placed(MapButton::ZoomOut.item(), corner)),
+            (5, placed(MapButton::ZoomIn.item(), corner)),
+            (6, placed(INFO_COLUMN, corner)),
+            (8, placed(MapButton::ClearRoute.item(), corner)),
+            (9, placed(MapButton::Borders.item(), corner)),
+            (10, placed(MapButton::Find.item(), corner)),
+        ];
+        for (n, bounds) in expected {
+            assert_eq!(item(n), bounds, "{name}: item {n}");
+            assert!(template.items[n - 1].enabled, "{name}: item {n}");
+            assert!(
+                matches!(template.items[n - 1].kind, ItemSpec::User),
+                "{name}: item {n} is a user item"
+            );
+        }
+        let seventh = &template.items[6];
+        assert!(!seventh.enabled, "{name}: item 7 is disabled");
+        assert!(
+            seventh.bounds.min.y > DIALOG_SIZE.1,
+            "{name}: item 7 is off the dialog"
+        );
+    }
+}
