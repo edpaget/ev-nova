@@ -577,7 +577,8 @@
 //! # The world layer
 //!
 //! Flight is the one screen that draws a world layer
-//! ([`DrawList::world`], [`DrawLayer`](crate::DrawLayer)): the stars, the
+//! ([`DrawList::world`](crate::DrawList::world),
+//! [`DrawLayer`](crate::DrawLayer)): the stars, the
 //! stellars, asteroids and boxes, the beams, the ships with their glow and
 //! lights, the shots, the effects and the smoke, everything the original
 //! draws into its sprite world. The brackets, the alerts, the floating
