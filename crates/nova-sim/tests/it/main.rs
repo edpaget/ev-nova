@@ -15,6 +15,7 @@ mod plugin_strings;
 mod stock;
 mod stock_answer_flag;
 mod stock_asteroids;
+mod stock_cloak_when_hit_burst;
 mod stock_comm_calls;
 mod stock_conditional_text;
 mod stock_crons;

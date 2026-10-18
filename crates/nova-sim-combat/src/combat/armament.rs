@@ -124,6 +124,8 @@
 //! weapon, so a load of -1 is kept. A person's own weapon slots add to
 //! these (`nova_sim::person::fit`).
 
+mod burst_reload;
+
 use std::collections::BTreeMap;
 
 use super::ShipRef;

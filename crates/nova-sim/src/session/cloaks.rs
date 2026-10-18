@@ -34,7 +34,10 @@
 //!   arg +0x20 skips (@0x3b44d, @0x3bf1f). Cloak-when-hit is in the
 //!   reaction block (@0x3bb95-0x3bbdd), so it needs the strike answered
 //!   ([`Strike::answered`], see the `answer_flag` module) too; the decloak
-//!   comes after the block, and any direct hit makes it.
+//!   comes after the block, and any direct hit makes it. Cloak-when-hit's
+//!   conditions also start the burst weapons of the ship's class on their
+//!   burst reload (`_AIForceBurstReload` @0x84c37), cloaked already or
+//!   not.
 
 use super::Session;
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
@@ -150,12 +153,17 @@ impl Session {
     }
 
     /// Each of `strikes` on an NPC, as its cloak takes it (see the module
-    /// docs).
+    /// docs). A hit that meets cloak-when-hit's conditions first starts
+    /// the burst weapons of the ship's class on their burst reload
+    /// ([`Armament::force_burst_reload`](crate::combat::armament::Armament::force_burst_reload)),
+    /// cloaked already or not, as `_DamageShip` calls
+    /// `_AIForceBurstReload` (@0x3bbd5) before `_DoShipCloak` (@0x3bbdd).
     pub(super) fn cloak_hits(&mut self, strikes: &[Strike]) {
         for strike in strikes.iter().filter(|strike| strike.direct) {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
+            let arsenal = &self.arsenal;
             let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
                 continue;
             };
@@ -166,12 +174,15 @@ impl Session {
             // is skipped.
             let holds =
                 !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
-            cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds);
+            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds) {
+                npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
+            }
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use crate::cloak::{CloakShown, FADE_FULL, SCAN_SCREEN, SEEN_AT_FULL_FADE};
     use crate::escort::FormationSlot;
@@ -212,6 +223,110 @@ mod tests {
         npc.cloak = CLOAKED;
         session.cloak_hits(&[unanswered]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
+    }
+
+    /// [`armed`] whose blaster (128, its class's) bursts 15 shots and
+    /// reloads 40 after, with a burst weapon 129 no class carries.
+    fn bursting() -> nova_sim_catalog::fixture::FakePilotCatalog {
+        let mut catalog = armed();
+        catalog.weapons[0].burst_count = 15;
+        catalog.weapons[0].burst_reload = 40;
+        catalog.weapons.push(crate::catalog::WeaponRecord {
+            burst_count: 4,
+            burst_reload: 20,
+            ..catalog.weapons[0]
+        });
+        catalog.weapons[1].id = crate::catalog::WeaponId(129);
+        catalog
+    }
+
+    /// Each of NPC 0's mounts' weapon and reload once `hits` land on it,
+    /// a cloak-when-hit ship that `can_cloak`, carrying its class's
+    /// blaster and weapon 129 too, attacking NPC 9.
+    fn reloads_after(
+        hits: &[crate::combat::Strike],
+        can_cloak: bool,
+    ) -> Vec<(crate::catalog::WeaponId, f32)> {
+        use crate::cloak::{CLOAK_WHEN_HIT, CloakGear};
+        use crate::combat::weapon::WeaponSpec;
+        let catalog = bursting();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = CloakGear {
+            flags2: CLOAK_WHEN_HIT,
+            device: can_cloak,
+            ..CAN_CLOAK
+        };
+        npc.goal =
+            crate::ai::Goal::Attack(crate::combat::ShipRef::Npc(crate::traffic::npc::NpcId(9)));
+        npc.armament = crate::combat::armament::Armament::new(
+            catalog
+                .weapons
+                .iter()
+                .map(|record| (WeaponSpec::new(record), 1)),
+        );
+        assert!(
+            npc.armament
+                .mounts()
+                .iter()
+                .all(|mount| mount.reload == 0.0),
+            "ready"
+        );
+        session.cloak_hits(hits);
+        session.npcs()[0]
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec.id, mount.reload))
+            .collect()
+    }
+
+    #[test]
+    fn cloaking_when_hit_starts_its_classs_burst_weapons_on_their_burst_reload() {
+        // `_AIForceBurstReload` (@0x3bbd5) on the cloak-when-hit
+        // conditions, before `_DoShipCloak` (@0x3bbdd); the class's
+        // weapons alone (`shïp` +0x5e8, @0x84c5f).
+        use crate::catalog::WeaponId;
+        use crate::combat::fixture::strike;
+        use crate::combat::{ShipRef, Strike};
+        use crate::traffic::npc::NpcId;
+        let hit = strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        let reset = vec![(WeaponId(128), 40.0), (WeaponId(129), 0.0)];
+        let alone = vec![(WeaponId(128), 0.0), (WeaponId(129), 0.0)];
+        assert_eq!(reloads_after(&[hit], true), reset);
+        let unanswered = Strike {
+            answered: false,
+            ..hit
+        };
+        assert_eq!(reloads_after(&[unanswered], true), alone, "unanswered");
+        let by_its_target = strike(ShipRef::Npc(NpcId(0)), ShipRef::Npc(NpcId(9)));
+        assert_eq!(reloads_after(&[by_its_target], true), alone, "its target");
+        assert_eq!(reloads_after(&[hit], false), alone, "it can't cloak");
+        let blast = Strike {
+            direct: false,
+            ..hit
+        };
+        assert_eq!(reloads_after(&[blast], true), alone, "no direct hit");
+    }
+
+    #[test]
+    fn a_ship_already_cloaked_starts_its_burst_reload_too() {
+        use crate::combat::fixture::strike;
+        use crate::combat::{ShipRef, Strike};
+        use crate::traffic::npc::NpcId;
+        let catalog = bursting();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        let hit: Strike = strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        session.cloak_hits(&[hit]);
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.cloak, CLOAKED);
+        assert_eq!(npc.armament.mounts()[0].reload, 40.0);
     }
 
     /// Marks `session`'s NPC 0 a mission escort that has joined the
