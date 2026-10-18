@@ -99,7 +99,7 @@
 use std::collections::BTreeSet;
 
 use super::Session;
-use crate::ai::Goal;
+use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
 use crate::cloak::Cloak;
@@ -715,12 +715,12 @@ impl Session {
         })
     }
 
-    /// Whether NPC `id` is allied with the player, as `_AlliedWithPlayer`
-    /// (@0x6985-0x69d0) has it: a ship the player leads, or one led by a
-    /// ship the player leads, such as a fighter an escort launched.
+    /// Whether NPC `id` is here and allied with the player
+    /// ([`Surroundings::allied_with_player`]).
     fn allied_with_player(&self, id: NpcId) -> bool {
-        let led = |id| self.player_led().any(|npc| npc.id == id);
-        led(id) || self.npc(id).and_then(|npc| npc.leader).is_some_and(led)
+        let npcs = self.traffic.npcs();
+        self.npc(id)
+            .is_some_and(|npc| Surroundings::new(&[], npcs).allied_with_player(npc))
     }
 
     /// Lets go of every target of the ships the player leads, as

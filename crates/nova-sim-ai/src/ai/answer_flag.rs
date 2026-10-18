@@ -307,16 +307,13 @@ fn same_leader(victim: &Npc, attacker: Attacker) -> bool {
 }
 
 /// Blessing (@0x3b9a9-0x3ba08): whether a governed NPC allied with the
-/// player (`_AlliedWithPlayer` @0x6985) whose government blesses the
-/// player with peace among `around` hit it.
+/// player ([`Surroundings::allied_with_player`]) whose government blesses
+/// the player with peace among `around` hit it.
 fn blessing(attacker: Attacker, around: &Surroundings) -> bool {
     let Attacker::Npc(npc) = attacker else {
         return false;
     };
-    let allied = attacker.players()
-        || matches!(npc.leader_ref(), Some(ShipRef::Npc(lead))
-            if around.npc(lead).is_some_and(|lead| lead.leader_ref() == Some(ShipRef::Player)));
-    npc.govt.is_some() && allied && around.blessed(npc.govt)
+    npc.govt.is_some() && around.allied_with_player(npc) && around.blessed(npc.govt)
 }
 
 /// Grand fleet (@0x3ba14-0x3baa1): whether `victim`'s leader's leader is
