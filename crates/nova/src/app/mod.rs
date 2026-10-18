@@ -2236,6 +2236,11 @@ mod tests {
     }
 
     #[test]
+    fn a_window_that_cannot_go_fullscreen_says_it_is_not() {
+        assert!(!FakeWindow::new((1024, 768), 1.0).is_fullscreen());
+    }
+
+    #[test]
     fn the_shortcut_goes_fullscreen_and_never_reaches_the_screen() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::MacOs);
