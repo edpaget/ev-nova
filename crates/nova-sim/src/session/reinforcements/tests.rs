@@ -378,13 +378,14 @@ fn the_daily_step_counts_the_countdowns_down() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     session.pilot.reinforcement_days = BTreeMap::from([(SystemId(130), 30)]);
+    session.stats.jump_days = 3;
     jump(&mut session, &catalog, 131);
     let left = session
         .pilot()
         .reinforcement_days
         .get(&SystemId(130))
         .copied();
-    assert!(left < Some(30), "a jump's days counted it down: {left:?}");
+    assert_eq!(left, Some(27), "a jump's three days counted it down");
 }
 
 #[test]
