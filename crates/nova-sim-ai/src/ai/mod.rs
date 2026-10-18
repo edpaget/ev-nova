@@ -20,6 +20,9 @@
 //! - [`call_for_help`]: the calls a think makes on the message line
 //!   ([`CommCall`]): a fleeing trader's distress call and an
 //!   interceptor's pre-scan hail, and the distress call's gates.
+//! - [`reinforcements`]: a ship's call for its system's reinforcement
+//!   fleet, the clock that brings it, and the daily countdown before the
+//!   next.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
 //!   NPC to the one for its type.
@@ -43,6 +46,7 @@ pub mod nova;
 pub mod odds;
 pub mod out_of_ammo;
 pub mod react;
+pub mod reinforcements;
 pub mod stand_off;
 pub mod target;
 pub mod warship;
