@@ -573,7 +573,7 @@ fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
         return false;
     };
     around.state_of(ship).is_some_and(|at| {
-        pursuit::frame_of(npc, &at, disabled(around, ship))
+        pursuit::frame_of(npc, &at, disabled_not_dying(around, ship))
             .is_some_and(|frame| frame.iter().any(|body| body.manoeuvre == Manoeuvre::Snipe))
     })
 }
@@ -634,7 +634,7 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
     let Some(at) = around.state_of(ship) else {
         return false;
     };
-    let Some(frame) = pursuit::frame_of(npc, &at, disabled(around, ship)) else {
+    let Some(frame) = pursuit::frame_of(npc, &at, disabled_not_dying(around, ship)) else {
         return false;
     };
     frame.iter().any(|body| match body.manoeuvre {
@@ -658,9 +658,12 @@ fn in_fire_box(npc: &Npc, at: &ShipState) -> bool {
     near(off.x) && near(off.y)
 }
 
-/// Whether `ship` is disabled, as `_IsDisabled` says of a stand-off
-/// ship's target (@0x8e4ca).
-fn disabled(around: &Surroundings, ship: ShipRef) -> bool {
+/// Whether `ship` is disabled and not breaking up, as the stand-off
+/// ship's target is read for `_IsDisabled` (@0x8e4ca). Narrower than
+/// [`Condition::disabled`], which counts a ship breaking up too; the two
+/// agree on every ship live in the system, as the sight and the snipe's
+/// launch read it.
+fn disabled_not_dying(around: &Surroundings, ship: ShipRef) -> bool {
     around.condition_of(ship) == Some(Condition::Disabled)
 }
 
@@ -804,7 +807,7 @@ fn sight<'a>(
 ) -> Option<(Sight<'a>, pursuit::Frame)> {
     let ship = npc.goal.quarry()?;
     let sight = sight_of(npc, ship, around, rules)?;
-    let frame = pursuit::frame_of(npc, &sight.at, disabled(around, ship))?;
+    let frame = pursuit::frame_of(npc, &sight.at, disabled_not_dying(around, ship))?;
     Some((sight, frame))
 }
 

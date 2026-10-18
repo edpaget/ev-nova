@@ -281,7 +281,7 @@ fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> 
         return false;
     };
     around.npc(id).is_some_and(|other| {
-        disabled(other.condition)
+        other.condition.disabled()
             && other.hull.inherent_ai > 2
             && other.former.is_none()
             && (!fire::destroys(npc) || ammo_left(npc) == AmmoLeft::Dry)
@@ -313,12 +313,6 @@ fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
 /// still jumping in is neither.
 fn gone_or_dying(ship: ShipRef, around: &Surroundings) -> bool {
     !around.condition_of(ship).is_some_and(Condition::standing)
-}
-
-/// Whether a ship of `condition` is disabled as `_IsDisabled` reads it:
-/// disabled or breaking up.
-fn disabled(condition: Condition) -> bool {
-    matches!(condition, Condition::Disabled | Condition::Dying { .. })
 }
 
 /// A decision of `goal` alone.

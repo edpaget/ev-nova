@@ -38,7 +38,6 @@
 
 use crate::ai::{Surroundings, fire};
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
 use crate::traffic::npc::Npc;
 
@@ -49,7 +48,7 @@ pub fn find(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
     let destroys = fire::destroys(npc);
     let player = around
         .player
-        .filter(|player| disabled(player.condition) && player.hull.crew > 0)
+        .filter(|player| player.condition.disabled() && player.hull.crew > 0)
         .map(|player| (ShipRef::Player, player.state.position));
     let npcs = around
         .by_slot()
@@ -78,7 +77,7 @@ fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> b
     other.leader_ref() != Some(ShipRef::Npc(npc.id))
         && other.condition.active()
         && !other.boarded
-        && disabled(other.condition)
+        && other.condition.disabled()
         && other.mission.is_none()
         && takes_on
         && other.hull.crew > 0
@@ -90,12 +89,6 @@ fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> b
 /// (4).
 fn reads_above_trader(other: &Npc) -> bool {
     other.carrier.is_some() || other.leader_ref().is_some() || !other.ai_type.trades()
-}
-
-/// Whether a ship of `condition` is disabled as `_IsDisabled` reads it:
-/// disabled or breaking up.
-fn disabled(condition: Condition) -> bool {
-    matches!(condition, Condition::Disabled | Condition::Dying { .. })
 }
 
 /// `off`'s square, as a float, truncated to a whole number
@@ -114,6 +107,7 @@ mod tests {
     use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, n, player, ship, sites};
     use crate::catalog::{ShipId, WeaponRecord};
     use crate::combat::armament::Armament;
+    use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
     use crate::fleet::Escort;
     use crate::reserves::Reserves;

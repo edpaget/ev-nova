@@ -419,6 +419,14 @@ impl Condition {
     pub fn active(self) -> bool {
         self != Self::Destroyed
     }
+
+    /// Whether it is disabled as the original's `_IsDisabled` reads it:
+    /// disabled or breaking up. A pirate plunders only such a ship, and
+    /// fires disable-only at one that is not.
+    #[must_use]
+    pub fn disabled(self) -> bool {
+        matches!(self, Self::Disabled | Self::Dying { .. })
+    }
 }
 
 /// What the player's `DeathDelay` is multiplied by as its breakup starts
@@ -956,6 +964,22 @@ mod tests {
             );
         }
         assert!(!Condition::Destroyed.active());
+    }
+
+    #[test]
+    fn disabled_and_breaking_up_ships_are_disabled_and_intact_or_destroyed_ones_not() {
+        assert!(!Condition::Intact.disabled());
+        assert!(Condition::Disabled.disabled());
+        for starting in [false, true] {
+            assert!(
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting
+                }
+                .disabled()
+            );
+        }
+        assert!(!Condition::Destroyed.disabled());
     }
 
     #[test]

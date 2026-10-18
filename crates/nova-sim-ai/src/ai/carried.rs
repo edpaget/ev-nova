@@ -44,12 +44,10 @@ impl Behaviour for CarriedAi {
         let Some(carrier) = carrier else {
             return Goal::Idle;
         };
-        let plundered = carrier.goal.plundering().filter(|&ship| {
-            !matches!(
-                around.condition_of(ship),
-                Some(Condition::Disabled | Condition::Dying { .. })
-            )
-        });
+        let plundered = carrier
+            .goal
+            .plundering()
+            .filter(|&ship| !around.condition_of(ship).is_some_and(Condition::disabled));
         match carrier.goal.attacking().or(plundered) {
             Some(quarry) => {
                 Goal::Attack(npc.target.filter(|&own| around.live(own)).unwrap_or(quarry))

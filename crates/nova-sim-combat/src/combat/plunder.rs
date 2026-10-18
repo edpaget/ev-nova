@@ -38,7 +38,6 @@
 //! plays a sound.
 
 use super::{Fighter, ShipRef, Target};
-use crate::combat::hull::Condition;
 
 /// What a ship launching a shot or beam reads of its own plunder: whether
 /// it is an NPC (slots 1-63), whether it plunders (goal 0xd), and the ship
@@ -90,13 +89,9 @@ pub fn beam_disables(firer: Plunderer, target: Option<ShipRef>, targets: &[Targe
 /// Whether `ship` is disabled among `targets`, as `_IsDisabled` reads it:
 /// disabled or breaking up. A ship not among them is not.
 fn disabled(ship: ShipRef, targets: &[Target]) -> bool {
-    targets.iter().any(|target| {
-        target.ship == ship
-            && matches!(
-                target.condition,
-                Condition::Disabled | Condition::Dying { .. }
-            )
-    })
+    targets
+        .iter()
+        .any(|target| target.ship == ship && target.condition.disabled())
 }
 
 /// Whether a real hit on `victim` by `attacker` can't kill it by the
@@ -123,6 +118,7 @@ mod tests {
     use super::*;
     use crate::catalog::ShipId;
     use crate::combat::NpcId;
+    use crate::combat::hull::Condition;
     use crate::combat::sides::Ties;
     use crate::geometry::Vec2;
 
