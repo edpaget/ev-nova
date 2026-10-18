@@ -424,10 +424,7 @@ fn fly_mobile(
                 Err(outcome) => return outcome,
             }
         }
-        Goal::JumpOut => match leave_flight::leaving(npc, &handling, inertia) {
-            Ok(controls) => controls,
-            Err(outcome) => return outcome,
-        },
+        Goal::JumpOut => return leave_flight::leaving(npc, &handling, flight, inertia),
         Goal::Follow(_) | Goal::Inspect(_) => match other {
             Some(other) => follow(&state, &handling, other, inertia),
             None => brake(&state, &handling, inertia),
@@ -449,10 +446,13 @@ fn fly_mobile(
                     return Outcome::Flying;
                 }
                 // Fleeing beyond its attacker's reach: state 3's far branch.
-                match leave_flight::fleeing_afar(npc, &handling, inertia, readings.jump_fuel) {
-                    Ok(controls) => controls,
-                    Err(outcome) => return outcome,
-                }
+                return leave_flight::fleeing_afar(
+                    npc,
+                    &handling,
+                    flight,
+                    inertia,
+                    readings.jump_fuel,
+                );
             }
             // A sniper whose target is gone coasts ([`snipe::fly`]).
             None if matches!(npc.goal, Goal::Snipe(_)) => {

@@ -10,14 +10,33 @@
 //!   itself), and thrusts while it is off that bearing by less than its
 //!   turn rate and [`RUN_OUT_THRUST`], in whole degrees, strictly
 //!   ([`fire::off_by`]). It flies at its top speed (+0x34 = 0).
-//! - [`Leg::Brake`] (sub 1): it brakes as the autopilot's stop does, an
-//!   inertialess ship as substate 1 does
-//!   ([`inertialess::brake`](crate::traffic::inertialess::brake)). The
-//!   original's substate 1 (@0x8536d-0x85633) is
-//!   rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's; its settle
-//!   below 0.35 on both axes can't run while the leave brakes, as the high
+//! - [`Leg::Brake`] (sub 1, @0x8536d-0x85633): an inertial ship brakes as
+//!   substate 1's inertial branch does (@0x85408-0x855e1, [`brake`]). It
+//!   turns to its retro heading, the table angle of its velocity + 180
+//!   (`_CalcInterceptAngle((0,0), velocity × 100.0)`), and thrusts while
+//!   off it by less than its turn and [`BRAKE_THRUST_SLACK`], whole
+//!   degrees, strictly. With an axis at [`FULL_BRAKE`] or more it thrusts
+//!   its full thrust (@0x85510); below that on both, half of it
+//!   ([`SOFT_BRAKE`]), its velocity cut to [`BRAKE_DAMPING`] of itself
+//!   first (@0x85526-0x8558d). It has no cutoff near rest: it thrusts as
+//!   long as the high level keeps it in sub 1, and may overshoot, turning
+//!   about to brake the other way. Its half thrust and damping bring any
+//!   thrust below 0.35 × (1 + 0.94) × 2, about 1.36 a tick (the stock's
+//!   most is 0.43, the Krypt Pod's under a divisor of 3000), to below
+//!   0.35 on both axes; a stronger one can settle swinging about the
+//!   0.35, as the original's does. An inertialess ship brakes as the
+//!   inertialess branch does
+//!   ([`inertialess::brake`](crate::traffic::inertialess::brake)).
+//!
+//!   Left out of sub 1, as it can't run on a leave: its settle below 0.35
+//!   on both axes (velocity × 0.95, sub 0, @0x855e3-0x85624), as the high
 //!   level sets sub 1 only while an axis is at 0.35 or more and the low
-//!   level reads the same velocity.
+//!   level reads the same velocity; and its damping off the retro heading
+//!   (velocity × 0.94, @0x85592-0x855e1), which runs only under goal 9
+//!   (+0xc8c8), not a leave's 2 or 3. Both, and the formation's use of sub
+//!   1, are rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. Its
+//!   cut of +0x48, the speed along the heading, with the velocity is
+//!   rdm:task/ai-drags-scale-the-npc-speed's. Nothing here plays a sound.
 //! - [`Leg::Jump`] (sub 4): it leaves the system that tick
 //!   ([`Outcome::JumpedOut`]). Sub 4 is the warp out (`_LowLevelAIHandler`
 //!   @0x8585e-0x859c5), which
@@ -27,71 +46,109 @@
 
 use crate::ai::fire;
 use crate::ai::leave::{self, Leg};
-use crate::flight::{Controls, ShipState};
+use crate::flight::{Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::{self, Outcome, steer};
-use crate::traffic::inertialess::Inertia;
+use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
 use crate::trig;
 
 /// How far beyond a turn, in degrees, a ship running out still thrusts
 /// (3.0 @0xdd664).
 pub const RUN_OUT_THRUST: f32 = 3.0;
+/// How far beyond a turn, in degrees, a braking ship still thrusts (the
+/// float 1.0 @0xdd068).
+pub const BRAKE_THRUST_SLACK: f32 = 1.0;
+/// The speed on an axis from which a braking ship thrusts its full thrust
+/// (the float 1.75 @0xdda38).
+pub const FULL_BRAKE: f32 = 1.75;
+/// The share of its thrust a braking ship thrusts below [`FULL_BRAKE`] on
+/// both axes (the float 0.5 @0xdd694).
+pub const SOFT_BRAKE: f32 = 0.5;
+/// What a braking ship's velocity is cut to there, each tick it thrusts
+/// (the double 0.94 @0xdda78).
+pub const BRAKE_DAMPING: f64 = 0.94;
 
-/// The controls a ship at `state` on `handling` flies `leg` by, as
-/// `inertia` says, or, on [`Leg::Jump`], that it jumped out (see the
-/// module docs).
-///
-/// # Errors
-///
-/// [`Outcome::JumpedOut`] on [`Leg::Jump`].
-pub fn controls(
-    state: &ShipState,
+/// Flies `npc` one tick of `leg` on `handling` under `flight`, as
+/// `inertia` says (see the module docs): flying on, or, on [`Leg::Jump`],
+/// jumped out where it is.
+pub fn fly(
+    npc: &mut Npc,
     leg: Leg,
     handling: &Handling,
+    flight: FlightRules,
     inertia: Inertia,
-) -> Result<Controls, Outcome> {
-    match leg {
-        Leg::RunOut => Ok(run_out(state, handling)),
-        Leg::Brake => Ok(autopilot::brake(state, handling, inertia)),
-        Leg::Jump => Err(Outcome::JumpedOut),
-    }
+) -> Outcome {
+    let (controls, flown) = match (leg, inertia) {
+        (Leg::Jump, _) => return Outcome::JumpedOut,
+        (Leg::RunOut, _) => (run_out(&npc.state, handling), *handling),
+        (Leg::Brake, Inertia::Inertial) => brake(&mut npc.state, handling),
+        (Leg::Brake, Inertia::Inertialess { .. }) => (inertialess::brake(&npc.state), *handling),
+    };
+    autopilot::step(npc, &flown, controls, flight, inertia);
+    Outcome::Flying
 }
 
-/// The controls `npc` leaving (state 2) flies by on `handling`, as
-/// `inertia` says, or that it jumped out: [`leave::leg`]'s leg, flown by
-/// [`controls`].
-///
-/// # Errors
-///
-/// [`Outcome::JumpedOut`] once its leg is [`Leg::Jump`].
-pub fn leaving(npc: &Npc, handling: &Handling, inertia: Inertia) -> Result<Controls, Outcome> {
-    let leg = leave::leg(&npc.state, leave::expedites(npc));
-    controls(&npc.state, leg, handling, inertia)
-}
-
-/// The controls `npc` fleeing beyond its attacker's reach (state 3's far
-/// branch) flies by on `handling`, as `inertia` says, or that it jumped
-/// out: [`leave::flee_leg`]'s leg, whether it can jump read by
-/// `jump_fuel` ([`leave::can_jump`]), flown by [`controls`].
-///
-/// # Errors
-///
-/// [`Outcome::JumpedOut`] once its leg is [`Leg::Jump`].
-pub fn fleeing_afar(
-    npc: &Npc,
+/// Flies `npc` leaving (state 2) one tick on `handling` under `flight`,
+/// as `inertia` says: [`leave::leg`]'s leg, by [`fly`].
+pub fn leaving(
+    npc: &mut Npc,
     handling: &Handling,
+    flight: FlightRules,
+    inertia: Inertia,
+) -> Outcome {
+    let leg = leave::leg(&npc.state, leave::expedites(npc));
+    fly(npc, leg, handling, flight, inertia)
+}
+
+/// Flies `npc` fleeing beyond its attacker's reach (state 3's far branch)
+/// one tick on `handling` under `flight`, as `inertia` says:
+/// [`leave::flee_leg`]'s leg, whether it can jump read by `jump_fuel`
+/// ([`leave::can_jump`]), by [`fly`].
+pub fn fleeing_afar(
+    npc: &mut Npc,
+    handling: &Handling,
+    flight: FlightRules,
     inertia: Inertia,
     jump_fuel: RuleSource,
-) -> Result<Controls, Outcome> {
+) -> Outcome {
     let leg = leave::flee_leg(
         &npc.state,
         leave::expedites(npc),
         leave::can_jump(npc, jump_fuel),
     );
-    controls(&npc.state, leg, handling, inertia)
+    fly(npc, leg, handling, flight, inertia)
+}
+
+/// Substate 1's brake for an inertial ship at `state` on `handling`
+/// (@0x85408-0x855e1, see the module docs): the controls, and the
+/// handling they fly by, its velocity cut as the substate cuts it.
+fn brake(state: &mut ShipState, handling: &Handling) -> (Controls, Handling) {
+    let moving = trig::intercept_angle(Vec2::ZERO, state.velocity * 100.0);
+    // In 0..360.
+    #[allow(clippy::cast_possible_truncation)]
+    let retro = (i32::from(moving) + 180).rem_euclid(360) as i16;
+    let thrust = fire::off_by(state.heading, retro) < handling.turn_rate + BRAKE_THRUST_SLACK;
+    let controls = Controls {
+        thrust,
+        turn: steer(state.heading, f32::from(retro), handling),
+        ..Controls::default()
+    };
+    let full = |axis: f32| axis.abs() >= FULL_BRAKE;
+    if !thrust || full(state.velocity.x) || full(state.velocity.y) {
+        return (controls, *handling);
+    }
+    // Doubles, back to floats (@0x85557-0x85574).
+    #[allow(clippy::cast_possible_truncation)]
+    let cut = |axis: f32| (f64::from(axis) * BRAKE_DAMPING) as f32;
+    state.velocity = Vec2::new(cut(state.velocity.x), cut(state.velocity.y));
+    let soft = Handling {
+        accel: handling.accel * SOFT_BRAKE,
+        ..*handling
+    };
+    (controls, soft)
 }
 
 /// Sub 3's controls for a ship at `state` on `handling`: turned to the
@@ -127,7 +184,7 @@ mod tests {
     }
 
     fn run_out(state: &ShipState) -> Controls {
-        controls(state, Leg::RunOut, &HANDLING, Inertia::Inertial).expect("flies")
+        super::run_out(state, &HANDLING)
     }
 
     #[test]
@@ -167,23 +224,122 @@ mod tests {
     }
 
     #[test]
-    fn braking_it_brakes_as_the_autopilots_stop_and_jumping_it_jumps_out() {
-        let moving = ShipState {
-            velocity: Vec2::new(0.0, -3.0),
-            ..at(0.0, -1200.0, 180.0)
-        };
-        for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 3.0 }] {
-            assert_eq!(
-                controls(&moving, Leg::Brake, &HANDLING, inertia),
-                Ok(autopilot::brake(&moving, &HANDLING, inertia))
-            );
-            assert_eq!(
-                controls(&moving, Leg::Jump, &HANDLING, inertia),
-                Err(Outcome::JumpedOut)
-            );
+    fn the_brakes_named_values_are_pinned() {
+        assert_eq!(BRAKE_THRUST_SLACK, 1.0);
+        assert_eq!(FULL_BRAKE, 1.75);
+        assert_eq!(SOFT_BRAKE, 0.5);
+        assert_eq!(BRAKE_DAMPING, 0.94);
+    }
+
+    /// A ship at `heading` moving at `(vx, vy)`, beyond 1000.
+    fn braking(vx: f32, vy: f32, heading: f32) -> ShipState {
+        ShipState {
+            velocity: Vec2::new(vx, vy),
+            ..at(0.0, -1200.0, heading)
         }
-        let braking = controls(&moving, Leg::Brake, &HANDLING, Inertia::Inertial).expect("flies");
-        assert!(braking.reverse && braking.thrust, "facing back, it thrusts");
+    }
+
+    #[test]
+    fn braking_it_turns_to_its_retro_heading_and_thrusts_only_within_a_turn_and_one_whole_degree() {
+        // Moving up (heading 0), its retro heading is 180.
+        let slack = HANDLING.turn_rate + BRAKE_THRUST_SLACK;
+        for (heading, thrusts, turn) in [
+            (180.0, true, Turn::None),
+            (180.0 - slack + 1.0, true, Turn::Right),
+            (180.0 - slack + 0.99, false, Turn::Right),
+            (180.0 - slack, false, Turn::Right),
+            (180.0 + slack, false, Turn::Left),
+            (90.0, false, Turn::Right),
+        ] {
+            let mut state = braking(0.0, -3.0, heading);
+            let (flown, _) = brake(&mut state, &HANDLING);
+            assert_eq!(flown.thrust, thrusts, "facing {heading}");
+            assert_eq!(flown.turn, turn, "facing {heading}");
+            assert!(!flown.reverse, "it steers to the heading itself");
+            assert_eq!(state.velocity, Vec2::new(0.0, -3.0), "facing {heading}");
+        }
+        // Moving left (heading 270), it turns to 90.
+        let mut left = braking(-3.0, 0.0, 90.0);
+        assert!(brake(&mut left, &HANDLING).0.thrust);
+    }
+
+    #[test]
+    fn braking_from_1_75_on_an_axis_it_thrusts_fully_and_below_it_at_half_cutting_its_velocity() {
+        for (vx, vy, heading) in [(0.0, -1.75, 180.0), (-1.75, 0.01, 90.0)] {
+            let mut state = braking(vx, vy, heading);
+            let (flown, by) = brake(&mut state, &HANDLING);
+            assert!(flown.thrust, "({vx}, {vy})");
+            assert_eq!(by, HANDLING, "({vx}, {vy})");
+            assert_eq!(state.velocity, Vec2::new(vx, vy), "({vx}, {vy})");
+        }
+        let below = f32::from_bits(1.75_f32.to_bits() - 1);
+        let mut state = braking(0.0, -below, 180.0);
+        let (flown, by) = brake(&mut state, &HANDLING);
+        assert!(flown.thrust);
+        assert_eq!(by.accel, HANDLING.accel * SOFT_BRAKE);
+        assert_eq!((by.max_speed, by.turn_rate), (5.0, 4.0));
+        #[allow(clippy::cast_possible_truncation)]
+        let cut = (f64::from(-below) * BRAKE_DAMPING) as f32;
+        assert_eq!(state.velocity, Vec2::new(0.0, cut));
+        // Off its retro heading, it neither thrusts nor cuts.
+        let mut turning = braking(0.0, -0.5, 0.0);
+        assert!(!brake(&mut turning, &HANDLING).0.thrust);
+        assert_eq!(turning.velocity, Vec2::new(0.0, -0.5));
+    }
+
+    #[test]
+    fn jumping_it_jumps_out_where_it_is() {
+        let start = braking(0.0, -3.0, 180.0);
+        for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 3.0 }] {
+            let mut leaver = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+            let outcome = fly(
+                &mut leaver,
+                Leg::Jump,
+                &HANDLING,
+                FlightRules::default(),
+                inertia,
+            );
+            assert_eq!(outcome, Outcome::JumpedOut);
+            assert_eq!(leaver.state, start);
+        }
+    }
+
+    #[test]
+    fn braking_an_inertial_ship_flies_substate_1s_brake_and_an_inertialess_one_the_inertialess_brake()
+     {
+        let start = braking(0.0, -1.0, 180.0);
+        let mut inertial = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        let rules = FlightRules::default();
+        let outcome = fly(
+            &mut inertial,
+            Leg::Brake,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(outcome, Outcome::Flying);
+        let mut by_hand = start;
+        let (controls, by) = brake(&mut by_hand, &HANDLING);
+        crate::flight::step(
+            &mut by_hand,
+            &by,
+            controls,
+            rules,
+            crate::flight::Flyer::Npc,
+        );
+        assert_eq!(inertial.state, by_hand);
+        let mut inertialess = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        inertialess.speed = 1.0;
+        let inertia = Inertia::Inertialess { speed: 1.0 };
+        fly(&mut inertialess, Leg::Brake, &HANDLING, rules, inertia);
+        let mut expected = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        expected.speed = 1.0;
+        let controls = crate::traffic::inertialess::brake(&start);
+        autopilot::step(&mut expected, &HANDLING, controls, rules, inertia);
+        assert_eq!(
+            (inertialess.state, inertialess.speed),
+            (expected.state, expected.speed)
+        );
     }
 
     // The leave flown through the autopilot.
@@ -220,6 +376,16 @@ mod tests {
 
     /// Flies `npc` one tick, its quarry at `other`, by `readings`.
     fn tick(npc: &mut Npc, other: Option<&ShipState>, readings: Readings) -> Outcome {
+        tick_under(npc, other, FlightRules::default(), readings)
+    }
+
+    /// [`tick`] under the flight rules `flight`.
+    fn tick_under(
+        npc: &mut Npc,
+        other: Option<&ShipState>,
+        flight: FlightRules,
+        readings: Readings,
+    ) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
         autopilot::fly(
             npc,
@@ -228,7 +394,7 @@ mod tests {
             other,
             false,
             speeds,
-            FlightRules::default(),
+            flight,
             readings,
             &mut Draws::of(&[]),
         )
@@ -237,15 +403,63 @@ mod tests {
     /// Flies `npc` until it leaves, at most `limit` ticks: each tick's
     /// starting state, and how it left.
     fn flown(npc: &mut Npc, other: Option<&ShipState>, limit: u32) -> (Vec<ShipState>, Outcome) {
+        flown_under(npc, other, FlightRules::default(), limit)
+    }
+
+    /// [`flown`] under the flight rules `flight`.
+    fn flown_under(
+        npc: &mut Npc,
+        other: Option<&ShipState>,
+        flight: FlightRules,
+        limit: u32,
+    ) -> (Vec<ShipState>, Outcome) {
         let mut states = Vec::new();
         for _ in 0..limit {
             states.push(npc.state);
-            let outcome = tick(npc, other, Readings::default());
+            let outcome = tick_under(npc, other, flight, Readings::default());
             if outcome != Outcome::Flying {
                 return (states, outcome);
             }
         }
         (states, Outcome::Flying)
+    }
+
+    /// Flight rules whose thrust divisor is 1000: the Krypt Pod's `Accel`
+    /// 1300 thrusts 1.3 a tick, above the 0.7 at which the autopilot's
+    /// brake, stopping at half a thrust, could leave an axis at 0.35 or
+    /// more.
+    fn strong_thrust() -> FlightRules {
+        FlightRules {
+            thrust_divisor: std::num::NonZeroU32::new(1000).expect("non-zero"),
+            ..FlightRules::default()
+        }
+    }
+
+    #[test]
+    fn a_leaver_thrusting_above_0_7_a_tick_still_brakes_below_035_and_jumps() {
+        let krypt = ShipStats::new(KRYPT, &[]);
+        assert!(strong_thrust().handling(krypt.handling).accel > 0.7);
+        for heading in [0.0, 180.0] {
+            let start = moving(0.0, -1100.0, 0.0, -0.5, heading);
+            let mut leaver = ship(krypt, Goal::JumpOut, start);
+            let (ticks, outcome) = flown_under(&mut leaver, None, strong_thrust(), 3000);
+            assert_eq!(outcome, Outcome::JumpedOut, "facing {heading}");
+            assert!(below_035(ticks.last().expect("flew")), "facing {heading}");
+        }
+    }
+
+    #[test]
+    fn a_ship_fleeing_from_afar_thrusting_above_0_7_a_tick_still_brakes_and_jumps() {
+        let attacker = moving(251.0, -10.0, 0.0, 0.0, 0.0);
+        let start = moving(0.0, -1100.0, 0.0, -0.5, 0.0);
+        let mut runner = ship(
+            ShipStats::new(KRYPT, &[]),
+            Goal::Flee(ShipRef::Player),
+            start,
+        );
+        let (states, outcome) = flown_under(&mut runner, Some(&attacker), strong_thrust(), 3000);
+        assert_eq!(outcome, Outcome::JumpedOut);
+        assert!(below_035(states.last().expect("flew")));
     }
 
     fn beyond(state: &ShipState) -> bool {
