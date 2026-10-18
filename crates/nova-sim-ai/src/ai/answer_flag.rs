@@ -549,8 +549,9 @@ mod tests {
             of(2, Some(PIRATES)),
             of(3, Some(TRADERS)),
             of(4, None),
+            led(of(5, Some(TRADERS)), 3),
         ];
-        let scene = Scene::new(&npcs, &govts);
+        let mut scene = Scene::new(&npcs, &govts);
         assert!(scene.answers(&strike(n(1), n(2))));
         assert!(scene.answers(&strike(n(1), n(4))), "an independent");
         assert!(!scene.answers(&strike(n(1), n(3))));
@@ -559,6 +560,17 @@ mod tests {
             ..strike(n(1), n(2))
         };
         assert!(!scene.answers(&by_none));
+        assert!(
+            !scene.answers(&strike(n(1), n(9))),
+            "a ship gone is no ship"
+        );
+        // A record of 2 x CrimeTol would forgive the player and its
+        // escorts, which a ship gone is not.
+        scene.record = 12;
+        assert!(
+            scene.answers(&strike(n(5), n(9))),
+            "a ship gone is not a led ship's leader"
+        );
     }
 
     #[test]
