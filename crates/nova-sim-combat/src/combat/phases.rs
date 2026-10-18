@@ -88,13 +88,23 @@ impl Combat {
 
     /// Step 4's point defence: every NPC's, as `_AIDispatch` runs it in
     /// its slot loop (@0x4429d, `_AIFireTurret` @0x80b0d), reading the
-    /// conditions the collision passes left, drawing on `chance`.
+    /// conditions the collision passes left, drawing on `chance`. None on
+    /// double time's second pass ([`GamePass::Again`]), as `_AIDispatch`
+    /// runs on the advance pass alone (@0x4402a).
+    ///
+    /// The original interleaves each NPC's point defence with its
+    /// decision, slot by slot; the session runs every decision first
+    /// (`nova_sim::Session::game_work`), and the simulation has no slots.
+    /// Both settle before the frame is drawn.
     pub fn defend_npcs(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        if arena.pass == GamePass::Again {
+            return;
+        }
         self.field = arena.field;
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;

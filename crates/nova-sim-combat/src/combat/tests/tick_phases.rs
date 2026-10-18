@@ -390,3 +390,64 @@ fn under_the_caps_an_npcs_point_defence_finds_the_missiles_last_ticks_beams_down
         assert_eq!(pd, usize::from(!capped), "{capped}");
     }
 }
+
+/// The ships whose Quad fired among `events`, in order.
+fn quad_firers(events: &[CombatEvent]) -> Vec<ShipRef> {
+    events
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::Fired {
+                ship,
+                weapon: WeaponId(133),
+                ..
+            } => Some(ship),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn double_times_second_pass_runs_the_players_point_defence_and_no_npcs() {
+    // `_HandlePlayer` runs on both passes, but `_AIDispatch`, which runs
+    // the NPCs' point defence, on the advance pass alone (@0x4402a).
+    let attacker = |id: u32, x: f32, at: ShipRef| {
+        Ship::at(id, x, -200.0)
+            .armed(missile())
+            .facing(180.0)
+            .targeting(at)
+    };
+    let guard = |ship: Ship| Ship {
+        trigger: Trigger {
+            point_defence: false,
+            ..QUIET
+        },
+        ..ship.armed(quad()).facing(0.0)
+    };
+    let mut player = guard(Ship::at(0, 0.0, 0.0));
+    player.id = ShipRef::Player;
+    player.fleet = ShipRef::Player;
+    let mut ships = [
+        player,
+        attacker(2, 0.0, ShipRef::Player),
+        guard(Ship::at(1, 400.0, 0.0)),
+        attacker(3, 400.0, A),
+    ];
+    let mut combat = Combat::default();
+    tick(&mut combat, &mut ships, &NovaDisable);
+    for ship in &mut ships {
+        ship.trigger = QUIET;
+    }
+    combat.take_events();
+    tick_on(&mut combat, &mut ships, GamePass::Again);
+    assert_eq!(quad_firers(&combat.take_events()), [ShipRef::Player]);
+    tick_on(
+        &mut combat,
+        &mut ships,
+        GamePass::Advance { double_time: true },
+    );
+    assert_eq!(
+        quad_firers(&combat.take_events()),
+        [A],
+        "the advance pass's, the player's reloading"
+    );
+}
