@@ -407,6 +407,7 @@ mod npc_escape;
 mod outfits;
 mod person_offers;
 mod persons;
+mod pilot_panel;
 mod pirate_plunder;
 mod player_downed;
 mod player_info;

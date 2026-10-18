@@ -16,7 +16,7 @@ use nova_sim::{
 };
 use nova_sim::{
     ControlBits, Hailed, HireTerms, MissionInfo, MissionInfoPress, OfferPrompt, PersonRules,
-    PlayerInfo, ship_layer::SlotSprites,
+    PlayerInfo, pilot_panel::PilotPanel, ship_layer::SlotSprites,
 };
 
 use crate::flight::cadence::HudCadence;
@@ -522,6 +522,15 @@ impl<
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
         Some(session.player_info(&self.catalog))
+    }
+
+    /// What the main screen's pilot panel says about the pilot, as
+    /// [`Session::pilot_panel`] gives it from the screen's catalog,
+    /// changing nothing; `None` for a session that failed.
+    #[must_use]
+    pub fn pilot_panel(&self) -> Option<PilotPanel> {
+        let session = self.session.as_ref().ok()?;
+        Some(session.pilot_panel(&self.catalog))
     }
 
     /// The player info dialog opens, as [`Session::open_player_info`] has

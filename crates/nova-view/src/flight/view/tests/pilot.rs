@@ -16,6 +16,25 @@ fn a_session_that_failed_has_no_pilot_desk() {
 }
 
 #[test]
+fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
+    let view = landed_view();
+    let session = view.session().expect("flying");
+    assert_eq!(
+        view.pilot_panel(),
+        Some(session.pilot_panel(view.catalog()))
+    );
+    assert_eq!(
+        view.pilot_panel().map(|panel| panel.pilot_name),
+        Some("Ada".to_owned())
+    );
+    let broken = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    });
+    assert_eq!(broken.pilot_panel(), None);
+}
+
+#[test]
 fn the_pilot_desk_reads_the_session_and_names_from_the_map() {
     let mut view = landed_view();
     let desk = view.pilot_desk().expect("flying");

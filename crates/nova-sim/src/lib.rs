@@ -400,6 +400,7 @@ pub use nova_sim_story::nebula;
 pub use nova_sim_story::news;
 pub use nova_sim_story::person;
 pub use nova_sim_story::pilot;
+pub mod pilot_panel;
 pub mod pre_jump;
 pub use nova_sim_story::rank;
 pub mod rating;
