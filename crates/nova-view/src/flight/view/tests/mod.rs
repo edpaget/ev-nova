@@ -933,6 +933,7 @@ const THRUST: Controls = Controls {
     thrust: true,
     turn: Turn::None,
     reverse: false,
+    face: nova_sim::flight::Face::Off,
 };
 
 fn ticks(view: &mut View, n: u32) {

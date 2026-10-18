@@ -400,6 +400,7 @@ fn steer_for(ship: &nova_sim::ShipState, to: nova_sim::Vec2) -> Controls {
             Turn::None
         },
         reverse: false,
+        ..Controls::default()
     }
 }
 

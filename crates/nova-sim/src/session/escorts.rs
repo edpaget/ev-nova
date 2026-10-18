@@ -1189,6 +1189,7 @@ mod tests {
                 Turn::None
             },
             reverse: false,
+            ..Controls::default()
         }
     }
 

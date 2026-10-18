@@ -19,6 +19,9 @@
 //!   growing down.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
+//! - [`player_turn`]: the player's turn block, `_HandlePlayer`'s: the
+//!   whole-degree turn, the auto-turn toward an aim that holds the turn
+//!   keys off, and the aims reverse and the jump's brake take.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
 //! - [`rule_values`]: the rules whose setting is a number, each a
@@ -49,6 +52,7 @@ pub mod flight;
 pub mod fuel;
 pub mod geometry;
 pub mod handling;
+pub mod player_turn;
 pub mod reserves;
 pub mod rule_values;
 pub mod rulebook;
@@ -59,7 +63,7 @@ pub mod trig;
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
-pub use flight::{Controls, FlightRules, Flyer, ShipState, Turn, step};
+pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};

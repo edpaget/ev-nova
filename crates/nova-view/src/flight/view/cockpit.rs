@@ -284,6 +284,7 @@ impl<C> FlightView<C> {
             thrust: holding(Key::Up),
             turn,
             reverse: holding(Key::Down),
+            ..Controls::default()
         }
     }
 

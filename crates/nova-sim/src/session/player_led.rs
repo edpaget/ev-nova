@@ -358,6 +358,7 @@ mod tests {
             thrust: true,
             turn: crate::flight::Turn::None,
             reverse: false,
+            ..crate::flight::Controls::default()
         };
         let mut player: f32 = 0.0;
         let mut npcs = std::collections::BTreeMap::new();

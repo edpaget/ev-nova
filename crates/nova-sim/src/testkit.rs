@@ -152,6 +152,7 @@ pub(crate) fn fly_out(session: &mut Session) {
         thrust: true,
         turn: Turn::None,
         reverse: false,
+        face: crate::flight::Face::Off,
     };
     for _ in 0..3000 {
         let player = *session.player();

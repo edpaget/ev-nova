@@ -333,6 +333,7 @@ fn fly_mobile(
                             <= handling.turn_rate + FLEE_THRUST,
                         turn: steer(state.heading, away, &handling),
                         reverse: false,
+                        ..Controls::default()
                     }
                 } else {
                     let out = state.position.length();
@@ -472,6 +473,7 @@ fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling, flight: Flig
             <= handling.turn_rate + DOCK_TURN_SLACK,
         turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
+        ..Controls::default()
     };
     flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc);
     let pull = handling.accel * FORMATION_NUDGE;
@@ -529,6 +531,7 @@ fn attack(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
         thrust: shortest_turn(npc.state.heading, wanted).abs() <= window,
         turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
+        ..Controls::default()
     }
 }
 
@@ -801,6 +804,7 @@ fn brake(state: &ShipState, handling: &Handling) -> Controls {
         thrust: facing_back && speed > handling.accel / 2.0,
         turn: Turn::None,
         reverse: true,
+        ..Controls::default()
     }
 }
 
@@ -892,6 +896,7 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
         thrust: off.abs() <= ALIGNED.max(handling.turn_rate),
         turn: steer(state.heading, wanted, handling),
         reverse: false,
+        ..Controls::default()
     }
 }
 
@@ -2767,6 +2772,7 @@ mod tests {
                 Turn::None
             },
             reverse: false,
+            ..Controls::default()
         }
     }
 

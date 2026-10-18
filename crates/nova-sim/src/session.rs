@@ -6637,6 +6637,7 @@ pub(super) mod tests {
                 thrust: true,
                 turn: Turn::None,
                 reverse: false,
+                ..Controls::default()
             });
         }
         session.player().velocity.length()
@@ -6683,6 +6684,7 @@ pub(super) mod tests {
             thrust: true,
             turn: Turn::Right,
             reverse: false,
+            ..Controls::default()
         };
         let mut expected = *session.player();
         for _ in 0..5 {
@@ -6705,6 +6707,7 @@ pub(super) mod tests {
         thrust: true,
         turn: Turn::None,
         reverse: false,
+        face: crate::flight::Face::Off,
     };
 
     #[test]
@@ -7858,6 +7861,7 @@ pub(super) mod tests {
             thrust: true,
             turn: Turn::Left,
             reverse: false,
+            ..Controls::default()
         };
         while session.jumping().is_none() {
             session.tick(Controls::default());
@@ -19178,6 +19182,7 @@ pub(super) mod tests {
             thrust: true,
             turn: Turn::Left,
             reverse: false,
+            ..Controls::default()
         });
         let drifted = *session.player();
         assert_eq!(

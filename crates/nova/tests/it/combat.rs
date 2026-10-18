@@ -1587,6 +1587,7 @@ fn steering(session: &Session, quarry: &Npc) -> nova_sim::Controls {
             thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,
             turn: side,
             reverse: false,
+            ..nova_sim::Controls::default()
         };
     }
     let ahead = toward(quarry.state.heading);

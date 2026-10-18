@@ -1,13 +1,19 @@
 //! Flight: one tick of a ship's Newtonian motion, the player's or an
 //! NPC's ([`Flyer`]).
 //!
-//! Each [`step`]:
+//! An NPC's tick is a [`step`]; the player's is a [`player_step`], which
+//! turns as `_HandlePlayer`'s turn block does (see the
+//! [`player_turn`](crate::player_turn) module) and then moves as a step
+//! does from step 2 on ([`advance`]). Each [`step`]:
 //!
-//! 1. Turns. Left and right turn by the ship's turn rate. Otherwise reverse
-//!    turns towards the heading opposite the ship's velocity, by at most the
-//!    turn rate, landing on it exactly once it is within one tick's turn. A
-//!    ship at rest has no velocity to turn from, so reverse does nothing;
-//!    one no faster than [`FlightRules::at_rest_speed`] counts as at rest.
+//! 1. Turns. Left and right turn by the ship's turn rate, the full rate
+//!    (`_HandleShip`). Otherwise reverse turns towards the heading
+//!    opposite the ship's velocity, by at most the turn rate, landing on
+//!    it exactly once it is within one tick's turn. A ship at rest has no
+//!    velocity to turn from, so reverse does nothing; one no faster than
+//!    [`FlightRules::at_rest_speed`] counts as at rest. (The original's
+//!    NPCs have no reverse: the AI turns them, and
+//!    rdm task `brake-leaves-sub-thrust-drift` owns their brake.)
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
 //!    its velocity. By default ([`SpeedCap::PerAxis`], the original's), as
 //!    `_AdjustedAccel` adds it ([`adjusted_accel`], @0x2ae4b-0x2af43): on
@@ -38,6 +44,7 @@ use core::num::NonZeroU32;
 
 use crate::geometry::Vec2;
 use crate::handling::{Handling, ORIGINAL_THRUST_DIVISOR};
+use crate::player_turn::{PlayerTurn, turn};
 use crate::rulebook::{RuleKey, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
 
@@ -46,27 +53,31 @@ use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
 /// [`ORIGINAL_THRUST_DIVISOR`]).
 pub const AT_REST_SPEED: f32 = 0.5 / ORIGINAL_THRUST_DIVISOR;
 
-/// The speed, in pixels a tick, at or below which reverse treats a ship as
-/// at rest when `Accel` is divided by `divisor`: half of one tick's thrust
-/// from the weakest engine (`Accel` 1). Thrust never changes a speed by
-/// less than that, so anything slower is the rounding left over from
-/// braking, whose direction is meaningless. (Reverse's rest test becomes
-/// the original's per-axis 0.05, 0xdd990, with
-/// `ship-handling-fidelity/phase-4-turning-and-reverse`.)
+/// The speed, in pixels a tick, at or below which an NPC's reverse
+/// ([`step`]) treats a ship as at rest when `Accel` is divided by
+/// `divisor`: half of one tick's thrust from the weakest engine (`Accel`
+/// 1). Thrust never changes a speed by less than that, so anything slower
+/// is the rounding left over from braking, whose direction is
+/// meaningless. The player's reverse tests each axis against the
+/// original's 0.05 instead
+/// ([`reverse_aim`](crate::player_turn::reverse_aim)).
 #[must_use]
 pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
     (0.5 / f64::from(divisor.get())) as f32
 }
 
 /// The rules a ship flies by, read from the [`Rulebook`] at each use: the
-/// thrust's divisor ([`RuleValue::ThrustDivisor`]) and the speed cap
-/// ([`RuleKey::SpeedCap`]).
+/// thrust's divisor ([`RuleValue::ThrustDivisor`]), the speed cap
+/// ([`RuleKey::SpeedCap`]) and how the player turns
+/// ([`RuleKey::PlayerTurn`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlightRules {
     /// What a ship's `Accel` total is divided by to give its thrust.
     pub thrust_divisor: NonZeroU32,
     /// How a ship's speed is capped.
     pub speed_cap: SpeedCap,
+    /// How the player's ship turns.
+    pub player_turn: PlayerTurn,
 }
 
 impl FlightRules {
@@ -76,6 +87,7 @@ impl FlightRules {
         Self {
             thrust_divisor: rules.value_for(RuleValue::ThrustDivisor),
             speed_cap: SpeedCap::from(rules.source_for(RuleKey::SpeedCap)),
+            player_turn: PlayerTurn::from(rules.source_for(RuleKey::PlayerTurn)),
         }
     }
 
@@ -134,15 +146,35 @@ pub enum Turn {
     Right,
 }
 
+/// The face-target key (the original's `autopilot`, keyPrefs +0xe), as
+/// held this tick, and whether with Option: what the player's ship turns
+/// to face (see `nova_sim::Session::tick`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Face {
+    /// Not held.
+    #[default]
+    Off,
+    /// Held alone: the ship target, or the nav stellar with none.
+    Target,
+    /// Held with Option: the nav stellar, or the ship target with none.
+    Stellar,
+}
+
 /// The player's controls for one tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Controls {
     /// Accelerate along the heading.
     pub thrust: bool,
-    /// Turn left or right; takes precedence over `reverse`.
+    /// Turn left or right. For an NPC ([`step`]) it takes precedence over
+    /// `reverse`; the player's are held off while reverse or the face key
+    /// aims ([`player_turn`](crate::player_turn)).
     pub turn: Turn,
-    /// Turn to face against the velocity.
+    /// Turn to face against the velocity: in an NPC's [`step`], and in the
+    /// session's aim for the player's
+    /// ([`reverse_aim`](crate::player_turn::reverse_aim)).
     pub reverse: bool,
+    /// The face-target key, which the session aims the player's ship by.
+    pub face: Face,
 }
 
 /// A ship in flight.
@@ -157,7 +189,7 @@ pub struct ShipState {
 }
 
 /// Advances `state`, `flyer`'s ship, one tick under `controls`, flying as
-/// `handling` allows under `rules` (see the module docs).
+/// `handling` allows under `rules` (see the module docs): an NPC's tick.
 pub fn step(
     state: &mut ShipState,
     handling: &Handling,
@@ -174,10 +206,46 @@ pub fn step(
         }
         Turn::None => state.heading,
     };
+    advance(state, handling, controls.thrust, rules, flyer);
+}
+
+/// Advances the player's ship, `state`, one tick under `controls`, flying
+/// as `handling` allows under `rules`: it turns as `_HandlePlayer`'s turn
+/// block does, toward `aim` while the auto-turn aims (reverse or the face
+/// key, which the session works out), the turn keys held off, and by
+/// them otherwise ([`player_turn`](crate::player_turn)); then it thrusts,
+/// is capped and moves ([`advance`]).
+pub fn player_step(
+    state: &mut ShipState,
+    handling: &Handling,
+    controls: Controls,
+    aim: Option<i16>,
+    rules: FlightRules,
+) {
+    (state.heading, _) = turn(
+        state.heading,
+        handling.turn_rate,
+        aim,
+        controls.turn,
+        rules.player_turn,
+    );
+    advance(state, handling, controls.thrust, rules, Flyer::Player);
+}
+
+/// The rest of a tick after the turn (see the module docs, steps 2-4):
+/// `state`, `flyer`'s ship, thrusts along its heading if `thrust`, is
+/// capped and moves, flying as `handling` allows under `rules`.
+pub fn advance(
+    state: &mut ShipState,
+    handling: &Handling,
+    thrust: bool,
+    rules: FlightRules,
+    flyer: Flyer,
+) {
     let top = handling.max_speed;
     match rules.speed_cap {
         SpeedCap::PerAxis => {
-            if controls.thrust {
+            if thrust {
                 state.velocity = adjusted_accel(state.velocity, state.heading, handling.accel, top);
             }
             if flyer == Flyer::Player {
@@ -185,7 +253,7 @@ pub fn step(
             }
         }
         SpeedCap::Circle => {
-            if controls.thrust {
+            if thrust {
                 state.velocity = state.velocity + facing(state.heading) * handling.accel;
             }
             state.velocity = circle(state.velocity, top);
@@ -258,6 +326,7 @@ mod tests {
         thrust: true,
         turn: Turn::None,
         reverse: false,
+        face: Face::Off,
     };
 
     fn turning(turn: Turn) -> Controls {
@@ -271,6 +340,7 @@ mod tests {
         thrust: false,
         turn: Turn::None,
         reverse: true,
+        face: Face::Off,
     };
 
     fn heading(heading: f32) -> ShipState {
@@ -288,6 +358,7 @@ mod tests {
         }
     }
 
+    /// `state` after `ticks` steps of `controls` by an NPC.
     fn after(mut state: ShipState, controls: Controls, ticks: usize) -> ShipState {
         for _ in 0..ticks {
             step(
@@ -295,7 +366,7 @@ mod tests {
                 &SHIP,
                 controls,
                 FlightRules::default(),
-                Flyer::Player,
+                Flyer::Npc,
             );
         }
         state
@@ -310,6 +381,7 @@ mod tests {
             None => panic!(),
         },
         speed_cap: SpeedCap::Circle,
+        player_turn: PlayerTurn::WholeDegrees,
     };
 
     fn under(divisor: u32) -> FlightRules {
@@ -521,6 +593,7 @@ mod tests {
                 thrust: true,
                 turn: Turn::Right,
                 reverse: false,
+                face: Face::Off,
             };
             // While the heading is within a few turns of the velocity,
             // thrust holds the ship at its top speed.
@@ -646,6 +719,7 @@ mod tests {
             thrust: true,
             turn: Turn::Right,
             reverse: false,
+            face: Face::Off,
         };
         let mut player = heading(0.0);
         let mut npc = heading(0.0);
@@ -726,6 +800,7 @@ mod tests {
                 thrust: true,
                 turn: Turn::Right,
                 reverse: false,
+                face: Face::Off,
             },
             FlightRules::default(),
             Flyer::Player,
@@ -785,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn left_or_right_overrides_reverse() {
+    fn an_npcs_left_or_right_overrides_reverse() {
         let up = moving(Vec2::new(0.0, -3.0), 0.0);
         let left = Controls {
             turn: Turn::Left,
@@ -866,6 +941,104 @@ mod tests {
             Flyer::Player,
         );
         assert_eq!(fast.heading, 87.0, "moving under 5000");
+    }
+
+    // The player's step.
+
+    /// A ship of `Maneuver` 25: 2.5° a tick.
+    const PEGASUS: Handling = Handling {
+        turn_rate: 2.5,
+        ..SHIP
+    };
+
+    fn player_after(
+        mut state: ShipState,
+        controls: Controls,
+        aim: Option<i16>,
+        rules: FlightRules,
+        ticks: usize,
+    ) -> ShipState {
+        for _ in 0..ticks {
+            player_step(&mut state, &PEGASUS, controls, aim, rules);
+        }
+        state
+    }
+
+    #[test]
+    fn the_player_turns_whole_degrees_and_an_npc_the_full_rate() {
+        let right = turning(Turn::Right);
+        let player = player_after(heading(90.0), right, None, FlightRules::default(), 1);
+        assert_eq!(player.heading, 92.0);
+        let mut npc = heading(90.0);
+        step(
+            &mut npc,
+            &PEGASUS,
+            right,
+            FlightRules::default(),
+            Flyer::Npc,
+        );
+        assert_eq!(npc.heading, 92.5);
+        let full = FlightRules {
+            player_turn: PlayerTurn::Full,
+            ..FlightRules::default()
+        };
+        assert_eq!(
+            player_after(heading(90.0), right, None, full, 1).heading,
+            92.5
+        );
+    }
+
+    #[test]
+    fn the_players_auto_turn_holds_the_turn_keys_off_and_stops_short_of_its_aim() {
+        let left = turning(Turn::Left);
+        let aimed = player_after(heading(0.0), left, Some(9), FlightRules::default(), 6);
+        assert_eq!(
+            aimed.heading, 8.0,
+            "turned right toward 9, the keys held off"
+        );
+        assert_eq!(
+            player_after(heading(0.0), left, None, FlightRules::default(), 1).heading,
+            358.0
+        );
+    }
+
+    #[test]
+    fn the_players_step_turns_before_it_thrusts_and_caps_its_speed() {
+        let quarter = Handling {
+            turn_rate: 90.0,
+            ..SHIP
+        };
+        let mut state = heading(0.0);
+        let controls = Controls {
+            thrust: true,
+            turn: Turn::Right,
+            ..Controls::default()
+        };
+        player_step(&mut state, &quarter, controls, None, FlightRules::default());
+        assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
+        assert!(near(state.position, Vec2::new(0.1, 0.0)), "{state:?}");
+        let mut fast = moving(Vec2::new(6.0, 0.0), 90.0);
+        player_step(
+            &mut fast,
+            &SHIP,
+            Controls::default(),
+            None,
+            FlightRules::default(),
+        );
+        assert_eq!(fast.velocity, Vec2::new(3.0, 0.0), "the player's box");
+        assert_eq!(fast.position, Vec2::new(3.0, 0.0));
+    }
+
+    #[test]
+    fn the_player_turn_reads_the_rulebook() {
+        assert_eq!(FlightRules::default().player_turn, PlayerTurn::WholeDegrees);
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::PlayerTurn, RuleSource::Bible)
+            )
+            .player_turn,
+            PlayerTurn::Full
+        );
     }
 
     #[test]

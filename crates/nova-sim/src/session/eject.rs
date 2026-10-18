@@ -1514,6 +1514,7 @@ mod tests {
             thrust: false,
             turn: crate::flight::Turn::Left,
             reverse: true,
+            ..crate::flight::Controls::default()
         };
         let at = session.player.position;
         session.tick(controls);
