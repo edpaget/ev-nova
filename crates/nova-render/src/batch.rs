@@ -380,35 +380,40 @@ impl<S: ImageSource> Renderer<S> {
         None
     }
 
-    /// Decodes every frame of `key`'s resource and places and uploads each.
+    /// Decodes every frame of `key`'s resource, has the enlarger turn them
+    /// all, then places and uploads each. The enlarging is done before
+    /// this returns, so the frame that first draws the resource draws it
+    /// enlarged.
     fn load(&mut self, key: ImageKey, gpu: &mut impl Gpu, report: &mut RenderReport) -> Resident {
         match self.images.frames(key.kind, key.id) {
             Err(error) => {
                 report.new_failures.push((key, error));
                 Resident::Failed
             }
-            Ok(frames) => Resident::Frames(
-                frames
-                    .iter()
-                    .map(|image| self.place(key.kind, image, gpu))
-                    .collect(),
-            ),
+            Ok(frames) => {
+                let enlarged = self.enlarger.enlarge_frames(key.kind, &frames);
+                Resident::Frames(
+                    frames
+                        .iter()
+                        .zip(enlarged)
+                        .map(|(image, enlarged)| self.place(image, &enlarged, gpu))
+                        .collect(),
+                )
+            }
         }
     }
 
-    /// Places `image`, a frame of a `kind` resource, in the atlas as the
-    /// enlarger turns it, and uploads it. An enlarged frame too big for a
-    /// page is placed as it decoded instead, so every frame that fits
-    /// natively draws.
+    /// Places `enlarged`, the image the atlas holds for frame `image`, and
+    /// uploads it. One too big for a page is placed as the frame decoded
+    /// instead, so every frame that fits natively draws.
     fn place(
         &mut self,
-        kind: ImageKind,
         image: &Image,
+        enlarged: &Image,
         gpu: &mut impl Gpu,
     ) -> Result<Placed, ImageError> {
-        let enlarged = self.enlarger.enlarge(kind, image);
         let (entry, held) = match self.atlas.place(enlarged.width(), enlarged.height()) {
-            Ok(entry) => (entry, enlarged.as_ref()),
+            Ok(entry) => (entry, enlarged),
             Err(_) => (self.atlas.place(image.width(), image.height())?, image),
         };
         if entry.opened {
@@ -2474,6 +2479,45 @@ mod tests {
         let mut renderer = renderer(images);
         renderer.set_enlarger(Box::new(Doubled::default()));
         renderer
+    }
+
+    /// Leaves a frame alone asked for one, and doubles a resource's frames
+    /// asked for them all at once.
+    #[derive(Debug)]
+    struct DoublesSheets;
+
+    impl Enlarger for DoublesSheets {
+        fn enlarge<'a>(&self, _kind: ImageKind, image: &'a Image) -> Cow<'a, Image> {
+            Cow::Borrowed(image)
+        }
+
+        fn enlarge_frames<'a>(&self, _kind: ImageKind, frames: &'a [Image]) -> Vec<Cow<'a, Image>> {
+            frames
+                .iter()
+                .map(|frame| Cow::Owned(doubled(frame)))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_resources_frames_are_enlarged_all_at_once() {
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 1), at(10.0, 10.0), Color::WHITE);
+        let mut renderer = renderer(images());
+        renderer.set_enlarger(Box::new(DoublesSheets));
+        let mut gpu = RecordingGpu::new();
+
+        renderer.render(&list, &viewport(), &mut gpu);
+
+        let sizes: Vec<(u32, u32)> = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::Upload { width, height, .. } => Some((*width, *height)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sizes, [(10, 12); 3]);
     }
 
     /// Every textured quad of `frame`, in draw order.

@@ -13,5 +13,7 @@ mod metal_fx;
 mod sharp_bilinear;
 mod stock_fonts;
 mod stock_render;
+mod stock_super_xbr;
+mod stock_super_xbr_cost;
 mod wgpu_offscreen;
 mod world_layer;

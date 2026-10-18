@@ -22,6 +22,16 @@ pub trait Enlarger: std::fmt::Debug {
     /// alone. It is drawn at `image`'s own (logical) size whatever size it
     /// comes back.
     fn enlarge<'a>(&self, kind: ImageKind, image: &'a Image) -> Cow<'a, Image>;
+
+    /// Every frame of a `kind` resource as the atlas holds them, in order,
+    /// each as [`Enlarger::enlarge`] turns it: one by one unless an
+    /// enlarger turns them together, on several threads, say.
+    fn enlarge_frames<'a>(&self, kind: ImageKind, frames: &'a [Image]) -> Vec<Cow<'a, Image>> {
+        frames
+            .iter()
+            .map(|frame| self.enlarge(kind, frame))
+            .collect()
+    }
 }
 
 /// No enlargement: the atlas holds each frame as it decodes, as before
@@ -81,6 +91,38 @@ mod tests {
                 .enlarge(ImageKind::Rled, &image)
                 .width(),
             4
+        );
+    }
+
+    /// Swaps red and blue, one frame at a time.
+    #[derive(Debug)]
+    struct Swapped;
+
+    impl Enlarger for Swapped {
+        fn enlarge<'a>(&self, _kind: ImageKind, image: &'a Image) -> Cow<'a, Image> {
+            let pixels = image
+                .pixels()
+                .chunks(4)
+                .flat_map(|t| [t[2], t[1], t[0], t[3]])
+                .collect();
+            Cow::Owned(Image::from_rgba(image.width(), image.height(), pixels).expect("same"))
+        }
+    }
+
+    #[test]
+    fn a_resources_frames_are_each_turned_as_one_frame_is_by_default() {
+        let frames = [
+            Image::from_rgba(1, 1, vec![1, 2, 3, 4]).expect("1x1"),
+            Image::from_rgba(1, 1, vec![5, 6, 7, 8]).expect("1x1"),
+        ];
+        let turned = Swapped.enlarge_frames(ImageKind::Rled, &frames);
+        let pixels: Vec<&[u8]> = turned.iter().map(|image| image.pixels()).collect();
+        assert_eq!(pixels, [[3, 2, 1, 4], [7, 6, 5, 8]]);
+        let native = NativeDetail.enlarge_frames(ImageKind::Pict, &frames);
+        assert!(
+            native.iter().zip(&frames).all(
+                |(got, frame)| matches!(got, Cow::Borrowed(same) if std::ptr::eq(*same, frame))
+            )
         );
     }
 

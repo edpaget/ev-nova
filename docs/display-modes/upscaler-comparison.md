@@ -96,6 +96,33 @@ sheet the dump produced (282 sheets, 160 Mpx of source):
 A GPU shader form of these scalers would do the same work at load in a
 fraction of that; these CPU numbers are the upper bound.
 
+### Super-xBR at sprite load (phase 8)
+
+Phase 8 ported Super-xBR's three passes to the CPU
+(`crates/nova-render/src/super_xbr.rs`) and enlarges each sheet's frames
+when the sheet is first drawn. Measured with
+`crates/nova-render/tests/it/stock_super_xbr_cost.rs` (release build, every
+stock rlëD sheet, 282 sheets and 17,007 frames) on an Apple M5 Max, 18
+cores, on 2026-10-18:
+
+| Threads | All sheets | Slowest sheet (rlëD 1452, 384 frames of 240x240) |
+|---|---|---|
+| 1 | 40.3 s | 4.34 s |
+| Bands of rows within each pass, up to 18 | 22.9 s | 1.61 s |
+| A sheet's frames spread over 18, bands within a lone frame (shipped) | 3.16 s | 0.39 s |
+
+The slowest sheet is well over one 60 Hz frame (16 ms) even spread over
+every core, so the first frame that draws a big sheet hitches. That happens
+once per sheet per session, and once more for each sheet drawn after the
+player changes Scaling. The enlargement stays synchronous in
+`Renderer::load`, so the first frame that draws an image already draws it
+enlarged. Enlarging in the background would show native frames first.
+
+The 2x atlas: the stock sheets take 162.8 Mpx natively (about 39 pages of
+2048x2048) and 645.7 Mpx at 2x (about 154 pages, 2.41 GiB of RGBA8),
+counting gutters but not packing waste. Nothing is evicted, but a session
+loads only the sheets it draws, a fraction of that.
+
 Real-ESRGAN x4plus took 0.4–0.9 s per sprite (about 0.4 s of each is process
 start and model load) and 6–8 s per whole 1024x768 or 1365x768 frame on this
 GPU. At the 1365x768 frame's rate (6.0 µs per source pixel) the full 160 Mpx

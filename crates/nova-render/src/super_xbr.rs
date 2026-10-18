@@ -72,20 +72,83 @@ impl Enlarger for SuperXbr {
             Cow::Owned(enlarge(image))
         }
     }
+
+    /// Every frame [`enlarge`]d, the frames spread over the machine's
+    /// threads; a pattern's borrowed as they are.
+    fn enlarge_frames<'a>(&self, kind: ImageKind, frames: &'a [Image]) -> Vec<Cow<'a, Image>> {
+        if matches!(kind, ImageKind::Pattern) {
+            return frames.iter().map(Cow::Borrowed).collect();
+        }
+        enlarge_all(frames, threads())
+            .into_iter()
+            .map(Cow::Owned)
+            .collect()
+    }
 }
 
-/// `image` at twice its width and height, by Super-xBR's three passes.
+/// How many threads the machine runs at once, at least one.
+fn threads() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+}
+
+/// Every one of `frames` enlarged, in order, on at most `threads` threads:
+/// the frames split into runs, one thread a run, each frame given its
+/// share of the threads for its passes' bands. A frame's bytes don't
+/// depend on the threads it is given.
+fn enlarge_all(frames: &[Image], threads: usize) -> Vec<Image> {
+    let workers = threads.min(frames.len()).max(1);
+    let each = (threads / workers).max(1);
+    if workers == 1 {
+        return frames
+            .iter()
+            .map(|frame| enlarge_with(frame, each))
+            .collect();
+    }
+    let run = frames.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = frames
+            .chunks(run)
+            .map(|run| {
+                scope.spawn(move || {
+                    run.iter()
+                        .map(|frame| enlarge_with(frame, each))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        runs.into_iter()
+            .flat_map(|run| run.join().expect("an enlarging thread panicked"))
+            .collect()
+    })
+}
+
+/// `image` at twice its width and height, by Super-xBR's three passes,
+/// each split into bands of rows across the threads the machine runs at
+/// once ([`std::thread::available_parallelism`]). It returns when the
+/// image is done, so a renderer that loads with it draws the image enlarged
+/// from the first frame.
 #[must_use]
 pub fn enlarge(image: &Image) -> Image {
+    enlarge_with(image, threads())
+}
+
+/// [`enlarge`] on at most `threads` threads. Every texel is computed the
+/// same way whichever thread computes it, so the bytes are the same for
+/// any number.
+fn enlarge_with(image: &Image, threads: usize) -> Image {
     let original = Plane::premultiplied(image);
     if original.texels.is_empty() {
         return Image::from_rgba(2 * image.width(), 2 * image.height(), Vec::new())
             .expect("no texels");
     }
-    let diagonal = pass0(&original);
-    let doubled = pass1(&original, &diagonal);
-    pass2(&doubled).straight()
+    let diagonal = pass0(&original, threads);
+    let doubled = pass1(&original, &diagonal, threads);
+    pass2(&doubled, threads).straight()
 }
+
+/// The fewest texels a thread computes in a pass: smaller bands would
+/// spend more starting threads than they save.
+const MIN_BAND_TEXELS: usize = 16 * 1024;
 
 /// A premultiplied RGBA texel, each channel 0 to 1.
 type Texel = [f32; 4];
@@ -110,12 +173,36 @@ impl Plane {
         }
     }
 
-    /// A `width` x `height` plane, each texel `texel(x, y)`.
-    fn from_fn(width: usize, height: usize, texel: impl Fn(usize, usize) -> Texel) -> Self {
-        let texels = (0..height)
-            .flat_map(|y| (0..width).map(move |x| (x, y)))
-            .map(|(x, y)| texel(x, y))
-            .collect();
+    /// A `width` x `height` plane, each texel `texel(x, y)`, its rows
+    /// computed in bands on up to `threads` threads, each band at least
+    /// [`MIN_BAND_TEXELS`].
+    fn from_fn(
+        width: usize,
+        height: usize,
+        threads: usize,
+        texel: impl Fn(usize, usize) -> Texel + Sync,
+    ) -> Self {
+        let mut texels = vec![[0.0; 4]; width * height];
+        let rows = height
+            .div_ceil(threads.max(1))
+            .max(MIN_BAND_TEXELS.div_ceil(width.max(1)));
+        let band_len = (rows * width).max(1);
+        let fill = |band: usize, chunk: &mut [Texel]| {
+            for (n, slot) in chunk.iter_mut().enumerate() {
+                let at = band * band_len + n;
+                *slot = texel(at % width, at / width);
+            }
+        };
+        if texels.len() <= band_len {
+            fill(0, &mut texels);
+        } else {
+            std::thread::scope(|scope| {
+                for (band, chunk) in texels.chunks_mut(band_len).enumerate() {
+                    let fill = &fill;
+                    scope.spawn(move || fill(band, chunk));
+                }
+            });
+        }
         Self::new(width, height, texels)
     }
 
@@ -381,8 +468,8 @@ fn kernel(window: &Window<Texel>, pass: &Pass) -> Texel {
 
 /// Pass 0: the texel at the centre of each square of four, the one at
 /// (x, y) being between (x, y) and (x + 1, y + 1).
-fn pass0(original: &Plane) -> Plane {
-    Plane::from_fn(original.width, original.height, |x, y| {
+fn pass0(original: &Plane, threads: usize) -> Plane {
+    Plane::from_fn(original.width, original.height, threads, |x, y| {
         kernel(&square(original, x as isize, y as isize), &PASS0)
     })
 }
@@ -390,22 +477,27 @@ fn pass0(original: &Plane) -> Plane {
 /// Pass 1: the doubled image. Of each 2x2 block, the top-left texel is
 /// the original's, the bottom-right the diagonal one pass 0 computed, and
 /// the other two are computed between those, on the grid turned 45°.
-fn pass1(original: &Plane, diagonal: &Plane) -> Plane {
-    Plane::from_fn(2 * original.width, 2 * original.height, |x2, y2| {
-        let (x, y) = ((x2 / 2) as isize, (y2 / 2) as isize);
-        match (x2 % 2, y2 % 2) {
-            (0, 0) => original.at(x, y),
-            (1, 1) => diagonal.at(x, y),
-            (1, _) => kernel(
-                &orthogonal(|dx, dy| (x + dx, y + dy), original, diagonal),
-                &PASS1,
-            ),
-            _ => kernel(
-                &orthogonal(|dx, dy| (x + dy, y + dx), original, diagonal),
-                &PASS1,
-            ),
-        }
-    })
+fn pass1(original: &Plane, diagonal: &Plane, threads: usize) -> Plane {
+    Plane::from_fn(
+        2 * original.width,
+        2 * original.height,
+        threads,
+        |x2, y2| {
+            let (x, y) = ((x2 / 2) as isize, (y2 / 2) as isize);
+            match (x2 % 2, y2 % 2) {
+                (0, 0) => original.at(x, y),
+                (1, 1) => diagonal.at(x, y),
+                (1, _) => kernel(
+                    &orthogonal(|dx, dy| (x + dx, y + dy), original, diagonal),
+                    &PASS1,
+                ),
+                _ => kernel(
+                    &orthogonal(|dx, dy| (x + dy, y + dx), original, diagonal),
+                    &PASS1,
+                ),
+            }
+        },
+    )
 }
 
 /// Pass 1's window for the texel right of original texel (x, y), its
@@ -448,8 +540,8 @@ fn orthogonal(
 /// Pass 2: each texel of the doubled image refined from the four round
 /// its top-left corner, which moves the image back by half a texel onto
 /// the 2x grid.
-fn pass2(doubled: &Plane) -> Plane {
-    Plane::from_fn(doubled.width, doubled.height, |x, y| {
+fn pass2(doubled: &Plane, threads: usize) -> Plane {
+    Plane::from_fn(doubled.width, doubled.height, threads, |x, y| {
         kernel(&square(doubled, x as isize - 1, y as isize - 1), &PASS2)
     })
 }
@@ -610,7 +702,7 @@ mod tests {
             &[0.0, 0.0, k, k],
             &[0.0, k, k, k],
         ]);
-        let diagonal = pass0(&source);
+        let diagonal = pass0(&source, 1);
         assert_eq!((diagonal.width, diagonal.height), (4, 4));
         assert_near(level(&diagonal, 1, 1), 0.03125);
     }
@@ -644,14 +736,14 @@ mod tests {
         let (a, b) = (1.0, 0.5);
         let original = greys(&[&[a, a, a], &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]]);
         let diagonal = greys(&[&[b, b, b], &[0.0, 0.0, 0.0], &[0.0, 0.0, 0.0]]);
-        let doubled = pass1(&original, &diagonal);
+        let doubled = pass1(&original, &diagonal, 1);
         assert_eq!((doubled.width, doubled.height), (6, 6));
         assert_near(level(&doubled, 3, 2), 0.009_713);
         // The transposed taps, below original (1, 1), on the transposed
         // planes.
         let original_t = greys(&[&[a, 0.0, 0.0], &[a, 0.0, 0.0], &[a, 0.0, 0.0]]);
         let diagonal_t = greys(&[&[b, 0.0, 0.0], &[b, 0.0, 0.0], &[b, 0.0, 0.0]]);
-        assert_near(level(&pass1(&original_t, &diagonal_t), 2, 3), 0.009_713);
+        assert_near(level(&pass1(&original_t, &diagonal_t, 1), 2, 3), 0.009_713);
         // Even-even texels are the original's, odd-odd ones the diagonal's.
         assert_eq!(level(&doubled, 2, 0), a);
         assert_eq!(level(&doubled, 4, 2), 0.0);
@@ -680,7 +772,7 @@ mod tests {
     #[test]
     fn pass_2_refines_a_texel_by_hyllians_formula() {
         let plane = greys(&[&[1.0, 1.0, 1.0], &[1.0, 0.0, 0.0], &[1.0, 0.0, 0.0]]);
-        let refined = pass2(&plane);
+        let refined = pass2(&plane, 1);
         assert_eq!((refined.width, refined.height), (3, 3));
         assert_near(level(&refined, 1, 1), 0.814_815);
     }
@@ -787,7 +879,7 @@ mod tests {
         // to alpha 0, and they must not keep a colour.
         let source = image(&[&[[255, 255, 255, 1], CLEAR], &[CLEAR, CLEAR]]);
         let original = Plane::premultiplied(&source);
-        let planes = pass2(&pass1(&original, &pass0(&original)));
+        let planes = pass2(&pass1(&original, &pass0(&original, 1), 1), 1);
         assert!(
             planes
                 .texels
@@ -870,6 +962,62 @@ mod tests {
         let enlarged = enlarge(&golden_source());
         assert_eq!((enlarged.width(), enlarged.height()), (12, 12));
         assert_eq!(enlarged.pixels(), GOLDEN);
+    }
+
+    #[test]
+    fn any_number_of_threads_enlarges_to_the_same_bytes() {
+        // Tall and wide enough for several bands of rows in every pass.
+        let (w, h) = (160_u32, 150_u32);
+        let pixels = (0..w * h)
+            .flat_map(|n| {
+                let v = |k: u32| ((n * k + n / 7 * 13) % 256) as u8;
+                [v(37), v(91), v(53), v(29)]
+            })
+            .collect();
+        let source = Image::from_rgba(w, h, pixels).expect("w x h");
+        let alone = enlarge_with(&source, 1);
+        for threads in [2, 3, 7, 64] {
+            assert!(enlarge_with(&source, threads) == alone, "{threads} threads");
+        }
+        assert!(enlarge(&source) == alone, "the machine's threads");
+        assert_eq!(enlarge_with(&golden_source(), 5).pixels(), GOLDEN);
+    }
+
+    /// Six 24x20 frames, each a different shade of a soft-edged blob.
+    fn sheet() -> Vec<Image> {
+        (0..6_u32)
+            .map(|n| {
+                let pixels = (0..20_u32)
+                    .flat_map(|y| (0..24_u32).map(move |x| (x, y)))
+                    .flat_map(|(x, y)| {
+                        let alpha =
+                            (255_u32.saturating_sub((x.abs_diff(12) + y.abs_diff(10)) * 20)) as u8;
+                        [(n * 40) as u8, (x * 10) as u8, (y * 12) as u8, alpha]
+                    })
+                    .collect();
+                Image::from_rgba(24, 20, pixels).expect("24x20")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_sheets_frames_spread_over_threads_enlarge_as_each_alone() {
+        let frames = sheet();
+        let alone: Vec<Image> = frames.iter().map(|f| enlarge_with(f, 1)).collect();
+        for threads in [1, 2, 4, 5, 64] {
+            assert!(enlarge_all(&frames, threads) == alone, "{threads} threads");
+        }
+        assert_eq!(enlarge_all(&[], 4), Vec::<Image>::new());
+        let turned = SuperXbr.enlarge_frames(ImageKind::Rled, &frames);
+        assert_eq!(turned.len(), frames.len());
+        assert!(turned.iter().zip(&alone).all(|(got, want)| **got == *want));
+        let patterns = SuperXbr.enlarge_frames(ImageKind::Pattern, &frames);
+        assert!(
+            patterns.iter().zip(&frames).all(
+                |(got, frame)| matches!(got, Cow::Borrowed(same) if std::ptr::eq(*same, frame))
+            ),
+            "patterns borrowed"
+        );
     }
 
     #[test]
