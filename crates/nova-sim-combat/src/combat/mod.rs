@@ -308,6 +308,7 @@ pub mod hull;
 pub mod impact;
 pub mod ion;
 pub mod jamming;
+pub mod phases;
 pub mod plunder;
 pub mod projectile;
 pub mod report;
@@ -334,6 +335,7 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
 use jamming::Jamming;
+pub use phases::Arena;
 use plunder::Plunderer;
 use projectile::{
     BombLaunch, DecayStep, Fuse, Guide, Jam, LockAngle, Meeting, ProximityFuse, Shot, ShotId,
@@ -916,7 +918,7 @@ pub struct Field {
 
 /// A hit that landed on a ship in the hit pass or in step 8, before it
 /// is taken.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Landed {
     /// The ship hit.
     ship: ShipRef,
@@ -948,7 +950,7 @@ struct Landed {
 
 /// How a hit that landed pushes its ship ([`impact`]): `_DamageShip`'s
 /// point and `Impact`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Push {
     /// Where it pushes the ship from (`_DamageShip`'s arg +0xc): where
     /// its shot met the ship, its blast's centre, or its beam's start.
@@ -1095,6 +1097,13 @@ pub struct Combat {
     /// caps each still holds its slot through the next tick's firing (see
     /// [`Combat::beam_room`]).
     ended_beams: usize,
+    /// The ships whose breakup the collision passes began this tick, whose
+    /// first tick takes no tick off (step 9); the close of the tick
+    /// clears them.
+    begun: Vec<ShipRef>,
+    /// The tick's missile locks, found as the shots fly (step 6), yet to
+    /// land.
+    locks: Vec<Landed>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -1160,92 +1169,20 @@ impl Combat {
         scenery: Scenery<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.field = field;
-        // A `dyn` source over the caller's, which may be unsized.
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        // Step 1: the player's point defence and trigger, as `_HandlePlayer`
-        // calls them (@0x68c74, then @0x6ab55) before the collision passes.
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.defend(
-            fighters,
-            &targets,
-            (rules.defence, govts),
-            chance,
-            Firers::Player,
-        );
-        self.fire(fighters, &targets, chance, Firers::Player);
-        // Steps 2 and 3: the last tick's moves tested, and the struck
-        // ships' conditions settled.
-        let begun = self.hit_pass(fighters, (govts, arsenal), rules.disable, scenery, chance);
-        // Step 4: the NPCs' point defence, as `_AIDispatch` runs it
-        // (@0x4429d), then their picks, as `_HandleShip` fires them
-        // (@0x44483), reading the conditions the pass left, as `_HandleShip`
-        // reads `_IsDisabled` after the passes.
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let sides = Sides {
-            targets: &targets,
+        let arena = Arena {
+            pass,
+            arsenal,
             govts,
-            pass_through: self.pass_through,
+            rules,
+            field,
         };
-        self.defend(
-            fighters,
-            &targets,
-            (rules.defence, govts),
-            chance,
-            Firers::Npcs,
-        );
-        self.fire(fighters, &targets, chance, Firers::Npcs);
-        // Step 5.
-        for fighter in fighters.iter_mut() {
-            fighter.armament.reload();
-        }
-        // Step 6.
-        let beams_held = self.beams.len();
-        self.fly(fighters, &targets, chance);
-        self.move_beams(fighters, &targets, pass, chance);
-        let locks: Vec<Landed> = self
-            .shots
-            .iter()
-            .filter_map(|shot| lock(shot, &sides))
-            .collect();
-        self.hold_reloads(fighters);
-        // Steps 7 and 8.
-        self.ended_shots = 0;
-        if pass.beams_act() {
-            self.hold_on_missiles(pass.beam_damage());
-        }
-        let first_strike = self.strikes.len();
-        let mut hits = locks;
-        if pass.beams_act() {
-            hits.extend(self.beam_hits(fighters, &sides, pass.beam_damage()));
-        }
-        self.land(fighters, hits, rules.disable);
-        // Steps 9 to 10.
-        for fighter in fighters.iter_mut() {
-            let struck = self.strikes[first_strike..]
-                .iter()
-                .any(|strike| strike.ship == fighter.ship);
-            if struck {
-                truncate_downed_player(fighter, rules.disable);
-            }
-            // A breakup the hit pass began takes no tick off on its first
-            // tick (@0x2d834-0x2d850).
-            if begun.contains(&fighter.ship) {
-                continue;
-            }
-            let downed = self.update_condition(fighter, rules.disable);
-            self.mark_downed(first_strike, fighter.ship, downed);
-        }
-        self.shock(fighters, rules.disable);
-        for fighter in fighters.iter_mut() {
-            regenerate(fighter);
-        }
-        self.ended_beams = beams_held.saturating_sub(self.beams.len());
-        self.stood = fighters
-            .iter()
-            .map(|fighter| (fighter.ship, fighter.state.position))
-            .collect();
+        self.defend_player(fighters, arena, chance);
+        self.fire_player(fighters, arena, chance);
+        self.test_hits(fighters, arena, scenery, chance);
+        self.defend_npcs(fighters, arena, chance);
+        self.fire_npcs(fighters, arena, chance);
+        self.fly_shots(fighters, arena, chance);
+        self.close_tick(fighters, arena, chance);
     }
 
     /// Marks the last strike on `ship` since `first_strike`, but a missile
@@ -1940,7 +1877,7 @@ impl Combat {
                     .find(|target| target.ship == ship && target.condition.standing())
             });
             if fighter.ship == ShipRef::Player {
-                self.fire_player(fighter, target, targets, chance);
+                self.pull_player_trigger(fighter, target, targets, chance);
                 continue;
             }
             let (state, hull) = (fighter.state, fighter.hull);
@@ -2014,7 +1951,7 @@ impl Combat {
     ///
     /// Each call reads the ship as the call before left it, as the
     /// original's does: a recoil moves the later weapons' shots on.
-    fn fire_player(
+    fn pull_player_trigger(
         &mut self,
         fighter: &mut Fighter,
         target: Option<&Target>,
@@ -3195,6 +3132,8 @@ impl Combat {
         self.ended_shots = 0;
         self.ended_beams = 0;
         self.stood.clear();
+        self.begun.clear();
+        self.locks.clear();
     }
 }
 
