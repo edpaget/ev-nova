@@ -19,6 +19,7 @@ mod stock_crons;
 mod stock_escape_pod;
 mod stock_galaxy_map;
 mod stock_galaxy_visibility;
+mod stock_inertialess;
 mod stock_mission_ships;
 mod stock_missions;
 mod stock_news;
