@@ -14,6 +14,7 @@ nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
+nova-metalfx = { path = "crates/nova-metalfx" }
 nova-sim = { path = "crates/nova-sim" }
 nova-sim-base = { path = "crates/nova-sim-base" }
 nova-sim-catalog = { path = "crates/nova-sim-catalog" }
