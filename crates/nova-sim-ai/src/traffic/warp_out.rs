@@ -110,7 +110,7 @@ use std::collections::BTreeMap;
 use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::flight::{Controls, FlightRules};
+use crate::flight::{Controls, FlightRules, turned};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::Outcome;
@@ -454,21 +454,10 @@ pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Ine
     match inertia {
         Inertia::Inertial => step(npc, handling, controls, flight, inertia),
         Inertia::Inertialess { .. } => {
-            npc.state.heading = turned(npc.state.heading, controls, handling);
+            npc.state.heading = turned(npc.state.heading, controls.turn, handling.turn_rate);
             inertialess::drift(npc, handling);
         }
     }
-}
-
-/// `heading` turned a tick as `controls` say at `handling`'s turn rate,
-/// kept within 0-360.
-fn turned(heading: f32, controls: Controls, handling: &Handling) -> f32 {
-    let by = match controls.turn {
-        crate::flight::Turn::Left => -handling.turn_rate,
-        crate::flight::Turn::Right => handling.turn_rate,
-        crate::flight::Turn::None => 0.0,
-    };
-    (heading + by).rem_euclid(360.0)
 }
 
 /// Whether `outcome` is the departure of an own jump.
@@ -1177,6 +1166,20 @@ mod tests {
         ship.warp.aim = 2;
         fly(&mut ship, &handling, FlightRules::default(), inertialess);
         assert_eq!(ship.state.heading, 2.0, "there");
+    }
+
+    #[test]
+    fn an_inertialess_jumping_ship_turned_a_hair_past_north_faces_north() {
+        let mut ship = warping(3.0, 0);
+        ship.state.heading = 2.0;
+        ship.warp.aim = 300;
+        let handling = Handling {
+            turn_rate: 2.000_000_2,
+            ..ship.stats.handling
+        };
+        let inertialess = Inertia::Inertialess { speed: 0.0 };
+        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        assert_eq!(ship.state.heading, 0.0, "within [0, 360)");
     }
 
     #[test]

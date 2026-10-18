@@ -257,12 +257,10 @@ pub fn step(
 ) {
     let rate = handling.turn_rate;
     state.heading = match controls.turn {
-        Turn::Left => normalized(state.heading - rate),
-        Turn::Right => normalized(state.heading + rate),
         Turn::None if controls.reverse && state.velocity.length() > rules.at_rest_speed() => {
             turn_toward(state.heading, heading_of(state.velocity * -1.0), rate)
         }
-        Turn::None => state.heading,
+        turn => turned(state.heading, turn, rate),
     };
     let caps = Caps::top(handling.max_speed);
     advance(state, handling, controls.thrust, caps, rules, flyer);
@@ -342,12 +340,7 @@ pub fn inertialess_step(
     controls: Controls,
     rules: FlightRules,
 ) {
-    let rate = handling.turn_rate;
-    state.heading = match controls.turn {
-        Turn::Left => normalized(state.heading - rate),
-        Turn::Right => normalized(state.heading + rate),
-        Turn::None => state.heading,
-    };
+    state.heading = turned(state.heading, controls.turn, handling.turn_rate);
     let thrust = if controls.thrust {
         THRUST
     } else if controls.reverse {
@@ -432,6 +425,17 @@ pub fn inertialess_advance(
         (SpeedCap::Circle, _) => circle(state.velocity, top),
     };
     state.position = state.position + state.velocity;
+}
+
+/// `heading` turned a tick by the turn keys, `turn`, at `rate` degrees a
+/// tick: an NPC's turn, kept within `[0, 360)` ([`normalized`]).
+#[must_use]
+pub fn turned(heading: f32, turn: Turn, rate: f32) -> f32 {
+    match turn {
+        Turn::Left => normalized(heading - rate),
+        Turn::Right => normalized(heading + rate),
+        Turn::None => heading,
+    }
 }
 
 /// Heading `from` turned towards heading `to` the short way, by at most
@@ -655,6 +659,19 @@ mod tests {
         assert_eq!(after(heading(0.0), turning(Turn::Left), 1).heading, 357.0);
         assert_eq!(after(heading(357.0), turning(Turn::Right), 1).heading, 0.0);
         assert_eq!(after(heading(0.0), turning(Turn::Right), 120).heading, 0.0);
+    }
+
+    #[test]
+    fn a_turn_by_the_keys_wraps_within_0_to_360() {
+        assert_eq!(turned(90.0, Turn::Left, 3.0), 87.0);
+        assert_eq!(turned(359.0, Turn::Right, 3.0), 2.0);
+        assert_eq!(turned(1.0, Turn::Left, 3.0), 358.0);
+        assert_eq!(turned(90.0, Turn::None, 3.0), 90.0);
+        assert_eq!(
+            turned(2.0, Turn::Left, 2.000_000_2),
+            0.0,
+            "a hair past north rounds to 360, which wraps"
+        );
     }
 
     #[test]
