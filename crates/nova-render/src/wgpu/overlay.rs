@@ -58,6 +58,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
         self.gpu.upload(page, at, image);
     }
 
+    fn clear_pages(&mut self) {
+        self.gpu.clear_pages();
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.gpu.submit_with(frame, self.painter);
     }
@@ -89,6 +93,7 @@ mod tests {
     enum Call {
         CreatePage(PageId, u32),
         Upload(PageId, PixelRect, Image),
+        ClearPages,
         Submit(Frame),
         SubmitWith(Frame, *const ()),
         SetUpscaler(Upscaler),
@@ -110,6 +115,10 @@ mod tests {
 
         fn upload(&mut self, page: PageId, at: PixelRect, image: &Image) {
             self.calls.push(Call::Upload(page, at, image.clone()));
+        }
+
+        fn clear_pages(&mut self) {
+            self.calls.push(Call::ClearPages);
         }
 
         fn submit(&mut self, frame: &Frame) {
@@ -223,12 +232,14 @@ mod tests {
             };
             with.create_page(PageId(2), 256);
             with.upload(PageId(2), at, &image);
+            with.clear_pages();
         }
         assert_eq!(
             gpu.calls,
             [
                 Call::CreatePage(PageId(2), 256),
-                Call::Upload(PageId(2), at, image)
+                Call::Upload(PageId(2), at, image),
+                Call::ClearPages
             ]
         );
     }

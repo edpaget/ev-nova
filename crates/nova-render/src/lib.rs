@@ -18,6 +18,11 @@
 //!   and turns a draw list into batches in draw order, keeping flight's
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
 //!   batch holds both.
+//! - [`enlarge`]: the [`Enlarger`] port, the load-time scaling site: what
+//!   the atlas holds for each decoded frame, which the [`Renderer`] draws
+//!   at the frame's own logical size. [`NativeDetail`] holds each frame
+//!   as it decodes; a new enlarger ([`Renderer::set_enlarger`]) starts the
+//!   atlas afresh at the next frame ([`Gpu::clear_pages`]).
 //! - [`upscale`]: the [`Upscaler`] the adapter draws the world with
 //!   ([`Gpu::set_upscaler`]), the [`UpscalerProbe`] port that says which
 //!   the device can use and the list the player picks from ([`listed`]),
@@ -70,6 +75,7 @@
 
 pub mod atlas;
 pub mod batch;
+pub mod enlarge;
 pub mod fonts;
 pub mod gpu;
 pub mod images;
@@ -83,6 +89,7 @@ pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
+pub use enlarge::{Enlarger, NativeDetail};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};

@@ -35,6 +35,8 @@ pub enum GpuCall {
         /// A hash of the image's pixels.
         pixels_hash: u64,
     },
+    /// [`Gpu::clear_pages`].
+    ClearPages,
     /// [`Gpu::submit`].
     Submit(Frame),
 }
@@ -148,6 +150,10 @@ impl Gpu for RecordingGpu {
         self.calls.push(GpuCall::upload(page, at, image));
     }
 
+    fn clear_pages(&mut self) {
+        self.calls.push(GpuCall::ClearPages);
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.calls.push(GpuCall::Submit(frame.clone()));
     }
@@ -204,6 +210,23 @@ mod tests {
         assert_eq!(gpu.world_resolution(), WorldResolution::Logical);
         gpu.set_upscaler(Upscaler::Native);
         assert_eq!(gpu.world_resolution(), WorldResolution::Native);
+    }
+
+    #[test]
+    fn clearing_the_pages_is_a_call_recorded_in_order() {
+        let mut gpu = RecordingGpu::new();
+        gpu.create_page(PageId(0), 64);
+        gpu.clear_pages();
+        assert_eq!(
+            gpu.calls,
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::ClearPages
+            ]
+        );
     }
 
     #[test]

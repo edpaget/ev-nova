@@ -20,6 +20,9 @@ pub trait Gpu {
     fn create_page(&mut self, page: PageId, size: u32);
     /// Copies `image` onto page `page` at `at` (the image's size).
     fn upload(&mut self, page: PageId, at: PixelRect, image: &Image);
+    /// Drops every atlas page, for an atlas started afresh: the next page
+    /// created is page 0 again.
+    fn clear_pages(&mut self);
     /// Draws `frame` to the window or target.
     fn submit(&mut self, frame: &Frame);
     /// The resolution it draws the world layer at, which decides each

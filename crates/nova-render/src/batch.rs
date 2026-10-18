@@ -3,11 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use nova_data::graphics::Image;
 use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
 use nova_view::{Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageKind, Point};
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
+use crate::enlarge::{Enlarger, NativeDetail};
 use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 use crate::images::{ImageError, ImageSource};
 use crate::upscale::world_space;
@@ -24,33 +26,51 @@ pub struct RenderReport {
     pub new_failures: Vec<(ImageKey, ImageError)>,
 }
 
+/// A frame's place in the atlas and the size it is drawn at.
+#[derive(Clone, Copy, Debug)]
+struct Placed {
+    /// Where the atlas holds it, perhaps enlarged.
+    entry: AtlasEntry,
+    /// The decoded frame's width and height: the logical size it is drawn
+    /// at, whatever size the atlas holds it.
+    size: (f32, f32),
+}
+
 /// One resource's frames once it has been asked for.
 #[derive(Debug)]
 enum Resident {
     /// Each frame's placement, or why it has none.
-    Frames(Vec<Result<AtlasEntry, ImageError>>),
+    Frames(Vec<Result<Placed, ImageError>>),
     /// The whole resource failed.
     Failed,
 }
 
 /// Turns draw lists into frames for a [`Gpu`], packing images into the
-/// atlas the first time a draw list names them.
+/// atlas the first time a draw list names them, each as its [`Enlarger`]
+/// turns it, and drawing each at its own logical size.
 #[derive(Debug)]
 pub struct Renderer<S> {
     images: S,
     atlas: Atlas,
     resident: HashMap<(ImageKind, i16), Resident>,
     reported: HashSet<ImageKey>,
+    /// What each decoded frame becomes in the atlas.
+    enlarger: Box<dyn Enlarger>,
+    /// Whether the atlas starts afresh at the next frame, for a new
+    /// enlarger.
+    rebuild: bool,
 }
 
 impl<S: ImageSource> Renderer<S> {
-    /// A renderer drawing images from `images` on [`PAGE_SIZE`] pages.
+    /// A renderer drawing images from `images` on [`PAGE_SIZE`] pages, as
+    /// they decode ([`NativeDetail`]).
     #[must_use]
     pub fn new(images: S) -> Self {
         Self::with_page_size(images, PAGE_SIZE)
     }
 
-    /// A renderer drawing images from `images` on `page_size` pages.
+    /// A renderer drawing images from `images` on `page_size` pages, as
+    /// they decode ([`NativeDetail`]).
     #[must_use]
     pub fn with_page_size(images: S, page_size: u32) -> Self {
         Self {
@@ -58,12 +78,39 @@ impl<S: ImageSource> Renderer<S> {
             atlas: Atlas::new(page_size),
             resident: HashMap::new(),
             reported: HashSet::new(),
+            enlarger: Box::new(NativeDetail),
+            rebuild: false,
         }
     }
 
     /// The image source.
     pub fn images(&self) -> &S {
         &self.images
+    }
+
+    /// Places images in the atlas as `enlarger` turns them from the next
+    /// frame drawn on. That frame starts the atlas afresh: it drops every
+    /// page on the GPU ([`Gpu::clear_pages`], when any is open) and every
+    /// image placed, then loads again, through `enlarger`, each image it
+    /// draws. A resource that failed as a whole stays failed, and no
+    /// failure is reported again. It needs no GPU, so it can be called
+    /// before the first frame.
+    pub fn set_enlarger(&mut self, enlarger: Box<dyn Enlarger>) {
+        self.enlarger = enlarger;
+        self.rebuild = true;
+    }
+
+    /// Starts the atlas afresh, if a new enlarger asks it to.
+    fn rebuild(&mut self, gpu: &mut impl Gpu) {
+        if !std::mem::take(&mut self.rebuild) {
+            return;
+        }
+        if self.atlas.page_count() > 0 {
+            gpu.clear_pages();
+        }
+        self.atlas = Atlas::new(self.atlas.page_size());
+        self.resident
+            .retain(|_, resident| matches!(resident, Resident::Failed));
     }
 
     /// Draws `list` into `viewport` through `gpu`: uploads images seen for
@@ -78,6 +125,9 @@ impl<S: ImageSource> Renderer<S> {
     /// marked world ([`Frame::world`]). The world is drawn where `gpu`'s
     /// resolution for it says ([`world_space`]). Text is never world, so
     /// every text run is in target pixels.
+    ///
+    /// A frame drawn after [`Renderer::set_enlarger`] first starts the
+    /// atlas afresh; a zero-area viewport leaves that to the next frame.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -88,6 +138,7 @@ impl<S: ImageSource> Renderer<S> {
         let (Some((rect, _)), Some(scale)) = (viewport.content(), viewport.axis_scales()) else {
             return report;
         };
+        self.rebuild(gpu);
         let target = Target { rect, scale };
         let mut layers = Layers::default();
         for (layer, command) in list.layered() {
@@ -127,8 +178,11 @@ impl<S: ImageSource> Renderer<S> {
                 tint,
                 blend,
             } => {
-                if let Some(entry) = self.entry(image, gpu, report) {
-                    let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
+                if let Some(Placed {
+                    entry,
+                    size: (w, h),
+                }) = self.entry(image, gpu, report)
+                {
                     let dest = Rect {
                         x: center.x - w / 2.0,
                         y: center.y - h / 2.0,
@@ -177,9 +231,9 @@ impl<S: ImageSource> Renderer<S> {
                 if let Some(area) = area
                     && drawable(area.width())
                     && drawable(area.height())
-                    && let Some(entry) = self.entry(image, gpu, report)
+                    && let Some(placed) = self.entry(image, gpu, report)
                 {
-                    push_tiles(batches, &entry, area, origin);
+                    push_tiles(batches, &placed.entry, placed.size, area, origin);
                 }
             }
             DrawCommand::Text {
@@ -282,8 +336,8 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) {
-        if let Some(entry) = self.entry(image, gpu, report) {
-            let (w, h) = size.unwrap_or((entry.rect.w as f32, entry.rect.h as f32));
+        if let Some(Placed { entry, size: own }) = self.entry(image, gpu, report) {
+            let (w, h) = size.unwrap_or(own);
             let dest = Rect {
                 x: top_left.x,
                 y: top_left.y,
@@ -303,7 +357,7 @@ impl<S: ImageSource> Renderer<S> {
         key: ImageKey,
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
-    ) -> Option<AtlasEntry> {
+    ) -> Option<Placed> {
         let resource = (key.kind, key.id);
         if !self.resident.contains_key(&resource) {
             let loaded = self.load(key, gpu, report);
@@ -313,7 +367,7 @@ impl<S: ImageSource> Renderer<S> {
             return None;
         };
         let error = match frames.get(usize::from(key.frame)) {
-            Some(Ok(entry)) => return Some(*entry),
+            Some(Ok(placed)) => return Some(*placed),
             Some(Err(error)) => error.clone(),
             None => ImageError::NoFrame {
                 frame: key.frame,
@@ -336,17 +390,35 @@ impl<S: ImageSource> Renderer<S> {
             Ok(frames) => Resident::Frames(
                 frames
                     .iter()
-                    .map(|image| {
-                        let entry = self.atlas.place(image.width(), image.height())?;
-                        if entry.opened {
-                            gpu.create_page(entry.page, self.atlas.page_size());
-                        }
-                        gpu.upload(entry.page, entry.rect, image);
-                        Ok(entry)
-                    })
+                    .map(|image| self.place(key.kind, image, gpu))
                     .collect(),
             ),
         }
+    }
+
+    /// Places `image`, a frame of a `kind` resource, in the atlas as the
+    /// enlarger turns it, and uploads it. An enlarged frame too big for a
+    /// page is placed as it decoded instead, so every frame that fits
+    /// natively draws.
+    fn place(
+        &mut self,
+        kind: ImageKind,
+        image: &Image,
+        gpu: &mut impl Gpu,
+    ) -> Result<Placed, ImageError> {
+        let enlarged = self.enlarger.enlarge(kind, image);
+        let (entry, held) = match self.atlas.place(enlarged.width(), enlarged.height()) {
+            Ok(entry) => (entry, enlarged.as_ref()),
+            Err(_) => (self.atlas.place(image.width(), image.height())?, image),
+        };
+        if entry.opened {
+            gpu.create_page(entry.page, self.atlas.page_size());
+        }
+        gpu.upload(entry.page, entry.rect, held);
+        Ok(Placed {
+            entry,
+            size: (image.width() as f32, image.height() as f32),
+        })
     }
 }
 
@@ -465,12 +537,18 @@ fn drawable(side: f32) -> bool {
     side.is_finite() && side > 0.0
 }
 
-/// Appends the quads tiling `area` with `entry`'s picture: copies of it
-/// edge to edge from `origin`, each cut to `area` with its texture
-/// coordinates cut to match. A picture with no size draws nothing: its
-/// first edge, a division by 0 times 0, is NaN, which no loop runs past.
-fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds, origin: Point) {
-    let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
+/// Appends the quads tiling `area` with `entry`'s picture, each tile `(w,
+/// h)`, the picture's logical size: copies of it edge to edge from
+/// `origin`, each cut to `area` with its texture coordinates cut to
+/// match. A picture with no size draws nothing: its first edge, a
+/// division by 0 times 0, is NaN, which no loop runs past.
+fn push_tiles(
+    batches: &mut Vec<Batch>,
+    entry: &AtlasEntry,
+    (w, h): (f32, f32),
+    area: Bounds,
+    origin: Point,
+) {
     let uv = entry.uv;
     let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
     let mut top = ((area.min.y - origin.y) / h).floor().mul_add(h, origin.y);
@@ -604,14 +682,17 @@ fn square(center: Point, size: f32) -> [Point; 4] {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     use nova_data::graphics::Image;
     use nova_view::draw::lights_tint;
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
+    use crate::enlarge::{Enlarger, NativeDetail};
     use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
     use crate::recording::{GpuCall, RecordingGpu};
     use crate::upscale::WorldResolution;
@@ -1074,12 +1155,26 @@ mod tests {
             opened: false,
         };
         let origin = at(0.0, 0.0);
-        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0), origin);
+        let tile = (0.0, 16.0);
+        push_tiles(
+            &mut batches,
+            &entry,
+            tile,
+            area(0.0, 0.0, 20.0, 20.0),
+            origin,
+        );
         let entry = AtlasEntry {
             rect: rect(0, 0, 16, 0),
             ..entry
         };
-        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0), origin);
+        let tile = (16.0, 0.0);
+        push_tiles(
+            &mut batches,
+            &entry,
+            tile,
+            area(0.0, 0.0, 20.0, 20.0),
+            origin,
+        );
         assert_eq!(batches, vec![]);
     }
 
@@ -2347,6 +2442,357 @@ mod tests {
                 (WORLD, Some(rect(15, 14, 10, 12))),
                 (OVERLAY, Some(rect(15, 14, 10, 12))),
             ]
+        );
+    }
+
+    /// Replicates each texel 2x2 for every kind, patterns included, and
+    /// records the kinds it is asked about.
+    #[derive(Debug, Default)]
+    struct Doubled {
+        kinds: Rc<RefCell<Vec<ImageKind>>>,
+    }
+
+    impl Enlarger for Doubled {
+        fn enlarge<'a>(&self, kind: ImageKind, image: &'a Image) -> Cow<'a, Image> {
+            self.kinds.borrow_mut().push(kind);
+            Cow::Owned(doubled(image))
+        }
+    }
+
+    /// `image` with each texel replicated 2x2.
+    fn doubled(image: &Image) -> Image {
+        let (w, h) = (image.width(), image.height());
+        let pixels = (0..h * 2)
+            .flat_map(|y| (0..w * 2).flat_map(move |x| image.pixel(x / 2, y / 2).expect("inside")))
+            .collect();
+        Image::from_rgba(w * 2, h * 2, pixels).expect("doubled")
+    }
+
+    /// The renderer on 64-texel pages, enlarging with [`Doubled`].
+    fn doubling(images: FakeImages) -> Renderer<FakeImages> {
+        let mut renderer = renderer(images);
+        renderer.set_enlarger(Box::new(Doubled::default()));
+        renderer
+    }
+
+    /// Every textured quad of `frame`, in draw order.
+    fn all_quads(frame: &Frame) -> Vec<QuadInstance> {
+        frame
+            .batches
+            .iter()
+            .flat_map(|batch| match batch {
+                Batch::Sprites { quads, .. } => quads.clone(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// The quads `renderer` draws `list` with, reporting no failure.
+    fn quads_of(mut renderer: Renderer<FakeImages>, list: &DrawList) -> Vec<QuadInstance> {
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(list, &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        all_quads(gpu.submits()[0])
+    }
+
+    /// `uv` twice as far from the page's corner: an image at the corner
+    /// placed at twice its size.
+    fn twice(uv: Uv) -> Uv {
+        Uv {
+            u0: uv.u0 * 2.0,
+            v0: uv.v0 * 2.0,
+            u1: uv.u1 * 2.0,
+            v1: uv.v1 * 2.0,
+        }
+    }
+
+    #[test]
+    fn an_enlarged_picture_and_sprite_upload_twice_their_size_and_draw_at_their_own() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(10.0, 20.0)).sprite(
+            ImageKey::sprite(200, 2),
+            at(30.5, 40.25),
+            Color::WHITE,
+        );
+        let native = quads_of(renderer(images()), &list);
+        let mut renderer = doubling(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        let sheet = sheet();
+        // The 16x8 picture fills the first shelf, and the 10x12 frames
+        // start a second below it and its gutter.
+        assert_eq!(
+            gpu.calls[..5],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 16, 8), &doubled(&red_picture())),
+                GpuCall::upload(PageId(0), rect(0, 9, 10, 12), &doubled(&sheet[0])),
+                GpuCall::upload(PageId(0), rect(11, 9, 10, 12), &doubled(&sheet[1])),
+                GpuCall::upload(PageId(0), rect(22, 9, 10, 12), &doubled(&sheet[2])),
+            ]
+        );
+        let enlarged = all_quads(gpu.submits()[0]);
+        let dests: Vec<Rect> = enlarged.iter().map(|quad| quad.dest).collect();
+        assert_eq!(
+            dests,
+            native.iter().map(|quad| quad.dest).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            dests[1],
+            Rect {
+                x: 28.0,
+                y: 37.25,
+                w: 5.0,
+                h: 6.0
+            },
+            "the sprite's own size, centred to the quarter unit"
+        );
+        let uvs: Vec<Uv> = enlarged.iter().map(|quad| quad.uv).collect();
+        assert_eq!(uvs, [uv(0, 0, 16, 8), uv(22, 9, 10, 12)]);
+    }
+
+    #[test]
+    fn enlarged_stretched_clipped_and_tiled_images_keep_their_places_and_take_the_bigger_rect() {
+        let mut picture = DrawList::new();
+        picture.picture(ImageKey::picture(128), at(1.25, 2.5));
+        let mut stretched = DrawList::new();
+        stretched.stretched_picture(ImageKey::picture(128), at(-2.5, 3.0), 20.0, 1.5);
+        let mut clipped = DrawList::new();
+        let sprite = DrawCommand::Sprite {
+            image: ImageKey::sprite(200, 0),
+            center: at(30.0, 40.0),
+            tint: Color::WHITE,
+            blend: Blend::Normal,
+        };
+        clipped.clipped(bounds(28.5, 38.0, 30.0, 40.0), sprite);
+        let mut tiled = DrawList::new();
+        tiled.tiled_picture(ImageKey::pattern(130), area(10.0, 5.0, 50.0, 45.0));
+        for list in [picture, stretched, clipped, tiled] {
+            // Each image alone at its page's corner, so the enlarged one's
+            // texture coordinates are the native one's doubled.
+            let native = quads_of(renderer(tiles()), &list);
+            let enlarged = quads_of(doubling(tiles()), &list);
+            assert!(!native.is_empty(), "{list:?}");
+            let expected: Vec<QuadInstance> = native
+                .iter()
+                .map(|quad| QuadInstance {
+                    uv: twice(quad.uv),
+                    ..*quad
+                })
+                .collect();
+            assert_eq!(enlarged, expected, "{list:?}");
+        }
+    }
+
+    #[test]
+    fn an_enlarged_frame_too_big_for_a_page_falls_back_to_its_native_frame() {
+        let fits = solid(40, 4, [3, 3, 3, 255]);
+        let images = FakeImages::default()
+            .with(ImageKind::Pict, 1, vec![fits.clone()])
+            .with(ImageKind::Pict, 2, vec![solid(70, 2, [4, 4, 4, 255])]);
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(1), at(1.0, 2.0))
+            .picture(ImageKey::picture(2), at(0.0, 0.0));
+        let mut renderer = doubling(images);
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(
+            report.new_failures,
+            [(
+                ImageKey::picture(2),
+                ImageError::Pack(PackError::TooLarge {
+                    width: 70,
+                    height: 2,
+                    page: 64
+                })
+            )],
+            "only what is too big natively fails"
+        );
+        assert_eq!(
+            gpu.calls[..2],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 40, 4), &fits),
+            ]
+        );
+        assert_eq!(
+            all_quads(gpu.submits()[0]),
+            [QuadInstance {
+                dest: Rect {
+                    x: 1.0,
+                    y: 2.0,
+                    w: 40.0,
+                    h: 4.0
+                },
+                uv: uv(0, 0, 40, 4),
+                tint: WHITE,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_new_enlarger_clears_the_pages_and_the_next_frame_reloads_what_it_draws() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(10.0, 20.0)).sprite(
+            ImageKey::sprite(200, 2),
+            at(30.0, 40.0),
+            Color::WHITE,
+        );
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let native = all_quads(gpu.take().last().and_then(submitted).expect("a frame"));
+        let kinds = Rc::new(RefCell::new(Vec::new()));
+        renderer.set_enlarger(Box::new(Doubled {
+            kinds: Rc::clone(&kinds),
+        }));
+
+        renderer.render(&list, &viewport(), &mut gpu);
+
+        let sheet = sheet();
+        assert_eq!(
+            gpu.calls[..6],
+            [
+                GpuCall::ClearPages,
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 16, 8), &doubled(&red_picture())),
+                GpuCall::upload(PageId(0), rect(0, 9, 10, 12), &doubled(&sheet[0])),
+                GpuCall::upload(PageId(0), rect(11, 9, 10, 12), &doubled(&sheet[1])),
+                GpuCall::upload(PageId(0), rect(22, 9, 10, 12), &doubled(&sheet[2])),
+            ]
+        );
+        let rebuilt = all_quads(gpu.submits()[0]);
+        let dests = |quads: &[QuadInstance]| quads.iter().map(|q| q.dest).collect::<Vec<_>>();
+        assert_eq!(dests(&rebuilt), dests(&native));
+        assert_eq!(
+            *kinds.borrow(),
+            [
+                ImageKind::Pict,
+                ImageKind::Rled,
+                ImageKind::Rled,
+                ImageKind::Rled
+            ]
+        );
+        assert_eq!(
+            renderer.images().calls(),
+            [
+                (ImageKind::Pict, 128),
+                (ImageKind::Rled, 200),
+                (ImageKind::Pict, 128),
+                (ImageKind::Rled, 200)
+            ],
+            "decoded again"
+        );
+
+        gpu.take();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let again = only_submit(&gpu.calls);
+        assert_eq!(all_quads(again), rebuilt, "a second frame uploads nothing");
+    }
+
+    /// The frame `call` submits, if it is a submit.
+    fn submitted(call: &GpuCall) -> Option<&Frame> {
+        match call {
+            GpuCall::Submit(frame) => Some(frame),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn pages_are_cleared_only_by_a_new_enlarger_once_some_are_open() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0));
+        let mut never = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        never.render(&list, &viewport(), &mut gpu);
+        never.render(&list, &viewport(), &mut gpu);
+        assert!(!gpu.calls.contains(&GpuCall::ClearPages), "never set");
+
+        let mut early = doubling(images());
+        let mut gpu = RecordingGpu::new();
+        early.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            gpu.take()[..2],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 16, 8), &doubled(&red_picture())),
+            ],
+            "no page to clear"
+        );
+
+        early.set_enlarger(Box::new(NativeDetail));
+        early.render(&list, &viewport(), &mut gpu);
+        assert_eq!(
+            gpu.calls[..3],
+            [
+                GpuCall::ClearPages,
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 8, 4), &red_picture()),
+            ]
+        );
+    }
+
+    #[test]
+    fn after_a_rebuild_failures_stay_failed_and_are_not_reported_again() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(99), at(0.0, 0.0))
+            .sprite(ImageKey::sprite(200, 7), at(0.0, 0.0), Color::WHITE)
+            .picture(ImageKey::picture(128), at(0.0, 0.0));
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        let first = renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(first.new_failures.len(), 2, "{first:?}");
+        renderer.set_enlarger(Box::new(Doubled::default()));
+        gpu.take();
+
+        let again = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(again, RenderReport::default());
+        assert_eq!(
+            renderer.images().calls(),
+            [
+                (ImageKind::Pict, 99),
+                (ImageKind::Rled, 200),
+                (ImageKind::Pict, 128),
+                (ImageKind::Rled, 200),
+                (ImageKind::Pict, 128)
+            ],
+            "the missing picture is not asked for again"
+        );
+        assert_eq!(gpu.calls[0], GpuCall::ClearPages);
+        assert_eq!(
+            all_quads(gpu.submits()[0]),
+            [QuadInstance {
+                dest: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 4.0
+                },
+                uv: uv(33, 0, 16, 8),
+                tint: WHITE,
+            }],
+            "the picture placed after the sheet's three 10x12 frames"
         );
     }
 }

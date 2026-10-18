@@ -350,6 +350,11 @@ impl WgpuRenderer {
         );
     }
 
+    /// Drops every atlas page: the next page created is page 0 again.
+    pub fn clear_pages(&mut self) {
+        self.pages.clear();
+    }
+
     /// Copies `image` onto page `page` at `at`.
     pub fn upload(&mut self, page: PageId, at: PixelRect, image: &Image) {
         let Some(page) = self.pages.get(&page) else {

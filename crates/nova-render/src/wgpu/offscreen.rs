@@ -168,6 +168,10 @@ impl Gpu for OffscreenGpu {
         self.renderer.upload(page, at, image);
     }
 
+    fn clear_pages(&mut self) {
+        self.renderer.clear_pages();
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.present(frame, None);
     }
