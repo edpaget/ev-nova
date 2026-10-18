@@ -281,6 +281,18 @@ fn a_button_let_go_of_in_flight_is_not_waited_for() {
 }
 
 #[test]
+fn a_button_cancelled_in_flight_is_not_waited_for() {
+    let store = MemoryPilots::new();
+    let mut screen = flying(&store, RuleSource::Engine);
+    screen.input(&left(true, NOWHERE));
+    // The window loses focus; the release never arrives.
+    screen.cancel_pointer();
+    screen.input(&key(Key::Escape, true));
+    screen.tick(DEATH_FADE_FOR);
+    assert_eq!(cover(&screen), None);
+}
+
+#[test]
 fn clicks_during_the_return_are_dropped() {
     let store = MemoryPilots::new();
     let mut screen = flying(&store, RuleSource::Engine);
