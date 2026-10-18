@@ -961,6 +961,15 @@ mod tests {
             aiming(of(3, Some(POLICE))),
             aiming(led(of(4, Some(POLICE)), 2)),
             aiming(escorting(of(5, None))),
+            aiming(Npc {
+                mission: Some(crate::traffic::npc::MissionMark {
+                    slot: 0,
+                    behav: crate::traffic::ShipBehav::EscortPlayer,
+                    formation: Some(FormationSlot::default()),
+                    order: None,
+                }),
+                ..of(6, Some(POLICE))
+            }),
         ];
         let mut scene = Scene::new(&npcs, &govts);
         assert!(scene.answers(&astray(strike(n(1), n(2)))), "unblessed");
@@ -975,6 +984,10 @@ mod tests {
         assert!(
             scene.answers(&astray(strike(n(1), n(5)))),
             "an independent escort"
+        );
+        assert!(
+            !scene.answers(&astray(strike(n(1), n(6)))),
+            "a mission escort of a blessing government"
         );
     }
 

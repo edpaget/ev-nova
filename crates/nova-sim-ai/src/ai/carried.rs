@@ -14,13 +14,15 @@
 //! - With its carrier not in the system it idles; the session leaves
 //!   such a fighter on its own AI type.
 //! - It fires as any ship does at what it attacks ([`fire::trigger`]),
-//!   targets that ship, and reacts to no hit.
+//!   and targets that ship.
+//! - A hit takes its attacker as its target, as any ship does
+//!   ([`react::victim`]); it never comes to another ship's help.
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, GateWait, Goal, Surroundings, escort, fire};
+use crate::ai::{Behaviour, GateWait, Goal, Reaction, Surroundings, escort, fire, react};
 use crate::chance::Chance;
-use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
+use crate::combat::{ShipRef, Strike};
 use crate::traffic::npc::Npc;
 
 /// An NPC carrier's fighters' AI (see the module docs).
@@ -59,6 +61,22 @@ impl Behaviour for CarriedAi {
     /// original flies a carried fighter as an escort (AI type above 4).
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
         escort::fire_unprovoked(npc, around, self.fire)
+    }
+
+    /// [`react::victim`], as for the player's escorts: `_DamageShip`'s
+    /// reaction block reads no AI type, and `_DoGoodSamaritan` takes AI 3
+    /// and 4 alone (@0x8289f-0x828bb).
+    ///
+    /// Its next think attacks that target while its carrier attacks, as
+    /// [`CarriedAi::decide`] reads its own target first, and docks
+    /// otherwise. Keeping the hit's attacker by the carrier's orders, as
+    /// `_EscortAI` does, is
+    /// rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
+    /// Until then a docking fighter's target can hold for as little as
+    /// one tick, until that think. Nothing the player sees reads it in
+    /// that time.
+    fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+        react::victim(npc, strike, around)
     }
 }
 
@@ -214,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fighter_fires_as_any_ship_does_at_what_it_attacks_and_reacts_to_nothing() {
+    fn a_fighter_fires_as_any_ship_does_at_what_it_attacks() {
         let attacking = fighter(Goal::Attack(ShipRef::Player), None);
         let docking = fighter(Goal::Dock(n(1)), Some(ShipRef::Player));
         let npcs = [carrier(Goal::Idle), attacking.clone(), docking.clone()];
@@ -237,13 +255,44 @@ mod tests {
             Trigger::default()
         );
         assert_eq!(CarriedAi::default().target(&docking, &around), None);
-        let strike = crate::combat::Strike {
+    }
+
+    #[test]
+    fn a_fighter_the_player_hits_turns_on_the_player_and_one_an_npc_hits_takes_it() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2),
+        // and `_AIMakeShipAttackPlayer` sets the victim's goal 4 (@0x89d3e);
+        // `_DoGoodSamaritan` never takes AI 5 or 6 (@0x8289f-0x828bb).
+        let attacking = fighter(Goal::Attack(n(3)), Some(n(3)));
+        let npcs = [carrier(Goal::Attack(n(3))), attacking.clone(), trader()];
+        let around = Surroundings {
+            player: Some(player(50.0, -100.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let react = |strike| CarriedAi::default().react(&attacking, &strike, &around);
+        let by_player = crate::combat::Strike {
             damage: 10.0,
             ..crate::combat::fixture::strike(n(2), ShipRef::Player)
         };
         assert_eq!(
-            CarriedAi::default().react(&attacking, &strike, &around),
-            crate::ai::Reaction::default()
+            react(by_player),
+            crate::ai::Reaction {
+                target: Some(ShipRef::Player),
+                provoked: 10.0,
+                goal: Some(Goal::Attack(ShipRef::Player)),
+            }
+        );
+        assert_eq!(
+            react(crate::combat::fixture::strike(n(2), n(3))),
+            crate::ai::Reaction {
+                target: Some(n(3)),
+                provoked: 12.0,
+                goal: None,
+            }
+        );
+        assert_eq!(
+            react(crate::combat::fixture::strike(n(3), ShipRef::Player)),
+            crate::ai::Reaction::default(),
+            "no Good Samaritan"
         );
     }
 }

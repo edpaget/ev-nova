@@ -12,7 +12,10 @@
 //!   their provocation and take the attacker as their target, unless they
 //!   already attack another ship nearer than half the attacker's distance
 //!   ([`FOCUS`] of its distance squared) while facing within
-//!   [`FOCUS_ANGLE`] of it: then the hit changes nothing. A ship still
+//!   [`FOCUS_ANGLE`] of it: then the hit changes nothing. The player's
+//!   hit on the victim itself also turns it on the player at once
+//!   ([`victim`], `_AIMakeShipAttackPlayer` @0x3be69), whatever it was
+//!   doing; its lead takes the target alone. A ship still
 //!   coming into the system answers so too, gliding in, waiting in its
 //!   gate or bursting out of it: `_DamageShip` drops the reaction only
 //!   while the victim's (or the lead's) hyperspace state +0x50 is above
@@ -79,7 +82,9 @@ pub const FOCUS: f32 = 0.25;
 pub const FOCUS_ANGLE: f32 = 44.0;
 
 /// How `npc` answers `strike` among `around`, the Good Samaritans being
-/// those `piracy_police` says (see the module docs).
+/// those `piracy_police` says (see the module docs): as the
+/// [`victim`] for a hit on itself or its escort, else as a Good
+/// Samaritan.
 #[must_use]
 pub fn answer(
     npc: &Npc,
@@ -87,26 +92,8 @@ pub fn answer(
     around: &Surroundings,
     piracy_police: RuleSource,
 ) -> Reaction {
-    let me = ShipRef::Npc(npc.id);
-    let escort_hit = match strike.ship {
-        ShipRef::Npc(id) => around.npc(id).is_some_and(|hit| hit.leader == Some(npc.id)),
-        ShipRef::Player => false,
-    };
-    if strike.ship == me || escort_hit {
-        // A hit by no ship provokes no one (`_DamageShip` sets a target
-        // only for a ship source, @0x3bcf0, @0x3bd64).
-        let Some(by) = strike.by else {
-            return Reaction::default();
-        };
-        return if ignores(npc, by, around) {
-            Reaction::default()
-        } else {
-            Reaction {
-                target: Some(by),
-                provoked: strike.damage,
-                goal: None,
-            }
-        };
+    if hits(npc, strike, around) {
+        return victim(npc, strike, around);
     }
     let polices = match piracy_police {
         RuleSource::Engine => true,
@@ -121,6 +108,55 @@ pub fn answer(
         };
     }
     Reaction::default()
+}
+
+/// How `npc` answers `strike` among `around` as its victim, or as the
+/// lead of the escort it hit, and nothing more: `_DamageShip`'s reaction
+/// block for every AI type (@0x3bb7a-0x3bed2 reads none), and all of it
+/// for the AI types 5 and 6, the player's escorts and fighters and an NPC
+/// carrier's, which are never Good Samaritans (`_DoGoodSamaritan` takes
+/// AI 3 and 4 alone, @0x8289f-0x828bb).
+///
+/// Unless it [keeps to its own target](ignores), it takes the attacker as
+/// its target and the damage as provocation; a hit by no ship does
+/// nothing. The player's hit on the ship itself also turns it on the
+/// player at once (`Goal::Attack(Player)`): `_AIMakeShipAttackPlayer`
+/// (@0x3be66-0x3be69) sets goal 4 on the victim, never on its lead
+/// (@0x89d3e), whatever goal it had. Its one other change, clearing a
+/// jump's sub-goal (4 or 0xd under goals 2, 3 and 0xb, @0x89cf2-0x89d35),
+/// the new goal makes here, as the engine has no jump stage; any other
+/// sub-goal it keeps, so a ship already attacking keeps its pursuit
+/// ([`Npc::pursuit`]).
+#[must_use]
+pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+    if !hits(npc, strike, around) {
+        return Reaction::default();
+    }
+    // A hit by no ship provokes no one (`_DamageShip` sets a target only
+    // for a ship source, @0x3bcf0, @0x3bd64).
+    let Some(by) = strike.by else {
+        return Reaction::default();
+    };
+    if ignores(npc, by, around) {
+        return Reaction::default();
+    }
+    let on_itself = strike.ship == ShipRef::Npc(npc.id);
+    Reaction {
+        target: Some(by),
+        provoked: strike.damage,
+        goal: (on_itself && by == ShipRef::Player).then_some(Goal::Attack(ShipRef::Player)),
+    }
+}
+
+/// Whether `strike` hit `npc` itself, or an escort it leads, among
+/// `around`.
+fn hits(npc: &Npc, strike: &Strike, around: &Surroundings) -> bool {
+    match strike.ship {
+        ShipRef::Npc(id) => {
+            id == npc.id || around.npc(id).is_some_and(|hit| hit.leader == Some(npc.id))
+        }
+        ShipRef::Player => false,
+    }
 }
 
 /// Whether `npc`, hit (or its escort hit) by `attacker`, lets it be: it
@@ -269,6 +305,100 @@ mod tests {
         goal: None,
     };
 
+    /// The victim of the player's hit: it takes the player as its target
+    /// and attacks it at once (`_AIMakeShipAttackPlayer` @0x89d3e).
+    const TURNS: Reaction = Reaction {
+        target: Some(ShipRef::Player),
+        provoked: 12.0,
+        goal: Some(Goal::Attack(ShipRef::Player)),
+    };
+
+    #[test]
+    fn the_players_hit_turns_its_victim_on_the_player_but_not_the_victims_lead() {
+        // `_DamageShip` calls `_AIMakeShipAttackPlayer` on the victim
+        // (`edi`) alone, once si, the attacker, is the player
+        // (@0x3bd7e-0x3be69); the lead takes the target only (@0x3bd79).
+        let govts = relations(0, 0);
+        let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        let npcs = [ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0), escort];
+        let on_lead = strike(n(1), ShipRef::Player);
+        assert_eq!(answered(&govts, &npcs, 0, &on_lead), TURNS);
+        let on_escort = strike(n(2), ShipRef::Player);
+        assert_eq!(answered(&govts, &npcs, 1, &on_escort), TURNS, "the escort");
+        assert_eq!(
+            answered(&govts, &npcs, 0, &on_escort),
+            TAKES(ShipRef::Player),
+            "its lead"
+        );
+        assert_eq!(
+            answered(&govts, &npcs, 0, &strike(n(1), n(2))),
+            TAKES(n(2)),
+            "an NPC's hit gives no goal"
+        );
+    }
+
+    #[test]
+    fn a_ship_keeping_its_own_nearer_target_does_not_turn_on_the_player() {
+        // The focus skip jumps past `_AIMakeShipAttackPlayer` to 0x3bed2
+        // (@0x3bcac), under the engine's reading of the focus test.
+        let govts = relations(0, 0);
+        let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        hunter.goal = Goal::Attack(n(2));
+        let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
+        quarry.state.position = Vec2::new(0.0, -10.0);
+        let npcs = [hunter, quarry];
+        let around = Surroundings {
+            govts: &govts,
+            player: Some(crate::ai::fixture::player(100.0, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let hit = strike(n(1), ShipRef::Player);
+        assert_eq!(victim(&npcs[0], &hit, &around), Reaction::default());
+        let mut far = npcs.clone();
+        far[1].state.position = Vec2::new(0.0, -60.0);
+        let around = Surroundings {
+            npcs: &far,
+            ..around
+        };
+        assert_eq!(victim(&far[0], &hit, &around), TURNS, "its target too far");
+    }
+
+    #[test]
+    fn victim_answers_a_hit_on_the_ship_or_its_escort_and_is_no_good_samaritan() {
+        let govts = relations(0, 0);
+        let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        let npcs = [
+            ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),
+            escort,
+            ship(3, Some(POLICE), AiType::Warship, 3000.0),
+        ];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let by_pirate = strike(n(1), n(9));
+        assert_eq!(victim(&npcs[0], &by_pirate, &around), TAKES(n(9)));
+        assert_eq!(
+            victim(&npcs[0], &strike(n(2), n(9)), &around),
+            TAKES(n(9)),
+            "its escort hit"
+        );
+        let by_player = strike(n(1), ShipRef::Player);
+        assert_eq!(victim(&npcs[0], &by_player, &around), TURNS);
+        assert_eq!(
+            answer(&npcs[2], &by_player, &around, RuleSource::Engine),
+            ANSWERS,
+            "a Samaritan by `answer`"
+        );
+        assert_eq!(
+            victim(&npcs[2], &by_player, &around),
+            Reaction::default(),
+            "none by `victim`"
+        );
+    }
+
     #[test]
     fn the_victim_takes_its_attacker_and_adds_the_damage() {
         let govts = relations(0, 0);
@@ -280,7 +410,7 @@ mod tests {
         assert_eq!(answered(&govts, &npcs, 0, &hit), TAKES(n(2)));
         assert_eq!(
             answered(&govts, &npcs, 0, &strike(n(1), ShipRef::Player)),
-            TAKES(ShipRef::Player)
+            TURNS
         );
         assert_eq!(
             answered(&govts, &npcs, 1, &hit),
@@ -389,7 +519,7 @@ mod tests {
             );
             assert_eq!(
                 answered(&govts, &npcs, 0, &strike(n(1), ShipRef::Player)),
-                TAKES(ShipRef::Player),
+                TURNS,
                 "{mode:?}"
             );
             npcs[2].leader = Some(NpcId(1));
@@ -521,11 +651,7 @@ mod tests {
         );
         assert_eq!(
             answered(&govts, &npcs, 0, &stray),
-            Reaction {
-                target: Some(ShipRef::Player),
-                provoked: 12.0,
-                goal: None,
-            },
+            TURNS,
             "the victim still answers it"
         );
     }

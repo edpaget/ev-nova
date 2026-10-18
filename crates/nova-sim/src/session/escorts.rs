@@ -2528,4 +2528,38 @@ mod tests {
         assert_eq!(left.person.map(|person| person.id), Some(PersonId(700)));
         assert!(!session.pilot().gone(PersonId(700)));
     }
+
+    #[test]
+    fn a_player_escort_hit_by_an_npc_takes_it_as_its_target_and_one_hit_by_a_fleetmate_none() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2):
+        // the escort (AI 5) takes its attacker as its target (@0x3bcf6),
+        // once the answer flag lets the hit through; a fleetmate's hit
+        // (same leader, @0x3b94e) it never does.
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let escorts: Vec<NpcId> = escort_npcs(&session).iter().map(|npc| npc.id).collect();
+        let mut pirate = session.npc(escorts[0]).expect("the escort").clone();
+        pirate.escort = None;
+        pirate.govt = Some(crate::catalog::GovtId(142));
+        pirate.state.position.x += 200.0;
+        pirate.target = Some(ShipRef::Npc(escorts[0]));
+        pirate.goal = Goal::Attack(ShipRef::Npc(escorts[0]));
+        let pirate = session.traffic.add_npc(pirate);
+        let answer = |session: &mut Session, by: NpcId| {
+            let mut strikes = vec![crate::combat::fixture::strike(
+                ShipRef::Npc(escorts[0]),
+                ShipRef::Npc(by),
+            )];
+            session.weigh_strikes(&mut strikes, &mut NeverFires);
+            session.strikes = strikes;
+            session.answer_strikes(&NovaAi::default());
+            session.npc(escorts[0]).expect("the escort").target
+        };
+        assert_eq!(answer(&mut session, escorts[1]), None, "its fleetmate");
+        assert_eq!(
+            answer(&mut session, pirate),
+            Some(ShipRef::Npc(pirate)),
+            "the pirate"
+        );
+    }
 }

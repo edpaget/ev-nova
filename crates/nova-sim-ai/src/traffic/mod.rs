@@ -116,6 +116,8 @@ pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod gate_entry;
+#[cfg(test)]
+mod hit_goal_tests;
 pub mod npc;
 pub mod persons;
 #[cfg(test)]

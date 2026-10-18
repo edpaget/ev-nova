@@ -504,6 +504,7 @@ mod tests {
             .map(|(i, ai_type)| carried(of(10 + i as u32, ai_type), carrier))
             .collect();
         let around = Surroundings::new(&[], &npcs);
+        let strike = crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player);
         for npc in &npcs {
             assert_eq!(
                 ai.decide(npc, &around, &mut Draws::of(&[])),
@@ -511,8 +512,9 @@ mod tests {
             );
             assert_eq!(ai.trigger(npc, &around).only, Some(WeaponId(8)));
             assert_eq!(ai.target(npc, &around), Some(fighters.ship()));
+            assert_eq!(ai.react(npc, &strike, &around).provoked, 8.0);
         }
-        assert_eq!(fighters.asked.borrow().len(), 12);
+        assert_eq!(fighters.asked.borrow().len(), 16);
         assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
         // The player's fighter is the player's escort.
         let players = escorting(carried(of(20, AiType::Warship), ShipRef::Player));
@@ -522,7 +524,7 @@ mod tests {
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(escorts.ship())
         );
-        assert_eq!(fighters.asked.borrow().len(), 12, "not the carried slot");
+        assert_eq!(fighters.asked.borrow().len(), 16, "not the carried slot");
         // Once its carrier is gone, it flies by its AI type.
         let orphan = of(21, AiType::Warship);
         let npcs = [orphan];
@@ -531,6 +533,56 @@ mod tests {
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(marks[2].ship())
         );
+    }
+
+    #[test]
+    fn novas_escorts_and_carried_fighters_answer_as_victims_and_never_as_samaritans() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2);
+        // `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
+        let ai = NovaAi::default();
+        let mut trader = of(1, AiType::WimpyTrader);
+        trader.govt = Some(crate::catalog::GovtId(140));
+        let mut warship = of(2, AiType::Warship);
+        warship.state.position = crate::geometry::Vec2::new(3000.0, 0.0);
+        let escort = escorting(Npc {
+            state: warship.state,
+            ..of(3, AiType::Warship)
+        });
+        let fighter = carried(
+            Npc {
+                state: warship.state,
+                ..of(4, AiType::Warship)
+            },
+            ShipRef::Npc(NpcId(9)),
+        );
+        let npcs = [trader, warship, escort, fighter];
+        let around = Surroundings::new(&[], &npcs);
+        let on_trader = crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player);
+        assert_eq!(
+            ai.react(&npcs[1], &on_trader, &around).goal,
+            Some(Goal::Attack(ShipRef::Player)),
+            "a warship comes to its help"
+        );
+        for npc in &npcs[2..] {
+            assert_eq!(
+                ai.react(npc, &on_trader, &around),
+                Reaction::default(),
+                "{:?}",
+                npc.id
+            );
+            let on_it =
+                crate::combat::fixture::strike(ShipRef::Npc(npc.id), ShipRef::Npc(NpcId(1)));
+            assert_eq!(
+                ai.react(npc, &on_it, &around),
+                Reaction {
+                    target: Some(ShipRef::Npc(NpcId(1))),
+                    provoked: 12.0,
+                    goal: None,
+                },
+                "{:?}",
+                npc.id
+            );
+        }
     }
 
     /// `npc` as a miner of `Flags3` `bits`.
