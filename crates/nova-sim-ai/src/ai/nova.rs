@@ -37,7 +37,9 @@
 use std::rc::Rc;
 
 use crate::ai::fire::FireRules;
+use crate::ai::flee_drop;
 use crate::ai::miner::{MINER_BITS, MinerAi};
+use crate::ai::target::TargetRules;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, GateWait, Goal, Interceptor, Reaction,
     Surroundings, Warship, WimpyTrader, reinforcements,
@@ -61,6 +63,9 @@ pub struct NovaAi {
     /// The source of [`RuleKey::HunterBribe`]: whether a paid-off
     /// `ShipBehav` 0 hunter attacks the player again.
     hunter_bribe: RuleSource,
+    /// The source of [`RuleKey::LedAllyAttack`]: which allies a fleeing
+    /// ship gives up fleeing ([`flee_drop`]).
+    led_ally: RuleSource,
 }
 
 impl Default for NovaAi {
@@ -93,6 +98,11 @@ impl NovaAi {
         let fire = FireRules {
             quadrant_arc: rulebook.source_for(RuleKey::QuadrantTurretArc),
         };
+        let led_ally = rulebook.source_for(RuleKey::LedAllyAttack);
+        let target = TargetRules {
+            led_ally,
+            friend_carry: rulebook.source_for(RuleKey::FriendShieldCarry),
+        };
         Self {
             wimpy: Rc::new(WimpyTrader {
                 piracy_police,
@@ -107,6 +117,7 @@ impl NovaAi {
                 person_coward,
                 always_attacks,
                 fire,
+                target,
             }),
             interceptor: Rc::new(Interceptor {
                 piracy_police,
@@ -114,6 +125,7 @@ impl NovaAi {
                 always_attacks,
                 fire,
                 patrol_uninhabited: rulebook.source_for(RuleKey::PatrolUninhabited),
+                target,
             }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
@@ -122,6 +134,7 @@ impl NovaAi {
             carried: Rc::new(CarriedAi { fire }),
             miner: Rc::new(MinerAi),
             hunter_bribe: rulebook.source_for(RuleKey::HunterBribe),
+            led_ally,
         }
     }
 
@@ -247,6 +260,7 @@ impl Behaviour for NovaAi {
         } else {
             self.thinker(npc).decision(npc, around, chance)
         };
+        let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
         reinforcements::with_high_level_call(npc, decision, around)
     }
 
@@ -1238,6 +1252,111 @@ mod tests {
                 "{ai_type:?}: the blessing holds the word back"
             );
         }
+    }
+
+    #[test]
+    fn nova_ai_reads_led_ally_attack_from_the_rulebook() {
+        use crate::ai::fixture::{POLICE, TRADERS, around, govts, ship, sites};
+        use crate::escort::{EscortDuty, FormationSlot};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut escort = ship(2, POLICE, AiType::Warship, 0.0, 100.0);
+        escort.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let spare = Rulebook::default().with_override(RuleKey::LedAllyAttack, RuleSource::Bible);
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut hunter = ship(1, TRADERS, ai_type, 0.0, 0.0);
+            hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+            let npcs = [hunter, escort.clone()];
+            let seen = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            let decide = |rulebook: &Rulebook| {
+                NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+            };
+            assert_eq!(
+                decide(&Rulebook::default()),
+                Goal::Attack(ShipRef::Npc(NpcId(2))),
+                "{ai_type:?}: the engine attacks on an ally the player leads"
+            );
+            assert_ne!(
+                decide(&spare),
+                Goal::Attack(ShipRef::Npc(NpcId(2))),
+                "{ai_type:?}: the other reading spares it"
+            );
+        }
+        // The flee drop reads it too.
+        let mut fleeing = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        fleeing.goal = Goal::Flee(ShipRef::Npc(NpcId(2)));
+        let npcs = [fleeing, escort];
+        let seen = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        let flee = |rulebook: &Rulebook| {
+            let ai = NovaAi::from_rulebook(rulebook).with(AiType::WimpyTrader, Rc::new(Fleeing));
+            ai.decision(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+        };
+        assert_eq!(
+            flee(&Rulebook::default()).goal,
+            Goal::Flee(ShipRef::Npc(NpcId(2)))
+        );
+        let given_up = flee(&spare);
+        assert_eq!(given_up.goal, Goal::Idle);
+        assert!(!given_up.calls_reinforcements, "and calls no fleet");
+    }
+
+    /// Flees NPC 2 in each decision.
+    #[derive(Debug)]
+    struct Fleeing;
+
+    impl Behaviour for Fleeing {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Flee(ShipRef::Npc(NpcId(2)))
+        }
+    }
+
+    #[test]
+    fn nova_ai_gives_up_fleeing_a_stranger_ally_within_250() {
+        use crate::ai::fixture::{POLICE, TRADERS, around, govts, ship, sites};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let npcs = [
+            ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0),
+            ship(2, POLICE, AiType::Warship, 0.0, 200.0),
+        ];
+        let seen = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        let ai = NovaAi::default().with(AiType::WimpyTrader, Rc::new(Fleeing));
+        let decision = ai.decision(&npcs[0], &seen, &mut Draws::of(&[0; 4]));
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(!decision.calls_reinforcements);
+    }
+
+    #[test]
+    fn nova_ai_reads_friend_shield_carry_from_the_rulebook() {
+        use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, ship, sites};
+        use crate::reserves::Gauge;
+        // The hunter's own 0.5 of 100, a full-shielded enemy before its
+        // shieldless ally of 40, and a pirate of 75 to take on: by the
+        // engine the ally carries the enemy's factor 1 (50 + 40), by the
+        // other reading its raw 0.25 (50 + 10).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut hunter = ship(1, TRADERS, AiType::Warship, 0.0, 0.0);
+        hunter.reserves.shield.now = 15.0;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.hull.strength = 75.0;
+        let mut ally = ship(3, POLICE, AiType::WimpyTrader, 0.0, 600.0);
+        ally.hull.strength = 40.0;
+        ally.reserves.shield = Gauge { now: 0.0, max: 0.0 };
+        let npcs = [hunter, pirate, ally];
+        let seen = around(&sites, &npcs, &govts, (0.0, -9000.0), 0);
+        let decide = |rulebook: &Rulebook| {
+            NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+        };
+        assert_eq!(
+            decide(&Rulebook::default()),
+            Goal::Attack(ShipRef::Npc(NpcId(2)))
+        );
+        let raw = Rulebook::default().with_override(RuleKey::FriendShieldCarry, RuleSource::Bible);
+        assert_ne!(decide(&raw), Goal::Attack(ShipRef::Npc(NpcId(2))));
     }
 
     #[test]

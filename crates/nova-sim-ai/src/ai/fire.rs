@@ -946,6 +946,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
         }
     }
 

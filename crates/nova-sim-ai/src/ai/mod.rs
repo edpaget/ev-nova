@@ -12,7 +12,10 @@
 //! - [`odds`]: how strong a ship and its friends are, the odds against it,
 //!   and whether a chase is hopeless.
 //! - [`target`]: whom a warship or interceptor attacks: the player, by its
-//!   government's relations and the player's legal record, or an NPC.
+//!   government's relations and the player's legal record, or an NPC;
+//!   [`candidates`], the candidate pass its steps share; and
+//!   [`threatened`], whether a friend is threatened by a ship's enemy.
+//! - [`flee_drop`]: a fleeing ship giving up fleeing an ally it spares.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
 //! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
 //!   weapons' longest reach, and how it flies there.
@@ -35,11 +38,13 @@
 
 pub mod brave;
 pub mod call_for_help;
+pub mod candidates;
 pub mod carried;
 pub mod escort;
 pub mod fire;
 #[cfg(test)]
 pub(crate) mod fixture;
+pub mod flee_drop;
 pub mod interceptor;
 pub mod miner;
 pub mod nova;
@@ -49,13 +54,14 @@ pub mod react;
 pub mod reinforcements;
 pub mod stand_off;
 pub mod target;
+pub mod threatened;
 pub mod warship;
 pub mod wimpy;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use crate::catalog::{GovtId, LandingSite, RankId, RankRecord, StellarId};
+use crate::catalog::{GovtId, LandingSite, RankId, RankRecord, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
@@ -403,6 +409,15 @@ pub struct PlayerSide {
     /// refresh took them (`nova_sim::Session::blessing`):
     /// [`Surroundings::blessed`] reads it.
     pub blessing: Blessing,
+    /// Its ship type: the escape pod ([`ESCAPE_POD_SHIP`](crate::combat::hull::ESCAPE_POD_SHIP), the original's
+    /// class 0x2ff) is no xenophobe's candidate (see [`target`]).
+    pub ship: ShipId,
+    /// The government its ship type fights as, its class's +0x9f4
+    /// ([`ShipRecord::combat_govt`](crate::catalog::ShipRecord::combat_govt)),
+    /// if any: the ships at war with it may turn on the player at the
+    /// 1-in-50 chance (see [`target`]), and the player's friend strength
+    /// counts the ships allied with it (see [`odds`]).
+    pub combat_govt: Option<GovtId>,
 }
 
 /// No governments at all.
@@ -439,11 +454,25 @@ pub struct Surroundings<'a> {
     /// (its timer above 0), which doubles an allied ship's `MaxOdds` in
     /// its odds retreat ([`reinforcements::odds_factor`]).
     pub reinforcements: Option<reinforcements::Coming>,
+    /// Whether the player scans for cloaked ships on screen, as
+    /// `_ShipVisibleToShip` reads it for the player's sight of a ship
+    /// ([`World::cloak_scanner`](crate::traffic::World::cloak_scanner)):
+    /// whether the player sees a threat to it ([`Surroundings::seen_by_player`]).
+    pub cloak_scanner: bool,
+    /// The governments an IFF scrambler (`oütf` `ModType` 48) has marked,
+    /// their byte +0x83 (see `nova_sim`'s `iff_scramblers` module): a
+    /// warship of one takes no player candidate from its hunt (see
+    /// [`target`]).
+    pub iff_marked: &'a BTreeSet<GovtId>,
 }
+
+/// No government marked by an IFF scrambler.
+pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
 
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
-    /// damage aimed, no asteroid in slot 0 and no reinforcements coming.
+    /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
+    /// cloak scanner and no government marked by an IFF scrambler.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -456,7 +485,31 @@ impl<'a> Surroundings<'a> {
             targeted: &NO_AIMED_DAMAGE,
             mining_rock: None,
             reinforcements: None,
+            cloak_scanner: false,
+            iff_marked: &NO_IFF_MARKS,
         }
+    }
+
+    /// Whether the player sees `npc` (`_ShipVisibleToShip(npc, player)`):
+    /// [`cloak::visible`](crate::cloak::visible) from where the player is
+    /// (the centre with no player), with its
+    /// [`cloak_scanner`](Surroundings::cloak_scanner).
+    #[must_use]
+    pub fn seen_by_player(&self, npc: &Npc) -> bool {
+        let observer = crate::cloak::Observer {
+            at: self
+                .player
+                .map_or(crate::geometry::Vec2::ZERO, |player| player.state.position),
+            scanner: self.cloak_scanner,
+            cloaked_escort: false,
+        };
+        crate::cloak::visible(npc.cloak, npc.state.position, npc.emerging(), observer)
+    }
+
+    /// Whether `govt` is marked by an IFF scrambler: never an independent.
+    #[must_use]
+    pub fn iff_marked(&self, govt: Option<GovtId>) -> bool {
+        govt.is_some_and(|govt| self.iff_marked.contains(&govt))
     }
 
     /// Whether `govt` blesses the player with peace, rank `Flags` 0x0100
@@ -474,6 +527,18 @@ impl<'a> Surroundings<'a> {
     #[must_use]
     pub fn aimed_at(&self, ship: ShipRef) -> i32 {
         self.targeted.get(&ship).copied().unwrap_or(0)
+    }
+
+    /// The NPCs in the original's slot order, by ship-table slot
+    /// ([`Npc::berth`]), those at one slot in the order they appeared: the
+    /// order the original's loops over slots 1-63 meet them, as a tie in
+    /// a nearest pick and a friend strength's carried shield factor read
+    /// it.
+    #[must_use]
+    pub fn by_slot(&self) -> Vec<&'a Npc> {
+        let mut npcs: Vec<&Npc> = self.npcs.iter().collect();
+        npcs.sort_by_key(|npc| npc.berth);
+        npcs
     }
 
     /// NPC `id`, if it is in the system.
@@ -1319,6 +1384,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
         };
         around.player = Some(player);
         assert!(around.live(P));

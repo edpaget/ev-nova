@@ -107,6 +107,8 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         yardstick: 0,
         untargetable: false,
         blessing: Blessing::NONE,
+        ship: crate::catalog::ShipId(128),
+        combat_govt: None,
     }
 }
 

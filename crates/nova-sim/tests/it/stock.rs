@@ -3640,12 +3640,17 @@ fn stock_governments_stand_as_the_gövts_say() {
 /// Destroyer's default items and stock weapons: a save that has read
 /// neither, which flying reads.
 fn destroyer_in_fomalhaut(data: &GameData) -> Session {
+    ship_in_fomalhaut(data, 141)
+}
+
+/// [`destroyer_in_fomalhaut`], flying `shïp` `ship` instead.
+fn ship_in_fomalhaut(data: &GameData, ship: i16) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["system"] = serde_json::json!(136);
     save["stellar"] = serde_json::Value::Null;
-    save["ship"] = serde_json::json!(141);
+    save["ship"] = serde_json::json!(ship);
     save["outfits"] = serde_json::Value::Null;
     save["stock_weapons_fitted"] = serde_json::json!(false);
     for gauge in ["shield", "armor", "fuel"] {
@@ -4267,7 +4272,16 @@ fn stock_governments_hail_as_their_flags_say() {
 /// Federation warship or interceptor (of some aggression) that some seed
 /// brings, targeted.
 fn hailing_the_federation(data: &GameData, record: i16) -> (Session, nova_sim::NpcId) {
-    let mut session = destroyer_in_fomalhaut(data);
+    hailing_the_federation_in(data, record, 141)
+}
+
+/// [`hailing_the_federation`], the pilot flying `shïp` `ship`.
+fn hailing_the_federation_in(
+    data: &GameData,
+    record: i16,
+    ship: i16,
+) -> (Session, nova_sim::NpcId) {
+    let mut session = ship_in_fomalhaut(data, ship);
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
     save["legal"] = serde_json::json!([{ "govt": 128, "record": record }]);
@@ -4329,14 +4343,18 @@ fn a_federation_ship_hailed_in_fomalhaut_greets_with_its_governments_line() {
 
 /// A wanted pilot hailing the Federation warship hunting it in Fomalhaut
 /// can beg for mercy at a price of whole thousands from 1000 to 20,000;
-/// paid, the ship does not attack it over the next 300 ticks.
+/// paid, the ship does not attack it over the next 300 ticks. The pilot
+/// flies a Shuttle (`shïp` 128, of no combat government): in a Fed
+/// Destroyer, which fights as the Federation, the Federation's ships count
+/// in its friend strength, which outweighs any one of them (see
+/// `stock_target_selection`).
 #[test]
 fn a_wanted_pilot_buys_off_a_hunting_federation_ship() {
     let Some(dir) = common::nova_data() else {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let (mut session, fed) = hailing_the_federation(&data, -100);
+    let (mut session, fed) = hailing_the_federation_in(&data, -100, 128);
     let mut chance = Seeded(0x5EED);
     let hunting = (0..600).any(|_| {
         session.tick_traffic(&data, &NovaAi::default(), &mut chance);
@@ -5568,6 +5586,8 @@ fn stock_pick_made(
         yardstick: 0,
         untargetable: false,
         blessing: nova_sim::rank::Blessing::NONE,
+        ship: target,
+        combat_govt: None,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

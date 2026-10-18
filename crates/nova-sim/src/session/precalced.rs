@@ -128,6 +128,7 @@ impl Session {
         self.junk_latches = market::JunkLatches::of(&self.goods, &self.pilot.cargo);
         self.refresh_sabotage();
         self.reset_inhibitors();
+        self.reset_iff_scramblers();
         if self.trims(cause) {
             self.trim_to_holds();
         }

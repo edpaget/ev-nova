@@ -33,7 +33,8 @@
 //!   Federation Commander. By the other reading of
 //!   [`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks),
 //!   the Bible's, a blessed ship gives no word, and [`select_target`]
-//!   gives it no player either.
+//!   gives it no player either; nor does it hold on to a player it already
+//!   attacks, kept or as its provoker (crons-news-ranks-fidelity 33).
 //!
 //!   So a 0x0004 ship attacking a ship the player leads goes on fighting
 //!   it, and a 0x0040 ship attacking one drops it. The provocation of 1
@@ -58,7 +59,17 @@
 //!   decides again.
 //! - **Its target**: provoked, the attacker it took on being hit;
 //!   otherwise the ship [`select_target`] gives, keeping the one it
-//!   attacks. A target is dropped as [`dropped`] says.
+//!   attacks. A target is dropped as [`dropped`] says, a fresh pick
+//!   included: `_WarshipAI` sets state 4 for the target
+//!   `_SelectWarshipTarget` gives and at once drops one inactive, breaking
+//!   up, or disabled while it has no destroying weapons (@0x8bc4e-0x8bca9),
+//!   and `_HighLevelAIHandler` drops a breaking-up one too (@0x8e3ef). So
+//!   such a pick (a breaking-up NPC a ship with destroying weapons hunts,
+//!   or a downed ally's quarry it helps against) leaves it with no target
+//!   that think, and no other candidate is tried. The original's step 1
+//!   keeps a target that starts breaking up and drops it the same way,
+//!   so the ship idles that think, where the engine's keep drops it first
+//!   and picks afresh at once: a one-think lag, not filed.
 //! - **Retreat**, only when its government says so (a warship's `Flags`
 //!   0x0010; the Bible: "retreat when shields drop below 25%"):
 //!   - the odds retreat (@0x8bcea): while attacking, with its shields
@@ -111,7 +122,7 @@ use crate::ai::odds::{hopeless_chase, odds_against};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
-use crate::ai::target::{dropped, pick_target};
+use crate::ai::target::{Pick, TargetRules, dropped, pick_target};
 use crate::ai::{
     Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, out_of_ammo, react,
 };
@@ -180,7 +191,15 @@ pub struct Retreat {
 /// 0x0040 word's fresh pick included. A ship fleeing on, or turning on
 /// its provoker, makes no call.
 #[must_use]
-pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat, word: Option<RuleSource>) -> Hunt {
+pub fn hunt(
+    npc: &Npc,
+    around: &Surroundings,
+    retreat: Retreat,
+    word: Option<RuleSource>,
+    rules: TargetRules,
+    chance: &mut dyn Chance,
+) -> Hunt {
+    let always_attacks = word;
     let word = word.and_then(|always_attacks| government_word(npc, around, always_attacks));
     let dropped_target = word == Some(Word::DropTarget);
     let word_provokes = word == Some(Word::TakePlayer);
@@ -190,16 +209,24 @@ pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat, word: Option<Rul
         dropped_target,
         provokes: word_provokes,
     };
+    let keep = |ship: ShipRef| !dropped(npc, ship, around, rules);
+    // A fresh pick the think drops at once (@0x8bc4e-0x8bca9, @0x8e3ef)
+    // leaves the ship with no target: no other candidate is tried.
+    let picked = |pick: Option<Pick>| match pick {
+        Some(pick) if keep(pick.ship) => Ok((pick.ship, pick.turns_on_player)),
+        Some(pick) => Err(pick.turns_on_player),
+        None => Err(false),
+    };
     let (target, turns_on_player) = match word {
         Some(Word::TakePlayer) => {
-            if dropped(npc, ShipRef::Player, around) {
+            if dropped(npc, ShipRef::Player, around, rules) {
                 return nothing(true);
             }
             (ShipRef::Player, true)
         }
-        Some(Word::DropTarget) => match pick_target(npc, None, around) {
-            Some(pick) => (pick.ship, pick.turns_on_player),
-            None => return nothing(false),
+        Some(Word::DropTarget) => match picked(pick_target(npc, None, around, rules, chance)) {
+            Ok(pick) => pick,
+            Err(turns_on_player) => return nothing(turns_on_player),
         },
         None => {
             if let Goal::Flee(attacker) = npc.goal
@@ -207,8 +234,9 @@ pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat, word: Option<Rul
             {
                 return Hunt::of(Goal::Flee(attacker));
             }
-            let keep = |ship: ShipRef| !dropped(npc, ship, around);
-            let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && keep(ship));
+            let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
+            let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
+            let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && held(ship));
             if npc.goal == Goal::Hold {
                 return Hunt {
                     goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
@@ -218,10 +246,10 @@ pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat, word: Option<Rul
             if let Some(ship) = provoker {
                 return Hunt::of(hunted(npc, ship, around, retreat));
             }
-            let current = npc.goal.attacking().filter(|&ship| keep(ship));
-            match pick_target(npc, current, around) {
-                Some(pick) => (pick.ship, pick.turns_on_player),
-                None => return nothing(false),
+            let current = npc.goal.attacking().filter(|&ship| held(ship));
+            match picked(pick_target(npc, current, around, rules, chance)) {
+                Ok(pick) => pick,
+                Err(turns_on_player) => return nothing(turns_on_player),
             }
         }
     };
@@ -240,6 +268,27 @@ pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat, word: Option<Rul
         dropped_target,
         provokes: word_provokes,
     }
+}
+
+/// Whether `npc` lets `ship` go as a target it holds, by the Bible's
+/// reading of [`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)
+/// in `always_attacks`: `ship` is the player, `npc`'s government has
+/// `Flags` 0x0004 and blesses the player (crons-news-ranks-fidelity 33).
+/// The word itself is held back for a blessed player by that reading
+/// ([`government_word`]); this lets go of one the word turned the ship on
+/// before the blessing came, as the kept target or as the provoker (the
+/// word's provocation of 1 can't be told from a hit's), so the ship fights
+/// a blessed player only on the hit's own reaction. Never by the engine.
+fn releases_blessed(
+    npc: &Npc,
+    ship: ShipRef,
+    around: &Surroundings,
+    always_attacks: Option<RuleSource>,
+) -> bool {
+    ship == ShipRef::Player
+        && always_attacks == Some(RuleSource::Bible)
+        && around.govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER)
+        && around.blessed(npc.govt)
 }
 
 /// What a hunter's think gives ([`hunt`]).
@@ -370,6 +419,8 @@ pub struct Warship {
     pub always_attacks: RuleSource,
     /// The rulebook's entries its weapon pick follows.
     pub fire: FireRules,
+    /// The rulebook's entries its target pick follows.
+    pub target: TargetRules,
 }
 
 /// A warship's retreat: when outnumbered or its shields run low, both by
@@ -410,7 +461,8 @@ impl Behaviour for Warship {
             npc
         };
         let word = (!plunders).then_some(self.always_attacks);
-        let decision = hunt(npc, around, retreat, word).or(|| idle(npc, around, chance));
+        let decision =
+            hunt(npc, around, retreat, word, self.target, chance).or(|| idle(npc, around, chance));
         Decision {
             goal: out_of_ammo::drop_when_dry(npc, decision.goal),
             ..decision
@@ -1472,6 +1524,97 @@ mod tests {
             blessed_word(ALWAYS, &[police()], false, bible),
             Goal::Attack(P),
             "unblessed, the word holds"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_0x0004_warship_lets_go_of_a_blessed_player_it_already_attacks() {
+        // crons-news-ranks-fidelity 33: kept by step 1, or by the word's
+        // provocation of 1.
+        let mut hunting = police();
+        hunting.goal = Goal::Attack(P);
+        let mut worded = hunting.clone();
+        worded.provoked = 1.0;
+        worded.target = Some(P);
+        for npc in [hunting, worded] {
+            let bible = RuleSource::Bible;
+            assert_eq!(
+                blessed_word(ALWAYS, std::slice::from_ref(&npc), true, bible),
+                IDLE
+            );
+            assert_eq!(
+                blessed_word(ALWAYS, std::slice::from_ref(&npc), true, RuleSource::Engine),
+                Goal::Attack(P),
+                "the engine keeps it"
+            );
+            assert_eq!(
+                blessed_word(ALWAYS, std::slice::from_ref(&npc), false, bible),
+                Goal::Attack(P),
+                "unblessed"
+            );
+            assert_eq!(
+                blessed_word(0, &[npc], true, bible),
+                Goal::Attack(P),
+                "no 0x0004"
+            );
+        }
+    }
+
+    // A fresh pick dropped in the same think (@0x8bc4e-0x8bca9, @0x8e3ef).
+
+    /// A traders' warship with destroying weapons, or not.
+    fn trader_cop(destroying: bool) -> Npc {
+        let mut cop = police();
+        cop.govt = Some(TRADERS);
+        if destroying {
+            cop.armament = Armament::new([(
+                WeaponSpec::new(&WeaponRecord {
+                    mass_dmg: 1,
+                    ..weapon(128)
+                }),
+                1,
+            )]);
+        }
+        cop
+    }
+
+    #[test]
+    fn a_breaking_up_pick_leaves_the_warship_with_no_target_that_think() {
+        // The player 100 above is wanted (-7 at the traders' home); the
+        // breaking-up pirate is nearer.
+        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 50.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        assert_eq!(
+            decided(&[trader_cop(true), dying.clone()], -7),
+            IDLE,
+            "the nearest is breaking up: no other candidate is tried"
+        );
+        assert_eq!(
+            decided(&[trader_cop(false), dying], -7),
+            Goal::Attack(P),
+            "without destroying weapons it was never a candidate"
+        );
+        assert_eq!(decided(&[trader_cop(true)], -7), Goal::Attack(P));
+    }
+
+    #[test]
+    fn a_downed_quarry_of_an_ally_leaves_the_warship_with_no_target_that_think() {
+        let mut ally = ship(2, POLICE, AiType::Warship, 0.0, 300.0);
+        ally.goal = Goal::Attack(n(3));
+        let mut downed = ship(3, PIRATES, AiType::Warship, 0.0, 600.0);
+        downed.condition = Condition::Disabled;
+        let pirate = ship(4, PIRATES, AiType::Warship, 0.0, 900.0);
+        let npcs = [trader_cop(false), ally, downed, pirate];
+        assert_eq!(decided(&npcs, 0), IDLE);
+        let mut armed = npcs.clone();
+        armed[0] = trader_cop(true);
+        assert_eq!(
+            decided(&armed, 0),
+            Goal::Attack(n(3)),
+            "it can finish it off"
         );
     }
 

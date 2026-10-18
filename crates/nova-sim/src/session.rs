@@ -378,6 +378,7 @@ mod hail;
 mod hire;
 mod hooks;
 mod hover;
+mod iff_scramblers;
 mod jump_collapse;
 mod map;
 mod map_borders;
@@ -794,6 +795,9 @@ pub struct Session {
     /// `reinforcements` module); never saved, as the original saves
     /// neither.
     reinforcements: reinforcements::Reinforcements,
+    /// The governments an IFF scrambler has marked (see the
+    /// `iff_scramblers` module); never saved, as the original saves none.
+    iff_marked: BTreeSet<GovtId>,
     /// The events told since they were last taken.
     events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
@@ -1574,6 +1578,7 @@ impl Session {
             quote_clock: persons::QuoteClock::default(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
+            iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
@@ -2380,6 +2385,7 @@ impl Session {
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
+            iff_marked: &self.iff_marked,
         };
         f(&mut self.traffic, world);
     }
@@ -2447,6 +2453,7 @@ impl Session {
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
+            iff_marked: &self.iff_marked,
         }
     }
 
@@ -2464,6 +2471,10 @@ impl Session {
                 .ship_record(self.pilot.ship)
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
             blessing: self.blessing(),
+            ship: self.pilot.ship,
+            combat_govt: self
+                .ship_record(self.pilot.ship)
+                .and_then(|record| record.combat_govt),
         }
     }
 

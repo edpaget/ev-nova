@@ -375,6 +375,9 @@ pub struct World<'a> {
     /// The system's reinforcement fleet while one called is on its way
     /// ([`Surroundings::reinforcements`]).
     pub reinforcements: Option<reinforcements::Coming>,
+    /// The governments an IFF scrambler has marked
+    /// ([`Surroundings::iff_marked`]).
+    pub iff_marked: &'a BTreeSet<GovtId>,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -385,7 +388,8 @@ impl<'a> World<'a> {
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], no cloak scanner, no
-    /// asteroid in slot 0 and no reinforcements coming.
+    /// asteroid in slot 0, no reinforcements coming and no government
+    /// marked by an IFF scrambler.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -405,6 +409,7 @@ impl<'a> World<'a> {
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
+            iff_marked: bare.iff_marked,
         }
     }
 
@@ -449,6 +454,8 @@ impl<'a> World<'a> {
             targeted: self.targeted,
             mining_rock: self.mining_rock,
             reinforcements: self.reinforcements,
+            cloak_scanner: self.cloak_scanner,
+            iff_marked: self.iff_marked,
         }
     }
 }
@@ -3052,6 +3059,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
         };
         let world = World {
             player: Some(player),
@@ -4356,6 +4365,8 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
         }
     }
 

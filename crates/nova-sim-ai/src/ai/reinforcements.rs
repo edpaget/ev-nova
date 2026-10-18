@@ -44,10 +44,11 @@
 //! @0x901e5), by the goal the think ends in ([`high_level_calls`]):
 //!
 //! - **fleeing** (state 3, @0x8df75-0x8e0dc), from a ship within 250 on
-//!   both axes, each offset cut to a whole number (@0x8e025-0x8e050),
-//!   unless it flees an ally neither it nor its quarry escorting the
-//!   player (@0x8e077-0x8e0c3, where the original stops fleeing,
-//!   rdm:phase/combat-ai-fidelity/phase-6-warship-target-selection's);
+//!   both axes, each offset cut to a whole number (@0x8e025-0x8e050,
+//!   [`within_reach`]), unless it flees an ally neither it nor its quarry
+//!   escorting the player (@0x8e077-0x8e0c3, [`flees_a_stranger_ally`]),
+//!   where the original stops fleeing instead
+//!   ([`flee_drop`](super::flee_drop));
 //! - **attacking or sniping** (state 4) a ship here to be fought
 //!   ([`Surroundings::live`], the target gates @0x8e267-0x8e3f6), the ship
 //!   itself intact (`_IsDisabled` @0x8e6eb), after its fighters launch
@@ -58,15 +59,11 @@
 //! [`Surroundings::reinforcements`]; see the [`warship`](super::warship)
 //! module).
 
+use crate::ai::flee_drop::{flees_a_stranger_ally, within_reach};
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::catalog::GovtId;
-use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
-
-/// How near, in whole pixels on either axis, a ship fled from must be for
-/// the fleeing ship to call (`cmpw $0xfa` @0x8e025, @0x8e047).
-pub const FLEEING_CALL_REACH: f32 = 250.0;
 
 /// Whether `_HighLevelAIHandler` calls for reinforcements after `npc`'s
 /// think ended in `goal`, among `around` (see the module docs).
@@ -74,33 +71,13 @@ pub const FLEEING_CALL_REACH: f32 = 250.0;
 pub fn high_level_calls(npc: &Npc, goal: Goal, around: &Surroundings) -> bool {
     match goal {
         Goal::Flee(from) => {
-            let near = around.state_of(from).is_some_and(|state| {
-                let off = state.position - npc.state.position;
-                off.x.trunc().abs() <= FLEEING_CALL_REACH
-                    && off.y.trunc().abs() <= FLEEING_CALL_REACH
-            });
-            near && !flees_a_stranger_ally(npc, from, around)
+            within_reach(npc, from, around) && !flees_a_stranger_ally(npc, from, around)
         }
         Goal::Attack(target) | Goal::Snipe(target) => {
             npc.condition == Condition::Intact && around.live(target)
         }
         _ => false,
     }
-}
-
-/// Whether `npc`, of a government and escorting no player, flees `from`,
-/// an ally of its government that escorts no player either: the case in
-/// which `_HighLevelAIHandler` stops fleeing and makes no call
-/// (@0x8e077-0x8e0c3 → @0x8e81d).
-fn flees_a_stranger_ally(npc: &Npc, from: ShipRef, around: &Surroundings) -> bool {
-    let ShipRef::Npc(id) = from else {
-        return false;
-    };
-    npc.govt.is_some()
-        && !npc.escorts_player()
-        && around.npc(id).is_some_and(|quarry| {
-            around.govts.allies(npc.govt, quarry.govt) && !quarry.escorts_player()
-        })
 }
 
 /// A called fleet on its way to the system, as a ship's odds retreat
@@ -322,6 +299,7 @@ pub fn day(countdown: u16) -> u16 {
 mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
+    use crate::combat::ShipRef;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::traffic::npc::AiType;
 

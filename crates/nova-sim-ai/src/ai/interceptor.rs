@@ -48,6 +48,7 @@
 //!   says.
 
 use crate::ai::fire::FireRules;
+use crate::ai::target::TargetRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
     Admit, Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting,
@@ -96,6 +97,8 @@ pub struct Interceptor {
     /// Whether its patrol can pick an uninhabited stellar
     /// ([`RuleKey::PatrolUninhabited`](crate::RuleKey::PatrolUninhabited)).
     pub patrol_uninhabited: RuleSource,
+    /// The rulebook's entries its target pick follows.
+    pub target: TargetRules,
 }
 
 impl Behaviour for Interceptor {
@@ -112,7 +115,14 @@ impl Behaviour for Interceptor {
             person_coward: self.person_coward,
             ..INTERCEPTOR_RETREAT
         };
-        let hunt = hunt(npc, around, retreat, Some(self.always_attacks));
+        let hunt = hunt(
+            npc,
+            around,
+            retreat,
+            Some(self.always_attacks),
+            self.target,
+            chance,
+        );
         let mut comm_call = None;
         let decision = hunt.or(|| {
             let (goal, call) = self.patrol(npc, around, chance);
