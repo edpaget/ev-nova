@@ -422,6 +422,37 @@ fn the_dialog_opens_on_the_prefs_the_router_was_given() {
 }
 
 #[test]
+fn an_offer_of_display_modes_shows_in_the_open_dialog_alone() {
+    let fhd = nova_view::VideoMode {
+        width: 1920,
+        height: 1080,
+        refresh_millihertz: 60_000,
+    };
+    let exclusive = nova_view::FullscreenKind::Exclusive(fhd);
+    let mut screen = with_dialogs(data()).with_prefs(quiet());
+    screen.offer_display(&[fhd], exclusive);
+    assert!(screen.preferences().is_none());
+    assert_eq!(screen.prefs(), quiet(), "no dialog, no change");
+    open_prefs(&mut screen);
+    screen.offer_display(&[fhd], exclusive);
+    let picker = prefs_dialog(&screen).display();
+    assert_eq!(
+        picker.entries(),
+        [nova_view::FullscreenKind::Borderless, exclusive]
+    );
+    assert_eq!(picker.selected(), exclusive);
+    assert_eq!(
+        screen.prefs(),
+        Prefs {
+            fullscreen: exclusive,
+            ..quiet()
+        },
+        "the dialog's next opening starts there"
+    );
+    assert_eq!(screen.take_prefs(), None, "an offer is no change");
+}
+
+#[test]
 fn each_change_comes_out_once_and_the_dialog_reopens_on_it() {
     let mut screen = with_dialogs(data()).with_prefs(quiet());
     assert_eq!(screen.take_prefs(), None);

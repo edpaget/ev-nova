@@ -16,7 +16,7 @@ use crate::prefs_fixture;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
-use nova::settings::{GameSettings, SettingsKeeper, game_settings};
+use nova::settings::{FullscreenSetting, GameSettings, SettingsKeeper, game_settings};
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::{effects_level_volume, music_level_volume};
 use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable};
@@ -37,12 +37,17 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::Point;
 use nova_view::ui::PrefsDialog;
-use nova_view::{Key, MouseButton};
+use nova_view::ui::prefs::OK_ITEM;
+use nova_view::{FullscreenKind, Key, MonitorMode, MouseButton, VideoMode};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-/// A 1024 x 768 window at scale 1: window pixels are logical units.
-struct FakeWindow;
+/// A 1024 x 768 window at scale 1, where window pixels are logical
+/// units, on a monitor named [`MONITOR`] offering [`raw_modes`]; it
+/// records each fullscreen request.
+struct FakeWindow {
+    fullscreen: Vec<Option<FullscreenKind>>,
+}
 
 impl WindowPort for FakeWindow {
     fn size_px(&self) -> (u32, u32) {
@@ -54,6 +59,45 @@ impl WindowPort for FakeWindow {
     }
 
     fn request_redraw(&mut self) {}
+
+    fn set_fullscreen(&mut self, fullscreen: Option<FullscreenKind>) {
+        self.fullscreen.push(fullscreen);
+    }
+
+    fn video_modes(&self) -> Vec<MonitorMode> {
+        raw_modes()
+    }
+
+    fn monitor_name(&self) -> Option<String> {
+        Some(MONITOR.to_owned())
+    }
+}
+
+const MONITOR: &str = "DELL U2720Q";
+
+fn mode(width: u32, height: u32, refresh_millihertz: u32) -> VideoMode {
+    VideoMode {
+        width,
+        height,
+        refresh_millihertz,
+    }
+}
+
+/// The monitor's modes as the platform lists them: unsorted, some at two
+/// depths, some smaller than the game.
+fn raw_modes() -> Vec<MonitorMode> {
+    [
+        (mode(1920, 1080, 60_000), 32),
+        (mode(800, 600, 60_000), 32),
+        (mode(2560, 1440, 144_000), 32),
+        (mode(1920, 1080, 59_940), 32),
+        (mode(1920, 1080, 60_000), 16),
+        (mode(1280, 720, 60_000), 32),
+        (mode(2560, 1440, 144_000), 24),
+    ]
+    .into_iter()
+    .map(|(mode, bit_depth)| MonitorMode { mode, bit_depth })
+    .collect()
 }
 
 /// One file, holding a fork, wherever it is looked for.
@@ -177,7 +221,7 @@ fn seeded() -> MemorySettings {
             },
             hyperspace_effects: true,
             fullscreen: false,
-            fullscreen_kind: nova::settings::FullscreenSetting::Borderless,
+            fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
         })
@@ -232,7 +276,9 @@ impl Harness {
         let log = audio.log();
         let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table)
             .with_settings(settings.audio);
-        let window = FakeWindow;
+        let window = FakeWindow {
+            fullscreen: Vec::new(),
+        };
         Self {
             app: App::new(&window, data, screen)
                 .with_audio(core)
@@ -724,4 +770,79 @@ fn the_cursor_comes_back_under_the_pointer_when_the_preferences_close() {
     assert_eq!(harness.showing(), Showing::Flight);
     harness.frame();
     assert_eq!(cursor(&harness), Some(ok), "under the pointer, not at A");
+}
+
+#[test]
+fn the_picker_lists_the_monitors_modes_and_ok_enters_the_one_picked_and_saves_it() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text == "Borderless")
+    );
+    assert_eq!(
+        harness.dialog().display().entries(),
+        [
+            FullscreenKind::Borderless,
+            FullscreenKind::Exclusive(mode(2560, 1440, 144_000)),
+            FullscreenKind::Exclusive(mode(1920, 1080, 60_000)),
+            FullscreenKind::Exclusive(mode(1920, 1080, 59_940)),
+        ],
+        "at least 1024x768, largest first, each once"
+    );
+
+    // Down on the focused picker, then a click on its down arrow.
+    for _ in 0..5 {
+        harness.press(Key::Tab);
+    }
+    harness.press(Key::Down);
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text == "2560 x 1440, 144 Hz")
+    );
+    let down = harness.dialog().display().rects().down.center();
+    harness.click(down);
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text == "1920 x 1080, 60 Hz")
+    );
+    assert_eq!(harness.window.fullscreen, [], "nothing while it is open");
+    assert_eq!(saved(&store)["fullscreen_kind"], "borderless");
+
+    let ok = harness
+        .dialog()
+        .dialog()
+        .item_bounds(OK_ITEM)
+        .expect("OK")
+        .center();
+    harness.click(ok);
+    assert_ne!(harness.showing(), Showing::Preferences, "closed");
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Exclusive(mode(1920, 1080, 60_000)))]
+    );
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+    let (restarted, warning) = SettingsKeeper::open(store.clone());
+    assert_eq!(warning, None);
+    assert!(restarted.settings().fullscreen);
+    assert_eq!(
+        restarted.settings().fullscreen_kind,
+        FullscreenSetting::Exclusive {
+            mode: mode(1920, 1080, 60_000),
+            monitor: Some(MONITOR.to_owned()),
+        }
+    );
+    assert!(restarted.settings().audio.music, "the rest kept");
+
+    // Reopened, the picker starts on the mode in use.
+    harness.command_comma();
+    assert_eq!(
+        harness.dialog().display().selected(),
+        FullscreenKind::Exclusive(mode(1920, 1080, 60_000))
+    );
 }

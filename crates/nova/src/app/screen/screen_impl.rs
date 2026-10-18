@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
-use nova_view::{Diagnostic, DrawList, Input, Prefs, Screen, ScreenAction, Showing, Sound};
+use nova_view::{
+    Diagnostic, DrawList, FullscreenKind, Input, Prefs, Screen, ScreenAction, Showing, Sound,
+    VideoMode,
+};
 
 use super::{
     AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held, LANDED,
@@ -311,6 +314,12 @@ impl Screen for AppScreen {
     /// change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.prefs_change.take()
+    }
+
+    /// Offers the open Preferences dialog the display modes, on the kind
+    /// the game runs fullscreen in now; with none open, nothing changes.
+    fn offer_display(&mut self, modes: &[VideoMode], current: FullscreenKind) {
+        self.offer_display_to_preferences(modes, current);
     }
 
     /// The flight's borders setting to save, once after an undocked close

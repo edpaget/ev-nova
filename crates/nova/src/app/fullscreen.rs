@@ -1,5 +1,6 @@
-//! Borderless fullscreen: the platform's shortcut toggles it, and the
-//! window's size before it is given back on leaving.
+//! Fullscreen: borderless, or exclusive in a display mode the player
+//! picked. The platform's shortcut toggles it, and the window's size
+//! before it is given back on leaving.
 //!
 //! [`Fullscreen`] holds the decisions; the window adapter only carries
 //! them out. The shortcut is the platform's usual one: Control+Command+F
@@ -7,11 +8,31 @@
 //! state without it (macOS's green button, its Window menu), and reports
 //! the change through [`Fullscreen::observed`]; either way, leaving gives
 //! the window back the size it had before entering.
+//!
+//! # Kinds
+//!
+//! Entering enters the live kind ([`Fullscreen::kind`]), the saved one
+//! unless this session fell back from it. An exclusive kind is entered
+//! only when the window's monitor offers its mode (listed by
+//! [`listed_modes`]) and, when both are named, is the monitor it was
+//! chosen on. Otherwise the game enters borderless with a warning naming
+//! the mode, and stays borderless for the session; it never guesses at
+//! the nearest mode.
+//!
+//! # Focus and exit
+//!
+//! Losing focus while exclusive leaves the mode, so the desktop gets its
+//! own back, and suspends: the system's report that the window left
+//! fullscreen is then expected, and changes nothing. Gaining focus enters
+//! the same mode again. Exiting leaves an exclusive mode too, and after
+//! it the system's reports are ignored, so the state saved is the one
+//! the player quit in.
 
-use nova_view::Key;
+use nova_view::{FullscreenKind, Key, VideoMode, listed_modes};
 
 use crate::app::WindowPort;
 use crate::config::Os;
+use crate::settings::FullscreenSetting;
 
 /// What a key event means to fullscreen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,12 +54,22 @@ struct Modifiers {
     alt: bool,
 }
 
-/// Whether the game is fullscreen, the window's size to give back on
-/// leaving, and what the shortcut needs to know of the keys held.
+/// Whether and how the game is fullscreen, the kind to enter, the
+/// window's size to give back on leaving, and what the shortcut needs to
+/// know of the keys held.
 #[derive(Clone, Debug)]
 pub(crate) struct Fullscreen {
     os: Os,
-    on: bool,
+    /// How the game is fullscreen now, as asked or as the system reported;
+    /// `None` when windowed.
+    current: Option<FullscreenKind>,
+    /// The kind entering enters.
+    kind: FullscreenSetting,
+    /// Whether an exclusive mode was left for a focus loss, to be entered
+    /// again when focus comes back.
+    suspended: bool,
+    /// Whether the app is exiting.
+    exited: bool,
     /// The window's inner size in physical pixels, the last time it was
     /// seen windowed.
     windowed_size_px: (u32, u32),
@@ -52,11 +83,15 @@ pub(crate) struct Fullscreen {
 }
 
 impl Fullscreen {
-    /// Windowed, in a window of `size_px`, reading `os`'s shortcut.
+    /// Windowed, in a window of `size_px`, reading `os`'s shortcut, its
+    /// kind borderless.
     pub(crate) fn new(os: Os, size_px: (u32, u32)) -> Self {
         Self {
             os,
-            on: false,
+            current: None,
+            kind: FullscreenSetting::Borderless,
+            suspended: false,
+            exited: false,
             windowed_size_px: size_px,
             held_modifiers: Modifiers::default(),
             held: None,
@@ -69,9 +104,28 @@ impl Fullscreen {
         self.os = os;
     }
 
-    /// Whether the game is fullscreen.
+    /// Enters `kind` from now on, without changing the state now.
+    pub(crate) fn set_kind(&mut self, kind: FullscreenSetting) {
+        self.kind = kind;
+    }
+
+    /// The kind entering enters.
+    pub(crate) fn kind(&self) -> &FullscreenSetting {
+        &self.kind
+    }
+
+    /// Whether the game is fullscreen, an exclusive mode suspended for a
+    /// focus loss included.
     pub(crate) fn is_on(&self) -> bool {
-        self.on
+        self.current.is_some()
+    }
+
+    /// Whether the game is in an exclusive mode, not suspended, and not
+    /// exiting.
+    fn exclusive(&self) -> bool {
+        matches!(self.current, Some(FullscreenKind::Exclusive(_)))
+            && !self.suspended
+            && !self.exited
     }
 
     /// Takes a key event: tracks the modifiers held, and says whether it
@@ -115,72 +169,155 @@ impl Fullscreen {
         std::mem::take(&mut self.drop_text)
     }
 
-    /// Forgets the keys held, since their releases will not arrive.
-    pub(crate) fn focus_lost(&mut self) {
+    /// Forgets the keys held, since their releases will not arrive, and,
+    /// while exclusive, leaves the mode until focus comes back.
+    pub(crate) fn focus_lost(&mut self, window: &mut impl WindowPort) {
         self.held_modifiers = Modifiers::default();
         self.held = None;
         self.drop_text = false;
+        if self.exclusive() {
+            window.set_fullscreen(None);
+            self.suspended = true;
+        }
     }
 
-    /// Enters fullscreen, remembering `window`'s size to give back, or
-    /// leaves it, giving that size back. Says whether it is now on.
-    pub(crate) fn toggle(&mut self, window: &mut impl WindowPort) -> bool {
-        if self.on {
-            self.leave(window);
+    /// Enters again the exclusive mode a focus loss left.
+    pub(crate) fn focus_gained(&mut self, window: &mut impl WindowPort) {
+        if self.suspended && !self.exited {
+            self.suspended = false;
+            window.set_fullscreen(self.current);
+        }
+    }
+
+    /// The app is exiting: leaves an exclusive mode, so the display gets
+    /// its own back, and ignores the system's reports from now on.
+    pub(crate) fn exiting(&mut self, window: &mut impl WindowPort) {
+        if self.exclusive() {
+            window.set_fullscreen(None);
+        }
+        self.exited = true;
+    }
+
+    /// Enters the live kind, remembering `window`'s size to give back, or
+    /// leaves fullscreen, giving that size back. A warning when the live
+    /// kind's mode is not offered and borderless is entered instead.
+    pub(crate) fn toggle(&mut self, window: &mut impl WindowPort) -> Option<String> {
+        if self.current.is_some() {
+            window.set_fullscreen(None);
+            window.request_inner_size(self.windowed_size_px);
+            self.current = None;
+            self.suspended = false;
+            None
         } else {
             self.windowed_size_px = window.size_px();
-            window.set_fullscreen(true);
-            self.on = true;
+            self.enter(window)
         }
-        self.on
     }
 
-    fn leave(&mut self, window: &mut impl WindowPort) {
-        window.set_fullscreen(false);
-        window.request_inner_size(self.windowed_size_px);
-        self.on = false;
+    /// Makes `kind` the live kind and enters it: from a window, remembering
+    /// its size; from fullscreen, switching to it alone. A warning as
+    /// [`Fullscreen::toggle`] gives one.
+    pub(crate) fn choose(
+        &mut self,
+        kind: FullscreenSetting,
+        window: &mut impl WindowPort,
+    ) -> Option<String> {
+        self.kind = kind;
+        if self.current.is_none() {
+            self.windowed_size_px = window.size_px();
+        }
+        self.enter(window)
+    }
+
+    /// Asks `window` for the live kind, falling back to borderless, for
+    /// the rest of the session, when its monitor does not offer the
+    /// kind's mode.
+    fn enter(&mut self, window: &mut impl WindowPort) -> Option<String> {
+        let warning = match &self.kind {
+            FullscreenSetting::Exclusive { mode, monitor }
+                if !offered(window, mode, monitor.as_deref()) =>
+            {
+                let on = monitor
+                    .as_ref()
+                    .map(|name| format!(" ({name})"))
+                    .unwrap_or_default();
+                let warning = format!(
+                    "nova: this monitor does not offer the saved display mode {}{on}; \
+                     opening borderless fullscreen",
+                    mode.label()
+                );
+                self.kind = FullscreenSetting::Borderless;
+                Some(warning)
+            }
+            _ => None,
+        };
+        let kind = self.kind.kind();
+        window.set_fullscreen(Some(kind));
+        self.current = Some(kind);
+        self.suspended = false;
+        warning
     }
 
     /// Takes the system's report of whether the window is `fullscreen`,
     /// and says whether that changed the state. Entering asks nothing of
-    /// the window, which is already fullscreen; leaving gives back the
-    /// size it had, however the player left.
+    /// the window, which is already fullscreen, and counts as borderless;
+    /// leaving gives back the size it had, however the player left, and
+    /// keeps the live kind. A window left for a focus loss, or on the
+    /// way out, is expected, and changes nothing.
     pub(crate) fn observed(&mut self, fullscreen: bool, window: &mut impl WindowPort) -> bool {
-        if fullscreen == self.on {
+        if fullscreen == self.current.is_some() || self.suspended || self.exited {
             return false;
         }
         if fullscreen {
-            self.on = true;
+            self.current = Some(FullscreenKind::Borderless);
         } else {
             window.request_inner_size(self.windowed_size_px);
-            self.on = false;
+            self.current = None;
         }
         true
     }
 
     /// Takes the window's new size: while windowed, it is the size to give
-    /// back on leaving. While fullscreen it is the display's, and ignored.
+    /// back on leaving. While fullscreen, or suspended from it, it is not
+    /// the window's own, and ignored.
     pub(crate) fn resized(&mut self, size_px: (u32, u32)) {
-        if !self.on {
+        if self.current.is_none() {
             self.windowed_size_px = size_px;
         }
     }
 }
 
+/// Whether `window`'s monitor offers `mode`: it lists it, and is the
+/// monitor named `monitor`, when both it and the saved kind have a name.
+fn offered(window: &impl WindowPort, mode: &VideoMode, monitor: Option<&str>) -> bool {
+    let same_monitor = match (monitor, window.monitor_name()) {
+        (Some(saved), Some(now)) => saved == now,
+        _ => true,
+    };
+    same_monitor && listed_modes(&window.video_modes()).contains(mode)
+}
+
 #[cfg(test)]
 mod tests {
+    use nova_view::{FullscreenKind, MonitorMode, VideoMode};
+
     use super::*;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Call {
-        SetFullscreen(bool),
+        SetFullscreen(Option<FullscreenKind>),
         RequestSize((u32, u32)),
     }
 
-    /// A window of settable size that records each fullscreen and size
-    /// request, in order.
+    const BORDERLESS: Call = Call::SetFullscreen(Some(FullscreenKind::Borderless));
+    const WINDOWED: Call = Call::SetFullscreen(None);
+
+    /// A window of settable size, on a monitor of settable modes and name,
+    /// that records each fullscreen and size request, in order.
     struct RecordingWindow {
         size_px: (u32, u32),
+        modes: Vec<MonitorMode>,
+        monitor: Option<String>,
         calls: Vec<Call>,
     }
 
@@ -188,9 +325,60 @@ mod tests {
         fn new(size_px: (u32, u32)) -> Self {
             Self {
                 size_px,
+                modes: [fhd(), qhd()]
+                    .map(|mode| MonitorMode {
+                        mode,
+                        bit_depth: 32,
+                    })
+                    .to_vec(),
+                monitor: Some(MONITOR.to_owned()),
                 calls: Vec::new(),
             }
         }
+    }
+
+    const MONITOR: &str = "DELL U2720Q";
+
+    fn fhd() -> VideoMode {
+        VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 60_000,
+        }
+    }
+
+    fn qhd() -> VideoMode {
+        VideoMode {
+            width: 2560,
+            height: 1440,
+            refresh_millihertz: 144_000,
+        }
+    }
+
+    fn exclusive(mode: VideoMode, monitor: Option<&str>) -> FullscreenSetting {
+        FullscreenSetting::Exclusive {
+            mode,
+            monitor: monitor.map(str::to_owned),
+        }
+    }
+
+    fn entered(mode: VideoMode) -> Call {
+        Call::SetFullscreen(Some(FullscreenKind::Exclusive(mode)))
+    }
+
+    /// Windowed in a 1024x768 window, its live kind `kind`.
+    fn set_to(kind: FullscreenSetting) -> Fullscreen {
+        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
+        fullscreen.set_kind(kind);
+        fullscreen
+    }
+
+    fn not_offered(mode: VideoMode, monitor: &str) -> String {
+        format!(
+            "nova: this monitor does not offer the saved display mode {} ({monitor}); \
+             opening borderless fullscreen",
+            mode.label()
+        )
     }
 
     impl WindowPort for RecordingWindow {
@@ -204,8 +392,16 @@ mod tests {
 
         fn request_redraw(&mut self) {}
 
-        fn set_fullscreen(&mut self, on: bool) {
-            self.calls.push(Call::SetFullscreen(on));
+        fn set_fullscreen(&mut self, fullscreen: Option<FullscreenKind>) {
+            self.calls.push(Call::SetFullscreen(fullscreen));
+        }
+
+        fn video_modes(&self) -> Vec<MonitorMode> {
+            self.modes.clone()
+        }
+
+        fn monitor_name(&self) -> Option<String> {
+            self.monitor.clone()
         }
 
         fn request_inner_size(&mut self, size_px: (u32, u32)) {
@@ -283,11 +479,13 @@ mod tests {
         let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
         press(&mut fullscreen, Key::Control);
         press(&mut fullscreen, Key::Command);
-        fullscreen.focus_lost();
+        let mut window = RecordingWindow::new((1024, 768));
+        fullscreen.focus_lost(&mut window);
         assert_eq!(press(&mut fullscreen, Key::Char('f')), Shortcut::None);
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         press(&mut fullscreen, Key::Alt);
-        fullscreen.focus_lost();
+        fullscreen.focus_lost(&mut window);
+        assert_eq!(window.calls, [], "windowed");
         assert_eq!(press(&mut fullscreen, Key::Enter), Shortcut::None);
     }
 
@@ -344,19 +542,15 @@ mod tests {
         let mut window = RecordingWindow::new((2048, 1536));
         let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
         assert!(!fullscreen.is_on());
-        assert!(fullscreen.toggle(&mut window));
+        assert_eq!(fullscreen.toggle(&mut window), None);
         assert!(fullscreen.is_on());
-        assert_eq!(window.calls, [Call::SetFullscreen(true)]);
+        assert_eq!(window.calls, [BORDERLESS]);
         window.size_px = (3024, 1964);
-        assert!(!fullscreen.toggle(&mut window));
+        assert_eq!(fullscreen.toggle(&mut window), None);
         assert!(!fullscreen.is_on());
         assert_eq!(
             window.calls,
-            [
-                Call::SetFullscreen(true),
-                Call::SetFullscreen(false),
-                Call::RequestSize((2048, 1536))
-            ]
+            [BORDERLESS, WINDOWED, Call::RequestSize((2048, 1536))]
         );
     }
 
@@ -368,10 +562,7 @@ mod tests {
         fullscreen.observed(true, &mut window);
         fullscreen.resized((3024, 1964));
         fullscreen.toggle(&mut window);
-        assert_eq!(
-            window.calls,
-            [Call::SetFullscreen(false), Call::RequestSize((1600, 1200))]
-        );
+        assert_eq!(window.calls, [WINDOWED, Call::RequestSize((1600, 1200))]);
     }
 
     #[test]
@@ -397,5 +588,230 @@ mod tests {
         assert!(!fullscreen.observed(true, &mut window));
         assert!(fullscreen.is_on());
         assert_eq!(window.calls, []);
+    }
+
+    #[test]
+    fn toggling_an_offered_exclusive_kind_enters_its_mode_and_leaves_to_the_window() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some(MONITOR)));
+        assert_eq!(fullscreen.toggle(&mut window), None);
+        assert!(fullscreen.is_on());
+        assert_eq!(window.calls, [entered(fhd())]);
+        assert_eq!(fullscreen.toggle(&mut window), None);
+        assert!(!fullscreen.is_on());
+        assert_eq!(
+            window.calls,
+            [entered(fhd()), WINDOWED, Call::RequestSize((1024, 768))]
+        );
+        assert_eq!(*fullscreen.kind(), exclusive(fhd(), Some(MONITOR)), "kept");
+    }
+
+    #[test]
+    fn a_kind_the_monitor_does_not_offer_falls_back_to_borderless_once_with_a_warning() {
+        let gone = VideoMode {
+            refresh_millihertz: 59_940,
+            ..fhd()
+        };
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(gone, Some(MONITOR)));
+        assert_eq!(
+            fullscreen.toggle(&mut window),
+            Some(not_offered(gone, MONITOR)),
+            "no such rate"
+        );
+        assert_eq!(window.calls, [BORDERLESS]);
+        assert_eq!(*fullscreen.kind(), FullscreenSetting::Borderless);
+        fullscreen.toggle(&mut window);
+        assert_eq!(fullscreen.toggle(&mut window), None, "warned once");
+        assert_eq!(window.calls[3], BORDERLESS);
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some("LG HDR 4K")));
+        assert_eq!(
+            fullscreen.toggle(&mut window),
+            Some(not_offered(fhd(), "LG HDR 4K")),
+            "another monitor"
+        );
+        assert_eq!(window.calls, [BORDERLESS]);
+    }
+
+    #[test]
+    fn a_saved_kind_without_a_monitor_warns_without_naming_one() {
+        let mut window = RecordingWindow::new((1024, 768));
+        window.modes.clear();
+        let mut fullscreen = set_to(exclusive(fhd(), None));
+        assert_eq!(
+            fullscreen.toggle(&mut window),
+            Some(format!(
+                "nova: this monitor does not offer the saved display mode {}; \
+                 opening borderless fullscreen",
+                fhd().label()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_mode_too_small_to_list_is_not_offered() {
+        let small = VideoMode {
+            width: 800,
+            height: 600,
+            refresh_millihertz: 60_000,
+        };
+        let mut window = RecordingWindow::new((1024, 768));
+        window.modes.push(MonitorMode {
+            mode: small,
+            bit_depth: 32,
+        });
+        let mut fullscreen = set_to(exclusive(small, Some(MONITOR)));
+        assert!(fullscreen.toggle(&mut window).is_some());
+        assert_eq!(window.calls, [BORDERLESS]);
+    }
+
+    #[test]
+    fn with_no_name_on_either_side_the_mode_alone_decides() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(qhd(), None));
+        assert_eq!(fullscreen.toggle(&mut window), None);
+        assert_eq!(window.calls, [entered(qhd())]);
+        let mut window = RecordingWindow::new((1024, 768));
+        window.monitor = None;
+        let mut fullscreen = set_to(exclusive(qhd(), Some("LG HDR 4K")));
+        assert_eq!(fullscreen.toggle(&mut window), None);
+        assert_eq!(window.calls, [entered(qhd())]);
+    }
+
+    #[test]
+    fn choosing_a_kind_while_windowed_enters_it_remembering_the_size() {
+        let mut window = RecordingWindow::new((1600, 1200));
+        let mut fullscreen = Fullscreen::new(Os::MacOs, (1600, 1200));
+        assert_eq!(
+            fullscreen.choose(exclusive(qhd(), Some(MONITOR)), &mut window),
+            None
+        );
+        assert!(fullscreen.is_on());
+        assert_eq!(*fullscreen.kind(), exclusive(qhd(), Some(MONITOR)));
+        fullscreen.toggle(&mut window);
+        assert_eq!(
+            window.calls,
+            [entered(qhd()), WINDOWED, Call::RequestSize((1600, 1200))]
+        );
+    }
+
+    #[test]
+    fn choosing_another_kind_while_fullscreen_switches_to_it_alone() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
+        fullscreen.toggle(&mut window);
+        fullscreen.resized((3024, 1964));
+        window.calls.clear();
+        assert_eq!(
+            fullscreen.choose(exclusive(fhd(), Some(MONITOR)), &mut window),
+            None
+        );
+        assert_eq!(window.calls, [entered(fhd())]);
+        fullscreen.choose(FullscreenSetting::Borderless, &mut window);
+        assert_eq!(window.calls, [entered(fhd()), BORDERLESS]);
+        assert!(fullscreen.is_on());
+        let gone = exclusive(fhd(), Some("LG HDR 4K"));
+        assert_eq!(
+            fullscreen.choose(gone, &mut window),
+            Some(not_offered(fhd(), "LG HDR 4K"))
+        );
+        fullscreen.toggle(&mut window);
+        assert_eq!(
+            window.calls[2..],
+            [BORDERLESS, WINDOWED, Call::RequestSize((1024, 768))]
+        );
+    }
+
+    #[test]
+    fn leaving_exclusive_through_the_system_clears_only_the_state() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some(MONITOR)));
+        fullscreen.toggle(&mut window);
+        assert!(fullscreen.observed(false, &mut window));
+        assert!(!fullscreen.is_on());
+        assert_eq!(*fullscreen.kind(), exclusive(fhd(), Some(MONITOR)));
+        fullscreen.toggle(&mut window);
+        assert_eq!(window.calls[2..], [entered(fhd())], "the kind again");
+    }
+
+    #[test]
+    fn losing_focus_while_exclusive_leaves_its_mode_until_focus_comes_back() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some(MONITOR)));
+        fullscreen.toggle(&mut window);
+        window.calls.clear();
+        fullscreen.focus_lost(&mut window);
+        assert_eq!(window.calls, [WINDOWED]);
+        assert!(!fullscreen.observed(false, &mut window), "expected");
+        fullscreen.resized((1024, 768));
+        fullscreen.resized((1280, 960));
+        assert!(fullscreen.is_on(), "suspended, not left");
+        assert_eq!(window.calls, [WINDOWED], "no size asked");
+        fullscreen.focus_lost(&mut window);
+        assert_eq!(window.calls, [WINDOWED], "once");
+        fullscreen.focus_gained(&mut window);
+        assert_eq!(window.calls, [WINDOWED, entered(fhd())]);
+        fullscreen.focus_gained(&mut window);
+        assert_eq!(window.calls.len(), 2, "resumed once");
+        fullscreen.toggle(&mut window);
+        assert_eq!(
+            window.calls[2..],
+            [WINDOWED, Call::RequestSize((1024, 768))],
+            "the size from before it entered"
+        );
+    }
+
+    #[test]
+    fn focus_changes_while_windowed_or_borderless_ask_nothing() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some(MONITOR)));
+        fullscreen.focus_lost(&mut window);
+        fullscreen.focus_gained(&mut window);
+        let mut borderless = Fullscreen::new(Os::MacOs, (1024, 768));
+        borderless.toggle(&mut window);
+        borderless.focus_lost(&mut window);
+        borderless.focus_gained(&mut window);
+        assert_eq!(window.calls, [BORDERLESS]);
+        assert!(borderless.observed(false, &mut window), "a real exit");
+    }
+
+    #[test]
+    fn exiting_leaves_an_exclusive_mode_and_then_ignores_the_system() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some(MONITOR)));
+        fullscreen.toggle(&mut window);
+        window.calls.clear();
+        fullscreen.exiting(&mut window);
+        assert_eq!(window.calls, [WINDOWED]);
+        assert!(!fullscreen.observed(false, &mut window));
+        assert!(fullscreen.is_on(), "kept as it was, for the save");
+        assert_eq!(window.calls, [WINDOWED], "no size asked");
+    }
+
+    #[test]
+    fn exiting_otherwise_asks_nothing() {
+        let mut window = RecordingWindow::new((1024, 768));
+        set_to(exclusive(fhd(), Some(MONITOR))).exiting(&mut window);
+        let mut borderless = Fullscreen::new(Os::MacOs, (1024, 768));
+        borderless.toggle(&mut window);
+        borderless.exiting(&mut window);
+        let mut suspended = set_to(exclusive(fhd(), Some(MONITOR)));
+        suspended.toggle(&mut window);
+        suspended.focus_lost(&mut window);
+        suspended.exiting(&mut window);
+        assert_eq!(window.calls, [BORDERLESS, entered(fhd()), WINDOWED]);
+        suspended.focus_gained(&mut window);
+        assert_eq!(window.calls.len(), 3, "no coming back after exiting");
+    }
+
+    #[test]
+    fn the_system_entering_is_borderless_and_the_live_kind_is_kept() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some(MONITOR)));
+        assert!(fullscreen.observed(true, &mut window));
+        fullscreen.focus_lost(&mut window);
+        assert_eq!(window.calls, [], "not exclusive");
+        assert_eq!(*fullscreen.kind(), exclusive(fhd(), Some(MONITOR)));
     }
 }

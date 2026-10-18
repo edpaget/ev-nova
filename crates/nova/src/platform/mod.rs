@@ -51,6 +51,7 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             pressed: state.is_pressed(),
         },
         WinitEvent::Focused(false) => WindowEvent::FocusLost,
+        WinitEvent::Focused(true) => WindowEvent::FocusGained,
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
@@ -624,19 +625,22 @@ mod tests {
     }
 
     #[test]
-    fn losing_focus_is_focus_lost_and_gaining_it_is_nothing() {
+    fn losing_focus_is_focus_lost_and_gaining_it_focus_gained() {
         assert_eq!(
             translate(&WinitEvent::Focused(false), &WINDOWED),
             Some(WindowEvent::FocusLost)
         );
-        assert_eq!(translate(&WinitEvent::Focused(true), &WINDOWED), None);
+        assert_eq!(
+            translate(&WinitEvent::Focused(true), &WINDOWED),
+            Some(WindowEvent::FocusGained)
+        );
     }
 
     #[test]
     fn redraws_and_other_events_are_not_translated() {
         // The runner adds the elapsed time to redraws itself.
         assert_eq!(translate(&WinitEvent::RedrawRequested, &WINDOWED), None);
-        assert_eq!(translate(&WinitEvent::Focused(true), &WINDOWED), None);
+        assert_eq!(translate(&WinitEvent::Occluded(true), &WINDOWED), None);
     }
 
     const AT: Duration = Duration::from_millis(250);
@@ -700,7 +704,10 @@ mod tests {
             events(&WinitEvent::Focused(false), true),
             [WindowEvent::FocusLost]
         );
-        assert_eq!(events(&WinitEvent::Focused(true), true), []);
+        assert_eq!(
+            events(&WinitEvent::Focused(true), true),
+            [WindowEvent::FocusGained]
+        );
         assert_eq!(
             events(&WinitEvent::CloseRequested, true),
             [WindowEvent::CloseRequested]

@@ -176,8 +176,12 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                     Some(keeper) => app.with_settings(keeper),
                     None => app,
                 };
-                // Fullscreen if the player quit fullscreen.
+                // Fullscreen if the player quit fullscreen; a saved mode
+                // this monitor lacks says so at startup.
                 app.restore_window(&mut window);
+                for warning in app.take_warnings() {
+                    eprintln!("{warning}");
+                }
                 #[cfg(feature = "dev-tools")]
                 let (app, dev_tools) = match self.dev_catalog.take() {
                     Some(catalog) => (

@@ -133,9 +133,10 @@ exclude_re = [
     "DevTools::(new|on_window_event|run_frame|layer_mut)",
     # The window port over a real winit window: one-line reads of its size,
     # scale factor and fullscreen state, a redraw request, showing or hiding
-    # the system pointer, and the fullscreen and size requests, observable
-    # only with a window.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size)",
+    # the system pointer, the fullscreen and size requests, and its
+    # monitor's modes and name, observable only with a window. The
+    # decisions in them are the tested `deepest` and `offers_exclusive`.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name)",
     # The port's defaults for a window with no pointer of its own, that
     # cannot go fullscreen or be sized, do nothing already.
     "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",

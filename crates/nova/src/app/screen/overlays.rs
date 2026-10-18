@@ -20,7 +20,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, HaggleDialog,
     PlunderDialog, PlunderShown, PrefsDialog,
 };
-use nova_view::{Input, Key, Screen, ScreenAction};
+use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, desc_dialog, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
@@ -135,6 +135,20 @@ impl AppScreen {
             if let Some(flight) = &mut self.flight {
                 flight.set_double_time(self.double_time);
             }
+        }
+    }
+
+    /// Offers the open Preferences dialog `modes` for its display picker,
+    /// on `current`, which the player's preferences take as the kind the
+    /// game runs fullscreen in. With no dialog open, nothing changes.
+    pub(super) fn offer_display_to_preferences(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+    ) {
+        if let Some(dialog) = &mut self.preferences {
+            dialog.set_display_modes(modes, current);
+            self.prefs.fullscreen = current;
         }
     }
 

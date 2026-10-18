@@ -45,14 +45,33 @@
 //!
 //! # Fullscreen
 //!
-//! The platform's fullscreen shortcut (Control+Command+F on macOS, Alt+Enter
-//! or F11 elsewhere) toggles borderless fullscreen through the
+//! The game runs fullscreen borderless, or exclusive in a display mode the
+//! player picked ([`FullscreenSetting`]). The platform's fullscreen
+//! shortcut (Control+Command+F on macOS, Alt+Enter or F11 elsewhere)
+//! toggles between the window and the saved kind through the
 //! [`WindowPort`], whatever shows, and never reaches the screen or the
 //! overlay. The system can change the state itself, and says so with
 //! [`WindowEvent::FullscreenChanged`]. Leaving, either way, gives the
-//! window back its size from before. Each change is saved as
-//! [`GameSettings::fullscreen`] through the settings keeper, if any, and
-//! [`App::restore_window`] opens the game the way the player left it.
+//! window back its size from before, and keeps the kind. Each change is
+//! saved as [`GameSettings::fullscreen`] through the settings keeper, if
+//! any, and [`App::restore_window`] opens the game the way the player left
+//! it.
+//!
+//! - **The picker.** Each time the Preferences dialog opens, the app
+//!   offers it the modes the window's monitor lists
+//!   ([`listed_modes`]) and the live kind
+//!   ([`Screen::offer_display`]). A kind the dialog reports
+//!   ([`Prefs::fullscreen`](nova_view::Prefs::fullscreen)) other than the
+//!   live one is entered once the event is handled, and saved, with the
+//!   monitor's name, as [`GameSettings::fullscreen_kind`].
+//! - **Fallback.** A saved mode the monitor does not offer, or one chosen
+//!   on another monitor, opens borderless with a warning naming it, and the
+//!   session stays borderless. The saved kind is kept, so the next launch
+//!   on that monitor gets the mode back.
+//! - **Focus.** Losing focus while exclusive leaves the mode until focus
+//!   comes back ([`WindowEvent::FocusGained`]), when it is entered again.
+//! - **Exit.** Before every exit, an exclusive mode is left, so the
+//!   display gets its own mode back. Nothing is saved on the way out.
 //!
 //! # Diagnostics
 //!
@@ -74,7 +93,10 @@ use std::time::Duration;
 use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
-use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
+use nova_view::{
+    DrawList, FullscreenKind, ImageKey, Input, Key, MonitorMode, MouseButton, Point, Screen,
+    ScreenAction, listed_modes,
+};
 
 mod fullscreen;
 pub mod screen;
@@ -82,7 +104,7 @@ pub mod screen;
 pub use screen::{AppScreen, Showing, start_screen};
 
 use crate::config::Os;
-use crate::settings::{GameKeeper, GameSettings};
+use crate::settings::{FullscreenSetting, GameKeeper, GameSettings};
 use fullscreen::{Fullscreen, Shortcut};
 
 /// What the app needs from the window.
@@ -98,11 +120,23 @@ pub trait WindowPort {
     fn set_pointer_visible(&mut self, visible: bool) {
         let _ = visible;
     }
-    /// Makes the window borderless fullscreen on its current display
-    /// (`true`), or a window again. Does nothing by default, for a window
-    /// that cannot go fullscreen.
-    fn set_fullscreen(&mut self, on: bool) {
-        let _ = on;
+    /// Makes the window fullscreen on its current display, borderless or
+    /// exclusive in a mode, or a window again (`None`), which also leaves
+    /// an exclusive mode, giving the display its own back. Does nothing by
+    /// default, for a window that cannot go fullscreen.
+    fn set_fullscreen(&mut self, fullscreen: Option<FullscreenKind>) {
+        let _ = fullscreen;
+    }
+    /// The display modes the window's current monitor offers for
+    /// exclusive fullscreen, as the platform lists them: none by default,
+    /// and none where the platform cannot enter them.
+    fn video_modes(&self) -> Vec<MonitorMode> {
+        Vec::new()
+    }
+    /// The name of the window's current monitor, if the platform gives
+    /// one; `None` by default.
+    fn monitor_name(&self) -> Option<String> {
+        None
     }
     /// Whether the window is fullscreen, as the system now says; `false`
     /// by default.
@@ -163,6 +197,8 @@ pub enum WindowEvent {
     /// The window stopped receiving keyboard input; the releases of any
     /// keys held down will not arrive.
     FocusLost,
+    /// The window receives keyboard input again.
+    FocusGained,
     /// Whether the window is fullscreen, as the system now reports it. The
     /// system can change it without the app asking (a window button, a
     /// menu), so the adapter reports it often, the same state again
@@ -219,6 +255,12 @@ pub struct App<S, C = AppScreen> {
     warnings: Vec<String>,
     diagnostics: Option<Box<dyn Write>>,
     fullscreen: Fullscreen,
+    /// A fullscreen kind the Preferences dialog chose, to apply once the
+    /// event that reported it is handled.
+    chosen_fullscreen: Option<FullscreenKind>,
+    /// Whether the open Preferences dialog has been offered the display
+    /// modes.
+    display_offered: bool,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -239,6 +281,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             warnings: Vec::new(),
             diagnostics: None,
             fullscreen: Fullscreen::new(Os::current(), window.size_px()),
+            chosen_fullscreen: None,
+            display_offered: false,
         }
     }
 
@@ -251,16 +295,60 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// Puts the window, just opened, in the state the player left it in:
-    /// fullscreen when the settings kept say so. Its size now is the one
-    /// given back on leaving.
+    /// fullscreen, in the kind saved, when the settings kept say so. Its
+    /// size now is the one given back on leaving. A saved mode the monitor
+    /// does not offer opens borderless, with a warning kept for the caller
+    /// to show; nothing is saved.
     pub fn restore_window(&mut self, window: &mut impl WindowPort) {
         let saved = self
             .settings
             .as_ref()
             .is_some_and(|keeper| keeper.settings().fullscreen);
         if saved && !self.fullscreen.is_on() {
-            self.fullscreen.toggle(window);
+            let warning = self.fullscreen.toggle(window);
+            self.warnings.extend(warning);
         }
+    }
+
+    /// Enters the fullscreen kind the Preferences dialog chose, if it
+    /// chose one, on the window's current monitor, and saves it, fullscreen
+    /// on, through the keeper, if any.
+    fn apply_chosen_fullscreen(&mut self, window: &mut impl WindowPort) {
+        let Some(kind) = self.chosen_fullscreen.take() else {
+            return;
+        };
+        let setting = match kind {
+            FullscreenKind::Borderless => FullscreenSetting::Borderless,
+            FullscreenKind::Exclusive(mode) => FullscreenSetting::Exclusive {
+                mode,
+                monitor: window.monitor_name(),
+            },
+        };
+        let warning = self.fullscreen.choose(setting.clone(), window);
+        self.warnings.extend(warning);
+        if let Some(keeper) = &mut self.settings {
+            let settings = GameSettings {
+                fullscreen: true,
+                fullscreen_kind: setting,
+                ..keeper.settings()
+            };
+            if let Err(warning) = keeper.change(settings) {
+                self.warnings.push(warning);
+            }
+        }
+    }
+
+    /// Offers the Preferences dialog, once each time it opens, the modes
+    /// the window's monitor lists and the kind the game runs fullscreen in
+    /// now ([`Screen::offer_display`]).
+    fn offer_display(&mut self, window: &impl WindowPort) {
+        let open = self.screen.now_showing() == Some(Showing::Preferences);
+        if open && !self.display_offered {
+            let modes = listed_modes(&window.video_modes());
+            self.screen
+                .offer_display(&modes, self.fullscreen.kind().kind());
+        }
+        self.display_offered = open;
     }
 
     /// Saves whether the game is fullscreen through the keeper, if there
@@ -306,6 +394,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// of the preferences is saved through it.
     #[must_use]
     pub fn with_settings(mut self, keeper: GameKeeper) -> Self {
+        self.fullscreen.set_kind(keeper.settings().fullscreen_kind);
         self.settings = Some(keeper);
         self
     }
@@ -322,7 +411,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
-    /// them), each when there is one; then a galaxy map borders setting
+    /// them but the fullscreen kind), each when there is one. A fullscreen
+    /// kind other than the live one is held, to be entered and saved once
+    /// the event is handled, which has the window; then a galaxy map borders setting
     /// its map's close reports ([`Screen::take_map_borders_save`]) is
     /// saved through the keeper with the other settings as they are. A
     /// failed save is kept as a warning.
@@ -345,6 +436,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 },
                 (None, None) => GameSettings::default(),
             };
+            if prefs.fullscreen != self.fullscreen.kind().kind() {
+                self.chosen_fullscreen = Some(prefs.fullscreen);
+            }
             let settings = current.with_prefs(prefs);
             if let Some(core) = &mut self.audio {
                 core.apply(settings.audio);
@@ -465,7 +559,31 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// shows, every other key and pointer event goes to it alone, wherever
     /// the pointer is, though the pointer's position is still recorded. Every
     /// redraw also gives the overlay its time.
+    ///
+    /// After the event, a fullscreen kind the Preferences dialog chose is
+    /// entered, and a Preferences dialog just opened is offered the display
+    /// modes. Before the app exits, an exclusive mode is left, so the
+    /// display gets its own back; nothing is saved, so the next launch
+    /// opens as this one quit.
     pub fn handle_routed(
+        &mut self,
+        event: WindowEvent,
+        window: &mut impl WindowPort,
+        gpu: &mut impl Gpu,
+    ) -> Handled {
+        let handled = self.dispatch(event, window, gpu);
+        self.apply_chosen_fullscreen(window);
+        if handled.control == Control::Exit {
+            self.fullscreen.exiting(window);
+        } else {
+            self.offer_display(window);
+        }
+        handled
+    }
+
+    /// Handles one window event as [`App::handle_routed`] does, before its
+    /// after-event steps.
+    fn dispatch(
         &mut self,
         event: WindowEvent,
         window: &mut impl WindowPort,
@@ -493,8 +611,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(Control::Exit)
             }
             WindowEvent::FocusLost => {
-                self.fullscreen.focus_lost();
+                self.fullscreen.focus_lost(window);
                 self.screen.release_keys();
+                game(Control::Continue)
+            }
+            WindowEvent::FocusGained => {
+                self.fullscreen.focus_gained(window);
                 game(Control::Continue)
             }
             WindowEvent::FullscreenChanged { fullscreen } => {
@@ -551,29 +673,41 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     None => Control::Continue,
                 })
             }
-            WindowEvent::Redraw { elapsed } => {
-                if let Some(overlay) = &mut self.overlay {
-                    overlay.frame(elapsed);
-                }
-                self.screen.tick(elapsed.saturating_sub(self.last_redraw));
-                self.forget_sync_unless_drawing();
-                self.feed_audio();
-                self.take_screen_warnings();
-                self.last_redraw = self.last_redraw.max(elapsed);
-                if self.screen.take_quit() {
-                    self.quit();
-                    return game(Control::Exit);
-                }
-                let resync = self.resync_pointer();
-                let mut list = DrawList::new();
-                self.screen.draw(&mut list);
-                let report = self.renderer.render(&list, &self.viewport, gpu);
-                self.failures.extend(report.new_failures);
-                self.show_pointer(window);
-                window.request_redraw();
-                game(resync)
-            }
+            WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
         }
+    }
+
+    /// A redraw at `elapsed`: ticks the screen and the overlay, then draws
+    /// the frame and asks for the next, unless the screen asked to quit.
+    fn redraw(
+        &mut self,
+        elapsed: Duration,
+        window: &mut impl WindowPort,
+        gpu: &mut impl Gpu,
+    ) -> Control {
+        if let Some(overlay) = &mut self.overlay {
+            overlay.frame(elapsed);
+        }
+        self.screen.tick(elapsed.saturating_sub(self.last_redraw));
+        self.forget_sync_unless_drawing();
+        self.feed_audio();
+        self.take_screen_warnings();
+        self.last_redraw = self.last_redraw.max(elapsed);
+        if self.screen.take_quit() {
+            self.quit();
+            return Control::Exit;
+        }
+        let resync = self.resync_pointer();
+        // A dialog a keyed click opened shows its modes from its first
+        // frame.
+        self.offer_display(window);
+        let mut list = DrawList::new();
+        self.screen.draw(&mut list);
+        let report = self.renderer.render(&list, &self.viewport, gpu);
+        self.failures.extend(report.new_failures);
+        self.show_pointer(window);
+        window.request_redraw();
+        resync
     }
 
     /// Handles a key: the fullscreen shortcut first, whatever shows, and
@@ -591,7 +725,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         };
         match self.fullscreen.key(key, pressed, repeat) {
             Shortcut::Toggle => {
-                self.fullscreen.toggle(window);
+                let warning = self.fullscreen.toggle(window);
+                self.warnings.extend(warning);
                 self.save_fullscreen();
                 return taken;
             }
@@ -782,8 +917,10 @@ mod tests {
         scale_factor: f64,
         redraws: usize,
         pointer_shown: Vec<bool>,
-        fullscreen: Vec<bool>,
+        fullscreen: Vec<Option<FullscreenKind>>,
         size_requests: Vec<(u32, u32)>,
+        modes: Vec<MonitorMode>,
+        monitor: Option<String>,
     }
 
     impl FakeWindow {
@@ -795,6 +932,8 @@ mod tests {
                 pointer_shown: Vec::new(),
                 fullscreen: Vec::new(),
                 size_requests: Vec::new(),
+                modes: Vec::new(),
+                monitor: None,
             }
         }
     }
@@ -816,8 +955,16 @@ mod tests {
             self.pointer_shown.push(visible);
         }
 
-        fn set_fullscreen(&mut self, on: bool) {
-            self.fullscreen.push(on);
+        fn set_fullscreen(&mut self, fullscreen: Option<FullscreenKind>) {
+            self.fullscreen.push(fullscreen);
+        }
+
+        fn video_modes(&self) -> Vec<MonitorMode> {
+            self.modes.clone()
+        }
+
+        fn monitor_name(&self) -> Option<String> {
+            self.monitor.clone()
         }
 
         fn request_inner_size(&mut self, size_px: (u32, u32)) {
@@ -2515,6 +2662,10 @@ mod tests {
 
     const MAC_SHORTCUT: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
 
+    const BORDERLESS: Option<FullscreenKind> = Some(FullscreenKind::Borderless);
+
+    const NOT_FULLSCREEN: Vec<Option<FullscreenKind>> = Vec::new();
+
     /// Presses `chord`'s keys in order, then releases them in reverse.
     fn chord<C: Screen>(app: &mut App<NoImages, C>, window: &mut FakeWindow, chord: &[Key]) {
         let mut gpu = RecordingGpu::new();
@@ -2549,6 +2700,22 @@ mod tests {
     }
 
     #[test]
+    fn a_window_with_no_monitor_of_its_own_lists_no_modes_and_no_name() {
+        struct Bare;
+        impl WindowPort for Bare {
+            fn size_px(&self) -> (u32, u32) {
+                (1024, 768)
+            }
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+            fn request_redraw(&mut self) {}
+        }
+        assert_eq!(Bare.video_modes(), []);
+        assert_eq!(Bare.monitor_name(), None);
+    }
+
+    #[test]
     fn the_shortcut_goes_fullscreen_and_never_reaches_the_screen() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::MacOs);
@@ -2559,7 +2726,7 @@ mod tests {
         }
         handle(&mut app, &mut window, WindowEvent::Text('f'));
         handle(&mut app, &mut window, key(Key::Char('f'), false));
-        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(
             app.screen().inputs,
             [key_input(Key::Control, true), key_input(Key::Command, true)],
@@ -2584,7 +2751,7 @@ mod tests {
         let mut app = app(&window).with_os(Os::Windows);
         chord(&mut app, &mut window, &[Key::Alt, Key::Enter]);
         chord(&mut app, &mut window, &[Key::Function(11)]);
-        assert_eq!(window.fullscreen, [true, false]);
+        assert_eq!(window.fullscreen, [BORDERLESS, None]);
         assert_eq!(
             app.screen().inputs,
             [key_input(Key::Alt, true), key_input(Key::Alt, false)]
@@ -2605,7 +2772,7 @@ mod tests {
         chord(&mut app, &mut window, &MAC_SHORTCUT);
         assert!(!saved_fullscreen(&store));
         assert_eq!(store.writes(), 2);
-        assert_eq!(window.fullscreen, [true, false]);
+        assert_eq!(window.fullscreen, [BORDERLESS, None]);
         assert_eq!(window.size_requests, [(2048, 1536)]);
         assert_eq!(app.take_warnings(), Vec::<String>::new());
     }
@@ -2627,7 +2794,7 @@ mod tests {
         handle(&mut app, &mut window, reported(false));
         assert!(!saved_fullscreen(&store));
         assert_eq!(window.size_requests, [(1024, 768)]);
-        assert_eq!(window.fullscreen, Vec::<bool>::new(), "the system did it");
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN, "the system did it");
         for _ in 0..3 {
             handle(&mut app, &mut window, reported(false));
         }
@@ -2650,7 +2817,7 @@ mod tests {
             handle(&mut app, &mut window, WindowEvent::Redraw { elapsed });
         }
         assert_eq!(store.writes(), 1);
-        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(window.size_requests, Vec::<(u32, u32)>::new());
         handle(&mut app, &mut window, reported(false));
         assert_eq!(store.writes(), 2, "the system's exit, seen on a frame");
@@ -2684,7 +2851,7 @@ mod tests {
         );
         assert!(visible(&app));
         chord(&mut app, &mut window, &[Key::Function(11)]);
-        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
     }
 
     #[test]
@@ -2694,7 +2861,7 @@ mod tests {
         handle(&mut app, &mut window, key(Key::Alt, true));
         handle(&mut app, &mut window, WindowEvent::FocusLost);
         handle(&mut app, &mut window, key(Key::Enter, true));
-        assert_eq!(window.fullscreen, Vec::<bool>::new());
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN);
         assert_eq!(app.screen().releases, 1);
     }
 
@@ -2703,7 +2870,7 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
         chord(&mut app, &mut window, &[Key::Function(11)]);
-        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(app.take_warnings(), Vec::<String>::new());
         let store = MemorySettings::new();
         let mut app = self::app(&window)
@@ -2722,10 +2889,10 @@ mod tests {
         let store = MemorySettings::holding(r#"{"fullscreen": true}"#);
         let mut app = app(&window).with_settings(keeper(&store));
         app.restore_window(&mut window);
-        assert_eq!(window.fullscreen, [true]);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(store.writes(), 0, "already saved so");
         handle(&mut app, &mut window, reported(true));
-        assert_eq!(window.fullscreen, [true], "once");
+        assert_eq!(window.fullscreen, [BORDERLESS], "once");
         assert_eq!(store.writes(), 0);
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let store = MemorySettings::holding(r#"{"fullscreen": false}"#);
@@ -2733,7 +2900,7 @@ mod tests {
         app.restore_window(&mut window);
         let mut unkept = self::app(&window);
         unkept.restore_window(&mut window);
-        assert_eq!(window.fullscreen, Vec::<bool>::new());
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN);
     }
 
     #[test]
@@ -2754,6 +2921,403 @@ mod tests {
         event: WindowEvent,
     ) {
         app.handle(event, window, &mut RecordingGpu::new());
+    }
+
+    // Exclusive display modes.
+
+    use nova_view::VideoMode;
+
+    const DELL: &str = "DELL U2720Q";
+
+    fn fhd() -> VideoMode {
+        VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 60_000,
+        }
+    }
+
+    fn qhd() -> VideoMode {
+        VideoMode {
+            width: 2560,
+            height: 1440,
+            refresh_millihertz: 144_000,
+        }
+    }
+
+    #[allow(clippy::unnecessary_wraps)] // As the window records a request.
+    fn exclusive(mode: VideoMode) -> Option<FullscreenKind> {
+        Some(FullscreenKind::Exclusive(mode))
+    }
+
+    /// A 1024x768 window on the DELL, which offers QHD at 144 Hz and FHD
+    /// at 60 Hz, each at two depths, and modes too small to list.
+    fn on_monitor() -> FakeWindow {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        window.monitor = Some(DELL.to_owned());
+        let small = VideoMode {
+            width: 800,
+            height: 600,
+            refresh_millihertz: 60_000,
+        };
+        window.modes = [fhd(), small, qhd(), fhd(), qhd()]
+            .into_iter()
+            .zip([32, 32, 32, 16, 24])
+            .map(|(mode, bit_depth)| MonitorMode { mode, bit_depth })
+            .collect();
+        window
+    }
+
+    /// Settings holding FHD on `monitor` as the kind, and `fullscreen`.
+    fn saved_fhd(fullscreen: bool, monitor: &str) -> MemorySettings {
+        MemorySettings::holding(
+            &serde_json::json!({
+                "fullscreen": fullscreen,
+                "fullscreen_kind": {"exclusive": {
+                    "width": 1920,
+                    "height": 1080,
+                    "refresh_millihertz": 60_000,
+                    "monitor": monitor,
+                }},
+            })
+            .to_string(),
+        )
+    }
+
+    fn stored(store: &MemorySettings) -> GameSettings {
+        crate::settings::SettingsKeeper::open(store.clone())
+            .0
+            .settings()
+    }
+
+    fn fhd_on(monitor: &str) -> FullscreenSetting {
+        FullscreenSetting::Exclusive {
+            mode: fhd(),
+            monitor: Some(monitor.to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_saved_exclusive_mode_the_monitor_offers_reopens_and_saves_nothing() {
+        let mut window = on_monitor();
+        let store = saved_fhd(true, DELL);
+        let mut app = app(&window).with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        assert_eq!(window.fullscreen, [exclusive(fhd())]);
+        assert_eq!(store.writes(), 0);
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_saved_mode_the_monitor_lacks_opens_borderless_with_a_warning_naming_it() {
+        for (window, monitor) in [
+            (FakeWindow::new((1024, 768), 1.0), DELL),
+            (on_monitor(), "LG HDR 4K"),
+        ] {
+            let mut window = window;
+            let store = saved_fhd(true, monitor);
+            let mut app = app(&window).with_settings(keeper(&store));
+            app.restore_window(&mut window);
+            assert_eq!(window.fullscreen, [BORDERLESS], "{monitor}");
+            let warnings = app.take_warnings();
+            assert_eq!(warnings.len(), 1, "{monitor}");
+            assert!(
+                warnings[0].contains("1920 x 1080, 60 Hz") && warnings[0].contains(monitor),
+                "{warnings:?}"
+            );
+            assert_eq!(store.writes(), 0, "the kind stays saved");
+            assert_eq!(stored(&store).fullscreen_kind, fhd_on(monitor));
+        }
+    }
+
+    #[test]
+    fn after_a_windowed_launch_the_shortcut_enters_the_saved_mode_and_saves_only_the_state() {
+        let mut window = on_monitor();
+        let store = saved_fhd(false, DELL);
+        let mut app = app(&window)
+            .with_os(Os::Windows)
+            .with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN);
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        assert_eq!(window.fullscreen, [exclusive(fhd())]);
+        assert!(stored(&store).fullscreen);
+        chord(&mut app, &mut window, &[Key::Function(11)]);
+        assert_eq!(window.fullscreen, [exclusive(fhd()), None]);
+        assert_eq!(window.size_requests, [(1024, 768)]);
+        let saved = stored(&store);
+        assert!(!saved.fullscreen);
+        assert_eq!(saved.fullscreen_kind, fhd_on(DELL));
+        assert_eq!(store.writes(), 2);
+    }
+
+    /// Opens Preferences on P, closes it on Escape, and reports the next
+    /// of `prefs` on Space; records each offer of the display modes.
+    #[derive(Default)]
+    struct DisplayScreen {
+        open: bool,
+        prefs: Vec<Prefs>,
+        pending: Option<Prefs>,
+        offers: Vec<(Vec<VideoMode>, FullscreenKind)>,
+        /// Opens Preferences on the next tick, as a keyed click does.
+        opens_on_tick: bool,
+        /// How many offers had arrived at each draw.
+        drawn_after: std::cell::RefCell<Vec<usize>>,
+    }
+
+    impl Screen for DisplayScreen {
+        fn input(&mut self, input: &Input) -> ScreenAction {
+            match *input {
+                Input::Key {
+                    key: Key::Char('p'),
+                    pressed: true,
+                    ..
+                } => self.open = true,
+                Input::Key {
+                    key: Key::Escape,
+                    pressed: true,
+                    ..
+                } => self.open = false,
+                Input::Key {
+                    key: Key::Space,
+                    pressed: true,
+                    ..
+                } if !self.prefs.is_empty() => self.pending = Some(self.prefs.remove(0)),
+                _ => {}
+            }
+            ScreenAction::None
+        }
+
+        fn tick(&mut self, _dt: Duration) {
+            self.open |= std::mem::take(&mut self.opens_on_tick);
+        }
+
+        fn draw(&self, _list: &mut DrawList) {
+            self.drawn_after.borrow_mut().push(self.offers.len());
+        }
+
+        fn take_prefs(&mut self) -> Option<Prefs> {
+            self.pending.take()
+        }
+
+        fn now_showing(&self) -> Option<Showing> {
+            Some(if self.open {
+                Showing::Preferences
+            } else {
+                Showing::Flight
+            })
+        }
+
+        fn offer_display(&mut self, modes: &[VideoMode], current: FullscreenKind) {
+            self.offers.push((modes.to_vec(), current));
+        }
+    }
+
+    type DisplayApp = App<NoImages, DisplayScreen>;
+
+    fn display_app(window: &FakeWindow, prefs: &[Prefs]) -> DisplayApp {
+        let screen = DisplayScreen {
+            prefs: prefs.to_vec(),
+            ..DisplayScreen::default()
+        };
+        App::new(window, NoImages, screen)
+    }
+
+    fn press_on(app: &mut DisplayApp, window: &mut FakeWindow, key: Key) {
+        let mut gpu = RecordingGpu::new();
+        for pressed in [true, false] {
+            app.handle(self::key(key, pressed), window, &mut gpu);
+        }
+    }
+
+    #[test]
+    fn opening_preferences_offers_the_listed_modes_and_the_live_kind_once_each_time() {
+        let mut window = on_monitor();
+        let mut app = display_app(&window, &[]);
+        handle_display(&mut app, &mut window, WindowEvent::FocusGained);
+        assert_eq!(app.screen().offers, [], "not open");
+        press_on(&mut app, &mut window, Key::Char('p'));
+        let listed = vec![qhd(), fhd()];
+        assert_eq!(
+            app.screen().offers,
+            [(listed.clone(), FullscreenKind::Borderless)]
+        );
+        press_on(&mut app, &mut window, Key::Up);
+        handle_display(
+            &mut app,
+            &mut window,
+            WindowEvent::Redraw {
+                elapsed: Duration::from_millis(16),
+            },
+        );
+        assert_eq!(app.screen().offers.len(), 1, "not again while open");
+        press_on(&mut app, &mut window, Key::Escape);
+        app.fullscreen.set_kind(fhd_on(DELL));
+        window.modes.clear();
+        press_on(&mut app, &mut window, Key::Char('p'));
+        assert_eq!(
+            app.screen().offers[1],
+            (vec![], FullscreenKind::Exclusive(fhd())),
+            "offered again, with no modes from a monitor listing none"
+        );
+    }
+
+    #[test]
+    fn a_dialog_opened_on_a_tick_is_offered_before_its_first_frame() {
+        let mut window = on_monitor();
+        let mut app = display_app(&window, &[]);
+        app.screen.opens_on_tick = true;
+        handle_display(
+            &mut app,
+            &mut window,
+            WindowEvent::Redraw {
+                elapsed: Duration::from_millis(16),
+            },
+        );
+        assert_eq!(*app.screen().drawn_after.borrow(), [1]);
+    }
+
+    fn handle_display(
+        app: &mut DisplayApp,
+        window: &mut FakeWindow,
+        event: WindowEvent,
+    ) -> Control {
+        app.handle(event, window, &mut RecordingGpu::new())
+    }
+
+    fn choosing(kind: FullscreenKind) -> Prefs {
+        Prefs {
+            fullscreen: kind,
+            ..MUSIC_OFF
+        }
+    }
+
+    #[test]
+    fn a_kind_the_dialog_chooses_is_entered_and_saved_with_the_monitors_name() {
+        let mut window = on_monitor();
+        let store = MemorySettings::new();
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(qhd()))])
+            .with_settings(keeper(&store));
+        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::Space);
+        assert_eq!(window.fullscreen, [exclusive(qhd())]);
+        let saved = stored(&store);
+        assert!(saved.fullscreen);
+        assert_eq!(
+            saved.fullscreen_kind,
+            FullscreenSetting::Exclusive {
+                mode: qhd(),
+                monitor: Some(DELL.to_owned()),
+            }
+        );
+        assert!(!saved.audio.music, "the rest of the prefs saved too");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+        assert_eq!(*app.fullscreen.kind(), saved.fullscreen_kind, "live");
+    }
+
+    #[test]
+    fn choosing_borderless_from_an_exclusive_mode_switches_to_it() {
+        let mut window = on_monitor();
+        let store = saved_fhd(true, DELL);
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Borderless)])
+            .with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        press_on(&mut app, &mut window, Key::Space);
+        assert_eq!(window.fullscreen, [exclusive(fhd()), BORDERLESS]);
+        assert_eq!(window.size_requests, NO_SIZES, "fullscreen to fullscreen");
+        assert_eq!(
+            stored(&store).fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+    }
+
+    const NO_SIZES: Vec<(u32, u32)> = Vec::new();
+
+    #[test]
+    fn an_audio_change_with_the_live_kind_asks_nothing_and_keeps_the_saved_kind() {
+        // The monitor lacks the saved mode: the session falls back to
+        // borderless, and the dialog reports borderless with the audio.
+        let mut window = on_monitor();
+        let store = saved_fhd(true, "LG HDR 4K");
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Borderless)])
+            .with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        app.take_warnings();
+        press_on(&mut app, &mut window, Key::Space);
+        assert_eq!(window.fullscreen, [BORDERLESS], "nothing more asked");
+        let saved = stored(&store);
+        assert!(!saved.audio.music, "the audio saved");
+        assert_eq!(saved.fullscreen_kind, fhd_on("LG HDR 4K"), "kept");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn quitting_from_an_exclusive_mode_leaves_it_first_and_saves_nothing() {
+        type Quit = fn(&mut TestApp, &mut FakeWindow) -> Control;
+        let close: Quit = |app, window| handle(app, window, WindowEvent::CloseRequested);
+        let screen_quit: Quit = |app, window| {
+            app.screen.quit_on = Some(Key::Char('q'));
+            handle(app, window, key(Key::Char('q'), true))
+        };
+        let quit_on_tick: Quit = |app, window| {
+            app.screen.asks_quit = true;
+            let elapsed = Duration::from_millis(16);
+            handle(app, window, WindowEvent::Redraw { elapsed })
+        };
+        for (name, quit) in [
+            ("close", close),
+            ("screen", screen_quit),
+            ("tick", quit_on_tick),
+        ] {
+            let mut window = on_monitor();
+            let store = saved_fhd(true, DELL);
+            let mut app = app(&window).with_settings(keeper(&store));
+            app.restore_window(&mut window);
+            assert_eq!(quit(&mut app, &mut window), Control::Exit, "{name}");
+            assert_eq!(window.fullscreen, [exclusive(fhd()), None], "{name}");
+            handle(&mut app, &mut window, reported(false));
+            assert_eq!(window.size_requests, NO_SIZES, "{name}");
+            assert_eq!(store.writes(), 0, "{name}");
+            assert!(stored(&store).fullscreen, "{name}: reopens exclusive");
+        }
+    }
+
+    #[test]
+    fn quitting_windowed_or_borderless_asks_nothing() {
+        let mut window = on_monitor();
+        let mut app = app(&window).with_os(Os::Windows);
+        handle(&mut app, &mut window, WindowEvent::CloseRequested);
+        let mut borderless = self::app(&window).with_os(Os::Windows);
+        chord(&mut borderless, &mut window, &[Key::Function(11)]);
+        handle(&mut borderless, &mut window, WindowEvent::CloseRequested);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
+    }
+
+    #[test]
+    fn losing_focus_in_an_exclusive_mode_leaves_it_until_focus_comes_back() {
+        let mut window = on_monitor();
+        let store = saved_fhd(true, DELL);
+        let mut app = app(&window).with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        handle(&mut app, &mut window, WindowEvent::FocusLost);
+        assert_eq!(window.fullscreen, [exclusive(fhd()), None]);
+        handle(&mut app, &mut window, reported(false));
+        assert_eq!(window.size_requests, NO_SIZES);
+        assert_eq!(store.writes(), 0);
+        assert_eq!(
+            app.handle_routed(
+                WindowEvent::FocusGained,
+                &mut window,
+                &mut RecordingGpu::new()
+            ),
+            handled_game()
+        );
+        assert_eq!(
+            window.fullscreen,
+            [exclusive(fhd()), None, exclusive(fhd())]
+        );
+        assert_eq!(app.screen().inputs, [], "the screen hears nothing");
+        assert_eq!(app.screen().releases, 1, "but lets go of its keys");
     }
 
     // The pilot desk.
