@@ -6,7 +6,7 @@
 //! the atlas, but draws it at the frame's own (logical) size: quads,
 //! positions and clips stay in logical units, and only the texture
 //! coordinates see the bigger image. [`NativeDetail`] hands every frame
-//! back as it is.
+//! back as it is; [`SuperXbr`](crate::SuperXbr) doubles it.
 
 use std::borrow::Cow;
 

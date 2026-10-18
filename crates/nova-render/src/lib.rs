@@ -23,6 +23,8 @@
 //!   at the frame's own logical size. [`NativeDetail`] holds each frame
 //!   as it decodes; a new enlarger ([`Renderer::set_enlarger`]) starts the
 //!   atlas afresh at the next frame ([`Gpu::clear_pages`]).
+//! - [`super_xbr`]: [`SuperXbr`], the enlarger that doubles each image
+//!   but a pattern with Hyllian's Super-xBR, ported to the CPU.
 //! - [`upscale`]: the [`Upscaler`] the adapter draws the world with
 //!   ([`Gpu::set_upscaler`]), the [`UpscalerProbe`] port that says which
 //!   the device can use and the list the player picks from ([`listed`]),
@@ -83,6 +85,7 @@ pub mod present;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod source;
+pub mod super_xbr;
 pub mod upscale;
 pub mod viewport;
 pub mod wgpu;
@@ -94,6 +97,7 @@ pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
+pub use super_xbr::SuperXbr;
 pub use upscale::{
     Abilities, RejectedSizes, Upscaler, UpscalerProbe, WorldResolution, effective, listed,
     metal_fx_takes, offered, resolution_of, world_space,
