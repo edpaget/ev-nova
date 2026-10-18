@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 use nova_data::graphics::Image;
 
 use crate::gpu::{Frame, Gpu, PageId};
-use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
+use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
 /// One call a [`RecordingGpu`] received.
@@ -150,10 +150,7 @@ impl Gpu for RecordingGpu {
 
     fn set_upscaler(&mut self, upscaler: Upscaler) {
         self.upscaler = upscaler;
-        self.world_resolution = match upscaler {
-            Upscaler::Native => WorldResolution::Native,
-            Upscaler::SharpBilinear => WorldResolution::Logical,
-        };
+        self.world_resolution = resolution_of(upscaler);
     }
 }
 

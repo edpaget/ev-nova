@@ -3,7 +3,7 @@
 //! [`SharpBilinear`] does.
 
 use super::sharp_bilinear::SharpBilinear;
-use crate::upscale::{Upscaler, WorldResolution};
+use crate::upscale::{Upscaler, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
 /// Draws flight's world layer onto the target for the
@@ -36,7 +36,7 @@ pub struct Native;
 
 impl Upscale for Native {
     fn resolution(&self) -> WorldResolution {
-        WorldResolution::Native
+        resolution_of(Upscaler::Native)
     }
 
     /// Never asked: a native world has no texture of its own.

@@ -18,7 +18,7 @@ use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
 use nova_render::{
     Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Upscaler, UpscalerProbe,
-    Viewport, WorldResolution,
+    Viewport, WorldResolution, resolution_of,
 };
 use nova_view::draw::{fill_rect, lights_tint};
 use nova_view::geometry::Bounds;
@@ -388,6 +388,15 @@ fn setting_the_upscaler_switches_how_the_world_is_drawn() {
     assert_eq!(gpu.world_resolution(), WorldResolution::Logical);
     gpu.set_upscaler(Upscaler::Native);
     assert_eq!(gpu.world_resolution(), WorldResolution::Native);
+    // As the core's rule, which the recording mock follows, says.
+    for upscaler in [Upscaler::SharpBilinear, Upscaler::Native] {
+        gpu.set_upscaler(upscaler);
+        assert_eq!(
+            gpu.world_resolution(),
+            resolution_of(upscaler),
+            "{upscaler:?}"
+        );
+    }
 }
 
 #[test]

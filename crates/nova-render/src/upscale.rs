@@ -53,6 +53,18 @@ pub enum WorldResolution {
     Logical,
 }
 
+/// The resolution `upscaler` draws the world layer at: native's own, and
+/// the logical size for every upscaler that enlarges a world texture. A
+/// GPU's [`Gpu::world_resolution`](crate::Gpu::world_resolution) answers
+/// this for the upscaler it was set to.
+#[must_use]
+pub fn resolution_of(upscaler: Upscaler) -> WorldResolution {
+    match upscaler {
+        Upscaler::Native => WorldResolution::Native,
+        Upscaler::SharpBilinear => WorldResolution::Logical,
+    }
+}
+
 /// Where a frame drawn into `viewport` draws its world, at `resolution`:
 /// straight into the target at the native resolution, and into a texture
 /// of the logical size at the logical one.
@@ -75,6 +87,15 @@ mod tests {
 
     use super::*;
     use crate::viewport::LOGICAL;
+
+    #[test]
+    fn native_draws_the_world_natively_and_sharp_bilinear_at_the_logical_size() {
+        assert_eq!(resolution_of(Upscaler::Native), WorldResolution::Native);
+        assert_eq!(
+            resolution_of(Upscaler::SharpBilinear),
+            WorldResolution::Logical
+        );
+    }
 
     #[test]
     fn a_native_world_is_drawn_into_the_target() {

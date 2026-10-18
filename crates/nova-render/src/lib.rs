@@ -79,5 +79,5 @@ pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
-pub use upscale::{Upscaler, UpscalerProbe, WorldResolution, listed, world_space};
+pub use upscale::{Upscaler, UpscalerProbe, WorldResolution, listed, resolution_of, world_space};
 pub use viewport::{LOGICAL, Letterbox, LogicalSize, PixelRect, Viewport};

@@ -12,7 +12,7 @@ use wgpu::util::DeviceExt;
 
 use super::renderer::{SCENE_FORMAT, pipeline, pipeline_layout};
 use super::upscale::Upscale;
-use crate::upscale::WorldResolution;
+use crate::upscale::{Upscaler, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
 /// The sharp-bilinear upscaler: the world is drawn at the logical
@@ -129,7 +129,7 @@ impl SharpBilinear {
 
 impl Upscale for SharpBilinear {
     fn resolution(&self) -> WorldResolution {
-        WorldResolution::Logical
+        resolution_of(Upscaler::SharpBilinear)
     }
 
     /// Writes the parameters for `world`'s size and `onto`, then draws
