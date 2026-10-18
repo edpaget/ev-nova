@@ -1,7 +1,7 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
 //! and music on or off, each one's volume, Hyperspace Effects, QuickTime
-//! Movies, how the game runs fullscreen and which frame upscaler draws
-//! flight's world.
+//! Movies, how the game runs fullscreen and how it is enlarged onto the
+//! window (its Scaling).
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -29,15 +29,16 @@
 //!   closes, so stepping through the modes never switches the display.
 //! - Check box 2 ("Share Processor Time"), the greyed option least likely
 //!   ever to work (it is the classic Mac's cooperative multitasking),
-//!   holds the frame upscaler list ([`Picker`]): the upscalers the
-//!   running device can use, native first ([`PrefsDialog::with_upscalers`]),
-//!   each labelled "Scaling: " and its name, as the row has no caption of
-//!   its own. It sits directly above the display picker, in the same
-//!   column, so it is laid out the same way, running on to the same
-//!   margin; and it leaves "Check For Updates" free for a later list.
-//!   Its choice is held until the dialog closes, as the display picker's
-//!   is, and reported as [`Prefs::upscaler`] only when the player stepped
-//!   it to another upscaler than the one running.
+//!   holds the Scaling list ([`Picker`]): native, the per-frame upscalers
+//!   the running device can use, then Super-xBR, which enlarges sprites
+//!   as they load ([`PrefsDialog::with_scaling`]), each labelled
+//!   "Scaling: " and its name, as the row has no caption of its own. It
+//!   sits directly above the display picker, in the same column, so it is
+//!   laid out the same way, running on to the same margin; and it leaves
+//!   "Check For Updates" free for a later list. Its choice is held until
+//!   the dialog closes, as the display picker's is, and reported as
+//!   [`Prefs::scaling`] only when the player stepped it to another
+//!   scaling than the one running.
 //! - Every other check box is drawn greyed and unchecked, and Key
 //!   Settings is a greyed button: those options do not work yet.
 //! - Every other item is hidden.
@@ -53,6 +54,7 @@ use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::preferences::Prefs;
+use crate::scaling::Scaling;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::SoundPrefs;
 use crate::text::TextMetrics;
@@ -91,12 +93,11 @@ pub const QUICKTIME_MOVIES_ITEM: usize = 9;
 pub const DISPLAY_ITEM: usize = 11;
 
 /// How far in from the dialog's right edge the display picker's label
-/// stops, and the upscaler list's: the left column's margin, mirrored.
+/// stops, and the Scaling list's: the left column's margin, mirrored.
 pub const DISPLAY_RIGHT_MARGIN: f32 = 11.0;
 
-/// The frame upscaler list's item ("Share Processor Time" in the stock
-/// dialog).
-pub const UPSCALER_ITEM: usize = 2;
+/// The Scaling list's item ("Share Processor Time" in the stock dialog).
+pub const SCALING_ITEM: usize = 2;
 
 /// The sound effects volume's label item.
 pub const VOLUME_LABEL_ITEM: usize = 4;
@@ -157,8 +158,8 @@ pub enum Focus {
     QuickTimeMovies,
     /// The display picker.
     Display,
-    /// The frame upscaler list.
-    Upscaler,
+    /// The Scaling list.
+    Scaling,
     /// The sound effects volume.
     EffectsVolume,
     /// The music volume.
@@ -174,8 +175,8 @@ impl Focus {
             Self::Sound => Self::HyperspaceEffects,
             Self::HyperspaceEffects => Self::QuickTimeMovies,
             Self::QuickTimeMovies => Self::Display,
-            Self::Display => Self::Upscaler,
-            Self::Upscaler => Self::EffectsVolume,
+            Self::Display => Self::Scaling,
+            Self::Scaling => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
             Self::MusicVolume => Self::Ok,
             Self::Ok => Self::Music,
@@ -191,7 +192,7 @@ enum Target {
     HyperspaceEffects,
     QuickTimeMovies,
     Display,
-    Upscaler,
+    Scaling,
     EffectsVolume,
     MusicVolume,
     Dialog,
@@ -216,7 +217,7 @@ fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
         HYPERSPACE_EFFECTS_ITEM,
         QUICKTIME_MOVIES_ITEM,
         DISPLAY_ITEM,
-        UPSCALER_ITEM,
+        SCALING_ITEM,
     ];
     template
         .items
@@ -236,23 +237,23 @@ fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
         .collect()
 }
 
-/// The frame upscaler list, its choice held until the dialog closes.
+/// The Scaling list, its choice held until the dialog closes.
 #[derive(Clone, Debug)]
-struct UpscalerList {
-    picker: Picker<Upscaler>,
+struct ScalingList {
+    picker: Picker<Scaling>,
     /// Whether the player has stepped it.
     stepped: bool,
 }
 
-impl UpscalerList {
+impl ScalingList {
     /// Sends `input` to the list, noting a step.
     fn input(&mut self, input: &Input) {
         self.stepped |= self.picker.input(input);
     }
 
-    /// The upscaler picked: the one chosen, when the player stepped the
+    /// The scaling picked: the one chosen, when the player stepped the
     /// list and it is not `running`.
-    fn picked(&self, running: Upscaler) -> Option<Upscaler> {
+    fn picked(&self, running: Scaling) -> Option<Scaling> {
         let chosen = self.picker.selected();
         (self.stepped && chosen != running).then_some(chosen)
     }
@@ -280,11 +281,11 @@ pub struct PrefsDialog {
     stepped: bool,
     /// The kind picked, once the dialog closed on a pick, until taken.
     choice: Option<FullscreenKind>,
-    /// The frame upscaler list.
-    upscalers: UpscalerList,
-    /// The frame upscaler, as reported: the one running, which the dialog
-    /// opened on, until it closes on a pick.
-    upscaler: Upscaler,
+    /// The Scaling list.
+    scaling_list: ScalingList,
+    /// The Scaling, as reported: the one running, which the dialog opened
+    /// on, until it closes on a pick.
+    scaling: Scaling,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -357,13 +358,14 @@ impl PrefsDialog {
         );
         let mut display = ModePicker::new(picker_row(&dialog, place(DISPLAY_ITEM)?));
         display.set_entries(&[], prefs.fullscreen);
-        let upscaler_row = picker_row(&dialog, place(UPSCALER_ITEM)?);
-        let upscalers = UpscalerList {
-            picker: Picker::new(upscaler_row, vec![Upscaler::Native], prefs.upscaler),
+        let scaling_row = picker_row(&dialog, place(SCALING_ITEM)?);
+        let unoffered = Scaling::list(&[Upscaler::Native]);
+        let scaling_list = ScalingList {
+            picker: Picker::new(scaling_row, unoffered, prefs.scaling),
             stepped: false,
         };
         let fullscreen = prefs.fullscreen;
-        let upscaler = prefs.upscaler;
+        let scaling = prefs.scaling;
         let prefs = prefs.sound;
         let music = Toggle::new(place(MUSIC_ITEM)?, MUSIC_LABEL, prefs.music);
         let sound = Toggle::new(place(SOUND_ITEM)?, SOUND_LABEL, prefs.sound);
@@ -380,8 +382,8 @@ impl PrefsDialog {
             chosen: fullscreen,
             stepped: false,
             choice: None,
-            upscalers,
-            upscaler,
+            scaling_list,
+            scaling,
             inert,
             dialog,
             style,
@@ -406,7 +408,7 @@ impl PrefsDialog {
             hyperspace_effects: self.hyperspace.on(),
             quicktime_movies: self.movies.on(),
             fullscreen: self.fullscreen,
-            upscaler: self.upscaler,
+            scaling: self.scaling,
         }
     }
 
@@ -427,14 +429,15 @@ impl PrefsDialog {
         self.stepped = false;
     }
 
-    /// The dialog listing `listed` in its upscaler list, in order, on the
+    /// The dialog listing `listed` in its Scaling list, in order, on the
     /// one its preferences say runs, or the first listed when that one is
-    /// not listed. Without a list it lists native alone.
+    /// not listed. Without a list it lists native and Super-xBR, which
+    /// every device has.
     #[must_use]
-    pub fn with_upscalers(mut self, listed: &[Upscaler]) -> Self {
-        self.upscalers
+    pub fn with_scaling(mut self, listed: &[Scaling]) -> Self {
+        self.scaling_list
             .picker
-            .set_entries(listed.to_vec(), self.upscaler);
+            .set_entries(listed.to_vec(), self.scaling);
         self
     }
 
@@ -468,7 +471,7 @@ impl PrefsDialog {
             (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
             (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.input(input),
             (_, Some(Focus::Display)) => self.stepped |= self.display.input(input),
-            (_, Some(Focus::Upscaler)) => self.upscalers.input(input),
+            (_, Some(Focus::Scaling)) => self.scaling_list.input(input),
             (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.input(input),
             (_, Some(Focus::MusicVolume)) => self.changed |= self.music_volume.input(input),
             _ => {}
@@ -493,8 +496,8 @@ impl PrefsDialog {
                 Target::QuickTimeMovies
             } else if self.display.arrow_at(at).is_some() {
                 Target::Display
-            } else if self.upscalers.picker.arrow_at(at).is_some() {
-                Target::Upscaler
+            } else if self.scaling_list.picker.arrow_at(at).is_some() {
+                Target::Scaling
             } else if self.effects_volume.arrow_at(at).is_some() {
                 Target::EffectsVolume
             } else if self.music_volume.arrow_at(at).is_some() {
@@ -509,7 +512,7 @@ impl PrefsDialog {
             Some(Target::HyperspaceEffects) => self.changed |= self.hyperspace.input(input),
             Some(Target::QuickTimeMovies) => self.changed |= self.movies.input(input),
             Some(Target::Display) => self.stepped |= self.display.input(input),
-            Some(Target::Upscaler) => self.upscalers.input(input),
+            Some(Target::Scaling) => self.scaling_list.input(input),
             Some(Target::EffectsVolume) => self.changed |= self.effects_volume.input(input),
             Some(Target::MusicVolume) => self.changed |= self.music_volume.input(input),
             Some(Target::Dialog) => self.dialog_input(input),
@@ -526,9 +529,9 @@ impl PrefsDialog {
     /// Closes the dialog, committing the display picker's choice as a
     /// pick when the player stepped it and it differs from the kind the
     /// game runs in or from the kind chosen: after a fallback, picking
-    /// either counts. The upscaler list's choice is committed, as a
-    /// change of the preferences, when the player stepped it and it
-    /// differs from the one the dialog opened on.
+    /// either counts. The Scaling list's choice is committed, as a change
+    /// of the preferences, when the player stepped it and it differs from
+    /// the one the dialog opened on.
     fn close(&mut self) {
         self.closed = true;
         let picked = self.display.selected();
@@ -538,8 +541,8 @@ impl PrefsDialog {
             self.chosen = picked;
             self.choice = Some(picked);
         }
-        if let Some(upscaler) = self.upscalers.picked(self.upscaler) {
-            self.upscaler = upscaler;
+        if let Some(scaling) = self.scaling_list.picked(self.scaling) {
+            self.scaling = scaling;
             self.changed = true;
         }
     }
@@ -592,10 +595,10 @@ impl PrefsDialog {
         &self.display
     }
 
-    /// The frame upscaler list.
+    /// The Scaling list.
     #[must_use]
-    pub fn upscalers(&self) -> &Picker<Upscaler> {
-        &self.upscalers.picker
+    pub fn scaling(&self) -> &Picker<Scaling> {
+        &self.scaling_list.picker
     }
 
     /// The sound effects volume.
@@ -621,10 +624,10 @@ impl Screen for PrefsDialog {
     /// - A click on a toggle flips it, and a click on a volume's arrow
     ///   steps it. A click on OK closes the dialog; the greyed check boxes
     ///   and Key Settings do nothing.
-    /// - A click on the display picker's or the upscaler list's arrows
+    /// - A click on the display picker's or the Scaling list's arrows
     ///   steps it.
     /// - Tab moves the focus (music, sound, Hyperspace Effects, QuickTime
-    ///   Movies, the display picker, the upscaler list, the sound volume,
+    ///   Movies, the display picker, the Scaling list, the sound volume,
     ///   the music volume, OK, and round). Space flips a focused toggle or
     ///   activates OK; the arrow keys step a focused volume, and Up and
     ///   Down the focused picker, repeats included.
@@ -649,7 +652,7 @@ impl Screen for PrefsDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The backdrop and its outline, OK and Key Settings, the greyed check
-    /// boxes, the four toggles, the display picker, the upscaler list,
+    /// boxes, the four toggles, the display picker, the Scaling list,
     /// then the two volumes.
     /// The focused part is outlined.
     fn draw(&self, list: &mut DrawList) {
@@ -668,7 +671,7 @@ impl Screen for PrefsDialog {
         self.movies
             .draw(focused(Focus::QuickTimeMovies), &self.metrics, list);
         self.display.draw(focused(Focus::Display), list);
-        self.upscalers.picker.draw(focused(Focus::Upscaler), list);
+        self.scaling_list.picker.draw(focused(Focus::Scaling), list);
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
@@ -684,7 +687,7 @@ impl Screen for PrefsDialog {
         self.hyperspace.cancel_pointer();
         self.movies.cancel_pointer();
         self.display.cancel_pointer();
-        self.upscalers.picker.cancel_pointer();
+        self.scaling_list.picker.cancel_pointer();
         self.effects_volume.cancel_pointer();
         self.music_volume.cancel_pointer();
         self.target = None;
@@ -1230,7 +1233,7 @@ mod tests {
                 Focus::HyperspaceEffects,
                 Focus::QuickTimeMovies,
                 Focus::Display,
-                Focus::Upscaler,
+                Focus::Scaling,
                 Focus::EffectsVolume,
                 Focus::MusicVolume,
                 Focus::Ok,
@@ -1506,7 +1509,7 @@ mod tests {
             .quicktime_movies()
             .draw(false, &MonoMetrics, &mut expected);
         dialog.display().draw(false, &mut expected);
-        dialog.upscalers().draw(false, &mut expected);
+        dialog.scaling().draw(false, &mut expected);
         dialog.effects_volume().draw(false, &mut expected);
         dialog.music_volume().draw(false, &mut expected);
         assert_eq!(commands, expected.iter().cloned().collect::<Vec<_>>());
@@ -1918,28 +1921,29 @@ mod tests {
         assert!(drawn(&dialog).windows(ring.len()).any(|w| w == ring));
     }
 
-    const NATIVE: Upscaler = Upscaler::Native;
-    const SHARP: Upscaler = Upscaler::SharpBilinear;
+    const NATIVE: Scaling = Scaling::Native;
+    const SHARP: Scaling = Scaling::SharpBilinear;
+    const SUPER: Scaling = Scaling::SuperXbr;
 
     /// The dialog on `start`, drawn natively, listing `listed`.
-    fn listing(listed: &[Upscaler]) -> PrefsDialog {
-        prefs().with_upscalers(listed)
+    fn listing(listed: &[Scaling]) -> PrefsDialog {
+        prefs().with_scaling(listed)
     }
 
-    /// Tabs to the upscaler list.
-    fn focus_upscaler(dialog: &mut PrefsDialog) {
+    /// Tabs to the Scaling list.
+    fn focus_scaling(dialog: &mut PrefsDialog) {
         for _ in 0..6 {
             dialog.input(&key(Key::Tab));
         }
-        assert_eq!(dialog.focus(), Some(Focus::Upscaler));
+        assert_eq!(dialog.focus(), Some(Focus::Scaling));
     }
 
     #[test]
-    fn the_upscaler_list_takes_share_processor_times_area() {
+    fn the_scaling_list_takes_share_processor_times_area() {
         let dialog = listing(&[NATIVE, SHARP]);
-        assert_eq!(UPSCALER_ITEM, 2);
+        assert_eq!(SCALING_ITEM, 2);
         assert_eq!(
-            dialog.upscalers().rects(),
+            dialog.scaling().rects(),
             PickerRects::in_row(placed(171.0, 55.0, 325.0, 73.0)),
             "on to the dialog's right margin"
         );
@@ -1949,13 +1953,17 @@ mod tests {
                 .iter()
                 .all(|toggle| toggle.label() != "Share Processor Time")
         );
-        assert_eq!(prefs().upscalers().entries(), [NATIVE], "native alone");
+        assert_eq!(
+            prefs().scaling().entries(),
+            [NATIVE, SUPER],
+            "native and Super-xBR before any offer"
+        );
     }
 
     #[test]
-    fn the_upscaler_list_is_clear_of_every_other_part() {
-        let dialog = listing(&[NATIVE, SHARP]);
-        let list = dialog.upscalers().rects().bounds();
+    fn the_scaling_list_is_clear_of_every_other_part() {
+        let dialog = listing(&[NATIVE, SHARP, SUPER]);
+        let list = dialog.scaling().rects().bounds();
         let ok = dialog.dialog().item_bounds(OK_ITEM).expect("OK");
         let keys = dialog
             .dialog()
@@ -1989,162 +1997,181 @@ mod tests {
         assert!(bounds.contains(list.min) && bounds.contains(list.max));
     }
 
-    #[test]
-    fn it_lists_exactly_the_upscalers_it_is_given_on_the_one_running() {
-        assert_eq!(listing(&[NATIVE]).upscalers().entries(), [NATIVE]);
-        let both = listing(&[NATIVE, SHARP]);
-        assert_eq!(both.upscalers().entries(), [NATIVE, SHARP]);
-        assert_eq!(both.upscalers().selected(), NATIVE);
-        let sharp = PrefsDialog::new(
+    /// The dialog opened on `scaling`, listing `listed`.
+    fn opened_on(scaling: Scaling, listed: &[Scaling]) -> PrefsDialog {
+        PrefsDialog::new(
             &template(),
-            Prefs {
-                upscaler: SHARP,
-                ..start()
-            },
+            Prefs { scaling, ..start() },
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
-        .expect("builds");
+        .expect("builds")
+        .with_scaling(listed)
+    }
+
+    #[test]
+    fn it_lists_exactly_the_scaling_it_is_given_on_the_one_running() {
         assert_eq!(
-            sharp
-                .clone()
-                .with_upscalers(&[NATIVE, SHARP])
-                .upscalers()
+            listing(&[NATIVE, SUPER]).scaling().entries(),
+            [NATIVE, SUPER]
+        );
+        let three = listing(&[NATIVE, SHARP, SUPER]);
+        assert_eq!(three.scaling().entries(), [NATIVE, SHARP, SUPER]);
+        assert_eq!(three.scaling().selected(), NATIVE);
+        assert_eq!(
+            opened_on(SHARP, &[NATIVE, SHARP, SUPER])
+                .scaling()
                 .selected(),
             SHARP
         );
         assert_eq!(
-            sharp.with_upscalers(&[NATIVE]).upscalers().selected(),
+            opened_on(SUPER, &[NATIVE, SHARP, SUPER])
+                .scaling()
+                .selected(),
+            SUPER
+        );
+        assert_eq!(
+            opened_on(SHARP, &[NATIVE, SUPER]).scaling().selected(),
             NATIVE,
             "the first, when the one running is not listed"
         );
     }
 
     #[test]
-    fn an_upscaler_step_is_reported_once_when_the_dialog_closes() {
+    fn a_scaling_step_is_reported_once_when_the_dialog_closes() {
         for close in [key(Key::Enter), key(Key::Escape)] {
-            let mut dialog = listing(&[NATIVE, SHARP]);
-            focus_upscaler(&mut dialog);
+            let mut dialog = listing(&[NATIVE, SHARP, SUPER]);
+            focus_scaling(&mut dialog);
             dialog.input(&key(Key::Down));
-            assert_eq!(dialog.upscalers().selected(), SHARP);
+            assert_eq!(dialog.scaling().selected(), SHARP);
             assert_eq!(dialog.take_change(), None, "held while open");
-            assert_eq!(dialog.prefs().upscaler, NATIVE);
+            assert_eq!(dialog.prefs().scaling, NATIVE);
             dialog.input(&close);
             assert!(dialog.closed());
             assert_eq!(
                 dialog.take_change(),
                 Some(Prefs {
-                    upscaler: SHARP,
+                    scaling: SHARP,
                     ..start()
                 }),
                 "{close:?}"
             );
             assert_eq!(dialog.take_change(), None, "once");
         }
-        let mut dialog = listing(&[NATIVE, SHARP]);
-        let down = dialog.upscalers().rects().down.center();
+        let mut dialog = listing(&[NATIVE, SUPER]);
+        let down = dialog.scaling().rects().down.center();
         click(&mut dialog, down);
-        assert_eq!(dialog.upscalers().selected(), SHARP, "a click steps it");
+        assert_eq!(dialog.scaling().selected(), SUPER, "a click steps it");
         assert_eq!(dialog.take_change(), None, "held while open");
         let ok = ok(&dialog);
         click(&mut dialog, ok);
-        assert_eq!(
-            dialog.take_change().map(|prefs| prefs.upscaler),
-            Some(SHARP)
-        );
+        assert_eq!(dialog.take_change().map(|prefs| prefs.scaling), Some(SUPER));
     }
 
     #[test]
-    fn stepping_the_upscaler_away_and_back_or_not_at_all_reports_nothing() {
-        let mut dialog = listing(&[NATIVE, SHARP]);
-        focus_upscaler(&mut dialog);
+    fn stepping_the_scaling_away_and_back_or_not_at_all_reports_nothing() {
+        let mut dialog = listing(&[NATIVE, SUPER]);
+        focus_scaling(&mut dialog);
         dialog.input(&key(Key::Down));
         dialog.input(&key(Key::Up));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_change(), None, "stepped away and back");
-        let mut dialog = listing(&[NATIVE]);
-        focus_upscaler(&mut dialog);
+        let mut dialog = opened_on(SUPER, &[NATIVE, SUPER]);
+        focus_scaling(&mut dialog);
         dialog.input(&key(Key::Down));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_change(), None, "nothing to step to");
-        let mut dialog = listing(&[NATIVE, SHARP]);
+        let mut dialog = listing(&[NATIVE, SHARP, SUPER]);
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_change(), None, "untouched");
     }
 
     #[test]
-    fn an_audio_change_with_an_upscaler_step_pending_reports_the_one_running() {
-        let mut dialog = listing(&[NATIVE, SHARP]);
-        focus_upscaler(&mut dialog);
+    fn an_audio_change_with_a_scaling_step_pending_reports_the_one_running() {
+        let mut dialog = listing(&[NATIVE, SUPER]);
+        focus_scaling(&mut dialog);
         dialog.input(&key(Key::Down));
         let point = dialog.music().rect().center();
         click(&mut dialog, point);
         assert_eq!(
-            dialog.take_change().map(|prefs| prefs.upscaler),
+            dialog.take_change().map(|prefs| prefs.scaling),
             Some(NATIVE)
         );
         dialog.input(&key(Key::Enter));
-        assert_eq!(
-            dialog.take_change().map(|prefs| prefs.upscaler),
-            Some(SHARP)
-        );
+        assert_eq!(dialog.take_change().map(|prefs| prefs.scaling), Some(SUPER));
     }
 
     #[test]
-    fn the_upscaler_and_display_steps_are_held_apart() {
-        let mut dialog = offered().with_upscalers(&[NATIVE, SHARP]);
+    fn the_scaling_and_display_steps_are_held_apart() {
+        let mut dialog = offered().with_scaling(&[NATIVE, SHARP, SUPER]);
         focus_display(&mut dialog);
         dialog.input(&key(Key::Down));
         dialog.input(&key(Key::Tab));
-        assert_eq!(dialog.focus(), Some(Focus::Upscaler));
+        assert_eq!(dialog.focus(), Some(Focus::Scaling));
         dialog.input(&key(Key::Enter));
         let reported = dialog.take_change().expect("the display pick");
-        assert_eq!(reported.upscaler, NATIVE, "never stepped");
+        assert_eq!(reported.scaling, NATIVE, "never stepped");
         assert_eq!(
             reported.fullscreen,
             FullscreenKind::Exclusive(modes()[0]),
             "the display stepped"
         );
-        let mut dialog = offered().with_upscalers(&[NATIVE, SHARP]);
-        focus_upscaler(&mut dialog);
+        let mut dialog = offered().with_scaling(&[NATIVE, SHARP, SUPER]);
+        focus_scaling(&mut dialog);
         dialog.input(&key(Key::Down));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_display_choice(), None, "no display pick");
         assert_eq!(
             dialog
                 .take_change()
-                .map(|prefs| (prefs.upscaler, prefs.fullscreen)),
+                .map(|prefs| (prefs.scaling, prefs.fullscreen)),
             Some((SHARP, FullscreenKind::Borderless))
         );
     }
 
     #[test]
-    fn the_focused_upscaler_list_is_outlined_and_drawn_after_the_display_picker() {
-        let mut dialog = listing(&[NATIVE, SHARP]);
+    fn the_focused_scaling_list_is_outlined_and_drawn_after_the_display_picker() {
+        let mut dialog = listing(&[NATIVE, SHARP, SUPER]);
         let mut expected = DrawList::new();
         dialog.display().draw(false, &mut expected);
-        dialog.upscalers().draw(false, &mut expected);
+        dialog.scaling().draw(false, &mut expected);
         let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
         assert!(
             drawn(&dialog)
                 .windows(expected.len())
                 .any(|w| w == expected)
         );
-        focus_upscaler(&mut dialog);
+        focus_scaling(&mut dialog);
         let mut ring = DrawList::new();
-        dialog.upscalers().draw(true, &mut ring);
+        dialog.scaling().draw(true, &mut ring);
         let ring: Vec<DrawCommand> = ring.iter().cloned().collect();
         assert!(drawn(&dialog).windows(ring.len()).any(|w| w == ring));
     }
 
     #[test]
-    fn a_cancelled_click_on_the_upscaler_list_steps_nothing() {
-        let mut dialog = listing(&[NATIVE, SHARP]);
-        let down = dialog.upscalers().rects().down.center();
+    fn a_super_xbr_pick_is_drawn_by_its_label() {
+        let mut dialog = listing(&[NATIVE, SUPER]);
+        focus_scaling(&mut dialog);
+        dialog.input(&key(Key::Down));
+        let label = DrawCommand::Text {
+            text: "Scaling: Super-xBR".to_owned(),
+            font: crate::font::Font::Geneva,
+            origin: dialog.scaling().rects().value.min,
+            size: crate::ui::volume::TEXT_SIZE,
+            wrap_width: None,
+            color: crate::ui::volume::COLOR,
+        };
+        assert!(drawn(&dialog).contains(&label));
+    }
+
+    #[test]
+    fn a_cancelled_click_on_the_scaling_list_steps_nothing() {
+        let mut dialog = listing(&[NATIVE, SHARP, SUPER]);
+        let down = dialog.scaling().rects().down.center();
         dialog.input(&button(true, down));
         dialog.cancel_pointer();
         dialog.input(&button(false, down));
-        assert_eq!(dialog.upscalers().selected(), NATIVE);
+        assert_eq!(dialog.scaling().selected(), NATIVE);
     }
 
     #[test]

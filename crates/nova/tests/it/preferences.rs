@@ -17,7 +17,7 @@ use crate::prefs_fixture;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova::settings::{
-    FullscreenSetting, GameSettings, SettingsKeeper, UpscalerSetting, game_settings,
+    FullscreenSetting, GameSettings, ScalingSetting, SettingsKeeper, game_settings,
 };
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::{effects_level_volume, music_level_volume};
@@ -33,7 +33,7 @@ use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record, SoundId};
 use nova_render::WorldSpace;
-use nova_render::recording::RecordingGpu;
+use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
@@ -44,7 +44,7 @@ use nova_view::ui::PrefsDialog;
 use nova_view::ui::prefs::OK_ITEM;
 use nova_view::ui::volume::TEXT_SIZE;
 use nova_view::{
-    DrawLayer, Font, FullscreenKind, Key, MonitorMode, MouseButton, Upscaler, VideoMode,
+    DrawLayer, Font, FullscreenKind, Key, MonitorMode, MouseButton, Scaling, Upscaler, VideoMode,
 };
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -231,7 +231,7 @@ fn seeded() -> MemorySettings {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
-            frame_upscaler: UpscalerSetting::default(),
+            frame_upscaler: ScalingSetting::default(),
         })
         .expect("seeds");
     store
@@ -465,7 +465,7 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    // Past the display picker and the upscaler list to the music volume.
+    // Past the display picker and the Scaling list to the music volume.
     for _ in 0..8 {
         harness.press(Key::Tab);
     }
@@ -548,7 +548,7 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    // Past the display picker and the upscaler list to the music volume.
+    // Past the display picker and the Scaling list to the music volume.
     for _ in 0..8 {
         harness.press(Key::Tab);
     }
@@ -907,8 +907,8 @@ fn seeded_on_another_monitor() -> MemorySettings {
 
 impl Harness {
     /// The game started over `store` as the runner starts it, its window
-    /// and frame upscaler restored on a device offering native alone, its
-    /// startup warnings taken.
+    /// and Scaling restored on a device offering native alone, its startup
+    /// warnings taken.
     fn launched(store: &MemorySettings) -> (Self, Vec<String>) {
         Self::launched_probing(store, &[Upscaler::Native])
     }
@@ -918,7 +918,7 @@ impl Harness {
         let mut harness = Self::new(store);
         harness.gpu = RecordingGpu::probing(probe);
         harness.app.restore_window(&mut harness.window);
-        harness.app.restore_upscaler(&mut harness.gpu);
+        harness.app.restore_scaling(&mut harness.gpu);
         let warnings = harness.app.take_warnings();
         (harness, warnings)
     }
@@ -995,12 +995,13 @@ const METAL_FX: Upscaler = Upscaler::MetalFxSpatial;
 /// Flight's world in a texture of the 1024 x 768 window's logical size.
 const TEXTURE: WorldSpace = WorldSpace::Texture { size: (1024, 768) };
 
-/// The settings `seeded` saves, with the frame upscaler saved as `name`.
+/// The settings `seeded` saves, with the Scaling saved as `name` under
+/// phase 6's `frame_upscaler` key.
 fn seeded_with_upscaler(name: &str) -> MemorySettings {
     let store = seeded();
     let (mut keeper, _) = SettingsKeeper::open(store.clone());
     let settings = GameSettings {
-        frame_upscaler: UpscalerSetting::from(name.to_owned()),
+        frame_upscaler: ScalingSetting::from(name.to_owned()),
         ..keeper.settings()
     };
     keeper.change(settings).expect("seeds");
@@ -1008,15 +1009,30 @@ fn seeded_with_upscaler(name: &str) -> MemorySettings {
 }
 
 impl Harness {
-    /// Opens the Preferences, tabs to the upscaler list and steps it down
-    /// once.
-    fn step_upscaler(&mut self) {
+    /// Opens the Preferences, tabs to the Scaling list and steps it down
+    /// `downs` times.
+    fn step_scaling(&mut self, downs: usize) {
+        self.step_scaling_by(Key::Down, downs);
+    }
+
+    /// Opens the Preferences, tabs to the Scaling list and presses `key`
+    /// `times` times.
+    fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
         for _ in 0..6 {
             self.press(Key::Tab);
         }
-        self.press(Key::Down);
+        for _ in 0..times {
+            self.press(key);
+        }
+    }
+
+    /// The GPU calls drawing the next frame, the frame's own and no older.
+    fn frame_calls(&mut self) -> Vec<GpuCall> {
+        self.gpu.take();
+        self.frame();
+        self.gpu.take()
     }
 
     /// Clicks the open Preferences dialog's OK.
@@ -1033,43 +1049,188 @@ impl Harness {
 }
 
 #[test]
-fn the_upscaler_list_shows_exactly_what_the_probe_offers_native_first() {
+fn the_scaling_list_is_native_the_probes_scalers_then_super_xbr() {
+    use Scaling::{MetalFxSpatial, Native, SharpBilinear, SuperXbr};
     let store = seeded();
     let (mut native_only, _) = Harness::launched_probing(&store, &[NATIVE]);
     native_only.command_comma();
-    assert_eq!(native_only.dialog().upscalers().entries(), [NATIVE]);
+    assert_eq!(native_only.dialog().scaling().entries(), [Native, SuperXbr]);
     assert!(
         texts(&native_only.frame())
             .iter()
             .any(|text| text == "Scaling: Native")
     );
+    native_only.press(Key::Escape);
+    native_only.step_scaling(1);
+    assert!(
+        texts(&native_only.frame())
+            .iter()
+            .any(|text| text == "Scaling: Super-xBR"),
+        "drawn when selected"
+    );
     let (mut both, _) = Harness::launched_probing(&store, &[SHARP, NATIVE]);
     both.command_comma();
-    assert_eq!(both.dialog().upscalers().entries(), [NATIVE, SHARP]);
-    assert_eq!(both.dialog().upscalers().selected(), NATIVE);
+    assert_eq!(
+        both.dialog().scaling().entries(),
+        [Native, SharpBilinear, SuperXbr]
+    );
+    assert_eq!(both.dialog().scaling().selected(), Native);
     let (mut all, _) = Harness::launched_probing(&store, &[SHARP, METAL_FX]);
     all.command_comma();
     assert_eq!(
-        all.dialog().upscalers().entries(),
-        [NATIVE, SHARP, METAL_FX]
+        all.dialog().scaling().entries(),
+        [Native, SharpBilinear, MetalFxSpatial, SuperXbr]
     );
 }
 
 #[test]
-fn the_widest_upscaler_label_fits_its_row() {
+fn the_widest_scaling_label_fits_its_row() {
     let store = seeded();
     let (mut harness, _) = Harness::launched_probing(&store, &[SHARP]);
     harness.command_comma();
-    let row = harness.dialog().upscalers().rects().value;
+    let row = harness.dialog().scaling().rects().value;
     let metrics = GlyphonMetrics::new(&FontFaces::bundled());
-    for upscaler in [NATIVE, SHARP, METAL_FX] {
-        let width = metrics.width(Font::Geneva, TEXT_SIZE, upscaler.label());
+    for scaling in Scaling::ALL {
+        let width = metrics.width(Font::Geneva, TEXT_SIZE, scaling.label());
         assert!(
             width <= row.width(),
-            "{upscaler:?}: {width} in {}",
+            "{scaling:?}: {width} in {}",
             row.width()
         );
     }
+}
+
+/// The sizes of the images `calls` upload, in order.
+fn uploads(calls: &[GpuCall]) -> Vec<(u32, u32)> {
+    calls
+        .iter()
+        .filter_map(|call| match call {
+            GpuCall::Upload { width, height, .. } => Some((*width, *height)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The places of the world's textured quads in `calls`' frame.
+fn world_quads(calls: &[GpuCall]) -> Vec<nova_render::Rect> {
+    let Some(GpuCall::Submit(frame)) = calls.last() else {
+        panic!("not a frame: {calls:?}");
+    };
+    frame
+        .world
+        .iter()
+        .flat_map(|&index| match &frame.batches[index] {
+            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// The world space of `calls`' frame.
+fn world_space(calls: &[GpuCall]) -> WorldSpace {
+    let Some(GpuCall::Submit(frame)) = calls.last() else {
+        panic!("not a frame: {calls:?}");
+    };
+    frame.world_space
+}
+
+/// Whether `calls` upload the fixture's 1 x 1 sprite frames enlarged (2 x
+/// 2) and none at their own size.
+fn uploads_enlarged(calls: &[GpuCall]) -> bool {
+    let sizes = uploads(calls);
+    sizes.contains(&(2, 2)) && !sizes.contains(&(1, 1))
+}
+
+/// Whether `calls` upload the fixture's 1 x 1 sprite frames at their own
+/// size and none enlarged.
+fn uploads_native(calls: &[GpuCall]) -> bool {
+    let sizes = uploads(calls);
+    sizes.contains(&(1, 1)) && !sizes.contains(&(2, 2))
+}
+
+#[test]
+fn choosing_super_xbr_in_flight_or_leaving_it_rebuilds_the_atlas_when_the_dialog_closes() {
+    let store = seeded();
+    let (mut harness, warnings) = Harness::launched_probing(&store, &[NATIVE]);
+    assert_eq!(warnings, Vec::<String>::new());
+    harness.press_physical(KeyCode::KeyF);
+    assert_eq!(harness.showing(), Showing::Flight);
+    let before = harness.frame_calls();
+    assert!(uploads_native(&before), "{:?}", uploads(&before));
+
+    harness.step_scaling(1);
+    assert_eq!(harness.dialog().scaling().selected(), Scaling::SuperXbr);
+    for _ in 0..2 {
+        let open = harness.frame_calls();
+        assert!(!open.contains(&GpuCall::ClearPages), "held while open");
+        assert!(!uploads(&open).contains(&(2, 2)), "native while open");
+        assert_eq!(world_space(&open), WorldSpace::Target);
+    }
+    assert_eq!(saved(&store)["frame_upscaler"], "native");
+
+    harness.ok();
+    let after = harness.frame_calls();
+    assert_eq!(after[0], GpuCall::ClearPages, "the next frame rebuilds");
+    assert!(uploads_enlarged(&after), "{:?}", uploads(&after));
+    assert_eq!(world_quads(&after), world_quads(&before), "the same places");
+    assert_eq!(world_space(&after), WorldSpace::Target);
+    assert_eq!(saved(&store)["frame_upscaler"], "super_xbr");
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    harness.step_scaling_by(Key::Up, 1);
+    harness.ok();
+    let back = harness.frame_calls();
+    assert_eq!(back[0], GpuCall::ClearPages, "leaving it rebuilds too");
+    assert!(uploads_native(&back), "{:?}", uploads(&back));
+    assert_eq!(saved(&store)["frame_upscaler"], "native");
+}
+
+#[test]
+fn super_xbr_draws_with_no_upscaler_and_a_per_frame_scaler_with_native_sprites() {
+    let store = seeded_with_upscaler("super_xbr");
+    let (mut harness, warnings) = Harness::launched_probing(&store, &[SHARP]);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(harness.gpu.upscaler(), NATIVE);
+    harness.press_physical(KeyCode::KeyF);
+    let enlarged = harness.frame_calls();
+    assert_eq!(world_space(&enlarged), WorldSpace::Target);
+    assert!(uploads_enlarged(&enlarged), "{:?}", uploads(&enlarged));
+
+    harness.step_scaling_by(Key::Up, 1);
+    assert_eq!(
+        harness.dialog().scaling().selected(),
+        Scaling::SharpBilinear
+    );
+    harness.ok();
+    let sharp = harness.frame_calls();
+    assert_eq!(world_space(&sharp), TEXTURE);
+    assert_eq!(sharp[0], GpuCall::ClearPages);
+    assert!(uploads_native(&sharp), "{:?}", uploads(&sharp));
+    assert_eq!(harness.gpu.upscaler(), SHARP);
+    for _ in 0..3 {
+        let later = harness.frame_calls();
+        assert!(!later.contains(&GpuCall::ClearPages), "no more rebuilds");
+    }
+}
+
+#[test]
+fn super_xbr_picked_is_saved_and_still_enlarges_after_a_restart() {
+    let store = seeded();
+    let (mut harness, _) = Harness::launched(&store);
+    harness.step_scaling(1);
+    harness.press(Key::Enter);
+    assert_eq!(saved(&store)["frame_upscaler"], "super_xbr");
+    assert_eq!(saved(&store)["music"], true, "the rest kept");
+
+    let (mut restarted, warnings) = Harness::launched(&store);
+    assert_eq!(warnings, Vec::<String>::new());
+    restarted.press_physical(KeyCode::KeyF);
+    let first = restarted.frame_calls();
+    assert!(uploads_enlarged(&first), "{:?}", uploads(&first));
+    assert_eq!(world_space(&first), WorldSpace::Target);
+    restarted.command_comma();
+    assert_eq!(restarted.dialog().scaling().selected(), Scaling::SuperXbr);
+    assert_eq!(restarted.dialog().prefs().scaling, Scaling::SuperXbr);
 }
 
 #[test]
@@ -1080,7 +1241,7 @@ fn an_upscaler_picked_in_flight_draws_the_first_frame_after_the_dialog_closes() 
     harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.frame().world_space, WorldSpace::Target);
-    harness.step_upscaler();
+    harness.step_scaling(1);
     let open = harness.frame();
     assert_eq!(open.world_space, WorldSpace::Target, "held while open");
     assert!(
@@ -1099,7 +1260,7 @@ fn an_upscaler_picked_in_flight_draws_the_first_frame_after_the_dialog_closes() 
 fn an_upscaler_picked_is_saved_and_still_draws_after_a_restart() {
     let store = seeded();
     let (mut harness, _) = Harness::launched_probing(&store, &[SHARP]);
-    harness.step_upscaler();
+    harness.step_scaling(1);
     harness.press(Key::Enter);
     assert_eq!(saved(&store)["frame_upscaler"], "sharp_bilinear");
     assert_eq!(saved(&store)["music"], true, "the rest kept");
@@ -1112,13 +1273,21 @@ fn an_upscaler_picked_is_saved_and_still_draws_after_a_restart() {
         "from the first frame"
     );
     restarted.command_comma();
-    assert_eq!(restarted.dialog().upscalers().selected(), SHARP);
-    assert_eq!(restarted.dialog().prefs().upscaler, SHARP);
+    assert_eq!(
+        restarted.dialog().scaling().selected(),
+        Scaling::SharpBilinear
+    );
+    assert_eq!(restarted.dialog().prefs().scaling, Scaling::SharpBilinear);
 }
 
 #[test]
 fn a_stored_upscaler_unknown_or_unavailable_starts_native_with_one_warning_and_is_kept() {
-    for name in ["sharp_bilinear", "metalfx_spatial", "warp_drive"] {
+    for name in [
+        "sharp_bilinear",
+        "metalfx_spatial",
+        "warp_drive",
+        "hd_pack_v9",
+    ] {
         let store = seeded_with_upscaler(name);
         let before = store.text();
         let writes = store.writes();
@@ -1130,7 +1299,11 @@ fn a_stored_upscaler_unknown_or_unavailable_starts_native_with_one_warning_and_i
 
         // A later change of another preference keeps it.
         harness.press(Key::Char('p'));
-        assert_eq!(harness.dialog().upscalers().selected(), NATIVE, "{name}");
+        assert_eq!(
+            harness.dialog().scaling().selected(),
+            Scaling::Native,
+            "{name}"
+        );
         let music = harness.dialog().music().rect().center();
         harness.click(music);
         harness.press(Key::Enter);

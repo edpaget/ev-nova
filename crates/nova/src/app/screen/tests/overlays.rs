@@ -348,7 +348,7 @@ fn quiet() -> Prefs {
         hyperspace_effects: true,
         quicktime_movies: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
-        upscaler: nova_view::Upscaler::Native,
+        scaling: nova_view::Scaling::Native,
     }
 }
 
@@ -455,51 +455,51 @@ fn an_offer_of_display_modes_shows_in_the_open_dialog_alone() {
 }
 
 #[test]
-fn the_upscalers_offered_are_listed_in_every_preferences_dialog_on_the_one_running() {
-    use nova_view::Upscaler::{Native, SharpBilinear};
+fn the_scaling_offered_is_listed_in_every_preferences_dialog_on_the_one_running() {
+    use nova_view::Scaling::{Native, SharpBilinear, SuperXbr};
     let mut screen = with_dialogs(data()).with_prefs(quiet());
     open_prefs(&mut screen);
     assert_eq!(
-        prefs_dialog(&screen).upscalers().entries(),
-        [Native],
-        "native alone before an offer"
+        prefs_dialog(&screen).scaling().entries(),
+        [Native, SuperXbr],
+        "native and Super-xBR before an offer"
     );
     screen.input(&key(Key::Escape, true));
-    screen.offer_upscalers(&[Native, SharpBilinear], SharpBilinear);
+    screen.offer_scaling(&[Native, SharpBilinear, SuperXbr], SharpBilinear);
     assert_eq!(
         screen.prefs(),
         Prefs {
-            upscaler: SharpBilinear,
+            scaling: SharpBilinear,
             ..quiet()
         }
     );
     assert_eq!(screen.take_prefs(), None, "an offer is no change");
     for _ in 0..2 {
         open_prefs(&mut screen);
-        let list = prefs_dialog(&screen).upscalers();
-        assert_eq!(list.entries(), [Native, SharpBilinear]);
+        let list = prefs_dialog(&screen).scaling();
+        assert_eq!(list.entries(), [Native, SharpBilinear, SuperXbr]);
         assert_eq!(list.selected(), SharpBilinear);
         screen.input(&key(Key::Escape, true));
     }
 }
 
 #[test]
-fn an_upscaler_pick_comes_out_once_as_a_change_and_the_dialog_reopens_on_it() {
-    use nova_view::Upscaler::{Native, SharpBilinear};
+fn a_scaling_pick_comes_out_once_as_a_change_and_the_dialog_reopens_on_it() {
+    use nova_view::Scaling::{Native, SharpBilinear, SuperXbr};
     let mut screen = with_dialogs(data()).with_prefs(quiet());
-    screen.offer_upscalers(&[Native, SharpBilinear], Native);
+    screen.offer_scaling(&[Native, SharpBilinear, SuperXbr], Native);
     open_prefs(&mut screen);
-    let down = prefs_dialog(&screen).upscalers().rects().down.center();
+    let down = prefs_dialog(&screen).scaling().rects().down.center();
     click_at(&mut screen, down);
     assert_eq!(screen.take_prefs(), None, "held while open");
     screen.input(&key(Key::Enter, true));
     assert_eq!(
-        screen.take_prefs().map(|prefs| prefs.upscaler),
+        screen.take_prefs().map(|prefs| prefs.scaling),
         Some(SharpBilinear)
     );
     assert_eq!(screen.take_prefs(), None, "once");
     open_prefs(&mut screen);
-    assert_eq!(prefs_dialog(&screen).upscalers().selected(), SharpBilinear);
+    assert_eq!(prefs_dialog(&screen).scaling().selected(), SharpBilinear);
 }
 
 #[test]

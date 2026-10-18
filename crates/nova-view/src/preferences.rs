@@ -1,14 +1,14 @@
 //! The player's preferences as the Preferences dialog shows them, which a
 //! screen reports through [`Screen::take_prefs`](crate::Screen::take_prefs).
 
+use crate::scaling::Scaling;
 use crate::sound::SoundPrefs;
-use crate::upscaler::Upscaler;
 use crate::video_mode::FullscreenKind;
 
 /// The player's preferences, as the Preferences dialog shows them: the
 /// sound preferences, whether a hyperspace jump plays its white fades, and
-/// whether a `dësc`'s movie plays, how the game runs fullscreen, and which
-/// frame upscaler draws flight's world.
+/// whether a `dësc`'s movie plays, how the game runs fullscreen, and how
+/// it is enlarged onto the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Prefs {
     /// Sound effects and music, on or off, and their volumes.
@@ -24,10 +24,10 @@ pub struct Prefs {
     /// display mode the dialog's picker chose. Not the original's: its
     /// dialog has no such control.
     pub fullscreen: FullscreenKind,
-    /// The frame upscaler drawing flight's world, as the dialog shows it:
-    /// the one running. Not the original's: its dialog has no such
-    /// control.
-    pub upscaler: Upscaler,
+    /// The Scaling, as the dialog shows it: the one running, a per-frame
+    /// upscaler or a load-time enlargement ([`Scaling::sites`]). Not the
+    /// original's: its dialog has no such control.
+    pub scaling: Scaling,
 }
 
 impl Default for Prefs {
@@ -35,14 +35,14 @@ impl Default for Prefs {
     /// movies on, as a fresh install of the original has them: it
     /// registers `HyperspaceEffects` and `QuickTimeMovies` as NO
     /// (`_LoadPrefs` @0xce8ac, @0xce8ee), and a clear byte means on; and
-    /// fullscreen borderless, the world drawn natively.
+    /// fullscreen borderless, and Scaling native.
     fn default() -> Self {
         Self {
             sound: SoundPrefs::default(),
             hyperspace_effects: true,
             quicktime_movies: true,
             fullscreen: FullscreenKind::Borderless,
-            upscaler: Upscaler::Native,
+            scaling: Scaling::Native,
         }
     }
 }
@@ -60,7 +60,7 @@ mod tests {
                 hyperspace_effects: true,
                 quicktime_movies: true,
                 fullscreen: FullscreenKind::Borderless,
-                upscaler: Upscaler::Native,
+                scaling: Scaling::Native,
             }
         );
     }

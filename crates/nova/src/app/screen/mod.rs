@@ -306,7 +306,7 @@ use nova_view::ui::{
     PrefsDialog, YesNoDialog,
 };
 use nova_view::{Color, Input, Key, Navigator, Point, Prefs, Sound};
-use nova_view::{FullscreenKind, Upscaler};
+use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
 mod build;
@@ -463,9 +463,9 @@ pub struct AppScreen {
     /// The fullscreen kind picked in the Preferences dialog since it was
     /// last taken.
     display_choice: Option<FullscreenKind>,
-    /// The frame upscalers the device can use, native first, as offered
-    /// at startup, for every Preferences dialog's list.
-    upscalers: Vec<Upscaler>,
+    /// The Scaling list, as offered at startup (native and Super-xBR
+    /// before), for every Preferences dialog.
+    scaling: Vec<Scaling>,
     /// The main menu and where pilots are kept, once given.
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.

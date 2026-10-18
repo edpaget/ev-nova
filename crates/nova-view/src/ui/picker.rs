@@ -1,7 +1,7 @@
 //! A row picker: one row holding two arrows, stacked, and the chosen
 //! entry's label, stepping through a list of entries without wrapping.
 //! The display mode picker ([`ModePicker`](super::mode_picker::ModePicker))
-//! and the Preferences dialog's frame upscaler list are pickers.
+//! and the Preferences dialog's Scaling list are pickers.
 //!
 //! Its arrows are drawn and tracked as the volume control's are
 //! ([`draw_arrow`], [`ButtonTracker`]), and its label is set as the
@@ -12,7 +12,6 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::scaling::Scaling;
-use crate::upscaler::Upscaler;
 use crate::video_mode::FullscreenKind;
 
 use super::button::ButtonTracker;
@@ -90,13 +89,6 @@ impl PickerEntry for Scaling {
     /// "Scaling: " and the scaling's name.
     fn label(&self) -> String {
         Scaling::label(*self).to_owned()
-    }
-}
-
-impl PickerEntry for Upscaler {
-    /// "Scaling: " and the upscaler's name.
-    fn label(&self) -> String {
-        Upscaler::label(*self).to_owned()
     }
 }
 
@@ -277,8 +269,8 @@ mod tests {
         }
     }
 
-    const NATIVE: Upscaler = Upscaler::Native;
-    const SHARP: Upscaler = Upscaler::SharpBilinear;
+    const NATIVE: Scaling = Scaling::Native;
+    const SHARP: Scaling = Scaling::SharpBilinear;
 
     fn key(key: Key) -> Input {
         Input::Key {

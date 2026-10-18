@@ -28,7 +28,7 @@ use nova_view::ui::note::{
 };
 use nova_view::ui::prefs::{
     HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM,
-    PREFS_DIALOG, SOUND_ITEM, UPSCALER_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM, VOLUME_UP_ITEM,
+    PREFS_DIALOG, SCALING_ITEM, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM, VOLUME_UP_ITEM,
     VOLUME_VALUE_ITEM,
 };
 use nova_view::ui::{
@@ -463,7 +463,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             prefs.inert().len(),
             7,
             "{name}: QuickTime Movies works, Run in a window is the display picker \
-             and Share Processor Time the upscaler list"
+             and Share Processor Time the Scaling list"
         );
         assert!(
             prefs.inert().iter().all(|toggle| {
@@ -502,12 +502,12 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
     }
 }
 
-/// The upscaler list fills "Share Processor Time"'s row, clear of every
+/// The Scaling list fills "Share Processor Time"'s row, clear of every
 /// other part, inside the dialog, its label as wide as the display
 /// picker's (the end-to-end preferences test checks the widest label fits
 /// it under the real text metrics).
 #[test]
-fn the_preferences_dialogs_upscaler_list_fills_share_processor_times_row() {
+fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
     for (_, path) in builds() {
         let template = interface(&path)
             .dialog_template(PREFS_DIALOG)
@@ -525,9 +525,9 @@ fn the_preferences_dialogs_upscaler_list_fills_share_processor_times_row() {
         let picker = prefs.display().rects().bounds();
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
-        let list = prefs.upscalers().rects().bounds();
+        let list = prefs.scaling().rects().bounds();
         let row = dialog
-            .item_bounds(UPSCALER_ITEM)
+            .item_bounds(SCALING_ITEM)
             .expect("Share Processor Time");
         assert_eq!(
             (list.min.x, list.min.y, list.max.y),
@@ -536,7 +536,7 @@ fn the_preferences_dialogs_upscaler_list_fills_share_processor_times_row() {
         );
         assert!(dialog.bounds().contains(list.min) && dialog.bounds().contains(list.max));
         assert_eq!(
-            prefs.upscalers().rects().value.width(),
+            prefs.scaling().rects().value.width(),
             prefs.display().rects().value.width(),
             "{name}"
         );
@@ -562,7 +562,7 @@ fn the_preferences_dialogs_upscaler_list_fills_share_processor_times_row() {
                 || rect.min.x >= list.max.x
                 || rect.max.y <= list.min.y
                 || rect.min.y >= list.max.y;
-            assert!(apart, "{name}: {rect:?} under the upscaler list {list:?}");
+            assert!(apart, "{name}: {rect:?} under the Scaling list {list:?}");
         }
     }
 }

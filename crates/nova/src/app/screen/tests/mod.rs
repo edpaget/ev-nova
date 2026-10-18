@@ -1071,7 +1071,7 @@ fn yes_no_template() -> DialogTemplate {
 }
 
 /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
-/// (1), the upscaler list's row (2), the effects volume (4 to 7), the
+/// (1), the Scaling list's row (2), the effects volume (4 to 7), the
 /// Music (8) and Sound (20) check boxes, Key Settings (16), a greyed
 /// check box (9) and the Hyperspace Effects check box (21).
 fn prefs_template() -> DialogTemplate {

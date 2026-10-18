@@ -192,3 +192,18 @@ How the roadmap reads that (the orchestrator's interpretation):
 
 The phases written from this decision are phases 5 to 10 of the
 `display-modes` roadmap (`rdm phase list --roadmap display-modes`).
+
+Phase 8 built the load-time site with these choices:
+
+- **One Scaling list, not two sites at once** (operator decision,
+  2026-10-18). Super-xBR is one entry of the single Scaling list, after
+  native and the per-frame scalers the device offers. It runs with the
+  native per-frame path, so its 2x sprites are drawn straight into the
+  window, never squeezed into a logical-size world texture. The choice is
+  kept under phase 6's `frame_upscaler` key as `"super_xbr"`.
+- **Kinds.** Every image kind is enlarged but `ppat` patterns, which are
+  tiled and would seam: `rlëD` sprites, `PICT`s, masked `PICT`s and
+  `cicn`s.
+- **Sampling.** The atlas holds the 2x image and the quad samples it
+  nearest, as every page is sampled. The preset's Jinc2 resample and
+  deblur passes are not ported.

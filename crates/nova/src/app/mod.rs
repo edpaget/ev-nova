@@ -75,24 +75,34 @@
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
 //!   display gets its own mode back. Nothing is saved on the way out.
 //!
-//! # Frame upscaler
+//! # Scaling
 //!
-//! Flight's world is drawn by a frame upscaler the player picks
-//! (`nova_render`'s port, [`Upscaler`](nova_view::Upscaler)).
+//! The player picks one Scaling ([`Scaling`](nova_view::Scaling)), which
+//! works at one of two sites ([`Scaling::sites`](nova_view::Scaling::sites)):
+//! a per-frame upscaler drawing flight's world (`nova_render`'s port,
+//! [`Upscaler`](nova_view::Upscaler)), or a load-time enlarger turning
+//! each sprite and picture as it loads into the atlas
+//! (`nova_render::Enlarger`). Super-xBR, the one load-time entry, draws the
+//! world natively; every per-frame entry loads images natively.
 //!
-//! - **Restore.** Once the GPU exists, [`App::restore_upscaler`] asks it
-//!   which upscalers the device can use, sets it drawing with the one the
-//!   settings keep ([`GameSettings::frame_upscaler`]), and offers the
-//!   screen the list, native first, and the one running
-//!   ([`Screen::offer_upscalers`]), for the Preferences dialog.
-//! - **Fallback.** A stored choice this game does not have, or one the
-//!   device cannot use, starts native with one warning naming it. The
-//!   stored choice is never changed by that, nor by a later change of
+//! - **Restore.** Once the GPU exists, [`App::restore_scaling`] asks it
+//!   which upscalers the device can use, applies the Scaling the settings
+//!   keep ([`GameSettings::frame_upscaler`]) at both sites (an enlarger
+//!   only when it isn't native, before the first frame), and offers the
+//!   screen the list, native first and Super-xBR last, and the one running
+//!   ([`Screen::offer_scaling`]), for the Preferences dialog.
+//! - **Fallback.** A stored choice this game does not have, or a per-frame
+//!   one the device cannot use, starts native with one warning naming it.
+//!   The stored choice is never changed by that, nor by a later change of
 //!   another preference, so it comes back on a device that has it.
 //! - **The pick.** The dialog reports its pick as the preferences'
-//!   upscaler ([`Screen::take_prefs`]); one that is not the upscaler
-//!   running is a switch, made on the GPU just before the next frame is
-//!   drawn and saved with the other preferences.
+//!   Scaling ([`Screen::take_prefs`]); one that is not the one running is
+//!   saved with the other preferences, and switches the sites whose half
+//!   changed. A new enlarger is set on the renderer at once, and the next
+//!   frame starts the atlas afresh and loads what it draws through it; a
+//!   new upscaler is set on the GPU just before the next frame is drawn.
+//!   Switching between per-frame scalers changes no enlarger, so it never
+//!   rebuilds the atlas.
 //!
 //! # Display shapes
 //!
@@ -135,15 +145,15 @@ use nova_view::{
 };
 
 mod fullscreen;
+mod scaling;
 pub mod screen;
-mod upscaler;
 
 pub use screen::{AppScreen, Showing, start_screen};
 
 use crate::config::Os;
-use crate::settings::{FullscreenSetting, GameKeeper, GameSettings, UpscalerSetting};
+use crate::settings::{FullscreenSetting, GameKeeper, GameSettings, ScalingSetting};
 use fullscreen::{Fullscreen, Shortcut};
-use upscaler::FrameUpscaler;
+use scaling::ScalingChoice;
 
 /// The widened view's size, in logical units, for a window `window_px`
 /// in size ([`widened_size`]).
@@ -308,8 +318,8 @@ pub struct App<S, C = AppScreen> {
     /// Whether the open Preferences dialog has been offered the display
     /// modes.
     display_offered: bool,
-    /// The frame upscaler drawing flight's world, and a switch to make.
-    upscaler: FrameUpscaler,
+    /// The Scaling running, and the switches a pick left to make.
+    scaling: ScalingChoice,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -337,7 +347,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             fullscreen: Fullscreen::new(Os::current(), window.size_px()),
             chosen_fullscreen: None,
             display_offered: false,
-            upscaler: FrameUpscaler::default(),
+            scaling: ScalingChoice::default(),
         }
     }
 
@@ -468,10 +478,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
-    /// them but the fullscreen kind), each when there is one. Its frame
-    /// upscaler is a switch when it is not the one running: it is made on
-    /// the GPU before the next frame is drawn, and saved with the rest;
-    /// otherwise the stored choice is kept as it is. A fullscreen
+    /// them but the fullscreen kind), each when there is one. Its Scaling
+    /// is a switch when it is not the one running: a new enlarger is set
+    /// on the renderer at once, a new upscaler on the GPU before the next
+    /// frame is drawn, and the choice is saved with the rest; otherwise
+    /// the stored choice is kept as it is. A fullscreen
     /// kind the player picked ([`Screen::take_display_choice`]) is held, to
     /// be entered and saved once the event is handled, which has the
     /// window; then a galaxy map borders setting
@@ -498,8 +509,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 (None, None) => GameSettings::default(),
             };
             let mut settings = current.with_prefs(prefs);
-            if self.upscaler.pick(prefs.upscaler) {
-                settings.frame_upscaler = UpscalerSetting::from(prefs.upscaler);
+            if self.pick_scaling(prefs.scaling) {
+                settings.frame_upscaler = ScalingSetting::from(prefs.scaling);
             }
             if let Some(core) = &mut self.audio {
                 core.apply(settings.audio);
@@ -2543,7 +2554,7 @@ mod tests {
         hyperspace_effects: true,
         quicktime_movies: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
-        upscaler: nova_view::Upscaler::Native,
+        scaling: nova_view::Scaling::Native,
     };
 
     /// `MUSIC_OFF` with the sound effects at `level`.
@@ -2619,7 +2630,7 @@ mod tests {
                 fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
-                frame_upscaler: crate::settings::UpscalerSetting::default(),
+                frame_upscaler: crate::settings::ScalingSetting::default(),
             }
         );
         let saved: serde_json::Value =

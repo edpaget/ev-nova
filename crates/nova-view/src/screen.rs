@@ -8,8 +8,8 @@ use nova_sim::SimDiagnostic;
 use crate::draw::DrawList;
 use crate::input::Input;
 use crate::preferences::Prefs;
+use crate::scaling::Scaling;
 use crate::sound::Sound;
-use crate::upscaler::Upscaler;
 use crate::video_mode::{FullscreenKind, VideoMode};
 use crate::view_shape::ViewShape;
 
@@ -166,13 +166,13 @@ pub trait Screen {
     ) {
         let _ = (modes, current, chosen);
     }
-    /// The frame upscalers the running device can use, native first
-    /// (`listed`, for the Preferences dialog's list), and the one drawing
-    /// flight's world now, `running`. The app offers them once, at
-    /// startup, once it has the device; a pick comes back through
-    /// [`Screen::take_prefs`] as [`Prefs::upscaler`]. Does nothing by
-    /// default.
-    fn offer_upscalers(&mut self, listed: &[Upscaler], running: Upscaler) {
+    /// The Scaling list for the Preferences dialog (`listed`: native, the
+    /// per-frame upscalers the running device can use, then Super-xBR, as
+    /// [`Scaling::list`] builds it), and the one running now, `running`.
+    /// The app offers it once, at startup, once it has the device; a pick
+    /// comes back through [`Screen::take_prefs`] as [`Prefs::scaling`].
+    /// Does nothing by default.
+    fn offer_scaling(&mut self, listed: &[Scaling], running: Scaling) {
         let _ = (listed, running);
     }
     /// The fullscreen kind the player picked in the Preferences dialog
@@ -243,7 +243,7 @@ mod tests {
     use super::*;
     use crate::input::Key;
     use crate::video_mode::{FullscreenKind, VideoMode};
-    use crate::{Color, Point, Upscaler};
+    use crate::{Color, Point, Scaling};
 
     /// Counts ticks and quits on Escape.
     #[derive(Default)]
@@ -389,11 +389,11 @@ mod tests {
     }
 
     #[test]
-    fn a_screen_ignores_an_offer_of_upscalers_by_default() {
+    fn a_screen_ignores_an_offer_of_scaling_by_default() {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
-        let both = [Upscaler::Native, Upscaler::SharpBilinear];
-        screen.offer_upscalers(&both, Upscaler::SharpBilinear);
+        let all = [Scaling::Native, Scaling::SharpBilinear, Scaling::SuperXbr];
+        screen.offer_scaling(&all, Scaling::SuperXbr);
         assert_eq!(screen.take_prefs(), None);
         let mut list = DrawList::new();
         screen.draw(&mut list);

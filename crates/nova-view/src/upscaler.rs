@@ -1,8 +1,8 @@
-//! The frame upscaler the player picks in the Preferences dialog: how
-//! flight's world layer is drawn onto the window.
+//! The frame upscaler: how flight's world layer is drawn onto the window,
+//! the per-frame half of the player's [`Scaling`](crate::Scaling)
+//! ([`Scaling::sites`](crate::Scaling::sites)).
 //!
-//! The choice is a plain value, shared by the dialog (which lists the ones
-//! the running device can use), the settings that keep it, and the
+//! It is a plain value, shared by the Scaling the player picks and the
 //! renderer that draws with it (`nova_render`'s upscaler port).
 
 /// Which upscaler draws flight's world layer.
@@ -24,19 +24,6 @@ pub enum Upscaler {
     MetalFxSpatial,
 }
 
-impl Upscaler {
-    /// Its entry in the Preferences dialog's list. The list's row has no
-    /// caption of its own, so each entry names what it chooses.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Native => "Scaling: Native",
-            Self::SharpBilinear => "Scaling: Sharp-bilinear",
-            Self::MetalFxSpatial => "Scaling: MetalFX",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,12 +31,5 @@ mod tests {
     #[test]
     fn the_default_is_native() {
         assert_eq!(Upscaler::default(), Upscaler::Native);
-    }
-
-    #[test]
-    fn each_label_names_the_scaling_it_chooses() {
-        assert_eq!(Upscaler::Native.label(), "Scaling: Native");
-        assert_eq!(Upscaler::SharpBilinear.label(), "Scaling: Sharp-bilinear");
-        assert_eq!(Upscaler::MetalFxSpatial.label(), "Scaling: MetalFX");
     }
 }
