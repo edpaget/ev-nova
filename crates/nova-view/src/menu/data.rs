@@ -2,14 +2,14 @@
 //! `spïn` 600 to 610 and what they name, decoded only as far as the core
 //! needs (the sizes, and the buttons' frame-0 masks), and the pilot
 //! panel's ([`PilotPanelSource`]): `cölr` 128's menu font and colours,
-//! `STR#` 2002's labels, and each `shïp`'s Subtitle and target picture.
+//! `STR#` 2002's labels, each `shïp`'s Subtitle, and the `shän` base
+//! images and `PICT` sizes [`target_picture`] picks its picture from.
 //! Thin lookups; the decisions are the core's.
 
 use nova_data::GameData;
 use nova_data::graphics::{Image, PICT, RLED, SpriteSheet, decode_pict, decode_rled};
 use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
-use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_sim::catalog::{CommCatalog, ShipId};
 use nova_sim::news::MISC_STRINGS;
@@ -18,14 +18,11 @@ use super::art::{
     BACKGROUND_PICT, BUTTON_SPINS, ButtonArt, COLORS_ID, LOGO_SPIN, MainScreenArt,
     MainScreenSource, PictFrames, ROLLOVER_SPIN, RolloverArt, SLIDE_SPINS, SpriteMask,
 };
-use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource, ShipPicture};
+use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource, target_picture};
 use crate::color::Color;
-use crate::flight::data::FIRST_TARGET_PICTURE;
 use crate::font::Font;
 use crate::geometry::Point;
-
-/// The first `shïp`, whose target picture is [`FIRST_TARGET_PICTURE`].
-const FIRST_SHIP: i16 = 128;
+use crate::spaceport::ShipBaseImages;
 
 /// Reads afresh on every call; the router reads the looks once and a
 /// ship's picture when the pilot's ship type changes.
@@ -51,35 +48,22 @@ impl PilotPanelSource for GameData {
         };
         PanelShip {
             subtitle: entry.record.subtitle.as_str().to_owned(),
-            picture: ship_picture(self, ship.0),
+            picture: target_picture(ship, &ship_bases(self), |id| picture_size(self, id)),
         }
     }
 }
 
-/// `shïp` `id`'s target picture, or its base ship's (see [`PanelShip`]).
-fn ship_picture(data: &GameData, id: i16) -> Option<ShipPicture> {
-    let base_image = |id: i16| {
-        data.get::<Ship>(id)?.ok()?;
-        Some(data.get::<ShipAnim>(id)?.ok()?.record.base_image_id)
-    };
-    let image = base_image(id)?;
-    target_picture(data, id).or_else(|| {
-        let base = (FIRST_SHIP..id).find(|&lower| base_image(lower) == Some(image))?;
-        target_picture(data, base)
-    })
+/// Each `shän`'s `BaseImage` whose `shïp` decodes.
+fn ship_bases(data: &GameData) -> Vec<(ShipId, i16)> {
+    let mut bases = data.ship_base_images();
+    bases.retain(|(id, _)| matches!(data.get::<Ship>(id.0), Some(Ok(_))));
+    bases
 }
 
-/// `shïp` `id`'s own target picture, `PICT` 3000 + (`id` − 128), if it
-/// exists and decodes.
-fn target_picture(data: &GameData, id: i16) -> Option<ShipPicture> {
-    let picture = FIRST_TARGET_PICTURE.checked_add(id.checked_sub(FIRST_SHIP)?)?;
-    let image = data.resource(PICT, picture)?;
-    let image = decode_pict(image.resource.data()).ok()?;
-    Some(ShipPicture {
-        picture,
-        width: image.width(),
-        height: image.height(),
-    })
+/// `PICT` `id`'s width and height, if it exists and decodes.
+fn picture_size(data: &GameData, id: i16) -> Option<(u32, u32)> {
+    let image = decode_pict(data.resource(PICT, id)?.resource.data()).ok()?;
+    Some((image.width(), image.height()))
 }
 
 impl MainScreenSource for GameData {
@@ -184,6 +168,7 @@ fn picture(data: &GameData, id: i16) -> Result<Image, String> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_data::Record;
+    use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::string_list::StrList;
     use nova_rsrc::ResType;
 
@@ -194,6 +179,7 @@ mod tests {
         ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_FRAMES, SLIDE_PICTS, SLIDE_POSITIONS,
         game_data as game, main_screen_resources,
     };
+    use crate::menu::pilot_panel::ShipPicture;
 
     /// The fixture's resources without (`ty`, `id`).
     fn without(ty: ResType, id: i16) -> GameData {
@@ -550,36 +536,21 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_without_a_picture_takes_the_first_lower_one_sharing_its_base_image() {
+    fn a_ship_without_a_picture_takes_its_base_ships() {
         let data = game(&[
-            (Ship::TYPE, 128, ship_record("")),
-            (ShipAnim::TYPE, 128, anim(1100)),
-            (PICT, 3000, blank(5, 5)),
             (Ship::TYPE, 129, ship_record("")),
             (ShipAnim::TYPE, 129, anim(1000)),
             (PICT, 3001, blank(6, 3)),
-            (Ship::TYPE, 130, ship_record("")),
-            (ShipAnim::TYPE, 130, anim(1000)),
-            (PICT, 3002, blank(7, 4)),
             (Ship::TYPE, 131, ship_record("Variant")),
             (ShipAnim::TYPE, 131, anim(1000)),
-            // 134 shares 133's base image and has a picture, but comes after it.
-            (Ship::TYPE, 133, ship_record("")),
-            (ShipAnim::TYPE, 133, anim(1200)),
-            (Ship::TYPE, 134, ship_record("")),
-            (ShipAnim::TYPE, 134, anim(1200)),
-            (PICT, 3006, blank(9, 9)),
         ]);
         assert_eq!(
-            data.panel_ship(ShipId(131)).picture,
-            Some(shown(3001, 6, 3)),
-            "129's, the lowest sharing 1000"
-        );
-        assert_eq!(data.panel_ship(ShipId(131)).subtitle, "Variant", "its own");
-        assert_eq!(
-            data.panel_ship(ShipId(133)).picture,
-            None,
-            "only lower ships are searched"
+            data.panel_ship(ShipId(131)),
+            PanelShip {
+                subtitle: "Variant".to_owned(),
+                picture: Some(shown(3001, 6, 3)),
+            },
+            "129's picture, its own subtitle"
         );
     }
 
