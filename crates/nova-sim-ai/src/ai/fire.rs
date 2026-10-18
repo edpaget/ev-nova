@@ -351,7 +351,7 @@ pub fn faces(npc: &Npc, wanted: i16, turns: f32) -> bool {
 
 /// The whole-degree lead from `npc`'s centre to a ship at `at` for
 /// `weapon` ([`lead_with`]).
-fn lead(npc: &Npc, at: &ShipState, weapon: Option<&WeaponSpec>) -> i16 {
+pub(crate) fn lead(npc: &Npc, at: &ShipState, weapon: Option<&WeaponSpec>) -> i16 {
     trig::lead_angle(
         npc.state.position,
         npc.state.velocity,
@@ -3274,8 +3274,8 @@ mod tests {
     #[test]
     fn a_sniper_at_rest_fires_facing_the_plain_bearing_not_the_lead_and_holds_at_exactly_three_turns()
      {
-        // Within 3.0 x its turn rate (3) of the bearing, 0, strictly
-        // (@0x872c3-0x872fe).
+        // Within 3.0 x its turn rate (3) of the bearing, 0, strictly, its
+        // heading truncated to whole degrees (@0x872aa-0x872fe).
         let sniper = |heading: f32| {
             let mut npc = shooter(&[gun(128, 1, 1)], SNIPE);
             npc.state.heading = heading;
@@ -3298,7 +3298,12 @@ mod tests {
         assert_eq!(fired_at_crossing(&sniper(26.57)), None, "facing the lead");
         assert_eq!(fired_at_crossing(&sniper(8.99)), id(128));
         assert_eq!(fired_at_crossing(&sniper(9.0)), None, "strictly");
-        assert_eq!(fired_at_crossing(&sniper(351.01)), id(128));
+        // 351.01 and 351.99 are 351, 9 off: no gun pass, where their
+        // fractional 8.99 and 8.01 would fire; 352.5 is 352, 8 off.
+        assert_eq!(fired_at_crossing(&sniper(351.01)), None);
+        assert_eq!(fired_at_crossing(&sniper(351.99)), None);
+        assert_eq!(fired_at_crossing(&sniper(352.5)), id(128));
+        assert_eq!(fired_at_crossing(&sniper(9.5)), None, "9, not less than 9");
     }
 
     #[test]

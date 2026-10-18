@@ -8,8 +8,9 @@
 //! - **Moving** ([`moving`]): 0.35 or more on either axis ([`MOVING`],
 //!   @0x870bf-0x87109), each axis's float speed widened and tested
 //!   against the double 0.35, so a speed of the float 0.35 is not
-//!   moving. It wants its retro heading, the way its velocity points
-//!   turned about (`_CalcInterceptAngle((0,0), v × 100)` + 180,
+//!   moving. It wants its retro heading ([`retro`]), the way its velocity
+//!   points turned about in the table's whole degrees
+//!   (`_CalcInterceptAngle((0,0), v × 100)` + 180, mod 360,
 //!   @0x871b2-0x871eb); or, with a last gun (+0xc8da,
 //!   [`Armament::last_gun`](crate::combat::armament::Armament::last_gun))
 //!   and by the engine, the lead angle at its target for that gun
@@ -17,19 +18,19 @@
 //!   and thrusts: not a brake at all
 //!   ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)). It
 //!   thrusts while its turn rate plus [`THRUST_SLACK`] is more than how
-//!   far it is off (strict, @0x871ef-0x87255), with no reverse key. Its
+//!   far it is off, its heading truncated to whole degrees
+//!   (`_AngularDifference`, [`fire::off_by`]; strict, @0x871ef-0x87255),
+//!   with no reverse key. Its
 //!   passes run nothing, and it asks for no point defence: it goes
 //!   straight to `_AILaunchFighter` (@0x87329).
 //! - **At rest**: its velocity slows by [`DAMPING`] each tick
-//!   (@0x8725a-0x8728e), it turns to the plain bearing of its target
-//!   (`_CalcInterceptAngle` @0x872aa, not a lead), and never thrusts. It
-//!   fires while it faces that bearing within [`GUN_FACING`] turns,
+//!   (@0x8725a-0x8728e), it turns to the plain bearing of its target in
+//!   the table's whole degrees (`_CalcInterceptAngle` @0x872aa, not a
+//!   lead), and never thrusts. It fires while its heading, truncated to
+//!   whole degrees, faces that bearing within [`GUN_FACING`] turns,
 //!   strictly ([`facing`], @0x872c3-0x872fe).
 //!
-//! Left out (rdm phase weapons-fidelity/phase-30-snipe-left-out-of-phase-17):
-//! the whole-degree headings and `_AngularDifference` the original tests
-//! by (@0x871ef-0x87255, @0x872aa-0x872fe), and the whole-degree modulo
-//! of its retro heading. An inertialess ship's brake (thrust reversed,
+//! Left out: an inertialess ship's brake (thrust reversed,
 //! @0x8710f-0x8713a): a moving inertialess sniper brakes as substate 1
 //! does instead ([`inertialess::brake`](crate::traffic::inertialess::brake),
 //! see the autopilot), until
@@ -37,12 +38,13 @@
 //! The block calls no `PlaySound` or `_beepSnd`.
 
 use crate::ai::fire::{self, GUN_FACING};
-use crate::combat::aim::{angle_off, bearing};
-use crate::flight::{Controls, ShipState, heading_of, shortest_turn};
+use crate::flight::{Controls, ShipState};
+use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::steer;
 use crate::traffic::npc::Npc;
+use crate::trig;
 
 /// How fast, in pixels a tick on either axis, a sniper is moving (the
 /// double 0.35 @0xdda68).
@@ -63,12 +65,28 @@ pub fn moving(state: &ShipState) -> bool {
     f64::from(state.velocity.x.abs()) >= MOVING || f64::from(state.velocity.y.abs()) >= MOVING
 }
 
-/// Whether `npc` faces its target at `at` closely enough to fire: within
-/// [`GUN_FACING`] turns of the plain bearing, strictly (@0x872c3-0x872fe).
+/// The retro heading of a ship moving at `velocity`, the way it moves
+/// turned about, in whole degrees: the table heading of the velocity
+/// scaled by the float 100.0 (`_CalcInterceptAngle((0,0), v × 100)`,
+/// @0xdd060), plus 180, modulo 360 in integers (@0x871b2-0x871eb). The
+/// table heading is 0..359, so the sum is 180..539 and the result 0..359.
+#[must_use]
+pub fn retro(velocity: Vec2) -> i16 {
+    let heading = i32::from(trig::intercept_angle(Vec2::ZERO, velocity * 100.0));
+    i16::try_from((heading + 180) % 360).expect("0..360 fits an i16")
+}
+
+/// Whether `npc` faces its target at `at` closely enough to fire: its
+/// heading truncated to whole degrees within [`GUN_FACING`] turns of the
+/// table's plain bearing (`_CalcInterceptAngle`), strictly
+/// (@0x872aa-0x872fe).
 #[must_use]
 pub fn facing(npc: &Npc, at: &ShipState) -> bool {
-    angle_off(npc.state.heading, bearing(npc.state.position, at.position))
-        < GUN_FACING * npc.stats.handling.turn_rate
+    fire::faces(
+        npc,
+        trig::intercept_angle(npc.state.position, at.position),
+        GUN_FACING,
+    )
 }
 
 /// The controls `npc` snipes by this tick at its target at `target`, on
@@ -88,9 +106,10 @@ pub fn fly(
     if !moving(&state) {
         npc.state.velocity = state.velocity * DAMPING;
         return Controls {
+            // +0x68, the table's whole-degree bearing (@0x872aa, @0x872b7).
             turn: steer(
                 state.heading,
-                bearing(state.position, target.position),
+                f32::from(trig::intercept_angle(state.position, target.position)),
                 handling,
             ),
             ..Controls::default()
@@ -102,13 +121,14 @@ pub fn fly(
             .iter()
             .find(|mount| mount.spec.id == gun)
     });
+    // +0x68, a whole degree either way (@0x871ac, @0x871eb).
     let wanted = match (last_gun, lead) {
-        (Some(gun), RuleSource::Engine) => fire::lead_with(npc, target, Some(&gun.spec)),
-        _ => heading_of(state.velocity * -1.0),
+        (Some(gun), RuleSource::Engine) => fire::lead(npc, target, Some(&gun.spec)),
+        _ => retro(state.velocity),
     };
     Controls {
-        thrust: handling.turn_rate + THRUST_SLACK > shortest_turn(state.heading, wanted).abs(),
-        turn: steer(state.heading, wanted, handling),
+        thrust: fire::off_by(state.heading, wanted) < handling.turn_rate + THRUST_SLACK,
+        turn: steer(state.heading, f32::from(wanted), handling),
         reverse: false,
         ..Controls::default()
     }
@@ -121,12 +141,12 @@ mod tests {
     use crate::ai::Goal;
     use crate::catalog::{WeaponId, WeaponRecord};
     use crate::combat::ShipRef;
+    use crate::combat::aim::bearing;
     use crate::combat::armament::{Armament, LauncherRounds, Shooter};
     use crate::combat::hull::Condition;
     use crate::combat::report::Reports;
     use crate::combat::weapon::WeaponSpec;
-    use crate::flight::Turn;
-    use crate::geometry::Vec2;
+    use crate::flight::{Turn, heading_of};
     use crate::stats::ShipStats;
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::weapon;
@@ -229,11 +249,63 @@ mod tests {
             assert!(!controls.reverse);
             controls
         };
+        // Its heading is truncated to whole degrees (`cvttss2si` @0x871f2).
         assert!(thrusting(3.99).thrust);
+        assert!(thrusting(3.5).thrust);
         assert!(!thrusting(4.0).thrust, "strictly");
-        assert!(thrusting(356.01).thrust);
+        assert!(!thrusting(4.5).thrust, "4, not less than 4");
+        // 356.01 and 356.5 are 356, 4 off: they hold, where their
+        // fractional 3.99 and 3.5 would thrust (@0x871f2).
+        assert!(!thrusting(356.01).thrust);
+        assert!(!thrusting(356.5).thrust);
         assert_eq!(thrusting(10.0).turn, Turn::Left);
         assert_eq!(thrusting(350.0).turn, Turn::Right);
+    }
+
+    /// [`FAST_HANDLING`] turning 3.6 degrees a tick: a window of 4.6.
+    const FRACTIONAL_TURN: Handling = Handling {
+        turn_rate: 3.6,
+        ..FAST_HANDLING
+    };
+
+    #[test]
+    fn moving_it_thrusts_by_its_heading_in_whole_degrees_against_a_fractional_turn_rate() {
+        // Moving down at 2: its retro heading is 0. Heading 4.7 is 4, less
+        // than 4.6, so it thrusts; the fractional 4.7 would not.
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        let mut npc = sniper(at(0.0, 0.0, 0.0, 2.0, 4.7));
+        let controls = fly(
+            &mut npc,
+            Some(&target),
+            &FRACTIONAL_TURN,
+            RuleSource::Engine,
+        );
+        assert!(controls.thrust);
+        let mut beyond = sniper(at(0.0, 0.0, 0.0, 2.0, 5.0));
+        let controls = fly(
+            &mut beyond,
+            Some(&target),
+            &FRACTIONAL_TURN,
+            RuleSource::Engine,
+        );
+        assert!(!controls.thrust, "5 is not less than 4.6");
+    }
+
+    #[test]
+    fn moving_it_thrusts_by_its_retro_heading_in_the_tables_whole_degrees() {
+        // Moving at (1, 1): the table's retro heading is 314, the float's 315.
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(retro(Vec2::new(1.0, 1.0)), 314);
+        let thrusting = |heading: f32| {
+            let mut npc = sniper(at(0.0, 0.0, 1.0, 1.0, heading));
+            fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine).thrust
+        };
+        // 318 is 4 off 314: it holds, where the float's 3.5 off 315 would
+        // thrust.
+        assert!(!thrusting(318.5));
+        assert!(thrusting(317.9), "317 is 3 off");
+        assert!(!thrusting(310.0), "4 off");
+        assert!(thrusting(311.0), "3 off");
     }
 
     #[test]
@@ -256,6 +328,16 @@ mod tests {
         );
         assert!(controls.thrust, "toward its target");
         assert_eq!(controls.turn, Turn::Right);
+        // At 3.6 a tick, 83.9 is 83, 4 off the lead, less than 4.6: it
+        // thrusts, where the fractional 4.9 would not (@0x871f2).
+        let mut whole = having_fired(sniper(at(0.0, 0.0, 0.0, 2.0, 83.9)));
+        let controls = fly(
+            &mut whole,
+            Some(&target),
+            &FRACTIONAL_TURN,
+            RuleSource::Engine,
+        );
+        assert!(controls.thrust);
         let mut other = npc.clone();
         let controls = fly(&mut other, Some(&target), &FAST_HANDLING, RuleSource::Bible);
         assert!(!controls.thrust, "76 off its retro heading");
@@ -272,6 +354,20 @@ mod tests {
     }
 
     #[test]
+    fn retro_is_the_tables_heading_of_the_velocity_turned_about_in_whole_degrees() {
+        // (_CalcInterceptAngle((0,0), v x 100) + 180) mod 360, in integers
+        // (@0x871b2-0x871eb).
+        assert_eq!(retro(Vec2::new(0.0, 2.0)), 0, "180 + 180 wraps");
+        assert_eq!(retro(Vec2::new(0.0, -2.0)), 180);
+        assert_eq!(retro(Vec2::new(-2.0, 0.0)), 90, "270 + 180 wraps");
+        // The table puts (1, 1) at 134, so its retro heading is 314, where
+        // the float's is 315.
+        assert_eq!(heading_of(Vec2::new(-1.0, -1.0)), 315.0);
+        assert_eq!(retro(Vec2::new(1.0, 1.0)), 314);
+        assert_eq!(retro(Vec2::new(1.0, 2.0)), 334, "the float's 333.43");
+    }
+
+    #[test]
     fn with_its_target_gone_it_coasts() {
         let mut npc = sniper(at(0.0, 0.0, 0.1, 2.0, 0.0));
         let controls = fly(&mut npc, None, &FAST_HANDLING, RuleSource::Engine);
@@ -281,11 +377,45 @@ mod tests {
 
     #[test]
     fn it_faces_its_target_strictly_within_three_turns_of_the_plain_bearing() {
-        // 3 degrees a tick: within 9 of the bearing, 90, strictly.
+        // 3 degrees a tick: within 9 of the table bearing, 90, strictly, its
+        // heading truncated to whole degrees (@0x872aa-0x872fe).
         let target = at(300.0, 0.0, 0.0, 5.0, 0.0);
-        assert!(facing(&sniper(at(0.0, 0.0, 0.0, 0.0, 81.01)), &target));
-        assert!(!facing(&sniper(at(0.0, 0.0, 0.0, 0.0, 81.0)), &target));
-        assert!(facing(&sniper(at(0.0, 0.0, 0.0, 0.0, 98.99)), &target));
-        assert!(!facing(&sniper(at(0.0, 0.0, 0.0, 0.0, 99.0)), &target));
+        let faces = |heading: f32| facing(&sniper(at(0.0, 0.0, 0.0, 0.0, heading)), &target);
+        // 81.01 and 81.99 are 81, 9 off: neither faces, where their
+        // fractional 8.99 and 8.01 would.
+        assert!(!faces(81.01));
+        assert!(!faces(81.99));
+        assert!(!faces(81.0));
+        assert!(faces(82.0));
+        assert!(faces(98.99), "98, 8 off");
+        assert!(!faces(99.0));
+        assert!(!faces(99.5));
+    }
+
+    #[test]
+    fn it_faces_the_tables_bearing_of_its_target() {
+        // The target at (300, 300): the table bearing is 134, the float's 135.
+        let target = at(300.0, 300.0, 0.0, 0.0, 0.0);
+        assert_eq!(trig::intercept_angle(Vec2::ZERO, target.position), 134);
+        assert_eq!(bearing(Vec2::ZERO, target.position), 135.0);
+        let faces = |heading: f32| facing(&sniper(at(0.0, 0.0, 0.0, 0.0, heading)), &target);
+        assert!(
+            !faces(143.5),
+            "143 is 9 off 134; the float's 8.5 would face"
+        );
+        assert!(!faces(125.5), "125 is 9 off");
+        assert!(faces(142.9), "142, 8 off");
+    }
+
+    #[test]
+    fn at_rest_it_turns_to_the_tables_bearing_of_its_target() {
+        // The target at (300, 300), table bearing 134: at 136.4 it is 2.4
+        // off, beyond half a turn (1.5), so it turns left, where the
+        // float's 135 is 1.4 off and it would hold (+0x68 @0x872b7).
+        let target = at(300.0, 300.0, 0.0, 0.0, 0.0);
+        let mut npc = sniper(at(0.0, 0.0, 0.0, 0.0, 136.4));
+        let controls = fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine);
+        assert_eq!(controls.turn, Turn::Left);
+        assert!(!controls.thrust);
     }
 }
