@@ -1228,7 +1228,7 @@ impl Traffic {
                 if still.contains(&npc.id) {
                     return Outcome::Flying;
                 }
-                if let Some(outcome) = warp_out::fly_jump(npc, &leaders, world, speeds, think) {
+                if let Some(outcome) = warp_out::fly_jump(npc, &leaders, world, think) {
                     return outcome;
                 }
                 match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance)
@@ -2870,6 +2870,26 @@ mod tests {
         assert_eq!(traffic.departed(), [(NpcId(1), Outcome::JumpedOut)]);
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         assert_eq!(traffic.departed(), [], "only the last tick's");
+    }
+
+    #[test]
+    fn the_advance_pass_ends_the_stage_of_an_intact_ship_whose_goal_left_its_jump() {
+        let mut traffic = populated(2, 1);
+        for npc in &mut traffic.npcs {
+            npc.begin_own_jump();
+            npc.warp.stage = 5.0;
+            npc.goal = Goal::Idle;
+            // Facing away from its aim, so `_HandleShip`'s warp-out only
+            // restamps it.
+            npc.state.heading = 0.0;
+            npc.warp.aim = 180;
+        }
+        traffic.npcs[1].condition = Condition::Disabled;
+        traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].warp.stage, 5.0, "not on the second pass");
+        traffic.tick(&Keep, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].warp.stage, 0.0, "the high level's hold");
+        assert_eq!(traffic.npcs[1].warp.stage, 5.0, "none for a disabled ship");
     }
 
     #[test]

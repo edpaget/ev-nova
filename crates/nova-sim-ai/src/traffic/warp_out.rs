@@ -115,7 +115,7 @@ use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::Outcome;
 use crate::traffic::World;
-use crate::traffic::autopilot::{TopSpeeds, steer, step};
+use crate::traffic::autopilot::{steer, step};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::trig::{accel, angular_difference, intercept_angle, whole};
@@ -438,9 +438,8 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld) {
             )
         }
     };
-    if v > 0.0 {
-        npc.state.position = npc.state.position + accel(whole(npc.state.heading), v);
-    }
+    // No move at v ≤ 0 or a NaN v (@0x349c1).
+    npc.state.position = npc.state.position + accel(whole(npc.state.heading), v.max(0.0));
 }
 
 /// One pass of a jumping ship's flight before its warp-out: it moves on
@@ -540,12 +539,12 @@ pub fn settle(npc: &mut Npc, leaders: &BTreeMap<NpcId, LeaderWarp>, world: &Warp
 /// sub-goal 4 or 0xd ([`follow_check`], [`own_jump`], [`follow_jump`]) on
 /// the advance pass, then its flight ([`fly`]) and its warp-out
 /// ([`warp_block`]). None when it is not jumping, or follows a leader not
-/// yet in its warp stage: the autopilot flies it as its goal says.
+/// yet in its warp stage: the autopilot flies it as its goal says. It
+/// takes no thrust, so its top speed plays no part.
 pub fn fly_jump(
     npc: &mut Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
     world: &World,
-    speeds: TopSpeeds,
     think: bool,
 ) -> Option<Outcome> {
     if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
@@ -585,10 +584,7 @@ pub fn fly_jump(
     if !npc.jumping() {
         return None;
     }
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..world.flight.handling(npc.stats.handling)
-    };
+    let handling = world.flight.handling(npc.stats.handling);
     let inertia = Inertia::of(npc, None, world.flight);
     fly(npc, &handling, world.flight, inertia);
     warp_block(npc, led(npc, leaders), &world.warp);
@@ -1021,7 +1017,167 @@ mod tests {
         assert_eq!(ship.state.position, Vec2::new(2000.0, 0.0) + accel(90, v));
     }
 
+    // The leaders' views.
+
+    #[test]
+    fn each_ship_shows_its_followers_its_warp_and_whether_it_leaves() {
+        let mut leaving = warping(4.0, 9);
+        leaving.state.velocity = Vec2::new(1.0, 2.0);
+        leaving.warp.aim = 33;
+        let mut idle = ship();
+        idle.id = crate::traffic::npc::NpcId(2);
+        let views = leaders(&[leaving.clone(), idle]);
+        assert_eq!(
+            views[&leaving.id],
+            LeaderWarp {
+                stage: 4.0,
+                since: 9,
+                factor: warp_factor(0),
+                heading: 90.0,
+                aim: 33,
+                velocity: Vec2::new(1.0, 2.0),
+                leaving: true,
+            }
+        );
+        assert!(!views[&crate::traffic::npc::NpcId(2)].leaving);
+    }
+
+    #[test]
+    fn goal_0xb_sends_an_intact_followers_npc_leader_out() {
+        let lead = crate::traffic::npc::NpcId(2);
+        let mut follower = ship();
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let mut leader = ship();
+        leader.id = lead;
+        let mut other = ship();
+        other.id = crate::traffic::npc::NpcId(3);
+        let mut ships = [follower.clone(), leader, other];
+        send_leaders_out(&mut ships);
+        assert_eq!(ships[1].goal, Goal::JumpOut, "goal 2 (@0x8def0)");
+        assert_eq!(ships[2].goal, Goal::Idle, "not a leader");
+        let mut disabled = follower;
+        disabled.condition = Condition::Disabled;
+        let mut leader = ship();
+        leader.id = lead;
+        let mut ships = [disabled, leader];
+        send_leaders_out(&mut ships);
+        assert_eq!(ships[1].goal, Goal::Idle, "a disabled follower sends none");
+        let mut own = ship();
+        own.begin_own_jump();
+        let mut leader = ship();
+        leader.id = lead;
+        let mut ships = [own, leader];
+        send_leaders_out(&mut ships);
+        assert_eq!(ships[1].goal, Goal::Idle, "an own jump follows no one");
+    }
+
+    #[test]
+    fn settling_runs_the_warp_out_of_a_ship_whose_stage_is_under_way() {
+        let views = BTreeMap::new();
+        let mut ship = warping(3.0, 100);
+        settle(&mut ship, &views, &world());
+        assert_eq!(ship.state.velocity, Vec2::new(1.9, 0.0));
+        let mut still = warping(0.0, 100);
+        settle(&mut still, &views, &world());
+        assert_eq!(still.state.velocity, Vec2::new(2.0, 0.0));
+    }
+
+    // Flying a jump.
+
+    /// A traffic world over `warp`.
+    fn in_world(warp: WarpWorld) -> crate::traffic::World<'static> {
+        crate::traffic::World {
+            warp,
+            ..crate::traffic::World::new(&[])
+        }
+    }
+
+    #[test]
+    fn a_ship_not_flying_or_not_intact_or_not_jumping_flies_no_jump() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let mut disabled = warping(3.0, 0);
+        disabled.condition = Condition::Disabled;
+        assert_eq!(fly_jump(&mut disabled, &views, &world, true), None);
+        let mut gliding = warping(3.0, 0);
+        gliding.mode = Mode::JumpingIn { tick: 0 };
+        assert_eq!(fly_jump(&mut gliding, &views, &world, true), None);
+        let mut idle = ship();
+        assert_eq!(fly_jump(&mut idle, &views, &world, true), None);
+        let mut own = warping(3.0, 0);
+        assert_eq!(
+            fly_jump(&mut own, &views, &world, true),
+            Some(Outcome::Flying)
+        );
+    }
+
+    #[test]
+    fn a_follower_of_a_leader_not_yet_warping_is_flown_by_its_goal_on_either_pass() {
+        let views = BTreeMap::new();
+        let mut world = world();
+        world.player.stage = 1.0;
+        let world = in_world(world);
+        let mut follower = ship();
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert_eq!(fly_jump(&mut follower, &views, &world, true), None);
+        assert_eq!(follower.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(fly_jump(&mut follower, &views, &world, false), None);
+        let mut warping_world = self::world();
+        warping_world.player.stage = 4.0;
+        warping_world.player.heading = 90.0;
+        warping_world.player.aim = 90;
+        let warping_world = in_world(warping_world);
+        assert_eq!(
+            fly_jump(&mut follower, &views, &warping_world, false),
+            Some(Outcome::Flying),
+            "past 1.0 it flies its jump"
+        );
+    }
+
+    #[test]
+    fn a_follower_whose_player_is_no_longer_jumping_gives_up() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let mut follower = ship();
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert_eq!(fly_jump(&mut follower, &views, &world, true), None);
+        assert_eq!(follower.warp.goal, None, "goal 0");
+    }
+
+    #[test]
+    fn its_own_jump_departs_on_the_advance_pass_alone() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let mut ship = warping(3.0, 1000);
+        assert_eq!(
+            fly_jump(&mut ship, &views, &world, false),
+            Some(Outcome::Flying)
+        );
+        assert_eq!(
+            fly_jump(&mut ship, &views, &world, true),
+            Some(Outcome::JumpedOut)
+        );
+    }
+
     // The flight.
+
+    #[test]
+    fn an_inertialess_jumping_ship_turns_by_its_rate_the_short_way_round() {
+        let mut ship = warping(3.0, 0);
+        ship.state.heading = 1.0;
+        ship.warp.aim = 300;
+        let handling = ship.stats.handling;
+        let inertialess = Inertia::Inertialess { speed: 0.0 };
+        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        assert_eq!(ship.state.heading, 358.0, "left, wrapping");
+        ship.warp.aim = 10;
+        ship.state.heading = 359.0;
+        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        assert_eq!(ship.state.heading, 2.0, "right, wrapping");
+        ship.warp.aim = 2;
+        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        assert_eq!(ship.state.heading, 2.0, "there");
+    }
 
     #[test]
     fn a_jumping_ship_turns_to_its_aim_and_moves_on_without_thrust_or_fire() {

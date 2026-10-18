@@ -999,6 +999,12 @@ mod tests {
         assert_eq!(warp_up_rate(warp_factor(0x0001)), 72_017, "65536 / 0.91");
         assert_eq!(warp_up_rate(warp_factor(0x0004)), 31_507, "65536 / 2.08");
         assert_eq!(warp_up_rate(2.0), 32_768);
+        // A factor no `Flags` gives plays at its own rate.
+        assert_eq!(warp_up_rate(0.0), 65_536, "65536 / 0 is +inf");
+        assert_eq!(warp_up_rate(f32::INFINITY), 65_536, "65536 / inf is 0");
+        assert_eq!(warp_up_rate(-1.0), 65_536);
+        assert_eq!(warp_up_rate(f32::NAN), 65_536);
+        assert_eq!(warp_up_rate(1e-30), u32::MAX, "capped");
     }
 
     #[test]

@@ -88,12 +88,6 @@ impl PlaybackRate {
         }
     }
 
-    /// The 16.16 fraction.
-    #[must_use]
-    pub const fn fixed(self) -> u32 {
-        self.0
-    }
-
     /// The rate as a multiple of the sound's own: 1.0 at it.
     #[must_use]
     pub fn ratio(self) -> f64 {

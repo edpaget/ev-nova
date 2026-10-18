@@ -3579,9 +3579,6 @@ impl Session {
             }
             _ => self.jump = Some(Jump::PreJump { to, bearing, warp }),
         }
-        if stage == PreJump::Brake {
-            self.hold_warp_stage();
-        }
         if started {
             self.start_warp();
         }
@@ -3763,7 +3760,6 @@ impl Session {
             return None;
         };
         self.jump = None;
-        self.end_warp();
         // The natural end, the warp-ups finished (`_warpSoundDone`
         // @0x6bb5e-0x6bba4), read before the halt ends them.
         let natural_end = !self.warp_ups.playing(false) && !self.warp_ups.playing(true);
@@ -6608,6 +6604,29 @@ fn fill_in(
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(super) mod tests {
+
+    #[test]
+    fn the_npcs_struck_are_those_the_strikes_hit_not_the_player() {
+        let strike = |ship| Strike {
+            ship,
+            by: None,
+            damage: 1.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
+        };
+        let strikes = [
+            strike(ShipRef::Npc(NpcId(3))),
+            strike(ShipRef::Player),
+            strike(ShipRef::Npc(NpcId(1))),
+            strike(ShipRef::Npc(NpcId(3))),
+        ];
+        assert_eq!(struck_npcs(&strikes), BTreeSet::from([NpcId(1), NpcId(3)]));
+    }
 
     /// The warp-up `session`'s ship sounds as its warp stage starts out of
     /// double time, pitched by its class's warp factor.

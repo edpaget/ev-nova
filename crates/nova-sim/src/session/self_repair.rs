@@ -419,6 +419,12 @@ mod tests {
             fight(&mut session, &[1]);
             assert!(session.is_escort(hired), "kept, though disabled");
         }
+        // A hit on it, disabled, loses it.
+        let was = [crate::session::NpcBefore::of(
+            session.npc(hired).expect("here"),
+        )];
+        session.lose_escorts(&was, &std::collections::BTreeSet::from([hired]));
+        assert!(!session.is_escort(hired), "hit");
     }
 
     #[test]

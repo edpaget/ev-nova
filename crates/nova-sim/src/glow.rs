@@ -174,11 +174,8 @@ pub fn brake_glow(base: i16) -> i16 {
 /// higher, to at most 32, while it is at most 31.
 #[must_use]
 pub fn move_off_glow(base: i16) -> i16 {
-    if base < MOVE_OFF_GLOW {
-        (base + 4).min(MOVE_OFF_GLOW)
-    } else {
-        base
-    }
+    // Above 31 it is left as it is: the raise capped at 32 is then less.
+    base.saturating_add(4).min(MOVE_OFF_GLOW).max(base)
 }
 
 /// Which of the jump's raises a tick of the jump makes (see

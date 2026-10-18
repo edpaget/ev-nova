@@ -92,8 +92,9 @@ const MOVE_OFF_CAP: f32 = 50.0;
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PlayerWarp {
-    /// +0x50 while the jump is under way: 1.0 while it brakes, 2.0 as
-    /// the warp stage starts, then 1.0 more each pass.
+    /// +0x50 once the warp stage has started: 2.0 as it starts, then 1.0
+    /// more each pass ([`Session::warp_stage`] gives 1.0 while it
+    /// brakes).
     stage: f32,
     /// `_warpSoundDone` (*0xdee3c).
     sound_done: bool,
@@ -196,11 +197,6 @@ impl Session {
         }
     }
 
-    /// The brake's hold of the stage at 1.0 (@0x6b6aa).
-    pub(super) fn hold_warp_stage(&mut self) {
-        self.warp.stage = 1.0;
-    }
-
     /// The warp stage's start (@0x6b5e9-0x6b603): +0x50 = 2.0, and the
     /// pilot is past the tutorial; the warp-up sounds unless it still
     /// plays ([`Session::sound_warp_up`]). The caller stamps the clock.
@@ -217,12 +213,6 @@ impl Session {
     /// warp-up still playing skips.
     pub(super) fn clear_warp_sound_done(&mut self) {
         self.warp.sound_done = false;
-    }
-
-    /// The arrival's end of the warp: no end due, nothing halted.
-    pub(super) fn end_warp(&mut self) {
-        self.warp.end_due = false;
-        self.warp.halted = false;
     }
 
     /// One pass of the warp stage toward `bearing` under `controls` (see
@@ -505,6 +495,17 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_of_1_runs_no_warp_stage_block() {
+        // +0x50 > 1.0 (@0x6bae2-0x6baf1): the brake's 1.0 is not in it.
+        let mut session = jumping(&catalog());
+        session.warp.stage = 1.0;
+        session.player.velocity = Vec2::new(0.5, 0.0);
+        tick(&mut session);
+        assert_eq!(session.warp_stage(), 1.0, "no growth");
+        assert_eq!(session.player.velocity, Vec2::new(0.5, 0.0), "no drag");
+    }
+
+    #[test]
     fn the_brake_holds_the_stage_at_1() {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::new(0.0, -5.0), 0.0);
         session.begin_jump().expect("jumps");
@@ -585,6 +586,18 @@ mod tests {
         // 118, 28 off: it moves.
         tick(&mut session);
         assert_eq!(session.player.heading, 118.0);
+        assert_ne!(session.player.position, at);
+    }
+
+    #[test]
+    fn the_ship_moves_off_at_30_whole_degrees_off_the_bearing() {
+        let mut session = jumping(&catalog());
+        tick_to(&mut session, 100);
+        // 123 turns 3 to 120, 30 off: within.
+        session.player.heading = 123.0;
+        let at = session.player.position;
+        tick(&mut session);
+        assert_eq!(session.player.heading, 120.0);
         assert_ne!(session.player.position, at);
     }
 
@@ -749,6 +762,21 @@ mod tests {
             [SimSound::Halt(&WARP_UP_HALTS), SimSound::Arrived],
             "the warp-out, the warp-ups already over"
         );
+    }
+
+    #[test]
+    fn a_warp_up_played_clears_the_warp_sound_flag_a_cancelled_warp_left() {
+        // Left set by a warp given up a pass after its fallback, the flag
+        // would end the next warp at a stage of 30 though its warp-up
+        // plays (@0x6b695 clears it as the warp-up plays).
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+        session.warp_sounds = [364, 252];
+        session.warp.sound_done = true;
+        session.begin_jump().expect("jumps");
+        for _ in 0..40 {
+            tick(&mut session);
+            assert!(!session.warp_end_due(), "{}", session.warp_stage());
+        }
     }
 
     #[test]
