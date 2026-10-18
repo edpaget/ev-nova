@@ -426,6 +426,7 @@ mod status_cargo;
 mod steering;
 mod stellars;
 mod story;
+mod swarm_formation;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
@@ -2433,6 +2434,7 @@ impl Session {
                 let last = self.last_npc();
                 let marks = self.mission_marks();
                 let still = self.held_through_the_warp();
+                self.reform_on_swarm_change();
                 self.step_traffic(|traffic, world| {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });

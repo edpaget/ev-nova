@@ -100,6 +100,7 @@ use std::collections::BTreeSet;
 
 use super::Session;
 use crate::ai::pursuit::Pursuit;
+use crate::ai::swarm::{self, FormationParent};
 use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
@@ -378,34 +379,20 @@ impl Session {
         self.save_due = true;
     }
 
-    /// Gives each ship the player leads ([`Session::player_led`]) its slot
-    /// in one formation of them all and the player, spaced by the widest
-    /// sprite among them ([`escort::spacing`]): 2, 3, … in ship-table
-    /// order, by berth, hired and mission escorts alike, as
-    /// `_AICalcFormationPositions` numbers every ship whose formation
-    /// parent is the player in table-slot order (@0x85137-0x851cc). That
-    /// parent is the player for each ship it leads (`_DoPlayGameWork`
-    /// @0x44160-0x441c0). The original recomputes the formation every
-    /// frame (the parent's +0xc2 flag); the engine re-forms on each change
-    /// to the led set, which gives the same slots at every frame.
+    /// Gives each ship the player leads ([`Session::player_led`]) whose
+    /// formation parent is the player its slot in one formation of them
+    /// and the player ([`Session::formation_slots`]). The parent is the
+    /// player for each ship it leads but one attacking with a swarm leader,
+    /// which forms on that ([`swarm::formation_parent`], `_DoPlayGameWork`
+    /// @0x44160-0x441c0) and keeps the slot it held. The original
+    /// recomputes the formation every frame (the parent's +0xc2 flag); the
+    /// engine re-forms on each change to the led set, and on each change
+    /// of parent before the traffic's tick (the `swarm_formation` module),
+    /// which gives the same slots at every frame.
     pub(super) fn reform(&mut self) {
-        let placed: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
-        let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
-        let widths: Vec<Option<f32>> = placed
-            .iter()
-            .filter_map(|&id| self.npc(id))
-            .map(|npc| npc.hull.sprite_size)
-            .collect();
-        let spacing = escort::spacing(self.hull.sprite_size, &widths);
-        for (place, id) in placed.into_iter().enumerate() {
-            let slot = u8::try_from(place + 2).unwrap_or(u8::MAX);
+        for (id, formation) in self.formation_slots() {
             let Some(npc) = self.npc_mut(id) else {
                 continue;
-            };
-            let formation = FormationSlot {
-                slot,
-                ships,
-                spacing,
             };
             if let Some(duty) = &mut npc.escort {
                 duty.formation = formation;
@@ -415,6 +402,36 @@ impl Session {
                 mark.formation = Some(formation);
             }
         }
+    }
+
+    /// The slot each ship in the player's formation takes: those the
+    /// player leads whose formation parent is the player, 2, 3, … in
+    /// ship-table order, by berth, hired and mission escorts alike, as
+    /// `_AICalcFormationPositions` numbers every ship whose formation
+    /// parent is the player in table-slot order (@0x85137-0x851cc), out of
+    /// them and the player, spaced by the widest sprite among them
+    /// ([`escort::spacing`]).
+    pub(super) fn formation_slots(&self) -> Vec<(NpcId, FormationSlot)> {
+        let placed: Vec<&Npc> = self
+            .player_led()
+            .filter(|npc| swarm::formation_parent(npc) == Some(FormationParent::Player))
+            .collect();
+        let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
+        let widths: Vec<Option<f32>> = placed.iter().map(|npc| npc.hull.sprite_size).collect();
+        let spacing = escort::spacing(self.hull.sprite_size, &widths);
+        placed
+            .iter()
+            .enumerate()
+            .map(|(place, npc)| {
+                let slot = u8::try_from(place + 2).unwrap_or(u8::MAX);
+                let formation = FormationSlot {
+                    slot,
+                    ships,
+                    spacing,
+                };
+                (npc.id, formation)
+            })
+            .collect()
     }
 
     /// Puts escort NPC `id`, hired or a mission escort, on its slot beside

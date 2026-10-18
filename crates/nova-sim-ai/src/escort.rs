@@ -39,7 +39,11 @@
 //! behind and beside the player along its heading. The spacing is six tenths of the widest sprite,
 //! held between 24 and 60 pixels. An escort within [`KEEP_FORMATION`] of
 //! its slot moves with the player, nudged back towards the slot
-//! (`_AIMaintainFormation` @0x84f04); farther off it flies there.
+//! (`_AIMaintainFormation` @0x84f04); farther off it flies there. A ship
+//! it leads that attacks with a swarm leader forms on that ship instead,
+//! so it leaves the player's formation and the rest close up
+//! ([`swarm::formation_parent`](crate::ai::swarm::formation_parent); see
+//! the session's `swarm_formation` module).
 //!
 //! **Threats** ([`threats`], [`threat_score`], [`best_threat`];
 //! `_IsShipANearbyThreatToParent` @0x836a4): an escort fights the ships
