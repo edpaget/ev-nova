@@ -67,6 +67,7 @@ mod escorts;
 mod flying;
 mod hyperspace;
 mod landing;
+mod layers;
 mod map_borders;
 mod map_find;
 mod maps;

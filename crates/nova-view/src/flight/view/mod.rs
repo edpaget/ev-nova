@@ -573,6 +573,22 @@
 //! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
 //! port's own, drawn only when turned on ([`FlightOverlays`],
 //! [`FlightView::with_overlays`]).
+//!
+//! # The world layer
+//!
+//! Flight is the one screen that draws a world layer
+//! ([`DrawList::world`], [`DrawLayer`](crate::DrawLayer)): the stars, the
+//! stellars, asteroids and boxes, the beams, the ships with their glow and
+//! lights, the shots, the effects and the smoke, everything the original
+//! draws into its sprite world. The brackets, the alerts, the floating
+//! map, the escort menu, the title and help, the status bar, the cursor,
+//! the fades and the course map are overlay, and so is every text: the
+//! message line and a placeholder's reason too, though they are drawn
+//! among the world's commands. Drawn at the window's resolution the
+//! layers change nothing, as each command is drawn in the list's order.
+//! Under a frame upscaler, which draws the world first and the overlay
+//! over it, the message line would show over the ships, where the
+//! original has it under them.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};

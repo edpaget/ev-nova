@@ -13,9 +13,21 @@
 //! its own (always RGBA8, whatever the target's format), then copies it to
 //! the window or offscreen target with one blit. An OR batch
 //! ([`Blend::Or`](nova_view::Blend::Or)) reads a backdrop copy of the
-//! rectangle the core says it covers
+//! rectangle the core says it covers, in its layer's pixels
 //! ([`Frame::pixels_covered`](crate::Frame::pixels_covered)), taken just
 //! before it.
+//!
+//! The renderer is made with an [`Upscaler`](crate::Upscaler), which it
+//! turns into an [`Upscale`] and asks how it draws flight's world layer
+//! ([`Gpu::world_resolution`](crate::Gpu::world_resolution)). The only
+//! one so far is [`Native`]: the world
+//! ([`WorldSpace::Target`](crate::WorldSpace::Target)) is drawn straight
+//! into the scene, every batch in the frame's order whatever its layer,
+//! so nothing changes on screen. An upscaler drawing the world into a
+//! texture of its own ([`WorldSpace::Texture`](crate::WorldSpace::Texture))
+//! will have the world drawn first, enlarged onto the viewport
+//! ([`Upscale::enlarge`]), and the overlay drawn over it; until one
+//! exists, such a frame's world is left out.
 //!
 //! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
 //! font system the renderer draws with, so the widgets lay text out by the
@@ -33,12 +45,14 @@ mod offscreen;
 mod overlay;
 mod renderer;
 mod surface;
+mod upscale;
 
 pub use metrics::GlyphonMetrics;
 pub use offscreen::{OffscreenGpu, ReadError};
 pub use overlay::{MAX_TEXTURE_SIDE, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay};
 pub use renderer::WgpuRenderer;
 pub use surface::SurfaceGpu;
+pub use upscale::{Native, Upscale};
 
 /// Why a GPU could not be set up.
 #[derive(Debug, thiserror::Error)]

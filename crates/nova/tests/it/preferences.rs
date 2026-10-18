@@ -38,7 +38,7 @@ use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::Point;
 use nova_view::ui::PrefsDialog;
 use nova_view::ui::prefs::OK_ITEM;
-use nova_view::{FullscreenKind, Key, MonitorMode, MouseButton, VideoMode};
+use nova_view::{DrawLayer, FullscreenKind, Key, MonitorMode, MouseButton, VideoMode};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -641,6 +641,39 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
     harness.key(Key::Up, true);
     harness.fly();
     assert_eq!(harness.played(), [engine], "a fresh thrust");
+}
+
+#[test]
+fn the_preferences_over_flight_are_drawn_in_the_overlay_over_its_world() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press_physical(KeyCode::KeyF);
+    assert_eq!(harness.showing(), Showing::Flight);
+    harness.frame();
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    let frame = harness.frame();
+    let texts_in = |layer: DrawLayer| -> Vec<String> {
+        frame
+            .in_layer(layer)
+            .flat_map(|batch| match batch {
+                Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+    assert!(
+        frame.in_layer(DrawLayer::World).next().is_some(),
+        "flight's world beneath"
+    );
+    assert!(texts_in(DrawLayer::World).is_empty());
+    let overlay = texts_in(DrawLayer::Overlay);
+    for label in ["Music", "OK", "Key Settings"] {
+        assert!(
+            overlay.iter().any(|text| text == label),
+            "{label}: {overlay:?}"
+        );
+    }
 }
 
 /// The settings saved in `store`, as JSON.

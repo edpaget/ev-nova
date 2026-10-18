@@ -450,14 +450,17 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     let view = flight();
     let list = drawn(&view);
     let mut expected = DrawList::new();
-    starfield::draw(&mut expected, &view.camera());
-    scene::draw_stellars(
-        &mut expected,
-        view.scene().expect("a scene"),
-        &view.camera(),
-        Duration::ZERO,
-    );
-    expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
+    // The stars, the stellars and the ship are the world, the HUD over it.
+    expected.world(|expected| {
+        starfield::draw(expected, &view.camera());
+        scene::draw_stellars(
+            expected,
+            view.scene().expect("a scene"),
+            &view.camera(),
+            Duration::ZERO,
+        );
+        expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
+    });
     hud::draw(
         &mut expected,
         view.status_bar().expect("a status bar"),

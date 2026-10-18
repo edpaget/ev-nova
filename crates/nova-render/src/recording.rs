@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use nova_data::graphics::Image;
 
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::upscale::WorldResolution;
 use crate::viewport::PixelRect;
 
 /// One call a [`RecordingGpu`] received.
@@ -54,11 +55,14 @@ impl GpuCall {
     }
 }
 
-/// Records every call, in order.
+/// Records every call, in order. Asked, it draws the world at
+/// [`WorldResolution::Native`] unless made [`answering`](Self::answering)
+/// otherwise; the question is not a call.
 #[derive(Clone, Debug, Default)]
 pub struct RecordingGpu {
     /// The calls received, oldest first.
     pub calls: Vec<GpuCall>,
+    world_resolution: WorldResolution,
 }
 
 impl RecordingGpu {
@@ -66,6 +70,15 @@ impl RecordingGpu {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A recorder with no calls that draws the world at `resolution`.
+    #[must_use]
+    pub fn answering(resolution: WorldResolution) -> Self {
+        Self {
+            world_resolution: resolution,
+            ..Self::default()
+        }
     }
 
     /// The frames submitted, oldest first.
@@ -97,5 +110,23 @@ impl Gpu for RecordingGpu {
 
     fn submit(&mut self, frame: &Frame) {
         self.calls.push(GpuCall::Submit(frame.clone()));
+    }
+
+    fn world_resolution(&self) -> WorldResolution {
+        self.world_resolution
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_draws_the_world_natively_unless_told_and_asking_is_no_call() {
+        let gpu = RecordingGpu::new();
+        assert_eq!(gpu.world_resolution(), WorldResolution::Native);
+        let logical = RecordingGpu::answering(WorldResolution::Logical);
+        assert_eq!(logical.world_resolution(), WorldResolution::Logical);
+        assert_eq!(logical.calls, []);
     }
 }

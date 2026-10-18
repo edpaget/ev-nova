@@ -10,6 +10,7 @@ use crate::gpu::{Frame, Gpu, PageId};
 use crate::present::{
     AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
 };
+use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// Draws frames into a window. Before each frame it asks
@@ -28,11 +29,13 @@ pub struct SurfaceGpu {
 
 impl SurfaceGpu {
     /// A surface on `window`, whose platform display is `display`, drawn
-    /// with vsync (`Fifo`) in a non-sRGB format, with text in `faces`.
+    /// with vsync (`Fifo`) in a non-sRGB format, with text in `faces` and
+    /// flight's world by `upscaler`.
     pub fn new(
         display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>,
         window: impl wgpu::DisplayAndWindowHandle + 'static,
         faces: &FontFaces,
+        upscaler: Upscaler,
     ) -> Result<Self, InitError> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(display));
@@ -55,7 +58,7 @@ impl SurfaceGpu {
                 .unwrap_or(wgpu::CompositeAlphaMode::Auto),
             view_formats: Vec::new(),
         };
-        let renderer = WgpuRenderer::new(&device, &queue, format, faces);
+        let renderer = WgpuRenderer::new(&device, &queue, format, faces, upscaler);
         Ok(Self {
             surface,
             device,
@@ -79,6 +82,10 @@ impl Gpu for SurfaceGpu {
 
     fn submit(&mut self, frame: &Frame) {
         self.present(frame, None);
+    }
+
+    fn world_resolution(&self) -> WorldResolution {
+        self.renderer.world_resolution()
     }
 }
 

@@ -174,6 +174,8 @@ impl Harness {
         assert_eq!(submits.len(), before + 1, "one submit per redraw");
         let frame = submits[before].clone();
         assert_eq!(self.app.take_failures(), []);
+        // Only flight draws a world layer.
+        assert_eq!(frame.world, [0_usize; 0], "no world");
         frame
     }
 }

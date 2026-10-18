@@ -97,7 +97,7 @@ pub mod video_mode;
 pub mod view_shape;
 
 pub use color::Color;
-pub use draw::{Blend, DrawCommand, DrawList};
+pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};

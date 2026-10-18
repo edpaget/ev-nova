@@ -10,7 +10,7 @@ use nova_render::wgpu::{
     InitError, OffscreenGpu, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay,
 };
 use nova_render::{
-    Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
+    Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport, WorldSpace,
 };
 use nova_view::draw::{fill_rect, lights_tint};
 use nova_view::geometry::Bounds;
@@ -54,8 +54,8 @@ fn patterned(w: u32, h: u32) -> Image {
 /// (`rlëD` 7), solid 4x4 sprites of [`DIM`] (`rlëD` 8) and [`LIT`]
 /// (`rlëD` 9), and the nebula pictures: solid 4x4 [`TEAL`] (`PICT` 10),
 /// [`VIOLET`] (`PICT` 11) and black (`PICT` 12), and a transparent white
-/// 4x4 (`PICT` 13).
-struct Images;
+/// 4x4 (`PICT` 13). Shared with [`super::world_layer`].
+pub(crate) struct Images;
 
 /// `PICT` 10's colour.
 const TEAL: [u8; 4] = [60, 180, 90, 255];
@@ -121,7 +121,7 @@ fn gpu() -> Option<OffscreenGpu> {
 
 /// A `width` x `height` offscreen GPU drawing text in `faces`, or `None`
 /// (after a skip message) with no adapter.
-fn gpu_with(width: u32, height: u32, faces: &FontFaces) -> Option<OffscreenGpu> {
+pub(crate) fn gpu_with(width: u32, height: u32, faces: &FontFaces) -> Option<OffscreenGpu> {
     match OffscreenGpu::new(width, height, faces) {
         Ok(gpu) => Some(gpu),
         Err(error @ (InitError::NoAdapter(_) | InitError::NoDevice(_))) => {
@@ -1064,7 +1064,9 @@ fn the_clear_colour_fills_the_target() {
         },
         logical: LOGICAL,
         clear: Color::rgba(51, 102, 204, 128),
+        world_space: WorldSpace::Target,
         batches: Vec::new(),
+        world: Vec::new(),
     };
 
     gpu.submit(&frame);
@@ -1191,7 +1193,9 @@ fn the_painter_runs_once_per_frame_on_the_offscreen_target() {
         },
         logical: LOGICAL,
         clear: Color::rgba(0, 0, 0, 255),
+        world_space: WorldSpace::Target,
         batches: Vec::new(),
+        world: Vec::new(),
     };
     gpu.submit_with(&frame, &mut painter);
     let target = ((SIZE, SIZE), wgpu::TextureFormat::Rgba8Unorm);

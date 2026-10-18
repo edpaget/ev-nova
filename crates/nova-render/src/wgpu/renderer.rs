@@ -11,11 +11,13 @@ use nova_data::graphics::Image;
 use wgpu::util::DeviceExt;
 
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
-use nova_view::{Blend, Color};
+use nova_view::{Blend, Color, DrawLayer};
 
 use super::fonts::{Families, font_system};
+use super::upscale::{Upscale, upscale_for};
 use crate::fonts::FontFaces;
-use crate::gpu::{Batch, Frame, PageId, TextRun};
+use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
+use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// The format every frame is drawn in, whatever the target's: the scene
@@ -106,18 +108,21 @@ pub struct WgpuRenderer {
     text_atlas: TextAtlas,
     text_viewport: glyphon::Viewport,
     text_renderers: Vec<TextRenderer>,
+    upscale: Box<dyn Upscale>,
 }
 
 impl WgpuRenderer {
     /// A renderer drawing into `format` textures on `device`, with text in
     /// `faces` alone: no system font is loaded. `format` is the target's;
-    /// only the final blit draws in it.
+    /// only the final blit draws in it. `upscaler` draws flight's world
+    /// layer.
     #[must_use]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         faces: &FontFaces,
+        upscaler: Upscaler,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals_layout = globals_layout(device);
@@ -212,7 +217,14 @@ impl WgpuRenderer {
             text_atlas,
             text_viewport,
             text_renderers: Vec::new(),
+            upscale: upscale_for(upscaler),
         }
+    }
+
+    /// The resolution it draws flight's world layer at: its upscaler's.
+    #[must_use]
+    pub fn world_resolution(&self) -> WorldResolution {
+        self.upscale.resolution()
     }
 
     /// How many font faces loaded.
@@ -715,7 +727,13 @@ struct Layout<'a> {
 /// Lays a frame's batches out in one instance buffer, one vertex buffer
 /// and a list of text batches, with what to draw for each batch in order,
 /// split into passes at each OR batch. An OR batch that covers no pixel
-/// is left out.
+/// in its layer is left out.
+///
+/// A world drawn into the target ([`WorldSpace::Target`]) is laid out in
+/// the frame's order with the overlay, as if there were no layers. A world
+/// drawn into a texture of its own ([`WorldSpace::Texture`]) is left out,
+/// and only the overlay is laid out: no upscaler draws one yet, and every
+/// one this renderer is made with draws the world natively.
 fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut instances: Vec<SpriteInstance> = Vec::new();
     let mut vertices: Vec<SolidVertex> = Vec::new();
@@ -725,14 +743,19 @@ fn lay_out(frame: &Frame) -> Layout<'_> {
         backdrop: None,
         draws: 0..0,
     }];
-    for batch in &frame.batches {
+    let textured = matches!(frame.world_space, WorldSpace::Texture { .. });
+    for (index, batch) in frame.batches.iter().enumerate() {
+        let layer = frame.layer(index);
+        if textured && layer == DrawLayer::World {
+            continue;
+        }
         if let Batch::Sprites {
             blend: Blend::Or,
             quads,
             ..
         } = batch
         {
-            let Some(rect) = frame.pixels_covered(quads) else {
+            let Some(rect) = frame.pixels_covered(layer, quads) else {
                 continue;
             };
             passes.push(Pass {
@@ -891,10 +914,10 @@ fn pipeline(
 
 #[cfg(test)]
 mod tests {
-    use nova_view::{Blend, Color, Point};
+    use nova_view::{Blend, Color, DrawLayer, Point};
 
     use super::*;
-    use crate::gpu::{QuadInstance, Rect, SolidQuad};
+    use crate::gpu::{QuadInstance, Rect, SolidQuad, WorldSpace};
     use crate::viewport::LogicalSize;
     use crate::{PageId, Uv};
 
@@ -958,6 +981,8 @@ mod tests {
             },
             logical: LogicalSize { w: 32, h: 32 },
             clear: Color::BLACK,
+            world_space: WorldSpace::Target,
+            world: Vec::new(),
             batches: vec![
                 Batch::Sprites {
                     page: PageId(0),
@@ -1044,7 +1069,7 @@ mod tests {
             sprites(Blend::Or, vec![quad(5.0)]),
             sprites(Blend::Normal, vec![quad(6.0)]),
         ]);
-        let covered = |quads: &[QuadInstance]| frame.pixels_covered(quads);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(DrawLayer::Overlay, quads);
 
         let layout = lay_out(&frame);
 
@@ -1091,7 +1116,7 @@ mod tests {
                     draws: 0..0
                 },
                 Pass {
-                    backdrop: frame.pixels_covered(&[quad(2.0)]),
+                    backdrop: frame.pixels_covered(DrawLayer::Overlay, &[quad(2.0)]),
                     draws: 0..1
                 },
             ]
@@ -1152,7 +1177,91 @@ mod tests {
             },
             logical: LogicalSize { w: 32, h: 32 },
             clear: Color::BLACK,
+            world_space: WorldSpace::Target,
             batches,
+            world: Vec::new(),
+        }
+    }
+
+    /// Asserts that `a` and `b` lay out alike: the same buffers, text,
+    /// draws and passes, backdrops included.
+    #[track_caller]
+    fn assert_same_layout(a: &Layout<'_>, b: &Layout<'_>) {
+        assert_eq!(a.instances, b.instances);
+        assert_eq!(a.vertices, b.vertices);
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.draws, b.draws);
+        assert_eq!(a.passes, b.passes);
+    }
+
+    /// Frames whose batches are marked world in different places: an OR
+    /// batch first in the world, an OR batch first in the overlay over a
+    /// world quad, and a world between two overlays.
+    fn layered_frames() -> Vec<Frame> {
+        let batches = || {
+            vec![
+                sprites(Blend::Or, vec![quad(1.0)]),
+                sprites(Blend::Normal, vec![quad(2.0), quad(3.0)]),
+                Batch::Text(vec![run("a")]),
+                Batch::Solid(vec![solid(4.0)]),
+                sprites(Blend::Or, vec![quad(2.0)]),
+                sprites(Blend::Normal, vec![quad(5.0)]),
+                Batch::Text(vec![run("b")]),
+            ]
+        };
+        [vec![0, 1, 2, 3], vec![1, 2, 3], vec![1, 3, 5], vec![0, 1]]
+            .into_iter()
+            .map(|world| Frame {
+                world,
+                ..frame_of(batches())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_native_world_lays_out_in_the_frames_order_as_with_no_world() {
+        for frame in layered_frames() {
+            let unlayered = Frame {
+                world: Vec::new(),
+                ..frame.clone()
+            };
+            assert_same_layout(&lay_out(&frame), &lay_out(&unlayered));
+        }
+    }
+
+    #[test]
+    fn a_native_worlds_or_backdrop_is_in_target_pixels() {
+        let frame = Frame {
+            world: vec![0],
+            ..frame_of(vec![sprites(Blend::Or, vec![quad(2.0)])])
+        };
+        let backdrop = lay_out(&frame).passes[1].backdrop;
+        assert_eq!(
+            backdrop,
+            Some(PixelRect {
+                x: 4,
+                y: 4,
+                w: 2,
+                h: 2
+            })
+        );
+    }
+
+    #[test]
+    fn a_textured_world_is_left_out_and_its_overlay_laid_out() {
+        // Until an upscaler draws the world into a texture of its own.
+        for frame in layered_frames() {
+            let textured = Frame {
+                world_space: WorldSpace::Texture { size: (32, 32) },
+                ..frame.clone()
+            };
+            let overlay_only = frame_of(
+                (0..frame.batches.len())
+                    .filter(|&at| frame.layer(at) == DrawLayer::Overlay)
+                    .map(|at| frame.batches[at].clone())
+                    .collect(),
+            );
+            assert_same_layout(&lay_out(&textured), &lay_out(&overlay_only));
         }
     }
 

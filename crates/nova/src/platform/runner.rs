@@ -28,7 +28,7 @@ use nova_view::devtools::DevOverlay;
 
 use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
-use nova_render::{FontFaces, ImageSource};
+use nova_render::{FontFaces, ImageSource, Upscaler};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent as WinitEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -147,10 +147,12 @@ fn open(
         .create_window(attributes)
         .map_err(|error| OpenFailure::Window(error.to_string()))?;
     let window = Arc::new(window);
+    // Flight's world drawn natively: the window's own resolution.
     let gpu = SurfaceGpu::new(
         Box::new(event_loop.owned_display_handle()),
         window.clone(),
         fonts,
+        Upscaler::Native,
     )
     .map_err(|error| gpu_failure(&error))?;
     Ok((WinitWindow(window), gpu))
