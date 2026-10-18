@@ -40,7 +40,7 @@ use crate::flight::SharedChance;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -378,9 +378,9 @@ fn stand_in_buttons() -> [Button; 6] {
 }
 
 impl Screen for MainMenu {
-    /// A press on a button, held and let go of over one, chooses the
-    /// button let go of over, with the original's sounds
-    /// ([`MainScreenTracker`]); an Escape press chooses Quit, silently: an
+    /// A primary-button press on a button, held and let go of over one,
+    /// chooses the button let go of over, with the original's sounds
+    /// ([`MainScreenTracker`]); the other mouse buttons do nothing. An Escape press chooses Quit, silently: an
     /// engine key, as the original's main screen ignores Escape
     /// (`_MainScreenKey` @0x1ac2d). Typing N, O or Q, in either case,
     /// chooses New Pilot, Open Pilot or Quit with [`UiSound::ButtonKeyed`],
@@ -414,8 +414,11 @@ impl Screen for MainMenu {
                     by: ChosenBy::Escape,
                 });
             }
-            Input::Key { .. } => {}
-            Input::PointerButton { pressed, at, .. } => {
+            Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            } => {
                 self.pointer = Some(at);
                 let hit = self.hit(at);
                 let tracked = if pressed {
@@ -426,6 +429,10 @@ impl Screen for MainMenu {
                 };
                 self.tracked(tracked);
             }
+            // Other keys do nothing. `_MainScreenMouse` runs only on the
+            // primary button's mouseDown, so the other mouse buttons
+            // neither press nor let go.
+            Input::Key { .. } | Input::PointerButton { .. } => {}
             Input::PointerMoved(at) => {
                 self.pointer = Some(at);
                 let hit = self.hit(at);
@@ -509,7 +516,6 @@ mod tests {
 
     use super::*;
     use crate::draw::{Blend, lights_tint};
-    use crate::input::MouseButton;
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME, LOGO_PICT,
         LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, main_screen_art,
@@ -764,6 +770,40 @@ mod tests {
         menu.input(&button(false, new));
         assert_eq!(menu.take_sounds(), [DOWN]);
         assert_eq!(menu.take_choice(), None);
+    }
+
+    #[test]
+    fn only_the_primary_button_presses_a_button() {
+        let other = |button, pressed, at| Input::PointerButton {
+            button,
+            pressed,
+            at,
+        };
+        let mut menu = with_art();
+        let new = menu.press_point(MenuChoice::NewPilot);
+        let quit = menu.press_point(MenuChoice::Quit);
+        for mouse in [MouseButton::Right, MouseButton::Middle, MouseButton::Other] {
+            for pressed in [true, false] {
+                menu.input(&other(mouse, pressed, new));
+            }
+            assert_eq!(menu.take_sounds(), [], "{mouse:?} is silent");
+            assert_eq!(menu.take_choice(), None, "{mouse:?} chooses nothing");
+            assert!(!menu.tracker.tracking(), "{mouse:?} tracks nothing");
+        }
+        // A secondary press and release while the primary is held leave
+        // its press alone.
+        menu.input(&button(true, new));
+        menu.input(&other(MouseButton::Right, true, quit));
+        menu.input(&other(MouseButton::Right, false, quit));
+        assert_eq!(menu.take_sounds(), [DOWN]);
+        assert_eq!(menu.take_choice(), None);
+        assert_eq!(menu.tracker.pressed(), Some(MenuChoice::NewPilot.index()));
+        menu.input(&button(false, new));
+        assert_eq!(menu.take_sounds(), [UP]);
+        assert_eq!(
+            menu.take_choice().map(|chosen| chosen.choice),
+            Some(MenuChoice::NewPilot)
+        );
     }
 
     #[test]
