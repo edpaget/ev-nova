@@ -11,6 +11,7 @@ mod frame_rate;
 mod headless;
 mod idle_block;
 mod landing;
+mod lost_sight;
 mod missions;
 mod plugin_strings;
 mod stock;
