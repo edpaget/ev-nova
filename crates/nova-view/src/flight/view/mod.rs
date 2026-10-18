@@ -19,14 +19,16 @@
 //! it brings. Drawing and input never read anything.
 //!
 //! The session populates the system's NPC traffic when it says to (see
-//! [`Session::tick_traffic`]), and as the ship takes off
+//! [`Session::game_work`]), and as the ship takes off
 //! ([`Session::take_off`]), rolled on the screen's [`SharedChance`].
 //! Each time, the sprite sheet of each ship type the traffic can spawn is
-//! read, once per type for the life of the screen. After each step of the
-//! player's ship, the traffic takes a step,
+//! read, once per type for the life of the screen. Each step runs an
+//! advance pass in the original's order ([`Session::game_work`]): the
+//! player's fire and move, the fight's collision passes, the traffic's AI,
 //! its NPCs deciding as the screen's [`Behaviour`] says
-//! ([`FlightView::with_behaviour`]; [`NovaAi`](nova_sim::NovaAi) by default), and then the
-//! fight ([`Session::tick_combat`]), its ships disabled as the screen's
+//! ([`FlightView::with_behaviour`]; [`NovaAi`](nova_sim::NovaAi) by default), the shots,
+//! the traffic's motion, the NPCs' fire and the beams, the fight's ships
+//! disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
 //! [`NovaDisable`](nova_sim::NovaDisable) by default), their point defence engaging every
 //! missile fired at them, or by the other reading of the `pd_hostility`
@@ -46,10 +48,11 @@
 //!
 //! In double time ([`FlightView::set_double_time`]), each step runs the
 //! session's second pass ([`Session::tick_again`]) after the advance
-//! pass's calls, and steps the effects and
+//! pass, and steps the effects and
 //! drains the fight's events after it as after the advance pass
 //! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
-//! its hits ([`Session::answer_strikes`]) and says the attack quotes they
+//! its hits as they land and what its close struck after it
+//! ([`Session::answer_strikes`]), and says the attack quotes they
 //! raise, then rolls the hail quotes ([`Session::tick_quotes_again`]),
 //! as `_HandleShot` (@0x44385) and `_HandleShip` (@0x44483) run on both
 //! passes; it gives no help and tells no comm. The mode is the screen's own
@@ -540,11 +543,11 @@
 //!   shown in the message line for
 //!   the session's count ([`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)),
 //!   the last one said winning.
-//! - Each step's fight starts with the asteroid field's work
-//!   ([`Session::tick_asteroids`], which [`Session::tick_combat`] runs
-//!   first): a spawn at the field's edge and the field stepped, on the
-//!   flight's chance, so the shots meet the asteroids where they are
-//!   drawn. Before any step, and so
+//! - Each step ends with the asteroid field's work
+//!   ([`Session::tick_asteroids`], which [`Session::game_work`] runs
+//!   after the fight): a spawn at the field's edge and the field stepped,
+//!   on the flight's chance, so the next step's shots meet the asteroids
+//!   where they are drawn. Before any step, and so
 //!   before the first frame is drawn, a session started or loaded in
 //!   flight places its field as its rules say
 //!   ([`Session::settle_asteroid_field`]).

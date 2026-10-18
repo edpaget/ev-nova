@@ -521,11 +521,13 @@ impl<
     }
 
     /// Runs up to `steps` of the session's steps, each only while
-    /// `go_on` holds of the session before it: the ship's tick under the
-    /// keys held, the traffic's, the quotes', the assistance's and the
-    /// fight's, then the effects; in double time, the second pass
-    /// ([`Session::tick_again`]) with the answers to its hits and their
-    /// attack quotes, and the effects again. Then says the comm
+    /// `go_on` holds of the session before it: the advance pass under the
+    /// keys held, in the original's order ([`Session::game_work`]: the
+    /// player, the fight's collision passes, the traffic's AI, the shots,
+    /// the traffic's motion, the NPCs' fire, the beams), the answers to
+    /// what its close struck and the quotes, then the effects; in double
+    /// time, the second pass ([`Session::tick_again`]) with the same, and
+    /// the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
     /// system the session populated afresh. Flight and the warp's lead-in
     /// under the streak both step this way. The eject chord, the land key
@@ -569,34 +571,39 @@ impl<
                     if again && !session.double_time() {
                         break;
                     }
-                    if again {
-                        session.tick_again(controls, &*self.behaviour, rules, &mut self.chance);
-                    } else {
-                        session.tick(controls);
-                    }
                     // The rescue settles on the pass the pod's countdown
                     // runs out, and stops the stepping so its dësc opens
                     // before the next: the original's `_HandlePlayer` runs
                     // it in place of the rest of that pass's player
                     // handling (@0x68ddd).
-                    if session.rescue_if_due(&self.catalog, &mut self.chance) {
+                    let rescued_now = if again {
+                        session.tick_again(controls, &*self.behaviour, rules, &mut self.chance);
+                        session.rescue_if_due(&self.catalog, &mut self.chance)
+                    } else {
+                        let behaviour = &*self.behaviour;
+                        let rescued_now = session.game_work(
+                            controls,
+                            &self.catalog,
+                            behaviour,
+                            rules,
+                            &mut self.chance,
+                        );
+                        notes.extend(session.take_comm());
+                        rescued_now
+                    };
+                    if rescued_now {
                         self.previous = *session.player();
                         rescued = true;
                         break 'steps;
                     }
-                    if !again {
-                        session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_assistance(&*self.disable_rule);
-                        notes.extend(session.take_comm());
-                        session.tick_combat(rules, &mut self.chance);
-                    }
-                    // The pass's hits are answered before the frame is
-                    // drawn, as `_HandleShot` answers them (@0x44385)
-                    // before `_HandleShip` and the display pass, on both
-                    // passes. Each pass then says the attack quotes its
-                    // answers raise (`_ShowPersonHailQuote` @0x89ce1) and
-                    // runs `_HandleShip`'s quote roll (@0x33f0f-0x33fba),
-                    // the quote clock moving on the advance pass alone.
+                    // The pass answers its collision passes' and shots'
+                    // hits as they land, as `_HandleShot` does (@0x44385);
+                    // what its close struck (the beams, the shockwaves)
+                    // is answered here, before the frame is drawn. Each
+                    // pass then says the attack quotes its answers raise
+                    // (`_ShowPersonHailQuote` @0x89ce1) and runs
+                    // `_HandleShip`'s quote roll (@0x33f0f-0x33fba), the
+                    // quote clock moving on the advance pass alone.
                     session.answer_strikes(&*self.behaviour);
                     if again {
                         session.tick_quotes_again(&self.catalog, &mut self.chance);

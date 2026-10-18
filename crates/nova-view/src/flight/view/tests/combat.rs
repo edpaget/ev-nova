@@ -347,13 +347,17 @@ fn hit_on_the_second_pass(catalog: FakeCatalog, draws: &[u32]) -> View {
     // its advance pass, and by the end of its second.
     let passes = |session: &Session, catalog: &FakeCatalog| {
         let mut copy = session.clone();
-        copy.tick(Controls::default());
-        copy.tick_traffic(catalog, &Answering, &mut NeverFires);
-        copy.tick_combat(Rules::default(), &mut NeverFires);
+        copy.game_work(
+            Controls::default(),
+            catalog,
+            &Answering,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let advance = left(&copy.npcs()[0]) < shield;
         copy.tick_again(
             Controls::default(),
-            &nova_sim::ai::NovaAi::default(),
+            &Answering,
             Rules::default(),
             &mut NeverFires,
         );
@@ -3021,4 +3025,50 @@ fn the_flight_convicts_by_the_law_it_is_given() {
     assert_eq!(*witness.seen.borrow(), [nova_sim::Crime::Disable]);
     let session = view.session().expect("flying");
     assert_eq!(session.pilot().legal_record(GovtId(140)), 0, "as it says");
+}
+
+#[test]
+fn a_ship_the_player_shoves_is_drawn_moved_on_the_frame_of_the_hit() {
+    // The push lands in the ship's velocity (`_DamageShip`
+    // @0x3a9b8-0x3ab84) before `_HandleShip` moves it (@0x34274-0x342aa),
+    // and the frame drawn after the pass shows it moved: the view steps
+    // the advance pass in `_DoPlayGameWork`'s order, as a copy run through
+    // `Session::game_work` does, not as the separate parts do.
+    let mut catalog = armed(1, &[BLASTER]);
+    for weapon in &mut catalog.weapons {
+        weapon.energy_dmg = 5;
+        weapon.impact = 3000;
+    }
+    catalog.hulls[1].mass = 40;
+    let mut view = fighting(catalog, &placed(750, 650, 180));
+    view.input(&key(FIRE_KEY, true));
+    let npc = |session: &Session| session.npcs()[0].clone();
+    let shield = npc(view.session().expect("flying")).reserves.shield.now;
+    for _ in 0..60 {
+        let session = view.session().expect("flying");
+        let mut in_order = session.clone();
+        in_order.hold_fire(true, false);
+        in_order.game_work(
+            Controls::default(),
+            view.catalog(),
+            &Still,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        let mut by_parts = session.clone();
+        by_parts.hold_fire(true, false);
+        by_parts.tick(Controls::default());
+        by_parts.tick_traffic(view.catalog(), &Still, &mut NeverFires);
+        by_parts.tick_combat(Rules::default(), &mut NeverFires);
+        let drawn_before = sprites(&drawn(&view));
+        view.tick(TICK);
+        let now = npc(view.session().expect("flying"));
+        if now.reserves.shield.now < shield {
+            assert_eq!(now.state, npc(&in_order).state, "in the original's order");
+            assert_ne!(now.state.position, npc(&by_parts).state.position, "pushed");
+            assert_ne!(sprites(&drawn(&view)), drawn_before, "drawn moved");
+            return;
+        }
+    }
+    panic!("never hit");
 }
