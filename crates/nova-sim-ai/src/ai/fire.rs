@@ -389,8 +389,7 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
     for mount in npc.armament.mounts() {
         held += 1;
         let dry = match mount.spec.ammo {
-            Ammo::Unlimited => continue,
-            Ammo::Other(raw) if raw < 0 => continue,
+            Ammo::Unlimited | Ammo::Other(..0) => continue,
             Ammo::Fuel(cost) if cost <= 0.0 => continue,
             Ammo::Fuel(cost) => npc.reserves.fuel.now < (cost * DRY_FUEL_SHOTS).round(),
             Ammo::Rounds(_) | Ammo::Other(_) => npc.rounds.slot(mount.spec.id) <= 0,
@@ -398,7 +397,8 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
         spending += 1;
         out += usize::from(dry);
     }
-    if held == 0 || (out > 0 && out == held) {
+    // Every weapon out is every weapon held, or none held.
+    if out == held {
         AmmoLeft::Dry
     } else if out > 0 && out == spending {
         AmmoLeft::OnlyUnlimited
