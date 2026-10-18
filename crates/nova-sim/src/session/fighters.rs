@@ -1532,6 +1532,52 @@ mod tests {
     }
 
     #[test]
+    fn a_sniping_carrier_whose_launch_finds_no_slot_keeps_its_round_and_takes_its_bay_as_its_pick()
+    {
+        // A goal-4 carrier sniping at rest 100 above the player, facing it,
+        // with a gun its pass finds. With 55 ships in the system its launch
+        // finds no slot (@0x3d648-0x3d662) and leaves the bay ready, so the
+        // snipe's own `_AILaunchFighter` makes the bay its pick after its
+        // passes (@0x8732f, @0x81411).
+        let catalog = carrying();
+        let sniped = |ships: u32| {
+            let (mut session, raider, _) = raided(&catalog);
+            let gun = WeaponRecord {
+                speed: 1000,
+                count: 20,
+                energy_dmg: 1,
+                mass_dmg: 1,
+                ..weapon(128)
+            };
+            let npc = session.npc_mut(raider).expect("there");
+            npc.goal = Goal::Snipe(ShipRef::Player);
+            npc.state.position = Vec2::new(0.0, -100.0);
+            npc.state.heading = 180.0;
+            npc.armament = crate::combat::armament::Armament::new([
+                (crate::combat::weapon::WeaponSpec::new(&gun), 1),
+                (crate::combat::weapon::WeaponSpec::new(&bay()), 1),
+            ]);
+            for n in 0..ships - 2 {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            fight(&mut session, &catalog, &raiding_ai());
+            (session, raider)
+        };
+        let (full, raider) = sniped(55);
+        assert_eq!(vipers(&full), [], "no fighter");
+        assert_eq!(aboard(&full, raider), 2, "the round put back");
+        assert_eq!(full.npc(raider).expect("there").pick, Some(BAY));
+        let (room, raider) = sniped(54);
+        assert_eq!(vipers(&room).len(), 1);
+        assert_eq!(aboard(&room, raider), 1);
+        assert_eq!(
+            room.npc(raider).expect("there").pick,
+            None,
+            "its gun fired and cleared"
+        );
+    }
+
+    #[test]
     fn the_players_fighter_launches_against_its_led_top_speed() {
         // The carrier moves at 8 along the fighter's heading: past the
         // Viper's own top speed of 6, and past 6 + 1.5, but below 1.5 x 6.

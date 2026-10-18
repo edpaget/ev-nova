@@ -571,7 +571,8 @@ impl<'a> World<'a> {
         }
     }
 
-    /// What `npcs` see in this world.
+    /// What `npcs` see in this world, with room for a fighter: the traffic
+    /// sets [`Surroundings::fighter_room`] from its berths as its NPCs fire.
     #[must_use]
     pub fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
         Surroundings {
@@ -586,6 +587,7 @@ impl<'a> World<'a> {
             reinforcements: self.reinforcements,
             cloak_scanner: self.cloak_scanner,
             iff_marked: self.iff_marked,
+            fighter_room: true,
         }
     }
 }
@@ -984,7 +986,15 @@ impl Traffic {
         self.plunder(plunders, &world, chance);
         self.pursue(&world, &due, &keeps, chance);
         plunder::drift(&mut self.npcs, &due);
-        let around = world.around(&self.npcs);
+        let mut around = world.around(&self.npcs);
+        // Whether a fighter launched now finds a slot, the test
+        // `_LaunchFighter` makes (@0x3d648-0x3d662), a snapshot taken as the
+        // traffic thinks. In the original a lower slot's launch within
+        // `_AIDispatch`'s loop (@0x4429d) takes the last slot before a
+        // higher slot's AI runs; here every carrier of the tick reads the
+        // same room. That per-slot order is
+        // rdm:phase/weapons-fidelity/phase-36-npc-fighter-launch-inside-ai-dispatch.
+        around.fighter_room = self.free_berth(world.spawn_reserve).is_some();
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
             .npcs
             .iter()
@@ -3578,6 +3588,42 @@ mod tests {
         );
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
         assert_eq!(traffic.npcs()[1].provoked, 4.0, "kept while it fights");
+    }
+
+    /// Keeps each goal and records, as it fires, whether its
+    /// surroundings had room for a fighter.
+    #[derive(Debug, Default)]
+    struct RoomSeen(RefCell<Vec<bool>>);
+
+    impl Behaviour for RoomSeen {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, around: &Surroundings) -> Trigger {
+            self.0.borrow_mut().push(around.fighter_room);
+            Trigger::default()
+        }
+    }
+
+    #[test]
+    fn the_triggers_see_room_for_a_fighter_while_a_berth_is_free_below_the_spawn_reserve() {
+        // Two NPCs in berths 1 and 2: the next is 3, below 64 - 60 but not
+        // below 64 - 61.
+        let room_with = |reserve: u32| {
+            let mut traffic = populated(2, 1);
+            assert_eq!(traffic.free_berth(60), Some(3));
+            assert_eq!(traffic.free_berth(61), None);
+            let seen = RoomSeen::default();
+            let world = World {
+                spawn_reserve: reserve,
+                ..World::new(&[])
+            };
+            traffic.think_holding(&seen, world, &[], &mut Draws::of(&[]));
+            seen.0.into_inner()
+        };
+        assert_eq!(room_with(60), [true, true]);
+        assert_eq!(room_with(61), [false, false]);
     }
 
     #[test]

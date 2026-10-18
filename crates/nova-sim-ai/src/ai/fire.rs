@@ -47,7 +47,10 @@
 //!   it, and a gun pass finding nothing fires it, which then finds it
 //!   reloading after its launch. A plunderer (goal 0xd) launches only as
 //!   it snipes, after the passes (@0x87329-0x8732f): the bay overrides
-//!   their find, and fires if a pass raised the flag.
+//!   their find, and fires if a pass raised the flag. A goal-4 sniper
+//!   launches there a second time, which does the same when its first
+//!   launch found no ship slot ([`Surroundings::fighter_room`]) and so left
+//!   the bay ready (@0x81421-0x81423).
 //! - **The wait gate** ([`gated`], `_HandleShip` @0x34a54-0x34a72): while
 //!   its AI wait runs ([`Npc::wait_running`]) the fight fires nothing of
 //!   its trigger but its fighter bays and its point defence, and its pick
@@ -152,13 +155,11 @@
 //!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
 //!   @0x80c5b), else uninitialised stack: here the bearing.
 //! - The whole-degree truncation in the arc test (@0x80c7f, @0x80c95).
-//! - `_LowLevelAIHandler`'s second `_AILaunchFighter` in the snipe under
-//!   goal 4, after its passes (@0x8732f), which writes the bay over the
-//!   frame's pick only when the attack block's launch failed: the engine's
-//!   sorties never fail (rdm phase
-//!   weapons-fidelity/phase-30-snipe-left-out-of-phase-17). Under goal 0xd
-//!   it is the only launch, and is built: a hopeless plunderer sniping
-//!   launches its fighters after its passes, the bay its pick.
+//! - A goal-4 sniper's second launch from a bay of `Reload` 0, which the
+//!   high level's success leaves ready, so the snipe's call launches
+//!   another fighter (@0x87329-0x8732f): no stock bay has one, and the
+//!   engine's fight launches one sortie per bay a tick
+//!   (rdm:phase/weapons-fidelity/phase-41-reload-zero-bay-second-snipe-launch).
 //! - The escape pod's (class 0x2ff) exemption from the wait gate
 //!   (@0x34a69-0x34a72): a pod NPC
 //!   ([`pod_flight`](crate::traffic::pod_flight)) counts its wait in its
@@ -540,7 +541,7 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
     let bays = launches(npc, around);
-    let after = launches_after_snipe(npc, around);
+    let after = launches_after_passes(npc, around);
     let (only, keep) = pick(npc, around, rules, (bays, after));
     Trigger {
         only,
@@ -573,14 +574,26 @@ fn launches(npc: &Npc, around: &Surroundings) -> bool {
     npc.goal.attacking().is_some_and(|ship| around.live(ship))
 }
 
-/// Whether `npc` launches its fighters after its passes: plundering a
-/// ship live in the system while it snipes, as the snipe substate ends
-/// every frame with `_AILaunchFighter` (@0x87329-0x8732f), which under
-/// goal 0xd is the only launch, its high level making none. Under goal 4
-/// it is a second call, which launches only when the high level's failed:
-/// rdm:phase/weapons-fidelity/phase-30-snipe-left-out-of-phase-17.
-fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
-    let Some(ship) = npc.goal.plundering().filter(|&ship| around.live(ship)) else {
+/// Whether `npc` launches its fighters after its passes, as the snipe
+/// substate ends every frame with `_AILaunchFighter` (@0x87329-0x8732f),
+/// while it snipes at a ship live in the system:
+///
+/// - Plundering it (goal 0xd), always: the only launch, its high level
+///   making none.
+/// - Attacking or sniping at it (goal 4, [`launches`]), only while a
+///   fighter would find no ship slot ([`Surroundings::fighter_room`]). The
+///   high level's launch came first (@0x8e6fa): with room it succeeded and
+///   the bay now reloads, so the second call writes nothing (every stock
+///   bay has a `Reload`). With none it wrote the bay (@0x81411) and failed
+///   (`_LaunchFighter`'s slot search, @0x3d648-0x3d662; @0x81421-0x81423),
+///   setting no reload, so the second call writes the bay again over the
+///   passes' pick and fails the same way.
+fn launches_after_passes(npc: &Npc, around: &Surroundings) -> bool {
+    let after = npc
+        .goal
+        .plundering()
+        .or_else(|| npc.goal.attacking().filter(|_| !around.fighter_room));
+    let Some(ship) = after.filter(|&ship| around.live(ship)) else {
         return false;
     };
     around.state_of(ship).is_some_and(|at| {
@@ -703,8 +716,9 @@ fn pick(
             passes.run(&sight, body);
         }
     }
-    // The snipe's `_AILaunchFighter` under goal 0xd, after its passes
-    // (@0x8732f): the bay is the pick, the flag as the passes left it.
+    // The snipe's `_AILaunchFighter` after its passes (@0x8732f), under
+    // goal 0xd or after a goal-4 launch that found no slot: the bay is the
+    // pick, the flag as the passes left it.
     if after && let Some(bay) = npc.armament.bay_to_launch(&npc.rounds) {
         passes.pick = Some(bay);
     }
@@ -3304,6 +3318,67 @@ mod tests {
         assert_eq!(fired_at_crossing(&sniper(351.99)), None);
         assert_eq!(fired_at_crossing(&sniper(352.5)), id(128));
         assert_eq!(fired_at_crossing(&sniper(9.5)), None, "9, not less than 9");
+    }
+
+    /// A goal-4 carrier sniping at rest at the player 100 above, facing
+    /// it, with a gun its pass finds and a ready bay with rounds.
+    fn sniping_carrier() -> Npc {
+        let mut npc = shooter(&[gun(128, 1, 1), bay(150)], SNIPE);
+        npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+        npc
+    }
+
+    /// The trigger `npc` holds at the player 100 above [`SHOOTER`], a
+    /// fighter finding a ship slot or not by `room`.
+    fn trigger_with_room(npc: &Npc, room: bool) -> Trigger {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0)),
+            fighter_room: room,
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default())
+    }
+
+    #[test]
+    fn a_sniper_whose_launch_finds_no_room_takes_its_bay_as_its_pick_after_its_passes() {
+        // With no ship slot the high level's launch fails (@0x81421-0x81423,
+        // @0x3d648-0x3d662), setting no reload, so the snipe's own
+        // `_AILaunchFighter` (@0x8732f) writes the bay over the gun pass's
+        // pick (@0x81411), the flag as the gun pass left it.
+        let npc = sniping_carrier();
+        let none = trigger_with_room(&npc, false);
+        assert_eq!((none.only, none.keep, none.bays), (id(150), id(150), true));
+        // With room the high level's launch succeeds; the bay then reloads
+        // and the second call writes nothing: the gun pass's find stands.
+        let room = trigger_with_room(&npc, true);
+        assert_eq!((room.only, room.keep, room.bays), (id(128), id(128), true));
+    }
+
+    #[test]
+    fn a_moving_sniper_with_no_room_keeps_its_bay_as_its_pick_unflagged() {
+        // A guard: it passes before and after the second call is built, as
+        // the high level's bay pick comes before the passes and a moving
+        // sniper runs none.
+        let mut npc = sniping_carrier();
+        npc.state.velocity = Vec2::new(0.0, 2.0);
+        let moving = trigger_with_room(&npc, false);
+        assert_eq!(
+            (moving.only, moving.keep, moving.bays),
+            (None, id(150), true)
+        );
+    }
+
+    #[test]
+    fn a_sniper_whose_bay_reloads_takes_nothing_after_its_passes_whatever_the_room() {
+        // A guard: it passes before and after the second call is built. A
+        // bay reloading returns at once (@0x81403-0x8140b), writing nothing.
+        let mut npc = sniping_carrier();
+        npc.armament.hold(WeaponId(150));
+        for room in [false, true] {
+            let held = trigger_with_room(&npc, room);
+            assert_eq!((held.only, held.keep), (id(128), id(128)), "{room}");
+        }
     }
 
     #[test]

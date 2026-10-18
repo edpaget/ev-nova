@@ -548,6 +548,13 @@ pub struct Surroundings<'a> {
     /// warship of one takes no player candidate from its hunt (see
     /// [`target`]).
     pub iff_marked: &'a BTreeSet<GovtId>,
+    /// Whether a fighter launched now would find a ship slot: a free berth
+    /// below the spawn reserve, as `_LaunchFighter`'s
+    /// `_GenericRandomShipSpawn(govt, 8)` asks (@0x3d648-0x3d662). With
+    /// none, a goal-4 sniper's launch fails and its bay stays ready, so the
+    /// snipe's own `_AILaunchFighter` makes the bay its pick after its
+    /// passes (see [`fire`]).
+    pub fighter_room: bool,
 }
 
 /// No government marked by an IFF scrambler.
@@ -556,7 +563,8 @@ pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
-    /// cloak scanner and no government marked by an IFF scrambler.
+    /// cloak scanner, no government marked by an IFF scrambler and room
+    /// for a fighter.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -571,6 +579,7 @@ impl<'a> Surroundings<'a> {
             reinforcements: None,
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
+            fighter_room: true,
         }
     }
 
