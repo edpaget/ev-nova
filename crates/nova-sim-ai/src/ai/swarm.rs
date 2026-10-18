@@ -61,9 +61,10 @@
 //! - The swarm leader's slot formation for an escort or fighter, the
 //!   `_AIMaintainFormation` calls and glow copies in substates 5, 0x11 and
 //!   7, the stale parent of a ship whose AI type `_AICheckParentExists`
-//!   dropped, goal 0x13's skip of the check, and a leftover substate 0x12
-//!   outside state 4: rdm phase
-//!   combat-ai-fidelity/phase-22-left-out-of-phase-14.
+//!   dropped, goal 0x13's skip of the check, a leftover substate 0x12
+//!   outside state 4, and a beam of `ExitType` 4 stepping its firer's
+//!   swarm leader as an exit cursor (`_SpawnBeam` @0x450fa-0x4511e): rdm
+//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14.
 
 use crate::ai::Surroundings;
 use crate::combat::ShipRef;
