@@ -71,7 +71,7 @@ mod tests {
     use crate::traffic::spawn::Entry;
     use crate::traffic::table::SpawnTable;
     use crate::traffic::{ShipBehav, Traffic};
-    use nova_sim_base::fixture::Ranged;
+    use nova_sim_base::fixture::{Draws, Ranged};
 
     /// Ship types 200 (always), 201 (by rating, `Strength` 40) and 202
     /// (neither bit), and person 128 flying 202 with `përs` `Flags`
@@ -222,5 +222,117 @@ mod tests {
             added(vec![mission, aux], 0, RuleSource::Engine, 0),
             [false, false]
         );
+    }
+
+    // The spawn paths that roll, and the one that does not.
+
+    /// A system of `avg_ships` on average, all of düde 128's ship 200,
+    /// which always has an afterburner; its reinforcement fleet, 129, ship
+    /// 200 leading one more.
+    fn spawning(avg_ships: u32) -> SpawnTable {
+        use crate::catalog::{
+            DudeId, EscortRecord, FleetId, FleetRecord, GovtId, SystemReinforcements,
+        };
+        use crate::stats::ShipStats;
+        use crate::traffic::table::SpawnDude;
+        use nova_sim_base::fixture::FAST;
+        SpawnTable {
+            avg_ships,
+            dudes: vec![(DudeId(128), 100)],
+            dude_records: BTreeMap::from([(
+                DudeId(128),
+                SpawnDude {
+                    ai_type: 1,
+                    govt: Some(GovtId(130)),
+                    ships: vec![(ShipId(200), 1)],
+                    booty: 0,
+                    info_types: 0,
+                },
+            )]),
+            ships: BTreeMap::from([(
+                ShipId(200),
+                ShipKind {
+                    stats: ShipStats::new(FAST, &[]),
+                    hull: HullSpec {
+                        afterburner: AFTERBURNER_ALWAYS,
+                        ..HullSpec::default()
+                    },
+                    ..ShipKind::default()
+                },
+            )]),
+            fleets: BTreeMap::from([(
+                FleetId(129),
+                FleetRecord {
+                    id: FleetId(129),
+                    lead: Some(ShipId(200)),
+                    escorts: vec![EscortRecord {
+                        ship: ShipId(200),
+                        min: 1,
+                        max: 1,
+                    }],
+                    govt: Some(GovtId(128)),
+                    link_syst: -1,
+                    appear_on: crate::control::Test::default(),
+                    quote: None,
+                    flags: 0,
+                },
+            )]),
+            reinforcements: Some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            }),
+            ..SpawnTable::default()
+        }
+    }
+
+    /// The afterburners of `traffic`'s NPCs, in order.
+    fn afterburners(traffic: &Traffic) -> Vec<bool> {
+        traffic.npcs().iter().map(|npc| npc.afterburner).collect()
+    }
+
+    #[test]
+    fn a_ship_the_setup_places_rolls_its_afterburner() {
+        let mut traffic = Traffic::new();
+        // One setup pass placing ship 200.
+        traffic.enter(spawning(1), &mut Draws::of(&[6, 6, 0, 0, 750, 750, 0, 2]));
+        assert_eq!(afterburners(&traffic), [true]);
+    }
+
+    #[test]
+    fn a_ship_that_arrives_rolls_its_afterburner() {
+        let mut traffic = Traffic::new();
+        // In an empty system of AvgShips 1, nothing set up.
+        traffic.table = spawning(1);
+        // The arrival rolled below AvgShips 1, then düde 128's ship 200.
+        traffic.enter_more_ships(World::new(&[]), &mut Draws::of(&[0, 6, 6, 0, 0, 90]));
+        assert_eq!(afterburners(&traffic), [true]);
+    }
+
+    #[test]
+    fn a_fleets_lead_brought_by_hyperspace_rolls_its_afterburner_and_its_escort_has_none() {
+        let mut traffic = Traffic::new();
+        traffic.enter(spawning(0), &mut Draws::of(&[]));
+        traffic.bring_reinforcements(&World::new(&[]), &mut Draws::of(&[0]));
+        assert_eq!(afterburners(&traffic), [true, false]);
+    }
+
+    #[test]
+    fn a_ship_brought_in_as_it_is_rolls_no_afterburner() {
+        let mut traffic = Traffic::new();
+        traffic.enter(spawning(0), &mut Draws::of(&[]));
+        let mission = NewShip {
+            mission: Some(MissionMark {
+                slot: 0,
+                behav: ShipBehav::Own,
+                formation: None,
+                order: None,
+            }),
+            ..duede(200)
+        };
+        // Neither `_MissionDudeSpawn` nor `_SpecificDudeSpawn` asks, even
+        // of a ship that would.
+        traffic.bring_in_within(vec![mission, duede(200)], 8);
+        assert_eq!(afterburners(&traffic), [false, false]);
     }
 }
