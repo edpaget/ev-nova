@@ -6,9 +6,10 @@
 //!
 //! **The pass.** [`Session::tick_asteroids`] is one pass's asteroid work:
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
-//! (@0x444f5). [`Session::tick_combat`] runs it after the fight, landed
-//! or jumping, so it steps the field through a jump's lead-in, and
-//! [`Session::tick_again`] runs it after the second pass's fight. The
+//! (@0x444f5). [`Session::game_work`] and [`Session::tick_combat`] run
+//! it after the fight, landed or jumping, so it steps the field through a
+//! jump's lead-in, and [`Session::tick_again`] runs it after the second
+//! pass's fight. The
 //! original spawns and steps the field after the collision passes, which
 //! test the shots' last moves, as the fight's hit pass does here (see
 //! [`Combat`](crate::combat::Combat)): so a shot meets an asteroid where

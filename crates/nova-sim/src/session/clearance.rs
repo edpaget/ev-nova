@@ -15,8 +15,10 @@
 //! **The approach** ([`Session::dock_approach`]) runs in the player's
 //! part of every game-work pass, so on both of double time's passes, as
 //! `_HandlePlayer` runs on both, and whatever the ship's condition, after
-//! the ship moves, as `_HandlePlayer` moves it (@0x6864d) before it
-//! reaches the approach (@0x6a965). It is
+//! the ship moves. The original reaches the approach (@0x6a97a) before
+//! its position step (@0x6d4b0): @0x6864d, once read as the move, is
+//! `_WrapPlayerPosition` (rdm weapons-fidelity phase 28's findings; filed
+//! as a hud-fidelity-followups phase). It is
 //! skipped while the land key is held ([`Session::set_land_key`], the
 //! original's `_dockTryFlag`, @0x6a965-0x6a97a). A request whose stellar
 //! is no longer among the system's is dropped (@0x647c5-0x647e3);

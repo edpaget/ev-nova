@@ -1,14 +1,60 @@
-//! The fight's phases as the session runs them, and what each settles
-//! (see [`Combat`]'s phases).
+//! An advance pass in `_DoPlayGameWork(1)`'s order ([`Session::game_work`]),
+//! and the fight's phases as the session runs them (see [`Combat`]'s
+//! phases).
 //!
-//! Each phase builds the fight's [`Fighter`]s afresh from the session
-//! ([`Session::with_fighters`]): the player, then every NPC, each on the
-//! terms the session works out for it. A phase that lands hits is settled
-//! at once ([`Session::settle_landed`]): the player's downing lines, the
-//! pushes, the eject on a breakup's first tick, the NPCs' fates, the
-//! strikes' answers, crimes and kills, and a target lost. What the whole
-//! pass leaves is settled once, after its last phase
-//! ([`Session::fight_tail`]).
+//! **The order** (`_DoPlayGameWork` @0x43de5-0x4453d):
+//!
+//! 1. `_HandlePlayer` (@0x43e19) up to its move: the pass's head and the
+//!    player's work before the move; its self-repair (@0x68b3d), point
+//!    defence (@0x68c74), sabotage (@0x692e5), trigger (@0x6ab55) and
+//!    reloads' countdown (@0x6ae25), its recoil (@0x62f35) and its bays'
+//!    fighters (@0x62c61) settled before it moves
+//!    ([`Session::player_fires`]).
+//! 2. The move, the turn, thrust and position step (@0x6c770-0x6d4eb),
+//!    or the escape pod's flight; the rescue, which ends the pass
+//!    (@0x68ddd); then the eject check (@0x6f22c).
+//! 3. The collision passes (@0x43e70-0x44015), their hits settled and
+//!    answered at once, as `_DamageShip`'s reaction block runs in them.
+//! 4. The advance pass's AI (@0x44223-0x442ae): the traffic's think half,
+//!    the damage aimed read after the passes (`_CalculateTargetedDamage`
+//!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the scans,
+//!    then every NPC's point defence (`_AIFireTurret` @0x80b0d).
+//! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
+//!    locks, their hits settled and answered.
+//! 6. `_HandleShip` (@0x44483): the traffic's fly half and the session's
+//!    work after it, the assistance, then each NPC's fire.
+//! 7. `_HandleBeams` (@0x4453d) and the fight's late steps, then what the
+//!    pass leaves ([`Session::fight_tail`]), then the asteroids
+//!    (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids` @0x444f5, after
+//!    the passes).
+//!
+//! Landed, or with the jump under way as the pass begins or once its move
+//! begins it, the pass runs the separate parts instead, as the fight
+//! stands still. Double time's second pass ([`Session::tick_again`]) runs
+//! the same order without the AI.
+//!
+//! **What remains**, none crossing a boundary the player sees, so none
+//! filed:
+//!
+//! - Every NPC's point defence runs after every NPC's decision, where
+//!   `_AIDispatch` interleaves them slot by slot.
+//! - What the close strikes (the beams, the shockwaves) is answered by the
+//!   caller after the pass ([`Session::answer_strikes`]), before the frame
+//!   is drawn.
+//! - The separate parts ([`Session::tick`], [`Session::tick_traffic`],
+//!   [`Session::tick_combat`]) keep the old order between the player, the
+//!   traffic and the fight, the fight's own phases in its new order; they
+//!   are no game path, and the tests that step through them are to step
+//!   through [`Session::game_work`] (rdm task
+//!   `retire-the-sessions-separate-pass-parts`).
+//!
+//! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
+//! session ([`Session::with_fighters`]): the player, then every NPC, each
+//! on the terms the session works out for it. A phase that lands hits is
+//! settled at once ([`Session::settle_landed`]): the player's downing
+//! lines, the pushes, the NPCs' fates, the strikes' answers, crimes and
+//! kills, and a target lost. What the whole pass leaves is settled once,
+//! after its last phase ([`Session::fight_tail`]).
 
 use super::{FightTerms, NpcBefore, Session, TrafficMarks};
 use crate::ai::Behaviour;

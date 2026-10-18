@@ -70,13 +70,17 @@
 //!   (@0x43e3a-0x44015), `_HandleShot` (@0x44385), `_HandleShip` for every
 //!   ship (@0x44483: NPC motion, cloak holds and fades, and their firing
 //!   `_FireAIShipWeapon` @0x34ffd), and the sprite routines, explosions
-//!   and boxes among them (@0x444d2-0x44513). So here the player's part of
-//!   [`Session::tick`] runs again on that frame, then the traffic's
-//!   motion ([`Traffic::move_in`](crate::traffic::Traffic::move_in)) with
-//!   its departures, fighters docking and targets lost, then
-//!   `_HandlePlayer`'s sabotage clock and eject check (see the `sabotage`
-//!   and `eject` modules), then the fight ([`GamePass::Again`]) with all
-//!   that follows from its hits, then the reinforcement clock
+//!   and boxes among them (@0x444d2-0x44513). So here, in that order
+//!   ([`Session::tick_again`]): the player's part of the pass runs again
+//!   on that frame, its self-repair, point defence, sabotage clock and
+//!   trigger before its move (see the `player_repair` and `sabotage`
+//!   modules), then its eject check (see the `eject` module); the fight's
+//!   collision passes ([`GamePass::Again`]), their hits answered; no
+//!   NPC's point defence, which is `_AIDispatch`'s; the shots, their hits
+//!   answered; the traffic's motion
+//!   ([`Traffic::move_in`](crate::traffic::Traffic::move_in)) with its
+//!   departures and fighters docking; the NPCs' fire; the beams and all
+//!   that follows from the pass's hits; then the reinforcement clock
 //!   (`_HandleReinforcements` @0x44504; see the `reinforcements`
 //!   module). A due frame therefore steps the junk and
 //!   the hints twice, as the original does, and the sabotage clock, the
@@ -99,7 +103,8 @@
 //!   provocation, the gate's wait cut @0x3be6e-0x3be7c,
 //!   `_AIMakeShipAttackPlayer` @0x3be66 and its quote,
 //!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
-//!   Its caller answers them after this pass
+//!   The pass answers the collision passes' and the shots' hits as they
+//!   land, and its caller answers what its close struck after it
 //!   ([`Session::answer_strikes`]) and says the attack quotes
 //!   ([`Session::tick_quotes_again`]), before the frame is drawn. The
 //!   block plays no sound and tells no comm.

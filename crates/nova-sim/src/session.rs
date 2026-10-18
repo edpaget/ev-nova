@@ -2529,12 +2529,14 @@ impl Session {
     /// now, as `behaviour` says ([`Traffic::answer`]): a ship the player
     /// hit in its gate is held there and seen, and a person turned on the
     /// player queues its quote. The original answers a hit inside
-    /// `_HandleShot` (@0x44385), before `_HandleShip`'s quotes and the
-    /// display pass, so the frame drawn after the fight shows the answer;
-    /// a flight calls this right after [`Session::tick_combat`], and
-    /// after double time's second pass ([`Session::tick_again`]), as
-    /// `_HandleShot` runs on both passes. Whatever
-    /// is left unanswered, [`Session::tick_traffic`] answers (as for a
+    /// `_DamageShip` as it lands, in the collision passes and `_HandleShot`
+    /// (@0x44385), before `_AIDispatch`, `_HandleShip`'s quotes and the
+    /// display pass, so the frame drawn after the pass shows the answer.
+    /// [`Session::game_work`] and [`Session::tick_again`] call this after
+    /// each of those phases; a flight calls it after each pass for what
+    /// the pass's close struck (the beams, the shockwaves), as after
+    /// [`Session::tick_combat`] for a caller of the separate parts. Whatever
+    /// is left unanswered, the next traffic tick answers (as for a
     /// caller that never calls this). While the ship is landed or jumping,
     /// or before the system is set up, nothing is answered.
     pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
@@ -2763,9 +2765,14 @@ impl Session {
         ))
     }
 
-    /// Advances the fight a tick among the player and the NPCs, each aimed
-    /// at its target, by `rules`, drawing each shot's inaccuracy and
-    /// spread on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
+    /// Advances the fight a tick among the player and the NPCs, its phases
+    /// in [`Combat::tick_on`]'s order with nothing of the session's between
+    /// them but each phase's settling (see the `game_work` module): this
+    /// is the fight's part of the separate parts, run after the traffic's
+    /// tick, where only [`Session::game_work`] runs the original's order
+    /// between the player, the fight and the traffic. Each ship is aimed
+    /// at its target, the fight going by `rules`, each shot's inaccuracy
+    /// and spread drawn on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
     /// the system, and the target is let go once it is breaking up or
     /// gone. While the ship is landed or jumping, it stands still. While
     /// it brakes and turns for a jump ([`Session::preparing_jump`]) the

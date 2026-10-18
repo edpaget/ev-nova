@@ -20,9 +20,11 @@
 //! (@0x6f22c), all before `_HandleShipDisplay` (@0x43e29) sets a new
 //! breakup's timer or explodes a ship at the end of its countdown. The
 //! engine's fight does both the decrement and the display step, so the
-//! check runs twice in [`Session::tick_combat`]:
+//! check runs twice a pass ([`Session::game_work`], [`Session::tick_again`]
+//! and [`Session::tick_combat`]):
 //!
-//! - Before the fight, for a player who enters the tick disabled or dying
+//! - Before the fight's collision passes, after the player's move, for a
+//!   player who enters the pass disabled or dying
 //!   ([`Session::eject_before_fight`]). The threshold reads the countdown
 //!   less one, the original's timer after its decrement. A dying player
 //!   who ejects here first sounds the klaxon when that is above 1, as the
