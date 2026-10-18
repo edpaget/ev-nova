@@ -177,6 +177,7 @@ fn seeded() -> MemorySettings {
             },
             hyperspace_effects: true,
             fullscreen: false,
+            fullscreen_kind: nova::settings::FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
         })
@@ -410,7 +411,8 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    for _ in 0..6 {
+    // Past the display picker to the music volume.
+    for _ in 0..7 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -492,7 +494,8 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    for _ in 0..6 {
+    // Past the display picker to the music volume.
+    for _ in 0..7 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);

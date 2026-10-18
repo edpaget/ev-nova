@@ -390,6 +390,7 @@ mod tests {
             },
             hyperspace_effects: false,
             fullscreen: false,
+            fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
         };

@@ -2188,6 +2188,7 @@ mod tests {
         },
         hyperspace_effects: true,
         quicktime_movies: true,
+        fullscreen: nova_view::FullscreenKind::Borderless,
     };
 
     /// `MUSIC_OFF` with the sound effects at `level`.
@@ -2260,6 +2261,7 @@ mod tests {
                 audio: AudioSettings::default().with_prefs(effects_at(4).sound),
                 hyperspace_effects: false,
                 fullscreen: false,
+                fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
             }

@@ -2,7 +2,7 @@
 //!
 //! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
 //!   hyperspace jumps play their white fades, whether `dësc` movies play,
-//!   and whether the game runs fullscreen.
+//!   whether the game runs fullscreen, and how ([`FullscreenSetting`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -12,9 +12,16 @@
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
-//! `show_map_borders` and `fullscreen`; files saved before the last four
-//! existed load unchanged, with the hyperspace effects, the movies and the
-//! map's borders on, and the game windowed.
+//! `show_map_borders`, `fullscreen` and `fullscreen_kind`; files saved
+//! before the last five existed load unchanged, with the hyperspace
+//! effects, the movies and the map's borders on, and the game windowed
+//! and, when fullscreen, borderless.
+//!
+//! `fullscreen_kind` is `"borderless"`, or an exclusive mode with the
+//! monitor it was chosen on: `{"exclusive": {"width": 1920, "height":
+//! 1080, "refresh_millihertz": 60000, "monitor": "DELL U2720Q"}}`, the
+//! monitor `null` when the platform names none. It is kept while the game
+//! is windowed, so the fullscreen shortcut goes back to it.
 //!
 //! `show_map_borders` is the original's `ShowMapBorders`: whether the
 //! galaxy map shades government borders, on when absent (`_LoadPrefs`
@@ -23,11 +30,38 @@
 //! (`nova_view::flight::FlightView::take_map_borders_save`).
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
-use nova_view::Prefs;
+use nova_view::{FullscreenKind, Prefs, VideoMode};
 use serde::{Deserialize, Serialize};
 
+/// How the game runs fullscreen, as saved.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FullscreenSetting {
+    /// Borderless, at the desktop's own mode.
+    #[default]
+    Borderless,
+    /// In `mode`, exclusively, on the monitor named `monitor` (`None` when
+    /// the platform named none).
+    Exclusive {
+        /// The display mode.
+        mode: VideoMode,
+        /// The monitor's name, as the platform gave it.
+        monitor: Option<String>,
+    },
+}
+
+impl FullscreenSetting {
+    /// The kind, without the monitor.
+    #[must_use]
+    pub fn kind(&self) -> FullscreenKind {
+        match self {
+            Self::Borderless => FullscreenKind::Borderless,
+            Self::Exclusive { mode, .. } => FullscreenKind::Exclusive(*mode),
+        }
+    }
+}
+
 /// Every setting the player can change.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // One field per on-off setting.
 pub struct GameSettings {
     /// Whether sound effects and music play, and how loud.
@@ -35,8 +69,11 @@ pub struct GameSettings {
     /// Whether hyperspace jumps fade to white and back: the original's
     /// Hyperspace Effects preference.
     pub hyperspace_effects: bool,
-    /// Whether the game runs borderless fullscreen rather than in a window.
+    /// Whether the game runs fullscreen rather than in a window.
     pub fullscreen: bool,
+    /// How the game runs fullscreen when it does, kept while it is
+    /// windowed.
+    pub fullscreen_kind: FullscreenSetting,
     /// Whether a `dësc`'s movie plays: the original's QuickTime Movies
     /// preference.
     pub quicktime_movies: bool,
@@ -53,6 +90,7 @@ impl Default for GameSettings {
             audio: AudioSettings::default(),
             hyperspace_effects: true,
             fullscreen: false,
+            fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
         }
@@ -60,19 +98,23 @@ impl Default for GameSettings {
 }
 
 impl GameSettings {
-    /// The settings as the Preferences dialog shows them.
+    /// The settings as the Preferences dialog shows them, the fullscreen
+    /// kind without its monitor.
     #[must_use]
-    pub fn prefs(self) -> Prefs {
+    pub fn prefs(&self) -> Prefs {
         Prefs {
             sound: self.audio.prefs(),
             hyperspace_effects: self.hyperspace_effects,
             quicktime_movies: self.quicktime_movies,
+            fullscreen: self.fullscreen_kind.kind(),
         }
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
     /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
-    /// settings the prefs don't carry: the map's borders and fullscreen.
+    /// settings the prefs don't set: the map's borders and fullscreen,
+    /// both whether and how. A fullscreen kind the dialog chooses is the
+    /// app's to apply and save, as it applies it.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
@@ -97,10 +139,60 @@ struct Saved {
     music_volume: f32,
     hyperspace_effects: bool,
     fullscreen: bool,
+    fullscreen_kind: SavedKind,
     quicktime_movies: bool,
     show_map_borders: bool,
     #[serde(flatten)]
     others: Others,
+}
+
+/// A [`FullscreenSetting`] as saved.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedKind {
+    #[default]
+    Borderless,
+    Exclusive {
+        width: u32,
+        height: u32,
+        refresh_millihertz: u32,
+        monitor: Option<String>,
+    },
+}
+
+impl From<FullscreenSetting> for SavedKind {
+    fn from(setting: FullscreenSetting) -> Self {
+        match setting {
+            FullscreenSetting::Borderless => Self::Borderless,
+            FullscreenSetting::Exclusive { mode, monitor } => Self::Exclusive {
+                width: mode.width,
+                height: mode.height,
+                refresh_millihertz: mode.refresh_millihertz,
+                monitor,
+            },
+        }
+    }
+}
+
+impl From<SavedKind> for FullscreenSetting {
+    fn from(saved: SavedKind) -> Self {
+        match saved {
+            SavedKind::Borderless => Self::Borderless,
+            SavedKind::Exclusive {
+                width,
+                height,
+                refresh_millihertz,
+                monitor,
+            } => Self::Exclusive {
+                mode: VideoMode {
+                    width,
+                    height,
+                    refresh_millihertz,
+                },
+                monitor,
+            },
+        }
+    }
 }
 
 /// The fields of the settings file that are not the keeper's own.
@@ -122,6 +214,7 @@ impl From<GameSettings> for Saved {
             music_volume: audio.music_volume.amplitude(),
             hyperspace_effects: settings.hyperspace_effects,
             fullscreen: settings.fullscreen,
+            fullscreen_kind: settings.fullscreen_kind.into(),
             quicktime_movies: settings.quicktime_movies,
             show_map_borders: settings.map_borders,
             others: Others::new(),
@@ -144,6 +237,7 @@ impl From<Saved> for GameSettings {
             .capped(),
             hyperspace_effects: saved.hyperspace_effects,
             fullscreen: saved.fullscreen,
+            fullscreen_kind: saved.fullscreen_kind.into(),
             quicktime_movies: saved.quicktime_movies,
             map_borders: saved.show_map_borders,
         }
@@ -212,7 +306,7 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// The settings.
     #[must_use]
     pub fn settings(&self) -> GameSettings {
-        self.settings
+        self.settings.clone()
     }
 
     /// The store they are saved in.
@@ -232,7 +326,7 @@ impl<S: SettingsStore> SettingsKeeper<S> {
         if settings == self.settings {
             return Ok(());
         }
-        self.settings = settings;
+        self.settings = settings.clone();
         let saved = Saved {
             others: self.others.clone(),
             ..Saved::from(settings)
@@ -272,7 +366,7 @@ mod tests {
     use nova_audio::recording::MemorySettings;
     use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
-    use nova_view::SoundPrefs;
+    use nova_view::{FullscreenKind, SoundPrefs, VideoMode};
 
     use super::*;
 
@@ -290,6 +384,7 @@ mod tests {
             audio,
             hyperspace_effects: false,
             fullscreen: false,
+            fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
         }
@@ -307,6 +402,7 @@ mod tests {
                 audio: AudioSettings::default(),
                 hyperspace_effects: true,
                 fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
             }
@@ -374,6 +470,7 @@ mod tests {
                 },
                 hyperspace_effects: true,
                 fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
             }
@@ -396,6 +493,7 @@ mod tests {
                 },
                 hyperspace_effects: true,
                 fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
             }
@@ -423,7 +521,7 @@ mod tests {
             fullscreen: true,
             ..GameSettings::default()
         };
-        keeper.change(fullscreen).expect("saves");
+        keeper.change(fullscreen.clone()).expect("saves");
         assert_eq!(json(&store)["fullscreen"], true);
         let (mut restarted, warning) = SettingsKeeper::open(store.clone());
         assert_eq!((restarted.settings(), warning), (fullscreen, None));
@@ -440,6 +538,141 @@ mod tests {
             ..plain(quiet())
         };
         assert!(settings.with_prefs(Prefs::default()).fullscreen);
+        let exclusive = GameSettings {
+            fullscreen: true,
+            fullscreen_kind: exclusive_on(Some("DELL U2720Q")),
+            ..plain(quiet())
+        };
+        for kind in [FullscreenKind::Borderless, FullscreenKind::Exclusive(qhd())] {
+            let chosen = exclusive.clone().with_prefs(Prefs {
+                fullscreen: kind,
+                ..Prefs::default()
+            });
+            assert!(chosen.fullscreen, "{kind:?}");
+            assert_eq!(
+                chosen.fullscreen_kind, exclusive.fullscreen_kind,
+                "{kind:?}"
+            );
+        }
+    }
+
+    fn fhd() -> VideoMode {
+        VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 59_940,
+        }
+    }
+
+    fn qhd() -> VideoMode {
+        VideoMode {
+            width: 2560,
+            height: 1440,
+            refresh_millihertz: 144_000,
+        }
+    }
+
+    fn exclusive_on(monitor: Option<&str>) -> FullscreenSetting {
+        FullscreenSetting::Exclusive {
+            mode: fhd(),
+            monitor: monitor.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_phase_one_file_loads_fullscreen_and_borderless() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"fullscreen": true}"#));
+        assert_eq!(warning, None);
+        assert!(keeper.settings().fullscreen);
+        assert_eq!(
+            keeper.settings().fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding("{}"));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().fullscreen);
+        assert_eq!(
+            keeper.settings().fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+        assert_eq!(
+            GameSettings::default().fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+    }
+
+    #[test]
+    fn an_exclusive_kind_is_saved_and_read_back_after_a_restart() {
+        for monitor in [Some("DELL U2720Q"), None] {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            let settings = GameSettings {
+                fullscreen: true,
+                fullscreen_kind: exclusive_on(monitor),
+                ..GameSettings::default()
+            };
+            keeper.change(settings.clone()).expect("saves");
+            assert_eq!(
+                json(&store)["fullscreen_kind"],
+                serde_json::json!({
+                    "exclusive": {
+                        "width": 1920,
+                        "height": 1080,
+                        "refresh_millihertz": 59_940,
+                        "monitor": monitor,
+                    }
+                })
+            );
+            let (restarted, warning) = SettingsKeeper::open(store.clone());
+            assert_eq!((restarted.settings(), warning), (settings, None));
+        }
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                fullscreen: true,
+                ..GameSettings::default()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["fullscreen_kind"], "borderless");
+    }
+
+    #[test]
+    fn a_fullscreen_kind_of_the_wrong_shape_is_not_usable() {
+        for text in [
+            r#"{"fullscreen_kind": 7}"#,
+            r#"{"fullscreen_kind": "sideways"}"#,
+            r#"{"fullscreen_kind": {"exclusive": {"width": 1920}}}"#,
+        ] {
+            let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
+            assert_eq!(keeper.settings(), GameSettings::default(), "{text}");
+            assert!(
+                warning.is_some_and(|warning| warning.contains("are not usable")),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prefs_show_the_stored_kind_without_its_monitor() {
+        let settings = GameSettings {
+            fullscreen_kind: exclusive_on(Some("DELL U2720Q")),
+            ..GameSettings::default()
+        };
+        assert_eq!(
+            settings.prefs().fullscreen,
+            FullscreenKind::Exclusive(fhd())
+        );
+        assert_eq!(
+            GameSettings::default().prefs().fullscreen,
+            FullscreenKind::Borderless
+        );
+        assert_eq!(exclusive_on(None).kind(), FullscreenKind::Exclusive(fhd()));
+        assert_eq!(
+            FullscreenSetting::Borderless.kind(),
+            FullscreenKind::Borderless
+        );
     }
 
     #[test]
@@ -545,6 +778,7 @@ mod tests {
                 "music_volume": 0.5,
                 "hyperspace_effects": false,
                 "fullscreen": false,
+                "fullscreen_kind": "borderless",
                 "quicktime_movies": true,
                 "show_map_borders": true,
             })
@@ -599,6 +833,7 @@ mod tests {
                 audio: quiet(),
                 hyperspace_effects: true,
                 fullscreen: false,
+                fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
             })
@@ -650,16 +885,21 @@ mod tests {
                 sound: quiet().prefs(),
                 hyperspace_effects: false,
                 quicktime_movies: true,
+                fullscreen: FullscreenKind::Borderless,
             }
         );
-        assert_eq!(settings.with_prefs(prefs), settings, "between levels kept");
+        assert_eq!(
+            settings.clone().with_prefs(prefs),
+            settings,
+            "between levels kept"
+        );
         let changed = settings.with_prefs(Prefs {
             sound: SoundPrefs {
                 effects_level: 3,
                 ..prefs.sound
             },
             hyperspace_effects: true,
-            quicktime_movies: true,
+            ..prefs
         });
         assert_eq!(changed.audio.effects_volume, effects_level_volume(3));
         assert_eq!(changed.audio.music_volume, Volume::new(0.5));
@@ -712,10 +952,11 @@ mod tests {
             },
             hyperspace_effects: false,
             fullscreen: false,
+            fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
         };
-        assert_eq!((settings, warning), (expected, None));
+        assert_eq!((settings, warning), (expected.clone(), None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");
         assert_eq!(keeper.settings(), expected);
         keeper.change(GameSettings::default()).expect("saves");

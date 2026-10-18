@@ -9,6 +9,7 @@ use crate::draw::DrawList;
 use crate::input::Input;
 use crate::preferences::Prefs;
 use crate::sound::Sound;
+use crate::video_mode::{FullscreenKind, VideoMode};
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +142,14 @@ pub trait Screen {
     fn take_prefs(&mut self) -> Option<Prefs> {
         None
     }
+    /// The display modes the current monitor offers for exclusive
+    /// fullscreen, as listed ([`listed_modes`](crate::video_mode::listed_modes)), and the kind the game runs
+    /// fullscreen in now, for the Preferences dialog's picker. The app
+    /// offers them each time the Preferences dialog opens. Does nothing by
+    /// default.
+    fn offer_display(&mut self, modes: &[VideoMode], current: FullscreenKind) {
+        let _ = (modes, current);
+    }
     /// The galaxy map's borders setting to save since this was last taken,
     /// if a map's close changed it, as the original's map saves
     /// `ShowMapBorders` (`_SaveMapBordersState` @0xcf110): each change is
@@ -182,6 +191,7 @@ pub trait Screen {
 mod tests {
     use super::*;
     use crate::input::Key;
+    use crate::video_mode::{FullscreenKind, VideoMode};
     use crate::{Color, Point};
 
     /// Counts ticks and quits on Escape.
@@ -297,6 +307,23 @@ mod tests {
         screen.keyed_click_ended();
         assert!(!screen.take_quit());
         assert_eq!(screen.take_sounds(), []);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_ignores_an_offer_of_display_modes_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        let mode = VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 60_000,
+        };
+        screen.offer_display(&[mode], FullscreenKind::Exclusive(mode));
+        assert_eq!(screen.take_prefs(), None);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
         assert_eq!(counter.elapsed, Duration::ZERO);
     }
 

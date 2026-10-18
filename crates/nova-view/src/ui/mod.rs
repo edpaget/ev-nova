@@ -33,6 +33,8 @@
 //!   new pilot:"): the new pilot's name.
 //! - [`toggle`]: an on/off check box with a label.
 //! - [`volume`]: a volume level with arrows that step it.
+//! - [`mode_picker`]: a [`ModePicker`](mode_picker::ModePicker) of how
+//!   the game runs fullscreen, its arrows stepping through the modes.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
 //! - [`mission_info`]: the key that asks for the mission info screen
@@ -64,6 +66,7 @@ pub mod dialog;
 pub mod edit_dialog;
 pub mod mission_dialogs;
 pub mod mission_info;
+pub mod mode_picker;
 pub mod new_pilot;
 pub mod note;
 pub mod picture_variant;

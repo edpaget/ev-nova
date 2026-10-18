@@ -346,6 +346,7 @@ fn quiet() -> Prefs {
         },
         hyperspace_effects: true,
         quicktime_movies: true,
+        fullscreen: nova_view::FullscreenKind::Borderless,
     }
 }
 
