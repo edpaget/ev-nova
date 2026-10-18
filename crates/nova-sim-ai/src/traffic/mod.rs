@@ -1109,8 +1109,15 @@ impl Traffic {
         let player = world.player.map(|player| player.state);
         self.cloaks(player, &states, think);
         if think {
-            // `TickCount` moves on between advance passes alone.
-            self.npcs.iter_mut().for_each(|npc| npc.warp.tick_clock());
+            // `TickCount` moves on between advance passes alone, and the
+            // high level holds each ship's warp to its goal.
+            for npc in &mut self.npcs {
+                npc.warp.tick_clock();
+                // `_AIDispatch` runs no high level for a disabled ship.
+                if npc.condition == Condition::Intact {
+                    warp_out::hold_stage(npc);
+                }
+            }
         }
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
         let outcomes = self.fly_all(world, player, &states, still, think, chance);

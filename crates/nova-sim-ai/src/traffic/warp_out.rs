@@ -8,7 +8,12 @@
 //! ([`Warp::tick_clock`]), as `TickCount` is real time and double time's
 //! second pass doesn't move it. `_AIIsShipJumping` (@0x82bf9-0x82c43) is
 //! a goal test: goal +0xc8c8 2, 3 or 0xb with sub-goal +0xc8ca 4 or 0xd
-//! ([`Warp::jumping`]).
+//! ([`Npc::jumping`]).
+//!
+//! **The high level's hold** ([`hold_stage`], `_HighLevelAIHandler`
+//! @0x8d513-0x8d56b): on each advance pass a ship whose goal has left
+//! its jump ends its stage, and a ship the player leads with its stage
+//! under way is held to the player's jump.
 //!
 //! **Sub-goal 4, its own jump** (`_LowLevelAIHandler` @0x8585b-0x859c5;
 //! [`own_jump`]), each advance pass (`_AIDispatch` runs on it alone):
@@ -30,7 +35,7 @@
 //!
 //! A ship enters it where it reaches its jump distance under
 //! [`Goal::JumpOut`], or runs out from its attacker beyond its reach
-//! (see [`autopilot`](crate::traffic::autopilot)): [`Warp::begin_own`].
+//! (see [`autopilot`](crate::traffic::autopilot)): [`Npc::begin_own_jump`].
 //!
 //! **Goal 0xb, its leader's jump** (`_HighLevelAIHandler`
 //! @0x8de63-0x8df75; [`follow_check`]), each advance pass before the low
@@ -40,7 +45,7 @@
 //! on goal 2, and it follows while the leader's sub-goal is 1 or 4, else
 //! gives up. `_MakeEscortsHyperWithParent` (@0x3fd54-0x3fdea) puts the
 //! ships the player leads on it each warp-stage frame of the player
-//! ([`Warp::follow_player`]); the NPC escorts' entry, `_EscortAI`
+//! ([`Npc::follow_player_jump`]); the NPC escorts' entry, `_EscortAI`
 //! (@0x839fd-0x83a92), is rdm:phase/escort-fleet-fidelity/phase-8-jump-with-leader's.
 //!
 //! **Sub-goal 0xd, following** (@0x859c5-0x85c5f; [`follow_jump`]): its
@@ -298,6 +303,24 @@ pub fn own_jump(npc: &mut Npc, duration: u32) -> bool {
         return true;
     }
     false
+}
+
+/// `_HighLevelAIHandler`'s hold on a ship's warp (@0x8d513-0x8d56b), on
+/// each advance pass: a ship whose goal is no longer a jump's (2, 3 or
+/// 0xb: [`Goal::JumpOut`], [`Goal::Flee`], or following its leader's)
+/// ends its stage, +0x50 = 0; a ship the player leads whose stage is
+/// under way is held to the player's jump, goal 0xb. Any other ship
+/// under way keeps goal 2 or 3, by whether it holds a target, which the
+/// engine's jump-out and flee goals already are.
+pub fn hold_stage(npc: &mut Npc) {
+    let jumping_goal = matches!(npc.goal, Goal::JumpOut | Goal::Flee(_))
+        || matches!(npc.warp.goal, Some(WarpGoal::Follow(_)));
+    if !jumping_goal {
+        npc.warp.stage = 0.0;
+    }
+    if npc.warp.under_way() && npc.escorts_player() {
+        npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+    }
 }
 
 /// What a pass of sub-goal 0xd did (see [`follow_jump`]).
@@ -629,6 +652,46 @@ mod tests {
         assert!(!ship.jumping(), "its goal left the jump");
         ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
         assert!(ship.jumping());
+    }
+
+    // The high level's hold on a warp.
+
+    #[test]
+    fn a_ship_whose_goal_left_its_jump_ends_its_stage_at_the_high_level() {
+        let mut ship = ship();
+        ship.begin_own_jump();
+        ship.warp.stage = 5.0;
+        hold_stage(&mut ship);
+        assert_eq!(ship.warp.stage, 5.0, "goal 2 keeps it");
+        ship.goal = Goal::Flee(ShipRef::Player);
+        hold_stage(&mut ship);
+        assert_eq!(ship.warp.stage, 5.0, "goal 3 keeps it");
+        ship.goal = Goal::Attack(ShipRef::Player);
+        hold_stage(&mut ship);
+        assert_eq!(ship.warp.stage, 0.0, "+0x50 = 0 (@0x8d52e)");
+        let mut follower = self::ship();
+        follower.goal = Goal::Idle;
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        follower.warp.stage = -1.0;
+        hold_stage(&mut follower);
+        assert_eq!(follower.warp.stage, -1.0, "goal 0xb keeps it");
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_with_its_stage_under_way_is_held_to_the_players_jump() {
+        let mut ship = ship();
+        ship.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        ship.goal = Goal::JumpOut;
+        ship.warp.stage = 3.0;
+        hold_stage(&mut ship);
+        assert_eq!(
+            ship.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player)),
+            "goal 0xb (@0x8d54c)"
+        );
     }
 
     // Sub-goal 4.
