@@ -309,6 +309,12 @@ mod tests {
     }
 
     #[test]
+    fn the_fixtures_panel_looks_are_the_stock_ones() {
+        let looks = crate::menu::fixture::main_screen_data().pilot_panel_looks();
+        assert_eq!(looks, PanelLooks::stock(PanelLabels::default()));
+    }
+
+    #[test]
     fn the_masks_follow_frame_0s_alpha() {
         let art = game(&main_screen_resources())
             .main_screen_art()

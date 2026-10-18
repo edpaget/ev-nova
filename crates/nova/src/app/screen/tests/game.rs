@@ -6,6 +6,7 @@ use super::menu::rewrite_save;
 use super::*;
 use nova_data::records::nebula::Nebula;
 use nova_sim::mission::aux_ships::AuxShips;
+use nova_view::menu::PanelPilot;
 use nova_view::ui::note::VERSION_NOTE;
 use nova_view::ui::yes_no::{NEW_PILOT_QUESTION, NO_ITEM};
 
@@ -40,6 +41,143 @@ fn ui_sounds(screen: &mut AppScreen) -> Vec<UiSound> {
             _ => None,
         })
         .collect()
+}
+
+// The pilot panel.
+
+/// The main screen's centre in the fixture: its 4 x 2 picture centred in
+/// the classic frame.
+const MENU_CENTER: Point = Point::new(512.0, 384.0);
+
+/// The text the main menu draws with its top-left at (`dx`, `baseline`
+/// less 9) from [`MENU_CENTER`], in the panel's Geneva 9, if any.
+#[allow(clippy::float_cmp)] // Exact offsets from the centre.
+fn panel_text_at(screen: &AppScreen, dx: f32, baseline: f32) -> Option<String> {
+    let at = Point::new(MENU_CENTER.x + dx, MENU_CENTER.y + baseline - 9.0);
+    drawn(screen).iter().find_map(|command| match command {
+        DrawCommand::Text {
+            text, origin, size, ..
+        } if *origin == at && *size == 9.0 => Some(text.clone()),
+        _ => None,
+    })
+}
+
+/// The pilot's name the panel shows, if it shows one.
+pub(super) fn panel_name(screen: &AppScreen) -> Option<String> {
+    panel_text_at(screen, -185.0, 262.0)
+}
+
+/// The centred message the panel shows, if any: the Geneva 9 text on its
+/// baseline, cy + 310.
+#[allow(clippy::float_cmp)] // Exact offsets from the centre.
+pub(super) fn panel_message(screen: &AppScreen) -> Option<String> {
+    drawn(screen).iter().find_map(|command| match command {
+        DrawCommand::Text {
+            text, origin, size, ..
+        } if origin.y == MENU_CENTER.y + 310.0 - 9.0 && *size == 9.0 => Some(text.clone()),
+        _ => None,
+    })
+}
+
+/// [`data`] with `STR#` 2002's panel labels, each the stock text.
+pub(super) fn labelled_data() -> Rc<GameData> {
+    let mut strings = vec![""; 279];
+    strings[250] = "Pilot Name:";
+    strings[275] = "No Pilot File Loaded";
+    strings[276] = "has been killed";
+    loaded(
+        &game_data_fork(false, false, false, 100, b"", b"", None).resource(
+            StrList::TYPE,
+            2002,
+            None,
+            &str_list(&strings),
+        ),
+    )
+}
+
+/// The router over [`labelled_data`] with the main menu over `store`, and
+/// dialogs, past its start-up appear.
+pub(super) fn labelled_menu(store: &MemoryPilots) -> AppScreen {
+    with_dialogs(labelled_data())
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared()
+}
+
+#[test]
+fn with_no_pilot_the_menu_shows_no_pilot_file_loaded() {
+    let store = MemoryPilots::new();
+    let screen = labelled_menu(&store);
+    assert_eq!(
+        panel_message(&screen).as_deref(),
+        Some("No Pilot File Loaded")
+    );
+    assert_eq!(panel_name(&screen), None);
+    assert_eq!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        &PanelPilot::None
+    );
+}
+
+#[test]
+fn a_new_pilot_shows_its_panel_at_once() {
+    let store = MemoryPilots::new();
+    let mut screen = labelled_menu(&store);
+    create_held(&mut screen, "Ada");
+    assert_eq!(panel_name(&screen).as_deref(), Some("Ada"));
+    assert_eq!(
+        panel_text_at(&screen, -190.0, 250.0).as_deref(),
+        Some("Pilot Name:")
+    );
+    assert_eq!(panel_message(&screen), None, "no message beside it");
+    create_held(&mut screen, "Bea");
+    assert_eq!(panel_name(&screen).as_deref(), Some("Bea"), "the new one");
+}
+
+#[test]
+fn an_opened_pilot_shows_its_panel() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create_held(&mut screen, "Ada");
+    let mut screen = labelled_menu(&store);
+    assert_eq!(panel_name(&screen), None);
+    open_held(&mut screen);
+    assert_eq!(panel_name(&screen).as_deref(), Some("Ada"));
+}
+
+#[test]
+fn an_escape_return_shows_the_alive_panel_again() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    assert_eq!(panel_name(&screen).as_deref(), Some("Ada"));
+    assert!(matches!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        PanelPilot::Alive(_)
+    ));
+}
+
+#[test]
+fn a_dying_pilot_put_away_by_escape_shows_the_killed_message() {
+    let store = MemoryPilots::new();
+    let mut screen = super::death::landed_took_off_and_breaking_up(&store);
+    screen.input(&key(Key::Escape, true));
+    returned(&mut screen);
+    assert_eq!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        &PanelPilot::Dying("Ada".to_owned())
+    );
+    // The death data has no `STR#` 2002: the name, a space and an empty
+    // #277.
+    assert_eq!(panel_message(&screen).as_deref(), Some("Ada "));
+    assert_eq!(panel_name(&screen), None, "no alive panel");
+    choose(&mut screen, MenuChoice::EnterShip);
+    assert_eq!(
+        screen.showing(),
+        Showing::MainMenu,
+        "Enter Ship still refuses"
+    );
+    assert_eq!(panel_message(&screen).as_deref(), Some("Ada "));
 }
 
 // New Pilot.

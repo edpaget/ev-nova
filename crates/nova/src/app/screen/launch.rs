@@ -62,6 +62,8 @@ impl AppScreen {
         flight.open_at_launch();
         self.hold_game(flight);
         let _ = self.settle_game();
+        // Before the first frame, which no input or tick precedes.
+        self.show_game_on_menu();
         self
     }
 }

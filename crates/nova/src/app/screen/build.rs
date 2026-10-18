@@ -15,7 +15,7 @@ use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
 use nova_view::menu::appear::Appear;
-use nova_view::menu::{MainMenu, MainScreenSource, PilotList};
+use nova_view::menu::{MainMenu, MainScreenSource, PilotList, PilotPanelSource};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
@@ -66,6 +66,7 @@ impl AppScreen {
             new_pilot: None,
             open_pilot: None,
             load_note: None,
+            note_hides_game: false,
             question: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
@@ -396,7 +397,8 @@ impl AppScreen {
             }
         };
         let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
-            .with_chance(self.effects_chance.clone());
+            .with_chance(self.effects_chance.clone())
+            .with_pilot_panel(self.data.pilot_panel_looks());
         screen.appear();
         Self {
             side: Side::MainMenu,

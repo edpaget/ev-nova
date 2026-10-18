@@ -58,6 +58,20 @@ fn the_last_pilot_saved_is_held_at_launch_and_enter_ship_flies_it() {
 }
 
 #[test]
+fn the_last_pilots_panel_shows_on_the_first_frame() {
+    let store = MemoryPilots::new();
+    save_ada(&store);
+    let screen = with_dialogs(data())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .open_last_pilot();
+    assert_eq!(super::game::panel_name(&screen).as_deref(), Some("Ada"));
+    assert!(matches!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        nova_view::menu::PanelPilot::Alive(_)
+    ));
+}
+
+#[test]
 fn the_last_pilot_opened_is_held_at_launch() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);

@@ -946,6 +946,55 @@ fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_ho
 }
 
 #[test]
+fn with_no_game_held_before_the_menu_under_the_note_shows_no_pilot_until_it_closes() {
+    use super::game::panel_name;
+    let store = MemoryPilots::new();
+    save_unlisted_ada(&store);
+    let mut screen = menu_with_dialogs(&store);
+    assert!(screen.game_in_progress().is_none());
+    open_held(&mut screen);
+    assert_eq!(screen.showing(), Showing::Note);
+    assert!(screen.game_in_progress().is_some(), "held behind the note");
+    assert_eq!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        &nova_view::menu::PanelPilot::None
+    );
+    assert_eq!(panel_name(&screen), None);
+    screen.tick(TICK);
+    assert_eq!(panel_name(&screen), None, "still, after a tick");
+    screen.input(&key(Key::Enter, true));
+    assert!(screen.load_note().is_none());
+    assert_eq!(
+        panel_name(&screen).as_deref(),
+        Some("Ada"),
+        "once it closes"
+    );
+}
+
+#[test]
+fn with_a_game_held_before_the_menu_under_the_note_shows_the_opened_pilot() {
+    use super::game::{held_name, panel_name};
+    let store = MemoryPilots::new();
+    save_unlisted_ada(&store);
+    let mut screen = menu_with_dialogs(&store);
+    create_held(&mut screen, "Bea");
+    assert_eq!(panel_name(&screen).as_deref(), Some("Bea"));
+    open_held(&mut screen);
+    assert_eq!(screen.showing(), Showing::Note);
+    assert_eq!(held_name(&screen), "Ada", "the list's first");
+    assert_eq!(
+        panel_name(&screen).as_deref(),
+        Some("Ada"),
+        "the new pilot's"
+    );
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(panel_name(&screen).as_deref(), Some("Ada"));
+    // A later note over a held game hides nothing either.
+    open_held(&mut screen);
+    assert_eq!(panel_name(&screen).as_deref(), Some("Ada"));
+}
+
+#[test]
 fn quitting_with_the_note_open_writes_nothing() {
     let store = MemoryPilots::new();
     save_unlisted_ada(&store);
@@ -1025,7 +1074,13 @@ fn without_dialogs_a_repaired_open_warns_and_flies() {
     save_unlisted_ada(&store);
     let mut screen = menu(&store);
     screen.take_warnings();
-    open_first(&mut screen);
+    open_held(&mut screen);
+    assert_eq!(
+        super::game::panel_name(&screen).as_deref(),
+        Some("Ada"),
+        "no note hides the pilot"
+    );
+    enter_ship(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.load_note().is_none());
     assert_eq!(screen.take_warnings(), [LOAD_FALLBACK_NOTE]);

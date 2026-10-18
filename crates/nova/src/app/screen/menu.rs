@@ -323,7 +323,10 @@ impl AppScreen {
     /// One whose load fell back ([`FlightView::load_repaired`]) shows the
     /// note `STR#` 140 #52 over the main menu, as `_MainScreenChoice`
     /// shows it through `_EVNoteAlert` (@0x1a817-0x1a85b); without
-    /// dialogs, or with no note to build, the note is a warning.
+    /// dialogs, or with no note to build, the note is a warning. Under
+    /// the note the pilot panel shows the opened pilot when a game was held
+    /// before the Open, and no pilot when none was, as the original draws
+    /// the screen with `_gameInProgress` as it was (see `pilot_panel`).
     ///
     /// One that can't be opened closes the list, as the original's
     /// Navigation panel is gone by then, and leaves the game held as it
@@ -355,6 +358,7 @@ impl AppScreen {
                         flight.resume();
                         flight.open_on_main_screen();
                         let repaired = flight.load_repaired();
+                        let held_before = self.game.is_some();
                         self.hold_game(flight);
                         // The original saves only on creation, landing
                         // and rescue (`_SavePilotFile` @0x76876), never on
@@ -362,6 +366,10 @@ impl AppScreen {
                         let _ = self.settle_game();
                         if repaired {
                             self.show_note(LOAD_FALLBACK_NOTE);
+                            // The original draws the screen under the
+                            // note with `_gameInProgress` as it was (see
+                            // `pilot_panel`).
+                            self.note_hides_game = !held_before && self.load_note.is_some();
                         }
                     }
                     Err(OpenError::WrongVersion(warning)) => {
@@ -413,6 +421,7 @@ impl AppScreen {
             && let Some(mut note) = self.load_note.take()
         {
             self.sounds.extend(note.take_sounds());
+            self.note_hides_game = false;
         }
         ScreenAction::None
     }

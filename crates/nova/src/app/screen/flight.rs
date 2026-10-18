@@ -342,8 +342,11 @@ impl AppScreen {
     /// visit's offers as it settles, so the spaceport's offer is asked for
     /// here, after the texts the landing queued, as `_DoPortDialog` offers
     /// after `_MissionLandCheck` (@0x5fbeb-0x5fc37), and before any input
-    /// can open a service. Last, a `Q` run while landed leaves, once
-    /// nothing shown holds it ([`AppScreen::leave_if_due`]).
+    /// can open a service. Then a `Q` run while landed leaves, once
+    /// nothing shown holds it ([`AppScreen::leave_if_due`]). Last, the
+    /// main menu's pilot panel is brought in step with the game held
+    /// ([`AppScreen::show_game_on_menu`]): this runs after every input and
+    /// tick, so every frame drawn on the menu shows the game as it stands.
     pub(super) fn settle_script(&mut self) {
         if let Some(flight) = self.flight.as_mut() {
             flight.settle_script();
@@ -351,6 +354,7 @@ impl AppScreen {
         self.show_mission_texts();
         self.serve_offers();
         self.leave_if_due();
+        self.show_game_on_menu();
     }
 
     /// Leaves the spaceport for a `Q` run while landed

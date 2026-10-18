@@ -475,6 +475,22 @@ fn breaking_up_by_the_other_reading(store: &MemoryPilots) -> AppScreen {
 }
 
 #[test]
+fn a_dead_pilots_return_shows_the_killed_message() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_and_took_off(&store);
+    until_exploded(&mut screen);
+    tick_until(&mut screen, 400, |screen| {
+        screen.showing() == Showing::MainMenu
+    });
+    returned(&mut screen);
+    assert_eq!(
+        screen.main_menu().expect("a menu").pilot_shown(),
+        &nova_view::menu::PanelPilot::Dying("Ada".to_owned())
+    );
+    assert_eq!(super::game::panel_message(&screen).as_deref(), Some("Ada "));
+}
+
+#[test]
 fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_only() {
     let store = MemoryPilots::new();
     let mut screen = landed_and_took_off(&store);

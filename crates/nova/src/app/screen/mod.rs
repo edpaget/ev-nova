@@ -332,6 +332,7 @@ mod game;
 mod launch;
 mod menu;
 mod overlays;
+mod pilot_panel;
 mod port_dialogs;
 mod quit_question;
 mod routing;
@@ -498,6 +499,10 @@ pub struct AppScreen {
     /// The note that an opened pilot's load fell back (`STR#` 140 #52),
     /// while it is open over the main menu, its flight built behind it.
     load_note: Option<NoteDialog>,
+    /// Whether the #52 note open over the main menu hides the game held
+    /// from the pilot panel: no game was held before the Open (see
+    /// `pilot_panel`).
+    note_hides_game: bool,
     /// The question asked over the main menu, and what for, while it is
     /// open: the window's close's (`STR#` 140 #10) or New Pilot's over a
     /// game in progress (#8).
