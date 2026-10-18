@@ -5521,6 +5521,17 @@ fn stock_pick_at(
     target: ShipId,
     distance: f32,
 ) -> Option<nova_sim::WeaponId> {
+    stock_pick_made(data, ship, target, distance, |_| {})
+}
+
+/// What [`stock_pick_at`]'s NPC fires, made over by `make` first.
+fn stock_pick_made(
+    data: &GameData,
+    ship: ShipId,
+    target: ShipId,
+    distance: f32,
+    make: impl Fn(&mut nova_sim::traffic::npc::Npc),
+) -> Option<nova_sim::WeaponId> {
     let mut session = destroyer_in_fomalhaut(data);
     let mut chance = NeverFires;
     session.tick_traffic(data, &NovaAi::default(), &mut chance);
@@ -5541,6 +5552,7 @@ fn stock_pick_at(
     npc.cloak = nova_sim::cloak::Cloak::default();
     npc.goal = Goal::Attack(ShipRef::Player);
     npc.state = ShipState::default();
+    make(&mut npc);
     let quarry = data.ship_fields(target).expect("the target reads");
     let strong = nova_sim::Reserves::full(1_000_000.0, 1_000_000.0, 100.0);
     let player = nova_sim::ai::PlayerSide {
@@ -5597,7 +5609,11 @@ fn a_stock_manticore_fires_its_ir_missile_before_its_emp_torpedo() {
 
 /// An NPC carrying the EMP Torpedo alone of its missiles never fires it
 /// at a stock ship of `Maneuver` 40 or more (a long gun may fire
-/// instead), and does at a slower one.
+/// instead), and does at a slower one. That carrier, the Pirate Carrier
+/// (147), stands off (`shïp` `Flags2` 0x0002): its Front Turret (157)
+/// reaches 1989, so 1000 off it snipes, and its turret pass, after the
+/// missile pass, fires the turret. Approaching, as a ship that doesn't
+/// stand off, its missile pass comes last.
 #[test]
 fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
     let Some(dir) = common::nova_data() else {
@@ -5628,14 +5644,21 @@ fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
         .map(|ship| ship.id)
         .collect();
     assert!(agile.len() > 100, "{}", agile.len());
+    assert_eq!(carrier, ShipId(147));
     let emp = Some(nova_sim::WeaponId(160));
+    let approaching = |target| {
+        stock_pick_made(&data, carrier, target, 1000.0, |npc| {
+            npc.hull.stands_off = false;
+        })
+    };
     for &target in &agile {
-        assert_ne!(stock_missile_at(&data, carrier, target), emp, "{target:?}");
+        assert_ne!(approaching(target), emp, "{target:?}");
     }
+    assert_eq!(approaching(ShipId(130)), emp, "at the Cargo Drone");
     assert_eq!(
         stock_missile_at(&data, carrier, ShipId(130)),
-        emp,
-        "at the Cargo Drone"
+        Some(nova_sim::WeaponId(157)),
+        "standing off, at the Cargo Drone"
     );
 }
 
