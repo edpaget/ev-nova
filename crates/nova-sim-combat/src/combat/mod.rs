@@ -650,10 +650,12 @@ pub struct Strike {
     pub downed: Option<Downed>,
     /// Whether it was a direct hit, which the ship hit may answer: the
     /// original's `_DamageShip` arg +0x20 ("real"). A shot's or beam's hit
-    /// is (`_HandleShipHit` @0x36c43, `_HandleBeams` @0x314be), and a
-    /// boarding; a blast's, whether it went off on a hit or as its shot
-    /// expired (@0x36e80, @0x360cb), and a death shockwave's
-    /// ([`shockwave`]) are not. So only a direct hit raises a grudge,
+    /// is (`_HandleShipHit` @0x36c43, `_HandleBeams` @0x314be); a
+    /// blast's, whether it went off on a hit or as its shot expired
+    /// (@0x36e80, @0x360cb), and a death shockwave's ([`shockwave`]) are
+    /// not, nor is a boarding's Good Samaritan call
+    /// (`nova_sim::Session::board`), which is answered but never passes
+    /// `_DamageShip`, and which the ship boarded never answers. So only a direct hit raises a grudge,
     /// cloaks or uncloaks its ship and provokes an AI (the reaction block
     /// @0x3b44d and the decloak @0x3bf1f skip the rest), though the player
     /// is convicted of what any hit does (@0x3ad4f-0x3ae53).
@@ -663,7 +665,8 @@ pub struct Strike {
     /// at ([`Shot::aimed_at`], shot +0x2a, @0x36bc5-0x36c37); a beam's on
     /// the ship it was fired at ([`Beam::aimed_at`], beam +0x18), or, for
     /// one fired at nothing, its firer's target at the hit (+0x70,
-    /// @0x31463-0x315b4); a boarding always is. No blast or shockwave is.
+    /// @0x31463-0x315b4); a boarding's call always is. No blast or
+    /// shockwave is.
     /// Only an intended strike by the player calls the Good Samaritans
     /// (@0x3bed2, see `nova_sim::ai::react::answer`).
     pub intended: bool,
@@ -695,7 +698,9 @@ pub struct Strike {
     /// the session's settle step works it out (see
     /// `nova_sim::ai::answer_flag`). The fight leaves it unset. Only an
     /// answered strike draws a reaction, a grudge, cloak-when-hit or a
-    /// Good Samaritan.
+    /// Good Samaritan. Every answered hit is [`direct`](Strike::direct)
+    /// (@0x3b44d); the boarding's call alone is answered but not direct,
+    /// drawing the Good Samaritans and no reaction.
     pub answered: bool,
 }
 
