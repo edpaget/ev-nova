@@ -26,7 +26,13 @@
 //! mission unavailable, its plunder (@0x65991); without, the plunder past
 //! it (@0x65a21 → @0x65ede). The fighter and escort cases that skip it are
 //! the boarding and fighter-bay follow-ups' (rdm:task/boarding-follow-up,
-//! rdm:task/fighter-bays-follow-up).
+//! rdm:task/fighter-bays-follow-up). The call is a strike that is answered
+//! but not direct ([`Strike::direct`]): `_DoGoodSamaritan` writes only goal
+//! 4 and the target on the ships its gates pass (@0x82891-0x82ba8), so the
+//! ship boarded and its lead draw no hit's reaction, cut no wait and ask
+//! no quote; they answer as Samaritans or not at all. The ship boarded is
+//! still disabled when the call is answered, as its condition is settled
+//! by the fight after the traffic answers, so it never answers its own.
 //!
 //! **A failed mission's ship** takes the pickup or assist path as any
 //! mission's ship does, as neither tests whether the mission failed
@@ -77,13 +83,22 @@ impl Session {
         }
     }
 
-    /// Calls the NPCs to `npc`'s help as for a hit by the player, a direct,
+    /// Calls the NPCs to `npc`'s help as for a hit by the player: an
     /// intended strike of no damage answered on the next traffic tick
     /// (`_DoGoodSamaritan`, called by `_HandlePlayerBoardAttempt` itself,
     /// with no aim to test), unless `npc` is a person with a
     /// `LinkMission`, whose boarding never calls it (see the module docs).
     /// It never passes `_DamageShip`, so the answer flag never weighs it:
-    /// it is answered as it is.
+    /// it is answered as it is. Nor is it direct, so neither the ship
+    /// boarded nor its lead draws a hit's reaction from it: only the Good
+    /// Samaritans answer, as `_DoGoodSamaritan` (@0x82823) writes goal 4
+    /// and the target alone (@0x82b82-0x82b97).
+    ///
+    /// The original calls it (@0x65ed9) before the plunder dialog opens
+    /// (@0x65f27), and the engine answers it on the next traffic tick,
+    /// after the dialog: the dialog shows no ship's goal or target and the
+    /// pilot can't be saved in it, so the lag crosses no boundary the
+    /// player sees or keeps.
     pub(super) fn call_good_samaritans(&mut self, npc: &Npc) {
         if !calls_good_samaritan(npc) {
             return;
@@ -93,7 +108,7 @@ impl Session {
             by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
-            direct: true,
+            direct: false,
             intended: true,
             lock: false,
             nominal: Nominal::default(),
@@ -141,6 +156,7 @@ fn calls_good_samaritan(npc: &Npc) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::Goal;
     use crate::board::{Boarding, NovaBoarding};
     use crate::catalog::{MissionId, ShipId};
     use crate::chance::NeverFires;
@@ -155,7 +171,7 @@ mod tests {
     use crate::session::person_offers::tests as person;
     use crate::session::tests::{alongside, board_by, boardable};
     use crate::testkit::FakePilotCatalog;
-    use crate::traffic::npc::Mode;
+    use crate::traffic::npc::{AiType, Mode};
 
     /// `catalog` with ship class `id` of no `Crew`.
     fn crewless(mut catalog: FakePilotCatalog, id: i16) -> FakePilotCatalog {
@@ -399,7 +415,7 @@ mod tests {
             by: Some(ShipRef::Player),
             damage: 0.0,
             downed: None,
-            direct: true,
+            direct: false,
             intended: true,
             lock: false,
             nominal: Nominal::default(),
@@ -431,6 +447,35 @@ mod tests {
         assert!(matches!(boarding, Ok(Boarding::Opened(_))), "{boarding:?}");
         let id = session.npcs()[0].id;
         assert_eq!(session.strikes, [samaritan_call(id.0)], "a failed mission");
+    }
+
+    /// [`alongside`]'s trader (NPC 0) escorting the police (NPC 1), an
+    /// ally of its government, of `ai_type`, idle: boarded, its call
+    /// answered.
+    fn board_escort_of(ai_type: AiType) -> Session {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let npcs = session.traffic.npcs_mut();
+        npcs[0].leader = Some(NpcId(1));
+        npcs[1].ai_type = ai_type;
+        npcs[1].goal = Goal::Idle;
+        npcs[1].target = None;
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        session.answer_strikes(&crate::ai::NovaAi::default());
+        session
+    }
+
+    #[test]
+    fn boarding_an_escort_leaves_its_trader_lead_alone_and_calls_its_warship_lead() {
+        // `_DoGoodSamaritan` writes goal 4 and the target alone, on the
+        // slots its gates pass (@0x82891-0x82ba8): no lead's reaction.
+        let session = board_escort_of(AiType::WimpyTrader);
+        let lead = &session.npcs()[1];
+        assert_eq!((lead.target, lead.goal), (None, Goal::Idle), "a trader");
+        let session = board_escort_of(AiType::Warship);
+        let lead = &session.npcs()[1];
+        assert_eq!(lead.target, Some(ShipRef::Player), "a warship");
+        assert_eq!(lead.goal, Goal::Attack(ShipRef::Player), "a warship");
     }
 
     // A failed mission's ship.

@@ -5607,8 +5607,9 @@ impl Session {
     /// failed mission: the original passes its mark,
     /// `_HandlePlayerBoardAttempt` @0x6582b, and `_SlapWithPenalty`
     /// slaps only for none, @0x9c10), the
-    /// NPCs come to the target's help as for a hit by the player (a
-    /// strike of no damage, answered on the next traffic tick), but for
+    /// Good Samaritans come to the target's help as for a hit by the
+    /// player (a strike of no damage, not direct, answered on the next
+    /// traffic tick: the target and its lead draw no hit's reaction), but for
     /// a person with a `LinkMission`, whose boarding never calls the Good
     /// Samaritans, the target is marked boarded, and every other NPC
     /// after it lets it go and decides again (`_AIShipBoardedByPlayer`;
@@ -23447,7 +23448,7 @@ pub(super) mod tests {
                 by: Some(ShipRef::Player),
                 damage: 0.0,
                 downed: None,
-                direct: true,
+                direct: false,
                 intended: true,
                 lock: false,
                 nominal: crate::combat::Nominal::default(),
