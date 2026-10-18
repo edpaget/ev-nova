@@ -873,25 +873,10 @@ fn sight_of<'a>(
             (other.cloak_gear.untargetable(), other.cloak.is_cloaked())
         }),
     };
-    // The player never cloaks, so is always seen. An NPC is seen as
-    // `_ShipVisibleToShip(target, shooter)` says (@0x971c, called
-    // @0x7ff1e-0x7ff2c and @0x80b5f-0x80b70): the shooter escorts it
-    // (shooter +0x9a is the target's +0x86) and has a cloak, @0x9788-0x97a2.
-    let seen = match ship {
-        ShipRef::Player => true,
-        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
-            crate::cloak::visible(
-                other.cloak,
-                other.state.position,
-                other.emerging(),
-                crate::cloak::Observer {
-                    at: npc.state.position,
-                    scanner: npc.cloak_gear.scanner.on_screen,
-                    cloaked_escort: npc.leader == Some(other.id) && npc.cloak_gear.device,
-                },
-            )
-        }),
-    };
+    // `_ShipVisibleToShip(target, shooter)` (@0x971c, called
+    // @0x7ff1e-0x7ff2c and @0x80b5f-0x80b70; see `sight`): the target is
+    // in the system, as `live` said above.
+    let seen = around.sees(npc, ship);
     let (turn_rate, planet_type) = match ship {
         ShipRef::Player => around
             .player

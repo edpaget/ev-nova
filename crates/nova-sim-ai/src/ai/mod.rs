@@ -62,6 +62,7 @@ pub mod plunder_target;
 pub mod pursuit;
 pub mod react;
 pub mod reinforcements;
+pub mod sight;
 pub mod stand_off;
 pub mod target;
 pub mod threatened;
