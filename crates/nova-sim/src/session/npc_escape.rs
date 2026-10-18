@@ -588,6 +588,20 @@ mod tests {
     }
 
     #[test]
+    fn the_cut_rolls_only_a_shield_above_1() {
+        let catalog = escaping(0);
+        for (shield, cut) in [(1.0, 1.0), (1.5, 0.0), (0.5, 0.5)] {
+            let (mut session, id) = carrier(&catalog, RuleSource::Engine, 1);
+            session.npc_mut(id).expect("there").reserves.shield.now = shield;
+            let mut chance = Rolls::launching(0, 7);
+            session.tick_combat(Rules::default(), &mut chance);
+            let held = session.npc(id).expect("dying");
+            assert_eq!(held.reserves.shield.now, cut, "{shield}");
+            assert_eq!(held.state.velocity, Vec2::new(1.0, 2.0), "{shield}");
+        }
+    }
+
+    #[test]
     fn a_roll_other_than_0_launches_nothing_and_never_rolls_again() {
         let catalog = escaping(0);
         for cut in [RuleSource::Engine, RuleSource::Bible] {

@@ -265,6 +265,13 @@ mod tests {
         assert!((after.at.x - before.at.x - 3.5).abs() < 1e-5);
         assert_eq!(after.at.y, before.at.y);
         assert_eq!(after.life, before.life - 1);
+        // Pushed straight down: it drifts down too.
+        let mut down = spawned(&[20, 180, 5]);
+        let before = down.pods()[0];
+        down.step();
+        let after = down.pods()[0];
+        assert!((after.at.y - before.at.y - 1.5).abs() < 1e-5, "{after:?}");
+        assert!((after.at.x - before.at.x - 2.0).abs() < 1e-5);
     }
 
     #[test]

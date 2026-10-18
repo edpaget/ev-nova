@@ -2275,6 +2275,12 @@ fn arriving_leaves_no_pod_drawn() {
     let ahead = player(&view).position + nova_sim::Vec2::new(0.0, -80.0);
     let npc = view.session().expect("flying").npcs()[0].id;
     nova_sim::fixture::place(view.session.as_mut().expect("flying"), npc, ahead);
+    let placed_at = view.session().expect("flying").npcs()[0].state;
+    assert_eq!(
+        (placed_at.position, placed_at.velocity),
+        (ahead, nova_sim::Vec2::ZERO),
+        "placed ahead, at rest"
+    );
     eject_a_pod(&mut view);
     jump_now(&mut view);
     assert!(
