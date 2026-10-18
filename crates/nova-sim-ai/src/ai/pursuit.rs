@@ -646,6 +646,8 @@ mod tests {
         assert_eq!(break_heading(0.0, 3), 225);
         assert_eq!(break_heading(10.7, 2), 145);
         assert_eq!(break_heading(300.5, 2), 75);
+        // 359 stays; only 360 and over wrap.
+        assert_eq!(break_heading(224.5, 2), 359);
         // Truncated toward zero: -34.1 is -34, so 326.
         assert_eq!(break_heading(100.9, 1), 326);
         let mut npc = fighter(AT_PLAYER, 0.0);
@@ -824,16 +826,18 @@ mod tests {
         };
         let pursuit = stepped_at_player(&next, &player_off(off, 0.0), 0, &mut chance);
         assert_eq!(bodies(&pursuit), [Manoeuvre::Rush], "the next");
-        // 82 whole pixels across is not enough.
-        let off = Vec2::new(-82.9, -300.0);
-        let npc = burning(fighter(
-            AT_PLAYER,
-            f32::from(trig::intercept_angle(AT, AT + off)),
-        ));
-        assert_eq!(
-            stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut chance).kept,
-            None
-        );
+        // 82 whole pixels across, or up, is not enough.
+        for off in [Vec2::new(-82.9, -300.0), Vec2::new(-300.0, -82.9)] {
+            let npc = burning(fighter(
+                AT_PLAYER,
+                f32::from(trig::intercept_angle(AT, AT + off)),
+            ));
+            assert_eq!(
+                stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut chance).kept,
+                None,
+                "{off:?}"
+            );
+        }
     }
 
     #[test]

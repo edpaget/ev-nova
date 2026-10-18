@@ -1378,6 +1378,11 @@ mod tests {
             !asks_at_player(&gone, 0.0, -100.0, plain),
             "no target state"
         );
+        // Fleeing beyond 250 (whole pixels) it runs out, as substates 1, 3
+        // and 4, which call no `_AIFireTurret`: no point defence.
+        let fleeing = shooter(&[], Goal::Flee(ShipRef::Player));
+        assert!(asks_at_player(&fleeing, 0.0, 250.9, plain));
+        assert!(!asks_at_player(&fleeing, 0.0, 251.0, plain));
         // Before the target checks (@0x80b0d): untargetable, unseen or not
         // live.
         let npc = shooter(&[guided(130, 4)], ATTACK);
@@ -1970,6 +1975,21 @@ mod tests {
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(131));
         npc.state.heading = 348.9;
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), None);
+    }
+
+    #[test]
+    fn a_ship_fleeing_beyond_250_fires_no_turret() {
+        // A turret reaching 300: within 250 the flee's turret pass fires
+        // it; beyond, running out, no pass runs.
+        let npc = shooter(
+            &[WeaponRecord {
+                count: 30,
+                ..guided(130, 4)
+            }],
+            Goal::Flee(ShipRef::Player),
+        );
+        assert_eq!(fired(&npc, 0.0, 250.0, 50.0), id(130));
+        assert_eq!(fired(&npc, 0.0, 251.0, 50.0), None);
     }
 
     #[test]

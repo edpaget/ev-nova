@@ -16,6 +16,12 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The joust's reverse bearing (`_LowLevelAIHandler` @0x86279-0x862a0)
+    # is the bearing + 180 taken mod 360; - 180 mod 360 is the same angle.
+    "nova-sim-ai/src/ai/pursuit\\.rs:.*replace \\+ with - in joust$",
+    # The break heading's first wrap (@0x86328-0x86331): a 0 raised to 360
+    # by `<= 0` is taken back to 0 by the second wrap (`> 359`).
+    "nova-sim-ai/src/ai/pursuit\\.rs:.*replace < with <= in break_heading$",
     # `_AIShipFriendStrength` doubles only a weight above 0 (@0x8279b);
     # doubling a weight of 0 still adds 0, and the threat test it skips
     # changes nothing, so `>=` can't be told from `>`.
