@@ -5,6 +5,21 @@ use super::*;
 // Pilot edits.
 
 #[test]
+fn the_intro_screen_seen_reads_and_marks_the_sessions_pilot() {
+    let mut view = landed_view();
+    assert!(!view.seen_intro());
+    view.mark_intro_seen();
+    assert!(view.seen_intro());
+    assert!(view.session().expect("flying").seen_intro());
+    let mut broken = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    });
+    broken.mark_intro_seen();
+    assert!(!broken.seen_intro());
+}
+
+#[test]
 fn a_session_that_failed_has_no_pilot_desk() {
     let mut view = FlightView::new(FakeCatalog {
         character: Err(StartError::NoCharacter),

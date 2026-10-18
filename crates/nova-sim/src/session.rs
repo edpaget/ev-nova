@@ -387,6 +387,7 @@ mod hooks;
 mod hover;
 mod iff_scramblers;
 mod inertialess;
+mod intro;
 mod jump_collapse;
 mod map;
 mod map_borders;
