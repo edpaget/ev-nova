@@ -14,10 +14,9 @@
 //! 3. Thrust (@0x6cbb2-0x6cc3e) adds a tick's acceleration to the speed,
 //!    up to `_ShipMaxSpeed`, and ramps the glow as any ship's
 //!    (@0x6cd24-0x6cd52).
-//! 4. The speed is capped at the top speed (@0x6d356-0x6d369; the
-//!    original caps it at `_playerMaxVel`, which is
-//!    rdm:phase/ship-handling-fidelity/phase-6-afterburner's, so here at
-//!    `_ShipMaxSpeed`, as the velocity's box is). A disabled player's
+//! 4. The speed is capped at the box, `_playerMaxVel` (@0x6d356-0x6d369;
+//!    see the `afterburner` module), the top speed but while the
+//!    afterburner widens it and as it bleeds back after. A disabled player's
 //!    speed then falls by
 //!    [`PLAYER_DISABLED_DECAY`](crate::inertialess::PLAYER_DISABLED_DECAY)
 //!    and its glow by 1 more (@0x6d36e-0x6d3a3), after its velocity's
@@ -80,10 +79,11 @@ impl Session {
     /// docs), its glow ramped and the thrust sounded as any ship's.
     pub(super) fn fly_inertialess(&mut self, controls: Controls, aim: Option<i16>) {
         let handling = self.flying_handling();
+        let caps = self.player_caps();
         let disabled = self.player_fate().row().drag;
         if disabled {
             drag(&mut self.player);
-            self.player_speed = self.player_speed.min(handling.max_speed) * PLAYER_DISABLED_DECAY;
+            self.player_speed = self.player_speed.min(caps.max_vel) * PLAYER_DISABLED_DECAY;
         }
         let flight = self.flight_rules();
         inertialess_player_step(
@@ -92,6 +92,7 @@ impl Session {
             &handling,
             controls,
             aim,
+            caps,
             flight,
         );
         let follow = if disabled {
@@ -106,11 +107,12 @@ impl Session {
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
-    /// an inertialess ship's glow, following `follow`
-    /// ([`ramp_inertialess_glow`]).
+    /// an inertialess ship's glow, following `follow`, with the
+    /// afterburner's step while it is on ([`ramp_inertialess_glow`]).
     pub(super) fn ramp_inertialess(&mut self, thrust: bool, follow: Follow) {
         self.sound_thrust(thrust);
-        self.engine_glow = ramp_inertialess_glow(self.engine_glow, thrust, follow);
+        let burning = self.afterburner_on;
+        self.engine_glow = ramp_inertialess_glow(self.engine_glow, thrust, follow, burning);
     }
 
     /// Ramps the glow after a pre-jump tick in which the ship thrust or
@@ -175,6 +177,7 @@ mod tests {
     /// A session of `catalog` at rest at the centre facing `heading`.
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        session.settle_box();
         session.player.position = Vec2::ZERO;
         session.player.velocity = Vec2::ZERO;
         session.player.heading = heading;
@@ -187,6 +190,7 @@ mod tests {
             turn,
             reverse,
             face: Face::Off,
+            afterburner: false,
         }
     }
 
@@ -384,7 +388,7 @@ mod tests {
             };
             assert_eq!(
                 session.engine_glow,
-                ramp_inertialess_glow(base, false, follow),
+                ramp_inertialess_glow(base, false, follow, false),
                 "from {base}"
             );
             assert_eq!(session.engine_glow, glow, "from {base}");

@@ -243,6 +243,7 @@ mod tests {
         turn: crate::flight::Turn::None,
         reverse: false,
         face: crate::flight::Face::Off,
+        afterburner: false,
     };
 
     fn session(catalog: &FakePilotCatalog) -> Session {
@@ -679,6 +680,7 @@ mod tests {
             turn: crate::flight::Turn::Left,
             reverse: true,
             face: crate::flight::Face::Off,
+            afterburner: false,
         };
         let mut session = session(&catalog());
         session.player.velocity = Vec2::new(3.0, 1.0);

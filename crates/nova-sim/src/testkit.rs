@@ -154,6 +154,7 @@ pub(crate) fn fly_out(session: &mut Session) {
         turn: Turn::None,
         reverse: false,
         face: crate::flight::Face::Off,
+        afterburner: false,
     };
     for _ in 0..3000 {
         let player = *session.player();

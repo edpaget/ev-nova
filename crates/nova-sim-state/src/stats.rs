@@ -54,9 +54,20 @@
 //!   as `_ShipIsInertialess` (@0x79c2) counts the outfit for the player
 //!   alone.
 //!
+//! - [`AFTERBURNER`] (15) is recorded as [`ShipStats::afterburner`], the
+//!   fuel it uses a tick: as `_ShipAfterburnerFuelUsage` (@0x7a82-0x7b0f)
+//!   reads it, the last carried outfit in index order that has a slot of
+//!   that `ModType` gives its first such slot's `ModVal` x
+//!   [`FUEL_PER_MOD_VAL`], whatever the count. The original caches it for
+//!   the player (reset in `_ResetPlayerPrecalcedValues` @0xc419), as it
+//!   caches `_HasAfterburner`'s scan (@0xc3ac); the stats are worked out
+//!   afresh whenever the outfits change, so they need no cache.
+//!
 //! Each total is summed wide, and none goes below none, so no mix of
 //! outfits can overflow or turn a figure negative. Every other `ModType`
 //! changes nothing here yet.
+
+use nova_sim_base::afterburner::FUEL_PER_MOD_VAL;
 
 use crate::flight::Flyer;
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
@@ -123,6 +134,14 @@ pub const FAST_JUMP_HULL: u16 = 0x0020;
 /// make the ship inertialess (`_ShipIsInertialess` @0x7a4f, `cmpw $0x26`
 /// over each of an outfit's four `ModType`s).
 pub const INERTIAL_DAMPENER: i16 = 38;
+/// The `oütf` `ModType` of an afterburner, whose `ModVal` is the fuel it
+/// uses a second (`cmpw $0xf` over each of an outfit's four `ModType`s,
+/// `_HasAfterburner` @0x3acc and `_ShipAfterburnerFuelUsage` @0x7ad0).
+pub const AFTERBURNER: i16 = 15;
+/// How many mods each outfit carries: an `oütf`'s four `ModType`s and
+/// `ModVal`s, which `nova_sim_catalog::catalog::outfit_mods` lists in
+/// turn for each outfit, in its records' order.
+pub const MOD_SLOTS: usize = 4;
 /// The `shïp` `Flags2` bit for an inertialess hull (`testb $0x40` on the
 /// class record's `Flags2`, +0x9ea, @0x7a06).
 pub const INERTIALESS_HULL: u16 = 0x0040;
@@ -163,6 +182,24 @@ pub struct ShipStats {
     pub inertialess_hull: bool,
     /// Whether it carries an [`INERTIAL_DAMPENER`], whatever its `ModVal`.
     pub dampener: bool,
+    /// The fuel its afterburner uses a tick, if it carries an
+    /// [`AFTERBURNER`] (see the module docs).
+    pub afterburner: Option<f32>,
+}
+
+/// The fuel a tick of the afterburner among `outfits` uses (see the module
+/// docs): `outfits` holds each outfit's [`MOD_SLOTS`] mods in turn, and
+/// the last carried one with an [`AFTERBURNER`] slot gives its first.
+fn afterburner_usage(outfits: &[OutfitMod]) -> Option<f32> {
+    outfits
+        .chunks(MOD_SLOTS)
+        .rev()
+        .find_map(|slots| {
+            slots
+                .iter()
+                .find(|slot| slot.mod_type == AFTERBURNER && slot.count > 0)
+        })
+        .map(|slot| (f64::from(slot.mod_val) * FUEL_PER_MOD_VAL) as f32)
 }
 
 /// `ModVal` x count summed over every one of `outfits` of `ModType`
@@ -260,6 +297,7 @@ impl ShipStats {
             dampener: outfits
                 .iter()
                 .any(|outfit| outfit.mod_type == INERTIAL_DAMPENER && outfit.count > 0),
+            afterburner: afterburner_usage(outfits),
         }
     }
 
@@ -668,6 +706,52 @@ mod tests {
         );
     }
 
+    /// An outfit's four slots, `mods` first and blanks after, `count`
+    /// carried.
+    fn slots(mods: &[(i16, i16)], count: u16) -> Vec<OutfitMod> {
+        (0..MOD_SLOTS)
+            .map(|at| {
+                let (mod_type, mod_val) = mods.get(at).copied().unwrap_or_default();
+                outfit(mod_type, mod_val, count)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_plain_ship_has_no_afterburner() {
+        assert_eq!(ShipStats::new(AVERAGE, &[]).afterburner, None);
+        let speed = slots(&[(MORE_SPEED, 10)], 1);
+        assert_eq!(ShipStats::for_player(AVERAGE, &speed).afterburner, None);
+    }
+
+    #[test]
+    fn an_afterburner_uses_its_mod_val_x_0_0333_fuel_a_tick_whatever_the_count() {
+        let one = slots(&[(MORE_SPEED, 10), (AFTERBURNER, 30)], 1);
+        let usage = ShipStats::for_player(AVERAGE, &one).afterburner;
+        assert_eq!(usage, Some((30.0 * 0.0333_f64) as f32));
+        let three = slots(&[(AFTERBURNER, 30)], 3);
+        assert_eq!(ShipStats::new(AVERAGE, &three).afterburner, usage);
+    }
+
+    #[test]
+    fn the_last_carried_afterburner_gives_its_first_afterburner_slot() {
+        let both = [
+            slots(&[(AFTERBURNER, 30)], 1),
+            slots(&[(MORE_SPEED, 5), (AFTERBURNER, 60), (AFTERBURNER, 90)], 1),
+        ]
+        .concat();
+        let usage = ShipStats::for_player(AVERAGE, &both).afterburner;
+        assert_eq!(usage, Some((60.0 * 0.0333_f64) as f32));
+        let unowned = [both, slots(&[(AFTERBURNER, 120)], 0)].concat();
+        assert_eq!(ShipStats::for_player(AVERAGE, &unowned).afterburner, usage);
+    }
+
+    #[test]
+    fn none_carried_of_an_afterburner_is_no_afterburner() {
+        let none = slots(&[(AFTERBURNER, 30)], 0);
+        assert_eq!(ShipStats::for_player(AVERAGE, &none).afterburner, None);
+    }
+
     #[test]
     fn a_multi_jump_outfit_gives_its_modval_once_whatever_the_count() {
         assert_eq!(MULTI_JUMP, 32);
@@ -698,7 +782,7 @@ mod tests {
     #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 39, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 17, 39, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,

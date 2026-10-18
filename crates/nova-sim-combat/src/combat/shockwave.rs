@@ -27,7 +27,8 @@
 //!   `Mass` above none and not planet-type, gains [`IMPACT`] / its `Mass`
 //!   along the whole-degree bearing from the wreck to it
 //!   (`_CalcInterceptAngle` @0x3aa9e), soft-capped at its class's top
-//!   speed and clamped on each axis to its top speed. An escape pod is
+//!   speed and clamped on each axis to its top speed, 1.8 times it for
+//!   the afterburning player (see [`impact`](super::impact)). An escape pod is
 //!   pushed no more than it is hit: `_DamageShip`'s early-out returns
 //!   before the push.
 //!

@@ -20,15 +20,22 @@
 //!    each axis only while that axis is short of the top speed's share
 //!    along the heading, and along the heading's whole degree, as the
 //!    original passes it (@0x6cd16, @0x34b9d). Under [`SpeedCap::Circle`]
-//!    it is added whole, along the heading itself.
+//!    it is added whole, along the heading itself. An NPC thrusts toward
+//!    its top speed; the player toward its [`Caps`]' thrust top, 1.8
+//!    times that while its afterburner is on.
 //! 3. Caps the speed. By default only the player's: its velocity is
-//!    clamped to the top speed on each axis, the box `_HandlePlayer`
-//!    clamps to before the move (@0x6d43f-0x6d4aa, [`speed_limit`]); an
-//!    NPC's isn't clamped (`_HandleShip` has no clamp), so nothing but its
-//!    own thrust slows a ship past its top speed, and one at top speed that
-//!    turns a quarter and thrusts ends near 1.41 times as fast. Under
-//!    [`SpeedCap::Circle`] every ship's speed is rescaled to its top speed,
-//!    keeping the direction ([`circle`]).
+//!    clamped on each axis to its box, `_playerMaxVel`, which
+//!    `_HandlePlayer` clamps to before the move (@0x6d43f-0x6d4aa,
+//!    [`speed_limit`]) and writes only after it, so the clamp reads the
+//!    box the last tick left: the top speed once settled, wider while
+//!    the afterburner is on, bleeding back after it (see the
+//!    [`afterburner`](crate::afterburner) module), and none on a run's
+//!    first tick. An NPC's isn't clamped (`_HandleShip` has no clamp), so
+//!    nothing but its own thrust slows a ship past its top speed, and one
+//!    at top speed that turns a quarter and thrusts ends near 1.41 times
+//!    as fast. Under [`SpeedCap::Circle`] every ship's speed is rescaled
+//!    to its top speed, keeping the direction ([`circle`]), the player's
+//!    to the box's half-width.
 //!    `step` adds no drag, so an intact ship coasts for ever. A disabled or
 //!    breaking-up ship is slowed by [`drag`] before its step, by its caller
 //!    (the session for the player, traffic for NPCs), as the original slows
@@ -42,8 +49,9 @@
 //! [`inertialess_step`] or [`inertialess_player_step`]: it turns as
 //! above, but reverse never turns it (an NPC's turns by its keys alone,
 //! and the player's reverse gives no aim). Thrust and reverse move the
-//! speed, not the velocity; then the velocity is pulled toward heading x
-//! speed on each axis, capped as in step 3, and the ship moves
+//! speed, not the velocity, up to the top speed; the player's speed is
+//! then capped at its box (@0x6d356). Then the velocity is pulled toward
+//! heading x speed on each axis, capped as in step 3, and the ship moves
 //! ([`inertialess_advance`]).
 //!
 //! A heading is in degrees: 0 faces up the screen (-y), and it grows
@@ -141,6 +149,36 @@ pub fn drag(state: &mut ShipState) {
     state.velocity = state.velocity * DISABLED_DRAG;
 }
 
+/// What a tick caps a ship's motion at: the top speed its thrust pushes
+/// toward, and the box (or circle) its velocity is held to. An NPC's are
+/// both its top speed ([`Caps::top`]). The player's come from its
+/// afterburner (see the [`afterburner`](crate::afterburner) module): the
+/// thrust's top is 1.8 times the top speed while the afterburner is on
+/// (@0x6cc43-0x6cc80), and the box is `_playerMaxVel`, the box the last
+/// tick left (@0x6d43f-0x6d4aa), which also caps an inertialess player's
+/// speed (@0x6d356).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Caps {
+    /// The top speed thrust pushes toward (`_AdjustedAccel`'s).
+    pub thrust_top: f32,
+    /// The box the velocity is clamped to on each axis, or the circle's
+    /// radius under [`SpeedCap::Circle`], and an inertialess player's
+    /// speed's cap.
+    pub max_vel: f32,
+}
+
+impl Caps {
+    /// Both caps at `max_speed`: an NPC's, or the player's with the
+    /// afterburner off and its box settled.
+    #[must_use]
+    pub fn top(max_speed: f32) -> Self {
+        Self {
+            thrust_top: max_speed,
+            max_vel: max_speed,
+        }
+    }
+}
+
 /// Whose ship flies: the player's, which `_HandlePlayer` clamps to its
 /// top speed on each axis, or an NPC's, which `_HandleShip` doesn't.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +230,9 @@ pub struct Controls {
     pub reverse: bool,
     /// The face-target key, which the session aims the player's ship by.
     pub face: Face,
+    /// The afterburner key (keyPrefs +0x30), which the session reads
+    /// (see the [`afterburner`](crate::afterburner) module).
+    pub afterburner: bool,
 }
 
 /// A ship in flight.
@@ -223,7 +264,8 @@ pub fn step(
         }
         Turn::None => state.heading,
     };
-    advance(state, handling, controls.thrust, rules, flyer);
+    let caps = Caps::top(handling.max_speed);
+    advance(state, handling, controls.thrust, caps, rules, flyer);
 }
 
 /// Advances the player's ship, `state`, one tick under `controls`, flying
@@ -231,12 +273,13 @@ pub fn step(
 /// block does, toward `aim` while the auto-turn aims (reverse or the face
 /// key, which the session works out), the turn keys held off, and by
 /// them otherwise ([`player_turn`](crate::player_turn)); then it thrusts,
-/// is capped and moves ([`advance`]).
+/// is capped by `caps` and moves ([`advance`]).
 pub fn player_step(
     state: &mut ShipState,
     handling: &Handling,
     controls: Controls,
     aim: Option<i16>,
+    caps: Caps,
     rules: FlightRules,
 ) {
     (state.heading, _) = turn(
@@ -246,34 +289,40 @@ pub fn player_step(
         controls.turn,
         rules.player_turn,
     );
-    advance(state, handling, controls.thrust, rules, Flyer::Player);
+    advance(state, handling, controls.thrust, caps, rules, Flyer::Player);
 }
 
 /// The rest of a tick after the turn (see the module docs, steps 2-4):
-/// `state`, `flyer`'s ship, thrusts along its heading if `thrust`, is
-/// capped and moves, flying as `handling` allows under `rules`.
+/// `state`, `flyer`'s ship, thrusts along its heading if `thrust`, toward
+/// `caps`' thrust top, is capped to its box and moves, flying as
+/// `handling` allows under `rules`.
 pub fn advance(
     state: &mut ShipState,
     handling: &Handling,
     thrust: bool,
+    caps: Caps,
     rules: FlightRules,
     flyer: Flyer,
 ) {
-    let top = handling.max_speed;
     match rules.speed_cap {
         SpeedCap::PerAxis => {
             if thrust {
-                state.velocity = adjusted_accel(state.velocity, state.heading, handling.accel, top);
+                state.velocity = adjusted_accel(
+                    state.velocity,
+                    state.heading,
+                    handling.accel,
+                    caps.thrust_top,
+                );
             }
             if flyer == Flyer::Player {
-                state.velocity = speed_limit(state.velocity, top);
+                state.velocity = speed_limit(state.velocity, caps.max_vel);
             }
         }
         SpeedCap::Circle => {
             if thrust {
                 state.velocity = state.velocity + facing(state.heading) * handling.accel;
             }
-            state.velocity = circle(state.velocity, top);
+            state.velocity = circle(state.velocity, caps.max_vel);
         }
     }
     state.position = state.position + state.velocity;
@@ -306,7 +355,8 @@ pub fn inertialess_step(
     } else {
         0.0
     };
-    inertialess_advance(state, speed, handling, thrust, rules, Flyer::Npc);
+    let caps = Caps::top(handling.max_speed);
+    inertialess_advance(state, speed, handling, thrust, caps, rules, Flyer::Npc);
 }
 
 /// Advances the player's inertialess ship, `state`, holding `speed` along
@@ -315,13 +365,16 @@ pub fn inertialess_step(
 /// turn keys (reverse gives an inertialess ship no aim); reverse takes a
 /// tick's acceleration off its speed (@0x6c770-0x6c7d3) and then thrust
 /// adds one (@0x6cbb2-0x6cc3e), each floored and capped as
-/// [`step_speed`] does; then [`inertialess_advance`].
+/// [`step_speed`] does, at the top speed whatever `caps` say (the thrust
+/// ignores the afterburner, @0x6cbb2-0x6cc3e); then
+/// [`inertialess_advance`], capped by `caps`.
 pub fn inertialess_player_step(
     state: &mut ShipState,
     speed: &mut f32,
     handling: &Handling,
     controls: Controls,
     aim: Option<i16>,
+    caps: Caps,
     rules: FlightRules,
 ) {
     (state.heading, _) = turn(
@@ -335,16 +388,17 @@ pub fn inertialess_player_step(
         *speed = step_speed(*speed, REVERSE, handling.accel, handling.max_speed);
     }
     let thrust = if controls.thrust { THRUST } else { 0.0 };
-    inertialess_advance(state, speed, handling, thrust, rules, Flyer::Player);
+    inertialess_advance(state, speed, handling, thrust, caps, rules, Flyer::Player);
 }
 
 /// The rest of an inertialess ship's tick after its turn: `state`,
 /// `flyer`'s ship, holding `speed` along its heading, moves its speed by
 /// `thrust` ticks of its acceleration when that is not none
-/// ([`step_speed`]); the player's speed is then capped at its top speed
-/// (@0x6d356-0x6d369). Its velocity is pulled toward heading x speed by
-/// [`ADJUST_RATE`] ticks' acceleration ([`adjust_velocity`],
-/// @0x6d43a, @0x3425f), capped as [`advance`] caps it, and it moves.
+/// ([`step_speed`], at the top speed); the player's speed is then capped
+/// at `caps`' box (@0x6d356-0x6d369). Its velocity is pulled toward
+/// heading x speed by [`ADJUST_RATE`] ticks' acceleration
+/// ([`adjust_velocity`], @0x6d43a, @0x3425f), capped as [`advance`] caps
+/// it, and it moves.
 ///
 /// The original's NPC is adjusted and moved (@0x34250-0x342aa) before its
 /// thrust word moves the speed (@0x34acc-0x34b6d), so an NPC's thrust
@@ -355,13 +409,14 @@ pub fn inertialess_advance(
     speed: &mut f32,
     handling: &Handling,
     thrust: f32,
+    caps: Caps,
     rules: FlightRules,
     flyer: Flyer,
 ) {
-    let top = handling.max_speed;
     if thrust != 0.0 {
-        *speed = step_speed(*speed, thrust, handling.accel, top);
+        *speed = step_speed(*speed, thrust, handling.accel, handling.max_speed);
     }
+    let top = caps.max_vel;
     if flyer == Flyer::Player {
         *speed = speed.min(top);
     }
@@ -444,6 +499,7 @@ mod tests {
         turn: Turn::None,
         reverse: false,
         face: Face::Off,
+        afterburner: false,
     };
 
     fn turning(turn: Turn) -> Controls {
@@ -458,6 +514,7 @@ mod tests {
         turn: Turn::None,
         reverse: true,
         face: Face::Off,
+        afterburner: false,
     };
 
     fn heading(heading: f32) -> ShipState {
@@ -490,6 +547,12 @@ mod tests {
     }
 
     const FLYERS: [Flyer; 2] = [Flyer::Player, Flyer::Npc];
+
+    /// The caps of [`SHIP`]'s top speed.
+    const TOP: Caps = Caps {
+        thrust_top: 3.0,
+        max_vel: 3.0,
+    };
 
     /// The original's flight rules but the speed cap's other reading.
     const CIRCLE: FlightRules = FlightRules {
@@ -712,6 +775,7 @@ mod tests {
                 turn: Turn::Right,
                 reverse: false,
                 face: Face::Off,
+                afterburner: false,
             };
             // While the heading is within a few turns of the velocity,
             // thrust holds the ship at its top speed.
@@ -838,6 +902,7 @@ mod tests {
             turn: Turn::Right,
             reverse: false,
             face: Face::Off,
+            afterburner: false,
         };
         let mut player = heading(0.0);
         let mut npc = heading(0.0);
@@ -919,6 +984,7 @@ mod tests {
                 turn: Turn::Right,
                 reverse: false,
                 face: Face::Off,
+                afterburner: false,
             },
             FlightRules::default(),
             Flyer::Player,
@@ -1077,7 +1143,14 @@ mod tests {
         ticks: usize,
     ) -> ShipState {
         for _ in 0..ticks {
-            player_step(&mut state, &PEGASUS, controls, aim, rules);
+            player_step(
+                &mut state,
+                &PEGASUS,
+                controls,
+                aim,
+                Caps::top(PEGASUS.max_speed),
+                rules,
+            );
         }
         state
     }
@@ -1132,7 +1205,14 @@ mod tests {
             turn: Turn::Right,
             ..Controls::default()
         };
-        player_step(&mut state, &quarter, controls, None, FlightRules::default());
+        player_step(
+            &mut state,
+            &quarter,
+            controls,
+            None,
+            TOP,
+            FlightRules::default(),
+        );
         assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
         assert!(near(state.position, Vec2::new(0.1, 0.0)), "{state:?}");
         let mut fast = moving(Vec2::new(6.0, 0.0), 90.0);
@@ -1141,10 +1221,140 @@ mod tests {
             &SHIP,
             Controls::default(),
             None,
+            TOP,
             FlightRules::default(),
         );
         assert_eq!(fast.velocity, Vec2::new(3.0, 0.0), "the player's box");
         assert_eq!(fast.position, Vec2::new(3.0, 0.0));
+    }
+
+    #[test]
+    fn the_players_thrust_pushes_toward_its_caps_thrust_top() {
+        let caps = Caps {
+            thrust_top: 5.4,
+            max_vel: 5.4,
+        };
+        let mut state = moving(Vec2::new(3.0, 0.0), 90.0);
+        player_step(
+            &mut state,
+            &SHIP,
+            THRUST,
+            None,
+            caps,
+            FlightRules::default(),
+        );
+        assert!(
+            near(state.velocity, Vec2::new(3.1, 0.0)),
+            "past the top: {state:?}"
+        );
+        let mut plain = moving(Vec2::new(3.0, 0.0), 90.0);
+        player_step(&mut plain, &SHIP, THRUST, None, TOP, FlightRules::default());
+        assert!(
+            near(plain.velocity, Vec2::new(3.0, 0.0)),
+            "held at it: {plain:?}"
+        );
+    }
+
+    #[test]
+    fn the_players_velocity_is_clamped_to_its_caps_box_under_either_reading() {
+        let narrow = Caps {
+            thrust_top: 3.0,
+            max_vel: 1.0,
+        };
+        let mut boxed = moving(Vec2::new(2.0, -2.0), 90.0);
+        player_step(
+            &mut boxed,
+            &SHIP,
+            Controls::default(),
+            None,
+            narrow,
+            FlightRules::default(),
+        );
+        assert_eq!(boxed.velocity, Vec2::new(1.0, -1.0), "{boxed:?}");
+        let wide = Caps {
+            thrust_top: 3.0,
+            max_vel: 5.0,
+        };
+        let mut fast = moving(Vec2::new(4.0, 0.0), 90.0);
+        player_step(
+            &mut fast,
+            &SHIP,
+            Controls::default(),
+            None,
+            wide,
+            FlightRules::default(),
+        );
+        assert_eq!(fast.velocity, Vec2::new(4.0, 0.0), "within the box");
+        let mut circled = moving(Vec2::new(4.0, 4.0), 90.0);
+        player_step(&mut circled, &SHIP, Controls::default(), None, wide, CIRCLE);
+        assert!(
+            (circled.velocity.length() - 5.0).abs() < 1e-5,
+            "{circled:?}"
+        );
+        let mut rested = moving(Vec2::new(4.0, 4.0), 90.0);
+        let start = Caps {
+            thrust_top: 3.0,
+            max_vel: 0.0,
+        };
+        player_step(
+            &mut rested,
+            &SHIP,
+            THRUST,
+            None,
+            start,
+            FlightRules::default(),
+        );
+        assert_eq!(
+            rested.velocity,
+            Vec2::ZERO,
+            "a box of none holds it at rest"
+        );
+        assert_eq!(rested.position, Vec2::ZERO);
+    }
+
+    #[test]
+    fn the_players_inertialess_speed_is_capped_at_its_box_after_its_thrust_at_the_top_speed() {
+        let wide = Caps {
+            thrust_top: 5.4,
+            max_vel: 5.4,
+        };
+        let mut state = moving(Vec2::new(4.0, 0.0), 90.0);
+        let mut speed = 4.0;
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            Controls::default(),
+            None,
+            wide,
+            FlightRules::default(),
+        );
+        assert_eq!(speed, 4.0, "within the box");
+        assert!(near(state.velocity, Vec2::new(4.0, 0.0)), "{state:?}");
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            THRUST,
+            None,
+            wide,
+            FlightRules::default(),
+        );
+        assert_eq!(speed, 3.0, "thrust caps it at the top speed");
+        let narrow = Caps {
+            thrust_top: 3.0,
+            max_vel: 2.0,
+        };
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            Controls::default(),
+            None,
+            narrow,
+            FlightRules::default(),
+        );
+        assert_eq!(speed, 2.0, "and the box below it");
     }
 
     #[test]
@@ -1207,6 +1417,7 @@ mod tests {
                     &QUARTER,
                     left,
                     None,
+                    TOP,
                     FlightRules::default(),
                 ),
             }
@@ -1344,6 +1555,7 @@ mod tests {
             &SHIP,
             REVERSE,
             None,
+            TOP,
             FlightRules::default(),
         );
         assert_eq!(state.heading, 0.0);
@@ -1359,6 +1571,7 @@ mod tests {
             &SHIP,
             both,
             None,
+            TOP,
             FlightRules::default(),
         );
         assert!(
@@ -1377,6 +1590,7 @@ mod tests {
             &PEGASUS,
             turning(Turn::Left),
             Some(9),
+            TOP,
             FlightRules::default(),
         );
         assert_eq!(state.heading, 2.0, "toward 9, the keys held off");
@@ -1392,6 +1606,7 @@ mod tests {
             &SHIP,
             Controls::default(),
             None,
+            TOP,
             FlightRules::default(),
         );
         assert_eq!(speed, 3.0, "capped at the top speed");
@@ -1424,6 +1639,7 @@ mod tests {
             &SHIP,
             Controls::default(),
             None,
+            TOP,
             CIRCLE,
         );
         assert!((player.velocity.length() - 3.0).abs() < 1e-5, "{player:?}");

@@ -34,12 +34,13 @@ use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, UiSound};
 
 use super::{
-    BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY,
-    ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView, HAIL_KEY, HELP,
-    HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
-    MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY, OVERLAY_SIZE,
-    SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
-    ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint, shown_heading, shown_position,
+    AFTERBURNER_KEY, BOARD_KEY, DrawnNow, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView,
+    HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
+    LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
+    OVERLAY_SIZE, SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY,
+    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint, shown_heading,
+    shown_position,
 };
 
 impl<C> FlightView<C> {
@@ -290,6 +291,7 @@ impl<C> FlightView<C> {
             turn,
             reverse: holding(Key::Down),
             face,
+            afterburner: holding(AFTERBURNER_KEY),
         }
     }
 

@@ -27,10 +27,12 @@
 //!   circle of the top speed instead ([`SpeedCap::Circle`]), for this push
 //!   and the tractor's self-pull alike.
 //!
-//! The player's top speed is 1.8 times its own there while its
-//! afterburner is on and no gravity source is present (@0x3ab19-0x3ab68);
-//! that is left to `ship-handling-fidelity/phase-6-afterburner`, and the
-//! plain top speed is used until then.
+//! The player's top speed is 1.8 times its own there
+//! ([`AFTERBURNER_SPEED`]) while its afterburner is on and no gravity
+//! source is present (@0x3ab19-0x3ab68): a [`Body`] whose
+//! [`afterburner`](Body::afterburner) is set. Only the player's can be,
+//! as the block tests +0x86 for the player first (@0x3ab19); an NPC's
+//! cap is always its plain top speed.
 //!
 //! **The point and the `Impact`** each caller passes: the weapon's raw
 //! `Impact` ([`WeaponSpec::impact`](super::weapon::WeaponSpec::impact)),
@@ -63,7 +65,8 @@
 //!   top speed), clamped to its top speed (`_SpeedLimit` @0x3144b), unless
 //!   the beam's start is within [`NEAR`] of the target on **both** axes
 //!   (@0x312dd-0x31341) or it is itself massless or planet-type
-//!   (@0x31347-0x3138c). There is no jump test and no 1.8. Its `Impact` is
+//!   (@0x31347-0x3138c). There is no jump test and no 1.8, so the
+//!   afterburner widens nothing here. Its `Impact` is
 //!   spent, so the target is not pushed ([`Tractor::Pulls`]).
 //!
 //! What a lock does to the ship it holds (the pull to its holder's
@@ -74,6 +77,9 @@
 //! Neither block makes a sound.
 
 use super::ShipRef;
+#[cfg(any(doc, test))]
+use crate::afterburner::AFTERBURNER_SPEED;
+use crate::afterburner::afterburner_top;
 use crate::bay::launch_velocity;
 use crate::geometry::Vec2;
 use crate::speed_cap::SpeedCap;
@@ -107,6 +113,10 @@ pub struct Body {
     pub top_speed: f32,
     /// Whether its jump is under way (+0x50 above none).
     pub jumping: bool,
+    /// Whether it is the player with its afterburner on and no gravity
+    /// source present (`_abOn`, *0x3b5598, and `_gravitySourcesPresent`,
+    /// *0x3b5568), which widens a push's clamp to 1.8 times its top speed.
+    pub afterburner: bool,
 }
 
 /// A ship's tractor lock: the ship holding it in a tractor beam, which
@@ -174,7 +184,12 @@ pub fn push(
         return None;
     }
     let bearing = f32::from(intercept_angle(from, body.position));
-    Some(pulled(body, bearing, impact, cap))
+    let top = if body.afterburner {
+        afterburner_top(body.top_speed)
+    } else {
+        body.top_speed
+    };
+    Some(pulled(body, bearing, impact, top, cap))
 }
 
 /// What a tractor beam of `impact` (below none) from `start`, fired by
@@ -194,7 +209,7 @@ pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32, cap: Speed
         return Tractor::Pulls(None);
     }
     let bearing = f32::from(intercept_angle(target.position, start));
-    Tractor::Pulls(Some(pulled(firer, bearing, impact, cap)))
+    Tractor::Pulls(Some(pulled(firer, bearing, impact, firer.top_speed, cap)))
 }
 
 /// Whether a push can move `body`: a class of some `Mass`, not
@@ -209,11 +224,11 @@ fn near_either(a: Vec2, b: Vec2) -> bool {
 }
 
 /// `body`'s velocity pushed `impact` / its mass along `bearing`, soft-capped
-/// at its class speed and clamped to its top speed as `cap` reads: on each
-/// axis by the original's `_SpeedLimit`, or to the circle.
-fn pulled(body: &Body, bearing: f32, impact: f32, cap: SpeedCap) -> Vec2 {
+/// at its class speed and clamped to `top` as `cap` reads: on each axis by
+/// the original's `_SpeedLimit`, or to the circle.
+fn pulled(body: &Body, bearing: f32, impact: f32, top: f32, cap: SpeedCap) -> Vec2 {
     let pushed = launch_velocity(body.velocity, bearing, impact / body.mass, body.class_speed);
-    cap.clamp(pushed, body.top_speed)
+    cap.clamp(pushed, top)
 }
 
 #[cfg(test)]
@@ -292,6 +307,40 @@ mod tests {
         };
         let clamped = push(&back, Vec2::ZERO, 750.0, None, PER_AXIS).expect("pushed");
         assert!(near(clamped, Vec2::new(-8.0, 8.0)), "{clamped:?}");
+    }
+
+    #[test]
+    fn an_afterburning_players_push_is_clamped_to_1_8_times_its_top_speed() {
+        let ship = Body {
+            top_speed: 3.0,
+            ..body(1.0, 100.0, 0.0)
+        };
+        let burning = Body {
+            afterburner: true,
+            ..ship
+        };
+        let plain = push(&ship, Vec2::ZERO, 10.0, None, PER_AXIS).expect("pushed");
+        assert!(near(plain, Vec2::new(3.0, 0.0)), "{plain:?}");
+        let wide = push(&burning, Vec2::ZERO, 10.0, None, PER_AXIS).expect("pushed");
+        assert!(near(wide, Vec2::new(5.4, 0.0)), "{wide:?}");
+        assert_eq!(AFTERBURNER_SPEED, 1.8);
+        let circled = push(&burning, Vec2::ZERO, 10.0, None, SpeedCap::Circle).expect("pushed");
+        assert!(near(circled, Vec2::new(5.4, 0.0)), "{circled:?}");
+    }
+
+    #[test]
+    fn an_afterburning_firers_self_pull_is_clamped_to_its_plain_top_speed() {
+        let target = body(15.0, 300.0, 0.0);
+        let firer = Body {
+            top_speed: 0.5,
+            afterburner: true,
+            ..body(1.0, -10.0, 0.0)
+        };
+        let Tractor::Pulls(Some(pulled)) = tractor(&target, &firer, Vec2::ZERO, -5.0, PER_AXIS)
+        else {
+            panic!("pulled");
+        };
+        assert!(near(pulled, Vec2::new(0.5, 0.0)), "{pulled:?}");
     }
 
     #[test]

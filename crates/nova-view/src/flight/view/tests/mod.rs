@@ -919,10 +919,32 @@ fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
             &handling(),
             controls,
             None,
+            nova_sim::flight::Caps::top(handling().max_speed),
             FlightRules::default(),
         );
     }
     state
+}
+
+/// The ship after `ticks` of the player's steps under `controls` from a
+/// new session's start: the first held at rest by the session's box of
+/// none (see `nova_sim::afterburner::MaxVel::START`), the rest as
+/// [`stepped`].
+fn launched(controls: Controls, ticks: u32) -> ShipState {
+    let mut state = start();
+    let rest = nova_sim::flight::Caps {
+        thrust_top: handling().max_speed,
+        max_vel: 0.0,
+    };
+    player_step(
+        &mut state,
+        &handling(),
+        controls,
+        None,
+        rest,
+        FlightRules::default(),
+    );
+    stepped(state, controls, ticks.saturating_sub(1))
 }
 
 /// The second half of a tick: `TICK / 2` rounds down, so this is a
@@ -934,6 +956,7 @@ const THRUST: Controls = Controls {
     turn: Turn::None,
     reverse: false,
     face: nova_sim::flight::Face::Off,
+    afterburner: false,
 };
 
 fn ticks(view: &mut View, n: u32) {

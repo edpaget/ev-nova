@@ -352,6 +352,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod afterburner;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
@@ -440,6 +441,7 @@ use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::outfits::{carries, launches};
 use self::ship_change::ClassChange;
+use crate::afterburner::MaxVel;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
 use crate::board::{
@@ -482,7 +484,7 @@ use crate::gate::{
 };
 use crate::gate_sprite::GateSprite;
 use crate::geometry::Vec2;
-use crate::glow::ramp_glow;
+use crate::glow::{ramp_afterburner_glow, ramp_glow};
 use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
@@ -613,6 +615,7 @@ impl FightTerms {
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
+            afterburner: false,
             tractor,
             ion,
             armament,
@@ -784,6 +787,13 @@ pub struct Session {
     /// The player's speed along its heading, the original's +0x48, which
     /// an inertialess ship flies by (see the `inertialess` module).
     player_speed: f32,
+    /// Whether the player's afterburner is on this tick, `_abOn` (see the
+    /// `afterburner` module). Unsaved.
+    afterburner_on: bool,
+    /// The box the player's velocity is clamped to, `_playerMaxVel`, as
+    /// the last tick left it (see the `afterburner` module). Unsaved, and
+    /// none in a new session, as the original's static data is.
+    player_max_vel: MaxVel,
     /// The sounds emitted since they were last taken.
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
@@ -1494,6 +1504,8 @@ impl Session {
             thrusting: false,
             engine_glow: 0,
             player_speed: 0.0,
+            afterburner_on: false,
+            player_max_vel: MaxVel::START,
             sounds: Vec::new(),
             messages: Vec::new(),
             events: Vec::new(),
@@ -1988,8 +2000,16 @@ impl Session {
     /// toward the aim the face-target key or reverse sets (see the
     /// `steering` module), or by the turn keys. A disabled or dying
     /// player's keys are let go of but the face key, which still aims.
+    ///
+    /// The afterburner's test comes first, before the thrust, and its
+    /// block after the move, on every arm but a destroyed player's (see
+    /// the `afterburner` module): the ship is pushed and the box widened
+    /// while it is on, and the box bleeds back in the pre-jump and the
+    /// warp's run as at any other time it is off. The ship's tick is
+    /// capped by the box the last tick left ([`Session::player_caps`]).
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
+        self.engage_afterburner(controls);
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -2000,6 +2020,7 @@ impl Session {
                 }
             }
             Condition::Destroyed => {
+                self.cut_afterburner();
                 self.stop_thrust();
                 self.player.velocity = Vec2::ZERO;
                 self.dead_tick();
@@ -2018,8 +2039,10 @@ impl Session {
                         crate::flight::drag(&mut self.player);
                     }
                     let flight = self.flight_rules();
-                    player_step(&mut self.player, &handling, controls, aim, flight);
+                    let caps = self.player_caps();
+                    player_step(&mut self.player, &handling, controls, aim, caps, flight);
                 }
+                self.burn_afterburner();
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
@@ -2040,16 +2063,19 @@ impl Session {
                 } else if !inertialess {
                     self.aim = brake_aim(self.player.velocity);
                 }
+                let caps = self.player_caps();
                 let speed = inertialess.then_some(&mut self.player_speed);
                 let thrust = pre_jump::fly(
                     &mut self.player,
                     &handling,
                     bearing,
                     slow_down,
+                    caps,
                     flight,
                     speed,
                 );
                 self.ramp_pre_jump(thrust);
+                self.burn_afterburner();
                 let warp = if again {
                     warp
                 } else {
@@ -2058,6 +2084,7 @@ impl Session {
                 self.stage_jump(to, bearing, warp);
             }
             Some(Jump::Hyperspace { to, warp }) => {
+                self.burn_afterburner();
                 self.aim_at_jump(to);
                 self.jump = Some(Jump::Hyperspace {
                     to,
@@ -2171,10 +2198,15 @@ impl Session {
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
-    /// the engine glow with it.
+    /// the engine glow with it and the afterburner
+    /// ([`ramp_afterburner_glow`] while it is on).
     fn thrust(&mut self, thrust: bool) {
         self.sound_thrust(thrust);
-        self.engine_glow = ramp_glow(self.engine_glow, thrust);
+        self.engine_glow = if self.afterburner_on {
+            ramp_afterburner_glow(self.engine_glow, thrust)
+        } else {
+            ramp_glow(self.engine_glow, thrust)
+        };
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says.
@@ -2655,6 +2687,9 @@ impl Session {
         let scanner = self.scanner();
         let mut rocks = self.asteroid_targets();
         let armor_regen = self.player_armor_regen();
+        // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
+        // (see the `afterburner` module).
+        let afterburner = self.afterburner_knockback();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2690,6 +2725,7 @@ impl Session {
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
+            afterburner,
             tractor: &mut self.tractor,
             ion: &mut self.ion,
             armament: &mut self.armament,
@@ -6717,6 +6753,8 @@ pub(super) mod tests {
             reverse: false,
             ..Controls::default()
         };
+        // The first tick's box of none holds the ship at rest.
+        session.tick(Controls::default());
         let mut expected = *session.player();
         for _ in 0..5 {
             session.tick(controls);
@@ -6725,6 +6763,7 @@ pub(super) mod tests {
                 &session.handling(),
                 controls,
                 None,
+                crate::flight::Caps::top(session.handling().max_speed),
                 FlightRules::default(),
             );
         }
@@ -6739,6 +6778,7 @@ pub(super) mod tests {
         turn: Turn::None,
         reverse: false,
         face: crate::flight::Face::Off,
+        afterburner: false,
     };
 
     #[test]
@@ -6768,6 +6808,7 @@ pub(super) mod tests {
     #[test]
     fn landing_docks_the_ship_at_the_stellar_at_rest() {
         let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(Controls::default());
         session.tick(Controls {
             turn: Turn::Right,
             ..THRUST
@@ -6824,6 +6865,7 @@ pub(super) mod tests {
             &session.handling(),
             THRUST,
             None,
+            crate::flight::Caps::top(session.handling().max_speed),
             FlightRules::default(),
         );
         assert_eq!(*session.player(), expected);
@@ -7654,6 +7696,7 @@ pub(super) mod tests {
         heading: f32,
     ) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        session.settle_box();
         session.plot_course(SystemId(131)).expect("a route");
         session.player = ShipState {
             position,
@@ -14640,6 +14683,8 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
+        // The first flight tick's box of none holds the ship at rest.
+        session.tick(Controls::default());
         let mut expected = *session.player();
         let handling = Handling {
             max_speed: 9.0 * top_speed::NON_STRICT_SPEED,
@@ -14652,6 +14697,7 @@ pub(super) mod tests {
                 &handling,
                 THRUST,
                 None,
+                crate::flight::Caps::top(handling.max_speed),
                 FlightRules::default(),
             );
         }
@@ -18518,7 +18564,7 @@ pub(super) mod tests {
     // The death shockwave.
 
     /// [`lawful`], with the player's ship 128 a fast one.
-    fn shockwave_catalog() -> FakePilotCatalog {
+    pub(super) fn shockwave_catalog() -> FakePilotCatalog {
         let mut catalog = lawful();
         catalog.ship_records.push(crate::testkit::ship(128, FAST));
         catalog
@@ -18527,7 +18573,7 @@ pub(super) mod tests {
     /// `catalog`'s session with the player at rest at the centre and
     /// NPC 0 at rest 40 pixels above it, both of `Mass` 200 and
     /// regenerating nothing.
-    fn beside_a_heavy_npc(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn beside_a_heavy_npc(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
         session.player.position = Vec2::ZERO;
         session.player.velocity = Vec2::ZERO;
@@ -18545,7 +18591,7 @@ pub(super) mod tests {
 
     /// Breaks up a ship of `reserves` and `condition` to the last tick
     /// before its final explosion, which the next fight tick sets off.
-    fn on_its_last_tick(reserves: &mut Reserves, condition: &mut Condition) {
+    pub(super) fn on_its_last_tick(reserves: &mut Reserves, condition: &mut Condition) {
         reserves.armor.now = -1.0;
         *condition = Condition::Dying {
             ticks_left: 3,
@@ -18647,7 +18693,7 @@ pub(super) mod tests {
     // Knockback and tractor beams (see the `combat::impact` module).
 
     /// The blaster at `Impact` 100.
-    fn knocker() -> WeaponRecord {
+    pub(super) fn knocker() -> WeaponRecord {
         WeaponRecord {
             impact: 100,
             ..blaster()
@@ -18673,7 +18719,7 @@ pub(super) mod tests {
     /// `npc_mass`; both with a top speed of 10 and full shields. The player
     /// fires `player`'s weapon at NPC 0, if any, and NPC 0 its `npc`'s at
     /// the player.
-    fn knocking(
+    pub(super) fn knocking(
         catalog: &FakePilotCatalog,
         (player, player_mass): (Option<WeaponRecord>, f32),
         (npc, npc_mass): (Option<WeaponRecord>, f32),
@@ -18708,7 +18754,7 @@ pub(super) mod tests {
     }
 
     /// Ticks the fight until `hit` holds, at most 20 ticks.
-    fn fight_until(session: &mut Session, hit: impl Fn(&Session) -> bool) {
+    pub(super) fn fight_until(session: &mut Session, hit: impl Fn(&Session) -> bool) {
         for _ in 0..20 {
             session.tick_combat(Rules::default(), &mut NeverFires);
             if hit(session) {
@@ -19249,6 +19295,8 @@ pub(super) mod tests {
     /// A session whose player has thrust once and is then disabled.
     fn disabled_moving_player(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        // The first tick's box of none holds the ship at rest.
+        session.tick(Controls::default());
         session.tick(Controls {
             thrust: true,
             ..Controls::default()

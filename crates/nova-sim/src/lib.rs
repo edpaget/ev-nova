@@ -317,6 +317,7 @@
 pub use nova_sim_ai::ai;
 pub use nova_sim_ai::brackets;
 pub use nova_sim_ai::cargo_box;
+pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;
 pub use nova_sim_base::clock;
@@ -450,7 +451,7 @@ pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
-pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
+pub use glow::{GLOW_AFTERBURNER, GLOW_CRUISE, glow_level, ramp_afterburner_glow, ramp_glow};
 pub use govt::Governments;
 pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{

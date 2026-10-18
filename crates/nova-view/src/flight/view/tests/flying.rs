@@ -158,10 +158,11 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
     let mut view = flight();
     assert_eq!(view.input(&key(Key::Up, true)), ScreenAction::None);
     view.tick(Duration::from_secs(1));
-    let expected = stepped(start(), THRUST, 30);
+    let expected = launched(THRUST, 30);
     assert_eq!(player(&view), expected);
-    // 0.06 more a tick for 30 ticks: 0.06 x 465 = 27.9 up.
-    assert!(expected.position.y < -27.0, "{expected:?}");
+    // At rest for the first tick, then 0.06 more a tick for 29 ticks:
+    // 0.06 x 435 = 26.1 up.
+    assert!(expected.position.y < -26.0, "{expected:?}");
     assert_eq!(expected.position.x, 0.0);
     assert_eq!(view.camera().center(), view.shown_position());
     let shown = view.shown_position();
@@ -219,6 +220,58 @@ fn facing(view: &View, aim: i16) -> bool {
         aim,
         nova_sim::player_turn::PlayerTurn::WholeDegrees,
     )
+}
+
+#[test]
+fn z_is_the_afterburner_key_held() {
+    assert_eq!(AFTERBURNER_KEY, Key::Char('z'));
+    let mut view = flight();
+    assert!(!view.controls().afterburner);
+    view.input(&key(AFTERBURNER_KEY, true));
+    assert!(view.controls().afterburner);
+    view.input(&key(AFTERBURNER_KEY, false));
+    assert!(!view.controls().afterburner);
+}
+
+/// [`catalog`] with ship 128 carrying an afterburner, `oütf` 197 of
+/// `ModVal` 30, as a default item.
+fn afterburning() -> FakeCatalog {
+    FakeCatalog {
+        outfits: vec![OutfitRecord {
+            id: OutfitId(197),
+            name: "Afterburner".to_owned(),
+            short_name: "Afterburner".to_owned(),
+            mods: [(15, 30), (0, 0), (0, 0), (0, 0)],
+            lc_name: "afterburner".to_owned(),
+            lc_plural: "afterburners".to_owned(),
+            ..multi_jumping().outfits[0].clone()
+        }],
+        defaults: vec![(OutfitId(197), 1)],
+        ..catalog()
+    }
+}
+
+#[test]
+fn up_and_z_held_with_an_afterburner_pass_the_top_speed_and_burn_fuel() {
+    let mut view = FlightView::new(afterburning());
+    let top = view.session().expect("flying").top_speed();
+    let full = reserves(&view).fuel.now;
+    view.input(&key(Key::Right, true));
+    ticks(&mut view, 30);
+    view.input(&key(Key::Right, false));
+    view.input(&key(Key::Up, true));
+    view.input(&key(AFTERBURNER_KEY, true));
+    ticks(&mut view, 120);
+    let speed = player(&view).velocity.length();
+    assert!(speed > top * 1.5, "{speed} of {top}");
+    assert!(reserves(&view).fuel.now < full);
+    view.input(&key(AFTERBURNER_KEY, false));
+    ticks(&mut view, 400);
+    let speed = player(&view).velocity.length();
+    assert!(
+        speed <= top * std::f32::consts::SQRT_2 + 1e-3,
+        "bled back: {speed}"
+    );
 }
 
 #[test]
@@ -292,7 +345,7 @@ fn repeats_hold_a_key_and_releasing_the_keys_stops_the_thrust() {
     let mut view = flight();
     view.input(&held(Key::Up));
     ticks(&mut view, 5);
-    assert_eq!(player(&view), stepped(start(), THRUST, 5));
+    assert_eq!(player(&view), launched(THRUST, 5));
     view.release_keys();
     let coasting = player(&view);
     ticks(&mut view, 5);
@@ -338,6 +391,8 @@ fn other_input_changes_nothing_and_never_quits() {
 #[test]
 fn the_ship_is_drawn_alpha_of_the_way_from_the_last_step_to_this_one() {
     let mut view = flight();
+    // A tick at rest first, the new session's box of none.
+    view.tick(TICK);
     view.input(&key(Key::Up, true));
     view.tick(TICK);
     let first = stepped(start(), THRUST, 1);
@@ -1332,9 +1387,9 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
-    // Coast a tick, so the arrival falls between the radar's refreshes and
-    // the test shows the arrival's own refresh.
-    view.tick(TICK);
+    // Coast two ticks, so the arrival falls between the radar's refreshes
+    // and the test shows the arrival's own refresh.
+    ticks(&mut view, 2);
     jump_now(&mut view);
     let leaving = view.session().expect("flying").system();
     for _ in 0..1000 {
@@ -1423,7 +1478,7 @@ fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
     assert_eq!(view.status_bar(), Err("no ïntf 128"));
     view.input(&key(Key::Up, true));
     ticks(&mut view, 5);
-    assert_eq!(player(&view), stepped(start(), THRUST, 5));
+    assert_eq!(player(&view), launched(THRUST, 5));
     let list = drawn(&view);
     let mut reason = DrawList::new();
     hud::draw_unavailable(&mut reason, "no ïntf 128");

@@ -608,12 +608,13 @@ pub struct FlightOverlays {
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
 /// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 16] = [
+const FLIGHT_KEYS: [Key; 17] = [
     Key::Up,
     Key::Left,
     Key::Right,
     Key::Down,
     FACE_TARGET_KEY,
+    AFTERBURNER_KEY,
     FIRE_KEY,
     SECONDARY_KEY,
     Key::Alt,
@@ -633,6 +634,12 @@ const FLIGHT_KEYS: [Key; 16] = [
 /// navigation stellar ([`Face`](nova_sim::Face)); a flight key, so it
 /// fades the cursor, as its press sets *0x3b5550 (@0x6aeeb).
 pub const FACE_TARGET_KEY: Key = Key::Char('a');
+/// The afterburner key: the original's default, Mac keycode 6, Z (keyPrefs
+/// +0x30, `_loadKeys` @0xcd899-0xcd8bc). Held, it engages the afterburner
+/// ([`Controls::afterburner`](nova_sim::Controls::afterburner)); a flight
+/// key, so it fades the cursor, as its press sets *0x3b5550 whether or not
+/// the ship carries an afterburner (@0x6cb03).
+pub const AFTERBURNER_KEY: Key = Key::Char('z');
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
 /// @0xcd5f8).
 pub const FIRE_KEY: Key = Key::Space;

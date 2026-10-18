@@ -167,6 +167,7 @@ mod tests {
     /// A session of [`pegasus`] at rest at the centre facing `heading`.
     fn flying(catalog: &FakePilotCatalog, heading: f32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        session.settle_box();
         session.player.position = Vec2::ZERO;
         session.player.velocity = Vec2::ZERO;
         session.player.heading = heading;

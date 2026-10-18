@@ -722,6 +722,11 @@ pub struct Fighter<'a> {
     /// (`_HandleShipPointDefense` @0x392d6). An NPC's jump out has no
     /// stage in the simulation, so only the player's is.
     pub jumping: bool,
+    /// Whether it is the player with its afterburner on and no gravity
+    /// source present, which widens a push's clamp to 1.8 times its top
+    /// speed ([`Body::afterburner`](impact::Body::afterburner)); never an
+    /// NPC's.
+    pub afterburner: bool,
     /// Its tractor lock, if a tractor beam holds it, or it holds itself
     /// along its own (the original's +0xc8dc and +0xb4): the fight sets
     /// and touches it ([`impact`]); what it does to the ship is the
@@ -2966,6 +2971,7 @@ impl Fighter<'_> {
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: self.jumping,
+            afterburner: self.afterburner,
         }
     }
 
@@ -3502,6 +3508,7 @@ mod tests {
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
+                afterburner: false,
                 tractor: &mut self.tractor,
                 ion: &mut self.ion,
                 armament: &mut self.armament,

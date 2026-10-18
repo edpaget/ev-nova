@@ -1422,6 +1422,7 @@ impl Combatant {
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
+            afterburner: false,
             tractor: &mut self.tractor,
             ion: &mut self.ion,
             armament: &mut self.armament,

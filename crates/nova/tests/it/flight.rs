@@ -634,8 +634,9 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
     harness.hold(&[Key::Up]);
     let thrust = harness.run(1.0);
     let ship = harness.ship();
-    // 30 ticks of 0.06 more a tick: 0.06 x 465 = 27.9 up.
-    assert!(ship.position.y < -27.0, "{ship:?}");
+    // The first tick held at rest by the new session's box of none, then
+    // 29 ticks of 0.06 more a tick: 0.06 x 435 = 26.1 up.
+    assert!(ship.position.y < -26.0, "{ship:?}");
     let camera = harness.flight().camera().center();
     assert_eq!(camera, harness.flight().shown_position());
     assert!(camera.y < -25.0, "{camera:?}");

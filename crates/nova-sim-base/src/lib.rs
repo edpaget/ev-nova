@@ -43,6 +43,7 @@
 //! it is named by its facade path as inline code, such as
 //! `nova_sim::Session`.
 
+pub mod afterburner;
 pub mod blink;
 pub mod chance;
 pub mod clock;

@@ -57,7 +57,8 @@
 //! velocity following its heading.
 
 use crate::flight::{
-    FlightRules, Flyer, ShipState, Turn, advance, heading_of, inertialess_advance, shortest_turn,
+    Caps, FlightRules, Flyer, ShipState, Turn, advance, heading_of, inertialess_advance,
+    shortest_turn,
 };
 use crate::geometry::Vec2;
 use crate::handling::Handling;
@@ -121,7 +122,8 @@ pub fn stage(
 }
 
 /// Flies `ship` one tick of the stage it is in (see [`stage`]) under
-/// `flight`, and gives whether it thrust. A ready ship does not move.
+/// `flight`, capped by `caps` (the player's box, as the last tick left
+/// it), and gives whether it thrust. A ready ship does not move.
 /// An inertialess ship flies holding `speed` along its heading (see the
 /// module docs), and never thrusts.
 pub fn fly(
@@ -129,6 +131,7 @@ pub fn fly(
     handling: &Handling,
     bearing: Option<i16>,
     slow_down: bool,
+    caps: Caps,
     flight: FlightRules,
     speed: Option<&mut f32>,
 ) -> bool {
@@ -141,7 +144,7 @@ pub fn fly(
             PreJump::Ready => return false,
         };
         (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
-        inertialess_advance(ship, speed, handling, brake, flight, Flyer::Player);
+        inertialess_advance(ship, speed, handling, brake, caps, flight, Flyer::Player);
         return false;
     }
     let (aim, thrust) = match stage {
@@ -155,7 +158,7 @@ pub fn fly(
         PreJump::Ready => return false,
     };
     (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
-    advance(ship, handling, thrust, flight, Flyer::Player);
+    advance(ship, handling, thrust, caps, flight, Flyer::Player);
     thrust
 }
 
@@ -254,7 +257,15 @@ mod tests {
             ..FlightRules::default()
         };
         let mut state = ship(Vec2::ZERO, 88.5);
-        fly(&mut state, &SHIP, EAST, true, rules, None);
+        fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            rules,
+            None,
+        );
         assert_eq!(state.heading, 90.0, "landing on it");
     }
 
@@ -349,7 +360,15 @@ mod tests {
             );
             let before = state;
             assert!(
-                !fly(&mut state, &SHIP, EAST, true, FlightRules::default(), None),
+                !fly(
+                    &mut state,
+                    &SHIP,
+                    EAST,
+                    true,
+                    Caps::top(SHIP.max_speed),
+                    FlightRules::default(),
+                    None
+                ),
                 "no thrust"
             );
             assert!(state.heading <= 90.0, "never overshoots: {state:?}");
@@ -371,7 +390,15 @@ mod tests {
     #[test]
     fn a_turn_goes_the_short_way_round() {
         let mut state = ship(Vec2::ZERO, 180.0);
-        fly(&mut state, &SHIP, EAST, true, FlightRules::default(), None);
+        fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        );
         assert_eq!(state.heading, 177.0);
         let mut state = ship(Vec2::ZERO, 350.0);
         fly(
@@ -379,6 +406,7 @@ mod tests {
             &SHIP,
             Some(10),
             true,
+            Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
         );
@@ -394,6 +422,7 @@ mod tests {
             &SHIP,
             EAST,
             true,
+            Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None
         ));
@@ -410,6 +439,7 @@ mod tests {
             handling,
             EAST,
             true,
+            Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
         )
@@ -453,7 +483,15 @@ mod tests {
             }
             let off = shortest_turn(state.heading, 180.0).abs();
             let speed = state.velocity.length();
-            let thrust = fly(&mut state, &SHIP, EAST, true, FlightRules::default(), None);
+            let thrust = fly(
+                &mut state,
+                &SHIP,
+                EAST,
+                true,
+                Caps::top(SHIP.max_speed),
+                FlightRules::default(),
+                None,
+            );
             assert_eq!(thrust, off < BRAKE_THRUST_ARC, "tick {k}: {state:?}");
             if thrust {
                 thrust_began.get_or_insert(k);
@@ -483,6 +521,7 @@ mod tests {
             &SHIP,
             EAST,
             false,
+            Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None
         ));
@@ -526,6 +565,7 @@ mod tests {
             &SHIP,
             EAST,
             true,
+            Caps::top(SHIP.max_speed),
             FlightRules::default(),
             Some(&mut speed),
         );
@@ -549,6 +589,7 @@ mod tests {
                 &SHIP,
                 EAST,
                 true,
+                Caps::top(SHIP.max_speed),
                 FlightRules::default(),
                 Some(&mut speed),
             );
@@ -568,6 +609,7 @@ mod tests {
                 &SHIP,
                 EAST,
                 true,
+                Caps::top(SHIP.max_speed),
                 FlightRules::default(),
                 Some(&mut speed),
             );

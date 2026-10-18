@@ -145,7 +145,8 @@ fn only_flight_ticks_while_it_is_shown() {
     let mut screen = AppScreen::new(data());
     fly(&mut screen);
     screen.input(&key(Key::Up, true));
-    screen.tick(TICK);
+    // The first tick is held at rest by the new session's box of none.
+    screen.tick(TICK * 2);
     assert_eq!(screen.ship_browser().frame(), Some(0), "paused");
     let moving = ship(&screen);
     assert_ne!(moving, nova_sim::ShipState::default());

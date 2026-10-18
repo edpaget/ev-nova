@@ -58,6 +58,8 @@ fn the_player_gains_its_accel_over_the_divisor_a_tick_from_rest() {
         let mut session = Session::start(&catalog)
             .expect("starts")
             .with_rules(under(divisor));
+        // The first tick's box of none holds the ship at rest.
+        session.tick(Controls::default());
         assert_eq!(session.player().velocity, Vec2::ZERO);
         let total = accel_total(session.handling().accel);
         assert!(total > 0.0);
@@ -104,6 +106,8 @@ fn the_player_at_top_speed_turned_a_quarter_and_thrusting_ends_near_c_by_minus_c
     let catalog = arming(blaster(), blaster(), 0);
     for (rules, circled) in [(Rulebook::default(), false), (circle(), true)] {
         let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        // The first tick's box of none holds the ship at rest.
+        session.tick(Controls::default());
         let c = session.top_speed();
         session.player.velocity = Vec2::new(c, 0.0);
         session.player.heading = 0.0;
