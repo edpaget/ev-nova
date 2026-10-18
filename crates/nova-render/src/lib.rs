@@ -21,8 +21,12 @@
 //! - [`upscale`]: the [`Upscaler`] the adapter draws the world with
 //!   ([`Gpu::set_upscaler`]), the [`UpscalerProbe`] port that says which
 //!   the device can use and the list the player picks from ([`listed`]),
-//!   and the [`WorldSpace`] a frame's world layer is drawn in, from the
-//!   [`WorldResolution`] the [`Gpu`] draws it at ([`world_space`]).
+//!   what a device with given [`Abilities`] offers ([`offered`]) and
+//!   draws a choice with ([`effective`]), the sizes MetalFX takes
+//!   ([`metal_fx_takes`]) and the ones it rejected, logged once each
+//!   ([`RejectedSizes`]), and the [`WorldSpace`] a frame's world layer is
+//!   drawn in, from the [`WorldResolution`] the [`Gpu`] draws it at
+//!   ([`world_space`]).
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
 //!   adapter over the picture and sprite decoders (and the mask that gives
 //!   a masked picture its alpha) that needs no GPU.
@@ -38,7 +42,11 @@
 //! upscaler ([`wgpu::Upscale`]): native draws it straight into the scene
 //! in the frame's order, as before there were layers, and
 //! [`wgpu::SharpBilinear`] draws it into a texture of the logical size
-//! and enlarges that onto the viewport, the overlay over it. The core
+//! and enlarges that onto the viewport, the overlay over it. On macOS,
+//! MetalFX's spatial scaler (through the `nova_metalfx` crate, the one
+//! place unsafe code lives) does the same in a command buffer of its own,
+//! falling back to sharp-bilinear, with one warning, for a size it won't
+//! take ([`Gpu::take_warnings`]); it needs macOS 13. The core
 //! turns each OR tint into exact
 //! levels and keeps overlapping OR quads in separate batches. [`wgpu::GlyphonMetrics`] is
 //! `nova_view`'s text-metrics port over the same glyphon font system, with
@@ -79,5 +87,8 @@ pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
-pub use upscale::{Upscaler, UpscalerProbe, WorldResolution, listed, resolution_of, world_space};
+pub use upscale::{
+    Abilities, RejectedSizes, Upscaler, UpscalerProbe, WorldResolution, effective, listed,
+    metal_fx_takes, offered, resolution_of, world_space,
+};
 pub use viewport::{LOGICAL, Letterbox, LogicalSize, PixelRect, Viewport};

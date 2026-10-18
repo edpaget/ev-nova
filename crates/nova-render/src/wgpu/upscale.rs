@@ -1,10 +1,17 @@
 //! The upscaler port in the renderer's terms: enlarge a world texture onto
-//! the target. [`Native`] never has one to enlarge;
-//! [`SharpBilinear`] does.
+//! the target. [`Native`] never has one to enlarge; [`SharpBilinear`]
+//! does, in the frame's own encoder, and so does MetalFX on macOS
+//! (`metal_fx::MetalFxSpatial`), in a command buffer of its own put
+//! between the world's and the overlay's
+//! ([`FrameCommands::insert`](super::frame_commands::FrameCommands::insert)).
+//!
+//! Which upscaler draws a choice is [`effective`]'s answer for the device's
+//! [`abilities`]: MetalFX only where the device has it, sharp-bilinear in
+//! its place everywhere else.
 
 use super::frame_commands::WgpuCommands;
 use super::sharp_bilinear::SharpBilinear;
-use crate::upscale::{Abilities, Upscaler, WorldResolution, resolution_of};
+use crate::upscale::{Abilities, Upscaler, WorldResolution, effective, resolution_of};
 use crate::viewport::PixelRect;
 
 /// Draws flight's world layer onto the target for the
@@ -22,9 +29,7 @@ pub trait Upscale {
     /// Enlarges `world`, the whole world texture, onto `onto`, a
     /// rectangle of `target`, with commands recorded into `commands`'s
     /// encoder, or in a command buffer of its own put after what the frame
-    /// recorded so far
-    /// ([`FrameCommands::insert`](super::frame_commands::FrameCommands::insert)).
-    /// A warning to show (a
+    /// recorded so far (`FrameCommands::insert`). A warning to show (a
     /// fallback, say) goes into `warnings`.
     fn enlarge(
         &mut self,
@@ -79,19 +84,35 @@ fn metal_fx_spatial(_device: &wgpu::Device) -> bool {
     false
 }
 
-/// The upscaler `choice` names, made on `device` and writing through
-/// `queue`.
+/// The upscaler that draws `choice` on a device with `abilities`
+/// ([`effective`]), made on `device` and writing through `queue`: MetalFX
+/// on a device without it is sharp-bilinear.
 pub(super) fn upscale_for(
     choice: Upscaler,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    abilities: Abilities,
 ) -> Box<dyn Upscale> {
-    match choice {
+    match effective(choice, abilities) {
         Upscaler::Native => Box::new(Native),
-        Upscaler::SharpBilinear | Upscaler::MetalFxSpatial => {
-            Box::new(SharpBilinear::new(device, queue))
-        }
+        Upscaler::SharpBilinear => Box::new(SharpBilinear::new(device, queue)),
+        Upscaler::MetalFxSpatial => metal_fx(device, queue),
     }
+}
+
+/// MetalFX's upscaler, scaling with MetalFX's own scalers.
+#[cfg(target_os = "macos")]
+fn metal_fx(device: &wgpu::Device, queue: &wgpu::Queue) -> Box<dyn Upscale> {
+    use super::metal_fx::{MetalFxScalers, MetalFxSpatial};
+    let scalers = Box::new(MetalFxScalers::new(device));
+    Box::new(MetalFxSpatial::new(scalers, device, queue))
+}
+
+/// Never reached: no device off macOS has MetalFX ([`abilities`]), so
+/// [`effective`] draws it with sharp-bilinear, as this does too.
+#[cfg(not(target_os = "macos"))]
+fn metal_fx(device: &wgpu::Device, queue: &wgpu::Queue) -> Box<dyn Upscale> {
+    Box::new(SharpBilinear::new(device, queue))
 }
 
 #[cfg(test)]

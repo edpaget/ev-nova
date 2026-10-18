@@ -154,6 +154,24 @@ impl WgpuRenderer {
         faces: &FontFaces,
         upscaler: Upscaler,
     ) -> Self {
+        Self::with_upscale(
+            device,
+            queue,
+            format,
+            faces,
+            upscale_for(upscaler, device, queue, abilities(device)),
+        )
+    }
+
+    /// [`WgpuRenderer::new`], drawing the world with `upscale` (made on
+    /// `device`) until an upscaler is set.
+    pub(super) fn with_upscale(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        faces: &FontFaces,
+        upscale: Box<dyn Upscale>,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals_layout = globals_layout(device);
         let page_layout = page_layout(device);
@@ -248,7 +266,7 @@ impl WgpuRenderer {
             text_atlas,
             text_viewport,
             text_renderers: Vec::new(),
-            upscale: upscale_for(upscaler, device, queue),
+            upscale,
             abilities: abilities(device),
             warnings: Vec::new(),
         }
@@ -268,7 +286,7 @@ impl WgpuRenderer {
 
     /// Draws flight's world layer with `upscaler` from the next frame on.
     pub fn set_upscaler(&mut self, upscaler: Upscaler) {
-        self.upscale = upscale_for(upscaler, &self.device, &self.queue);
+        self.upscale = upscale_for(upscaler, &self.device, &self.queue, self.abilities);
     }
 
     /// The upscalers it can draw the world with on its device: native and
@@ -567,9 +585,12 @@ impl WgpuRenderer {
         let (texture, view, group) = self.scene_texture(
             label,
             size,
+            // `COPY_DST`: an upscaler that scales into a texture of its
+            // own (MetalFX) copies the result onto the scene.
             wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
         );
         let (backdrop, _, backdrop_group) = self.scene_texture(
             label,

@@ -11,11 +11,16 @@
 //! [`Upscaler::Native`] draws the world straight into the target at its
 //! own resolution, which changes nothing on screen.
 //! [`Upscaler::SharpBilinear`] draws it into a texture of the logical
-//! size and enlarges that onto the viewport.
+//! size and enlarges that onto the viewport. [`Upscaler::MetalFxSpatial`]
+//! does too, with MetalFX's spatial scaler, on macOS alone.
 //!
 //! Which upscalers the running device can use is the [`UpscalerProbe`]
 //! port's answer; [`listed`] turns it into the list the player picks
-//! from, native first and always.
+//! from, native first and always. A GPU adapter answers from its
+//! device's [`Abilities`] ([`offered`]) and draws each choice with what
+//! [`effective`] says. A world and output size MetalFX won't scale
+//! between ([`metal_fx_takes`], or MetalFX's own refusal) is drawn with
+//! sharp-bilinear and logged once ([`RejectedSizes`]).
 
 use crate::gpu::WorldSpace;
 use crate::viewport::Viewport;

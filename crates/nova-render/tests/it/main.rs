@@ -6,6 +6,7 @@
 
 mod common;
 
+mod flight_frame;
 mod frame_cost;
 mod metal_fx;
 mod sharp_bilinear;

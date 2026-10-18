@@ -133,7 +133,7 @@ impl Upscale for SharpBilinear {
         resolution_of(Upscaler::SharpBilinear)
     }
 
-    /// Draws into the frame's current encoder ([`Self::enlarge_into`]).
+    /// Draws into the frame's current encoder (`enlarge_into`).
     fn enlarge(
         &mut self,
         commands: &mut WgpuCommands<'_>,

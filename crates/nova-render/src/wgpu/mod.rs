@@ -29,9 +29,23 @@
 //! enlarges it onto the viewport ([`Upscale::enlarge`]), and the whole
 //! overlay is drawn over it, in the frame's order: an overlay drawn before
 //! the world in the frame lands over it, unlike natively (the renderer's
-//! layout says why). Both GPU adapters are the
-//! [`UpscalerProbe`](crate::UpscalerProbe) for their device: every wgpu
-//! device can use both.
+//! layout says why). On macOS, MetalFX's spatial scaler
+//! (`metal_fx::MetalFxSpatial`, through the `nova_metalfx` crate's safe
+//! API) draws the world into a texture as sharp-bilinear does, scales it
+//! in a command buffer of its own, and copies the result onto the
+//! viewport; a size pair MetalFX won't take is drawn with sharp-bilinear
+//! and logged once ([`Gpu::take_warnings`](crate::Gpu::take_warnings)).
+//! Both GPU adapters are the [`UpscalerProbe`](crate::UpscalerProbe) for
+//! their device: every wgpu device can use native and sharp-bilinear, and
+//! a macOS device on Metal with a GPU MetalFX supports can use MetalFX too
+//! ([`offered`](crate::upscale::offered)). MetalFX needs macOS 13, which
+//! the build's minimum is.
+//!
+//! A frame is recorded as a run of command buffers (`FrameCommands`,
+//! submitted at once, in order) rather than one: wgpu panics if one
+//! encoder mixes its API with the raw (`as_hal`) one MetalFX is driven
+//! through, so MetalFX's scale goes between the world's passes and the
+//! overlay's.
 //!
 //! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
 //! font system the renderer draws with, so the widgets lay text out by the
@@ -45,6 +59,8 @@
 mod data;
 mod fonts;
 mod frame_commands;
+#[cfg(target_os = "macos")]
+mod metal_fx;
 mod metrics;
 mod offscreen;
 mod overlay;

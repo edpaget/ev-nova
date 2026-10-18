@@ -7,6 +7,7 @@ use nova_data::graphics::Image;
 
 use super::data::{padded_bytes_per_row, strip_padding};
 use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
+use super::upscale::{Native, Upscale};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
@@ -47,6 +48,17 @@ impl OffscreenGpu {
     /// A `width` x `height` target on the default GPU adapter, drawing
     /// text in `faces` and the world natively ([`Upscaler::Native`]).
     pub fn new(width: u32, height: u32, faces: &FontFaces) -> Result<Self, InitError> {
+        Self::with_upscale(width, height, faces, |_, _| Box::new(Native))
+    }
+
+    /// [`OffscreenGpu::new`], its world drawn with the upscaler `upscale`
+    /// makes on its device and queue: a stand-in, for tests.
+    pub(super) fn with_upscale(
+        width: u32,
+        height: u32,
+        faces: &FontFaces,
+        upscale: impl FnOnce(&wgpu::Device, &wgpu::Queue) -> Box<dyn Upscale>,
+    ) -> Result<Self, InitError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let (_adapter, device, queue) = acquire(&instance, None)?;
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -64,7 +76,8 @@ impl OffscreenGpu {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let renderer = WgpuRenderer::new(&device, &queue, FORMAT, faces, Upscaler::Native);
+        let upscale = upscale(&device, &queue);
+        let renderer = WgpuRenderer::with_upscale(&device, &queue, FORMAT, faces, upscale);
         Ok(Self {
             device,
             queue,
