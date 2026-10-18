@@ -403,8 +403,9 @@ fn the_probe_offers_native_and_sharp_bilinear() {
 
 #[test]
 fn one_gpu_draws_a_texture_world_then_another_logical_size_then_natively() {
-    // The world canvas is remade for a new logical size, and a native
-    // frame after a texture one draws as a fresh GPU draws it.
+    // The world canvas is remade for a new logical size under the same
+    // upscaler, which reads the new canvas, and a native frame after a
+    // texture one draws as a fresh GPU draws it.
     let Some(mut gpu) = gpu_with(64, 48, &FontFaces::bundled()) else {
         return;
     };
@@ -418,8 +419,13 @@ fn one_gpu_draws_a_texture_world_then_another_logical_size_then_natively() {
         (fitted(LOGICAL, (64, 48)), Upscaler::Native),
     ];
     let mut renderer = Renderer::new(Sprites);
+    let mut set = None;
     for (viewport, upscaler) in &frames {
-        gpu.set_upscaler(*upscaler);
+        // Set only on a change, so both texture frames share one upscaler.
+        if set != Some(*upscaler) {
+            gpu.set_upscaler(*upscaler);
+            set = Some(*upscaler);
+        }
         renderer.render(&marked, viewport, &mut gpu);
         let reused = gpu.read_pixels().expect("read back");
         let fresh = drawn(&marked, viewport, *upscaler).expect("an adapter");
