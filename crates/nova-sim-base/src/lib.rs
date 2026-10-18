@@ -52,6 +52,7 @@ pub mod flight;
 pub mod fuel;
 pub mod geometry;
 pub mod handling;
+pub mod inertialess;
 pub mod player_turn;
 pub mod reserves;
 pub mod rule_values;

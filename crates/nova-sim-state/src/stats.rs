@@ -44,10 +44,19 @@
 //!   course. It is the one total that is not `ModVal` x count: each
 //!   outfit carried adds its `ModVal` once, whatever its count, as the
 //!   engine's `_ShipJumpsPerJump` does.
+//! - [`INERTIAL_DAMPENER`] (38), carried at all, whatever its `ModVal`
+//!   (the Bible's "inertial dampener ... makes ship inertialess"), is
+//!   recorded as [`ShipStats::dampener`], and a `shïp` whose `Flags2` has
+//!   [`INERTIALESS_HULL`] (0x0040, class record +0x9ea) set as
+//!   [`ShipStats::inertialess_hull`]. The stats only record them:
+//!   whether the ship flies inertialess is
+//!   [`is_inertialess`](crate::inertialess::is_inertialess)'s to decide,
+//!   as `_ShipIsInertialess` (@0x79c2) counts the outfit for the player
+//!   alone.
 //!
 //! Each total is summed wide, and none goes below none, so no mix of
-//! outfits can overflow or turn a figure negative. The inertial dampener
-//! (38) and every other `ModType` change nothing here yet.
+//! outfits can overflow or turn a figure negative. Every other `ModType`
+//! changes nothing here yet.
 
 use crate::flight::Flyer;
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
@@ -110,6 +119,13 @@ pub const MULTI_JUMP: i16 = 32;
 pub const FAST_JUMP: i16 = 37;
 /// The `shïp` `Flags2` bit for a hull that jumps without slowing down.
 pub const FAST_JUMP_HULL: u16 = 0x0020;
+/// The `oütf` `ModType` of the inertial dampener: carried at all, it may
+/// make the ship inertialess (`_ShipIsInertialess` @0x7a4f, `cmpw $0x26`
+/// over each of an outfit's four `ModType`s).
+pub const INERTIAL_DAMPENER: i16 = 38;
+/// The `shïp` `Flags2` bit for an inertialess hull (`testb $0x40` on the
+/// class record's `Flags2`, +0x9ea, @0x7a06).
+pub const INERTIALESS_HULL: u16 = 0x0040;
 
 /// A [`TURN_CHANGE`] `ModVal` per unit of `Maneuver`: the Bible's "100 =
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
@@ -143,6 +159,10 @@ pub struct ShipStats {
     /// How many systems a jump passes along the course, as the outfits
     /// give it (see `nova_sim::hyperspace::hops_per_jump`).
     pub multi_jump: u32,
+    /// Whether its hull's `Flags2` holds [`INERTIALESS_HULL`].
+    pub inertialess_hull: bool,
+    /// Whether it carries an [`INERTIAL_DAMPENER`], whatever its `ModVal`.
+    pub dampener: bool,
 }
 
 /// `ModVal` x count summed over every one of `outfits` of `ModType`
@@ -236,6 +256,10 @@ impl ShipStats {
                     .max(0),
             )
             .unwrap_or(u32::MAX),
+            inertialess_hull: fields.flags2 & INERTIALESS_HULL != 0,
+            dampener: outfits
+                .iter()
+                .any(|outfit| outfit.mod_type == INERTIAL_DAMPENER && outfit.count > 0),
         }
     }
 
@@ -610,6 +634,41 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_ship_has_neither_an_inertialess_hull_nor_a_dampener() {
+        let stats = ShipStats::new(AVERAGE, &[]);
+        assert!(!stats.inertialess_hull);
+        assert!(!stats.dampener);
+    }
+
+    #[test]
+    fn a_hull_with_flags2_0x0040_is_inertialess() {
+        assert_eq!(INERTIALESS_HULL, 0x0040);
+        let hull = |flags2| ShipFields { flags2, ..AVERAGE };
+        assert!(ShipStats::new(hull(0x0040), &[]).inertialess_hull);
+        assert!(ShipStats::for_player(hull(0x0040), &[]).inertialess_hull);
+        assert!(
+            !ShipStats::new(hull(0xFFBF), &[]).inertialess_hull,
+            "every other bit"
+        );
+    }
+
+    #[test]
+    fn an_inertial_dampener_outfit_is_carried_whatever_its_modval() {
+        assert_eq!(INERTIAL_DAMPENER, 38);
+        assert!(ShipStats::new(AVERAGE, &[outfit(INERTIAL_DAMPENER, 0, 1)]).dampener);
+        assert!(ShipStats::new(AVERAGE, &[outfit(INERTIAL_DAMPENER, -7, 3)]).dampener);
+        assert!(ShipStats::for_player(AVERAGE, &[outfit(INERTIAL_DAMPENER, 1, 1)]).dampener);
+        assert!(
+            !ShipStats::new(AVERAGE, &[outfit(INERTIAL_DAMPENER, 1, 0)]).dampener,
+            "none carried"
+        );
+        assert!(
+            !ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 1, 1)]).dampener,
+            "another ModType"
+        );
+    }
+
+    #[test]
     fn a_multi_jump_outfit_gives_its_modval_once_whatever_the_count() {
         assert_eq!(MULTI_JUMP, 32);
         let total = |outfits: &[OutfitMod]| ShipStats::new(AVERAGE, outfits).multi_jump;
@@ -639,7 +698,7 @@ mod tests {
     #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 38, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 39, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,

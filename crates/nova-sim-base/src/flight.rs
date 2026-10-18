@@ -36,6 +36,16 @@
 //!    that frame's position step.
 //! 4. Moves the ship by its new velocity (semi-implicit Euler).
 //!
+//! An inertialess ship (see [`inertialess`](crate::inertialess)) holds a
+//! speed along its heading instead, which its owner keeps (the session
+//! for the player, traffic for an NPC). Its tick is an
+//! [`inertialess_step`] or [`inertialess_player_step`]: it turns as
+//! above, but reverse never turns it (an NPC's turns by its keys alone,
+//! and the player's reverse gives no aim). Thrust and reverse move the
+//! speed, not the velocity; then the velocity is pulled toward heading x
+//! speed on each axis, capped as in step 3, and the ship moves
+//! ([`inertialess_advance`]).
+//!
 //! A heading is in degrees: 0 faces up the screen (-y), and it grows
 //! clockwise, kept in `[0, 360)`. Facing `h` is the unit vector
 //! `(sin h, -cos h)`.
@@ -44,6 +54,9 @@ use core::num::NonZeroU32;
 
 use crate::geometry::Vec2;
 use crate::handling::{Handling, ORIGINAL_THRUST_DIVISOR};
+use crate::inertialess::{
+    ADJUST_RATE, BRAKE, InertialDampener, REVERSE, THRUST, adjust_velocity, step_speed,
+};
 use crate::player_turn::{PlayerTurn, turn};
 use crate::rulebook::{RuleKey, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
@@ -68,8 +81,9 @@ pub fn at_rest_speed(divisor: NonZeroU32) -> f32 {
 
 /// The rules a ship flies by, read from the [`Rulebook`] at each use: the
 /// thrust's divisor ([`RuleValue::ThrustDivisor`]), the speed cap
-/// ([`RuleKey::SpeedCap`]) and how the player turns
-/// ([`RuleKey::PlayerTurn`]).
+/// ([`RuleKey::SpeedCap`]), how the player turns
+/// ([`RuleKey::PlayerTurn`]) and whose inertial dampener counts
+/// ([`RuleKey::InertialDampener`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FlightRules {
     /// What a ship's `Accel` total is divided by to give its thrust.
@@ -78,6 +92,8 @@ pub struct FlightRules {
     pub speed_cap: SpeedCap,
     /// How the player's ship turns.
     pub player_turn: PlayerTurn,
+    /// Whose `ModType` 38 outfits make a ship inertialess.
+    pub inertial_dampener: InertialDampener,
 }
 
 impl FlightRules {
@@ -88,6 +104,7 @@ impl FlightRules {
             thrust_divisor: rules.value_for(RuleValue::ThrustDivisor),
             speed_cap: SpeedCap::from(rules.source_for(RuleKey::SpeedCap)),
             player_turn: PlayerTurn::from(rules.source_for(RuleKey::PlayerTurn)),
+            inertial_dampener: InertialDampener::from(rules.source_for(RuleKey::InertialDampener)),
         }
     }
 
@@ -262,6 +279,106 @@ pub fn advance(
     state.position = state.position + state.velocity;
 }
 
+/// Advances `state`, an inertialess NPC's ship holding `speed` along its
+/// heading, one tick under `controls`, flying as `handling` allows under
+/// `rules` (see the module docs): it turns by the turn keys alone, as
+/// reverse never turns an inertialess ship; thrust adds a tick's
+/// [`THRUST`] to its speed and reverse is the AI's brake, [`BRAKE`]
+/// (`_LowLevelAIHandler` substate 1, @0x853d7-0x85403); then
+/// [`inertialess_advance`].
+pub fn inertialess_step(
+    state: &mut ShipState,
+    speed: &mut f32,
+    handling: &Handling,
+    controls: Controls,
+    rules: FlightRules,
+) {
+    let rate = handling.turn_rate;
+    state.heading = match controls.turn {
+        Turn::Left => normalized(state.heading - rate),
+        Turn::Right => normalized(state.heading + rate),
+        Turn::None => state.heading,
+    };
+    let thrust = if controls.thrust {
+        THRUST
+    } else if controls.reverse {
+        BRAKE
+    } else {
+        0.0
+    };
+    inertialess_advance(state, speed, handling, thrust, rules, Flyer::Npc);
+}
+
+/// Advances the player's inertialess ship, `state`, holding `speed` along
+/// its heading, one tick under `controls`, flying as `handling` allows
+/// under `rules`: it turns as [`player_step`] does, toward `aim` or by the
+/// turn keys (reverse gives an inertialess ship no aim); reverse takes a
+/// tick's acceleration off its speed (@0x6c770-0x6c7d3) and then thrust
+/// adds one (@0x6cbb2-0x6cc3e), each floored and capped as
+/// [`step_speed`] does; then [`inertialess_advance`].
+pub fn inertialess_player_step(
+    state: &mut ShipState,
+    speed: &mut f32,
+    handling: &Handling,
+    controls: Controls,
+    aim: Option<i16>,
+    rules: FlightRules,
+) {
+    (state.heading, _) = turn(
+        state.heading,
+        handling.turn_rate,
+        aim,
+        controls.turn,
+        rules.player_turn,
+    );
+    if controls.reverse {
+        *speed = step_speed(*speed, REVERSE, handling.accel, handling.max_speed);
+    }
+    let thrust = if controls.thrust { THRUST } else { 0.0 };
+    inertialess_advance(state, speed, handling, thrust, rules, Flyer::Player);
+}
+
+/// The rest of an inertialess ship's tick after its turn: `state`,
+/// `flyer`'s ship, holding `speed` along its heading, moves its speed by
+/// `thrust` ticks of its acceleration when that is not none
+/// ([`step_speed`]); the player's speed is then capped at its top speed
+/// (@0x6d356-0x6d369). Its velocity is pulled toward heading x speed by
+/// [`ADJUST_RATE`] ticks' acceleration ([`adjust_velocity`],
+/// @0x6d43a, @0x3425f), capped as [`advance`] caps it, and it moves.
+///
+/// The original's NPC is adjusted and moved (@0x34250-0x342aa) before its
+/// thrust word moves the speed (@0x34acc-0x34b6d), so an NPC's thrust
+/// reaches its velocity a tick later there than here: a one-tick lag the
+/// player never sees, left as it is.
+pub fn inertialess_advance(
+    state: &mut ShipState,
+    speed: &mut f32,
+    handling: &Handling,
+    thrust: f32,
+    rules: FlightRules,
+    flyer: Flyer,
+) {
+    let top = handling.max_speed;
+    if thrust != 0.0 {
+        *speed = step_speed(*speed, thrust, handling.accel, top);
+    }
+    if flyer == Flyer::Player {
+        *speed = speed.min(top);
+    }
+    state.velocity = adjust_velocity(
+        state.velocity,
+        state.heading,
+        *speed,
+        handling.accel * ADJUST_RATE,
+    );
+    state.velocity = match (rules.speed_cap, flyer) {
+        (SpeedCap::PerAxis, Flyer::Player) => speed_limit(state.velocity, top),
+        (SpeedCap::PerAxis, Flyer::Npc) => state.velocity,
+        (SpeedCap::Circle, _) => circle(state.velocity, top),
+    };
+    state.position = state.position + state.velocity;
+}
+
 /// Heading `from` turned towards heading `to` the short way, by at most
 /// `rate` degrees: exactly `to` once it is within one turn.
 #[must_use]
@@ -382,6 +499,7 @@ mod tests {
         },
         speed_cap: SpeedCap::Circle,
         player_turn: PlayerTurn::WholeDegrees,
+        inertial_dampener: InertialDampener::PlayerOnly,
     };
 
     fn under(divisor: u32) -> FlightRules {
@@ -1057,6 +1175,256 @@ mod tests {
         assert_eq!(
             under(3000).handling(own),
             own.thrust_under(NonZeroU32::new(3000).unwrap())
+        );
+    }
+
+    // Inertialess flight.
+
+    /// A ship that turns a quarter a tick, so a test turns it in one.
+    const QUARTER: Handling = Handling {
+        turn_rate: 90.0,
+        ..SHIP
+    };
+
+    #[test]
+    fn an_inertialess_ship_turned_a_quarter_follows_its_heading_within_the_ticks_its_rate_allows() {
+        for flyer in FLYERS {
+            // East at full speed, then a quarter left to north.
+            let mut state = moving(Vec2::new(3.0, 0.0), 90.0);
+            let mut speed = 3.0;
+            let left = turning(Turn::Left);
+            match flyer {
+                Flyer::Npc => inertialess_step(
+                    &mut state,
+                    &mut speed,
+                    &QUARTER,
+                    left,
+                    FlightRules::default(),
+                ),
+                Flyer::Player => inertialess_player_step(
+                    &mut state,
+                    &mut speed,
+                    &QUARTER,
+                    left,
+                    None,
+                    FlightRules::default(),
+                ),
+            }
+            assert_eq!(state.heading, 0.0, "{flyer:?}");
+            let rate = QUARTER.accel * crate::inertialess::ADJUST_RATE;
+            // Each axis has 3 to make up at 0.4 a tick: 8 ticks, the first
+            // the turn's.
+            let ticks = (3.0 / rate).ceil() as usize;
+            assert_eq!(ticks, 8);
+            for _ in 1..ticks {
+                inertialess_step(
+                    &mut state,
+                    &mut speed,
+                    &QUARTER,
+                    Controls::default(),
+                    FlightRules::default(),
+                );
+            }
+            assert!(
+                near(state.velocity, Vec2::new(0.0, -3.0)),
+                "{flyer:?}: {state:?}"
+            );
+            assert_eq!(speed, 3.0, "the speed is kept through the turn");
+            let at = state.position;
+            inertialess_step(
+                &mut state,
+                &mut speed,
+                &QUARTER,
+                Controls::default(),
+                FlightRules::default(),
+            );
+            assert!(near(state.position - at, Vec2::new(0.0, -3.0)), "no drift");
+        }
+    }
+
+    #[test]
+    fn the_velocity_moves_by_the_rate_a_tick_until_it_reaches_the_heading() {
+        let mut state = moving(Vec2::new(3.0, 0.0), 0.0);
+        let mut speed = 3.0;
+        inertialess_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            Controls::default(),
+            FlightRules::default(),
+        );
+        assert!(near(state.velocity, Vec2::new(2.6, -0.4)), "{state:?}");
+        assert!(
+            near(state.position, Vec2::new(2.6, -0.4)),
+            "moves by the new velocity"
+        );
+    }
+
+    #[test]
+    fn an_inertialess_ship_coasting_keeps_its_speed_along_its_heading() {
+        let mut state = moving(facing(30.0) * 2.0, 30.0);
+        let mut speed = 2.0;
+        for _ in 0..50 {
+            inertialess_step(
+                &mut state,
+                &mut speed,
+                &SHIP,
+                Controls::default(),
+                FlightRules::default(),
+            );
+        }
+        assert_eq!(speed, 2.0);
+        assert!(near(state.velocity, facing(30.0) * 2.0), "{state:?}");
+    }
+
+    #[test]
+    fn thrust_adds_to_the_speed_and_the_velocity_follows_it() {
+        let mut state = heading(90.0);
+        let mut speed = 0.0;
+        inertialess_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            THRUST,
+            FlightRules::default(),
+        );
+        assert!((speed - 0.1).abs() < 1e-6, "{speed}");
+        assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
+        for _ in 0..100 {
+            inertialess_step(
+                &mut state,
+                &mut speed,
+                &SHIP,
+                THRUST,
+                FlightRules::default(),
+            );
+        }
+        assert_eq!(speed, 3.0, "up to the top speed");
+    }
+
+    #[test]
+    fn an_npcs_inertialess_brake_takes_half_a_ticks_thrust_off_and_never_turns() {
+        let mut state = moving(Vec2::new(0.0, -2.0), 0.0);
+        let mut speed = 2.0;
+        inertialess_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            REVERSE,
+            FlightRules::default(),
+        );
+        assert_eq!(state.heading, 0.0, "reverse turns no inertialess ship");
+        assert!((speed - 1.95).abs() < 1e-6, "{speed}");
+        assert!(near(state.velocity, Vec2::new(0.0, -1.95)), "{state:?}");
+    }
+
+    #[test]
+    fn the_players_reverse_takes_a_whole_ticks_thrust_off_before_its_thrust_adds_one() {
+        let mut state = moving(Vec2::new(0.0, -2.0), 0.0);
+        let mut speed = 2.0;
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            REVERSE,
+            None,
+            FlightRules::default(),
+        );
+        assert_eq!(state.heading, 0.0);
+        assert!((speed - 1.9).abs() < 1e-6, "{speed}");
+        let mut slow = 0.05;
+        let both = Controls {
+            thrust: true,
+            ..REVERSE
+        };
+        inertialess_player_step(
+            &mut heading(0.0),
+            &mut slow,
+            &SHIP,
+            both,
+            None,
+            FlightRules::default(),
+        );
+        assert!(
+            (slow - 0.1).abs() < 1e-6,
+            "floored at none, then thrust: {slow}"
+        );
+    }
+
+    #[test]
+    fn the_players_inertialess_step_turns_by_its_turn_block_toward_an_aim() {
+        let mut state = heading(0.0);
+        let mut speed = 0.0;
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &PEGASUS,
+            turning(Turn::Left),
+            Some(9),
+            FlightRules::default(),
+        );
+        assert_eq!(state.heading, 2.0, "toward 9, the keys held off");
+    }
+
+    #[test]
+    fn the_players_inertialess_speed_and_velocity_stay_within_its_box() {
+        let mut state = moving(Vec2::new(5.0, 0.0), 90.0);
+        let mut speed = 5.0;
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            Controls::default(),
+            None,
+            FlightRules::default(),
+        );
+        assert_eq!(speed, 3.0, "capped at the top speed");
+        assert!(near(state.velocity, Vec2::new(3.0, 0.0)), "{state:?}");
+        // An NPC's speed above its top speed is left alone while it coasts.
+        let mut npc = moving(Vec2::new(5.0, 0.0), 90.0);
+        let mut fast = 5.0;
+        inertialess_step(
+            &mut npc,
+            &mut fast,
+            &SHIP,
+            Controls::default(),
+            FlightRules::default(),
+        );
+        assert_eq!(fast, 5.0);
+        assert!(near(npc.velocity, Vec2::new(5.0, 0.0)), "{npc:?}");
+    }
+
+    #[test]
+    fn under_the_circle_an_inertialess_ship_is_held_to_its_top_speed() {
+        let mut state = moving(Vec2::new(3.0, 3.0), 90.0);
+        let mut speed = 3.0;
+        inertialess_step(&mut state, &mut speed, &SHIP, Controls::default(), CIRCLE);
+        assert!((state.velocity.length() - 3.0).abs() < 1e-5, "{state:?}");
+        let mut player = moving(Vec2::new(3.0, 3.0), 90.0);
+        let mut speed = 3.0;
+        inertialess_player_step(
+            &mut player,
+            &mut speed,
+            &SHIP,
+            Controls::default(),
+            None,
+            CIRCLE,
+        );
+        assert!((player.velocity.length() - 3.0).abs() < 1e-5, "{player:?}");
+    }
+
+    #[test]
+    fn the_inertial_dampener_rule_reads_the_rulebook() {
+        assert_eq!(
+            FlightRules::default().inertial_dampener,
+            InertialDampener::PlayerOnly
+        );
+        assert_eq!(
+            FlightRules::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::InertialDampener, RuleSource::Bible)
+            )
+            .inertial_dampener,
+            InertialDampener::AnyShip
         );
     }
 

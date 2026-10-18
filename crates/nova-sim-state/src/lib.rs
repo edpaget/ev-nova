@@ -60,7 +60,9 @@
 // docs name by their old `crate::` paths, which now resolve to
 // `nova-sim-base` and `nova-sim-catalog`.
 #[allow(unused_imports)]
-use nova_sim_base::{RuleKey, chance, flight, fuel, geometry, handling, reserves, rulebook, rules};
+use nova_sim_base::{
+    RuleKey, chance, flight, fuel, geometry, handling, inertialess, reserves, rulebook, rules,
+};
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, catalog, control};
 
