@@ -43,8 +43,8 @@
 //! module), read whatever system lists it. A record that didn't load
 //! reads as a zeroed one, at 0,0, as the missions' record reading has it.
 //!
-//! **Left out.** An inertialess ship's reverse (@0x6c770-0x6c7d3) is
-//! rdm:phase/ship-handling-fidelity/phase-5-inertialess-flight's.
+//! An inertialess ship's reverse (@0x6c770-0x6c7d3) aims at nothing: it
+//! brakes the ship's speed instead (see the `inertialess` module).
 
 use super::Session;
 use crate::catalog::StellarId;
@@ -67,7 +67,9 @@ impl Session {
     pub(super) fn steer(&mut self, controls: Controls) -> Option<i16> {
         let disabled = self.condition != Condition::Intact;
         let mut aim = self.face_aim(controls.face);
-        if controls.reverse && !disabled {
+        // An inertialess ship's reverse brakes instead, with no aim (see
+        // the `inertialess` module).
+        if controls.reverse && !disabled && !self.player_inertialess() {
             aim = reverse_aim(self.player.velocity).or(aim);
         }
         if let Some(aim) = aim {

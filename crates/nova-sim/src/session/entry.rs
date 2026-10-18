@@ -857,13 +857,18 @@ impl Session {
         }
     }
 
-    /// Puts the ship where `placement` says.
+    /// Puts the ship where `placement` says, its speed along its heading
+    /// with it (see the `inertialess` module).
     fn place(&mut self, placement: Placement) {
         match placement.ship {
-            ShipPlacement::Arrive(state) => self.player = state,
+            ShipPlacement::Arrive(state) => {
+                self.player = state;
+                self.arrive_at_speed();
+            }
             ShipPlacement::AtRest(position) => {
                 self.player.position = position;
                 self.player.velocity = Vec2::ZERO;
+                self.player_speed = 0.0;
             }
             ShipPlacement::Keep => {}
         }

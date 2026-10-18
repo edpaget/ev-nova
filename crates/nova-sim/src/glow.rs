@@ -25,6 +25,27 @@
 //! returns to 0 when the player lands (`_HandlePlayerDockRequest`,
 //! 0x66691, at 0x67010). [`ramp_glow`] is one such step.
 //!
+//! **An inertialess ship's base** (see `nova_sim::flight`'s inertialess
+//! tick) takes one more step between those two, at 0x6d36e-0x6d42d, in
+//! the same frame, after step 1 and before step 2
+//! ([`ramp_inertialess_glow`]):
+//!
+//! - In flight it follows the speed: with a target of
+//!   min(24, trunc(32 x speed x 0.75 / `_ShipMaxSpeed`)) (32.0 f32
+//!   @0xdd654, 0.75 @0xdd1f8; [`speed_target`]), it rises by 1 below the
+//!   target and falls by 1 otherwise, on the target too
+//!   ([`follow_speed`]). Step 1 still runs, so coasting (-1) and
+//!   following (+1) cancel below the target, and steady thrust at top
+//!   speed holds the base at 23, one under the target, after it has
+//!   climbed 2 a tick.
+//! - Disabled, it falls by 1 more while above 0 (@0x6d397-0x6d3a3), 2 a
+//!   tick with step 1's coasting.
+//!
+//! The base is an `i16` here too: following the speed from 0 at rest
+//! takes it to -1, and the next tick back to 0, as the original's does.
+//! A level of 1 or less is hidden, so a base of 0 or less draws nothing
+//! ([`drawn_base`]).
+//!
 //! **The drawn level.** `_HandleShipDisplay` draws the glow of any ship
 //! whose class has a glow sheet (the gate at 0x2c195), at
 //! `base + _Rand(6) - 4` in 16-bit arithmetic (at 0x2c1b5-0x2c1f3).
@@ -50,8 +71,7 @@
 //! The cloak's path (at 0x2c1f6), which caps the level by the hull's
 //! bias instead; 8-bit screens' alpha-table blits; the afterburner, which
 //! drives the base to 32 (at 0x6fc63); the banking glow, shän flag
-//! 0x0002 with banking (at 0x6cef6), which no stock ship has;
-//! inertialess ships, whose base follows their speed (at 0x6d36e); AI
+//! 0x0002 with banking (at 0x6cef6), which no stock ship has; AI
 //! ships' own rules (`_HandleShip`, 0x33581, and `_LowLevelAIHandler`,
 //! 0x851da); and the hyperspace run-up, during which the glow blazes to
 //! 32 (at 0x6b81b and 0x6d320): here a jump puts the glow out as it
@@ -66,20 +86,102 @@ pub const GLOW_CRUISE: u8 = 24;
 /// thrust raises it by 1 up to [`GLOW_CRUISE`], coasting lowers it by 1
 /// down to 0, and a base above [`GLOW_CRUISE`] then falls by 1 more.
 #[must_use]
-pub fn ramp_glow(base: u8, thrusting: bool) -> u8 {
-    // Thrust or coast (at 0x6cd2e and 0x6cd40).
-    let stepped = match (thrusting, base < GLOW_CRUISE) {
-        (true, true) => base + 1,
-        (true, false) => base,
-        (false, _) => base.saturating_sub(1),
+pub fn ramp_glow(base: i16, thrusting: bool) -> i16 {
+    settle(thrust_step(base, thrusting))
+}
+
+/// What an inertialess ship's glow base takes from its speed this tick
+/// (see the module docs): `Speed`'s in flight, `Disabled`'s disabled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Follow {
+    /// Flying at `speed` of a top speed of `max_speed`
+    /// (`_ShipMaxSpeed`).
+    Speed {
+        /// Its speed along its heading.
+        speed: f32,
+        /// Its top speed.
+        max_speed: f32,
+    },
+    /// Disabled.
+    Disabled,
+}
+
+/// An inertialess ship's glow base level after one tick from `base`,
+/// thrusting or not (see the module docs): [`ramp_glow`]'s thrust or
+/// coast step, then `follow`'s ([`follow_speed`], or 1 more down while
+/// above 0 disabled), then [`ramp_glow`]'s step down above cruise.
+#[must_use]
+pub fn ramp_inertialess_glow(base: i16, thrusting: bool, follow: Follow) -> i16 {
+    let stepped = thrust_step(base, thrusting);
+    let followed = match follow {
+        Follow::Speed { speed, max_speed } => follow_speed(stepped, speed, max_speed),
+        Follow::Disabled => fade(stepped),
     };
-    // Above cruise, with no afterburner, one step more down (at 0x6fd3f).
-    if stepped > GLOW_CRUISE {
-        stepped - 1
+    settle(followed)
+}
+
+/// The base an inertialess ship's glow follows at `speed` of a top speed
+/// of `max_speed`: min(24, trunc(32 x speed x 0.75 / `max_speed`))
+/// (@0x6d3af-0x6d408); none when it has no top speed, whose quotient the
+/// original's `cvttsd2si` turns to a word of 0.
+#[must_use]
+pub fn speed_target(speed: f32, max_speed: f32) -> i16 {
+    if max_speed <= 0.0 {
+        return 0;
+    }
+    let scaled = f64::from(SPEED_GLOW * speed) * SPEED_GLOW_SHARE / f64::from(max_speed);
+    scaled.trunc().clamp(0.0, f64::from(GLOW_CRUISE)) as i16
+}
+
+/// `base` stepped toward [`speed_target`] at `speed` of `max_speed`: up
+/// by 1 below it, down by 1 at or above it (@0x6d40f-0x6d42d), to -1 at
+/// the least.
+#[must_use]
+pub fn follow_speed(base: i16, speed: f32, max_speed: f32) -> i16 {
+    if speed_target(speed, max_speed) > base {
+        base + 1
     } else {
-        stepped
+        base - 1
     }
 }
+
+/// The base the glow is drawn from for a base level of `base`: none below
+/// none, which draws the same, as every level of 1 or less is hidden.
+#[must_use]
+pub fn drawn_base(base: i16) -> u8 {
+    u8::try_from(base.max(0)).unwrap_or(u8::MAX)
+}
+
+/// The thrust or coast step (at 0x6cd2e and 0x6cd40): thrust raises
+/// `base` by 1 while it is at most 23; coasting lowers it by 1 while it is
+/// above 0.
+fn thrust_step(base: i16, thrusting: bool) -> i16 {
+    match (thrusting, base < i16::from(GLOW_CRUISE)) {
+        (true, true) => base + 1,
+        (true, false) => base,
+        (false, _) => fade(base),
+    }
+}
+
+/// `base` 1 lower while it is above 0.
+fn fade(base: i16) -> i16 {
+    if base > 0 { base - 1 } else { base }
+}
+
+/// Above cruise, with no afterburner, one step more down (at 0x6fd3f).
+fn settle(base: i16) -> i16 {
+    if base > i16::from(GLOW_CRUISE) {
+        base - 1
+    } else {
+        base
+    }
+}
+
+/// The glow's full scale at top speed (32.0 f32 @0xdd654).
+const SPEED_GLOW: f32 = 32.0;
+
+/// The share of [`SPEED_GLOW`] top speed gives (0.75 @0xdd1f8).
+const SPEED_GLOW_SHARE: f64 = 0.75;
 
 /// The glow's level at `tick` for a base level of `base`:
 /// `Some(2..=32)` out of [`FULL`] when it is drawn, `None` when the
@@ -171,15 +273,140 @@ mod tests {
 
     #[test]
     fn the_base_ramps_a_step_a_tick() {
+        let cruise = i16::from(GLOW_CRUISE);
         let mut base = 0;
         for k in 1..=30 {
             base = ramp_glow(base, true);
-            assert_eq!(base, k.min(GLOW_CRUISE), "{k} ticks of thrust");
+            assert_eq!(base, k.min(cruise), "{k} ticks of thrust");
         }
         for k in 1..=30 {
             base = ramp_glow(base, false);
-            assert_eq!(base, GLOW_CRUISE.saturating_sub(k), "{k} ticks coasting");
+            assert_eq!(base, (cruise - k).max(0), "{k} ticks coasting");
         }
+    }
+
+    // An inertialess ship's base.
+
+    #[test]
+    fn the_speed_target_is_three_quarters_of_32_at_top_speed_capped_at_24() {
+        for (speed, max, toward) in [
+            (6.0, 6.0, 24),
+            (3.0, 6.0, 12),
+            (0.0, 6.0, 0),
+            (10.8, 6.0, 24),
+            (1.0, 6.0, 4),
+            (0.24, 6.0, 0),
+            (0.26, 6.0, 1),
+            (3.0, 0.0, 0),
+            (0.0, 0.0, 0),
+        ] {
+            assert_eq!(speed_target(speed, max), toward, "{speed} of {max}");
+        }
+    }
+
+    #[test]
+    fn following_the_speed_steps_up_below_the_target_and_down_at_or_above_it() {
+        assert_eq!(follow_speed(10, 3.0, 6.0), 11, "12 above 10");
+        assert_eq!(follow_speed(12, 3.0, 6.0), 11, "on the target, down");
+        assert_eq!(follow_speed(13, 3.0, 6.0), 12);
+        assert_eq!(follow_speed(0, 0.0, 6.0), -1, "an i16 dips below none");
+        assert_eq!(follow_speed(-1, 0.0, 6.0), 0);
+    }
+
+    /// `ticks` inertialess ticks of `base`, thrusting or not, at `speed`
+    /// of top speed 6.
+    fn inertialess_after(mut base: i16, thrusting: bool, speed: f32, ticks: usize) -> i16 {
+        for _ in 0..ticks {
+            base = ramp_inertialess_glow(
+                base,
+                thrusting,
+                Follow::Speed {
+                    speed,
+                    max_speed: 6.0,
+                },
+            );
+        }
+        base
+    }
+
+    #[test]
+    fn coasting_at_top_speed_the_coast_step_and_the_follow_cancel_and_hold_the_base() {
+        // Coast: -1; follow (24 above): +1.
+        for base in [1, 12, 20, 24] {
+            assert_eq!(inertialess_after(base, false, 6.0, 1), base, "{base}");
+            assert_eq!(inertialess_after(base, false, 6.0, 30), base, "{base}");
+        }
+        // From none the coast step does nothing and the follow lifts it.
+        assert_eq!(inertialess_after(0, false, 6.0, 1), 1);
+        assert_eq!(inertialess_after(0, false, 6.0, 30), 1);
+    }
+
+    #[test]
+    fn thrusting_at_top_speed_it_climbs_two_a_tick_and_settles_at_23() {
+        // Thrust: +1; follow (24 above): +1, until the base reaches 24,
+        // where the thrust holds it and the follow takes it back to 23.
+        assert_eq!(inertialess_after(0, true, 6.0, 1), 2);
+        assert_eq!(inertialess_after(0, true, 6.0, 11), 22);
+        assert_eq!(inertialess_after(0, true, 6.0, 12), 24);
+        assert_eq!(inertialess_after(0, true, 6.0, 13), 23);
+        assert_eq!(inertialess_after(0, true, 6.0, 40), 23);
+    }
+
+    #[test]
+    fn coasting_at_half_speed_from_cruise_it_falls_two_a_tick_to_the_target_of_12() {
+        // Coast: -1; follow (12 at or below): -1, until the base is 12.
+        assert_eq!(inertialess_after(24, false, 3.0, 1), 22);
+        assert_eq!(inertialess_after(24, false, 3.0, 6), 12);
+        assert_eq!(inertialess_after(24, false, 3.0, 30), 12);
+        // An odd base passes the target and holds below it.
+        assert_eq!(inertialess_after(13, false, 3.0, 1), 11);
+        assert_eq!(inertialess_after(13, false, 3.0, 30), 11);
+    }
+
+    #[test]
+    fn coasting_at_half_speed_from_none_it_rises_only_to_1() {
+        // Coast: nothing at none, -1 at 1; follow (12 above): +1.
+        assert_eq!(inertialess_after(0, false, 3.0, 1), 1);
+        assert_eq!(inertialess_after(0, false, 3.0, 30), 1);
+    }
+
+    #[test]
+    fn thrusting_at_half_speed_it_climbs_to_the_target_and_holds_it() {
+        // Thrust: +1; follow: +1 below 12, -1 from it.
+        assert_eq!(inertialess_after(0, true, 3.0, 5), 10);
+        assert_eq!(inertialess_after(0, true, 3.0, 6), 12);
+        assert_eq!(inertialess_after(0, true, 3.0, 30), 12);
+    }
+
+    #[test]
+    fn at_rest_an_inertialess_glow_dips_to_minus_1_and_back_which_draws_nothing() {
+        assert_eq!(inertialess_after(0, false, 0.0, 1), -1);
+        assert_eq!(inertialess_after(0, false, 0.0, 2), 0);
+        assert_eq!(
+            inertialess_after(0, true, 0.0, 1),
+            0,
+            "thrust lifts it first"
+        );
+        assert_eq!(inertialess_after(-1, true, 0.0, 1), -1);
+        for base in [-1, 0] {
+            assert_eq!(rolled(drawn_base(base), 5), None, "{base}");
+        }
+    }
+
+    #[test]
+    fn disabled_the_coast_step_and_the_disabled_step_take_two_a_tick_off_down_to_none() {
+        assert_eq!(ramp_inertialess_glow(10, false, Follow::Disabled), 8);
+        assert_eq!(ramp_inertialess_glow(1, false, Follow::Disabled), 0);
+        assert_eq!(ramp_inertialess_glow(0, false, Follow::Disabled), 0);
+        assert_eq!(ramp_inertialess_glow(-1, false, Follow::Disabled), -1);
+    }
+
+    #[test]
+    fn the_drawn_base_is_the_base_with_none_below_none() {
+        assert_eq!(drawn_base(-1), 0);
+        assert_eq!(drawn_base(0), 0);
+        assert_eq!(drawn_base(24), 24);
+        assert_eq!(drawn_base(400), u8::MAX);
     }
 
     // The drawn level.

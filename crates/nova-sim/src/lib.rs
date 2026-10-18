@@ -154,6 +154,10 @@
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
+//! - [`inertialess`]: inertialess flight: who flies it
+//!   ([`is_inertialess`](inertialess::is_inertialess)), the speed along
+//!   the heading thrust and brakes move, and the velocity pulled toward
+//!   it.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
 //!   clearance, then, once the dock approach has cleared the request,
 //!   land (or, over a hypergate or wormhole, enter it);
@@ -347,6 +351,7 @@ pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
 pub use nova_sim_ai::navigation;
 pub use nova_sim_base::handling;
+pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;

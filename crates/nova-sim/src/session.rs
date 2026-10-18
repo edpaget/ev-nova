@@ -378,6 +378,7 @@ mod hail;
 mod hire;
 mod hooks;
 mod hover;
+mod inertialess;
 mod jump_collapse;
 mod map;
 mod mission_cargo;
@@ -777,8 +778,12 @@ pub struct Session {
     goods: Goods,
     /// Whether the ship is thrusting, as the last sounds told it.
     thrusting: bool,
-    /// The engine glow's base level (see [`glow`](crate::glow)).
-    engine_glow: u8,
+    /// The engine glow's base level (see [`glow`](crate::glow)), an
+    /// `i16` as the original's, which an inertialess ship's dips to -1.
+    engine_glow: i16,
+    /// The player's speed along its heading, the original's +0x48, which
+    /// an inertialess ship flies by (see the `inertialess` module).
+    player_speed: f32,
     /// The sounds emitted since they were last taken.
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
@@ -1488,6 +1493,7 @@ impl Session {
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
+            player_speed: 0.0,
             sounds: Vec::new(),
             messages: Vec::new(),
             events: Vec::new(),
@@ -2003,32 +2009,47 @@ impl Session {
         match self.jump {
             None => {
                 let aim = self.steer(controls);
-                self.thrust(controls.thrust);
-                let handling = self.flying_handling();
-                if self.player_fate().row().drag {
-                    crate::flight::drag(&mut self.player);
+                if self.player_inertialess() {
+                    self.fly_inertialess(controls, aim);
+                } else {
+                    self.thrust(controls.thrust);
+                    let handling = self.flying_handling();
+                    if self.player_fate().row().drag {
+                        crate::flight::drag(&mut self.player);
+                    }
+                    let flight = self.flight_rules();
+                    player_step(&mut self.player, &handling, controls, aim, flight);
                 }
-                let flight = self.flight_rules();
-                player_step(&mut self.player, &handling, controls, aim, flight);
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
                 let slow_down = !self.stats.fast_jump;
                 let flight = self.flight_rules();
+                let inertialess = self.player_inertialess();
                 let stage = pre_jump::stage(
                     &self.player,
                     &handling,
                     bearing,
                     slow_down,
                     flight.player_turn,
+                    inertialess,
                 );
-                if stage == PreJump::Brake {
-                    self.aim = brake_aim(self.player.velocity);
-                } else {
+                // An inertialess ship's brake writes no aim (@0x6b6c3).
+                if stage != PreJump::Brake {
                     self.aim_at_jump(to);
+                } else if !inertialess {
+                    self.aim = brake_aim(self.player.velocity);
                 }
-                let thrust = pre_jump::fly(&mut self.player, &handling, bearing, slow_down, flight);
-                self.thrust(thrust);
+                let speed = inertialess.then_some(&mut self.player_speed);
+                let thrust = pre_jump::fly(
+                    &mut self.player,
+                    &handling,
+                    bearing,
+                    slow_down,
+                    flight,
+                    speed,
+                );
+                self.ramp_pre_jump(thrust);
                 let warp = if again {
                     warp
                 } else {
@@ -2152,6 +2173,12 @@ impl Session {
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
     /// the engine glow with it.
     fn thrust(&mut self, thrust: bool) {
+        self.sound_thrust(thrust);
+        self.engine_glow = ramp_glow(self.engine_glow, thrust);
+    }
+
+    /// Sounds the thrust starting or stopping as `thrust` says.
+    fn sound_thrust(&mut self, thrust: bool) {
         if thrust != self.thrusting {
             self.thrusting = thrust;
             self.sounds.push(if thrust {
@@ -2160,7 +2187,6 @@ impl Session {
                 SimSound::ThrustStopped
             });
         }
-        self.engine_glow = ramp_glow(self.engine_glow, thrust);
     }
 
     /// Fills the system with its initial NPC population, replacing any
@@ -3403,6 +3429,7 @@ impl Session {
             bearing,
             !self.stats.fast_jump,
             self.flight_rules().player_turn,
+            self.player_inertialess(),
         );
         let started = warp.is_none() && stage != PreJump::Brake;
         let warp = match stage {
@@ -4170,6 +4197,8 @@ impl Session {
             self.player.position = site.position;
         }
         self.player.velocity = Vec2::ZERO;
+        // `_PlayerLandOnStellar` @0x63409.
+        self.player_speed = 0.0;
         self.landed = Some(stellar);
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
@@ -5253,11 +5282,13 @@ impl Session {
     /// The engine glow's base level, as [`glow`](crate::glow) says: each
     /// tick in flight thrust raises it by 1 up to
     /// [`GLOW_CRUISE`](crate::GLOW_CRUISE) and coasting lowers it by 1 to
-    /// 0, so it stays within 0 to 24. It starts at 0, and landing and
-    /// beginning a jump put it back to 0.
+    /// 0, so it stays within 0 to 24; an inertialess ship's follows its
+    /// speed too. It starts at 0, and landing and beginning a jump put it
+    /// back to 0. The base drawn: none below none
+    /// ([`drawn_base`](crate::glow::drawn_base)).
     #[must_use]
     pub fn engine_glow(&self) -> u8 {
-        self.engine_glow
+        crate::glow::drawn_base(self.engine_glow)
     }
 
     /// The player's ship as it flies.
