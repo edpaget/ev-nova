@@ -100,7 +100,13 @@ impl Session {
             window: dock_window(record.fields.maneuver),
             reach: self.reach_of(sortie.carrier),
         };
-        let npc = fighter(&kind, sortie.ship, state, carrier);
+        // It takes its carrier's speed along the heading
+        // (`_LaunchFighter` @0x3d6d5-0x3d6e0).
+        let speed = match sortie.carrier {
+            ShipRef::Player => self.player_speed,
+            ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
+        };
+        let npc = fighter(&kind, sortie.ship, state, speed, carrier);
         match sortie.carrier {
             ShipRef::Player => self.join_as_fighter(npc, sortie.target),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
@@ -433,13 +439,15 @@ impl Session {
     }
 }
 
-/// A fighter of ship type `ship`, as `kind` gives it, at `state`,
-/// launched by `carrier`: its shield and armour full, carrying its
-/// class's stock weapons and rounds, its AI type its `InherentAI`, idle.
+/// A fighter of ship type `ship`, as `kind` gives it, at `state` and
+/// `speed` along its heading, launched by `carrier`: its shield and armour
+/// full, carrying its class's stock weapons and rounds, its AI type its
+/// `InherentAI`, idle.
 fn fighter(
     kind: &ShipKind,
     ship: crate::catalog::ShipId,
     state: ShipState,
+    speed: f32,
     carrier: Carrier,
 ) -> Npc {
     Npc {
@@ -454,6 +462,7 @@ fn fighter(
         stats: kind.stats,
         reserves: kind.stats.full(),
         state,
+        speed,
         mode: Mode::Flying,
         goal: Goal::Idle,
         condition: Condition::Intact,
@@ -728,7 +737,7 @@ mod tests {
             window: 0.0,
             reach: 0.0,
         };
-        let npc = fighter(&kind, ShipId(204), ShipState::default(), carrier);
+        let npc = fighter(&kind, ShipId(204), ShipState::default(), 0.0, carrier);
         assert_eq!(npc.cloak_gear, gear);
     }
 
@@ -1488,6 +1497,26 @@ mod tests {
             from.velocity,
             "at or past its own top speed: no gain"
         );
+    }
+
+    #[test]
+    fn a_fighter_takes_its_carriers_speed_along_its_heading() {
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        session.player_speed = 2.5;
+        session.npc_mut(raider).expect("there").speed = 1.5;
+        for (carrier, speed) in [(ShipRef::Player, 2.5), (ShipRef::Npc(raider), 1.5)] {
+            let sortie = Sortie {
+                carrier,
+                bay: BAY,
+                ship: VIPER,
+                from: ShipState::default(),
+                heading: 0.0,
+                target: None,
+            };
+            assert!(session.launch_fighter(&sortie));
+            assert_eq!(session.npcs().last().expect("launched").speed, speed);
+        }
     }
 
     #[test]

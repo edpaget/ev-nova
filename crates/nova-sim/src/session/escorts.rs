@@ -241,6 +241,8 @@ impl Session {
             stats: kind.stats,
             reserves: escort.reserves,
             state: self.player,
+            // `_RespawnEscort` zeroes +0x48 (@0x3d59d).
+            speed: 0.0,
             mode: Mode::Flying,
             goal: Goal::Formation { guard: None },
             condition: Condition::Intact,

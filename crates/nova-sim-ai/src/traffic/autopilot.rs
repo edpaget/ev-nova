@@ -3,7 +3,10 @@
 //! handling at its top speed [`TopSpeeds::own`], its `_ShipMaxSpeed`
 //! ([`Npc::top_speed`]), its thrust under the world's
 //! [`FlightRules`]. It decides nothing (the [`ai`](crate::ai) does); it only
-//! flies the goal it is given.
+//! flies the goal it is given. An inertialess ship
+//! ([`Npc::flies_inertialess`]) flies its controls through
+//! [`flight::inertialess_step`] instead, its brake and planning as the
+//! [`inertialess`] module says.
 //!
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
 //!   any sideways drift, and brakes (Down and thrust) once its stopping
@@ -156,6 +159,7 @@ use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
+use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
@@ -287,7 +291,8 @@ fn fly_mobile(
         max_speed: speeds.own,
         ..flight.handling(npc.stats.handling)
     };
-    if let Some(outcome) = unsteered(npc, &handling, speeds, flight, chance) {
+    let inertia = Inertia::of(npc, other, flight);
+    if let Some(outcome) = unsteered(npc, &handling, speeds, flight, inertia, chance) {
         return outcome;
     }
     hand_off(npc, sites);
@@ -295,33 +300,35 @@ fn fly_mobile(
     let controls = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
             Some(site) if over(&state, site) => return Outcome::Landed(stellar),
-            Some(site) => approach(&state, &handling, site.position),
-            None => brake(&state, &handling),
+            Some(site) => approach(&state, &handling, site.position, inertia),
+            None => brake(&state, &handling, inertia),
         },
-        Goal::EnterGate(gate) => match enter_box(npc, sites, type_widths, gate, &handling) {
-            Ok(controls) => controls,
-            Err(outcome) => return outcome,
-        },
+        Goal::EnterGate(gate) => {
+            match enter_box(npc, sites, type_widths, gate, &handling, inertia) {
+                Ok(controls) => controls,
+                Err(outcome) => return outcome,
+            }
+        }
         Goal::JumpOut => {
             if state.position.length() >= npc.stats.jump_distance {
                 return Outcome::JumpedOut;
             }
-            run_out(&state, &handling)
+            run_out(&state, &handling, inertia)
         }
         Goal::Follow(_) | Goal::Inspect(_) => match other {
-            Some(other) => follow(&state, &handling, other),
-            None => brake(&state, &handling),
+            Some(other) => follow(&state, &handling, other, inertia),
+            None => brake(&state, &handling, inertia),
         },
         Goal::Attack(_) => match other {
             Some(target) => attack(npc, target, &handling),
-            None => brake(&state, &handling),
+            None => brake(&state, &handling, inertia),
         },
         Goal::Snipe(_) => match other {
-            Some(target) if state.velocity.length() <= flight.at_rest_speed() => Controls {
+            Some(target) if at_rest(&state, flight, inertia) => Controls {
                 turn: steer(state.heading, fire::wanted_heading(npc, target), &handling),
                 ..Controls::default()
             },
-            _ => brake(&state, &handling),
+            _ => brake(&state, &handling, inertia),
         },
         Goal::Flee(_) => match other {
             Some(attacker) => {
@@ -340,18 +347,18 @@ fn fly_mobile(
                     if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
                         return Outcome::JumpedOut;
                     }
-                    run_out(&state, &handling)
+                    run_out(&state, &handling, inertia)
                 }
             }
-            None => brake(&state, &handling),
+            None => brake(&state, &handling, inertia),
         },
         Goal::Assist(help) => match other {
             Some(player)
                 if !assist::within(&state, player, assist::reach(help, handling.turn_rate)) =>
             {
-                follow(&state, &handling, player)
+                follow(&state, &handling, player, inertia)
             }
-            _ => brake(&state, &handling),
+            _ => brake(&state, &handling, inertia),
         },
         Goal::Formation { .. } => match (other, npc.formation()) {
             (Some(leader), Some(place)) => {
@@ -362,19 +369,48 @@ fn fly_mobile(
                     keep_formation(npc, leader, slot, &handling);
                     return Outcome::Flying;
                 }
-                rejoin(&state, &handling, slot, leader.velocity)
+                rejoin(&state, &handling, slot, leader.velocity, inertia)
             }
-            _ => brake(&state, &handling),
+            _ => brake(&state, &handling, inertia),
         },
-        Goal::Dock(_) => match dock(npc, other, &handling, flight) {
+        Goal::Dock(_) => match dock(npc, other, &handling, flight, inertia) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
-        Goal::Idle => brake(&state, &handling),
+        Goal::Idle => brake(&state, &handling, inertia),
         Goal::Hold => Controls::default(),
     };
-    flight::step(&mut npc.state, &handling, controls, flight, Flyer::Npc);
+    step(npc, &handling, controls, flight, inertia);
     Outcome::Flying
+}
+
+/// Flies `npc` one tick under `controls` as `inertia` says: an inertial
+/// ship's [`flight::step`], an inertialess one's
+/// [`flight::inertialess_step`] (see [`inertialess`]).
+fn step(
+    npc: &mut Npc,
+    handling: &Handling,
+    controls: Controls,
+    flight: FlightRules,
+    inertia: Inertia,
+) {
+    match inertia {
+        Inertia::Inertial => flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc),
+        Inertia::Inertialess { .. } => {
+            flight::inertialess_step(&mut npc.state, &mut npc.speed, handling, controls, flight);
+        }
+    }
+}
+
+/// Whether a sniper at `state` is at rest enough to turn to its target:
+/// moving no faster than [`FlightRules::at_rest_speed`] with inertia, and
+/// not [`moving`](inertialess::moving) inertialess, which substate 1's
+/// brake stops braking at.
+fn at_rest(state: &ShipState, flight: FlightRules, inertia: Inertia) -> bool {
+    match inertia {
+        Inertia::Inertial => state.velocity.length() <= flight.at_rest_speed(),
+        Inertia::Inertialess { .. } => !inertialess::moving(state.velocity),
+    }
 }
 
 /// State 1's hand-off (@0x8d8b8-0x8d8fe): a landing goal whose stellar
@@ -399,13 +435,14 @@ fn enter_box(
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     gate: StellarId,
     handling: &Handling,
+    inertia: Inertia,
 ) -> Result<Controls, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == gate) else {
-        return Ok(brake(&npc.state, handling));
+        return Ok(brake(&npc.state, handling, inertia));
     };
     let reach = gate_entry::gate_reach(site, type_widths);
     if !gate_entry::inside(site.position, npc.state.position, reach) {
-        return Ok(approach(&npc.state, handling, site.position));
+        return Ok(approach(&npc.state, handling, site.position, inertia));
     }
     npc.state.velocity = Vec2::ZERO;
     npc.mode = Mode::EnteringGate {
@@ -424,9 +461,10 @@ fn dock(
     carrier: Option<&ShipState>,
     handling: &Handling,
     flight: FlightRules,
+    inertia: Inertia,
 ) -> Result<Controls, Outcome> {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
-        return Ok(brake(&npc.state, handling));
+        return Ok(brake(&npc.state, handling, inertia));
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
@@ -436,6 +474,7 @@ fn dock(
             handling,
             carrier.position,
             carrier.velocity,
+            inertia,
         ));
     }
     if within(dock.reach) {
@@ -444,20 +483,31 @@ fn dock(
             ship: npc.ship,
         });
     }
-    dock_in(npc, carrier, handling, flight);
+    dock_in(npc, carrier, handling, flight, inertia);
     Err(Outcome::Flying)
 }
 
 /// Flies back to `to`, which moves at `velocity`: within
 /// [`APPROACH_FORMATION`] of it on each axis, closing at the speed it can
 /// still brake from; farther off, at full speed towards it.
-fn rejoin(state: &ShipState, handling: &Handling, to: Vec2, velocity: Vec2) -> Controls {
+fn rejoin(
+    state: &ShipState,
+    handling: &Handling,
+    to: Vec2,
+    velocity: Vec2,
+    inertia: Inertia,
+) -> Controls {
     let off = to - state.position;
     if off.x.abs() <= APPROACH_FORMATION && off.y.abs() <= APPROACH_FORMATION {
-        close_on(state, handling, to, velocity, 0.0)
+        close_on(state, handling, to, velocity, 0.0, inertia)
     } else {
         let distance = off.length();
-        match_velocity(state, handling, off * (handling.max_speed / distance))
+        match_velocity(
+            state,
+            handling,
+            off * (handling.max_speed / distance),
+            inertia,
+        )
     }
 }
 
@@ -465,8 +515,15 @@ fn rejoin(state: &ShipState, handling: &Handling, to: Vec2, velocity: Vec2) -> C
 /// window (see the module docs): it turns at the carrier, thrusting
 /// within its turn rate and [`DOCK_TURN_SLACK`] of it, flies, and is
 /// pulled towards it on each axis farther off than
-/// [`FORMATION_NUDGE`] ticks' acceleration, under `flight`.
-fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling, flight: FlightRules) {
+/// [`FORMATION_NUDGE`] ticks' acceleration, under `flight`, as `inertia`
+/// says.
+fn dock_in(
+    npc: &mut Npc,
+    carrier: &ShipState,
+    handling: &Handling,
+    flight: FlightRules,
+    inertia: Inertia,
+) {
     let wanted = bearing(npc.state.position, carrier.position);
     let controls = Controls {
         thrust: shortest_turn(npc.state.heading, wanted).abs()
@@ -475,7 +532,7 @@ fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling, flight: Flig
         reverse: false,
         ..Controls::default()
     };
-    flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc);
+    step(npc, handling, controls, flight, inertia);
     let pull = handling.accel * FORMATION_NUDGE;
     let towards = |at: f32, to: f32| {
         let off = to - at;
@@ -494,18 +551,23 @@ fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling, flight: Flig
 
 /// Heads straight out from the centre at full speed; from the centre
 /// itself, ahead.
-fn run_out(state: &ShipState, handling: &Handling) -> Controls {
+fn run_out(state: &ShipState, handling: &Handling, inertia: Inertia) -> Controls {
     let away = if state.position.length() > 0.0 {
         heading_of(state.position)
     } else {
         state.heading
     };
-    match_velocity(state, handling, flight::facing(away) * handling.max_speed)
+    match_velocity(
+        state,
+        handling,
+        flight::facing(away) * handling.max_speed,
+        inertia,
+    )
 }
 
 /// Turns from `heading` towards `wanted`, not at all within half a tick's
 /// turn, where turning would only overshoot.
-fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
+pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     let off = shortest_turn(heading, wanted);
     let half_turn = handling.turn_rate / 2.0;
     if off > half_turn {
@@ -544,12 +606,19 @@ fn attack(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
 /// cap, the lower of its own and its lead's top speed (@0x34c68-0x34d0d),
 /// once the next speed would reach it (@0x34d10-0x34d2a), and leaves the
 /// velocity at the last speed, which lies within 1.165 above the cap.
-fn glide(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance + ?Sized)) {
+fn glide(
+    npc: &mut Npc,
+    tick: u32,
+    speeds: TopSpeeds,
+    flown: Flown,
+    chance: &mut (impl Chance + ?Sized),
+) {
     if !burst(
         npc,
         glide_speed(tick),
         glide_speed(tick + 1),
         speeds,
+        flown,
         chance,
     ) {
         npc.mode = Mode::JumpingIn { tick: tick + 1 };
@@ -560,23 +629,28 @@ fn glide(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance 
 /// gate or waiting at one, drifting while not intact, gliding in from
 /// hyperspace (intact or disabled), bursting out of a gate, or holding
 /// its course after either (see the module docs), on `handling` under
-/// `flight`, its burst ending at `speeds`' [`burst_cap`](TopSpeeds::burst_cap)
-/// and its wait rolled on `chance`. What became of it, if it did.
+/// `flight`, as `inertia` says, its burst ending at `speeds`'
+/// [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on `chance`.
+/// What became of it, if it did. A disabled or breaking-up ship's speed
+/// along its heading slows with its velocity, inertialess or not
+/// (@0x3398f-0x339a1).
 fn unsteered(
     npc: &mut Npc,
     handling: &Handling,
     speeds: TopSpeeds,
     flight: FlightRules,
+    inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
+    let flown = Flown { handling, inertia };
     match (npc.mode, npc.condition == Condition::Intact) {
         (Mode::EnteringGate { gate, ticks_left }, _) => {
-            return Some(enter_gate(npc, gate, ticks_left));
+            return Some(enter_gate(npc, gate, ticks_left, flown));
         }
         (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
         (Mode::HeldAtGate { ticks_left }, _) => hold_at_gate(npc, ticks_left),
         (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
-            glide(npc, tick, speeds, chance);
+            glide(npc, tick, speeds, flown, chance);
         }
         (mode, false) => {
             match mode {
@@ -591,18 +665,13 @@ fn unsteered(
             }
             if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
                 flight::drag(&mut npc.state);
+                npc.speed *= flight::DISABLED_DRAG;
             }
-            flight::step(
-                &mut npc.state,
-                handling,
-                Controls::default(),
-                flight,
-                Flyer::Npc,
-            );
+            step(npc, handling, Controls::default(), flight, inertia);
         }
-        (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, chance),
-        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, chance),
-        (Mode::Coasting { ticks_left }, true) => coast(npc, ticks_left),
+        (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, flown, chance),
+        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, flown, chance),
+        (Mode::Coasting { ticks_left }, true) => coast(npc, ticks_left, flown),
         (Mode::Flying, true) => return None,
     }
     Some(Outcome::Flying)
@@ -611,9 +680,11 @@ fn unsteered(
 /// One tick of `npc` entering `gate`, `ticks_left` of its wait left
 /// (see [`gate_entry`]): still, whatever its condition and goal, as
 /// `_HandleShip` counts +0x4c down for every ship and the fade reads only
-/// the sub-goal; and gone once the wait is out.
-fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32) -> Outcome {
-    npc.state.velocity = Vec2::ZERO;
+/// the sub-goal; and gone once the wait is out. An inertialess ship's
+/// velocity follows its speed meanwhile, as `flown` says
+/// ([`inertialess::drift`]).
+fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> Outcome {
+    flown.hold(npc);
     let left = ticks_left.saturating_sub(1);
     if left == 0 {
         return Outcome::EnteredGate(gate);
@@ -661,7 +732,13 @@ fn hold_at_gate(npc: &mut Npc, ticks_left: u32) {
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
 /// [`exit_speed`], ending as [`burst`] says. On its first tick it is out
 /// of its gate ([`Npc::emerges_from`] cleared, @0x8dd8a-0x8dd93).
-fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance + ?Sized)) {
+fn leave_gate(
+    npc: &mut Npc,
+    tick: u32,
+    speeds: TopSpeeds,
+    flown: Flown,
+    chance: &mut (impl Chance + ?Sized),
+) {
     if tick == 0 {
         // The pass that starts the burst sets goal 8 and +0x6c = -1
         // (`_HighLevelAIHandler` @0x8dd8a-0x8dd93).
@@ -672,6 +749,7 @@ fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Ch
         exit_speed(npc.led_out, tick),
         exit_speed(npc.led_out, tick + 1),
         speeds,
+        flown,
         chance,
     ) {
         npc.mode = Mode::LeavingGate { tick: tick + 1 };
@@ -688,17 +766,31 @@ fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Ch
 /// course for [`POST_BURST_WAIT`] + `Rand(`[`POST_BURST_SPREAD`]`)`
 /// ticks first ([`Mode::Coasting`], @0x34d5c-0x34d8b), its trigger
 /// released.
+///
+/// An inertialess ship (as `flown` says) takes `speed` as its speed along
+/// its heading instead (@0x34bdf-0x34bf0), after its velocity has
+/// followed the last tick's and it has moved (@0x34250-0x342aa), and its
+/// velocity is zeroed as the burst ends (@0x34d46-0x34d59).
 fn burst(
     npc: &mut Npc,
     speed: f32,
     next: f32,
     speeds: TopSpeeds,
+    flown: Flown,
     chance: &mut (impl Chance + ?Sized),
 ) -> bool {
-    npc.state.velocity = flight::facing(npc.state.heading) * speed;
-    npc.state.position = npc.state.position + npc.state.velocity;
+    if let Inertia::Inertialess { .. } = flown.inertia {
+        inertialess::drift(npc, flown.handling);
+        npc.speed = speed;
+    } else {
+        npc.state.velocity = flight::facing(npc.state.heading) * speed;
+        npc.state.position = npc.state.position + npc.state.velocity;
+    }
     if next > speeds.burst_cap() {
         return false;
+    }
+    if let Inertia::Inertialess { .. } = flown.inertia {
+        npc.state.velocity = Vec2::ZERO;
     }
     npc.mode = if speeds.lead.is_some() {
         Mode::Flying
@@ -734,10 +826,36 @@ pub(crate) fn cut_wait(npc: &mut Npc) {
 /// firing, as `_HandleShip` skips its steering, thrust, over-speed and
 /// fire while +0x4c runs (@0x34a54-0x34a72 to @0x3501f) but moves it
 /// first (@0x34274-0x342aa), and flies once the wait is over
-/// (@0x3501f-0x35048).
-fn coast(npc: &mut Npc, ticks_left: u32) {
-    npc.state.position = npc.state.position + npc.state.velocity;
+/// (@0x3501f-0x35048). An inertialess ship's velocity follows its speed
+/// as it moves (@0x3425f; [`inertialess::drift`]).
+fn coast(npc: &mut Npc, ticks_left: u32, flown: Flown) {
+    match flown.inertia {
+        Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
+        Inertia::Inertialess { .. } => inertialess::drift(npc, flown.handling),
+    }
     count_down(npc, ticks_left);
+}
+
+/// What a ship with no say in its flight flies on: its handling, and
+/// whether it is inertialess.
+#[derive(Clone, Copy)]
+struct Flown<'a> {
+    /// Its handling.
+    handling: &'a Handling,
+    /// Whether it is inertialess.
+    inertia: Inertia,
+}
+
+impl Flown<'_> {
+    /// Holds `npc` where it is, as a ship entering a gate is held: still
+    /// with inertia; inertialess, its velocity following its speed
+    /// ([`inertialess::drift`]).
+    fn hold(self, npc: &mut Npc) {
+        match self.inertia {
+            Inertia::Inertial => npc.state.velocity = Vec2::ZERO,
+            Inertia::Inertialess { .. } => inertialess::drift(npc, self.handling),
+        }
+    }
 }
 
 /// Counts `npc`'s wait on its course down a tick from `ticks_left`
@@ -759,21 +877,30 @@ fn over(state: &ShipState, site: &LandingSite) -> bool {
 
 /// Heads for `target` at full speed, and brakes once the ship's stopping
 /// distance reaches the distance left.
-fn approach(state: &ShipState, handling: &Handling, target: Vec2) -> Controls {
+fn approach(state: &ShipState, handling: &Handling, target: Vec2, inertia: Inertia) -> Controls {
     let to = target - state.position;
     let distance = to.length();
-    if distance <= stopping_distance(state, handling) {
-        return brake(state, handling);
+    if distance <= stopping_distance(state, handling, inertia) {
+        return brake(state, handling, inertia);
     }
-    match_velocity(state, handling, to * (handling.max_speed / distance))
+    match_velocity(
+        state,
+        handling,
+        to * (handling.max_speed / distance),
+        inertia,
+    )
 }
 
 /// How far a ship at `state` travels while it turns to face against its
 /// motion and brakes to a stop; none at rest, and for ever when it cannot
 /// turn or thrust. At rest is at or below [`AT_REST_SPEED`], the
 /// original's thrust's, whatever the thrust divisor: a threshold of the
-/// engine's own planning, not a flight rule.
-fn stopping_distance(state: &ShipState, handling: &Handling) -> f32 {
+/// engine's own planning, not a flight rule. An inertialess ship's is
+/// [`inertialess::stopping_distance`].
+fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -> f32 {
+    if let Inertia::Inertialess { speed } = inertia {
+        return inertialess::stopping_distance(speed, handling);
+    }
     let speed = state.velocity.length();
     if speed <= AT_REST_SPEED {
         return 0.0;
@@ -790,8 +917,12 @@ fn stopping_distance(state: &ShipState, handling: &Handling) -> f32 {
 
 /// Turns to face against the ship's motion (Down) and thrusts once it
 /// does, until thrust would only push it the other way; nothing at or
-/// below [`AT_REST_SPEED`] (see [`stopping_distance`]).
-fn brake(state: &ShipState, handling: &Handling) -> Controls {
+/// below [`AT_REST_SPEED`] (see [`stopping_distance`]). An inertialess
+/// ship brakes as substate 1 does ([`inertialess::brake`]).
+fn brake(state: &ShipState, handling: &Handling, inertia: Inertia) -> Controls {
+    if let Inertia::Inertialess { .. } = inertia {
+        return inertialess::brake(state);
+    }
     let speed = state.velocity.length();
     if speed <= AT_REST_SPEED {
         return Controls::default();
@@ -811,13 +942,14 @@ fn brake(state: &ShipState, handling: &Handling) -> Controls {
 /// Keeps within [`FOLLOW_DISTANCE`] of a lead at `lead`: closing at the
 /// speed it can still brake from in the distance beyond it, on top of the
 /// lead's velocity, and matching the lead's velocity within it.
-fn follow(state: &ShipState, handling: &Handling, lead: &ShipState) -> Controls {
+fn follow(state: &ShipState, handling: &Handling, lead: &ShipState, inertia: Inertia) -> Controls {
     close_on(
         state,
         handling,
         lead.position,
         lead.velocity,
         FOLLOW_DISTANCE,
+        inertia,
     )
 }
 
@@ -830,18 +962,19 @@ fn close_on(
     target: Vec2,
     velocity: Vec2,
     margin: f32,
+    inertia: Inertia,
 ) -> Controls {
     let to = target - state.position;
     let distance = to.length();
     let beyond = (distance - margin).max(0.0);
-    let speed = braking_speed(beyond, handling).min(handling.max_speed);
+    let speed = braking_speed(beyond, handling, inertia).min(handling.max_speed);
     // None within the margin, where `to` may be no direction at all.
     let closing = if distance > margin {
         to * (speed / distance)
     } else {
         Vec2::ZERO
     };
-    match_velocity(state, handling, velocity + closing)
+    match_velocity(state, handling, velocity + closing, inertia)
 }
 
 /// Keeps formation on `slot` beside a leader at `leader`
@@ -872,8 +1005,12 @@ fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2, handling: &Hand
 
 /// The fastest a ship can go and still turn round and stop within
 /// `distance`: the `v` with `v T + v² / 2a = distance`, `T` the ticks a
-/// half turn takes. None when it cannot turn or thrust.
-fn braking_speed(distance: f32, handling: &Handling) -> f32 {
+/// half turn takes. None when it cannot turn or thrust. An inertialess
+/// ship's is [`inertialess::braking_speed`].
+fn braking_speed(distance: f32, handling: &Handling, inertia: Inertia) -> f32 {
+    if let Inertia::Inertialess { .. } = inertia {
+        return inertialess::braking_speed(distance, handling);
+    }
     if handling.turn_rate <= 0.0 || handling.accel <= 0.0 {
         return 0.0;
     }
@@ -884,8 +1021,17 @@ fn braking_speed(distance: f32, handling: &Handling) -> f32 {
 
 /// Turns towards the change that takes the ship's velocity to `desired`,
 /// and thrusts once it faces it; coasts once the velocity is within half
-/// a tick's thrust of it.
-fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Controls {
+/// a tick's thrust of it. An inertialess ship matches its speed instead
+/// ([`inertialess::match_speed`]).
+fn match_velocity(
+    state: &ShipState,
+    handling: &Handling,
+    desired: Vec2,
+    inertia: Inertia,
+) -> Controls {
+    if let Inertia::Inertialess { speed } = inertia {
+        return inertialess::match_speed(state, speed, handling, desired);
+    }
     let change = desired - state.velocity;
     if change.length() <= handling.accel / 2.0 {
         return Controls::default();
@@ -915,6 +1061,29 @@ mod tests {
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
     use std::collections::BTreeMap;
+
+    // The planning helpers flying with inertia, as their tests here fly
+    // them (see `traffic::inertialess` for the inertialess arms).
+
+    fn stopping_distance(state: &ShipState, handling: &Handling) -> f32 {
+        super::stopping_distance(state, handling, Inertia::Inertial)
+    }
+
+    fn braking_speed(distance: f32, handling: &Handling) -> f32 {
+        super::braking_speed(distance, handling, Inertia::Inertial)
+    }
+
+    fn brake(state: &ShipState, handling: &Handling) -> Controls {
+        super::brake(state, handling, Inertia::Inertial)
+    }
+
+    fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Controls {
+        super::match_velocity(state, handling, desired, Inertia::Inertial)
+    }
+
+    fn follow(state: &ShipState, handling: &Handling, lead: &ShipState) -> Controls {
+        super::follow(state, handling, lead, Inertia::Inertial)
+    }
 
     /// Flies `npc` at its own top speed, with no lead: the autopilot as
     /// most tests see it.

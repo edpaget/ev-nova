@@ -112,6 +112,7 @@ pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod gate_entry;
+pub mod inertialess;
 pub mod npc;
 pub mod persons;
 pub mod quote;
@@ -1622,6 +1623,10 @@ impl Traffic {
                 stats: kind.stats,
                 reserves,
                 state: ship.state,
+                // Every spawn zeroes +0x48 with the velocity, and a fleet's
+                // escort copies its lead's (`_HyperSpawnFleet` @0x423dd-0x423e7),
+                // as freshly zeroed.
+                speed: 0.0,
                 mode: match ship.entry {
                     Entry::Placed => Mode::Flying,
                     Entry::JumpingIn => Mode::JumpingIn { tick: 0 },

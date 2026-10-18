@@ -28,6 +28,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         stats,
         reserves: stats.full(),
         state: ShipState::default(),
+        speed: 0.0,
         mode: Mode::Flying,
         goal: Goal::Idle,
         condition: Condition::Intact,

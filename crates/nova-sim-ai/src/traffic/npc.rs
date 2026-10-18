@@ -10,9 +10,10 @@ use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
-use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
-use crate::flight::ShipState;
+use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, KEEP_FORMATION};
+use crate::flight::{Flyer, ShipState};
 use crate::geometry::Vec2;
+use crate::inertialess::{InertialDampener, is_inertialess};
 use crate::market::Good;
 use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
@@ -240,6 +241,14 @@ pub struct Npc {
     pub reserves: Reserves,
     /// Where it is and how it moves.
     pub state: ShipState,
+    /// Its speed along its heading, the original's +0x48, which an
+    /// inertialess ship flies by (see [`Npc::flies_inertialess`]): none as
+    /// it spawns, as every spawn zeroes it with the velocity
+    /// (`_GenericRandomShipSpawn` @0x3c954, `_SpawnPerson` @0x41037,
+    /// `_HyperShipSpawn` @0x42ab1, `_SetupShipsInSystem` @0x42f81, and
+    /// the rest), and a fighter's its carrier's (`_LaunchFighter`
+    /// @0x3d6da-0x3d6e0).
+    pub speed: f32,
     /// Whether it is still jumping in.
     pub mode: Mode,
     /// What it is doing.
@@ -533,6 +542,39 @@ impl Npc {
         self.escort
             .map(|duty| duty.formation)
             .or_else(|| self.mission.and_then(|mark| mark.formation))
+    }
+
+    /// Whether it keeps close formation with its leader, at `leader`:
+    /// it keeps formation ([`Goal::Formation`]) on a slot
+    /// ([`Npc::formation`]) beside a leader that is there, within
+    /// [`KEEP_FORMATION`] of the slot on each axis, where the autopilot
+    /// moves it with the leader. That is the engine's counterpart of the
+    /// original's substate 0xc, which `_IsShipInCloseForm` tests
+    /// (@0x82f54-0x82f69).
+    #[must_use]
+    pub fn keeps_close_formation(&self, leader: Option<&ShipState>) -> bool {
+        let (Goal::Formation { .. }, Some(leader), Some(place)) =
+            (self.goal, leader, self.formation())
+        else {
+            return false;
+        };
+        let off = place.position(leader) - self.state.position;
+        off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION
+    }
+
+    /// Whether it flies inertialess, its leader at `leader` (see
+    /// [`is_inertialess`]): by its hull, or by an inertial dampener as
+    /// `rule` counts an NPC's; never while it
+    /// [keeps close formation](Npc::keeps_close_formation).
+    #[must_use]
+    pub fn flies_inertialess(&self, leader: Option<&ShipState>, rule: InertialDampener) -> bool {
+        is_inertialess(
+            self.stats.inertialess_hull,
+            self.stats.dampener,
+            Flyer::Npc,
+            self.keeps_close_formation(leader),
+            rule,
+        )
     }
 
     /// Whether it fights `ship` directly: it is intact, flying, and

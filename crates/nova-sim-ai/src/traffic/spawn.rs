@@ -889,8 +889,9 @@ fn specific_dude_ship(
 /// cloaking ([`NewShip::cloaked`], `_DoShipCloak` @0x43114-0x43121). The
 /// original also zeroes a
 /// rescue ship's +0x48, an inertialess ship's speed along its heading
-/// (`_AdjustInertialessShipVelocity` @0x334c9-0x334d9), which the engine
-/// does not keep: the zero velocity covers it.
+/// (`_AdjustInertialessShipVelocity` @0x334c9-0x334d9), at which every
+/// ship the traffic adds starts anyway
+/// ([`Npc::speed`](crate::traffic::npc::Npc::speed)).
 pub fn mission_ships(
     table: &SpawnTable,
     spawn: &MissionSpawn,

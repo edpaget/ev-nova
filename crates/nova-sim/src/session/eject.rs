@@ -361,6 +361,8 @@ impl Session {
             stats: kind.stats,
             reserves,
             state: self.player,
+            // The ship left as it was, its speed along its heading too.
+            speed: self.player_speed,
             mode: Mode::Flying,
             goal: Goal::Idle,
             condition,
