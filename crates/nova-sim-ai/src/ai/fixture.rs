@@ -2,7 +2,7 @@
 
 use crate::ai::fire::AmmoLeft;
 use crate::ai::{Blessed, Blessing, PlayerSide, Surroundings};
-use crate::catalog::{GovtId, GovtRecord, LandingSite, WeaponId, WeaponRecord};
+use crate::catalog::{EscortClass, GovtId, GovtRecord, LandingSite, WeaponId, WeaponRecord};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, LauncherRounds};
 use crate::combat::hull::{Condition, HullSpec};
@@ -109,6 +109,8 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         blessing: Blessing::NONE,
         ship: crate::catalog::ShipId(128),
         combat_govt: None,
+        target: None,
+        class: EscortClass::Freighter,
     }
 }
 

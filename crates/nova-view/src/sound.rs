@@ -154,6 +154,13 @@ pub struct CombatSound {
     /// Where it happened from the player, in whole pixels, x right and y
     /// down: how far away it is heard.
     pub offset: (i32, i32),
+    /// The original's priority for it, `_PlaySoundDistance`'s third
+    /// argument: how much it matters when the voices are full.
+    pub priority: u16,
+    /// Whether it is skipped while its `snd ` plays on any voice, as the
+    /// original's looped weapons are (`ST_IsSoundPlaying`); named after
+    /// [`UiSound::PortAmbient`]'s field.
+    pub until_stopped: bool,
 }
 
 /// A sound a screen reports.
@@ -237,22 +244,26 @@ mod tests {
 
     #[test]
     fn a_combat_sound_is_its_snd_heard_from_where_it_happened() {
-        let fired = Sound::Combat(CombatSound {
+        let heard = CombatSound {
             sound: SoundId(208),
             offset: (-300, 40),
-        });
-        assert_eq!(
+            priority: 4,
+            until_stopped: true,
+        };
+        let fired = Sound::Combat(heard);
+        assert_eq!(fired, Sound::Combat(heard));
+        assert_ne!(
             fired,
             Sound::Combat(CombatSound {
-                sound: SoundId(208),
-                offset: (-300, 40),
+                offset: (0, 0),
+                ..heard
             })
         );
         assert_ne!(
             fired,
             Sound::Combat(CombatSound {
-                sound: SoundId(208),
-                offset: (0, 0),
+                priority: 6,
+                ..heard
             })
         );
     }

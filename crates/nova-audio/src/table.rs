@@ -5,7 +5,8 @@
 //! resources' own (all 227 are in `Nova Sounds.ndat`); "the guide" is the
 //! community *EV Nova Resource ID Guide* (github.com/andrews05/evstuff,
 //! `guides/resourceidguide.html`, "snd IDs"), which lists the engine's
-//! fixed sounds.
+//! fixed sounds. The priority each event plays at is
+//! [`crate::priority`]'s.
 
 use nova_data::SoundId;
 
@@ -181,15 +182,13 @@ impl SoundTable {
     ///   runs (`_InitEVNova` @0x47196, @0x47428).
     /// - `escort_repaired`: 154, `_beepSnd[4]`, which `_HandleShip` plays
     ///   after "Escort repaired." or "Fighter repaired." as a former
-    ///   escort rejoins (@0x33bc9-0x33bd4). The original plays it on
-    ///   channel 8, which is not modelled.
+    ///   escort rejoins (@0x33bc9-0x33bd4), at priority 8.
     /// - `red_alert`: 370, "Red Alert", which `_LoadSounds` loads into
     ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
-    ///   (@0x68cff). The original plays it at priority 5; the audio port
-    ///   has no channel priorities, so that is not modelled.
+    ///   (@0x68cff), at priority 5.
     /// - `jettison`: 154, `_beepSnd[4]` again, which `_JettisonCargo`
     ///   plays when anything went in flight (@0x3e31a-0x3e33d), at
-    ///   priority 1, not modelled either.
+    ///   priority 1.
     /// - `scan_failed`: 151, `_beepSnd[1]`, which `_ScanPlayer` plays as
     ///   it fails a mission it found that is not hidden (@0x7e721-0x7e740),
     ///   at priority 1.
@@ -258,7 +257,7 @@ impl SoundTable {
     ///   (@0x1c22c-0x1c23e) and `_HandlePlayer` plays while the player's
     ///   death timer is above 1.0 and it is not already playing
     ///   (@0x6f1e4-0x6f227, `_ST_IsSoundPlaying` @0x6f200). The original
-    ///   plays it at priority 15, not modelled.
+    ///   plays it at priority 15.
     /// - `eject`: 372, "Eject", which `_LoadSounds` loads into
     ///   `_escapePodSnd` (@0x1c240-0x1c252) and `_HandlePlayer` plays as the
     ///   player ejects, with no test of whether it is still playing
@@ -269,11 +268,11 @@ impl SoundTable {
     ///   `_explodSnd`, which `_HandlePlayer` plays as a sabotage outfit goes
     ///   off (`_explodSnd[0]`, `PlaySound` @0x69375), with no test of
     ///   whether it is still playing. The original plays it at priority
-    ///   100, not modelled.
+    ///   100.
     /// - `jump_collapsed`: 151, "Beep2", `_beepSnd[1]`, which
     ///   `_HandlePlayer` plays as a disabled player's pre-jump collapses,
     ///   after halting the warp-up sounds (`_PlaySound` @0x68aaf). The
-    ///   original plays it at priority 50, not modelled.
+    ///   original plays it at priority 50.
     /// - `refused`: 153, "Beep4", `_beepSnd[3]`, the shared refusal beep,
     ///   which `_HandlePlayer` plays as it refuses the player info key
     ///   during a jump or while the ship breaks up (`PlaySound`
@@ -281,7 +280,8 @@ impl SoundTable {
     ///   (@0x6b89f, @0x6b9cc, @0x6ba72), and which
     ///   `_HandlePlayerCommunication` plays with every refusal of a hail,
     ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). The
-    ///   original plays it at priority 5, not modelled.
+    ///   original plays it at priority 5 or 1 by its site (see
+    ///   [`priority::REFUSED`](crate::priority::REFUSED)).
     /// - `map_open`: 152, "Beep3", `_beepSnd[2]`, which `_HandlePlayer`
     ///   plays as the map key's press passes every gate, just before it
     ///   calls `_DoSystemMap` (`PlaySound` @0x6a7e4-0x6a809). A refused
@@ -305,7 +305,7 @@ impl SoundTable {
     ///   board goes aboard: as a boarded person offers its mission, before
     ///   `_OfferOneMission` (@0x65907), and before `_DoPlunderDialog` on
     ///   its two plunder paths (@0x659b3, @0x65f00). The original plays it
-    ///   at priority 8, not modelled.
+    ///   at priority 8.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),

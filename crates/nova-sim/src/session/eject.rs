@@ -371,6 +371,7 @@ impl Session {
             pick: None,
             target: None,
             provoked: 0.0,
+            stray: 0.0,
             aggression: 0,
             inspected: None,
             booty: None,
@@ -708,6 +709,39 @@ mod tests {
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
         assert_eq!(hulk(&session).ion, Ion::default());
+    }
+
+    #[test]
+    fn an_ejecting_players_turn_of_exits_goes_on_in_the_pod_by_the_engine_alone() {
+        use crate::combat::exits::ExitKind;
+        use crate::rulebook::Rulebook;
+        for (reading, gun) in [(RuleSource::Engine, 1), (RuleSource::Bible, 0)] {
+            let catalog = ejecting(100);
+            let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
+            let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
+            session.armament.exit_cursors_mut().step(ExitKind::Gun);
+            to_the_breakup(&mut session, &catalog, false);
+            assert!(in_the_pod(&session));
+            assert_eq!(
+                session.armament.exit_cursors().next(ExitKind::Gun),
+                gun,
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ejecting_players_fold_set_goes_back_to_0_in_the_pod_by_either_reading() {
+        use crate::rulebook::Rulebook;
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = ejecting(100);
+            let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
+            let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
+            session.armament = session.armament.clone().with_fold_set(2);
+            to_the_breakup(&mut session, &catalog, false);
+            assert!(in_the_pod(&session));
+            assert_eq!(session.armament.fold_set(), 0, "{reading:?}");
+        }
     }
 
     #[test]

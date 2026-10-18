@@ -74,12 +74,13 @@
 
 use std::cell::RefCell;
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova::app::start_screen;
-use nova::audio::{game_audio, music_warning};
+use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
 use nova::developer::flight_overlays;
@@ -90,16 +91,37 @@ use nova::rulebook::game_rulebook;
 use nova::saves::FilePilots;
 use nova::settings::game_settings;
 use nova::{cli, exit};
-use nova_audio::{FileSettings, KiraAudio, SettingsStore};
+use nova_audio::{Audio, AudioCore, FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{Chance, PilotKeeper, PilotStore};
+use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
 use winit::event_loop::EventLoop;
+
+/// The audio core over the default device, playing `data`'s sounds and
+/// the soundtrack in `dir`, with as many voices as `rulebook` says; none
+/// when the device did not open. Each warning is printed.
+fn open_audio(
+    data: &Rc<GameData>,
+    dir: &Path,
+    rulebook: &Rulebook,
+) -> Option<AudioCore<Box<dyn Audio>>> {
+    let (music, warning) = music_warning(open_music(dir));
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    let voices = voice_limit(rulebook);
+    let device = KiraAudio::open(Rc::clone(data), music).map(|audio| audio.with_voices(voices));
+    let (audio, warning) = game_audio(device);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    audio
+}
 
 /// Nanoseconds since 1970, wrapped: a different seed each run.
 fn run_seed() -> u64 {
@@ -181,10 +203,7 @@ fn main() -> ExitCode {
         }
         Err(error) => eprintln!("nova: running without dialogs: {error}"),
     }
-    let (music, warning) = music_warning(open_music(&dir));
-    warn(warning);
-    let (audio, warning) = game_audio(KiraAudio::open(Rc::clone(&data), music));
-    warn(warning);
+    let audio = open_audio(&data, &dir, &rulebook);
     let runner =
         Runner::new(Rc::clone(&data), screen, fonts).with_diagnostics(Box::new(std::io::stderr()));
     let runner = match audio {

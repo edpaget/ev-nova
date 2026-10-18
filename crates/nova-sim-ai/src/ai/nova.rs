@@ -391,13 +391,8 @@ mod tests {
             .collect();
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Player,
-            by: Some(ShipRef::Player),
             damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player)
         };
         for (npc, mark) in npcs.iter().zip(&marks) {
             let ship = mark.ship();
@@ -463,13 +458,8 @@ mod tests {
             .collect();
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Player,
-            by: Some(ShipRef::Player),
             damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player)
         };
         for npc in &npcs {
             assert_eq!(
@@ -577,6 +567,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         for bits in [MINES, SCOOPS, MINER_BITS] {
             let npcs: Vec<Npc> = TYPES
@@ -879,13 +872,8 @@ mod tests {
             ..Surroundings::new(&[], &npcs)
         };
         let hit = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         [&npcs[1], &npcs[2]].map(|npc| ai.react(npc, &hit, &around).goal)
     }
@@ -1016,13 +1004,8 @@ mod tests {
             "it fires as its type does"
         );
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 1.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 7.0);
         assert_eq!(
@@ -1075,13 +1058,8 @@ mod tests {
         assert_eq!(ai.target(&npcs[0], &around), Some(escorts.ship()));
         assert_eq!(ai.trigger(&npcs[0], &around).only, Some(WeaponId(9)));
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 1.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");

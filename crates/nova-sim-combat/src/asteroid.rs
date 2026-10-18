@@ -68,8 +68,8 @@
 //!   its only read, and each −32000 written elsewhere (@0x9ad1, @0xc3d9,
 //!   @0x97c64) is to another table. A hit below 0 destroys the asteroid
 //!   at once, so the cull is moot.
-//! - `_HandleSpriteMurkiness` (@0x36446): the engine draws no sprite
-//!   murky (the cargo boxes leave it out too).
+//! - `_HandleSpriteMurkiness` (@0x36446): the view murks shots alone so
+//!   far, the asteroids and cargo boxes not (rdm:task/murk-other-sprites).
 //! - The `_gameFrozen` skip (@0x36300-0x3636f) and the frozen game's call
 //!   from `_PrepareAllSprites` (@0x3a7dd): the engine has no frozen game
 //!   (see the `combat` module), and a paused session doesn't tick.

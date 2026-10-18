@@ -129,6 +129,7 @@ use super::Session;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
 use crate::flight::Controls;
+use crate::trig::angular_difference;
 
 /// `_PlayGame`'s double-time switch (@0x463b3-0x4642f; see the module
 /// docs), from whether the `key` is on, whether each warp-up is
@@ -138,23 +139,6 @@ use crate::flight::Controls;
 pub fn switch(key: bool, playing: [bool; 2], aligned: bool) -> bool {
     let [single, double] = playing;
     double || (key && !(aligned && single))
-}
-
-/// `_AngularDifference(a, b)` (@0x649e-0x64f4), in the original's 16
-/// bits: |a − b|, taken from 360 when a and b lie either side of 179,
-/// then from 360 again when above 180. For headings in 0..360 it is how
-/// far apart they are, 0 to 180.
-#[must_use]
-#[allow(clippy::cast_possible_truncation)]
-pub fn angular_difference(a: i16, b: i16) -> i16 {
-    let mut difference = (i32::from(a) - i32::from(b)).abs() as i16;
-    if (a > 179) != (b > 179) {
-        difference = 360_i16.wrapping_sub(difference);
-    }
-    if difference > 180 {
-        difference = 360_i16.wrapping_sub(difference);
-    }
-    difference
 }
 
 /// How far, in whole degrees, the player may face off its desired
@@ -595,28 +579,6 @@ mod tests {
         assert!(switch(true, [true, false], false), "turned away");
         assert!(switch(true, [false, false], true), "128 over");
         assert!(switch(true, [false, false], false));
-    }
-
-    #[test]
-    fn the_angular_difference_folds_as_the_originals() {
-        assert_eq!(angular_difference(0, 0), 0);
-        assert_eq!(angular_difference(0, 170), 170);
-        assert_eq!(angular_difference(170, 0), 170);
-        assert_eq!(angular_difference(10, 350), 20, "across north");
-        assert_eq!(angular_difference(350, 10), 20);
-        assert_eq!(angular_difference(170, 190), 20, "across south");
-        assert_eq!(angular_difference(100, 200), 100);
-        assert_eq!(angular_difference(0, 179), 179);
-        assert_eq!(angular_difference(0, 180), 180, "180 is past 179");
-        assert_eq!(angular_difference(0, 181), 179);
-        assert_eq!(angular_difference(179, 180), 1);
-        assert_eq!(angular_difference(180, 181), 1);
-        assert_eq!(angular_difference(1, 181), 180);
-        assert_eq!(angular_difference(359, 0), 1);
-        // Out of 0..360 it folds by the same steps, as the original does
-        // in 16 bits: 720 and 0 lie either side of 179, so 360 − 720.
-        assert_eq!(angular_difference(720, 0), -360);
-        assert_eq!(angular_difference(-90, 90), 180);
     }
 
     /// A session at rest out of the no-jump zone facing east, `snd ` 128

@@ -57,6 +57,7 @@
 //! - [`self_repair`]: a disabled ship repairing itself
 //!   ([`can_self_repair`](self_repair::can_self_repair)), and a former
 //!   escort rejoining the player as it does.
+//! - [`sprite_layer`]: the order the ship and shot layers are drawn in.
 //! - [`ship_layer`]: the layers ships are drawn in
 //!   ([`ShipLayer`](ship_layer::ShipLayer)): the disabled at the bottom,
 //!   then the ships the player leads, then the rest with the player.
@@ -92,4 +93,5 @@ pub mod player_fate;
 pub mod sabotage;
 pub mod self_repair;
 pub mod ship_layer;
+pub mod sprite_layer;
 pub mod tutorial;

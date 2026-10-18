@@ -27,6 +27,26 @@ exclude_re = [
     # can't tell the player's condition here from the result. The pure
     # gate's own tests pin it (`threatens_player`).
     "comm_calls.rs:.*replace == with != in Session::distress_facts",
+    # `_AngularDifference`'s first fold (from 360 when the two lie either
+    # side of 179, @0x649e-0x64f4) is undone or redone by its second (from
+    # 360 above 180) for every pair whose difference fits in 16 bits
+    # (checked exhaustively), so any mutant of its three comparisons
+    # (`!=` at column 18, `a > 179` at 11, `b > 179` at 24) gives the same
+    # answer; the port keeps the fold as the original has it. The second
+    # fold's `> 180` loosened to `>= 180` folds 180 to 180, the same; its
+    # `<` and `==` mutants are not equivalent and stay in.
+    "nova-sim-base/src/trig\\.rs:140:(11|24): replace > with (==|<|>=) in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:140:18: replace != with == in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:143:19: replace > with >= in angular_difference$",
+    # `_TableArcTan`'s `180 + c` for a point below and left of the origin
+    # (@0x25a64-0x25a6d) is taken round into 0..360 after, so `c - 180`
+    # lands on the same heading.
+    "trig.rs:[0-9]+:[0-9]+: replace \\+= with -= in table_arctan",
+    # `open_audio` (nova's `main.rs`) opens the default audio device
+    # through cpal and reads the soundtrack from disk: the program's edge,
+    # which no hermetic test may run. Its decisions are tested on their
+    # own (`music_warning`, `voice_limit`, `game_audio`).
+    "nova/src/main.rs:.*replace open_audio -> ",
     # `run_seed` reads the clock for a different seed each run: no test
     # can tell one seed from another.
     "main.rs:.*replace run_seed -> u64 with",
@@ -308,4 +328,15 @@ exclude_re = [
     # 9999-31999 and so gives `None` for every code of 2176-9998, which is
     # nowhere with no draw too. The arm states the original's reading.
     "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
+    # The lightning rolls' seed joins a high word shifted past 32 bits and
+    # a low word below 2^32, and a trail colour joins channels shifted to
+    # their own 8 bits: their bits never overlap, so `|` and `^` give the
+    # same word.
+    "nova-view/src/flight/lightning\\.rs:188:30: replace \\| with \\^ in StepRolls::draw$",
+    "nova-view/src/flight/trails\\.rs:90:16: replace \\| with \\^ in scaled_colour$",
+    # A trail's tail angle is taken `% 360` as the original takes it, but
+    # the table trig it feeds (`table_sin`, `table_cos`) takes every angle
+    # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
+    # same tail.
+    "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
 ]

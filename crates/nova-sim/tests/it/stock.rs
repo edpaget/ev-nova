@@ -3055,6 +3055,25 @@ fn fires_at(spec: &WeaponSpec, hull: HullSpec, bearing: f32) -> Option<f32> {
     }
 }
 
+/// The stock ships whose turret shots are drawn over the ships (`shïp`
+/// `Flags3` 0x0040, `_SpawnShot` @0x3f101) are the Fed Carrier (143) and
+/// the Aurora Thunderforge (380).
+#[test]
+fn the_fed_carrier_and_the_thunderforge_draw_their_turret_shots_over_the_ships() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let over: Vec<ShipId> = data
+        .ships()
+        .into_iter()
+        .map(|ship| ship.id)
+        .filter(|&id| arsenal.hull(id).turret_shots_over)
+        .collect();
+    assert_eq!(over, [ShipId(143), ShipId(380)]);
+}
+
 /// Each stock turret (3 and 4) fires at a target astern unless it or its
 /// ship is blind to the rear, and at one abeam unless it is blind to the
 /// sides (162), which fires ahead.
@@ -3087,7 +3106,8 @@ fn every_stock_turret_fires_at_its_target_outside_its_blind_spots() {
 }
 
 /// Each stock front-quadrant turret (7) fires at a target 30 degrees off
-/// its nose at the lead angle, and at one 90 degrees off straight ahead.
+/// its nose at the lead angle, the table's whole degree (119 for a ship at
+/// rest at 120), and at one 90 degrees off straight ahead.
 #[test]
 fn every_stock_front_quadrant_turret_leads_a_target_in_its_arc_and_otherwise_fires_ahead() {
     let Some(dir) = common::nova_data() else {
@@ -3100,7 +3120,9 @@ fn every_stock_front_quadrant_turret_leads_a_target_in_its_arc_and_otherwise_fir
     for spec in front {
         let id = spec.id.0;
         let in_arc = fires_at(&spec, HullSpec::default(), 120.0).expect("fires");
-        assert!((in_arc - 120.0).abs() < 1e-3, "{id}: {in_arc}");
+        let table = nova_sim::trig::intercept_angle(Vec2::ZERO, facing(120.0) * 100.0);
+        assert_eq!(table, 119, "{id}");
+        assert!((in_arc - f32::from(table)).abs() < 1e-3, "{id}: {in_arc}");
         let out = fires_at(&spec, HullSpec::default(), 180.0).expect("fires");
         assert!((out - 90.0).abs() < 1e-3, "{id}: {out}");
     }
@@ -5588,6 +5610,8 @@ fn stock_pick_made(
         blessing: nova_sim::rank::Blessing::NONE,
         ship: target,
         combat_govt: None,
+        target: None,
+        class: nova_sim::escort::EscortClass::Freighter,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {
@@ -6249,6 +6273,8 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             velocity: Vec2::ZERO,
             heading: 270.0,
         };
+        let defending = defender.trigger;
+        defender.trigger.point_defence = false;
         let mut ships = [defender, attacker];
         let mut chance = Rolling {
             class: 100,
@@ -6256,16 +6282,23 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             asked: Vec::new(),
         };
         let mut combat = Combat::default();
-        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
-        combat.tick(
-            &mut fighters,
-            &arsenal,
-            &nova_sim::Governments::default(),
-            Rules::default(),
-            nova_sim::Field::default(),
-            nova_sim::combat::Scenery::default(),
-            &mut chance,
-        );
+        // The missile is first met on the tick after it is fired, as
+        // `_AIDispatch` (@0x4429d) runs an NPC's point defence before
+        // `_HandleShip` (@0x44483) fires any NPC's pick.
+        for _ in 0..2 {
+            let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+            combat.tick(
+                &mut fighters,
+                &arsenal,
+                &nova_sim::Governments::default(),
+                Rules::default(),
+                nova_sim::Field::default(),
+                nova_sim::combat::Scenery::default(),
+                &mut chance,
+            );
+            ships[0].trigger = defending;
+            ships[1].trigger = Trigger::default();
+        }
         let rolls: Vec<Option<u32>> = combat
             .shots()
             .iter()
@@ -6402,9 +6435,8 @@ fn defended_against(
 /// leads it from its exit, which matters at that speed, and a Quad shot
 /// strikes it.
 #[test]
+#[allow(clippy::float_cmp)]
 fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
-    use nova_sim::combat::aim::{bearing, lead};
-    use nova_sim::combat::projectile::Target;
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -6421,26 +6453,16 @@ fn a_stock_fed_destroyers_quad_leads_and_hits_a_viper_attacking_it() {
     let quad = stock_weapon(&data, 133);
     let (fired, strikes) = defended_against(&arsenal, &mut ships, 133, 40);
     let &(start, heading, viper) = fired.first().expect("the Quad fires");
-    let quarry = Target {
-        ship: QUARRY,
-        ship_type: ShipId(167),
-        fleet: QUARRY,
-        ties: nova_sim::combat::sides::Ties::default(),
-        position: viper.position,
-        velocity: viper.velocity,
-        radius: 0.0,
-        sprite_x: 0.0,
-        sheet: true,
-        condition: Condition::Intact,
-        miss_class: 0,
-    };
-    let from = ShipState {
-        position: start,
-        ..ShipState::default()
-    };
-    let led = lead(&from, &quarry, quad.speed);
-    assert!((heading - led).abs() < 1e-3, "{heading} led {led}");
-    let aimed = bearing(start, viper.position);
+    // The whole-degree lead from its exit (`_CalcLeadAngle` @0x397c6), the
+    // defender at rest.
+    let led = f32::from(nova_sim::trig::lead_angle(
+        start,
+        Vec2::ZERO,
+        (viper.position, viper.velocity),
+        quad.lead_shot(),
+    ));
+    assert_eq!(heading, led, "led {led}");
+    let aimed = f32::from(nova_sim::trig::intercept_angle(start, viper.position));
     assert!((led - aimed).abs() > 5.0, "the lead matters: {led} {aimed}");
     assert_ne!(start, Vec2::ZERO, "from its exit");
     assert!(

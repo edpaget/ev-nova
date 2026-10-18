@@ -253,14 +253,30 @@ impl Behaviour for Answering {
     }
 }
 
+/// [`armed`] with a volley the answer flag answers at a ship the player
+/// can't target, hidden in its gate: two guns of 5 energy damage firing
+/// together, each of `Reload` 30, at ships of govt 140, of `ShootPenalty`
+/// 5. The first hit of the volley is a stray one, forgiven below 50
+/// stray provocation with no roll, and adds 1.75 × 30 to it; the second,
+/// on the same tick, reads 52.5 and is answered (see
+/// `nova_sim::ai::answer_flag`).
+fn volleying() -> FakeCatalog {
+    let mut catalog = armed(1, &[BLASTER, UNSEEN]);
+    for weapon in &mut catalog.weapons {
+        weapon.energy_dmg = 5;
+        weapon.reload = 30;
+    }
+    let mut govt = damaging().govts.remove(0);
+    govt.penalties.shoot = 5;
+    catalog.govts = vec![govt];
+    catalog
+}
+
 #[test]
 fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
     // The original answers the hit inside `_HandleShot` (@0x44385),
     // before the display pass draws the frame.
-    let mut catalog = armed(1, &[BLASTER]);
-    for weapon in &mut catalog.weapons {
-        weapon.energy_dmg = 5;
-    }
+    let mut catalog = volleying();
     catalog.sites.push(LandingSite {
         flags2: nova_sim::gate::HYPERGATE,
         exit_angle: 90,
@@ -296,16 +312,12 @@ fn a_ship_the_player_hits_in_its_gate_is_drawn_on_the_frame_of_the_hit() {
     panic!("never hit");
 }
 
-/// [`armed`] with blasters of 5 energy damage and hypergate 141 at
-/// (0, -110), straight ahead of the player, `with` changes made. A shot
-/// hits on the pass after the one it moves into its target on, and at
-/// this distance that move falls on a frame's advance pass, so the hit
-/// falls on its second.
+/// [`volleying`] with hypergate 141 at (0, -110), straight ahead of the
+/// player, `with` changes made. A shot hits on the pass after the one it
+/// moves into its target on, and at this distance that move falls on a
+/// frame's advance pass, so the hit falls on its second.
 fn gate_110_ahead(with: impl FnOnce(&mut FakeCatalog)) -> FakeCatalog {
-    let mut catalog = armed(1, &[BLASTER]);
-    for weapon in &mut catalog.weapons {
-        weapon.energy_dmg = 5;
-    }
+    let mut catalog = volleying();
     catalog.sites.push(LandingSite {
         flags2: nova_sim::gate::HYPERGATE,
         exit_angle: 90,
@@ -806,6 +818,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         guidance: -1,
         speed: 1000,
         ammo_type: -1,
+        graphic: 0,
         inaccuracy: 0,
         impact: 5,
         explod_type: -1,
@@ -844,6 +857,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         id: ShipId(129),
         flags: 0,
         flags2: 0,
+        flags3: 0,
         death_delay: 0,
         explode1: -1,
         explode2: -1,
@@ -1117,6 +1131,8 @@ fn every_steps_fight_reaches_the_effects() {
     let fired = CombatSound {
         sound: nova_sim::SoundId(208),
         offset: (0, 0),
+        priority: u16::from(nova_sim::combat::PLAYER_FIRE_PRIORITY),
+        until_stopped: false,
     };
     assert_eq!(combat_sounds(&mut view), [fired; 3]);
     assert_eq!(combat_sounds(&mut view), [], "taken");
@@ -1135,6 +1151,8 @@ fn the_sounds_are_the_sessions_then_the_fights() {
             Sound::Combat(CombatSound {
                 sound: nova_sim::SoundId(208),
                 offset: (0, 0),
+                priority: u16::from(nova_sim::combat::PLAYER_FIRE_PRIORITY),
+                until_stopped: false,
             })
         ]
     );
@@ -1173,8 +1191,10 @@ fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
         |c| matches!(c, DrawCommand::Text { origin, .. } if *origin == TITLE),
     );
     let hud = hud_at(&list);
+    // An unguided shot is in the shot layer 0x3b52f0, under the intact
+    // ships (`_SetupSpriteWorld` @0x21d0c-0x21e24).
     let order = [
-        stellar, under, npc, ship, shot, over, explosion, brackets, title, hud,
+        stellar, under, shot, npc, ship, over, explosion, brackets, title, hud,
     ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")
@@ -1212,6 +1232,27 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
     assert!(
         (drawn_at.1.x - expected.x).abs() < 1e-3 && (drawn_at.1.y - expected.y).abs() < 1e-3,
         "{drawn_at:?} {expected:?}"
+    );
+}
+
+#[test]
+fn a_shot_is_drawn_under_the_intact_player_in_the_shot_layer() {
+    let mut view = fighting(armed(0, &[BLASTER]), &[]);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    view.tick(TICK / 2);
+    let list = drawn(&view);
+    let shot = list
+        .iter()
+        .position(
+            |command| matches!(*command, DrawCommand::Sprite { image, .. } if image.id == 3500),
+        )
+        .expect("the shot");
+    let centre = view.camera().world_to_screen(view.shown_position());
+    assert!(
+        shot < drawn_at(&list, centre),
+        "under the player (0x3b52f0)"
     );
 }
 
@@ -2037,6 +2078,8 @@ fn a_destroyed_npc_explodes_and_scatters_debris_on_the_frames_after() {
             (boom.x - player.x).round() as i32,
             (boom.y - player.y).round() as i32,
         ),
+        priority: crate::flight::effects::EXPLOSION_PRIORITY,
+        until_stopped: false,
     };
     assert!(
         combat_sounds(&mut view).contains(&heard),
@@ -2585,8 +2628,9 @@ fn the_effects_roll_on_their_own_chance() {
     );
 }
 
-#[test]
-fn a_looped_weapon_is_heard_again_only_once_its_sound_has_played_out() {
+/// A view firing the player's looped beam, of a 3-tick sound, each step,
+/// by `rules`.
+fn firing_a_looped_beam(rules: Rulebook) -> View {
     let mut catalog = armed(0, &[UNDER]);
     catalog.weapons[4].reload = 0;
     catalog.weapons[4].count = 5;
@@ -2596,15 +2640,33 @@ fn a_looped_weapon_is_heard_again_only_once_its_sound_has_played_out() {
         sound_ticks: Some(3),
         ..WeaponLook::default()
     });
-    let mut view = fighting(catalog, &[]);
+    let mut view = fighting(catalog, &[]).with_rules(rules);
     view.input(&key(FIRE_KEY, true));
+    view
+}
+
+#[test]
+fn by_default_a_looped_weapon_is_heard_every_shot_waiting_on_any_voice() {
+    let mut view = firing_a_looped_beam(Rulebook::default());
     ticks(&mut view, 4);
     assert_eq!(
         view.session().expect("flying").beams().len(),
         4,
         "a beam fired each step"
     );
-    assert_eq!(combat_sounds(&mut view).len(), 2, "on the first and fourth");
+    let heard = combat_sounds(&mut view);
+    assert_eq!(heard.len(), 4, "the audio side decides: {heard:?}");
+    assert!(heard.iter().all(|sound| sound.until_stopped), "{heard:?}");
+}
+
+#[test]
+fn by_the_other_reading_a_looped_weapon_is_heard_again_once_its_sound_has_played_out() {
+    let rules = Rulebook::default().with_override(RuleKey::LoopedSoundWait, RuleSource::Bible);
+    let mut view = firing_a_looped_beam(rules);
+    ticks(&mut view, 4);
+    let heard = combat_sounds(&mut view);
+    assert_eq!(heard.len(), 2, "on the first and fourth");
+    assert!(heard.iter().all(|sound| !sound.until_stopped), "{heard:?}");
     view.input(&key(FIRE_KEY, false));
     ticks(&mut view, 1);
     view.input(&key(FIRE_KEY, true));
@@ -2796,6 +2858,8 @@ fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
     let (_, chance) = scripted(&placed(750, 650, 0));
     let mut view = FlightView::new(damaging()).with_chance(chance);
     view.tick(TICK);
+    // Aimed at it: a stray hit the answer flag forgives.
+    tap(&mut view, TARGET_KEY);
     view.input(&key(FIRE_KEY, true));
     let mut answered = false;
     for _ in 0..120 {

@@ -225,7 +225,8 @@ pub struct PanelInput<'a> {
     pub asteroids: i16,
     /// Its `Interference`, raw.
     pub interference: i16,
-    /// Its `Murk`, raw.
+    /// Its `Murk` as loaded ([`crate::murk::loaded_murk`]), the runtime
+    /// +0xbc the panel reads.
     pub murk: i16,
     /// Its `NavDefs` stellars, in slot order.
     pub stellars: &'a [PanelStellar],

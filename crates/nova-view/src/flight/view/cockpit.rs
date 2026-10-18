@@ -21,9 +21,14 @@ use crate::flight::escorts::{
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
+use crate::flight::murk::{self, murk_tint, sprite_murk};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
-use crate::flight::weapons::{BeamShown, ShotShown};
+use crate::flight::weapon_glow::npc_glow_level;
+use crate::flight::weapons::{self, BeamShown, ShotShown};
+use nova_sim::sprite_layer::SpriteLayer;
+
+use super::sprites::{Sprite, sprite_stack};
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
 use crate::system::camera::{Camera, VIEW_SIZE};
@@ -165,30 +170,36 @@ impl<C> FlightView<C> {
         session.hover(Vec2::new(world.x, world.y), &ships).is_some()
     }
 
-    /// Draws the ships, bottom first, in their layers as
-    /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
-    /// the disabled, then the ships the player leads, then the rest, each
-    /// layer in the order the session's rules overlap them. Without a
-    /// session it draws the player alone.
-    /// The order and each cloak's level are read from the session as the
-    /// frame is drawn, so nothing waits past it.
-    pub(super) fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
+    /// Draws the ships and the shots, bottom first, in their layers as
+    /// the session stacks them ([`sprites`](super::sprites)): the ships as
+    /// [`Session::draw_layers`] gives them (see [`nova_sim::ship_layer`]),
+    /// each layer in the order the session's rules overlap them, and the
+    /// shots among them by their layers ([`nova_sim::sprite_layer`]).
+    /// Without a session it draws the player alone. The order and each
+    /// cloak's level are read from the session as the frame is drawn, so
+    /// nothing waits past it.
+    pub(super) fn draw_sprites(&self, list: &mut DrawList, camera: &Camera) {
         let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
             self.draw_ship(list, player, ShipDrawn::Full);
             return;
         };
         let npcs = self.shown_npcs();
-        for ship in session.draw_order() {
-            match ship {
-                ShipRef::Player => {
+        let fade = session
+            .rules()
+            .source_for(nova_sim::RuleKey::TranslucentShotFade);
+        let stacked = sprite_stack(session.draw_layers(), self.shown_shots(camera));
+        for sprite in stacked {
+            match sprite {
+                Sprite::Ship(ShipRef::Player) => {
                     self.draw_ship(list, player, session.player_fate().row().drawn);
                 }
-                ShipRef::Npc(id) => {
+                Sprite::Ship(ShipRef::Npc(id)) => {
                     if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
                     }
                 }
+                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks, fade),
             }
         }
     }
@@ -197,7 +208,9 @@ impl<C> FlightView<C> {
     /// crossed box when its sheet cannot be read, at the alpha its cloak
     /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
     /// waiting at the gate it comes out of is hidden, then fades in over
-    /// its last ticks there ([`npc_tint`]).
+    /// its last ticks there ([`npc_tint`]). Its weapon glow is drawn over
+    /// it while lit ([`weapon_glow`](crate::flight::weapon_glow)), held
+    /// below its murk ([`npc_glow_level`]) and murked.
     fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
         let Some(cloak) = cloak_alpha(session.cloak_shown(npc)) else {
             return;
@@ -214,6 +227,14 @@ impl<C> FlightView<C> {
             Some(Ok(sheet)) => {
                 let frame = rotation_frame(heading, sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+                let glow = sheet.weapon.zip(self.glows.drawn(ShipRef::Npc(npc.id)));
+                if let Some((layer, level)) = glow {
+                    let viewer = session.player().position;
+                    let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
+                    let tint = murk_tint(lights_tint(npc_glow_level(level, murk)), murk);
+                    let layer_frame = frame % layer.frames.get();
+                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
+                }
             }
             _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -826,16 +847,26 @@ impl<C> FlightView<C> {
     }
 
     /// The shots in flight, each where it is drawn: `alpha` of the way
-    /// from where it was a step ago, as the ships are.
+    /// from where it was a step ago, as the ships are; each with the
+    /// index its spin started on ([`SpinStarts`](crate::flight::spin::SpinStarts))
+    /// and its murk where the session holds it, seen from the player's
+    /// ship as the session holds it, in the player's effective murk
+    /// ([`murk::sprite_murk`], [`Session::effective_murk`]), as
+    /// `_HandleShot` murks it once a pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
         let Ok(session) = &self.session else {
             return Vec::new();
         };
         let behind = 1.0 - self.alpha;
+        let viewer = session.player().position;
+        let murk = session.effective_murk();
         session
             .shots()
             .iter()
             .map(|shot| ShotShown {
+                id: shot.id,
+                spin_start: self.shot_looks.spin_starts.start(shot.id),
+                murk: murk::sprite_murk(shot.position, viewer, murk),
                 at: camera.world_to_screen(Point::new(
                     shot.velocity.x.mul_add(-behind, shot.position.x),
                     shot.velocity.y.mul_add(-behind, shot.position.y),
@@ -843,6 +874,7 @@ impl<C> FlightView<C> {
                 heading: shot.heading,
                 age: shot.age,
                 weapon: shot.weapon.id,
+                layer: SpriteLayer::from(shot.layer),
             })
             .collect()
     }
@@ -983,8 +1015,9 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the player's ship at `at`, as much of it as `drawn` says
-    /// (see [`nova_sim::player_fate`]): its sprite, engine glow and
-    /// running lights, or, when its sheet cannot be read, a crossed box
+    /// (see [`nova_sim::player_fate`]): its sprite, engine glow, running
+    /// lights and weapon glow ([`weapon_glow`](crate::flight::weapon_glow),
+    /// never murked), or, when its sheet cannot be read, a crossed box
     /// and the reason. The box stands in for the sprite and a missing
     /// sheet has no glow or lights, so only a ship drawn in full has one.
     fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
@@ -1004,7 +1037,10 @@ impl<C> FlightView<C> {
                     .zip(glow_level(base, tick, &self.glow_rolls).map(lights_tint));
                 let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
                 let lights = sheet.lights.zip(level.map(lights_tint));
-                for (layer, tint) in [glow, lights].into_iter().flatten() {
+                let weapon = sheet
+                    .weapon
+                    .zip(self.glows.drawn(ShipRef::Player).map(lights_tint));
+                for (layer, tint) in [glow, lights, weapon].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();
                     list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }

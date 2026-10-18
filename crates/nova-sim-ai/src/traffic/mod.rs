@@ -22,6 +22,7 @@
 //!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
+//! - [`snipe`]: how a sniper flies, braking or at rest.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter_in`]) replaces them with its initial population, its
@@ -104,6 +105,9 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 pub mod autopilot;
+pub mod berth_exits;
+pub mod berth_kept;
+pub mod berth_picks;
 #[cfg(test)]
 mod comm_call_tests;
 pub mod destination;
@@ -115,9 +119,11 @@ pub mod npc;
 pub mod persons;
 pub mod quote;
 mod reinforcing;
+pub mod snipe;
 pub mod spawn;
 pub mod strength;
 pub mod table;
+pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::{
@@ -130,7 +136,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::catalog::{FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
-use crate::combat::armament::Trigger;
+use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::control::Gate;
@@ -140,6 +146,8 @@ use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
+use berth_exits::BerthExits;
+use berth_picks::BerthPicks;
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
@@ -322,6 +330,19 @@ fn player_dying(world: &World) -> bool {
     })
 }
 
+/// The goal a new ship starts with ([`Traffic::add`]): the player, for a
+/// mission ship that `hunts` it; holding, for one set up `held`
+/// ([`NewShip::held`]); else idle.
+fn starting_goal(hunts: bool, held: bool) -> Goal {
+    if hunts {
+        Goal::Attack(ShipRef::Player)
+    } else if held {
+        Goal::Hold
+    } else {
+        Goal::Idle
+    }
+}
+
 /// What the traffic flies among besides itself: the system's stellars,
 /// the player, the governments, and the player's legal record there.
 #[derive(Clone, Copy, Debug)]
@@ -364,6 +385,11 @@ pub struct World<'a> {
     /// that have arrived ([`Npc::arrived`]) by the other reading
     /// ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)).
     pub arrival_hits: RuleSource,
+    /// Where a moving sniper with a last gun turns as it brakes
+    /// ([`snipe::fly`]): its target's lead by the engine, its retro heading
+    /// by the other reading
+    /// ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
+    pub snipe_brake_lead: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -378,6 +404,15 @@ pub struct World<'a> {
     /// The governments an IFF scrambler has marked
     /// ([`Surroundings::iff_marked`]).
     pub iff_marked: &'a BTreeSet<GovtId>,
+    /// Whether a `ShootPenalty` above 0 holds back the roll that forgives
+    /// the player's stray hit
+    /// ([`RuleKey::StrayShootPenalty`](crate::RuleKey::StrayShootPenalty),
+    /// see [`answer_flag`](crate::ai::answer_flag)).
+    pub stray_shoot_penalty: RuleSource,
+    /// Whether two independents are kin
+    /// ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin), see
+    /// [`answer_flag`](crate::ai::answer_flag)).
+    pub independent_kin: RuleSource,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -387,9 +422,9 @@ impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
-    /// width known, the engine's [`SPAWN_RESERVE`], no cloak scanner, no
-    /// asteroid in slot 0, no reinforcements coming and no government
-    /// marked by an IFF scrambler.
+    /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
+    /// no cloak scanner, no asteroid in slot 0, no reinforcements coming
+    /// and no government marked by an IFF scrambler.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -406,10 +441,13 @@ impl<'a> World<'a> {
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
             arrival_hits: RuleSource::Engine,
+            snipe_brake_lead: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
             iff_marked: bare.iff_marked,
+            stray_shoot_penalty: RuleSource::Engine,
+            independent_kin: RuleSource::Engine,
         }
     }
 
@@ -500,6 +538,14 @@ pub struct Traffic {
     /// leaves, and across systems, and cleared by a capture
     /// ([`Traffic::forget_berth_person`]). `<OSN>` reads it.
     berth_persons: BTreeMap<u32, String>,
+    /// The pick (+0x72) of the ship last at each berth, which a new ship
+    /// there takes ([`berth_picks`]): written as each ship's pick changes,
+    /// kept as it dies or leaves, and across systems.
+    berth_picks: BerthPicks,
+    /// The exit cursors (+0xc8fe-+0xc905) of the ship last at each berth,
+    /// which a new ship there takes ([`berth_exits`]): written after each
+    /// fight, kept as it dies or leaves, and across systems.
+    berth_exits: BerthExits,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -565,6 +611,8 @@ impl Traffic {
             comm_calls: Vec::new(),
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
+            berth_picks: BerthPicks::default(),
+            berth_exits: BerthExits::default(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -784,22 +832,7 @@ impl Traffic {
                     .map(|decision| (npc.id, decision.dropped_target))
             })
             .collect();
-        self.comm_calls.extend(
-            self.npcs
-                .iter()
-                .zip(&decisions)
-                .filter_map(|(npc, decision)| decision.map(|decision| (npc.id, decision)))
-                .flat_map(|(id, decision)| {
-                    let reinforcements = decision
-                        .calls_reinforcements
-                        .then_some(CommCall::Reinforcements);
-                    decision
-                        .comm_call
-                        .into_iter()
-                        .chain(reinforcements)
-                        .map(move |call| (id, call))
-                }),
-        );
+        self.queue_comm_calls(&decisions);
         let view = world.gate_view();
         for (id, dropped_target) in turning {
             self.ask_quote_gate(id, dropped_target, view);
@@ -825,6 +858,7 @@ impl Traffic {
                 // or none run, leave it as it was.
                 if trigger.keep.is_some() {
                     npc.pick = trigger.keep;
+                    self.berth_picks.write(npc.berth, npc.pick);
                 }
                 npc.trigger = trigger;
                 npc.target = target;
@@ -841,6 +875,12 @@ impl Traffic {
             .collect();
         for (npc, wait) in self.npcs.iter_mut().zip(waits) {
             if let Some(wait) = wait {
+                // A turret find under the wait is its pick (+0x72,
+                // `_AIFireTurret` @0x80e3c); none leaves it.
+                if wait.trigger.keep.is_some() {
+                    npc.pick = wait.trigger.keep;
+                    self.berth_picks.write(npc.berth, npc.pick);
+                }
                 npc.trigger = wait.trigger;
                 if wait.drops_target {
                     npc.target = None;
@@ -991,6 +1031,7 @@ impl Traffic {
                     other.as_ref(),
                     other_disabled,
                     speeds,
+                    world.snipe_brake_lead,
                     &mut *chance,
                 )
             })
@@ -1146,9 +1187,10 @@ impl Traffic {
         self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was a
-    /// direct hit, as `behaviour` says, now, as [`Traffic::tick_in`]'s step 2 does: the
-    /// hit's own step (see `nova_sim::Session::answer_strikes`).
+    /// Each intact NPC answers each of `strikes` in `world` that was
+    /// answered ([`Strike::answered`]), as `behaviour` says, now, as
+    /// [`Traffic::tick_in`]'s step 2 does: the hit's own step (see
+    /// `nova_sim::Session::answer_strikes`).
     pub fn answer(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1158,11 +1200,12 @@ impl Traffic {
         self.react(behaviour, world, strikes);
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was a
-    /// direct hit ([`Strike::direct`]: a shot's or beam's, not a blast's
-    /// or a death shockwave's, which skip `_DamageShip`'s reaction block
-    /// @0x3b44d), as `behaviour` says, all against the NPCs as they were
-    /// before; by the
+    /// Each intact NPC answers each of `strikes` in `world` that was
+    /// answered ([`Strike::answered`]: `_DamageShip`'s answer flag, see
+    /// [`weigh_strikes`](Traffic::weigh_strikes), which a blast's or a
+    /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
+    /// flag skips the whole reaction block, @0x3baea), as `behaviour`
+    /// says, all against the NPCs as they were before; by the
     /// other reading of [`World::arrival_hits`] only those that have
     /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
     /// a target) cuts its wait, in its gate, held at it or holding its
@@ -1207,7 +1250,7 @@ impl Traffic {
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
-        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.direct).collect();
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.answered).collect();
         if strikes.is_empty() {
             return;
         }
@@ -1266,11 +1309,37 @@ impl Traffic {
     }
 
     /// What `_HandleShip` does with each NPC's pick once the fight has
-    /// fired it ([`after_firing`](crate::ai::fire::after_firing)).
-    pub fn after_firing(&mut self) {
+    /// fired it, by the weapon records of `arsenal`
+    /// ([`after_firing`](crate::ai::fire::after_firing)); its berth keeps
+    /// what it leaves.
+    pub fn after_firing(&mut self, arsenal: &Arsenal) {
         for npc in &mut self.npcs {
-            crate::ai::fire::after_firing(npc);
+            crate::ai::fire::after_firing(npc, arsenal);
+            self.berth_picks.write(npc.berth, npc.pick);
         }
+    }
+
+    /// Clears NPC `id`'s pick, and its berth's, as a capture clears the
+    /// ship's (`_DoShipCapture` @0x41207).
+    pub fn clear_pick(&mut self, id: NpcId) {
+        if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
+            npc.pick = None;
+            self.berth_picks.write(npc.berth, None);
+        }
+    }
+
+    /// Gives each new ship its berth's last pick by `reading`
+    /// ([`RuleKey::ReusedSlotPick`](crate::RuleKey::ReusedSlotPick)):
+    /// by the engine, as no spawn writes +0x72; none by the other reading.
+    pub fn set_reused_slot_pick(&mut self, reading: RuleSource) {
+        self.berth_picks.set_reading(reading);
+    }
+
+    /// The reading new ships take their berth's last pick by (see
+    /// [`Traffic::set_reused_slot_pick`]).
+    #[must_use]
+    pub fn reused_slot_pick(&self) -> RuleSource {
+        self.berth_picks.reading()
     }
 
     /// NPC `id` turns on the player: its person's hail quote is queued
@@ -1410,7 +1479,17 @@ impl Traffic {
             .and_then(|person| self.table.persons.get(&person.id))
             .map(|person| person.record.name.clone());
         self.write_berth_person(berth, name);
-        self.npcs.push(Npc { id, berth, ..npc });
+        // No spawn writes the pick (+0x72): it is the berth's last.
+        let pick = npc.pick.or(self.berth_picks.seed(berth));
+        let mut npc = Npc {
+            id,
+            berth,
+            pick,
+            ..npc
+        };
+        // Nor the exit cursors (+0xc8fe-+0xc905): they are the berth's.
+        *npc.armament.exit_cursors_mut() = self.berth_cursors(berth);
+        self.npcs.push(npc);
         id
     }
 
@@ -1579,6 +1658,28 @@ impl Traffic {
         std::mem::take(&mut self.comm_calls)
     }
 
+    /// Queues the calls `decisions`, one for each NPC in order, made on
+    /// the message line ([`Traffic::take_comm_calls`]): each think's own
+    /// call, then its call for reinforcements.
+    fn queue_comm_calls(&mut self, decisions: &[Option<Decision>]) {
+        self.comm_calls.extend(
+            self.npcs
+                .iter()
+                .zip(decisions)
+                .filter_map(|(npc, decision)| decision.map(|decision| (npc.id, decision)))
+                .flat_map(|(id, decision)| {
+                    let reinforcements = decision
+                        .calls_reinforcements
+                        .then_some(CommCall::Reinforcements);
+                    decision
+                        .comm_call
+                        .into_iter()
+                        .chain(reinforcements)
+                        .map(move |call| (id, call))
+                }),
+        );
+    }
+
     /// The ship types the system's traffic can spawn, by ascending ID.
     #[must_use]
     pub fn ship_types(&self) -> Vec<ShipId> {
@@ -1707,21 +1808,24 @@ impl Traffic {
                     Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
                     Entry::Emerging { ticks_left, .. } => Mode::Emerging { ticks_left },
                 },
-                goal: if hunts {
-                    Goal::Attack(ShipRef::Player)
-                } else if ship.held {
-                    Goal::Hold
-                } else {
-                    Goal::Idle
-                },
+                goal: starting_goal(hunts, ship.held),
                 condition,
                 hull: kind.hull,
-                armament: kind.armament.clone(),
+                // No spawn writes the exit cursors (+0xc8fe-+0xc905): they
+                // are the berth's.
+                armament: kind
+                    .armament
+                    .clone()
+                    .with_exit_cursors(self.berth_cursors(berth)),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
-                pick: None,
+                // No spawn writes the pick (+0x72): it is the berth's last.
+                pick: self.berth_picks.seed(berth),
                 target: hunts.then_some(ShipRef::Player),
                 provoked: 0.0,
+                // `_RandomShipSpawn` @0x3c50c, `_GenericRandomShipSpawn`
+                // @0x3ca7a.
+                stray: 0.0,
                 aggression: ship.aggression,
                 inspected: None,
                 booty: ship.booty,
@@ -1868,7 +1972,15 @@ mod tests {
                         hit_radius: 9.0,
                         ..HullSpec::default()
                     },
-                    armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
+                    // A gun with a speed to lead by: `_CalcLeadAngle` at
+                    // speed 0 aims at infinity (`trig::lead_angle`).
+                    armament: Armament::new([(
+                        WeaponSpec::new(&crate::catalog::WeaponRecord {
+                            speed: 1000,
+                            ..weapon(128)
+                        }),
+                        2,
+                    )]),
                     rounds: LauncherRounds::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
@@ -2928,13 +3040,8 @@ mod tests {
 
     fn struck(ship: u32, damage: f32) -> Strike {
         Strike {
-            ship: ShipRef::Npc(NpcId(ship)),
-            by: Some(ShipRef::Player),
             damage,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(ship)), ShipRef::Player)
         }
     }
 
@@ -2967,9 +3074,11 @@ mod tests {
     fn a_strike_that_provokes_nothing_is_answered_by_no_one() {
         let mut traffic = populated(2, 1);
         let fighting = Fighting::deciding(Goal::Idle);
+        // No direct hit, so the weighing leaves it unanswered.
         let shockwave = Strike {
             direct: false,
             intended: false,
+            answered: false,
             ..struck(1, 4.0)
         };
         traffic.tick_in(
@@ -3061,6 +3170,8 @@ mod tests {
             blessing: crate::ai::Blessing::NONE,
             ship: crate::catalog::ShipId(128),
             combat_govt: None,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         };
         let world = World {
             player: Some(player),
@@ -3074,6 +3185,74 @@ mod tests {
             "{:?}",
             traffic.npcs()[0].state
         );
+    }
+
+    /// The heading a sniper moving down at 2, facing 76, with a last gun
+    /// of 10 a tick, sniping the player 300 to its right, takes after one
+    /// move in a world whose snipe brake lead is `lead`.
+    fn snipers_heading_after_a_move(lead: RuleSource) -> f32 {
+        let mut traffic = populated(1, 1);
+        let gun = crate::catalog::WeaponRecord {
+            speed: 1000,
+            count: 20,
+            ..weapon(128)
+        };
+        let npc = &mut traffic.npcs[0];
+        npc.goal = Goal::Snipe(ShipRef::Player);
+        npc.armament = Armament::new([(WeaponSpec::new(&gun), 1)]);
+        npc.state = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, 2.0),
+            heading: 76.0,
+        };
+        let mut fuel = npc.reserves.fuel;
+        npc.armament.fire_pick(
+            WeaponId(128),
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut LauncherRounds::default(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        );
+        assert_eq!(npc.armament.last_gun(), Some(WeaponId(128)));
+        let player = PlayerSide {
+            state: ShipState {
+                position: Vec2::new(300.0, 0.0),
+                ..ShipState::default()
+            },
+            condition: Condition::Intact,
+            reserves: crate::reserves::Reserves::full(1.0, 1.0, 1.0),
+            hull: HullSpec::default(),
+            handling: ShipStats::new(FAST, &[]).handling,
+            rating: 0,
+            yardstick: 0,
+            untargetable: false,
+            blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
+        };
+        let world = World {
+            player: Some(player),
+            snipe_brake_lead: lead,
+            ..World::new(&[])
+        };
+        traffic.move_in(world, &mut Draws::of(&[]));
+        traffic.npcs()[0].state.heading
+    }
+
+    #[test]
+    fn a_moving_sniper_with_a_last_gun_turns_to_its_lead_or_its_retro_heading_by_the_worlds_reading()
+     {
+        // Its lead lies right of 76, at 78.69; its retro heading is up, 0.
+        let engine = snipers_heading_after_a_move(RuleSource::Engine);
+        assert!(engine > 76.0, "toward its lead: {engine}");
+        let bible = snipers_heading_after_a_move(RuleSource::Bible);
+        assert!(bible < 76.0, "toward its retro heading: {bible}");
     }
 
     #[test]
@@ -3813,6 +3992,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unanswered_hit_draws_no_answer_from_its_ship_its_lead_or_a_samaritan() {
+        // A clear answer flag skips `_DamageShip`'s whole reaction block
+        // (@0x3baea-0x3baf1): the victim's, its lead's and the Good
+        // Samaritans' parts alike.
+        let mut traffic = populated(3, 1);
+        traffic.npcs[1].leader = Some(traffic.npcs[0].id);
+        let fighting = Fighting::deciding(Goal::Idle);
+        let unanswered = Strike {
+            answered: false,
+            ..struck(1, 1.0)
+        };
+        traffic.answer(&fighting, &World::new(&[]), &[unanswered, struck(2, 1.0)]);
+        let reacted: Vec<String> = fighting.log.borrow().clone();
+        assert_eq!(
+            reacted,
+            [0, 1, 2].map(|id| format!("react {id} Npc(NpcId(2))"))
+        );
+        assert_eq!(traffic.npcs[1].target, None, "the escort hit");
+    }
+
+    #[test]
     fn only_an_arrived_intact_npc_answers_a_strike_by_the_other_reading() {
         assert_eq!(
             reacting(RuleSource::Bible),
@@ -4209,6 +4409,40 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_ships_turret_find_becomes_its_pick() {
+        let finding = Firing {
+            waits: GateWait {
+                trigger: Trigger {
+                    keep: Some(WeaponId(140)),
+                    ..POINT_DEFENCE
+                },
+                drops_target: false,
+            },
+            ..Firing::default()
+        };
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
+        traffic.npcs[0].pick = Some(WeaponId(128));
+        traffic.tick_in(&finding, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(140)));
+        // A wait that finds nothing leaves the pick.
+        let defending = Firing {
+            waits: DEFENDING,
+            ..Firing::default()
+        };
+        traffic.tick_in(&defending, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(140)));
+        // The find is its berth's pick too: a ship that reuses the berth
+        // holds it, by the engine's reading.
+        assert_eq!(traffic.reused_slot_pick(), RuleSource::Engine);
+        let (id, berth) = (traffic.npcs()[0].id, traffic.npcs()[0].berth);
+        traffic.remove(id);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        let reuser = traffic.npcs().last().expect("added");
+        assert_eq!((reuser.berth, reuser.pick), (berth, Some(WeaponId(140))));
+    }
+
+    #[test]
     fn a_waiting_ship_drops_its_target_when_its_behaviour_says() {
         let firing = Firing {
             waits: GateWait {
@@ -4367,6 +4601,8 @@ mod tests {
             blessing: crate::ai::Blessing::NONE,
             ship: crate::catalog::ShipId(128),
             combat_govt: None,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         }
     }
 
@@ -5950,10 +6186,119 @@ mod tests {
             npc.trigger.only = Some(WeaponId(128));
             npc.pick = Some(WeaponId(128));
         }
-        traffic.after_firing();
+        traffic.after_firing(&crate::combat::armament::Arsenal::new(
+            &[weapon(128)],
+            Vec::new(),
+        ));
         for npc in traffic.npcs() {
             assert_eq!((npc.trigger.only, npc.pick), (None, None), "{:?}", npc.id);
         }
+    }
+
+    /// Keeps its goal and keeps weapon `0` as its pick, firing nothing.
+    #[derive(Debug)]
+    struct Picking(WeaponId);
+
+    impl Behaviour for Picking {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                keep: Some(self.0),
+                ..Trigger::default()
+            }
+        }
+    }
+
+    /// Traffic with its first NPC, at berth 1, having kept `pick` and
+    /// left, reading reused berths' picks by `reading`.
+    fn left_picking(pick: WeaponId, reading: RuleSource) -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.set_reused_slot_pick(reading);
+        let first = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.tick_in(&Picking(pick), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].pick, Some(pick));
+        traffic.remove(first);
+        traffic
+    }
+
+    #[test]
+    fn a_new_ship_in_a_reused_berth_holds_the_last_ships_pick_by_the_engine_and_none_by_the_other_reading()
+     {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        let picks: Vec<(u32, Option<WeaponId>)> = traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.berth, npc.pick))
+            .collect();
+        assert_eq!(
+            picks,
+            [
+                (2, Some(WeaponId(131))),
+                (1, Some(WeaponId(131))),
+                (3, None)
+            ],
+            "berth 2's own pick, berth 1's left, berth 3 fresh"
+        );
+        let mut other = left_picking(WeaponId(131), RuleSource::Bible);
+        assert_eq!(other.reused_slot_pick(), RuleSource::Bible);
+        other.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(other.npcs()[1].pick, None);
+    }
+
+    #[test]
+    fn arrivals_take_the_pick_of_the_berth_they_reuse() {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        traffic.table = table(0);
+        traffic.bring_in_within(vec![mission_ship(-1, 0.0)], SPAWN_RESERVE);
+        let arrival = traffic.npcs().last().expect("came");
+        assert_eq!((arrival.berth, arrival.pick), (1, Some(WeaponId(131))));
+    }
+
+    #[test]
+    fn a_berths_pick_follows_its_ships_pick_as_it_fires_and_is_cleared() {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        let id = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        // It fires the pick, a primary: cleared, and so is its berth's.
+        let npc = traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == id)
+            .expect("there");
+        npc.trigger.only = Some(WeaponId(131));
+        traffic.after_firing(&crate::combat::armament::Arsenal::default());
+        traffic.remove(id);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(traffic.npcs().last().map(|npc| npc.pick), Some(None));
+        // A capture's clear clears its berth's too.
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        let id = traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        traffic.clear_pick(id);
+        assert_eq!(traffic.npcs().last().map(|npc| npc.pick), Some(None));
+        traffic.remove(id);
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(traffic.npcs().last().map(|npc| npc.pick), Some(None));
+    }
+
+    #[test]
+    fn a_berths_pick_outlives_a_jump_but_not_a_new_traffic() {
+        let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
+        traffic.retarget(table(0), &BTreeSet::new(), Leave::Dropped);
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        traffic.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(
+            (traffic.npcs()[0].berth, traffic.npcs()[0].pick),
+            (1, Some(WeaponId(131)))
+        );
+        let mut fresh = Traffic::new();
+        fresh.add_npc(crate::traffic::fixture::npc(0, ShipStats::default()));
+        assert_eq!(fresh.npcs()[0].pick, None);
+        assert_eq!(fresh.reused_slot_pick(), RuleSource::Engine);
     }
 
     #[test]

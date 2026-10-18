@@ -670,6 +670,8 @@ mod tests {
             blessing: Blessing::NONE,
             ship: crate::catalog::ShipId(128),
             combat_govt: None,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
         }
     }
 

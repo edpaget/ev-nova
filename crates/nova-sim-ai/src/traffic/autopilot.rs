@@ -58,11 +58,17 @@
 //!   [`fire::manoeuvre`] gives, reading whether its target is disabled.
 //!   Approaching, it faces the heading it wants to fire along
 //!   and thrusts within [`APPROACH_THRUST`] turns of it; dogfighting,
-//!   within a turn and [`DOGFIGHT_THRUST`]; sniping, it brakes to a stop,
-//!   then turns to that heading without thrusting; backing away, a
-//!   stand-off ship inside the dogfight box flees close (sub 5,
-//!   below), never running out to jump (see
-//!   [`stand_off`](crate::ai::stand_off)).
+//!   within a turn and [`DOGFIGHT_THRUST`]; sniping, as [`snipe::fly`]
+//!   says (below); backing away, a stand-off ship inside the dogfight box
+//!   flees close (sub 5, below), never running out to jump (see
+//!   [`stand_off`](crate::ai::stand_off)). With its target gone an
+//!   attacker brakes and a sniper coasts.
+//! - Sniping, as [`snipe::fly`] says: moving 0.35 or more on an axis it
+//!   brakes, turning to its retro heading (or, with a last gun and by the
+//!   engine, its target's lead) and thrusting within its turn rate and
+//!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
+//!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
+//!   sub-goal 0xe, @0x8709d-0x87334).
 //! - [`Goal::Flee`]: within [`FLEE_CLOSE`] of its attacker on both axes it
 //!   flees close: it turns straight away, thrusting within a turn and
 //!   [`FLEE_THRUST`] of that heading (`_LowLevelAIHandler` sub 5,
@@ -159,9 +165,11 @@ use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
+use crate::rulebook::RuleSource;
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::npc::{Mode, Npc};
+use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
 
@@ -254,8 +262,13 @@ impl TopSpeeds {
 /// says (a stand-off ship's band halves against a disabled target, see
 /// [`stand_off`](crate::ai::stand_off)), at its top speed
 /// `speeds.own`, its burst out of a gate or glide in capped at
-/// [`TopSpeeds::burst_cap`], the wait a leaderless ship takes after it
-/// rolled on `chance`.
+/// [`TopSpeeds::burst_cap`], a moving sniper with a last gun turning as
+/// `snipe_lead` says ([`snipe::fly`]), the wait a leaderless ship takes
+/// after it rolled on `chance`.
+// Each is a separate input of the tick: the ship, the system's stellars
+// and gate widths, its quarry and whether it is disabled, its top speeds,
+// the snipe's rule and the dice.
+#[allow(clippy::too_many_arguments)]
 pub fn fly(
     npc: &mut Npc,
     sites: &[LandingSite],
@@ -263,6 +276,7 @@ pub fn fly(
     other: Option<&ShipState>,
     other_disabled: bool,
     speeds: TopSpeeds,
+    snipe_lead: RuleSource,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let handling = Handling {
@@ -295,7 +309,11 @@ pub fn fly(
             None => brake(&state, &handling),
         },
         Goal::Attack(_) | Goal::Snipe(_) => match other {
-            Some(target) => fight(npc, target, other_disabled, &handling),
+            Some(target) => fight(npc, target, other_disabled, &handling, snipe_lead),
+            // A sniper whose target is gone coasts ([`snipe::fly`]).
+            None if matches!(npc.goal, Goal::Snipe(_)) => {
+                snipe::fly(npc, None, &handling, snipe_lead)
+            }
             None => brake(&state, &handling),
         },
         Goal::Flee(_) => match other {
@@ -470,7 +488,7 @@ fn run_out(state: &ShipState, handling: &Handling) -> Controls {
 
 /// Turns from `heading` towards `wanted`, not at all within half a tick's
 /// turn, where turning would only overshoot.
-fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
+pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     let off = shortest_turn(heading, wanted);
     let half_turn = handling.turn_rate / 2.0;
     if off > half_turn {
@@ -486,12 +504,19 @@ fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// sniping, as its manoeuvre says ([`fire::manoeuvre`]): approaching, it
 /// faces the heading it wants to fire along ([`fire::wanted_heading`]),
 /// thrusting within [`APPROACH_THRUST`] turns of it; dogfighting, within a
-/// turn and [`DOGFIGHT_THRUST`]; sniping, it brakes to a stop, then turns
-/// to that heading without thrusting; backing away (a stand-off ship
-/// inside the dogfight box), it flees close ([`flee_close`]).
-fn fight(npc: &Npc, target: &ShipState, disabled: bool, handling: &Handling) -> Controls {
+/// turn and [`DOGFIGHT_THRUST`]; sniping, as [`snipe::fly`] says, a moving
+/// sniper with a last gun turning as `snipe_lead` says; backing away (a
+/// stand-off ship inside the dogfight box), it flees close
+/// ([`flee_close`]).
+fn fight(
+    npc: &mut Npc,
+    target: &ShipState,
+    disabled: bool,
+    handling: &Handling,
+    snipe_lead: RuleSource,
+) -> Controls {
     match fire::manoeuvre(npc, target, disabled) {
-        Some(fire::Manoeuvre::Snipe) => snipe(npc, target, handling),
+        Some(fire::Manoeuvre::Snipe) => snipe::fly(npc, Some(target), handling, snipe_lead),
         Some(fire::Manoeuvre::Flee) => flee_close(&npc.state, target, handling),
         Some(fire::Manoeuvre::Dogfight) => {
             attack(npc, target, handling.turn_rate + DOGFIGHT_THRUST, handling)
@@ -499,23 +524,6 @@ fn fight(npc: &Npc, target: &ShipState, disabled: bool, handling: &Handling) -> 
         Some(fire::Manoeuvre::Approach) | None => {
             attack(npc, target, APPROACH_THRUST * handling.turn_rate, handling)
         }
-    }
-}
-
-/// Snipes at a target at `target`: brakes until at rest, then turns to the
-/// heading it wants to fire along, without thrusting.
-fn snipe(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
-    if npc.state.velocity.length() <= AT_REST_SPEED {
-        Controls {
-            turn: steer(
-                npc.state.heading,
-                fire::wanted_heading(npc, target),
-                handling,
-            ),
-            ..Controls::default()
-        }
-    } else {
-        brake(&npc.state, handling)
     }
 }
 
@@ -920,6 +928,7 @@ mod tests {
             other,
             false,
             speeds,
+            RuleSource::Engine,
             &mut Draws::of(&[]),
         )
     }
@@ -1616,6 +1625,7 @@ mod tests {
                 Some(&player),
                 false,
                 top,
+                RuleSource::Engine,
                 &mut draws,
             );
             assert!(
@@ -1777,6 +1787,7 @@ mod tests {
             None,
             false,
             speeds,
+            RuleSource::Engine,
             draws,
         );
         while let Mode::LeavingGate { .. } = ship.mode {
@@ -1787,6 +1798,7 @@ mod tests {
                 None,
                 false,
                 speeds,
+                RuleSource::Engine,
                 draws,
             );
         }
@@ -1820,6 +1832,7 @@ mod tests {
                         None,
                         false,
                         speeds,
+                        RuleSource::Engine,
                         &mut draws
                     ),
                     Outcome::Flying
@@ -1842,6 +1855,7 @@ mod tests {
                 None,
                 false,
                 speeds,
+                RuleSource::Engine,
                 &mut draws,
             );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
@@ -1888,6 +1902,7 @@ mod tests {
                     None,
                     false,
                     speeds,
+                    RuleSource::Engine,
                     &mut draws,
                 );
             }
@@ -1903,6 +1918,7 @@ mod tests {
                 None,
                 false,
                 speeds,
+                RuleSource::Engine,
                 &mut draws,
             );
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
@@ -1967,7 +1983,16 @@ mod tests {
         widths: &BTreeMap<StellarId, TypeWidth>,
     ) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
-        super::fly(npc, sites, widths, None, false, speeds, &mut Draws::of(&[]))
+        super::fly(
+            npc,
+            sites,
+            widths,
+            None,
+            false,
+            speeds,
+            RuleSource::Engine,
+            &mut Draws::of(&[]),
+        )
     }
 
     #[test]
@@ -2563,9 +2588,10 @@ mod tests {
 
     #[test]
     fn dogfighting_within_165_it_thrusts_within_a_turn_and_15_degrees() {
-        // 3 + 15: within 18 of the target 165 above.
+        // 3 + 15: within 18 of the target 165 above, which the table
+        // bears at 46, its diagonal a degree past 45.
         let target = at(165.0, -165.0, 0.0, 0.0, 0.0);
-        let bearing = 45.0;
+        let bearing = 46.0;
         let thrusting = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.0), &target);
         assert!(thrusting.thrust);
         let turning = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.1), &target);
@@ -2589,16 +2615,20 @@ mod tests {
             }),
             1,
         )]);
-        // 1000 above crossing right at 10 a tick: led 1000 to the right,
-        // 45 degrees.
+        // 1000 above crossing right at 10 a tick: led about 1000 to the
+        // right, near 45 degrees, in whole degrees as the ship moves.
         let crossing = at(0.0, -1000.0, 10.0, 0.0, 0.0);
         let mut flown = ship.clone();
         for _ in 0..30 {
             fly(&mut flown, &[], Some(&crossing));
         }
+        let wanted = fire::wanted_heading(&flown, &crossing);
+        assert_eq!(wanted, wanted.trunc(), "a whole degree");
+        assert!((wanted - 45.0).abs() < 3.0, "{wanted}");
+        let half_turn = flown.stats.handling.turn_rate / 2.0;
         assert!(
-            (flown.state.heading - 45.0).abs() < 3.0,
-            "{:?}",
+            shortest_turn(flown.state.heading, wanted).abs() <= half_turn,
+            "{:?} {wanted}",
             flown.state
         );
     }
@@ -2607,7 +2637,9 @@ mod tests {
     fn sniping_it_brakes_to_a_stop_then_faces_its_target() {
         let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
         let mut moving = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, -3.0, 0.0));
-        for _ in 0..200 {
+        // It turns to its retro heading and thrusts down to 0.35 a tick on
+        // each axis, then slows by 0.95 a tick.
+        for _ in 0..400 {
             fly(&mut moving, &[], Some(&target));
         }
         assert!(moving.state.velocity.length() <= crate::flight::AT_REST_SPEED);
@@ -2689,6 +2721,7 @@ mod tests {
             Some(other),
             disabled,
             speeds,
+            RuleSource::Engine,
             &mut Draws::of(&[]),
         )
     }
@@ -2728,7 +2761,10 @@ mod tests {
         for _ in 0..200 {
             fly_at_quarry(&mut moving, &target, false);
         }
-        assert!(moving.state.velocity.length() <= crate::flight::AT_REST_SPEED);
+        // It snipes as `snipe::fly` says: it brakes below 0.35 on each
+        // axis, then slows by `snipe::DAMPING` a tick.
+        assert!(!snipe::moving(&moving.state), "{:?}", moving.state);
+        assert!(moving.state.velocity.length() < 0.001, "{:?}", moving.state);
         let bearing = crate::combat::aim::bearing(moving.state.position, target.position);
         assert!(
             shortest_turn(moving.state.heading, bearing).abs() < 3.0,
@@ -2803,13 +2839,80 @@ mod tests {
     }
 
     #[test]
+    fn a_sniper_whose_target_is_gone_coasts() {
+        // `_LowLevelAIHandler`'s sub-goal 0xe does nothing with no target
+        // (@0x870ab-0x870b9), its thrust zeroed at entry (@0x851f1).
+        let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.1, -0.2, 10.0));
+        for _ in 0..10 {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        }
+        assert_eq!(ship.state.velocity, Vec2::new(0.1, -0.2));
+        assert_eq!(ship.state.heading, 10.0);
+    }
+
+    #[test]
+    fn a_moving_sniper_turns_as_the_lead_reading_it_is_given_says() {
+        // Moving down at 2 at heading 76, its target 300 right at rest,
+        // having fired its gun of 10 a tick: by the engine it leads its
+        // target (78.69) and thrusts; by the other reading it turns to
+        // its retro heading, 0.
+        let gun = crate::catalog::WeaponRecord {
+            speed: 1000,
+            count: 20,
+            ..nova_sim_catalog::fixture::weapon(128)
+        };
+        let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, 2.0, 76.0));
+        ship.armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&gun),
+            1,
+        )]);
+        let mut fuel = ship.reserves.fuel;
+        ship.armament.fire_pick(
+            crate::catalog::WeaponId(128),
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut crate::combat::armament::LauncherRounds::default(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            RuleSource::Engine,
+            &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
+        );
+        let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
+        let flown = |lead: RuleSource| {
+            let mut flown = ship.clone();
+            super::fly(
+                &mut flown,
+                &[],
+                &BTreeMap::new(),
+                Some(&target),
+                false,
+                TopSpeeds::own_of(&ship),
+                lead,
+                &mut Draws::of(&[]),
+            );
+            flown.state
+        };
+        let engine = flown(RuleSource::Engine);
+        assert_eq!(engine.heading, 79.0, "a turn right");
+        assert!(engine.velocity.y < 2.0, "thrust toward its target");
+        let other = flown(RuleSource::Bible);
+        assert_eq!(other.heading, 73.0, "a turn left");
+        assert_eq!(other.velocity, Vec2::new(0.0, 2.0), "no thrust");
+    }
+
+    #[test]
+    fn a_sniper_at_rest_slows_by_0_95_a_tick() {
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.2, 0.0, 270.0));
+        fly(&mut ship, &[], Some(&target));
+        assert_eq!(ship.state.velocity, Vec2::new(0.2 * 0.95, 0.0));
+        assert_eq!(ship.state.position, Vec2::new(0.2 * 0.95, 0.0));
+    }
+
+    #[test]
     fn a_fight_whose_ship_is_gone_brakes() {
-        for goal in [
-            Goal::Attack(FOE),
-            Goal::Snipe(FOE),
-            Goal::Flee(FOE),
-            Goal::Inspect(FOE),
-        ] {
+        for goal in [Goal::Attack(FOE), Goal::Flee(FOE), Goal::Inspect(FOE)] {
             let mut ship = npc(FAST, goal, at(0.0, 0.0, 4.0, -3.0, 10.0));
             for _ in 0..200 {
                 assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);

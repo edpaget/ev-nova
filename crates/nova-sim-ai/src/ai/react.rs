@@ -2,12 +2,15 @@
 //! [`answer`], which the four AI types share.
 //!
 //! The rules are the original's (`_DamageShip` @0x3bb20-0x3bed2 and
-//! `_DoGoodSamaritan` @0x3bef4 in the `EV Nova` executable):
+//! `_DoGoodSamaritan` @0x3bef4 in the `EV Nova` executable). A strike
+//! reaches them only once answered ([`Strike::answered`]): `_DamageShip`'s
+//! answer flag, which holds back a ship's kin, its fleet and much else,
+//! skips the whole block when clear (see
+//! [`answer_flag`](crate::ai::answer_flag)).
 //!
 //! - **The victim**, and the lead of an escort hit, add the damage to
-//!   their provocation and take the attacker as their target, unless the
-//!   attacker is of their government or their fleet, or they already
-//!   attack another ship nearer than half the attacker's distance
+//!   their provocation and take the attacker as their target, unless they
+//!   already attack another ship nearer than half the attacker's distance
 //!   ([`FOCUS`] of its distance squared) while facing within
 //!   [`FOCUS_ANGLE`] of it: then the hit changes nothing. A ship still
 //!   coming into the system answers so too, gliding in, waiting in its
@@ -120,21 +123,13 @@ pub fn answer(
     Reaction::default()
 }
 
-/// Whether `npc`, hit (or its escort hit) by `attacker`, lets it be: the
-/// attacker is of its government or fleet, or it keeps to its own nearer
-/// target ahead of it. Its mode is not read: `_DamageShip` skips a
-/// reaction only while +0x50 is above 0 (@0x3b4b0-0x3b4c2), a ship
-/// jumping out, never one coming in (see the module docs).
+/// Whether `npc`, hit (or its escort hit) by `attacker`, lets it be: it
+/// keeps to its own nearer target ahead of it. Kin is not read: the
+/// answer flag held it back already ([`answer_flag`](crate::ai::answer_flag)).
+/// Its mode is not read: `_DamageShip` skips a reaction only while +0x50
+/// is above 0 (@0x3b4b0-0x3b4c2), a ship jumping out, never one coming in
+/// (see the module docs).
 fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
-    let kin = match attacker {
-        ShipRef::Player => false,
-        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
-            (npc.govt.is_some() && other.govt == npc.govt) || other.fleet() == npc.fleet()
-        }),
-    };
-    if kin {
-        return true;
-    }
     let squared = |ship: ShipRef| {
         around.state_of(ship).map(|state| {
             let off = state.position - npc.state.position;
@@ -248,17 +243,7 @@ mod tests {
         ShipRef::Npc(NpcId(id))
     }
 
-    fn strike(ship: ShipRef, by: ShipRef) -> Strike {
-        Strike {
-            ship,
-            by: Some(by),
-            damage: 12.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
-        }
-    }
+    use crate::combat::fixture::strike;
 
     fn answered(govts: &Governments, npcs: &[Npc], who: usize, hit: &Strike) -> Reaction {
         answered_by(RuleSource::Engine, govts, npcs, who, hit)
@@ -341,20 +326,31 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_by_its_own_government_or_fleet_is_ignored() {
+    fn an_answered_hit_by_its_own_government_or_fleet_is_taken() {
+        // Kin is the answer flag's (`ai::answer_flag`, @0x3b4cd-0x3b4fc):
+        // a hit that reaches the reaction was answered, and the reaction
+        // block, the lead's part included (@0x3bcfa-0x3bd79), has no kin
+        // test of its own.
         let govts = relations(0, 0);
         let mut npcs = [
             ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),
             ship(2, Some(TRADERS), AiType::Warship, 500.0),
+            ship(3, Some(TRADERS), AiType::Warship, 50.0),
         ];
+        npcs[2].leader = Some(NpcId(1));
         let hit = strike(n(1), n(2));
-        assert_eq!(answered(&govts, &npcs, 0, &hit), Reaction::default());
+        assert_eq!(answered(&govts, &npcs, 0, &hit), TAKES(n(2)));
+        assert_eq!(
+            answered(&govts, &npcs, 0, &strike(n(3), n(2))),
+            TAKES(n(2)),
+            "its escort hit by its government"
+        );
         npcs[1].govt = Some(NEUTRAL);
         npcs[1].leader = Some(NpcId(1));
         assert_eq!(
             answered(&govts, &npcs, 0, &hit),
-            Reaction::default(),
-            "its escort"
+            TAKES(n(2)),
+            "by its escort"
         );
         npcs[1].leader = None;
         npcs[0].govt = None;
@@ -362,7 +358,7 @@ mod tests {
         assert_eq!(
             answered(&govts, &npcs, 0, &hit),
             TAKES(n(2)),
-            "two independents are no government"
+            "two independents"
         );
     }
 

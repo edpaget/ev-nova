@@ -30,6 +30,9 @@ nova-sim-base = { workspace = true, features = ["fixture"] }
 # The catalog record builders and control-bit mocks the moved tests build
 # from.
 nova-sim-catalog = { workspace = true, features = ["fixture"] }
+# The plain answered strike (`combat::fixture::strike`) the reaction and
+# answer-flag tests build on.
+nova-sim-combat = { workspace = true, features = ["fixture"] }
 
 [features]
 # Test support for other crates' tests: `traffic::fixture::npc`, and the

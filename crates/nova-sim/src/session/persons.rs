@@ -431,13 +431,16 @@ impl Session {
 
     /// Each person of `Flags` 0x0001 that a shot of the player's hit among
     /// `strikes` holds a grudge against it from now on, on the pilot too
-    /// (`_DamageShip` @0x3be83-0x3beb3); an escort's shot does not count,
-    /// nor does a blast or the player's death shockwave, which is no
-    /// direct hit ([`Strike::direct`]). No save is due.
+    /// (`_DamageShip` @0x3be83-0x3beb3), once the hit is answered
+    /// ([`Strike::answered`]): the grudge is in the reaction block, which a
+    /// clear answer flag skips (see the `answer_flag` module). An escort's
+    /// shot does not count, nor does a blast or the player's death
+    /// shockwave, which is no direct hit and never answered. No save is
+    /// due.
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
         for strike in strikes
             .iter()
-            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.direct)
+            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.answered)
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -730,12 +733,14 @@ mod tests {
     const ACE_ABOVE: [u32; 4] = [99, 750, 650, 180];
 
     /// `pilot`'s session over `catalog` with Ace placed 100 above the
-    /// player, who holds its fire on it.
+    /// player, who targets it, so its hits are no stray ones, and holds
+    /// its fire on it.
     fn facing_ace(catalog: &FakePilotCatalog, pilot: Pilot) -> Session {
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.populate(catalog, &mut Draws::of(&ACE_ABOVE));
         assert_eq!(persons(&session), [Some(600)]);
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        session.target = Some(session.npcs()[0].id);
         session.hold_trigger(Trigger {
             primary: true,
             ..Trigger::default()
@@ -866,6 +871,23 @@ mod tests {
     }
 
     #[test]
+    fn an_unanswered_player_hit_holds_no_grudge() {
+        // The grudge (@0x3be83-0x3beb3) is inside the reaction block, which
+        // a clear answer flag skips.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        session.hold_grudges(&[Strike {
+            answered: false,
+            ..hit
+        }]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+        session.hold_grudges(&[hit]);
+        assert!(session.pilot().grudge(PersonId(600)), "answered");
+    }
+
+    #[test]
     fn a_hit_by_no_ship_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
@@ -877,6 +899,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
     }
@@ -893,6 +918,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
@@ -913,6 +941,9 @@ mod tests {
             direct: false,
             intended: false,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: false,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
@@ -945,6 +976,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),

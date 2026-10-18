@@ -144,6 +144,7 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, normalized};
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
+use crate::trig;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -600,6 +601,18 @@ impl Launch {
     pub fn heading_from(&self, origin: &ShipState) -> f32 {
         normalized(self.pointing.heading_from(origin) + self.inaccuracy)
     }
+
+    /// The heading a shot of it leaves `origin` along, as `_SpawnShot`
+    /// sets it: its pointing's whole degree from there
+    /// ([`Pointing::whole_from`]), turned by its whole-degree inaccuracy
+    /// in `f32` and taken round once each way ([`trig::wrap_once`],
+    /// @0x3ed44-0x3edc1; point defence's @0x39807-0x3986e). A bomb's
+    /// inaccuracy comes after its velocity is set (@0x3ef0a-0x3efed), so
+    /// the fight sends its velocity along [`Pointing::whole_from`] alone.
+    #[must_use]
+    pub fn shot_heading(&self, origin: &ShipState) -> f32 {
+        trig::wrap_once(f32::from(self.pointing.whole_from(origin)) + self.inaccuracy)
+    }
 }
 
 /// What an NPC's pick fired in one call ([`Armament::fire_pick`]): its
@@ -622,6 +635,9 @@ pub struct Armament {
     /// The exit each `ExitType`'s next shot or beam leaves from (the
     /// original's +0xc8fe-+0xc905; see [`exits`](super::exits)).
     exits: ExitCursors,
+    /// The ship's fold set (the original's +0xc8fc), which a beam of
+    /// `ExitType` -1 steps as a cursor (see [`Armament::fold_set`]).
+    fold_set: u16,
 }
 
 impl Armament {
@@ -649,6 +665,7 @@ impl Armament {
             mounts,
             last_gun: None,
             exits: ExitCursors::default(),
+            fold_set: 0,
         }
     }
 
@@ -1065,6 +1082,44 @@ impl Armament {
         &mut self.exits
     }
 
+    /// The ship's fold set, the original's +0xc8fc: 0 when built, the
+    /// original's `BaseSets` − 1 for a hull of one set. A beam of `ExitType`
+    /// -1 steps it as `_SpawnBeam` steps a cursor (@0x450fa-0x4523d; see
+    /// [`exits::step_stray`](super::exits::step_stray)), and no refit
+    /// writes it; the player's goes back to 0 on a change of ship, as the
+    /// original writes `BaseSets` − 1 there (`_HandlePlayer` @0x6ef3f).
+    /// Folding hulls' `BaseSets` − 1 at spawn and on a ship
+    /// change, and every reader (the drawn set, the fold-before-fire
+    /// gates), are ship-handling-fidelity phase 10's; this is their hook.
+    #[must_use]
+    pub fn fold_set(&self) -> u16 {
+        self.fold_set
+    }
+
+    /// This armament with `fold_set` for its fold set: the player's carried
+    /// through an outfit refit (see [`Armament::fold_set`]).
+    #[must_use]
+    pub fn with_fold_set(mut self, fold_set: u16) -> Self {
+        self.fold_set = fold_set;
+        self
+    }
+
+    /// The exit cursors and the fold set together, for the fight to move
+    /// on as a shot or beam leaves: a beam of `ExitType` -1 steps the fold
+    /// set in place of a cursor.
+    pub fn exits_mut(&mut self) -> (&mut ExitCursors, &mut u16) {
+        (&mut self.exits, &mut self.fold_set)
+    }
+
+    /// This armament with `cursors` for its exit cursors: those its ship's
+    /// slot kept, or the player's carried through a refit, as no spawn or
+    /// refit writes them.
+    #[must_use]
+    pub fn with_exit_cursors(mut self, cursors: ExitCursors) -> Self {
+        self.exits = cursors;
+        self
+    }
+
     /// The last unguided gun or rocket (guidance -1 or 6) an NPC's pick
     /// fired ([`Armament::fire_pick`]), the original's +0xc8da: none
     /// before its first.
@@ -1094,7 +1149,8 @@ impl Armament {
     /// any: the fight's [`Quarry`](super::defence::Quarry), a missile or a
     /// ship, which goes through the same tail either way (@0x39931). Nothing
     /// fires, and nothing is spent, when `pick` gives none, nor for a shot
-    /// (guidance 9) when the shot table has no `room`: `_SpawnShot` failing
+    /// (guidance 9) when the shot table has no `room` or its weapon places
+    /// no shot ([`WeaponSpec::spawns_shot`]): `_SpawnShot` failing
     /// returns before the reload, the ammunition, the sound and the burst
     /// (@0x396ea-0x396ee). A beam (10) never asks (`_SpawnBeam` @0x3992c
     /// is unchecked), so its tail runs whether or not it spawns. What it
@@ -1130,7 +1186,7 @@ impl Armament {
             .0;
         let mount = &mut self.mounts[index];
         let (pointing, quarry) = pick(&mount.spec)?;
-        if mount.spec.guidance == Guidance::PointDefence && !room {
+        if mount.spec.guidance == Guidance::PointDefence && !(room && mount.spec.spawns_shot()) {
             return None;
         }
         let inaccuracy = if mount.spec.guidance == Guidance::PointDefenceBeam {

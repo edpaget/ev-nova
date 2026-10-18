@@ -109,6 +109,12 @@ fn stock_player(
         blessing: Blessing::NONE,
         ship,
         combat_govt: record.combat_govt,
+        target: None,
+        class: nova_sim::escort::EscortClass::of(
+            record.escort_type,
+            record.inherent_ai,
+            record.fields.mass,
+        ),
     }
 }
 

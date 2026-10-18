@@ -52,7 +52,8 @@
 //! is [`scoop`](crate::scoop)'s ([`CargoBoxes::take_touching`]). Left
 //! out: the AI that steers for them
 //! (rdm:phase/asteroids/phase-5-ai-mining); the player's wrap shift; and
-//! the sprite murk.
+//! the sprite murk, which the view draws for shots alone so far
+//! (rdm:task/murk-other-sprites).
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};

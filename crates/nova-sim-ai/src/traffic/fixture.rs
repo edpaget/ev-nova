@@ -38,6 +38,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         pick: None,
         target: None,
         provoked: 0.0,
+        stray: 0.0,
         aggression: 0,
         inspected: None,
         booty: None,

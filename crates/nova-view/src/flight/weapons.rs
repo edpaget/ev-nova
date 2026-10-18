@@ -5,31 +5,38 @@
 //! - A shot is a frame of its weapon's sheet, `spïn` 3000 + `Graphic`
 //!   ([`shot_frame`]): the frame for its heading, `trunc(n x heading /
 //!   360)`, or, for a spinning weapon (`Flags` 0x0001), one frame every
-//!   `BeamWidth` ticks of its age, wrapping, or holding the last
-//!   (`Flags2` 0x0002), and from frame 0 only once its age reaches
-//!   `ProxSafety` (`Flags2` 0x0001). Every shot starts on the first frame
-//!   (`Flags` 0x0004 always holds: there is no random start).
-//! - A translucent shot (`Flags3` 0x0002) is blended additively in the
-//!   original; the renderer cannot, so it is drawn at
-//!   [`TRANSLUCENT_ALPHA`] instead, a placeholder.
+//!   `BeamWidth` ticks of its age from the index its spin started on,
+//!   wrapping, or holding the last (`Flags2` 0x0002), and frame 0 while
+//!   its age is below `ProxSafety` (`Flags2` 0x0001). A shot's spin starts
+//!   on a random index, `Rand(36)`, unless its weapon has `Flags` 0x0004
+//!   ([`spin`](super::spin)).
+//! - A shot fades in and out by its `Falloff`, and a translucent one
+//!   (`Flags3` 0x0002) is added to what is under it
+//!   ([`shot_fade`](super::shot_fade)); a shot far from the player's ship
+//!   in a murky system is darkened ([`murk`](super::murk)).
 //! - A beam is drawn from its start to its end as lines in `BeamColor`
 //!   ([`beam_strokes`]): its core at offsets 0, ±1, up to one short of
 //!   ±`BeamWidth` along the minor axis, at alpha (32 - 16|i|)/32, and with a
 //!   `Falloff` as the original loads it (16 for none) plus the ticks it has
 //!   faded, its corona in `CoronaColor` at offsets ±(`BeamWidth` + j),
 //!   from alpha 16/32 down by that falloff/32 a line while above 2/32. A
-//!   lightning beam (`LiDensity`) is drawn as its plain core, a
-//!   placeholder for the original's random zig-zag, fading by its fade
-//!   over 32 ticks.
+//!   lightning beam (`LiDensity`) is drawn as its zig-zag, fading by its
+//!   fade over 32 ticks ([`lightning`]).
 //! - A beam whose weapon sets `Flags2` 0x2000 is drawn under the ships,
 //!   and every other beam over them.
 
 use std::num::NonZeroU16;
 
 use super::catalog::{Looks, WeaponId, WeaponLook};
-use crate::draw::crossed_box;
+use super::lightning::{self, StepRolls};
+use super::murk::murk_tint;
+use super::shot_fade::{ShotShade, shot_shade};
+use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Color, DrawList, ImageKey, Point};
+use nova_sim::combat::projectile::ShotId;
+use nova_sim::sprite_layer::SpriteLayer;
+use nova_sim::{Chance, RuleSource};
 
 /// `Flags`: the shot's frames spin with its age, not its heading.
 pub const SPINS: u16 = 0x0001;
@@ -41,10 +48,12 @@ pub const STILL_UNTIL_SAFE: u16 = 0x0001;
 pub const HOLDS_LAST_FRAME: u16 = 0x0002;
 /// `Flags2`: the beam is drawn under the ships.
 pub const BEAM_UNDER_SHIPS: u16 = 0x2000;
-/// `Flags3`: the shot is translucent.
+/// `Flags3`: the shot is translucent, added to what is under it (see
+/// [`shot_fade`](super::shot_fade)).
 pub const TRANSLUCENT: u16 = 0x0002;
-/// The alpha a translucent shot, and every explosion, is drawn at: a
-/// placeholder for the original's additive blend.
+/// The alpha every explosion is drawn at ([`effects`](super::effects)): a
+/// placeholder for the original's additive blend of a translucent
+/// explosion.
 pub const TRANSLUCENT_ALPHA: f32 = 0.75;
 /// The side of the crossed box drawn for a shot whose look cannot be
 /// read, in the placeholder colour.
@@ -61,32 +70,63 @@ const CORONA_START: i32 = 16;
 const CORONA_END: i32 = 2;
 
 /// The frame of a shot heading `heading` degrees, `age` ticks old, on a
-/// sheet of `frames` frames, of a weapon that looks as `look` says.
+/// sheet of `frames` frames, of a weapon that looks as `look` says, whose
+/// spin started on index `start` ([`SpinStarts`](super::spin::SpinStarts)).
+///
+/// A shot that does not spin shows its heading's frame. A spinning one
+/// (`Flags` 0x0001) shows the index `_HandleShot` holds before its
+/// tick's step (@0x35894), clamped to the sheet (@0x35956-0x3596c): the
+/// shot drawn at `age` is on its `age`-th pass (the session moves it,
+/// and ages it, once a pass), so it has stepped once every `BeamWidth`
+/// passes before, every pass for a `BeamWidth` of 1 or less
+/// (@0x35884-0x358c4). A step past the last frame wraps to 0, or holds
+/// the last under `Flags2` 0x0002 (@0x358cb-0x358f6). So a start below
+/// the frame count runs from the start; one at or past it shows the last
+/// frame until the first step, then runs from 0 (or holds the last).
+/// Under `Flags2` 0x0001 the shot shows frame 0 while its age is below
+/// `ProxSafety`, the index running on beneath; with 0x0002 too, the index
+/// is put back to 0 on each of those passes (@0x35914-0x35932).
 #[must_use]
-pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook) -> u16 {
-    let count = frames.get();
+pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook, start: u8) -> u16 {
+    let count = u32::from(frames.get());
     let last = count - 1;
     if look.flags & SPINS == 0 {
-        let turned = f32::from(count) * heading.rem_euclid(360.0) / 360.0;
-        // Just short of a full turn can round to a full turn.
-        return (turned as u16).min(last);
+        // `(frames × heading)` in `f32`, over 360.0 in doubles, truncated
+        // toward 0 and clamped to the sheet (`_HandleShot`
+        // @0x3593a-0x3596c), so a bomb's unwrapped heading below 0 or past
+        // 360 shows an end frame.
+        let turned = f64::from(f32::from(frames.get()) * heading) / 360.0;
+        return (turned as i64).clamp(0, i64::from(last)) as u16;
     }
+    let holds = look.flags2 & HOLDS_LAST_FRAME != 0;
     let safety = if look.flags2 & STILL_UNTIL_SAFE == 0 {
         0
     } else {
         u32::try_from(look.prox_safety).unwrap_or(0)
     };
-    let Some(spinning) = age.checked_sub(safety) else {
+    if age < safety {
         return 0;
-    };
-    let ticks_a_frame = u32::try_from(look.beam_width).unwrap_or(0).max(1);
-    let turns = spinning / ticks_a_frame;
-    let frame = if look.flags2 & HOLDS_LAST_FRAME == 0 {
-        turns % u32::from(count)
+    }
+    let every = u32::try_from(look.beam_width).unwrap_or(0).max(1);
+    // The steps made on passes `from` to `to`, a pass being a step's when
+    // it is a multiple of `every`.
+    let steps = |from: u32, to: u32| (to / every).saturating_sub(from.saturating_sub(1) / every);
+    let before = age.saturating_sub(1);
+    let index = if holds && safety > 1 {
+        // Put back to 0 on every pass below the safety; the timer runs on.
+        steps(safety, before).min(last)
     } else {
-        turns.min(u32::from(last))
+        let stepped = steps(1, before);
+        let start = u32::from(start);
+        match (start < count, holds) {
+            (true, false) => (start + stepped) % count,
+            (true, true) => (start + stepped).min(last),
+            (false, _) if stepped == 0 => last,
+            (false, false) => (stepped - 1) % count,
+            (false, true) => last,
+        }
     };
-    u16::try_from(frame).unwrap_or(last)
+    u16::try_from(index).unwrap_or(u16::MAX)
 }
 
 /// The lines that draw a beam from `start` to `end` of a weapon that
@@ -95,16 +135,22 @@ pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook)
 /// colour, in drawing order: the corona, then the core out to in. The
 /// corona falls off by `Falloff` + `fade` and is drawn when that is above
 /// none (`_DrawBeam` @0xc3e00), so a fading beam grows one. A lightning
-/// beam has no corona, and its placeholder core is drawn at
-/// (32 − `fade`)/32 of its alpha, none below none (`_BeamDrawCallback`
-/// @0x37c75-0x37d62).
+/// beam (`LiDensity` above none) is its zig-zag instead
+/// ([`lightning::zig_zag`]), drawn on the `zig_zag` rolls by its rule's
+/// reading of [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag),
+/// at (32 − `fade`)/32 (`_BeamDrawCallback` @0x37c75-0x37d62).
 #[must_use]
 pub fn beam_strokes(
     start: Point,
     end: Point,
     look: &WeaponLook,
     fade: u32,
+    zig_zag: (RuleSource, &mut dyn Chance),
 ) -> Vec<(Point, Point, Color)> {
+    if look.li_density > 0 {
+        let (rule, rolls) = zig_zag;
+        return lightning::zig_zag(start, end, look, fade, rule, rolls);
+    }
     // A mostly vertical beam widens along x, any other along y.
     let along_x = (end.x - start.x).abs() < (end.y - start.y).abs();
     let line = |offset: i32, color: u32, alpha: i32| {
@@ -118,10 +164,9 @@ pub fn beam_strokes(
     };
     let width = i32::from(look.beam_width.max(1));
     let fade = i32::try_from(fade).unwrap_or(i32::MAX);
-    let lightning = look.li_density > 0;
     let mut strokes = Vec::new();
     let falloff = i32::from(look.falloff).saturating_add(fade);
-    if !lightning && falloff > 0 {
+    if falloff > 0 {
         // From the start down by the falloff a line, while above the end.
         let step = usize::try_from(falloff).unwrap_or(usize::MAX);
         let fading = (CORONA_END + 1..=CORONA_START).rev().step_by(step);
@@ -130,20 +175,14 @@ pub fn beam_strokes(
             strokes.push(line(out, look.corona_color, alpha));
         }
     }
-    let shown = if lightning {
-        ALPHA_STEPS.saturating_sub(fade).max(0)
-    } else {
-        ALPHA_STEPS
-    };
-    let core = |alpha: i32| alpha * shown / ALPHA_STEPS;
     for out in (1..width).rev() {
         let alpha = ALPHA_STEPS - CORE_FALLOFF * out;
         if alpha > 0 {
-            strokes.push(line(-out, look.beam_color, core(alpha)));
-            strokes.push(line(out, look.beam_color, core(alpha)));
+            strokes.push(line(-out, look.beam_color, alpha));
+            strokes.push(line(out, look.beam_color, alpha));
         }
     }
-    strokes.push(line(0, look.beam_color, core(ALPHA_STEPS)));
+    strokes.push(line(0, look.beam_color, ALPHA_STEPS));
     strokes
 }
 
@@ -154,10 +193,13 @@ fn faded(raw: u32, alpha: i32) -> Color {
     Color::rgba(color.r, color.g, color.b, a)
 }
 
-/// A shot to draw: where on screen, which way it heads, how old it is and
-/// its weapon.
+/// A shot to draw: which it is, where on screen, which way it heads, how
+/// old it is, its weapon, the sprite layer it is drawn in, the index its
+/// spin started on and how murky it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShotShown {
+    /// Its number in the fight.
+    pub id: ShotId,
     /// Where its centre is drawn, on screen.
     pub at: Point,
     /// Which way it heads, in degrees.
@@ -166,33 +208,69 @@ pub struct ShotShown {
     pub age: u32,
     /// Its weapon.
     pub weapon: WeaponId,
+    /// The layer it is drawn in among the ships
+    /// ([`nova_sim::sprite_layer`]).
+    pub layer: SpriteLayer,
+    /// The index its spin started on ([`SpinStarts`](super::spin::SpinStarts)).
+    pub spin_start: u8,
+    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
+    pub murk: u8,
 }
 
-/// Draws each of `shots` as its weapon's frame ([`shot_frame`]), a
-/// translucent one at [`TRANSLUCENT_ALPHA`]; nothing for a weapon whose
-/// shots have no graphic, and a crossed box for one whose look or sheet
-/// was not read.
-pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks) {
+/// Draws each of `shots` in turn ([`draw_shot`]), by `fade`'s reading
+/// of [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade).
+pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade: RuleSource) {
     for shot in shots {
-        let Some(look) = looks.weapon(shot.weapon) else {
-            crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER);
-            continue;
-        };
-        match &look.sheet {
-            None => {}
-            Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
-            Some(Ok(sheet)) => {
-                let frame = shot_frame(shot.heading, shot.age, sheet.frames, look);
-                let tint = if look.flags3 & TRANSLUCENT == 0 {
-                    Color::WHITE
-                } else {
-                    translucent()
-                };
-                list.sprite(ImageKey::sprite(sheet.image_id, frame), shot.at, tint);
+        draw_shot(list, shot, looks, fade);
+    }
+}
+
+/// Draws `shot` as its weapon's frame ([`shot_frame`]), shaded as it
+/// fades ([`shot_shade`], by `fade`'s reading of
+/// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
+/// opaque, translucent at alpha (32 − t)/32, or additive,
+/// [`Blend::Or`](crate::draw::Blend::Or) at [`lights_tint`]`(n)`; each
+/// darkened by its murk ([`murk_tint`]). Nothing for a weapon whose shots
+/// have no graphic, and a crossed box for one whose look or sheet was not
+/// read.
+pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: RuleSource) {
+    let Some(look) = looks.weapon(shot.weapon) else {
+        crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER);
+        return;
+    };
+    match &look.sheet {
+        None => {}
+        Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
+        Some(Ok(sheet)) => {
+            let frame = shot_frame(shot.heading, shot.age, sheet.frames, look, shot.spin_start);
+            let image = ImageKey::sprite(sheet.image_id, frame);
+            match shot_shade(look, shot.age, fade) {
+                ShotShade::Opaque => {
+                    list.sprite(image, shot.at, murk_tint(Color::WHITE, shot.murk));
+                }
+                ShotShade::Translucent(t) => {
+                    let tint = see_through(t);
+                    list.sprite(image, shot.at, murk_tint(tint, shot.murk));
+                }
+                ShotShade::Additive(n) => {
+                    list.or_sprite(image, shot.at, murk_tint(lights_tint(n), shot.murk));
+                }
             }
         }
     }
 }
+
+/// White at alpha (32 − `t`)/32, rounded: a shot translucent by `t`
+/// 32nds.
+#[must_use]
+pub fn see_through(t: u8) -> Color {
+    let shown = u16::from(FADE_STEPS) - u16::from(t).min(u16::from(FADE_STEPS));
+    let alpha = (shown * 255 + u16::from(FADE_STEPS) / 2) / u16::from(FADE_STEPS);
+    Color::rgba(255, 255, 255, u8::try_from(alpha).unwrap_or(u8::MAX))
+}
+
+/// The steps of a shot's translucency.
+const FADE_STEPS: u8 = 32;
 
 /// White at [`TRANSLUCENT_ALPHA`].
 #[must_use]
@@ -216,13 +294,27 @@ pub struct BeamShown {
 }
 
 /// Draws those of `beams` drawn `under` the ships (`Flags2` 0x2000), or
-/// the others, as [`beam_strokes`]; a beam whose look was not read is a
-/// plain line in [`Color::ERROR`], over the ships.
-pub fn draw_beams(list: &mut DrawList, beams: &[BeamShown], looks: &Looks, under: bool) {
-    for beam in beams {
+/// the others, as [`beam_strokes`], the `n`-th's zig-zag, if it is
+/// lightning, on the step's rolls for its `n`-th beam
+/// ([`StepRolls::for_beam`]) by `rule`'s reading of
+/// [`RuleKey::LightningZigZag`](nova_sim::RuleKey::LightningZigZag); a
+/// beam whose look was not read is a plain line in [`Color::ERROR`], over
+/// the ships.
+pub fn draw_beams(
+    list: &mut DrawList,
+    beams: &[BeamShown],
+    looks: &Looks,
+    under: bool,
+    (rule, rolls): (RuleSource, StepRolls),
+) {
+    for (n, beam) in beams.iter().enumerate() {
         match looks.weapon(beam.weapon) {
             Some(look) if (look.flags2 & BEAM_UNDER_SHIPS != 0) == under => {
-                for (from, to, color) in beam_strokes(beam.start, beam.end, look, beam.fade) {
+                let mut rolls = rolls.for_beam(n);
+                let zig_zag = (rule, &mut rolls as &mut dyn Chance);
+                for (from, to, color) in
+                    beam_strokes(beam.start, beam.end, look, beam.fade, zig_zag)
+                {
                     list.line(from, to, 1.0, color);
                 }
             }
@@ -251,21 +343,42 @@ mod tests {
         Point::new(x, y)
     }
 
+    /// [`beam_strokes`] of a beam that is not lightning.
+    fn plain(start: Point, end: Point, look: &WeaponLook, fade: u32) -> Vec<(Point, Point, Color)> {
+        beam_strokes(
+            start,
+            end,
+            look,
+            fade,
+            (RuleSource::Engine, &mut StepRolls::default()),
+        )
+    }
+
     #[test]
     fn a_shot_shows_the_frame_its_heading_truncates_to() {
         let plain = WeaponLook::default();
+        let frame = |heading, frames| shot_frame(heading, 1, n(frames), &plain, 0);
         let frames: Vec<u16> = [0.0, 9.9, 10.0, 185.0, 359.9]
             .into_iter()
-            .map(|heading| shot_frame(heading, 0, n(36), &plain))
+            .map(|heading| frame(heading, 36))
             .collect();
         assert_eq!(frames, [0, 0, 1, 18, 35]);
-        assert_eq!(shot_frame(360.0, 0, n(36), &plain), 0, "a full turn");
-        assert_eq!(shot_frame(-10.0, 0, n(36), &plain), 35);
-        // Just short of 0 is a whole turn in f32.
-        assert_eq!(shot_frame(-0.000_001, 0, n(36), &plain), 35, "clamped");
-        assert_eq!(shot_frame(200.0, 0, n(1), &plain), 0);
-        assert_eq!(shot_frame(100.0, 0, n(2), &plain), 0);
-        assert_eq!(shot_frame(190.0, 0, n(2), &plain), 1);
+        // `_HandleShot` truncates toward 0 and clamps to the sheet
+        // (@0x3593a-0x3596c): an unwrapped bomb past 360 or below 0 shows
+        // an end frame.
+        assert_eq!(frame(360.0, 36), 35, "clamped");
+        assert_eq!(frame(360.5, 36), 35);
+        assert_eq!(frame(-10.0, 36), 0, "clamped");
+        assert_eq!(frame(-1.5, 36), 0);
+        assert_eq!(frame(-0.000_001, 36), 0);
+        assert_eq!(frame(200.0, 1), 0);
+        assert_eq!(frame(100.0, 2), 0);
+        assert_eq!(frame(190.0, 2), 1);
+        assert_eq!(
+            shot_frame(185.0, 9, n(36), &plain, 20),
+            18,
+            "a shot that does not spin ignores its start"
+        );
     }
 
     fn spinning(beam_width: i16, flags2: u16, prox_safety: i16) -> WeaponLook {
@@ -278,49 +391,127 @@ mod tests {
         }
     }
 
-    fn ages(look: &WeaponLook, frames: u16, ages: std::ops::Range<u32>) -> Vec<u16> {
-        ages.map(|age| shot_frame(90.0, age, n(frames), look))
+    /// The frames shown at `ages` of a shot of `look` on a sheet of
+    /// `frames`, started on index `start`. A shot is drawn at age `k` on
+    /// its `k`-th pass, from age 1.
+    fn ages_from(
+        look: &WeaponLook,
+        frames: u16,
+        start: u8,
+        ages: std::ops::Range<u32>,
+    ) -> Vec<u16> {
+        ages.map(|age| shot_frame(90.0, age, n(frames), look, start))
             .collect()
+    }
+
+    fn ages(look: &WeaponLook, frames: u16, ages: std::ops::Range<u32>) -> Vec<u16> {
+        ages_from(look, frames, 0, ages)
     }
 
     #[test]
     fn a_spinning_shot_turns_a_frame_every_beam_width_ticks_and_wraps() {
-        assert_eq!(ages(&spinning(2, 0, 0), 3, 0..8), [0, 0, 1, 1, 2, 2, 0, 0]);
+        assert_eq!(ages(&spinning(2, 0, 0), 3, 1..9), [0, 0, 1, 1, 2, 2, 0, 0]);
         assert_eq!(
-            ages(&spinning(0, 0, 0), 3, 0..4),
+            ages(&spinning(0, 0, 0), 3, 1..5),
             [0, 1, 2, 0],
             "every tick"
         );
-        assert_eq!(ages(&spinning(-1, 0, 0), 3, 0..4), [0, 1, 2, 0]);
-        assert_eq!(ages(&spinning(1, 0, 0), 3, 0..4), [0, 1, 2, 0]);
+        assert_eq!(ages(&spinning(-1, 0, 0), 3, 1..5), [0, 1, 2, 0]);
+        assert_eq!(ages(&spinning(1, 0, 0), 3, 1..5), [0, 1, 2, 0]);
+        assert_eq!(
+            ages(&spinning(1, 0, 0), 3, 0..2),
+            [0, 0],
+            "its first pass shows its start, before any step"
+        );
     }
 
     #[test]
     fn a_spinning_shot_may_hold_its_last_frame() {
         assert_eq!(
-            ages(&spinning(1, HOLDS_LAST_FRAME, 0), 3, 0..6),
+            ages(&spinning(1, HOLDS_LAST_FRAME, 0), 3, 1..7),
             [0, 1, 2, 2, 2, 2]
         );
     }
 
     #[test]
-    fn a_spinning_shot_may_wait_for_its_prox_safety() {
+    fn a_spinning_shot_runs_on_from_its_start() {
+        // Start 3 on 8 frames, a step every 2 passes.
         assert_eq!(
-            ages(&spinning(1, STILL_UNTIL_SAFE, 3), 4, 0..9),
-            [0, 0, 0, 0, 1, 2, 3, 0, 1]
+            ages_from(&spinning(2, 0, 0), 8, 3, 1..13),
+            [3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 0, 0]
         );
         assert_eq!(
-            ages(&spinning(1, 0, 3), 4, 0..3),
+            ages_from(&spinning(2, HOLDS_LAST_FRAME, 0), 8, 3, 1..13),
+            [3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 7, 7]
+        );
+    }
+
+    #[test]
+    fn a_start_past_the_sheet_shows_the_last_frame_until_the_first_step() {
+        // Start 20 on 8 frames: clamped to 7 until the first step, which
+        // wraps it to 0 (@0x358cb-0x358f6).
+        assert_eq!(
+            ages_from(&spinning(2, 0, 0), 8, 20, 1..21),
+            [7, 7, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 0, 0]
+        );
+        assert_eq!(
+            ages_from(&spinning(2, HOLDS_LAST_FRAME, 0), 8, 20, 1..7),
+            [7, 7, 7, 7, 7, 7],
+            "or holds the last"
+        );
+        assert_eq!(
+            ages_from(&spinning(1, 0, 0), 8, 8, 1..4),
+            [7, 0, 1],
+            "a start of the frame count is past the sheet"
+        );
+    }
+
+    #[test]
+    fn a_spinning_shot_may_wait_for_its_prox_safety() {
+        // Frame 0 below the safety, its index running on beneath it.
+        assert_eq!(
+            ages(&spinning(1, STILL_UNTIL_SAFE, 3), 4, 1..9),
+            [0, 0, 2, 3, 0, 1, 2, 3]
+        );
+        assert_eq!(
+            ages_from(&spinning(1, STILL_UNTIL_SAFE, 3), 4, 1, 1..6),
+            [0, 0, 3, 0, 1],
+            "from its start"
+        );
+        assert_eq!(
+            ages(&spinning(1, 0, 3), 4, 1..4),
             [0, 1, 2],
             "only with the flag"
         );
+        // With 0x0002 too, the index is put back to 0 on the passes below
+        // the safety, so it runs from 0 at it.
         assert_eq!(
             ages(
-                &spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 2),
+                &spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 3),
                 3,
-                0..7
+                1..8
             ),
             [0, 0, 0, 1, 2, 2, 2]
+        );
+        assert_eq!(
+            ages_from(
+                &spinning(2, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 4),
+                8,
+                20,
+                1..10
+            ),
+            [0, 0, 0, 0, 1, 1, 2, 2, 3],
+            "its start forgotten; the timer runs on: steps on passes 4, 6 and 8"
+        );
+        assert_eq!(
+            ages_from(
+                &spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 1),
+                4,
+                2,
+                1..4
+            ),
+            [2, 3, 3],
+            "a safety of 1 puts nothing back"
         );
     }
 
@@ -345,14 +536,14 @@ mod tests {
     fn a_beam_one_wide_is_one_opaque_line_in_its_colour() {
         let from = at(10.0, 20.0);
         let to = at(110.0, 30.0);
-        assert_eq!(beam_strokes(from, to, &beam(1, 0), 0), [(from, to, BEAM)]);
-        assert_eq!(beam_strokes(from, to, &beam(0, 0), 0), [(from, to, BEAM)]);
+        assert_eq!(plain(from, to, &beam(1, 0), 0), [(from, to, BEAM)]);
+        assert_eq!(plain(from, to, &beam(0, 0), 0), [(from, to, BEAM)]);
     }
 
     #[test]
     fn a_beam_two_wide_adds_half_alpha_lines_along_its_minor_axis() {
         // Mostly horizontal: offsets go down y.
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 10.0), &beam(2, 0), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 10.0), &beam(2, 0), 0);
         assert_eq!(
             strokes,
             [
@@ -362,7 +553,7 @@ mod tests {
             ]
         );
         // Mostly vertical: offsets go along x.
-        let strokes = beam_strokes(at(0.0, 0.0), at(10.0, -100.0), &beam(2, 0), 0);
+        let strokes = plain(at(0.0, 0.0), at(10.0, -100.0), &beam(2, 0), 0);
         assert_eq!(
             strokes,
             [
@@ -375,7 +566,7 @@ mod tests {
 
     /// Which axis `beam` widens along: x or y.
     fn widens(from: Point, to: Point) -> char {
-        let strokes = beam_strokes(from, to, &beam(2, 0), 0);
+        let strokes = plain(from, to, &beam(2, 0), 0);
         if strokes[0].0.x == from.x { 'y' } else { 'x' }
     }
 
@@ -389,20 +580,20 @@ mod tests {
     #[test]
     fn a_corona_line_at_two_32nds_is_left_out() {
         // 16, 9, then 2: not above 2.
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 7), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 7), 0);
         let alphas: Vec<u8> = strokes.iter().map(|(_, _, color)| color.a).collect();
         assert_eq!(alphas, [127, 127, 71, 71, 255]);
     }
 
     #[test]
     fn a_wide_beams_outer_core_lines_vanish() {
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(4, 0), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(4, 0), 0);
         assert_eq!(strokes.len(), 3, "±2 and ±3 are clear: {strokes:?}");
     }
 
     #[test]
     fn a_falloff_adds_a_corona_fading_by_it_a_line() {
-        let strokes = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 8), 0);
+        let strokes = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 8), 0);
         assert_eq!(
             strokes,
             [
@@ -413,21 +604,21 @@ mod tests {
                 (at(0.0, 0.0), at(100.0, 0.0), BEAM),
             ]
         );
-        let slow = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(2, 4), 0);
+        let slow = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(2, 4), 0);
         let alphas: Vec<u8> = slow.iter().map(|(_, _, color)| color.a).collect();
         // Corona at ±2 to ±5 (16, 12, 8 and 4 32nds: 4 is above 2), then
         // the core.
         assert_eq!(alphas, [127, 127, 95, 95, 63, 63, 31, 31, 127, 127, 255]);
         assert_eq!(slow[0].0, at(0.0, -2.0));
         assert_eq!(slow[6].0, at(0.0, -5.0));
-        let none = beam_strokes(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 0), 0);
+        let none = plain(at(0.0, 0.0), at(100.0, 0.0), &beam(1, 0), 0);
         assert_eq!(none.len(), 1, "no falloff, no corona");
     }
 
     #[test]
     fn a_fading_beam_draws_its_corona_at_falloff_plus_its_fade() {
         let alphas = |look: &WeaponLook, fade| -> Vec<u8> {
-            beam_strokes(at(0.0, 0.0), at(100.0, 0.0), look, fade)
+            plain(at(0.0, 0.0), at(100.0, 0.0), look, fade)
                 .iter()
                 .map(|(_, _, color)| color.a)
                 .collect()
@@ -445,27 +636,77 @@ mod tests {
     }
 
     #[test]
-    fn a_fading_lightning_beam_draws_at_32_less_its_fade() {
-        let lightning = |beam_width| WeaponLook {
+    fn a_lightning_beam_is_its_zig_zag_on_the_rolls_given_and_has_no_corona() {
+        let lightning = WeaponLook {
             li_density: 3,
+            li_amplitude: 5,
             falloff: 8,
-            ..beam(beam_width, 8)
+            ..beam(1, 8)
         };
-        let alphas = |look: &WeaponLook, fade| -> Vec<u8> {
-            beam_strokes(at(0.0, 0.0), at(100.0, 0.0), look, fade)
-                .iter()
-                .map(|(_, _, color)| color.a)
-                .collect()
+        let (from, to) = (at(0.0, 0.0), at(300.0, 20.0));
+        let step = StepRolls::new(7);
+        for rule in [RuleSource::Engine, RuleSource::Bible] {
+            let mut rolls = step;
+            let mut again = step;
+            assert_eq!(
+                beam_strokes(from, to, &lightning, 16, (rule, &mut rolls)),
+                lightning::zig_zag(from, to, &lightning, 16, rule, &mut again),
+                "{rule:?}"
+            );
+        }
+        let mut rolls = step;
+        let lines = beam_strokes(from, to, &lightning, 0, (RuleSource::Engine, &mut rolls));
+        assert!(
+            lines.iter().all(|&(.., color)| color == BEAM),
+            "no corona: {lines:?}"
+        );
+        assert_eq!(lines.len(), 8, "9 steps: 8 segments, one line each");
+    }
+
+    #[test]
+    fn each_beams_zig_zag_takes_its_own_rolls_of_the_step() {
+        let lightning = WeaponLook {
+            li_density: 3,
+            li_amplitude: 5,
+            ..beam(1, 0)
         };
-        assert_eq!(alphas(&lightning(1), 0), [255], "no corona");
-        assert_eq!(alphas(&lightning(1), 16), [127]);
-        assert_eq!(alphas(&lightning(2), 16), [63, 63, 127]);
-        assert_eq!(alphas(&lightning(1), 32), [0]);
-        assert_eq!(alphas(&lightning(1), 40), [0], "never below none");
+        let looks = looks(&[(165, lightning.clone())]);
+        let shown = |y| BeamShown {
+            start: at(0.0, y),
+            end: at(300.0, y),
+            weapon: WeaponId(165),
+            fade: 0,
+        };
+        let step = StepRolls::new(11);
+        let mut list = DrawList::new();
+        draw_beams(
+            &mut list,
+            &[shown(0.0), shown(50.0)],
+            &looks,
+            false,
+            (RuleSource::Engine, step),
+        );
+        let mut expected = DrawList::new();
+        for (n, y) in [0.0, 50.0].into_iter().enumerate() {
+            let mut rolls = step.for_beam(n);
+            let beam = shown(y);
+            for (from, to, color) in lightning::zig_zag(
+                beam.start,
+                beam.end,
+                &lightning,
+                0,
+                RuleSource::Engine,
+                &mut rolls,
+            ) {
+                expected.line(from, to, 1.0, color);
+            }
+        }
+        assert_eq!(list, expected);
     }
 
     fn looks(weapons: &[(i16, WeaponLook)]) -> Looks {
         Looks {
+            smokes: BTreeMap::default(),
             weapons: weapons
                 .iter()
                 .map(|(id, look)| (WeaponId(*id), Ok(look.clone())))
@@ -479,13 +720,14 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id,
             frames: n(frames),
         }
     }
 
     #[test]
-    fn shots_are_drawn_as_their_frames_translucent_ones_see_through() {
+    fn shots_are_drawn_as_their_frames_translucent_ones_added_to_what_is_under() {
         let looks = looks(&[
             (
                 128,
@@ -512,10 +754,14 @@ mod tests {
             ),
         ]);
         let shot = |x, weapon| ShotShown {
+            id: ShotId(1),
+            spin_start: 0,
+            murk: 0,
             at: at(x, 5.0),
             heading: 90.0,
             age: 3,
             weapon: WeaponId(weapon),
+            layer: SpriteLayer::Shots,
         };
         let mut list = DrawList::new();
         draw_shots(
@@ -528,14 +774,11 @@ mod tests {
                 shot(5.0, 132),
             ],
             &looks,
+            RuleSource::Engine,
         );
         let mut expected = DrawList::new();
         expected.sprite(ImageKey::sprite(3500, 9), at(1.0, 5.0), Color::WHITE);
-        expected.sprite(
-            ImageKey::sprite(3501, 9),
-            at(2.0, 5.0),
-            Color::rgba(255, 255, 255, 191),
-        );
+        expected.or_sprite(ImageKey::sprite(3501, 9), at(2.0, 5.0), lights_tint(32));
         for x in [4.0, 5.0] {
             crossed_box(
                 &mut expected,
@@ -545,7 +788,95 @@ mod tests {
             );
         }
         assert_eq!(list, expected);
-        assert_eq!((TRANSLUCENT_ALPHA, SHOT_PLACEHOLDER_SIZE), (0.75, 8.0));
+        assert_eq!(SHOT_PLACEHOLDER_SIZE, 8.0);
+    }
+
+    /// How a shot of `look` is drawn at `age`, `murk` 32nds murky, by
+    /// `rule`: its tint and whether it is drawn by OR.
+    fn shaded(look: WeaponLook, age: u32, murk: u8, rule: RuleSource) -> (Color, bool) {
+        let looks = looks(&[(
+            128,
+            WeaponLook {
+                sheet: Some(Ok(sheet(3500, 36))),
+                ..look
+            },
+        )]);
+        let shot = ShotShown {
+            id: ShotId(1),
+            at: at(0.0, 0.0),
+            heading: 0.0,
+            age,
+            weapon: WeaponId(128),
+            layer: SpriteLayer::Shots,
+            spin_start: 0,
+            murk,
+        };
+        let mut list = DrawList::new();
+        draw_shot(&mut list, &shot, &looks, rule);
+        match list.iter().next() {
+            Some(&DrawCommand::Sprite { tint, blend, .. }) => {
+                (tint, blend == crate::draw::Blend::Or)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_shot_is_drawn_as_it_fades() {
+        let fading = |flags3| WeaponLook {
+            count: 40,
+            shot_falloff: 2,
+            flags3,
+            ..WeaponLook::default()
+        };
+        let engine = RuleSource::Engine;
+        assert_eq!(shaded(fading(0), 8, 0, engine), (Color::WHITE, false));
+        assert_eq!(
+            shaded(fading(0), 25, 0, engine),
+            (Color::rgba(255, 255, 255, 8), false),
+            "16 ticks into its window: 2 × 16, translucent by 31 at most"
+        );
+        assert_eq!(
+            shaded(fading(0), 12, 0, engine),
+            (see_through(6), false),
+            "translucent by 6"
+        );
+        assert_eq!(see_through(6), Color::rgba(255, 255, 255, 207));
+        assert_eq!(see_through(0), Color::WHITE);
+        assert_eq!(
+            shaded(fading(TRANSLUCENT), 10, 0, engine),
+            (lights_tint(30), true),
+            "added at 30"
+        );
+        assert_eq!(
+            shaded(fading(TRANSLUCENT), 5, 0, engine),
+            (Color::WHITE, false),
+            "opaque before its window, by the engine"
+        );
+        assert_eq!(
+            shaded(fading(TRANSLUCENT), 5, 0, RuleSource::Bible),
+            (lights_tint(32), true),
+            "added at 32, by the other reading"
+        );
+    }
+
+    #[test]
+    fn a_murky_shot_is_darkened_by_its_murk() {
+        let plain = WeaponLook::default();
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            shaded(plain.clone(), 1, 16, engine),
+            (Color::rgba(127, 127, 127, 255), false)
+        );
+        let added = WeaponLook {
+            flags3: TRANSLUCENT,
+            ..plain
+        };
+        assert_eq!(
+            shaded(added, 1, 31, engine),
+            (murk_tint(lights_tint(32), 31), true)
+        );
+        assert_eq!(murk_tint(lights_tint(32), 31), Color::rgba(7, 7, 7, 255));
     }
 
     #[test]
@@ -569,7 +900,13 @@ mod tests {
         let beams = [shown(146), shown(147), shown(148)];
         let lines = |under| {
             let mut list = DrawList::new();
-            draw_beams(&mut list, &beams, &looks, under);
+            draw_beams(
+                &mut list,
+                &beams,
+                &looks,
+                under,
+                (RuleSource::Engine, StepRolls::default()),
+            );
             list.iter()
                 .map(|command| match *command {
                     DrawCommand::Line { color, width, .. } => (color, width),

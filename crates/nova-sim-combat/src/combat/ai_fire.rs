@@ -26,7 +26,14 @@
 //! [`RuleKey::AiSpendWithoutShot`](crate::RuleKey::AiSpendWithoutShot)).
 //! Nothing spawned, nothing else happens: no sound, reload, burst,
 //! recoil, exclusive hold or last gun. The weapon's sound plays once a
-//! call, at priority 4 ([`AI_FIRE_PRIORITY`](super::AI_FIRE_PRIORITY)).
+//! call, at priority 4 ([`AI_FIRE_PRIORITY`](super::AI_FIRE_PRIORITY)),
+//! a looped one (`Flags` 0x0010) skipped while its sound plays anywhere
+//! (@0x88e00-0x88e1d), which the view or the audio side applies
+//! ([`FireSound::unless_playing`](super::FireSound::unless_playing)).
+//! A pick that spawned a weapon of the glow (`Flags2` 0x0200, +0xc8e8 =
+//! 32.0, @0x88dc0-0x88de4) lights its ship's glow once a call
+//! ([`CombatEvent::WeaponGlow`](super::CombatEvent::WeaponGlow)), which
+//! the view draws.
 //!
 //! # Not modelled
 //!
@@ -41,20 +48,13 @@
 //! - The rating stretch of the reload (@0x88fb3-0x8901b): rdm phase
 //!   cloaking-fidelity/phase-6-rating-reload-stretch, between the reload
 //!   and the burst in `Armament::fire_pick`.
-//! - The weapon glow (`Flags2` 0x0200, +0xc8e8 = 32.0, @0x88ddd): rdm
-//!   phase weapons-fidelity/phase-14, from the `Fired` it raises.
-//! - Playing the sound by its priority, and a looped weapon (`Flags`
-//!   0x0010) skipped while its sound plays anywhere (@0x88e00): rdm phase
-//!   audio-fidelity/phase-15-weapon-sounds-by-priority.
 //! - `_SpawnShot`'s exit points and its turret miss and launch speed:
 //!   weapons-fidelity phases 6 and 10.
-//! - The whole degrees and pixels: the box's reach (@0x888bf, @0x88a24),
-//!   the heading (@0x88af7, @0x88b13, @0x88f46) and `_CalcInterceptAngle`'s
-//!   table, as `ai::fire` leaves them; and the 16-bit cap on the copies.
+//! - The whole pixels of the box's reach (@0x888bf, @0x88a24), the
+//!   recoil's whole-degree heading (@0x88f46), and the 16-bit cap on the
+//!   copies.
 
-use super::aim::{
-    Aim, FRONT_ARC, bearing, blind, led, on_bearing, quadrant_off, quadrant_reference,
-};
+use super::aim::{Aim, FRONT_ARC, blind_spot, led, on_bearing, quadrant_off};
 use super::armament::{GUN_RANGE_MARGIN, Rounds};
 use super::hull::HullSpec;
 use super::projectile::Target;
@@ -64,6 +64,7 @@ use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
+use crate::trig;
 
 /// How many copies of `spec` an NPC carrying `count` of it fires in one
 /// call (`_WeaponMaxSimultShots` @0x8350-0x8408): one, unless its copies
@@ -127,12 +128,14 @@ fn in_box(spec: &WeaponSpec, firer: &ShipState, target: &Target) -> bool {
 /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)):
 ///
 /// - 3 and 4, only with a target not in a blind spot of the weapon's or
-///   the ship's `Flags` by the bearing (`_TurretBlindSpot` @0x88884) and
+///   the ship's `Flags` by the table's bearing against the truncated
+///   heading ([`blind_spot`], `_TurretBlindSpot` @0x88884) and
 ///   inside the box of its reach: 3 along the bearing, 4 at the lead angle
 ///   (`_SpawnShot` @0x3e6c4, @0x3ecdc).
 /// - 7 and 8 with a target, inside the box and within [`FRONT_ARC`] of
-///   the heading (7) or of `(heading + 180) mod 360` (8), at the lead
-///   angle; no blind spot is tested.
+///   the heading (7) or of `(heading + 180) mod 360` (8) as
+///   [`quadrant_off`] measures the table's bearing, at the lead angle; no
+///   blind spot is tested.
 /// - 7 with no target, along the heading at nothing (@0x88bc7-0x88c07).
 /// - 1, only with a target: along the heading, at it.
 /// - -1, 0 and 6, with or without a target and with no range test: along
@@ -150,9 +153,10 @@ pub fn spawn(
     let ahead = Aim::along(firer.heading, None);
     match (spec.guidance, target) {
         (Guidance::TurretBeam | Guidance::Turret, Some(target)) => {
-            let bearing = bearing(firer.position, target.position);
-            let off = super::aim::angle_off(firer.heading, bearing);
-            if blind(spec.flags | hull.blind_spots, off) || !in_box(spec, firer, target) {
+            // The table's angle (@0x88873).
+            let angle = trig::intercept_angle(firer.position, target.position);
+            let blind = blind_spot(spec.flags | hull.blind_spots, firer.heading, angle);
+            if blind || !in_box(spec, firer, target) {
                 return None;
             }
             Some(if spec.guidance == Guidance::TurretBeam {
@@ -162,10 +166,10 @@ pub fn spawn(
             })
         }
         (Guidance::FrontTurret | Guidance::RearTurret, Some(target)) => {
-            let bearing = bearing(firer.position, target.position);
-            let reference = quadrant_reference(spec.guidance, firer.heading);
-            (in_box(spec, firer, target) && quadrant_off(reference, bearing, arc) <= FRONT_ARC)
-                .then(|| led(spec, target))
+            // The table's angle (@0x88ac4).
+            let angle = trig::intercept_angle(firer.position, target.position);
+            let off = quadrant_off(spec.guidance, firer.heading, angle, arc);
+            (in_box(spec, firer, target) && off <= FRONT_ARC).then(|| led(spec, target))
         }
         (Guidance::Homing, Some(target)) => Some(Aim {
             target: Some(target.ship),
@@ -223,7 +227,7 @@ mod tests {
     use crate::catalog::{ShipId, WeaponId, WeaponRecord};
     use crate::combat::NpcId;
     use crate::combat::ShipRef;
-    use crate::combat::aim::{BLIND_REAR, lead};
+    use crate::combat::aim::{BLIND_FRONT, BLIND_REAR, BLIND_SIDES};
     use crate::combat::armament::LauncherRounds;
     use crate::combat::hull::Condition;
     use crate::combat::sides::Ties;
@@ -288,7 +292,15 @@ mod tests {
         assert_eq!(fires(&turret, Some(&corner)), Some(led(&turret, &corner)));
         assert_eq!(
             pointed(fires(&turret, Some(&corner))),
-            Some((lead(&firer(), &corner, turret.speed), Some(B)))
+            Some((
+                f32::from(trig::lead_angle(
+                    Vec2::ZERO,
+                    Vec2::ZERO,
+                    (corner.position, corner.velocity),
+                    turret.lead_shot()
+                )),
+                Some(B)
+            ))
         );
         assert_eq!(fires(&turret, Some(&at(232.0, 0.0))), None, "on the edge");
         assert_eq!(fires(&turret, Some(&at(0.0, -232.0))), None);
@@ -368,10 +380,52 @@ mod tests {
     }
 
     #[test]
+    fn a_turrets_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = at(100.0, -100.0);
+        for guidance in [3, 4] {
+            let blind = |flags| WeaponSpec {
+                flags,
+                ..guided(guidance)
+            };
+            assert!(
+                fires(&blind(BLIND_FRONT), Some(&diagonal)).is_some(),
+                "{guidance}: 46"
+            );
+            assert_eq!(
+                fires(&blind(BLIND_SIDES), Some(&diagonal)),
+                None,
+                "{guidance}: the side"
+            );
+            // Dead ahead of a firer facing 45.9 is 45.9 off by float, the
+            // side, but 45 off its truncated heading, the front.
+            let turned = ShipState {
+                heading: 45.9,
+                ..firer()
+            };
+            let ahead = at(0.0, -100.0);
+            let from_turned = |flags| {
+                spawn(
+                    &blind(flags),
+                    &turned,
+                    &HullSpec::default(),
+                    Some(&ahead),
+                    RuleSource::Engine,
+                )
+            };
+            assert!(from_turned(BLIND_SIDES).is_some(), "{guidance}: 45");
+            assert_eq!(from_turned(BLIND_FRONT), None, "{guidance}: the front");
+        }
+    }
+
+    #[test]
     fn a_quadrant_turret_spawns_only_within_45_of_its_reference() {
         let front = guided(7);
-        assert!(fires(&front, Some(&at(100.0, -100.0))).is_some(), "45 off");
-        assert_eq!(fires(&front, Some(&at(100.0, -99.0))), None, "past 45");
+        // The table's angles: (99, -100) reads 44, and the diagonal 46, a
+        // degree past its 45 (no whole degree reads 45 there).
+        assert!(fires(&front, Some(&at(99.0, -100.0))).is_some(), "44 off");
+        assert_eq!(fires(&front, Some(&at(100.0, -100.0))), None, "46: past 45");
         assert_eq!(fires(&front, Some(&at(0.0, 100.0))), None, "astern");
         let rear = guided(8);
         assert!(fires(&rear, Some(&at(0.0, 100.0))).is_some());
