@@ -89,11 +89,15 @@
 //!    at it holds only what the behaviour gives it for the wait
 //!    ([`Behaviour::gate_wait`], `_AIEscortFireUnprovoked`), dropping its
 //!    target if the behaviour says so;
-//! 5. every NPC's cloak ([`cloak`]): a flying NPC's think
-//!    cloaks or uncloaks it, one cloaked that can no longer cloak
-//!    uncloaks, and its fade steps;
-//! 6. on the advance pass alone, each escape pod's wait counted down, a
-//!    pod whose wait ran out freed ([`pod_flight::count_down`], `Outcome::Freed`); then the
+//! 5. each flying NPC's cloak think ([`cloak`], `_AIHandleCloaking`
+//!    @0x8fcaa), which cloaks or uncloaks it; then each escape pod's wait
+//!    counted down, a pod whose wait ran out freed
+//!    ([`pod_flight::count_down`], `Outcome::Freed`). Steps 1 to 5 are the
+//!    tick's think half ([`Traffic::think_holding`]), `_DoPlayGameWork`'s
+//!    advance-pass AI (`_EnterMoreShips` @0x44237, `_AIDispatch`
+//!    @0x4429d);
+//! 6. every NPC's cloak held and faded: one cloaked that can no longer
+//!    cloak uncloaks (`_HandleShip` @0x3413d), and its fade steps; then the
 //!    autopilot and a flight step for every NPC, a pod at full thrust
 //!    along its heading, each other ship flying towards
 //!    the ship its goal is about, the player's included (the one it
@@ -106,10 +110,17 @@
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
 //! 7. the removal of those that landed, jumped out, entered a gate or
 //!    docked, each in [`Traffic::departed`] with how it left, for its
-//!    session to take a fighter docked aboard;
+//!    session to take a fighter docked aboard, the pods freed in step 5
+//!    after them;
 //! 8. and every NPC left, held still, disabled or breaking up included,
 //!    regenerates its fuel up to its capacity ([`Npc::regenerate_fuel`],
-//!    `_HandleShip` @0x35305-0x35374), on both passes.
+//!    `_HandleShip` @0x35305-0x35374), on both passes. Steps 6 to 8 are
+//!    the tick's fly half ([`Traffic::fly_holding`]), `_HandleShip`'s
+//!    motion (@0x44483).
+//!
+//! A session that runs the original's order (`nova_sim::Session::game_work`)
+//! runs the fight's collision passes before the think half, and its
+//! `_HandleShot` between the two halves.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
@@ -120,7 +131,8 @@
 //! ([`Leave`]), their berths and their persons' names still taken; those
 //! held in the system it goes on into come back as they were.
 //! Double time's second pass moves the traffic again
-//! ([`Traffic::move_in`]): steps 5 to 8 alone, with no cloak thinks.
+//! ([`Traffic::move_in`]): steps 6 to 8 alone, with no cloak thinks and
+//! no pod's wait.
 //!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
@@ -596,6 +608,10 @@ pub struct Traffic {
     interval: u32,
     /// The NPCs that left on the last tick, and how.
     departed: Vec<(NpcId, Outcome)>,
+    /// The escape pods the think half of the tick under way freed
+    /// ([`Traffic::think_holding`]), which its fly half adds to the
+    /// departures.
+    freed: Vec<(NpcId, Outcome)>,
     /// The NPCs that have looked the player over since the scans were
     /// last taken, in order.
     scans: Vec<NpcId>,
@@ -688,6 +704,7 @@ impl Traffic {
             ticks: 0,
             interval,
             departed: Vec::new(),
+            freed: Vec::new(),
             scans: Vec::new(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
@@ -756,6 +773,7 @@ impl Traffic {
         self.npcs.clear();
         self.left_behind.clear();
         self.departed.clear();
+        self.freed.clear();
         self.scans.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -853,6 +871,7 @@ impl Traffic {
             }
         }
         self.departed.clear();
+        self.freed.clear();
         self.scans.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -887,13 +906,35 @@ impl Traffic {
 
     /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
     /// the NPCs in `still`, which decide, aim and cloak as the others do
-    /// and keep their place: none of them moves, lands or jumps out.
+    /// and keep their place: none of them moves, lands or jumps out. It
+    /// is its think half ([`Traffic::think_holding`]) then its fly half
+    /// ([`Traffic::fly_holding`]).
     pub fn tick_holding(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
         world: World,
         strikes: &[Strike],
         still: &BTreeSet<NpcId>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.think_holding(behaviour, world, strikes, chance);
+        self.fly_holding(world, still, chance);
+    }
+
+    /// The think half of a tick in `world` (steps 1 to 5 of the module
+    /// docs), `_DoPlayGameWork`'s advance-pass AI after the collision
+    /// passes: the arrivals pass (`_EnterMoreShips` @0x44237), the answers
+    /// to the `strikes` left, the decisions as `behaviour` says, rolling
+    /// on `chance`, their goals, pursuit, fire commands and targets, the
+    /// gate waits, each flying NPC's cloak think and each escape pod's
+    /// wait, as `_AIDispatch` runs them (@0x4429d: `_AIHandleCloaking`
+    /// @0x8fcaa, the pod's wait in [`pod_flight::count_down`]). No NPC
+    /// moves.
+    pub fn think_holding(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: World,
+        strikes: &[Strike],
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.enter_more_ships(world, chance);
@@ -992,9 +1033,26 @@ impl Traffic {
                 }
             }
         }
+        let player = world.player.map(|player| player.state);
+        self.think_cloaks(player);
         let freed = pod_flight::count_down(&mut self.npcs);
-        self.fly(&world, true, still, chance);
-        self.departed.extend(freed);
+        self.freed.extend(freed);
+    }
+
+    /// The fly half of a tick in `world` (steps 6 to 8 of the module
+    /// docs), `_HandleShip`'s motion (@0x44483): every NPC's cloak held
+    /// and faded, then the autopilot, the flight, the departures and the
+    /// fuel, rolling on `chance`, but for the NPCs in `still`, which keep
+    /// their place; the pods the think half freed join the departures.
+    /// The tick is then counted on the AI timer.
+    pub fn fly_holding(
+        &mut self,
+        world: World,
+        still: &BTreeSet<NpcId>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.fly(&world, still, chance);
+        self.departed.extend(std::mem::take(&mut self.freed));
         // The display pass (`_DoPlayGameWork` @0x444ad) follows the
         // frame's arrivals pass (step 1) and frees each ship left behind
         // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them
@@ -1072,8 +1130,8 @@ impl Traffic {
 
     /// Moves the traffic again in `world`, rolling on `chance`, as double
     /// time's second pass does (`_DoPlayGameWork(0)`; see the session's
-    /// `double_time` module): steps 5 to 8 of a tick (see the module
-    /// docs), but no cloak thinks, as `_AIHandleCloaking` is the AI's.
+    /// `double_time` module): steps 6 to 8 of a tick (see the module
+    /// docs), with no cloak thinks, as `_AIHandleCloaking` is the AI's.
     /// Nothing else runs, as the arrivals (`_EnterMoreShips`), the
     /// escort-strength timer, the answers to strikes, the decisions
     /// (`_AIDispatch`) and the gate waits' fire are the advance pass's
@@ -1082,26 +1140,20 @@ impl Traffic {
     /// begun. The ships an in-flight move left behind stay until the next
     /// advance pass frees them, as none of them is drawn.
     pub fn move_in(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
-        self.fly(&world, false, &BTreeSet::new(), chance);
+        self.fly(&world, &BTreeSet::new(), chance);
     }
 
-    /// Steps 5 to 8 of a tick in `world` (see the module docs), rolling on
-    /// `chance`: every NPC's cloak, thinking when `think`, then the
-    /// autopilot, a flight step, the followers of a ship that reached its
-    /// gate released ([`Traffic::release_followers`]), the departures, but
-    /// for the NPCs in `still`, which keep their place, and every NPC's
-    /// fuel regeneration.
-    fn fly(
-        &mut self,
-        world: &World,
-        think: bool,
-        still: &BTreeSet<NpcId>,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
+    /// Steps 6 to 8 of a tick in `world` (see the module docs), rolling on
+    /// `chance`: every NPC's cloak held and faded ([`Traffic::hold_cloaks`]),
+    /// then the autopilot, a flight step, the followers of a ship that
+    /// reached its gate released ([`Traffic::release_followers`]), the
+    /// departures, but for the NPCs in `still`, which keep their place,
+    /// and every NPC's fuel regeneration.
+    fn fly(&mut self, world: &World, still: &BTreeSet<NpcId>, chance: &mut (impl Chance + ?Sized)) {
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
-        self.cloaks(player, &states, think);
+        self.hold_cloaks();
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
         let outcomes = self.fly_all(world, player, &states, still, chance);
         board_wait::count_down(&mut self.npcs);
@@ -1358,32 +1410,38 @@ impl Traffic {
             .collect()
     }
 
-    /// Each NPC's cloak a tick on (see [`cloak`]): when `think`, a flying
-    /// NPC thinks (`_AIHandleCloaking`), knowing whether it is disabled,
-    /// retreats (fleeing), and where the ship it attacks is, among
-    /// `states` and the `player`; one cloaked as the tick began that can
-    /// no longer cloak uncloaks (`_HandleShip` @0x3413d); and its fade
-    /// steps.
-    fn cloaks(&mut self, player: Option<ShipState>, states: &[(NpcId, ShipState)], think: bool) {
+    /// Each flying NPC's cloak think (`_AIHandleCloaking`, see [`cloak`]),
+    /// knowing whether it is disabled, retreats (fleeing), and where the
+    /// ship it attacks is, among the NPCs and the `player`.
+    fn think_cloaks(&mut self, player: Option<ShipState>) {
+        let states: Vec<(NpcId, ShipState)> =
+            self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
+        for npc in self.npcs.iter_mut().filter(|npc| npc.mode == Mode::Flying) {
+            let attacking = npc.goal.attacking().and_then(|ship| match ship {
+                ShipRef::Player => player,
+                ShipRef::Npc(id) => states
+                    .iter()
+                    .find(|(other, _)| *other == id)
+                    .map(|(_, state)| *state),
+            });
+            let situation = cloak::Situation {
+                disabled: npc.condition == Condition::Disabled,
+                retreating: matches!(npc.goal, Goal::Flee(_)),
+                attacking: attacking.map(|state| state.position - npc.state.position),
+            };
+            cloak::think(&mut npc.cloak, npc.cloak_gear, situation);
+        }
+    }
+
+    /// Each NPC's cloak a tick on in `_HandleShip` (see [`cloak`]): one
+    /// cloaked that can no longer cloak uncloaks (@0x3413d), and its fade
+    /// steps. Whether it is cloaked is read now, after the frame's think:
+    /// a think moves only the way the fade goes ([`cloak::think`]), and
+    /// whether a ship is cloaked turns on its fade, so it reads as it did
+    /// before the think.
+    fn hold_cloaks(&mut self) {
         for npc in &mut self.npcs {
-            let was = npc.cloak.is_cloaked();
-            let disabled = npc.condition == Condition::Disabled;
-            if think && npc.mode == Mode::Flying {
-                let attacking = npc.goal.attacking().and_then(|ship| match ship {
-                    ShipRef::Player => player,
-                    ShipRef::Npc(id) => states
-                        .iter()
-                        .find(|(other, _)| *other == id)
-                        .map(|(_, state)| *state),
-                });
-                let situation = cloak::Situation {
-                    disabled,
-                    retreating: matches!(npc.goal, Goal::Flee(_)),
-                    attacking: attacking.map(|state| state.position - npc.state.position),
-                };
-                cloak::think(&mut npc.cloak, npc.cloak_gear, situation);
-            }
-            if was {
+            if npc.cloak.is_cloaked() {
                 let able = npc.can_cloak();
                 cloak::hold(&mut npc.cloak, able);
             }
@@ -2635,6 +2693,116 @@ mod tests {
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         let moved = traffic.npcs()[0].state.position - from;
         assert!(moved.x > 0.0, "{moved:?}");
+    }
+
+    /// A busy system: a cloaking mission ship fleeing, another waiting in
+    /// its gate, an escape pod whose wait is running out, a ship leaving
+    /// by jumping out, and room for arrivals.
+    fn busy() -> Traffic {
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        traffic.table.avg_ships = 6;
+        traffic.bring_in_within(
+            vec![
+                mission_ship(-1, 300.0),
+                mission_ship(-1, 600.0),
+                mission_ship(-1, 900.0),
+            ],
+            SPAWN_RESERVE,
+        );
+        traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
+        traffic.npcs[1].mode = Mode::Emerging { ticks_left: 5 };
+        traffic.npcs[2].ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        traffic.npcs[2].mode = Mode::Adrift { ticks_left: 2 };
+        traffic.npcs[3].goal = Goal::JumpOut;
+        traffic
+    }
+
+    /// A chance drawing a fixed, varied sequence.
+    #[derive(Debug, Default)]
+    struct Cycling {
+        state: u32,
+    }
+
+    impl Chance for Cycling {
+        fn fires(&mut self, percent: u8) -> bool {
+            self.below(100) < u32::from(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.state = self.state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (self.state >> 16) % n.max(1)
+        }
+    }
+
+    #[test]
+    fn the_think_half_moves_no_npc_and_the_fly_half_moves_them() {
+        // `_AIDispatch` (@0x4429d) thinks, and frees a pod whose wait ran
+        // out (`pod_flight::count_down`); `_HandleShip` (@0x44483) moves.
+        let world = || World {
+            player: Some(player_at(0.0, 400.0)),
+            ..World::new(&[])
+        };
+        let mut traffic = busy();
+        traffic.npcs[2].mode = Mode::Adrift { ticks_left: 0 };
+        traffic.npcs[0].state.velocity = Vec2::new(1.0, 0.0);
+        let places = |traffic: &Traffic| -> Vec<(NpcId, Vec2)> {
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| (npc.id, npc.state.position))
+                .collect()
+        };
+        let before = places(&traffic);
+        let ticks = traffic.ticks;
+        let behaviour = Recording::deciding(Goal::Flee(ShipRef::Player));
+        traffic.think_holding(&behaviour, world(), &[], &mut Cycling::default());
+        let pod = NpcId(2);
+        let thought: Vec<(NpcId, Vec2)> = before
+            .iter()
+            .copied()
+            .filter(|(id, _)| *id != pod)
+            .collect();
+        assert_eq!(places(&traffic)[..thought.len()], thought[..], "unmoved");
+        assert!(traffic.npcs().iter().all(|npc| npc.id != pod), "freed");
+        assert_eq!(traffic.departed(), [], "reported with the motion's");
+        assert_eq!(traffic.ticks, ticks, "not counted yet");
+        traffic.fly_holding(world(), &BTreeSet::new(), &mut Cycling::default());
+        assert_ne!(places(&traffic)[0], before[0], "moved");
+        assert_eq!(traffic.departed(), [(pod, Outcome::Freed)]);
+        assert_eq!(traffic.ticks, ticks + 1);
+    }
+
+    #[test]
+    fn the_cloak_think_is_the_think_halfs_and_the_hold_and_fade_the_fly_halfs() {
+        // `_AIDispatch` runs `_AIHandleCloaking` (@0x8fcaa); `_HandleShip`
+        // holds a cloak that can no longer cloak (@0x3413d) and steps the
+        // fade. A think sets only the way the fade moves, never whether
+        // the ship is cloaked (see `cloak::think`).
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
+        traffic.think_holding(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[0].cloak,
+            Cloak {
+                fade: 0.0,
+                direction: 1
+            },
+            "thought, not faded"
+        );
+        traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.fade, 0.75, "faded a step");
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        let npc = &mut traffic.npcs[0];
+        npc.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        npc.mode = Mode::JumpingIn { tick: 0 };
+        npc.reserves.fuel.now = 0.0;
+        traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.direction, 0, "not held yet");
+        traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.direction, -1, "held");
     }
 
     #[test]
