@@ -2263,6 +2263,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_dogfighter_launching_a_bay_leads_from_the_bay_and_wants_the_plain_bearing() {
+        // Holding its gun at a crossing target in the box, a carrier whose
+        // bay is ready launches it before its low level (@0x8e6fa,
+        // @0x81411), so it leads from the bay, no gun or rocket: the
+        // bearing, 0, not the gun's lead of 26.
+        let carrier = |rounds: LauncherRounds| {
+            let mut npc = holding(leading(ATTACK), 128);
+            npc.armament = Armament::new([
+                (WeaponSpec::new(&gun(128, 1, 1)), 1),
+                (WeaponSpec::new(&bay(150)), 1),
+            ]);
+            npc.rounds = rounds;
+            npc.state.heading = 26.0;
+            npc
+        };
+        let mut player = player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0);
+        player.state.velocity = Vec2::new(4.0, 0.0);
+        let wanted = |npc: &Npc| {
+            let npcs = [npc.clone()];
+            let around = Surroundings {
+                player: Some(player),
+                ..Surroundings::new(&[], &npcs)
+            };
+            let kept = pursuit::step(
+                npc,
+                &around,
+                pursuit::PursuitRules::default(),
+                &mut nova_sim_base::fixture::Ranged::of(&[]),
+            );
+            let heading = kept
+                .frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.heading);
+            (lead_pick(npc, &around), heading)
+        };
+        let launching = carrier(LauncherRounds::from([(WeaponId(150), 2)]));
+        assert_eq!(wanted(&launching), (id(150), Some(0)));
+        let empty = carrier(LauncherRounds::default());
+        assert_eq!(wanted(&empty), (id(128), Some(26)), "no bay to launch");
+        // Attacking no ship live there, it launches nothing.
+        let npcs = [launching.clone()];
+        assert_eq!(
+            lead_pick(&launching, &Surroundings::new(&[], &npcs)),
+            id(128)
+        );
+    }
+
     /// The arsenal of a gun of 128 and a secondary missile of 131.
     fn gun_and_secondary() -> Arsenal {
         Arsenal::new(&[gun(128, 1, 1), secondary_missile(131)], Vec::new())
