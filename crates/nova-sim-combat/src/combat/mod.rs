@@ -301,6 +301,7 @@ pub mod beam;
 pub mod damage;
 pub mod defence;
 pub mod exits;
+mod expiry;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flags;
@@ -1101,9 +1102,6 @@ pub struct Combat {
     /// first tick takes no tick off (step 9); the close of the tick
     /// clears them.
     begun: Vec<ShipRef>,
-    /// The tick's missile locks, found as the shots fly (step 6), yet to
-    /// land.
-    locks: Vec<Landed>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -2167,8 +2165,10 @@ impl Combat {
     /// 2. the point-defence layer against the missiles
     ///    ([`Combat::intercept`]);
     /// 3. the proximity fuse, a ship then an asteroid;
-    /// 4. the end of life of each shot its move spent (@0x36195);
-    /// 5. the stellars ([`Combat::strike_stellars`]).
+    /// 4. the stellars ([`Combat::strike_stellars`]).
+    ///
+    /// A shot whose move spent it meets only the asteroids it touches, and
+    /// is kept for its end of life in `_HandleShot` ([`Combat::expire`]).
     ///
     /// The pass meets each NPC where it stood as the last tick ran, as
     /// its last `_HandleShip` left it, and the player where it is now, as
@@ -2188,8 +2188,8 @@ impl Combat {
     /// but for a breakup's countdown, its strike marked as downing it,
     /// as `rule` says: so an NPC downed by a shot fires nothing more that
     /// tick, as `_HandleShip`'s fire reads `_IsDisabled` after the passes.
-    /// Gives the ships whose breakup it began, whose first tick takes no
-    /// tick off (step 9).
+    /// It keeps the ships whose breakup it began, whose first tick takes no
+    /// tick off (step 9, see `Combat::settle_struck`).
     ///
     /// Within the pass, shots go in the order they are kept, where the
     /// original goes in sprite-collision or slot order; that crosses no
@@ -2201,23 +2201,12 @@ impl Combat {
         rule: &dyn DisableRule,
         scenery: Scenery<'_>,
         chance: &mut dyn Chance,
-    ) -> Vec<ShipRef> {
+    ) {
         let Scenery {
             stellars,
             asteroids,
         } = scenery;
-        let now: Vec<Vec2> = fighters
-            .iter()
-            .map(|fighter| fighter.state.position)
-            .collect();
-        for fighter in fighters
-            .iter_mut()
-            .filter(|fighter| fighter.ship != ShipRef::Player)
-        {
-            if let Some(&at) = self.stood.get(&fighter.ship) {
-                fighter.state.position = at;
-            }
-        }
+        let now = self.stand_where_they_stood(fighters);
         let player_stood = self.stood.get(&ShipRef::Player).copied();
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let touchable: Vec<Target> = targets
@@ -2257,7 +2246,39 @@ impl Combat {
             fighter.state.position = position;
         }
         self.ended_shots = 0;
-        let mut begun = Vec::new();
+        self.settle_struck(fighters, first_strike, rule);
+    }
+
+    /// Puts each NPC among `fighters` where it stood as the last tick ran
+    /// (see [`Combat::hit_pass`]), one not in the last tick's fight where
+    /// it is, and gives where every fighter is now, to put them back.
+    fn stand_where_they_stood(&self, fighters: &mut [Fighter]) -> Vec<Vec2> {
+        let now: Vec<Vec2> = fighters
+            .iter()
+            .map(|fighter| fighter.state.position)
+            .collect();
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.ship != ShipRef::Player)
+        {
+            if let Some(&at) = self.stood.get(&fighter.ship) {
+                fighter.state.position = at;
+            }
+        }
+        now
+    }
+
+    /// Each ship among `fighters` struck since `first_strike` and still
+    /// standing settles its condition as step 9 does, as `rule` says, but
+    /// for a breakup's countdown, its last strike marked as downing it: a
+    /// breakup it begins is kept, whose first tick takes no tick off
+    /// (`begun`, step 9).
+    fn settle_struck(
+        &mut self,
+        fighters: &mut [Fighter],
+        first_strike: usize,
+        rule: &dyn DisableRule,
+    ) {
         for fighter in fighters.iter_mut() {
             let struck = self.strikes[first_strike..]
                 .iter()
@@ -2269,10 +2290,9 @@ impl Combat {
             let downed = self.update_condition(fighter, rule);
             self.mark_downed(first_strike, fighter.ship, downed);
             if downed == Some(Downed::BreakingUp) {
-                begun.push(fighter.ship);
+                self.begun.push(fighter.ship);
             }
         }
-        begun
     }
 
     /// The hit pass's point-defence layer: each point-defence shot in
@@ -2367,13 +2387,14 @@ impl Combat {
         });
     }
 
-    /// The hit pass's ship and asteroid tests and its ends of life (see
-    /// [`Combat::hit_pass`]): the hits, blasts and expiries of the shots
-    /// that have moved, among `sides` and, for contact, `touch`, those
-    /// `gone` to point defence taken out first; each sub-munition's weapon
-    /// is read from `arsenal`, its spread drawn on `chance`. Gives the
-    /// hits on ships to land, in the original's pass order: contacts,
-    /// proximities, then expiries.
+    /// The hit pass's ship and asteroid tests (see [`Combat::hit_pass`]):
+    /// the hits and blasts of the shots that have moved, among `sides`
+    /// and, for contact, `touch`, those `gone` to point defence taken out
+    /// first; each sub-munition's weapon is read from `arsenal`, its spread
+    /// drawn on `chance`. Gives the hits on ships to land, in the
+    /// original's pass order: contacts, then proximities. A shot its move
+    /// spent that meets no asteroid is kept for its end of life in
+    /// `_HandleShot` ([`Combat::expire`]).
     ///
     /// Each shot is checked against the ships and `asteroids` in the
     /// original's order (`_DoPlayGameWork` @0x43e70-0x43fd8, then
@@ -2395,11 +2416,9 @@ impl Combat {
     ) -> Vec<Landed> {
         // The original's passes, in its frame's order: the contact passes
         // (`_SWCollideSpriteLayer` @0x43e70-0x44010), then the proximity
-        // pass (`_CheckShotProximities` @0x44015), then each shot's end of
-        // life in `_HandleShot` (@0x44385), each hit with its blast.
+        // pass (`_CheckShotProximities` @0x44015), each hit with its blast.
         let mut contacts: Vec<Landed> = Vec::new();
         let mut proximities: Vec<Landed> = Vec::new();
-        let mut expiries: Vec<Landed> = Vec::new();
         let mut kept = Vec::with_capacity(self.shots.len());
         let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
         let shots = std::mem::take(&mut self.shots);
@@ -2470,19 +2489,9 @@ impl Combat {
                 // Only the proximity pass releases sub-munitions
                 // (`spawnSubs` 1 @0x37678, 0 @0x37095).
                 (fuse == Fuse::Proximity).then_some(Some(ship))
-            } else if shot.expired() {
-                if shot.weapon.detonates() {
-                    let blast = shot.blast(None);
-                    self.explode_shot(&shot, &blast);
-                    // An expiry blast weighs its weapon's `Reload`
-                    // (`_HandleShot` @0x360a2).
-                    let weight = shot.weapon.reload;
-                    expiries.extend(blasted(&shot, &blast, hit, weight, sides.targets));
-                } else if shot.weapon.fizzles {
-                    self.events.push(CombatEvent::Fizzled { at: shot.position });
-                }
-                shot.weapon.subs_on_expiry().then_some(shot.aimed_at)
             } else {
+                // A shot its move spent waits for its end of life in
+                // `_HandleShot` (`Combat::expire`).
                 kept.push(shot);
                 continue;
             };
@@ -2493,7 +2502,6 @@ impl Combat {
         }
         let mut hits = contacts;
         hits.extend(proximities);
-        hits.extend(expiries);
         self.ended_shots += ended;
         self.shots = kept;
         for (parent, target) in released {
@@ -2819,8 +2827,11 @@ impl Combat {
     fn strike_stellars(&mut self, stellars: &mut [StellarTarget]) {
         let mut kept = Vec::with_capacity(self.shots.len());
         for shot in std::mem::take(&mut self.shots) {
+            // A shot its move spent is never tested (`_CheckShotProximities`
+            // @0x371ea); it waits for its end of life (`Combat::expire`).
             let met = shot
                 .moved_from
+                .filter(|_| !shot.expired())
                 .and_then(|was| stellar::met(&shot, was, stellars));
             let Some((index, at)) = met else {
                 kept.push(shot);
@@ -3133,7 +3144,6 @@ impl Combat {
         self.ended_beams = 0;
         self.stood.clear();
         self.begun.clear();
-        self.locks.clear();
     }
 }
 
@@ -13170,7 +13180,7 @@ mod tests {
     }
 
     #[test]
-    fn a_release_in_the_hit_pass_counts_the_shots_it_ended_before_it() {
+    fn a_release_at_an_end_of_life_finds_the_slots_the_collision_passes_ended_freed() {
         let (shell, arsenal) = cluster(0);
         // A shot whose last move, its `age`th, ended at `at` from 10 to
         // the left, fired by A.
@@ -13180,8 +13190,9 @@ mod tests {
             age,
             ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
         };
-        // One ends on B, and one inside the stellar, which the pass
-        // tests after the releases.
+        // One ends on B, and one inside the stellar, in the collision
+        // passes; the shell's end of life comes after, in `_HandleShot`
+        // (@0x36195), which has freed their slots (@0x3617c) by then.
         let endings = [
             ("on a ship", flown(blaster(), Vec2::new(100.0, 0.0), 1)),
             (
@@ -13191,8 +13202,9 @@ mod tests {
         ];
         for (what, ending) in endings {
             // 125 others, the shot that ends, and the shell its last move
-            // spent: both still hold their slots as the shell releases.
-            for (capped, released) in [(false, 2), (true, 1)] {
+            // spent: the shell alone still holds its slot as it releases.
+            for capped in [false, true] {
+                let released = 2;
                 let mut combat = crowded(MAX_SHOTS - 3, capped);
                 combat.shots.push(ending);
                 combat.shots.push(flown(shell, Vec2::new(0.0, -3000.0), 3));
@@ -13205,7 +13217,7 @@ mod tests {
     }
 
     #[test]
-    fn a_release_in_the_hit_pass_counts_the_asteroid_and_point_defence_ends_before_it() {
+    fn a_release_at_an_end_of_life_finds_the_asteroid_and_point_defence_ends_freed() {
         let (shell, arsenal) = cluster(0);
         let flown = |record: WeaponRecord, at: Vec2, age: u32| Shot {
             position: at,
@@ -13251,9 +13263,11 @@ mod tests {
             ("on an asteroid", on_a_rock),
             ("to point defence", defended),
         ] {
-            // The others, the shots that end, and the shell: all hold
-            // their slots as the shell releases, leaving one free.
-            for (capped, released) in [(false, 2), (true, 1)] {
+            // The others, the shots that end, and the shell: the shots
+            // the collision passes ended are freed before the shell's end
+            // of life, leaving room for both.
+            for capped in [false, true] {
+                let released = 2;
                 let mut combat = crowded(MAX_SHOTS - 2 - endings.len(), capped);
                 combat.shots.extend(endings.iter().copied());
                 combat.shots.push(spent_shell);
@@ -13664,7 +13678,7 @@ mod tests {
     }
 
     #[test]
-    fn under_the_caps_a_shot_ended_last_tick_holds_its_slot_from_the_players_point_defence() {
+    fn under_the_caps_a_spent_shot_holds_its_slot_from_every_ships_point_defence() {
         let ending = WeaponSpec::new(&WeaponRecord {
             count: 1,
             speed: 0,
@@ -13699,9 +13713,9 @@ mod tests {
                 tick(&mut combat, &mut ships, &NovaDisable);
                 assert_eq!(combat.shots().len(), MAX_SHOTS, "spent");
                 combat.take_events();
-                // The player's point defence finds the spent shot still
-                // holding the 128th slot; an NPC's, after the hit pass has
-                // ended it, finds it free.
+                // Every ship's point defence finds the spent shot still
+                // holding the 128th slot: `_HandleShot` ends it (@0x36195)
+                // after `_HandlePlayer` and `_AIDispatch` (@0x4429d).
                 ships[0].trigger = defending;
                 tick(&mut combat, &mut ships, &NovaDisable);
                 let missiles = combat.shots().iter().filter(|shot| shot.firer == B);
@@ -13710,8 +13724,7 @@ mod tests {
                     .into_iter()
                     .filter(|&(weapon, _)| weapon == WeaponId(133))
                     .count();
-                let held = capped && defender == ShipRef::Player;
-                assert_eq!(pd, usize::from(!held), "{defender:?} {capped}");
+                assert_eq!(pd, usize::from(!capped), "{defender:?} {capped}");
             }
         }
     }

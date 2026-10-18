@@ -83,8 +83,7 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let terms = (arena.govts, arena.arsenal);
-        let begun = self.hit_pass(fighters, terms, arena.rules.disable, scenery, chance);
-        self.begun.extend(begun);
+        self.hit_pass(fighters, terms, arena.rules.disable, scenery, chance);
     }
 
     /// Step 4's point defence: every NPC's, as `_AIDispatch` runs it in
@@ -123,9 +122,16 @@ impl Combat {
         self.fire(fighters, &targets, chance, Firers::Npcs);
     }
 
-    /// Step 6's shots, `_HandleShot` (@0x44385): the shots fly among
-    /// `fighters`, drawing on `chance`, the tick's missile locks are
-    /// found, and each one-at-a-time shot holds its firer's reload.
+    /// Step 6, `_HandleShot` (@0x44385): first each shot its last move
+    /// spent comes to its end of life ([`Combat::expire`], @0x36195), its
+    /// blast meeting each NPC where it stood as the last tick ran and the
+    /// player where it is, as the collision passes do
+    /// (`Combat::hit_pass`); its hits land and each ship struck settles
+    /// its condition as in the collision passes. Then the shots fly among
+    /// `fighters`, drawing on `chance` ([`Combat::fly`]), the tick's
+    /// missile locks land ([`Strike::lock`](super::Strike::lock),
+    /// @0x35855), and each one-at-a-time shot holds its firer's reload
+    /// (`Combat::hold_reloads`, @0x35c09).
     pub fn fly_shots(
         &mut self,
         fighters: &mut [Fighter],
@@ -135,19 +141,33 @@ impl Combat {
         self.field = arena.field;
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
+        let rule = arena.rules.disable;
+        let now = self.stand_where_they_stood(fighters);
+        let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let sides = Sides {
+            targets: &stood,
+            govts: arena.govts,
+            pass_through: self.pass_through,
+        };
+        let first_strike = self.strikes.len();
+        let expiries = self.expire(fighters, &sides, arena.arsenal, chance);
+        self.land(fighters, expiries, rule);
+        for (fighter, position) in fighters.iter_mut().zip(now) {
+            fighter.state.position = position;
+        }
+        self.settle_struck(fighters, first_strike, rule);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fly(fighters, &targets, chance);
         let sides = Sides {
             targets: &targets,
-            govts: arena.govts,
-            pass_through: self.pass_through,
+            ..sides
         };
         let locks: Vec<Landed> = self
             .shots
             .iter()
             .filter_map(|shot| lock(shot, &sides))
             .collect();
-        self.locks.extend(locks);
+        self.land(fighters, locks, rule);
         self.hold_reloads(fighters);
     }
 
@@ -182,7 +202,7 @@ impl Combat {
             pass_through: self.pass_through,
         };
         let first_strike = self.strikes.len();
-        let mut hits = std::mem::take(&mut self.locks);
+        let mut hits = Vec::new();
         if pass.beams_act() {
             hits.extend(self.beam_hits(fighters, &sides, pass.beam_damage()));
         }

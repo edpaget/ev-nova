@@ -117,3 +117,136 @@ fn the_players_reload_counts_down_after_its_trigger() {
         "every Reload ticks"
     );
 }
+
+/// A flak shell, 10 pixels a tick for 3 ticks, detonating at the end of
+/// its life with a 40-pixel blast of the blaster's 4 mass and 10 energy.
+fn flak() -> WeaponRecord {
+    WeaponRecord {
+        count: 3,
+        speed: 1000,
+        blast_radius: 40,
+        flags: 0x8000,
+        ..blaster()
+    }
+}
+
+/// The advance pass at single speed, by the default rules, among no
+/// sub-munitions, no governments' relations, on frame 0.
+fn arena<'a>(arsenal: &'a Arsenal, govts: &'a Governments) -> Arena<'a> {
+    Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal,
+        govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    }
+}
+
+#[test]
+fn a_spent_shots_blast_lands_after_the_npcs_point_defence_and_before_their_picks() {
+    // `_AIDispatch` runs the NPCs' point defence (@0x4429d), then
+    // `_HandleShot` the spent shell's end of life (@0x36195), then
+    // `_HandleShip` the picks (@0x44483). A, frail, carries the Quad and a
+    // pick; B's missile closes on it, and C's shell, fired on tick 1 to
+    // pass 35 below A, is spent on tick 4 and blasts A on tick 5.
+    let [mut a, b] = missile_attack(quad());
+    a.armament = Armament::new([
+        (WeaponSpec::new(&quad()), 1),
+        (WeaponSpec::new(&slow_blaster()), 1),
+    ]);
+    a.trigger = Trigger {
+        point_defence: false,
+        ..QUIET
+    };
+    a.reserves.shield.now = 0.0;
+    a.reserves.armor.now = 10.5;
+    let mut ships = [a, b, Ship::at(3, -30.0, 35.0).armed(flak())];
+    let mut combat = Combat::default();
+    tick(&mut combat, &mut ships, &NovaDisable);
+    ships[1].trigger = QUIET;
+    ships[2].trigger = QUIET;
+    for _ in 2..=4 {
+        tick(&mut combat, &mut ships, &NovaDisable);
+    }
+    assert_eq!(ships[0].condition, Condition::Intact);
+    combat.take_events();
+    ships[0].trigger = Trigger {
+        primary: true,
+        ..QUIET
+    };
+    tick(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].condition, Condition::Disabled, "blasted");
+    let fired: Vec<WeaponId> = combat
+        .take_events()
+        .iter()
+        .filter_map(|event| match *event {
+            CombatEvent::Fired { ship, weapon, .. } if ship == A => Some(weapon),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fired, [WeaponId(133)], "its point defence, not its pick");
+}
+
+#[test]
+fn a_lock_lands_in_the_shot_step() {
+    // `_HandleShot` makes the lock (@0x35855) as it moves the missile,
+    // before `_HandleShip` and `_HandleBeams`.
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = arena(&arsenal, &govts);
+    let mut ships = [player_with(missile()), far_b()];
+    let mut combat = Combat::default();
+    let mut locked = Vec::new();
+    for tick_no in 1..=40 {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        combat.defend_player(&mut fighters, arena, &mut NeverFires);
+        combat.fire_player(&mut fighters, arena, &mut NeverFires);
+        combat.test_hits(&mut fighters, arena, Scenery::default(), &mut NeverFires);
+        combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+        combat.fly_shots(&mut fighters, arena, &mut NeverFires);
+        let shot_step = combat.take_strikes();
+        locked.extend(
+            shot_step
+                .iter()
+                .filter(|strike| strike.lock)
+                .map(|_| tick_no),
+        );
+        combat.fire_npcs(&mut fighters, arena, &mut NeverFires);
+        combat.close_tick(&mut fighters, arena, &mut NeverFires);
+        let closed = combat.take_strikes();
+        assert!(
+            closed.iter().all(|strike| !strike.lock),
+            "{tick_no}: {closed:?}"
+        );
+        drop(fighters);
+        ships[0].trigger = QUIET;
+    }
+    assert_eq!(locked.len(), 1, "{locked:?}");
+}
+
+#[test]
+fn a_breakup_an_expiry_begins_takes_no_tick_off_on_its_first() {
+    // Fired on tick 1, the shell is spent on tick 4 and its blast takes
+    // B's last armour on tick 5, in `_HandleShot`; the countdown starts
+    // there, set and marked starting (@0x2d834-0x2d850).
+    let mut b = Ship::at(2, 30.0, 35.0);
+    b.reserves.shield.now = 0.0;
+    b.reserves.armor.now = 1.0;
+    b.hull.death_delay = 5;
+    let mut ships = [Ship::at(1, 0.0, 0.0).armed(flak()), b];
+    let mut combat = Combat::default();
+    for _ in 1..=5 {
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+    }
+    let starting = Condition::Dying {
+        ticks_left: 5,
+        starting: true,
+    };
+    assert_eq!(ships[1].condition, starting);
+    tick(&mut combat, &mut ships, &NovaDisable);
+    let counting = Condition::Dying {
+        ticks_left: 4,
+        starting: false,
+    };
+    assert_eq!(ships[1].condition, counting);
+}
