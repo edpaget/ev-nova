@@ -209,6 +209,14 @@ mod tests {
     }
 
     #[test]
+    fn the_distance_is_measured_from_the_pirate() {
+        let mut away = pirate();
+        away.state.position = Vec2::new(0.0, 500.0);
+        // 400 and 100 from the pirate; 100 and 400 from the centre.
+        assert_eq!(found(&[away, wreck(2, 100.0), wreck(3, 400.0)]), Some(n(3)));
+    }
+
+    #[test]
     fn an_intact_ship_is_no_candidate_and_one_breaking_up_is() {
         let mut intact = wreck(2, 100.0);
         intact.condition = Condition::Intact;

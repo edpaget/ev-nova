@@ -861,6 +861,97 @@ mod tests {
         assert_eq!(target(Goal::CountWait { ticks_left: 3 }, Some(n(3))), None);
     }
 
+    #[test]
+    fn a_waiting_pirate_fires_nothing_and_a_plundering_one_fires_at_its_victim() {
+        let gun = WeaponSpec::new(&WeaponRecord {
+            speed: 1000,
+            count: 30,
+            energy_dmg: 5,
+            ..weapon(141)
+        });
+        let armed = |goal| Npc {
+            armament: Armament::new([(gun, 1)]),
+            ..holding(goal, None)
+        };
+        let ai = PirateWarship::default();
+        let sites = sites();
+        let fired = |npc: Npc| {
+            let npcs = [npc, trader(2, -100.0)];
+            let around = Surroundings::new(&sites, &npcs);
+            ai.trigger(&npcs[0], &around)
+        };
+        assert_eq!(
+            fired(armed(Goal::CountWait { ticks_left: 9 })),
+            Trigger::default()
+        );
+        let plundering = fired(armed(plunder(n(2))));
+        assert_eq!(plundering.only, Some(crate::catalog::WeaponId(141)));
+    }
+
+    #[test]
+    fn the_pirate_decides_by_its_think_and_answers_a_hit_as_a_warship() {
+        let npcs = [pirate(), wreck(2, 300.0)];
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, 3000.0), 0);
+        let ai = PirateWarship::default();
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            plunder(n(2))
+        );
+        let hit = Strike {
+            damage: 4.0,
+            ..crate::combat::fixture::strike(n(1), n(2))
+        };
+        assert_eq!(
+            ai.react(&npcs[0], &hit, &around),
+            react::answer(&npcs[0], &hit, &around, RuleSource::Engine)
+        );
+        assert_eq!(ai.react(&npcs[0], &hit, &around).target, Some(n(2)));
+    }
+
+    #[test]
+    fn a_disabled_class_of_inherent_ai_2_without_a_crew_is_attacked_not_dropped() {
+        // The drop needs `InherentAI` above 2 (`jle` @0x8c80e).
+        let mut crewless = wreck(2, 300.0);
+        crewless.hull.crew = 0;
+        let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), crewless.clone()];
+        assert_eq!(decided(&npcs), only(Goal::Attack(n(2))));
+        crewless.hull.inherent_ai = 3;
+        let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), crewless];
+        assert_eq!(
+            decided(&npcs),
+            Decision {
+                keeps_pursuit: true,
+                ..dropped()
+            }
+        );
+    }
+
+    #[test]
+    fn the_box_is_measured_from_the_pirate_on_either_axis() {
+        // A heavy pirate off the centre, the player running off across.
+        let mut heavy = holding(plunder(P), Some(P));
+        heavy.hull.mass = 100.0;
+        heavy.state.position = Vec2::new(500.0, 0.0);
+        let govts = govts(0, 0);
+        let running = |x: f32| {
+            let mut side = side(500.0 + x, 0.0, Condition::Intact, 1);
+            side.state.velocity = Vec2::new(1.0, 0.0);
+            side
+        };
+        let hopeless = |x: f32| decided_by(&govts, &[heavy.clone()], Some(&running(x))).goal;
+        assert_eq!(
+            hopeless(400.0),
+            Goal::Plunder {
+                ship: P,
+                hopeless: true
+            }
+        );
+        assert_eq!(hopeless(100.0), plunder(P), "inside, from the pirate");
+        assert_eq!(hopeless(165.0), plunder(P), "165 is inside");
+    }
+
     impl Decision {
         /// This decision with `goal`.
         fn goal_of(self, goal: Goal) -> Self {

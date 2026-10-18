@@ -587,6 +587,16 @@ mod tests {
             "hit by the ship it attacks"
         );
         assert_eq!((FOCUS, FOCUS_ANGLE), (0.25, 44.0));
+        let mut plundering = npcs.clone();
+        plundering[0].goal = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        assert_eq!(
+            answered(&govts, &plundering, 0, &hit),
+            TAKES(n(3)),
+            "a plunder (goal 0xd) is no attack to `_IsShipAttacking` (@0x3bc18)"
+        );
     }
 
     /// A Samaritan W of `govt` and `ai_type` answering the player's hit

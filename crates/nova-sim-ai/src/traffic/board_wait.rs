@@ -62,14 +62,17 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
         let Some(victim) = decisions[at].and_then(|decision| decision.board_wait) else {
             continue;
         };
-        let boarder = order.iter().enumerate().any(|(other_rank, &other)| {
-            let (goal, target) = if other_rank < rank {
-                decided(&npcs[other], decisions[other])
-            } else {
-                (npcs[other].goal, npcs[other].target)
-            };
-            other != at && boards(&npcs[other], goal, target, victim)
-        });
+        let (lower, higher) = order.split_at(rank);
+        let boarded_by = |other: usize, (goal, target): (Goal, Option<ShipRef>)| {
+            boards(&npcs[other], goal, target, victim)
+        };
+        let boarder = lower
+            .iter()
+            .any(|&other| boarded_by(other, decided(&npcs[other], decisions[other])))
+            || higher
+                .iter()
+                .skip(1)
+                .any(|&other| boarded_by(other, (npcs[other].goal, npcs[other].target)));
         if boarder && let Some(decision) = decisions[at].as_mut() {
             *decision = Decision {
                 goal: Goal::CountWait {
@@ -85,19 +88,13 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
 }
 
 /// The goal and target `npc` holds once its think this tick, if any, set
-/// `decision`: its fight's quarry, a goal that fights nothing keeping its
-/// target unless the think cleared it, and none in a count wait.
+/// `decision`: its new goal and the ship that goal fights. A goal that
+/// fights nothing boards no ship whatever target it keeps, as boarding is
+/// plundering or sniping, so its target is not read.
 fn decided(npc: &Npc, decision: Option<Decision>) -> (Goal, Option<ShipRef>) {
-    let Some(decision) = decision else {
-        return (npc.goal, npc.target);
-    };
-    let target = match decision.goal {
-        Goal::CountWait { .. } => None,
-        goal => goal
-            .quarry()
-            .or_else(|| npc.target.filter(|_| !decision.clears_target)),
-    };
-    (decision.goal, target)
+    decision.map_or((npc.goal, npc.target), |decision| {
+        (decision.goal, decision.goal.quarry())
+    })
 }
 
 /// Whether `other`, of `goal` and `target`, boards `victim` as the wait
@@ -239,7 +236,11 @@ mod tests {
     #[test]
     fn a_wait_keeps_the_thinks_call_on_the_player_and_calls_for_no_reinforcements() {
         let npcs = [ship(1, 1, Goal::Idle), ship(2, 2, plunder(n(9))), victim()];
-        let mut decisions = vec![Some(waiting_on(n(9))), None, None];
+        let kept = Decision {
+            keeps_pursuit: true,
+            ..waiting_on(n(9))
+        };
+        let mut decisions = vec![Some(kept), None, None];
         resolve(&npcs, &mut decisions);
         let waited = decisions[0].expect("decided");
         assert_eq!(waited.goal, WAIT);
@@ -470,12 +471,18 @@ mod tests {
 
     #[test]
     fn the_traffic_runs_the_wait_loop_in_berth_order_and_its_calls_follow_it() {
+        let provoked = |mut npc: Npc| {
+            npc.provoked = 5.0;
+            npc
+        };
         let mut traffic = traffic_of(vec![
-            ship(1, 2, plunder(n(9))),
-            ship(2, 1, plunder(n(9))),
+            provoked(ship(1, 2, plunder(n(9)))),
+            provoked(ship(2, 1, plunder(n(9)))),
             victim(),
         ]);
         tick(&mut traffic, &Waiter);
+        let provocations: Vec<f32> = traffic.npcs()[..2].iter().map(|npc| npc.provoked).collect();
+        assert_eq!(provocations, [5.0, 0.0], "+0x96 0 as it waits (@0x8c713)");
         let goals: Vec<Goal> = traffic.npcs().iter().map(|npc| npc.goal).collect();
         assert_eq!(
             goals[..2],
