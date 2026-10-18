@@ -1,9 +1,9 @@
 //! App frames of the ship browser, the galaxy map and a system over the
 //! stock data, through the recording Gpu, a course plotted from flight,
 //! and HG-Kania entered for Tichel, a new pilot offered the tutorial
-//! over the spaceport, and a storyline finale's texts shown over Earth's
-//! spaceport before its `Q` leaves. Skips, passing, when `NOVA_DATA` is
-//! unset.
+//! over the spaceport, a storyline finale's texts shown over Earth's
+//! spaceport before its `Q` leaves, and a new pilot's intro screen.
+//! Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -854,6 +854,108 @@ fn a_finales_texts_show_over_earths_spaceport_before_its_q_leaves() {
         flight.message(),
         Some("A mysterious force transports you to an unknown location...")
     );
+}
+
+/// A new pilot made on the stock data enters play through the stock
+/// intro: `PICT`s 8200, 8201 and 8202, each 45 s once faded in, with no
+/// intro sound (the stock data has no snd 30003) and no text after
+/// them, then flight.
+#[test]
+fn a_new_stock_pilot_sees_the_three_intro_pictures_for_45_seconds_each() {
+    use nova_audio::recording::RecordingAudio;
+    use nova_audio::{Audio, AudioCommand, AudioCore};
+    use nova_sim::fixture::MemoryPilots;
+    use nova_sim::{PilotKeeper, PilotStore};
+    use nova_view::menu::MenuChoice;
+    use nova_view::menu::intro::INTRO_SOUND;
+    use nova_view::text::fixture::MonoMetrics;
+    use nova_view::{DrawCommand, DrawList, Screen};
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let keeper = PilotKeeper::new(Box::new(MemoryPilots::new()) as Box<dyn PilotStore>);
+    let screen = start_screen(Rc::clone(&data)).with_pilots(Some(keeper), Rc::new(MonoMetrics));
+    let audio = RecordingAudio::new();
+    let log = audio.log();
+    let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+    let mut driver = Driver {
+        app: App::new(&Window, data, crate::common::appeared(screen)).with_audio(core),
+        gpu: RecordingGpu::new(),
+        clock: Duration::ZERO,
+    };
+    let new_pilot = driver
+        .app
+        .screen()
+        .main_menu()
+        .expect("the main menu")
+        .press_point(MenuChoice::NewPilot);
+    driver.click(new_pilot);
+    assert_eq!(driver.showing(), Showing::NewPilot);
+    for c in "Ada".chars() {
+        driver.send(WindowEvent::Text(c));
+    }
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::MainMenu);
+    let enter = crate::common::enter_ship_at(driver.app.screen());
+    driver.click(enter);
+    // Each picture shown, and how long it showed with no fade over it,
+    // in steps of half a second, which the fades' second divides.
+    let step = Duration::from_millis(500);
+    let mut shown: Vec<(i16, Duration)> = Vec::new();
+    let mut showings = Vec::new();
+    while driver.app.screen().entering() {
+        assert!(
+            driver.clock < Duration::from_secs(300),
+            "the intro never ends"
+        );
+        driver.clock += step;
+        let elapsed = driver.clock;
+        driver.send(WindowEvent::Redraw { elapsed });
+        showings.push(driver.showing());
+        let mut list = DrawList::new();
+        driver.app.screen().draw(&mut list);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let picture = commands.iter().find_map(|command| match command {
+            DrawCommand::Picture { image, .. } if (8200..=8202).contains(&image.id) => {
+                Some(image.id)
+            }
+            _ => None,
+        });
+        let faded = matches!(
+            commands.last(),
+            Some(DrawCommand::Line { color, .. }) if (color.r, color.g, color.b) == (0, 0, 0)
+        );
+        if let Some(picture) = picture {
+            if shown.last().map(|(id, _)| *id) != Some(picture) {
+                shown.push((picture, Duration::ZERO));
+            }
+            if !faded && let Some((_, time)) = shown.last_mut() {
+                *time += step;
+            }
+        }
+    }
+    let pictures: Vec<i16> = shown.iter().map(|(id, _)| *id).collect();
+    assert_eq!(pictures, [8200, 8201, 8202]);
+    for (picture, time) in &shown {
+        // 45 s once faded in: counted from the frame its fade-in ends to
+        // the frame its fade out begins, each a step.
+        assert!(
+            (Duration::from_secs(45)..=Duration::from_secs(46)).contains(time),
+            "PICT {picture} showed for {time:?}"
+        );
+    }
+    assert!(!showings.contains(&Showing::IntroText), "no intro text");
+    assert_eq!(driver.showing(), Showing::Flight);
+    let intro_sounds = log
+        .borrow()
+        .iter()
+        .filter(
+            |command| matches!(command, AudioCommand::Play { sound, .. } if *sound == INTRO_SOUND),
+        )
+        .count();
+    assert_eq!(intro_sounds, 0, "no intro sound");
 }
 
 crate::common::entry_harness!(Driver, click, redraw);

@@ -11,6 +11,7 @@ use std::rc::Rc;
 use nova_data::records::string_list::StrList;
 use nova_data::{GameData, InterfaceData, Record};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSource};
 use nova_view::menu::{MainMenu, MainScreenArt, MainScreenSource, MenuChoice};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::note::VERSION_NOTE;
@@ -48,6 +49,27 @@ const BUTTONS: [Recorded; 6] = [
     (8054, (581.0, 464.0), (99, 61)),
     (8055, (580.0, 528.0), (98, 60)),
 ];
+
+#[test]
+fn the_stock_intro_is_pictures_8200_to_8202_at_45_seconds_with_no_sound_or_text() {
+    let Some((data, _)) = stock() else {
+        return;
+    };
+    let shown = |picture| IntroPicture { picture, delay: 45 };
+    let intro = data.first_character_intro().expect("chär 128");
+    assert_eq!(
+        intro,
+        CharacterIntro {
+            pictures: [shown(8200), shown(8201), shown(8202), intro.pictures[3]],
+            text: None,
+        }
+    );
+    assert!(intro.pictures[3].picture <= 0, "{:?}", intro.pictures[3]);
+    for picture in 8200..=8202 {
+        assert!(data.intro_picture_size(picture).is_some(), "PICT {picture}");
+    }
+    assert!(!data.has_sound(INTRO_SOUND), "no snd 30003");
+}
 
 #[test]
 fn the_stock_art_resolves_where_it_was_recorded() {
