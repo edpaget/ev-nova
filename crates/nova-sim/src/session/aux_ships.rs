@@ -177,6 +177,29 @@ impl Session {
         }
     }
 
+    /// Open Pilot's restart of every active mission's auxiliary ships, in
+    /// slot order ([`AuxShips::restart_from_main_screen`]), drawing on
+    /// `chance`: `_MainScreenChoice(1)`'s loop over the 16 slots
+    /// (@0x1a918-0x1a982), run once the pilot is loaded. No save is due.
+    /// Which slot draws first decides nothing the player sees (the
+    /// engine's generator isn't the original's).
+    ///
+    /// [`AuxShips::restart_from_main_screen`]: crate::mission::aux_ships::AuxShips::restart_from_main_screen
+    pub fn restart_aux_from_main_screen(&mut self, chance: &mut dyn Chance) {
+        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
+        for slot in slots {
+            let Some(active) = self.pilot.missions.get(slot) else {
+                continue;
+            };
+            let record = self.lifecycle_record(active.mission);
+            if let Some(active) = self.pilot.missions.get_mut(slot) {
+                active
+                    .aux
+                    .restart_from_main_screen(&record.aux, record.flags, chance);
+            }
+        }
+    }
+
     /// The player's exit from a hypergate or wormhole, after the
     /// enter-system hook's restart of the mission in `slot`: under the
     /// engine's reading of [`RuleKey::AuxGate`], an `AuxShipSyst` of -1
@@ -1221,6 +1244,36 @@ mod tests {
         let mut draws = Draws::of(&[]);
         let _ = session.settle_script(&catalog, &mut draws);
         assert!(!draws.asked.contains(&70), "the hook restarts none");
+    }
+
+    #[test]
+    fn open_pilots_restart_draws_each_slot_with_ships_left_in_slot_order() {
+        let (_, mut session) = two_slots();
+        let spent = |left| AuxShips {
+            countdown: 5,
+            arrived: 2,
+            left,
+        };
+        for (slot, left) in [(0, 1), (1, 0)] {
+            if let Some(active) = session.pilot.missions.get_mut(slot) {
+                active.aux = spent(left);
+            }
+        }
+        let _ = session.take_save_due();
+        let mut draws = Draws::of(&[9]);
+        session.restart_aux_from_main_screen(&mut draws);
+        let aux = |slot| session.pilot().missions().get(slot).expect("held").aux;
+        assert_eq!(
+            aux(0),
+            AuxShips {
+                countdown: 79,
+                arrived: 0,
+                left: 1
+            }
+        );
+        assert_eq!(aux(1), spent(0), "none left: as saved");
+        assert_eq!(draws.asked, [70], "one draw, slot 0's");
+        assert!(!session.take_save_due(), "no save is due");
     }
 
     // The gate exit.

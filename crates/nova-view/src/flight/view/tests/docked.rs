@@ -1705,6 +1705,62 @@ fn a_failed_flight_resumes_nothing() {
 }
 
 #[test]
+fn opening_on_the_main_screen_restarts_the_aux_countdown_on_the_flights_chance() {
+    let errands = || {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = vec![MissionRecord {
+            aux: nova_sim::catalog::AuxShip {
+                count: 2,
+                dude: Some(nova_sim::catalog::DudeId(200)),
+                syst: -1,
+            },
+            ..errand(130)
+        }];
+        errands
+    };
+    let pilot = {
+        let mut view = FlightView::new(errands());
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        view.pilot().expect("flying").clone()
+    };
+    let aux = |view: &View| {
+        view.pilot()
+            .expect("flying")
+            .missions()
+            .get(0)
+            .expect("held")
+            .aux
+    };
+    let (script, chance) = scripted(&[9]);
+    let mut view = FlightView::with_pilot(errands(), pilot).with_chance(chance);
+    assert_eq!(aux(&view).countdown, 139, "the accept's draw");
+    view.open_on_main_screen();
+    assert_eq!(
+        aux(&view),
+        nova_sim::mission::aux_ships::AuxShips {
+            countdown: 79,
+            arrived: 0,
+            left: 2
+        }
+    );
+    assert_eq!(script.borrow().asked, [70]);
+    let (script, chance) = scripted(&[]);
+    let broken = FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    };
+    let mut broken = FlightView::new(broken).with_chance(chance);
+    broken.open_on_main_screen();
+    assert!(
+        script.borrow().asked.is_empty(),
+        "a failed flight draws nothing"
+    );
+}
+
+#[test]
 fn in_port_a_plain_click_on_the_map_selects_only() {
     let mut view = in_the_bar(None);
     view.open_bar_map();

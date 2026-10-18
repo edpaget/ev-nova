@@ -101,6 +101,17 @@ impl<
         }
     }
 
+    /// Opens a pilot just loaded on the main screen, as Open Pilot's
+    /// `_MainScreenChoice(1)` does once it is loaded: every active
+    /// mission's auxiliary ships restart
+    /// ([`Session::restart_aux_from_main_screen`], @0x1a918-0x1a982) on
+    /// the flight's chance. A session that failed opens nothing.
+    pub fn open_on_main_screen(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.restart_aux_from_main_screen(&mut self.chance);
+        }
+    }
+
     /// The flight of `session`, or why it could not start. No session
     /// starts landed, so flight's first frame redraws the bar, as
     /// `_PlayGame`'s `_RedrawStatus` (@0x457d8) does.
