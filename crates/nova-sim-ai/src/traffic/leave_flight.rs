@@ -423,4 +423,51 @@ mod tests {
             Outcome::JumpedOut
         );
     }
+
+    #[test]
+    fn a_hunter_giving_up_on_a_disabled_player_flies_out_past_1000_brakes_and_jumps() {
+        use crate::ai::NovaAi;
+        use crate::combat::hull::Condition;
+        use crate::traffic::npc::MissionMark;
+        use crate::traffic::{ShipBehav, Traffic, World};
+
+        let mut hunter = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::Attack(ShipRef::Player),
+            moving(0.0, -600.0, 0.0, -2.0, 0.0),
+        );
+        hunter.target = Some(ShipRef::Player);
+        hunter.ai_type = crate::traffic::npc::AiType::Warship;
+        hunter.reserves.fuel.now = 0.0;
+        hunter.mission = Some(MissionMark {
+            slot: 1,
+            behav: ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        let mut traffic = Traffic::new();
+        let id = traffic.add_npc(hunter);
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.condition = Condition::Disabled;
+        let world = World {
+            player: Some(player),
+            ..World::new(&[])
+        };
+        let mut last = None;
+        for _ in 0..3000 {
+            traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
+            if let Some(npc) = traffic.npcs().iter().find(|npc| npc.id == id) {
+                assert_ne!(npc.goal, Goal::Attack(ShipRef::Player));
+                assert_eq!(npc.target, None, "its target dropped");
+                last = Some(npc.state);
+                continue;
+            }
+            assert_eq!(traffic.departed(), [(id, Outcome::JumpedOut)]);
+            let last = last.expect("it flew");
+            assert!(last.position.length() > 1000.0, "{last:?}");
+            assert!(below_035(&last), "it braked: {last:?}");
+            return;
+        }
+        panic!("it never left");
+    }
 }
