@@ -136,13 +136,9 @@ pub fn turn(
             return (turned, way);
         }
         Some(aim) if !settled(heading, rate, aim, rule) => {
-            let mut ahead = f32::from(aim) - heading;
-            while ahead >= 360.0 {
-                ahead -= 360.0;
-            }
-            while ahead < 0.0 {
-                ahead += 360.0;
-            }
+            // The original brings it into [0, 360) by whole turns
+            // (@0x6c912-0x6c94d), as `rem_euclid` does.
+            let ahead = (f32::from(aim) - heading).rem_euclid(360.0);
             if ahead > 180.0 {
                 Turn::Left
             } else {
@@ -308,6 +304,26 @@ mod tests {
             );
             assert_eq!(turn(90.0, 3.0, Some(90), keys, FULL), (90.0, Turn::None));
         }
+    }
+
+    #[test]
+    fn by_the_other_reading_the_auto_turn_gives_the_way_it_turned() {
+        assert_eq!(
+            turn(0.0, 2.5, Some(90), Turn::None, FULL),
+            (2.5, Turn::Right)
+        );
+        assert_eq!(
+            turn(0.0, 2.5, Some(270), Turn::None, FULL),
+            (357.5, Turn::Left)
+        );
+        assert_eq!(
+            turn(89.0, 2.5, Some(90), Turn::Left, FULL),
+            (90.0, Turn::Right)
+        );
+        assert_eq!(
+            turn(91.0, 2.5, Some(90), Turn::Right, FULL),
+            (90.0, Turn::Left)
+        );
     }
 
     #[test]

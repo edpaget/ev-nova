@@ -16,6 +16,21 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_AngularDifference`'s first fold, from 360 when a and b lie either
+    # side of 179 (`angular_difference`, @0x649e-0x64f4), is ported as the
+    # original has it, but the second fold undoes it: for any |a − b| = d,
+    # folding 360 − d over 180 gives the same as folding d, so every
+    # mutant of that test (columns 11, 18 and 24) is the function itself.
+    # So is the second fold's `>` at 180 (column 19), where 360 − 180 is 180.
+    "trig.rs:[0-9]+:(11|18|24): replace .* in angular_difference",
+    "trig.rs:[0-9]+:19: replace > with >= in angular_difference",
+    # `_ShipTurnRate`'s player floor (`floored_turn`) sets a rate below 1.0
+    # to 1.0; at exactly 1.0, `<=` sets it to 1.0 too.
+    "handling.rs:[0-9]+:[0-9]+: replace < with <= in floored_turn",
+    # The Turn Rate row floors the player's turn (`turn_shown`), whose floor
+    # reads only whether the class turns above none: the class's `Maneuver`
+    # / 10 and * 10 (column 50) have the same sign.
+    "player_info.rs:[0-9]+:50: replace / with \\* in turn_shown",
     # `fitted` scales a movie box down only when the window is smaller
     # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
     # `<=` gives the same size.
