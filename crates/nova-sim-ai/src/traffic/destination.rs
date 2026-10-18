@@ -367,6 +367,10 @@ mod tests {
             nearest(Vec2::new(5000.0, 0.0), None, &sites, None),
             Some(128)
         );
+        let behind = [planet(128, 0.0, -100.0), planet(129, 0.0, 50.0)];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &behind, None), Some(129), "by y");
+        let behind = [planet(128, -100.0, 0.0), planet(129, 50.0, 0.0)];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &behind, None), Some(129), "by x");
     }
 
     #[test]

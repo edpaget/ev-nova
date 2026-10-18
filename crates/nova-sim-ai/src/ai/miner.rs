@@ -69,7 +69,7 @@ pub const MINES: u16 = 0x0001;
 pub const SCOOPS: u16 = 0x0002;
 
 /// The `Flags3` bits that make a ship a miner (`testb $0x3` @0x8ff76).
-pub const MINER_BITS: u16 = MINES | SCOOPS;
+pub const MINER_BITS: u16 = 0x0003;
 
 /// How a leaderless miner decides (see the module docs): it fires and
 /// answers hits as its AI type does, which [`NovaAi`](crate::ai::NovaAi)
@@ -217,6 +217,12 @@ mod tests {
             ..Surroundings::new(sites, &npcs)
         };
         decide(npc, &around)
+    }
+
+    #[test]
+    fn the_miner_bits_are_the_two_flags() {
+        assert_eq!(MINES | SCOOPS, MINER_BITS);
+        assert_eq!(MINES & SCOOPS, 0);
     }
 
     #[test]
