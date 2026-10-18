@@ -332,6 +332,12 @@ pub fn destroys(npc: &Npc) -> bool {
         .any(|mount| destroying(&mount.spec) && has_ammo(npc, mount))
 }
 
+/// How many shots of fuel a fuel-burning weapon needs left not to be out:
+/// `_AIShipIsOutOfAmmo` compares the fuel with |`AmmoType`| − 1000
+/// (@0x7f77a-0x7f7a2), ten times the shot's cost of (|`AmmoType`| − 1000)
+/// × 0.1.
+pub const DRY_FUEL_SHOTS: f32 = 10.0;
+
 /// How much of its weapons a ship can still fire (`_AIShipIsOutOfAmmo`
 /// @0x7f71f, which returns 0, 1 or 2 for these in order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -341,44 +347,60 @@ pub enum AmmoLeft {
     Armed,
     /// Every ammunition- or fuel-using weapon is out, but a weapon of
     /// unlimited ammunition remains (the original's `AmmoType`
-    /// -1000..-1, @0x7f750-0x7f75f; here [`Ammo::Unlimited`] and
-    /// [`Ammo::Other`]).
+    /// -1000..-1, @0x7f750-0x7f75f; here [`Ammo::Unlimited`],
+    /// [`Ammo::Other`] below none and [`Ammo::Fuel`] of no cost).
     OnlyUnlimited,
     /// It holds no weapon, or every weapon it holds is out of rounds
-    /// (a fighter bay's rounds are its fighters) or of fuel (a shot
-    /// costing more than the fuel left, @0x7f797).
+    /// (a fighter bay's rounds are its fighters) or of fuel (less than
+    /// [`DRY_FUEL_SHOTS`] of its shots left, @0x7f797).
     Dry,
 }
 
-/// How much of its weapons `npc` can still fire (see [`AmmoLeft`]),
-/// each launcher read from its own slot of rounds, as
-/// `_AIShipIsOutOfAmmo` reads them (@0x7f76a): a launcher whose
-/// ammunition another holds is still empty. The rest of the function (the
-/// ×10 fuel threshold, `AmmoType` -1000 as unlimited, and an `AmmoType`
-/// past 255 reading its own slot) is rdm
-/// combat-ai-fidelity/phase-1-warship-word-and-ammo's.
+/// How much of its weapons `npc` can still fire (see [`AmmoLeft`]), as
+/// `_AIShipIsOutOfAmmo` (@0x7f71f-0x7f7ec) classes each weapon it holds by
+/// its `AmmoType` alone, a fighter bay's too:
 ///
-/// Only [`AmmoLeft::Dry`] is read today, by
-/// [`select_target`](crate::ai::target::select_target); the escort's
-/// fallback that reads the others (`_EscortAI` @0x83bb5) stays with
+/// - -1000 to -1 is unlimited and skipped (@0x7f750-0x7f75f):
+///   [`Ammo::Unlimited`], [`Ammo::Other`] below none, and
+///   [`Ammo::Fuel`] of no cost;
+/// - -1001 and below burns fuel, and is out while the fuel is below
+///   [`DRY_FUEL_SHOTS`] of its shots (@0x7f77a-0x7f7a2), though it may
+///   afford one;
+/// - 0 and above, 256 and above too, is out while its own slot of rounds
+///   is empty (@0x7f765-0x7f774): a launcher whose ammunition another
+///   holds is still empty.
+///
+/// It holds no weapon, or every weapon is out: [`AmmoLeft::Dry`]; every
+/// weapon that spends is out beside an unlimited one:
+/// [`AmmoLeft::OnlyUnlimited`] (@0x7f7b6-0x7f7e0).
+///
+/// [`select_target`](crate::ai::target::select_target) reads
+/// [`AmmoLeft::Dry`] to refuse a new target. The escort's fallback that
+/// reads the others (`_EscortAI` @0x83bb5) stays with
 /// rdm:task/escorts-follow-up.
 #[must_use]
 pub fn ammo_left(npc: &Npc) -> AmmoLeft {
-    let mut unlimited = false;
-    let mut spending = false;
+    let mut held = 0_usize;
+    let mut spending = 0_usize;
+    let mut out = 0_usize;
     for mount in npc.armament.mounts() {
-        if matches!(mount.spec.ammo, Ammo::Unlimited | Ammo::Other(_)) {
-            unlimited = true;
-        } else if mount.affords(&npc.rounds, npc.reserves.fuel, true) {
-            return AmmoLeft::Armed;
-        } else {
-            spending = true;
-        }
+        held += 1;
+        let dry = match mount.spec.ammo {
+            Ammo::Unlimited => continue,
+            Ammo::Other(raw) if raw < 0 => continue,
+            Ammo::Fuel(cost) if cost <= 0.0 => continue,
+            Ammo::Fuel(cost) => npc.reserves.fuel.now < (cost * DRY_FUEL_SHOTS).round(),
+            Ammo::Rounds(_) | Ammo::Other(_) => npc.rounds.slot(mount.spec.id) <= 0,
+        };
+        spending += 1;
+        out += usize::from(dry);
     }
-    match (spending, unlimited) {
-        (false, true) => AmmoLeft::Armed,
-        (true, true) => AmmoLeft::OnlyUnlimited,
-        (_, false) => AmmoLeft::Dry,
+    if held == 0 || (out > 0 && out == held) {
+        AmmoLeft::Dry
+    } else if out > 0 && out == spending {
+        AmmoLeft::OnlyUnlimited
+    } else {
+        AmmoLeft::Armed
     }
 }
 
@@ -2006,11 +2028,71 @@ mod tests {
     }
 
     #[test]
-    fn a_fuel_weapon_is_armed_while_fuel_covers_its_cost() {
-        let mut ship = shooter(&[fuel_weapon(128, 5.0)], ATTACK);
-        ship.reserves.fuel.now = 4.0;
-        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
-        ship.reserves.fuel.now = 5.0;
+    fn a_fuel_weapon_is_dry_below_ten_shots_of_fuel() {
+        // -1010: a unit a shot, dry below 10 (@0x7f77a-0x7f7a2).
+        let mut ship = shooter(&[fuel_weapon(128, 1.0)], ATTACK);
+        ship.reserves.fuel.now = 10.0;
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+        ship.reserves.fuel.now = 9.9;
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry, "though it affords a shot");
+        let mut beside = shooter(&[fuel_weapon(128, 1.0), weapon(127)], ATTACK);
+        beside.reserves.fuel.now = 9.9;
+        assert_eq!(ammo_left(&beside), AmmoLeft::OnlyUnlimited);
+        // -1007: 0.7 a shot, armed at exactly 7.
+        let mut fine = shooter(&[fuel_weapon(128, 0.7)], ATTACK);
+        fine.reserves.fuel.now = 7.0;
+        assert_eq!(ammo_left(&fine), AmmoLeft::Armed);
+        fine.reserves.fuel.now = 6.99;
+        assert_eq!(ammo_left(&fine), AmmoLeft::Dry);
+        assert_eq!(DRY_FUEL_SHOTS, 10.0);
+    }
+
+    #[test]
+    fn an_ammo_type_from_minus_1000_to_minus_1_is_unlimited() {
+        for raw in [-1, -2, -500, -999, -1000] {
+            let gun = WeaponRecord {
+                ammo_type: raw,
+                ..weapon(127)
+            };
+            let mut alone = shooter(std::slice::from_ref(&gun), ATTACK);
+            alone.reserves.fuel.now = 0.0;
+            assert_eq!(ammo_left(&alone), AmmoLeft::Armed, "{raw}");
+            let beside = shooter(&[gun, launcher(129)], ATTACK);
+            assert_eq!(
+                ammo_left(&beside),
+                AmmoLeft::OnlyUnlimited,
+                "{raw}: unlimited, not an ammunition user (@0x7f750-0x7f75f)"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ammo_type_past_255_reads_its_own_slot() {
+        let odd = WeaponRecord {
+            ammo_type: 300,
+            ..weapon(140)
+        };
+        let mut ship = shooter(&[odd], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry, "`testw; js` @0x7f765");
+        ship.rounds = LauncherRounds::from([(WeaponId(140), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_fighter_bay_of_an_unlimited_ammo_type_is_unlimited() {
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: -5,
+            ..weapon(150)
+        };
+        let ship = shooter(&[bay, launcher(129)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::OnlyUnlimited);
+    }
+
+    #[test]
+    fn a_dry_launcher_beside_a_live_one_and_a_gun_is_armed() {
+        let mut ship = shooter(&[launcher(128), launcher(129), weapon(127)], ATTACK);
+        ship.rounds = LauncherRounds::from([(WeaponId(129), 3)]);
         assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
     }
 
