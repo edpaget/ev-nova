@@ -1,5 +1,6 @@
-//! The black screen fades: the death's fade out and the main screen's fade
-//! back in.
+//! The black screen fades: the death's fade out, and the main screen's
+//! fades in, at start-up and on each return from play (see
+//! [`menu::appear`](crate::menu::appear)).
 //!
 //! The original fades the whole display with `CGDisplayFade`: to solid
 //! black (rgb 0,0,0) in `_FadeScreenOut` (@0x530f, over 1.0 s, 0x3f800000
@@ -17,9 +18,9 @@ use crate::draw::fill_rect;
 use crate::geometry::Bounds;
 use crate::{Color, DrawList, Point};
 
-/// How long the death's fade to black and the main screen's fade back
-/// from it take: the 1.0 s of `_FadeScreenOut` (@0x5399) and
-/// `_FadeScreenIn` (@0x542d).
+/// How long the death's fade to black and the main screen's fades from
+/// it take, at start-up (@0x1b126) and on a return (@0x1a673): the 1.0 s
+/// of `_FadeScreenOut` (@0x5399) and `_FadeScreenIn` (@0x542d).
 pub const DEATH_FADE_FOR: Duration = Duration::from_secs(1);
 
 /// The whole of a view `view` logical units in size, which a fade covers.

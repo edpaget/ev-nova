@@ -2,6 +2,9 @@
 //!
 //! - [`main_menu`]: the [`MainMenu`], the original's main screen: New
 //!   Pilot, Open Pilot, Quit, Enter Ship, Preferences and About.
+//! - [`appear`]: how the main screen appears, at start-up and on each
+//!   return from play: its fade, and what it does with the input
+//!   meanwhile.
 //! - [`art`]: the main screen's art in the core's terms, and the port it
 //!   comes through ([`MainScreenSource`]); `data` adapts the game data
 //!   to it.
@@ -14,6 +17,7 @@
 //! - [`pilot_list`]: the [`PilotList`], the saved pilots to open one of,
 //!   over the main menu.
 
+pub mod appear;
 pub mod art;
 pub mod background;
 mod data;
