@@ -51,6 +51,13 @@ exclude_re = [
     # its size, which `()` does too.
     "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
     "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
+    # The wgpu adapter's only upscaler is native, so every answer to how
+    # it draws the world is `WorldResolution::Native`, which is
+    # `WorldResolution::default()`: the same value. Remove these once a
+    # second upscaler (display-modes phase 6) can answer otherwise.
+    "nova-render/src/wgpu/(offscreen|surface)\\.rs:.*replace <impl Gpu for (OffscreenGpu|SurfaceGpu)>::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/renderer\\.rs:.*replace WgpuRenderer::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/upscale\\.rs:.*replace <impl Upscale for Native>::resolution -> WorldResolution with Default::default\\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
     # `+ 360` in place of `mod 360` lands on the same heading.
