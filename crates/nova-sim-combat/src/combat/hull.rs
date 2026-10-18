@@ -116,6 +116,10 @@ pub const PLANET_TYPE: u16 = 0x0400;
 /// fired on by point defense" (class +0x9ea, `_HandleShipPointDefense`
 /// @0x3951d; see [`defence`](super::defence)).
 pub const PD_TARGET: u16 = 0x0008;
+/// The `shïp` `Flags2` bit of a ship that retreats once its weapons run
+/// out of ammunition (class +0x9ea, `_WarshipAI` @0x8bf50,
+/// `_InterceptorAI` @0x8d358; see `nova_sim::ai::out_of_ammo`).
+pub const RETREATS_DRY: u16 = 0x0080;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -196,6 +200,9 @@ pub struct HullSpec {
     /// when it fights the defender or its leader (see
     /// [`defence::choose_ship`](super::defence::choose_ship)).
     pub pd_target: bool,
+    /// Whether it retreats once its weapons run out of ammunition, its
+    /// `Flags2` [`RETREATS_DRY`] (see `nova_sim::ai::out_of_ammo`).
+    pub retreats_dry: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -250,6 +257,7 @@ impl Default for HullSpec {
             sprite_height: None,
             planet_type: false,
             pd_target: false,
+            retreats_dry: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
@@ -283,6 +291,7 @@ impl HullSpec {
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
             pd_target: record.flags2 & PD_TARGET != 0,
+            retreats_dry: record.flags2 & RETREATS_DRY != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
@@ -665,6 +674,28 @@ mod tests {
         assert!(!flags.pd_target, "its Flags never");
         assert!(!HullSpec::default().pd_target);
         assert_eq!(PD_TARGET, 0x0008);
+    }
+
+    #[test]
+    fn a_hull_that_retreats_out_of_ammunition_has_its_flags2_0x0080() {
+        let retreats = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .retreats_dry
+        };
+        assert!(retreats(0x0080));
+        assert!(retreats(0x0089), "with other bits");
+        assert!(!retreats(0xff7f), "every other bit");
+        assert!(!retreats(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0080,
+            ..hull(167)
+        });
+        assert!(!flags.retreats_dry, "its Flags never");
+        assert!(!HullSpec::default().retreats_dry);
+        assert_eq!(RETREATS_DRY, 0x0080);
     }
 
     #[test]

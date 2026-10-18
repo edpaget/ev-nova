@@ -30,6 +30,10 @@
 //!   flagged 0x0020 or fining the smuggler, then its illegal `jünk` and
 //!   outfits (see [`scan`](crate::scan)), convicting the smuggler; any
 //!   find sets the interceptor attacking the player.
+//! - Short of ammunition with a hull of `Flags2` 0x0080
+//!   (@0x8d343-0x8d391), it flees the ship it attacks, snipes at or
+//!   inspects, and with none it stops, unless it is leaving; it has no
+//!   fully-dry drop (see [`out_of_ammo`]).
 //! - With nothing to inspect it patrols: the idle block, but its
 //!   `_SelectRandomStellarDest` call is (ship, 0, 1) (@0x8d027-0x8d03a),
 //!   plain stellars only ([`idle_admitting`] with [`Admit::PlainOnly`]):
@@ -40,7 +44,8 @@
 use crate::ai::fire::FireRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
-    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting, react,
+    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting,
+    out_of_ammo, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -61,11 +66,13 @@ pub fn within_reach(off: Vec2) -> bool {
     off.x.abs() <= INSPECT_REACH && off.y.abs() <= INSPECT_REACH
 }
 
-/// An interceptor's retreat: only when outnumbered, by `Flags` 0x0100.
+/// An interceptor's retreat: when outnumbered, by `Flags` 0x0100, and
+/// out of ammunition, by its hull's `Flags2` 0x0080.
 pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
     odds_flag: INTERCEPTORS_RETREAT,
     shields: false,
     person_coward: RuleSource::Engine,
+    out_of_ammo: true,
 };
 
 /// Nova's interceptor (see the module docs).
@@ -91,32 +98,16 @@ impl Behaviour for Interceptor {
     }
 
     /// Its [`hunt`], or with nothing to fight its inspection, hold or
-    /// patrol, the hunt's call on the player kept through each.
+    /// patrol, after its out-of-ammo retreat
+    /// ([`out_of_ammo::after_patrol`]), the hunt's call on the player kept
+    /// through each.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..INTERCEPTOR_RETREAT
         };
-        let hunt = hunt(npc, around, retreat, self.always_attacks);
-        hunt.or(|| {
-            if let Goal::Inspect(ship) = npc.goal
-                && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
-                && !within_reach(state.position - npc.state.position)
-            {
-                return Goal::Inspect(ship);
-            }
-            if npc.goal == Goal::Hold {
-                // The patrol and inspect block needs goal 1 or below, or
-                // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
-                // holds.
-                return idle(npc, around, chance);
-            }
-            let patrol = Admit::PlainOnly {
-                uninhabited: self.patrol_uninhabited == RuleSource::Engine,
-            };
-            inspect(npc, around, chance)
-                .unwrap_or_else(|| idle_admitting(npc, around, chance, patrol))
-        })
+        let hunt = hunt(npc, around, retreat, Some(self.always_attacks));
+        hunt.or(|| out_of_ammo::after_patrol(npc, self.patrol(npc, around, chance)))
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -129,6 +120,28 @@ impl Behaviour for Interceptor {
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         react::answer(npc, strike, around, self.piracy_police)
+    }
+}
+
+impl Interceptor {
+    /// Its goal with nothing to fight: its inspection, hold or patrol.
+    fn patrol(self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        if let Goal::Inspect(ship) = npc.goal
+            && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
+            && !within_reach(state.position - npc.state.position)
+        {
+            return Goal::Inspect(ship);
+        }
+        if npc.goal == Goal::Hold {
+            // The patrol and inspect block needs goal 1 or below, or
+            // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
+            // holds.
+            return idle(npc, around, chance);
+        }
+        let patrol = Admit::PlainOnly {
+            uninhabited: self.patrol_uninhabited == RuleSource::Engine,
+        };
+        inspect(npc, around, chance).unwrap_or_else(|| idle_admitting(npc, around, chance, patrol))
     }
 }
 
@@ -162,7 +175,10 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::ai::fixture::{NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
+    use crate::ai::fire::AmmoLeft;
+    use crate::ai::fixture::{
+        NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, short_of_ammo, sites,
+    };
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::hull::Condition;
@@ -611,6 +627,94 @@ mod tests {
                 provokes: false,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
+        );
+    }
+
+    // Out of ammunition (`_InterceptorAI` @0x8d343-0x8d391).
+
+    /// The police interceptor with `goal`, `left` of its ammunition,
+    /// retreating out of it as `retreats` says.
+    fn short(goal: Goal, left: AmmoLeft, retreats: bool) -> Npc {
+        short_of_ammo(Npc { goal, ..police() }, left, retreats)
+    }
+
+    #[test]
+    fn an_interceptor_of_flags2_0x0080_retreats_from_its_target_out_of_ammunition() {
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let fight = Goal::Attack(n(2));
+        for left in [AmmoLeft::Dry, AmmoLeft::OnlyUnlimited] {
+            assert_eq!(
+                decided(&[short(fight, left, true), pirate.clone()], 0, &[]),
+                Goal::Flee(n(2)),
+                "{left:?}"
+            );
+        }
+        assert_eq!(
+            decided(
+                &[short(fight, AmmoLeft::Armed, true), pirate.clone()],
+                0,
+                &[]
+            ),
+            fight
+        );
+        assert_eq!(
+            decided(&[short(fight, AmmoLeft::Dry, false), pirate], 0, &[]),
+            fight,
+            "without 0x0080 it fights on: the interceptor has no fully-dry drop"
+        );
+    }
+
+    #[test]
+    fn an_interceptor_of_flags2_0x0080_out_of_ammunition_flees_the_ship_it_inspects() {
+        // An inspection holds its ship as the target (state 7, @0x8ce34-0x8ce42).
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let inspecting = short(Goal::Inspect(n(2)), AmmoLeft::Dry, true);
+        assert_eq!(
+            decided(&[inspecting, trader.clone()], 0, &[]),
+            Goal::Flee(n(2)),
+            "kept"
+        );
+        let idle = short(Goal::Idle, AmmoLeft::OnlyUnlimited, true);
+        assert_eq!(
+            decided(&[idle, trader], 0, &[1]),
+            Goal::Flee(n(2)),
+            "picked afresh"
+        );
+    }
+
+    #[test]
+    fn an_interceptor_of_flags2_0x0080_out_of_ammunition_with_no_target_stops() {
+        // State 3 with target -1 is state 0 at once in `_HighLevelAIHandler`
+        // (@0x8dff6 → @0x8e228-0x8e23d).
+        let sites = sites();
+        let govts = govts(0, 0);
+        let decide = |npc: Npc, sites: &[crate::catalog::LandingSite]| {
+            let npcs = [npc];
+            let around = crate::ai::Surroundings {
+                govts: &govts,
+                ..crate::ai::Surroundings::new(sites, &npcs)
+            };
+            Interceptor::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
+        };
+        assert_eq!(
+            decide(short(Goal::Idle, AmmoLeft::Dry, true), &sites),
+            Goal::Idle,
+            "its patrol"
+        );
+        assert_eq!(
+            decide(short(Goal::Idle, AmmoLeft::Dry, false), &sites),
+            Goal::Land(StellarId(128)),
+            "without 0x0080 it patrols"
+        );
+        assert_eq!(
+            decide(short(Goal::Hold, AmmoLeft::Dry, true), &sites),
+            Goal::Idle,
+            "its hold"
+        );
+        assert_eq!(
+            decide(short(Goal::JumpOut, AmmoLeft::Dry, true), &[]),
+            Goal::JumpOut,
+            "leaving, state 2"
         );
     }
 }

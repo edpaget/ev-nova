@@ -78,9 +78,15 @@
 //!     Bible ([`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)),
 //!     any warship or interceptor person with no fleet lead does,
 //!     whatever its government.
+//! - **The out-of-ammo retreat** (@0x8bf3e-0x8bf83), after those, by its
+//!   hull's `Flags2` 0x0080 rather than its government: short of
+//!   ammunition, it flees its target (see [`out_of_ammo`]).
 //! - **A hopeless chase** ([`hopeless_chase`]) stands off and snipes;
 //!   anything else is attacked.
-//! - With no target it goes about its business ([`idle`](super::idle)).
+//! - **Fully dry** (@0x8c0e7-0x8c117), an attack or snipe is dropped: it
+//!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
+//! - With no target it goes about its business ([`idle`](super::idle)),
+//!   short of ammunition or not: the out-of-ammo retreat needs a target.
 //!
 //! A held ship ([`Goal::Hold`], the original's goal 10 with no leader)
 //! still hears its government's word and answers its attacker, but looks
@@ -91,14 +97,18 @@
 //! `_PirateWarshipAI` (`_AIDispatch` @0x8ffc8-0x8fff0), which with no
 //! target goes straight to its plunder and target search and its
 //! destination pick (@0x8c339-0x8c35d): it decides as if idle, leaving
-//! the hold on its first think. Its plunder itself isn't modelled here.
+//! the hold on its first think. It takes no government's word and has no
+//! out-of-ammo retreat, but drops a target fully dry (@0x8c848-0x8c887).
+//! Its plunder itself isn't modelled here.
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
 #[cfg(doc)]
 use crate::ai::target::select_target;
 use crate::ai::target::{dropped, pick_target};
-use crate::ai::{Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, react};
+use crate::ai::{
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, out_of_ammo, react,
+};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
@@ -130,13 +140,17 @@ pub struct Retreat {
     /// Which persons retreat at their `Coward`
     /// ([`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)).
     pub person_coward: RuleSource,
+    /// Whether it retreats when its weapons run out of ammunition, by its
+    /// hull's `Flags2` 0x0080 ([`out_of_ammo::retreats`]).
+    pub out_of_ammo: bool,
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
-/// says and letting its government's word reach a blessed player as
-/// `always_attacks` ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks))
-/// says: its goal, or none when it has nothing to fight (see the module
-/// docs).
+/// says and taking its government's word on the player when `word` is
+/// some, which says whether it reaches a blessed player
+/// ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)):
+/// its goal, or none when it has nothing to fight (see the module docs).
+/// A plunderer's warship takes no word (`_PirateWarshipAI` has none).
 ///
 /// After a word, the retreat judges the ship by the goal the word has
 /// just given it, an attack on its new target: the original sets the
@@ -160,13 +174,8 @@ pub struct Retreat {
 /// 0x0040 word's fresh pick included. A ship fleeing on, or turning on
 /// its provoker, makes no call.
 #[must_use]
-pub fn hunt(
-    npc: &Npc,
-    around: &Surroundings,
-    retreat: Retreat,
-    always_attacks: RuleSource,
-) -> Hunt {
-    let word = government_word(npc, around, always_attacks);
+pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat, word: Option<RuleSource>) -> Hunt {
+    let word = word.and_then(|always_attacks| government_word(npc, around, always_attacks));
     let dropped_target = word == Some(Word::DropTarget);
     let word_provokes = word == Some(Word::TakePlayer);
     let nothing = |turns_on_player| Hunt {
@@ -265,10 +274,11 @@ impl Hunt {
 }
 
 /// What a hunter `npc`, judged by the goal it holds, does about
-/// `target`: it retreats from it as `retreat` says, or snipes at it in a
-/// hopeless chase, or attacks it.
+/// `target`: it retreats from it as `retreat` says, the odds and shield
+/// retreats then the out-of-ammo one (@0x8bcd9-0x8bf35, then
+/// @0x8bf3e-0x8bf83), or snipes at it in a hopeless chase, or attacks it.
 fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
-    if retreats(npc, around, retreat) {
+    if retreats(npc, around, retreat) || (retreat.out_of_ammo && out_of_ammo::retreats(npc)) {
         Goal::Flee(target)
     } else if hopeless_chase(npc, target, around) {
         Goal::Snipe(target)
@@ -290,18 +300,13 @@ enum Word {
 /// The word `npc`'s government has on the player among `around`, if any
 /// (`_WarshipAI` @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3; see
 /// the module docs): none without a government, in hyperspace
-/// ([`Npc::in_hyperspace`]), with no player in the system, or for a
-/// plunderer ([`PLUNDERS`], which thinks as `_PirateWarshipAI`); and by
-/// the Bible's `always_attacks`, no 0x0004 word for a blessed player.
+/// ([`Npc::in_hyperspace`]), or with no player in the system; and by the
+/// Bible's `always_attacks`, no 0x0004 word for a blessed player.
 fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource) -> Option<Word> {
-    let govts = around.govts;
-    if npc.govt.is_none()
-        || npc.in_hyperspace()
-        || around.player.is_none()
-        || govts.flag(npc.govt, PLUNDERS)
-    {
+    if npc.govt.is_none() || npc.in_hyperspace() || around.player.is_none() {
         return None;
     }
+    let govts = around.govts;
     let threat = npc.threatens_player_among(around.npcs);
     if govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER) {
         let held = always_attacks == RuleSource::Bible && around.blessed(npc.govt);
@@ -359,11 +364,13 @@ pub struct Warship {
 }
 
 /// A warship's retreat: when outnumbered or its shields run low, both by
-/// `Flags` 0x0010, a person at its `Coward` by the engine.
+/// `Flags` 0x0010, a person at its `Coward` by the engine, and out of
+/// ammunition by its hull's `Flags2` 0x0080.
 pub const WARSHIP_RETREAT: Retreat = Retreat {
     odds_flag: WARSHIPS_RETREAT,
     shields: true,
     person_coward: RuleSource::Engine,
+    out_of_ammo: true,
 };
 
 impl Behaviour for Warship {
@@ -372,14 +379,19 @@ impl Behaviour for Warship {
     }
 
     /// Its [`hunt`], or with nothing to fight its business ([`idle`]),
-    /// the hunt's call on the player kept either way.
+    /// the hunt's call on the player kept either way; an attack fully dry
+    /// is dropped ([`out_of_ammo::drop_when_dry`]). A plunderer's warship
+    /// takes no word and has no out-of-ammo retreat, as
+    /// `_PirateWarshipAI`.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        let plunders = around.govts.flag(npc.govt, PLUNDERS);
         let retreat = Retreat {
             person_coward: self.person_coward,
+            out_of_ammo: !plunders,
             ..WARSHIP_RETREAT
         };
         let plunderer;
-        let npc = if npc.goal == Goal::Hold && around.govts.flag(npc.govt, PLUNDERS) {
+        let npc = if npc.goal == Goal::Hold && plunders {
             plunderer = Npc {
                 goal: Goal::Idle,
                 ..npc.clone()
@@ -388,7 +400,12 @@ impl Behaviour for Warship {
         } else {
             npc
         };
-        hunt(npc, around, retreat, self.always_attacks).or(|| idle(npc, around, chance))
+        let word = (!plunders).then_some(self.always_attacks);
+        let decision = hunt(npc, around, retreat, word).or(|| idle(npc, around, chance));
+        Decision {
+            goal: out_of_ammo::drop_when_dry(npc, decision.goal),
+            ..decision
+        }
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -408,7 +425,10 @@ impl Behaviour for Warship {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::ai::fixture::{NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
+    use crate::ai::fire::AmmoLeft;
+    use crate::ai::fixture::{
+        NEUTRAL, PIRATES, POLICE, TRADERS, around, govts, n, ship, short_of_ammo, sites,
+    };
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::hull::Condition;
@@ -1488,6 +1508,119 @@ mod tests {
                 provokes: false,
             },
             "no grudge: dropped, and nothing picked"
+        );
+    }
+
+    // Out of ammunition (`_WarshipAI` @0x8bf3e-0x8bf83, @0x8c0e7-0x8c117).
+
+    const ARMED: AmmoLeft = AmmoLeft::Armed;
+    const ONLY_UNLIMITED: AmmoLeft = AmmoLeft::OnlyUnlimited;
+    const DRY: AmmoLeft = AmmoLeft::Dry;
+
+    /// The police warship with `goal`, `left` of its ammunition, retreating
+    /// out of it as `retreats` says.
+    fn short(goal: Goal, left: AmmoLeft, retreats: bool) -> Npc {
+        short_of_ammo(Npc { goal, ..police() }, left, retreats)
+    }
+
+    #[test]
+    fn a_warship_of_flags2_0x0080_retreats_from_its_target_out_of_ammunition() {
+        let fight = Goal::Attack(n(2));
+        for left in [DRY, ONLY_UNLIMITED] {
+            assert_eq!(
+                worded(0, &[short(fight, left, true), pirate()], INTACT),
+                Goal::Flee(n(2)),
+                "{left:?}"
+            );
+        }
+        assert_eq!(
+            worded(0, &[short(fight, ARMED, true), pirate()], INTACT),
+            fight
+        );
+        let mut provoked = short(Goal::Idle, DRY, true);
+        provoked.provoked = 3.0;
+        provoked.target = Some(n(3));
+        let neutral = ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0);
+        assert_eq!(
+            worded(0, &[provoked, neutral], INTACT),
+            Goal::Flee(n(3)),
+            "from its provoker"
+        );
+    }
+
+    #[test]
+    fn a_warship_without_flags2_0x0080_drops_its_target_only_fully_dry() {
+        let fight = Goal::Attack(n(2));
+        assert_eq!(
+            worded(0, &[short(fight, ONLY_UNLIMITED, false), pirate()], INTACT),
+            fight
+        );
+        assert_eq!(
+            worded(0, &[short(fight, DRY, false), pirate()], INTACT),
+            Goal::Idle,
+            "state 0, target and nav -1 (@0x8c0ff-0x8c117)"
+        );
+        let mut heavy = short(fight, DRY, false);
+        heavy.hull.mass = 100.0;
+        assert_eq!(
+            worded_moving(ALWAYS, &[heavy.clone(), pirate()], 1.0),
+            Goal::Idle,
+            "a hopeless chase too"
+        );
+        heavy.armament = police().armament;
+        assert_eq!(
+            worded_moving(ALWAYS, &[heavy, pirate()], 1.0),
+            Goal::Snipe(P)
+        );
+    }
+
+    #[test]
+    fn a_warship_with_no_target_does_not_retreat_out_of_ammunition() {
+        // The retreat needs a target: target -1 jumps past it (@0x8bc48).
+        assert_eq!(worded(0, &[short(Goal::Idle, DRY, true)], INTACT), IDLE);
+        assert_eq!(
+            worded(0, &[short(Goal::Hold, DRY, true)], INTACT),
+            Goal::Hold
+        );
+        let fleeing = short(Goal::Flee(n(2)), DRY, true);
+        assert_eq!(
+            worded(0, &[fleeing, pirate()], INTACT),
+            Goal::Flee(n(2)),
+            "state 3 already"
+        );
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_retreats_from_it_out_of_ammunition() {
+        let npcs = [short(Goal::Attack(n(2)), DRY, true), pirate()];
+        assert_eq!(
+            worded_decision(ALWAYS, &npcs, Condition::Intact, 0.0),
+            turning(Goal::Flee(P), true)
+        );
+        let npcs = [short(Goal::Attack(n(2)), DRY, false), pirate()];
+        assert_eq!(
+            worded_decision(ALWAYS, &npcs, Condition::Intact, 0.0),
+            turning(Goal::Idle, true),
+            "fully dry without 0x0080, it drops the player at once"
+        );
+    }
+
+    #[test]
+    fn a_plundering_warship_drops_its_target_fully_dry_but_never_retreats_out_of_ammunition() {
+        // `_PirateWarshipAI` has the drop (@0x8c848-0x8c887) but no
+        // `Flags2` 0x0080 test.
+        let fight = Goal::Attack(n(2));
+        assert_eq!(
+            worded(PLUNDERS, &[short(fight, DRY, true), pirate()], INTACT),
+            Goal::Idle
+        );
+        assert_eq!(
+            worded(
+                PLUNDERS,
+                &[short(fight, ONLY_UNLIMITED, true), pirate()],
+                INTACT
+            ),
+            fight
         );
     }
 }

@@ -32,6 +32,7 @@ pub(crate) mod fixture;
 pub mod interceptor;
 pub mod nova;
 pub mod odds;
+pub mod out_of_ammo;
 pub mod react;
 pub mod target;
 pub mod warship;
