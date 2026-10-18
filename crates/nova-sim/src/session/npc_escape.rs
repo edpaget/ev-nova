@@ -691,4 +691,22 @@ mod tests {
             (None, None)
         );
     }
+
+    /// The test-support `fixture::place`, which only other crates' tests
+    /// call, tested here where a session's traffic can be reached.
+    #[test]
+    fn place_puts_a_ship_where_it_is_told_at_rest() {
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        let mut moving = npc(0, ShipStats::default());
+        moving.state.velocity = Vec2::new(3.0, 1.0);
+        let id = session.traffic.add_npc(moving);
+        crate::fixture::place(&mut session, id, Vec2::new(40.0, -80.0));
+        let placed = session.npc(id).expect("there").state;
+        assert_eq!(
+            (placed.position, placed.velocity),
+            (Vec2::new(40.0, -80.0), Vec2::ZERO)
+        );
+    }
 }
