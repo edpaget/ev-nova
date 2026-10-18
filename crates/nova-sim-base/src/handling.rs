@@ -13,6 +13,7 @@
 
 use core::num::NonZeroU32;
 
+use crate::flight::Flyer;
 use crate::rule_values::RuleValue;
 
 /// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel`,
@@ -68,6 +69,51 @@ impl ShipFields {
     pub fn class_speed(&self) -> f32 {
         f32::from(self.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK
     }
+
+    /// The class's turn rate, in degrees a tick: its `Maneuver` alone,
+    /// none of its outfits', a tenth (the original's class +0x38,
+    /// `_LoadObjectData` @0x7a0fb-0x7a10b), not floored. What
+    /// [`floored_turn`] reads.
+    #[must_use]
+    pub fn class_turn(&self) -> f32 {
+        f32::from(self.maneuver) / MANEUVER_PER_DEGREE_PER_TICK
+    }
+}
+
+/// The turn rate, in degrees a tick, `_ShipTurnRate` floors a ship's at
+/// (1.0, 0xdd068).
+pub const MIN_TURN_RATE: f32 = 1.0;
+
+/// `rate`, a ship's turn in degrees a tick with its outfits, floored as
+/// `_ShipTurnRate` (@0x32f7-0x34e0) floors it for `flyer`, whose class
+/// turns `class_rate` ([`ShipFields::class_turn`]):
+///
+/// 1. The player's alone (@0x33ba-0x33db): below [`MIN_TURN_RATE`], it
+///    becomes that when its class turns above none, and is kept when
+///    its class turns none or less.
+/// 2. Every ship's (@0x3441-0x3473): when its class turns
+///    [`MIN_TURN_RATE`] or more, at least that.
+/// 3. None below none (@0x34cd).
+///
+/// So the player turns at least 1° a tick unless its class turns none,
+/// and an NPC unless its class turns under 1°. Left out: between the
+/// floors, a tractor's hold on an NPC, × 0.333
+/// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), and the nag
+/// ship's +1, which no ship of ours is; after them, ionization
+/// (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling). The
+/// original's NPC rate is its class's alone, with no outfits, where ours
+/// counts them
+/// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
+#[must_use]
+pub fn floored_turn(class_rate: f32, rate: f32, flyer: Flyer) -> f32 {
+    let mut rate = rate;
+    if flyer == Flyer::Player && rate < MIN_TURN_RATE && class_rate > 0.0 {
+        rate = MIN_TURN_RATE;
+    }
+    if class_rate >= MIN_TURN_RATE {
+        rate = rate.max(MIN_TURN_RATE);
+    }
+    rate.max(0.0)
 }
 
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels
@@ -215,6 +261,61 @@ mod tests {
             (stuck.max_speed, stuck.accel, stuck.turn_rate),
             (3.0, 0.0, 1.0)
         );
+    }
+
+    #[test]
+    fn the_players_turn_is_floored_at_1_unless_its_class_turns_none() {
+        for (class, rate, floored) in [
+            (0.5, 0.5, 1.0),
+            (2.5, 0.98, 1.0),
+            (2.5, -3.0, 1.0),
+            (0.1, 0.0, 1.0),
+            (2.5, 2.5, 2.5),
+            (0.5, 1.5, 1.5),
+            (0.0, 0.5, 0.5),
+            (0.0, -1.0, 0.0),
+            (-0.5, 0.25, 0.25),
+        ] {
+            assert_eq!(
+                floored_turn(class, rate, Flyer::Player),
+                floored,
+                "{class} {rate}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_npcs_turn_is_floored_at_1_only_when_its_class_turns_1_or_more() {
+        for (class, rate, floored) in [
+            (1.0, 0.2, 1.0),
+            (2.5, 0.98, 1.0),
+            (2.5, -3.0, 1.0),
+            (2.5, 2.5, 2.5),
+            (0.9, 0.9, 0.9),
+            (0.9, 0.2, 0.2),
+            (0.5, 1.5, 1.5),
+            (0.0, 0.5, 0.5),
+            (0.9, -1.0, 0.0),
+        ] {
+            assert_eq!(
+                floored_turn(class, rate, Flyer::Npc),
+                floored,
+                "{class} {rate}"
+            );
+        }
+        assert_eq!(MIN_TURN_RATE, 1.0);
+    }
+
+    #[test]
+    fn a_class_turn_is_its_maneuver_alone_a_tenth() {
+        let fields = |maneuver| ShipFields {
+            maneuver,
+            ..ShipFields::default()
+        };
+        assert_eq!(fields(25).class_turn(), 2.5);
+        assert_eq!(fields(9).class_turn(), 0.9);
+        assert_eq!(fields(0).class_turn(), 0.0);
+        assert_eq!(fields(-10).class_turn(), -1.0, "as the record says");
     }
 
     #[test]

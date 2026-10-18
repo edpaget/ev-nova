@@ -1,5 +1,6 @@
-//! The original's table trigonometry in whole degrees: `_TableArcTan`
-//! and the headings `_CalcInterceptAngle` works out with it.
+//! The original's table trigonometry in whole degrees: `_TableArcTan`,
+//! the headings `_CalcInterceptAngle` works out with it, and
+//! `_AngularDifference`, how far apart two headings are.
 //!
 //! Headings are on Nova's compass: 0 up the screen (−y), growing
 //! clockwise, as the [`flight`](crate::flight) module's are, but whole
@@ -54,6 +55,23 @@ pub fn intercept_angle(from: Vec2, to: Vec2) -> i16 {
     table_arctan(from.x - to.x, from.y - to.y)
 }
 
+/// `_AngularDifference(a, b)` (@0x649e-0x64f4), in the original's 16
+/// bits: |a − b|, taken from 360 when a and b lie either side of 179,
+/// then from 360 again when above 180. For headings in 0..360 it is how
+/// far apart they are, 0 to 180.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn angular_difference(a: i16, b: i16) -> i16 {
+    let mut difference = (i32::from(a) - i32::from(b)).abs() as i16;
+    if (a > 179) != (b > 179) {
+        difference = 360_i16.wrapping_sub(difference);
+    }
+    if difference > 180 {
+        difference = 360_i16.wrapping_sub(difference);
+    }
+    difference
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +117,27 @@ mod tests {
             "a degree short"
         );
         assert_eq!(intercept_angle(at, at), 0);
+    }
+
+    #[test]
+    fn the_angular_difference_folds_as_the_originals() {
+        assert_eq!(angular_difference(0, 0), 0);
+        assert_eq!(angular_difference(0, 170), 170);
+        assert_eq!(angular_difference(170, 0), 170);
+        assert_eq!(angular_difference(10, 350), 20, "across north");
+        assert_eq!(angular_difference(350, 10), 20);
+        assert_eq!(angular_difference(170, 190), 20, "across south");
+        assert_eq!(angular_difference(100, 200), 100);
+        assert_eq!(angular_difference(0, 179), 179);
+        assert_eq!(angular_difference(0, 180), 180, "180 is past 179");
+        assert_eq!(angular_difference(0, 181), 179);
+        assert_eq!(angular_difference(179, 180), 1);
+        assert_eq!(angular_difference(180, 181), 1);
+        assert_eq!(angular_difference(1, 181), 180);
+        assert_eq!(angular_difference(359, 0), 1);
+        // Out of 0..360 it folds by the same steps, as the original does
+        // in 16 bits: 720 and 0 lie either side of 179, so 360 − 720.
+        assert_eq!(angular_difference(720, 0), -360);
+        assert_eq!(angular_difference(-90, 90), 180);
     }
 }

@@ -1233,6 +1233,27 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_whose_outfits_drive_its_turn_to_none_still_turns_1_a_tick() {
+        let unturning = [crate::fuel::OutfitMod {
+            mod_type: crate::stats::TURN_CHANGE,
+            mod_val: -200,
+            count: 1,
+        }];
+        let stats = ShipStats::new(AVERAGE, &unturning);
+        assert_eq!(stats.handling.turn_rate, 1.0, "floored");
+        let sites = [planet(140, 800.0, 0.0)];
+        let mut ship = Npc {
+            state: at(0.0, 0.0, 0.0, 0.0, 0.0),
+            goal: Goal::Land(StellarId(140)),
+            ..crate::traffic::fixture::npc(1, stats)
+        };
+        for tick in 1..=5_u8 {
+            fly(&mut ship, &sites, None);
+            assert_eq!(ship.state.heading, f32::from(tick), "toward the east");
+        }
+    }
+
+    #[test]
     fn a_ship_crossing_past_a_stellar_turns_back_and_lands_on_it() {
         let sites = [planet(140, 0.0, 0.0)];
         for (fields, start) in [

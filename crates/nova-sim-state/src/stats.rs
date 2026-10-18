@@ -12,7 +12,10 @@
 //!   "see shïp": the same scale.
 //! - [`TURN_CHANGE`] (9) adds to `Maneuver`, a tenth as much
 //!   ([`TURN_MOD_PER_MANEUVER`]): the Bible gives the outfit's 100 as
-//!   30°/s and the ship's 10 as about 30°/s.
+//!   30°/s and the ship's 10 as about 30°/s. The turn rate is then
+//!   floored as `_ShipTurnRate` floors it ([`floored_turn`]): the
+//!   player's ship's ([`ShipStats::for_player`]) at 1° a tick unless its
+//!   class turns none, any other's only when its class turns 1° or more.
 //! - [`MORE_SHIELD`] (4), [`MORE_ARMOR`] (6) and [`MORE_FUEL`] (12) add
 //!   to the shield, armour and fuel capacity, after the [`crate::reserves`]
 //!   rules read the `shïp`'s own.
@@ -46,8 +49,9 @@
 //! outfits can overflow or turn a figure negative. The inertial dampener
 //! (38) and every other `ModType` change nothing here yet.
 
+use crate::flight::Flyer;
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
-use crate::handling::{Handling, ShipFields};
+use crate::handling::{Handling, ShipFields, floored_turn};
 use crate::market::cargo_capacity;
 use crate::reserves::{Reserves, shield_points};
 
@@ -164,6 +168,9 @@ pub struct HandlingTotals {
     /// `Maneuver` plus a tenth of the [`TURN_CHANGE`] outfits
     /// ([`TURN_MOD_PER_MANEUVER`]).
     pub maneuver: f32,
+    /// `Maneuver` alone, which the turn's floor reads
+    /// ([`floored_turn`]).
+    pub class_maneuver: i16,
 }
 
 impl HandlingTotals {
@@ -175,19 +182,32 @@ impl HandlingTotals {
             accel: i64::from(fields.accel) + mod_total(outfits, MORE_ACCEL),
             maneuver: f32::from(fields.maneuver)
                 + mod_total(outfits, TURN_CHANGE) as f32 / TURN_MOD_PER_MANEUVER,
+            class_maneuver: fields.maneuver,
         }
     }
 }
 
 impl ShipStats {
-    /// The stats of a ship with `fields`, carrying `outfits`.
+    /// The stats of a ship with `fields`, carrying `outfits`, an NPC's:
+    /// its turn floored as `_ShipTurnRate` floors an NPC's
+    /// ([`floored_turn`]).
     #[must_use]
     pub fn new(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
+        Self::flown_by(fields, outfits, Flyer::Npc)
+    }
+
+    /// The stats of a ship with `fields`, carrying `outfits`, flown by
+    /// `flyer`, whose floor its turn takes.
+    fn flown_by(fields: ShipFields, outfits: &[OutfitMod], flyer: Flyer) -> Self {
         let total = |mod_type: i16| mod_total(outfits, mod_type);
         let totals = HandlingTotals::new(fields, outfits);
         let positive = |total: i64| total.max(0) as f32;
+        let handling = Handling::from_totals(totals.speed, totals.accel, totals.maneuver);
         Self {
-            handling: Handling::from_totals(totals.speed, totals.accel, totals.maneuver),
+            handling: Handling {
+                turn_rate: floored_turn(fields.class_turn(), handling.turn_rate, flyer),
+                ..handling
+            },
             shield: positive(shield_points(fields.shield) + total(MORE_SHIELD)),
             armor: positive(i64::from(fields.armor.max(0)) + total(MORE_ARMOR)),
             fuel: positive(i64::from(fields.fuel.max(0)) + total(MORE_FUEL)),
@@ -223,7 +243,8 @@ impl ShipStats {
     /// as [`ShipStats::new`], but its hull's `FuelRegen` counts only when
     /// its `Flags` hold [`FUEL_REGEN_HULL`], while its fuel scoops always
     /// count (`_ShipFuelGenRate` @0x3043-0x3057, which counts it for any
-    /// other ship whatever its flags).
+    /// other ship whatever its flags), and its turn takes the player's
+    /// floor ([`floored_turn`]).
     #[must_use]
     pub fn for_player(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
         let fuel_regen = if fields.flags & FUEL_REGEN_HULL == 0 {
@@ -231,12 +252,13 @@ impl ShipStats {
         } else {
             fields.fuel_regen
         };
-        Self::new(
+        Self::flown_by(
             ShipFields {
                 fuel_regen,
                 ..fields
             },
             outfits,
+            Flyer::Player,
         )
     }
 
@@ -650,7 +672,7 @@ mod tests {
             ],
         );
         assert_eq!(stats.handling.max_speed, 2.0);
-        assert_eq!(stats.handling.turn_rate, 0.98);
+        assert_eq!(stats.handling.turn_rate, 1.0, "floored, not 0.98");
         assert_eq!(stats.shield, 20.0);
         let none = ShipStats::new(
             AVERAGE,
@@ -664,9 +686,53 @@ mod tests {
                 outfit(MORE_CARGO, -11, 1),
             ],
         );
-        assert_eq!(none.handling, Handling::default());
+        assert_eq!(
+            none.handling,
+            Handling {
+                turn_rate: 1.0,
+                ..Handling::default()
+            },
+            "the turn floored"
+        );
         assert_eq!((none.shield, none.armor, none.fuel), (0.0, 0.0, 0.0));
         assert_eq!(none.capacity, 0);
+    }
+
+    #[test]
+    fn a_turn_driven_to_none_or_below_by_outfits_is_floored_at_1_for_the_player_and_an_npc() {
+        for mods in [
+            [outfit(TURN_CHANGE, -2, 1)],
+            [outfit(TURN_CHANGE, -101, 1)],
+            [outfit(TURN_CHANGE, i16::MIN, u16::MAX)],
+        ] {
+            assert_eq!(ShipStats::new(AVERAGE, &mods).handling.turn_rate, 1.0);
+            assert_eq!(
+                ShipStats::for_player(AVERAGE, &mods).handling.turn_rate,
+                1.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_turning_under_1_is_floored_for_the_player_alone_and_one_turning_none_for_neither() {
+        let slow = ShipFields {
+            maneuver: 5,
+            ..AVERAGE
+        };
+        assert_eq!(ShipStats::for_player(slow, &[]).handling.turn_rate, 1.0);
+        assert_eq!(ShipStats::new(slow, &[]).handling.turn_rate, 0.5);
+        let rigid = ShipFields {
+            maneuver: 0,
+            ..AVERAGE
+        };
+        assert_eq!(ShipStats::for_player(rigid, &[]).handling.turn_rate, 0.0);
+        assert_eq!(ShipStats::new(rigid, &[]).handling.turn_rate, 0.0);
+        let lifted = [outfit(TURN_CHANGE, 50, 1)];
+        assert_eq!(
+            ShipStats::for_player(rigid, &lifted).handling.turn_rate,
+            0.5,
+            "a class of none keeps what its outfits give"
+        );
     }
 
     #[test]
@@ -709,7 +775,13 @@ mod tests {
             })
             .collect();
         let stats = ShipStats::new(most, &least);
-        assert_eq!(stats.handling, Handling::default());
+        assert_eq!(
+            stats.handling,
+            Handling {
+                turn_rate: 1.0,
+                ..Handling::default()
+            }
+        );
         assert_eq!((stats.shield, stats.armor, stats.fuel), (0.0, 0.0, 0.0));
         assert_eq!((stats.jump_distance, stats.jump_days), (0.0, 1));
     }
