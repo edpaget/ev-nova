@@ -32,10 +32,13 @@
 //! NPC, is (`_AIShipIsPlundering` @0x89841, the leader's own target not
 //! read).
 //!
-//! `_AIShipIsPlunderingShip`'s other half, goal 4 with sub-goal 0xf, a
-//! pirate docked to plunder (@0x83f6e), is
-//! rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder's. Nothing here
-//! plays a sound.
+//! `_AIShipIsPlunderingShip`'s other half (@0x83f6e) is goal 4 with
+//! sub-goal 0xf, a pirate docked with the ship it plunders
+//! ([`Fighter::docked`]): it plunders its target too ([`plunders`]), so
+//! its shots and beams at that target leave disable-only while it is
+//! intact. It isn't `_AIShipIsPlundering` (goal 0xd alone, @0x89841), so
+//! neither the shot's any-target branch nor the can't-kill reads it.
+//! Nothing here plays a sound.
 
 use super::{Fighter, ShipRef, Target};
 
@@ -49,6 +52,9 @@ pub struct Plunderer {
     pub npc: bool,
     /// Whether it plunders ([`Fighter::plundering`]).
     pub plundering: bool,
+    /// Whether it is docked with the ship it plunders
+    /// ([`Fighter::docked`]).
+    pub docked: bool,
     /// The ship it targets ([`Fighter::target`]).
     pub target: Option<ShipRef>,
 }
@@ -60,16 +66,18 @@ impl Plunderer {
         Self {
             npc: matches!(fighter.ship, ShipRef::Npc(_)),
             plundering: fighter.plundering,
+            docked: fighter.docked,
             target: fighter.target,
         }
     }
 }
 
 /// Whether `firer` plunders `ship`, `_AIShipIsPlunderingShip`
-/// (@0x83f5e-0x83f94): it is in goal 0xd and targets it.
+/// (@0x83f5e-0x83f94): it is in goal 0xd, or docked in goal 4 with
+/// sub-goal 0xf, and targets it.
 #[must_use]
 pub fn plunders(firer: Plunderer, ship: ShipRef) -> bool {
-    firer.plundering && firer.target == Some(ship)
+    (firer.plundering || firer.docked) && firer.target == Some(ship)
 }
 
 /// Whether a shot `firer` launches at `target`, as `targets` see it, is
@@ -149,6 +157,7 @@ mod tests {
             npc: true,
             plundering,
             target,
+            docked: false,
         }
     }
 
@@ -163,6 +172,40 @@ mod tests {
         assert!(!plunders(pirate(true, Some(n(3))), n(2)), "another target");
         assert!(!plunders(pirate(true, None), n(2)));
         assert!(!plunders(pirate(false, Some(n(2))), n(2)), "attacking");
+    }
+
+    #[test]
+    fn a_ship_docked_in_goal_4_plunders_the_ship_it_targets_too() {
+        let docked = |target| Plunderer {
+            docked: true,
+            ..pirate(false, target)
+        };
+        assert!(plunders(docked(Some(n(2))), n(2)));
+        assert!(!plunders(docked(Some(n(3))), n(2)), "another target");
+        assert!(!plunders(docked(None), n(2)));
+    }
+
+    #[test]
+    fn a_docked_pirates_shots_and_beams_spare_only_its_intact_target() {
+        let targets = [target(2, Condition::Intact), target(3, Condition::Disabled)];
+        let docked = Plunderer {
+            docked: true,
+            ..pirate(false, Some(n(2)))
+        };
+        assert!(shot_disables(docked, Some(n(2)), &targets));
+        assert!(beam_disables(docked, Some(n(2)), &targets));
+        for aimed in [Some(n(4)), None] {
+            assert!(
+                !shot_disables(docked, aimed, &targets),
+                "{aimed:?}: no goal-0xd branch"
+            );
+        }
+        let at_wreck = Plunderer {
+            target: Some(n(3)),
+            ..docked
+        };
+        assert!(!shot_disables(at_wreck, Some(n(3)), &targets), "disabled");
+        assert!(!beam_disables(at_wreck, Some(n(3)), &targets));
     }
 
     #[test]

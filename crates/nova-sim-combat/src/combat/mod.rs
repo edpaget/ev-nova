@@ -781,6 +781,13 @@ pub struct Fighter<'a> {
     /// too, and its and its escorts' hits on their targets can't kill
     /// ([`plunder`]). Never the player.
     pub plundering: bool,
+    /// Whether it is docked with the ship it plunders, a pirate's goal 4
+    /// with sub-goal 0xf (`_AIShipIsPlunderingShip`'s other half,
+    /// @0x83f6e): its shots and beams at its target leave disable-only
+    /// while that target is intact, but its hits can kill and its shots
+    /// at other ships are its weapons' own ([`plunder`]). Never the
+    /// player.
+    pub docked: bool,
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
@@ -3622,6 +3629,7 @@ mod tests {
         attacking: Option<ShipRef>,
         threatens_player: bool,
         plundering: bool,
+        docked: bool,
         emerging: bool,
         cloak_scanner: bool,
         has_cloak: bool,
@@ -3678,6 +3686,7 @@ mod tests {
                 attacking: None,
                 threatens_player: false,
                 plundering: false,
+                docked: false,
                 emerging: false,
                 cloak_scanner: false,
                 has_cloak: false,
@@ -3743,6 +3752,7 @@ mod tests {
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
+                docked: self.docked,
             }
         }
     }

@@ -59,6 +59,32 @@ fn a_plunderers_shot_leaves_its_intact_victim_at_1_armour_and_an_attackers_destr
 }
 
 #[test]
+fn a_docked_pirates_shot_at_its_intact_target_is_disable_only_and_no_other() {
+    // Goal 4 with sub 0xf plunders its target (@0x83f6e), so the launch
+    // flag is set; `_AIShipIsPlundering` reads goal 0xd alone, so the hit
+    // on a ship it doesn't plunder can kill.
+    let docked = |target| Ship {
+        docked: true,
+        ..pirate(shell(), target, false)
+    };
+    let mut ships = [docked(B), Ship::at(2, 100.0, 0.0)];
+    let events = fought(&mut ships, 20, |_| {});
+    assert!(spared(&ships[1], &events), "{:?}", ships[1].reserves);
+    let mut ships = [docked(B), Ship::at(2, 100.0, 0.0)];
+    let events = fought(&mut ships, 20, |ships| ships[0].docked = false);
+    assert!(spared(&ships[1], &events), "the launch flag holds");
+    // Aimed at C, disabled, the shell meets B in its path: not spared, as
+    // there is no goal-0xd branch and its target isn't intact.
+    let wreck = Ship {
+        condition: Condition::Disabled,
+        ..Ship::at(3, 0.0, 900.0)
+    };
+    let mut ships = [docked(C), Ship::at(2, 100.0, 0.0), wreck];
+    let events = fought(&mut ships, 20, |_| {});
+    assert!(broke_up(&events, &[B]), "no goal-0xd branch");
+}
+
+#[test]
 fn the_shots_flag_is_set_as_it_leaves_and_holds_when_the_pirate_turns_to_attack() {
     let mut combat = Combat::default();
     let mut ships = [pirate(shell(), B, true), Ship::at(2, 100.0, 0.0)];

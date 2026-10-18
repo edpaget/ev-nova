@@ -1395,6 +1395,7 @@ impl Combatant {
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,
+            docked: false,
         }
     }
 }

@@ -578,6 +578,11 @@ impl FightTerms {
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
         let plundering = npc.goal.plundering().is_some();
+        // Goal 4 with sub 0xf (`_AIShipIsPlunderingShip` @0x83f6e).
+        let docked = npc.goal.attacking().is_some()
+            && npc
+                .docking
+                .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let cloak_device = npc.cloak_gear.device;
@@ -622,6 +627,7 @@ impl FightTerms {
             attacking,
             threatens_player: self.threatens_player,
             plundering,
+            docked,
             emerging,
             cloak_scanner,
             has_cloak: cloak_device,
@@ -2731,6 +2737,7 @@ impl Session {
             armament: &mut self.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
+            docked: false,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -22224,6 +22231,27 @@ pub(super) mod tests {
                 "{goal:?}: point defence reads goal 4 alone"
             );
         }
+        npc.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: player,
+            sub: crate::traffic::plunder_dock::DockSub::Dock,
+        });
+        for (goal, docked) in [
+            (Goal::Attack(player), true),
+            (Goal::Snipe(player), true),
+            (plunder(false), false),
+            (Goal::Idle, false),
+        ] {
+            npc.goal = goal;
+            let fighter = terms(false).fighter(&mut npc);
+            assert_eq!(fighter.docked, docked, "{goal:?}: goal 4 with sub 0xf");
+        }
+        npc.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: player,
+            sub: crate::traffic::plunder_dock::DockSub::Close,
+        });
+        npc.goal = Goal::Attack(player);
+        assert!(!terms(false).fighter(&mut npc).docked, "sub 0xb");
+        npc.docking = None;
         npc.goal = Goal::Idle;
         assert!(terms(true).fighter(&mut npc).threatens_player);
         assert!(!terms(false).fighter(&mut npc).threatens_player);
