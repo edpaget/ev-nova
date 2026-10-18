@@ -118,6 +118,16 @@ impl Fullscreen {
         self.fell_back = false;
     }
 
+    /// The kind entering enters now: borderless after a fallback, and the
+    /// chosen kind otherwise.
+    pub(crate) fn live_kind(&self) -> FullscreenKind {
+        if self.fell_back {
+            FullscreenKind::Borderless
+        } else {
+            self.kind.kind()
+        }
+    }
+
     /// The kind the player chose, kept through a fallback.
     pub(crate) fn kind(&self) -> &FullscreenSetting {
         &self.kind
@@ -261,11 +271,7 @@ impl Fullscreen {
             }
             _ => None,
         };
-        let kind = if self.fell_back {
-            FullscreenKind::Borderless
-        } else {
-            self.kind.kind()
-        };
+        let kind = self.live_kind();
         window.set_fullscreen(Some(kind));
         self.current = Some(kind);
         self.suspended = false;
@@ -638,6 +644,12 @@ mod tests {
             *fullscreen.kind(),
             exclusive(gone, Some(MONITOR)),
             "the chosen kind is kept"
+        );
+        assert_eq!(fullscreen.live_kind(), FullscreenKind::Borderless, "runs");
+        assert_eq!(
+            set_to(exclusive(gone, Some(MONITOR))).live_kind(),
+            FullscreenKind::Exclusive(gone),
+            "not tried yet"
         );
         fullscreen.toggle(&mut window);
         assert_eq!(fullscreen.toggle(&mut window), None, "warned once");

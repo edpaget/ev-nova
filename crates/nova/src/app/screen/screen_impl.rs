@@ -317,9 +317,21 @@ impl Screen for AppScreen {
     }
 
     /// Offers the open Preferences dialog the display modes, on the kind
-    /// the game runs fullscreen in now; with none open, nothing changes.
-    fn offer_display(&mut self, modes: &[VideoMode], current: FullscreenKind) {
-        self.offer_display_to_preferences(modes, current);
+    /// the game runs fullscreen in now and the kind chosen; with none
+    /// open, nothing changes.
+    fn offer_display(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        self.offer_display_to_preferences(modes, current, chosen);
+    }
+
+    /// The fullscreen kind picked in the Preferences dialog, once after it
+    /// closed on the pick.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        self.display_choice.take()
     }
 
     /// The flight's borders setting to save, once after an undocked close

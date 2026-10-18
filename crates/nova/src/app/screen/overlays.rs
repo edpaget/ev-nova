@@ -140,20 +140,23 @@ impl AppScreen {
 
     /// Offers the open Preferences dialog `modes` for its display picker,
     /// on `current`, which the player's preferences take as the kind the
-    /// game runs fullscreen in. With no dialog open, nothing changes.
+    /// game runs fullscreen in, the player having chosen `chosen`. With no
+    /// dialog open, nothing changes.
     pub(super) fn offer_display_to_preferences(
         &mut self,
         modes: &[VideoMode],
         current: FullscreenKind,
+        chosen: FullscreenKind,
     ) {
         if let Some(dialog) = &mut self.preferences {
-            dialog.set_display_modes(modes, current);
+            dialog.set_display_modes(modes, current, chosen);
             self.prefs.fullscreen = current;
         }
     }
 
-    /// The Preferences dialog's input: each change is kept, to be taken
-    /// once, and the dialog closes once OK is activated.
+    /// The Preferences dialog's input: each change, and the fullscreen
+    /// kind picked as it closes, is kept, to be taken once, and the dialog
+    /// closes once OK is activated.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
         if let Some(dialog) = &mut self.preferences {
             dialog.input(input);
@@ -165,6 +168,9 @@ impl AppScreen {
                     flight.set_hyperspace_effects(prefs.hyperspace_effects);
                     flight.set_sound_prefs(prefs.sound);
                 }
+            }
+            if let Some(kind) = dialog.take_display_choice() {
+                self.display_choice = Some(kind);
             }
             if dialog.closed() {
                 self.sounds.extend(dialog.take_sounds());

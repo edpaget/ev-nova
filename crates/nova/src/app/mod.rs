@@ -59,16 +59,17 @@
 //!
 //! - **The picker.** Each time the Preferences dialog opens, the app
 //!   offers it the modes the window's monitor lists
-//!   ([`listed_modes`]) and the chosen kind
-//!   ([`Screen::offer_display`]). A kind the dialog reports
-//!   ([`Prefs::fullscreen`](nova_view::Prefs::fullscreen)) other than the
-//!   chosen one is entered once the event is handled, and saved, with the
-//!   monitor's name, as [`GameSettings::fullscreen_kind`].
+//!   ([`listed_modes`]), the kind fullscreen runs in, and the kind chosen
+//!   ([`Screen::offer_display`]). A kind the player picks there
+//!   ([`Screen::take_display_choice`]) is entered once the event is
+//!   handled, and saved, with the monitor's name, as
+//!   [`GameSettings::fullscreen_kind`].
 //! - **Fallback.** A saved mode the monitor does not offer, or one chosen
 //!   on another monitor, opens borderless with a warning naming it, and the
 //!   session stays borderless. The saved kind is kept, and still chosen,
-//!   so the next launch on that monitor gets the mode back, and picking
-//!   borderless in the dialog saves borderless.
+//!   so the next launch on that monitor gets the mode back. The dialog
+//!   shows borderless, as it runs, and a pick of borderless or of the
+//!   saved mode is entered and saved.
 //! - **Focus.** Losing focus while exclusive leaves the mode until focus
 //!   comes back ([`WindowEvent::FocusGained`]), when it is entered again.
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
@@ -340,15 +341,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// Offers the Preferences dialog, once each time it opens, the modes
-    /// the window's monitor lists and the chosen fullscreen kind, the
-    /// saved one even when this session fell back from it
+    /// the window's monitor lists, the kind fullscreen runs in, and the
+    /// kind chosen, the saved one even when this session fell back from it
     /// ([`Screen::offer_display`]).
     fn offer_display(&mut self, window: &impl WindowPort) {
         let open = self.screen.now_showing() == Some(Showing::Preferences);
         if open && !self.display_offered {
             let modes = listed_modes(&window.video_modes());
+            let chosen = self.fullscreen.kind().kind();
             self.screen
-                .offer_display(&modes, self.fullscreen.kind().kind());
+                .offer_display(&modes, self.fullscreen.live_kind(), chosen);
         }
         self.display_offered = open;
     }
@@ -414,8 +416,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
     /// them but the fullscreen kind), each when there is one. A fullscreen
-    /// kind other than the chosen one is held, to be entered and saved once
-    /// the event is handled, which has the window; then a galaxy map borders setting
+    /// kind the player picked ([`Screen::take_display_choice`]) is held, to
+    /// be entered and saved once the event is handled, which has the
+    /// window; then a galaxy map borders setting
     /// its map's close reports ([`Screen::take_map_borders_save`]) is
     /// saved through the keeper with the other settings as they are. A
     /// failed save is kept as a warning.
@@ -438,9 +441,6 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 },
                 (None, None) => GameSettings::default(),
             };
-            if prefs.fullscreen != self.fullscreen.kind().kind() {
-                self.chosen_fullscreen = Some(prefs.fullscreen);
-            }
             let settings = current.with_prefs(prefs);
             if let Some(core) = &mut self.audio {
                 core.apply(settings.audio);
@@ -450,6 +450,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             {
                 self.warnings.push(warning);
             }
+        }
+        if let Some(kind) = self.screen.take_display_choice() {
+            self.chosen_fullscreen = Some(kind);
         }
         if let Some(map_borders) = self.screen.take_map_borders_save()
             && let Some(keeper) = &mut self.settings
@@ -3053,14 +3056,22 @@ mod tests {
         assert_eq!(store.writes(), 2);
     }
 
+    /// What the dialog reports on a close: the prefs, and the kind
+    /// picked, if any.
+    type Report = (Prefs, Option<FullscreenKind>);
+
+    /// An offer of the display modes: the modes, the kind the game runs
+    /// in, and the kind chosen.
+    type Offer = (Vec<VideoMode>, FullscreenKind, FullscreenKind);
+
     /// Opens Preferences on P, closes it on Escape, and reports the next
-    /// of `prefs` on Space; records each offer of the display modes.
+    /// of `reports` on Space; records each offer of the display modes.
     #[derive(Default)]
     struct DisplayScreen {
         open: bool,
-        prefs: Vec<Prefs>,
-        pending: Option<Prefs>,
-        offers: Vec<(Vec<VideoMode>, FullscreenKind)>,
+        reports: Vec<Report>,
+        pending: Option<Report>,
+        offers: Vec<Offer>,
         /// Opens Preferences on the next tick, as a keyed click does.
         opens_on_tick: bool,
         /// How many offers had arrived at each draw.
@@ -3084,7 +3095,7 @@ mod tests {
                     key: Key::Space,
                     pressed: true,
                     ..
-                } if !self.prefs.is_empty() => self.pending = Some(self.prefs.remove(0)),
+                } if !self.reports.is_empty() => self.pending = Some(self.reports.remove(0)),
                 _ => {}
             }
             ScreenAction::None
@@ -3099,7 +3110,11 @@ mod tests {
         }
 
         fn take_prefs(&mut self) -> Option<Prefs> {
-            self.pending.take()
+            self.pending.map(|(prefs, _)| prefs)
+        }
+
+        fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+            self.pending.take().and_then(|(_, choice)| choice)
         }
 
         fn now_showing(&self) -> Option<Showing> {
@@ -3110,16 +3125,21 @@ mod tests {
             })
         }
 
-        fn offer_display(&mut self, modes: &[VideoMode], current: FullscreenKind) {
-            self.offers.push((modes.to_vec(), current));
+        fn offer_display(
+            &mut self,
+            modes: &[VideoMode],
+            current: FullscreenKind,
+            chosen: FullscreenKind,
+        ) {
+            self.offers.push((modes.to_vec(), current, chosen));
         }
     }
 
     type DisplayApp = App<NoImages, DisplayScreen>;
 
-    fn display_app(window: &FakeWindow, prefs: &[Prefs]) -> DisplayApp {
+    fn display_app(window: &FakeWindow, reports: &[Report]) -> DisplayApp {
         let screen = DisplayScreen {
-            prefs: prefs.to_vec(),
+            reports: reports.to_vec(),
             ..DisplayScreen::default()
         };
         App::new(window, NoImages, screen)
@@ -3142,7 +3162,11 @@ mod tests {
         let listed = vec![qhd(), fhd()];
         assert_eq!(
             app.screen().offers,
-            [(listed.clone(), FullscreenKind::Borderless)]
+            [(
+                listed.clone(),
+                FullscreenKind::Borderless,
+                FullscreenKind::Borderless
+            )]
         );
         press_on(&mut app, &mut window, Key::Up);
         handle_display(
@@ -3159,7 +3183,11 @@ mod tests {
         press_on(&mut app, &mut window, Key::Char('p'));
         assert_eq!(
             app.screen().offers[1],
-            (vec![], FullscreenKind::Exclusive(fhd())),
+            (
+                vec![],
+                FullscreenKind::Exclusive(fhd()),
+                FullscreenKind::Exclusive(fhd())
+            ),
             "offered again, with no modes from a monitor listing none"
         );
     }
@@ -3187,11 +3215,27 @@ mod tests {
         app.handle(event, window, &mut RecordingGpu::new())
     }
 
-    fn choosing(kind: FullscreenKind) -> Prefs {
-        Prefs {
-            fullscreen: kind,
-            ..MUSIC_OFF
-        }
+    /// The dialog closed on a pick of `kind`, with the music turned off.
+    fn choosing(kind: FullscreenKind) -> Report {
+        (
+            Prefs {
+                fullscreen: kind,
+                ..MUSIC_OFF
+            },
+            Some(kind),
+        )
+    }
+
+    /// The dialog closed with the music turned off and no pick, showing
+    /// `shown`.
+    fn audio_only(shown: FullscreenKind) -> Report {
+        (
+            Prefs {
+                fullscreen: shown,
+                ..MUSIC_OFF
+            },
+            None,
+        )
     }
 
     #[test]
@@ -3238,25 +3282,68 @@ mod tests {
     #[test]
     fn an_audio_change_after_a_fallback_asks_nothing_and_keeps_the_saved_kind() {
         // The monitor lacks the saved mode: the session falls back to
-        // borderless. The dialog is offered the saved kind, and reports it
-        // with the audio.
-        let mut window = on_monitor();
-        let store = saved_fhd(true, "LG HDR 4K");
-        let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(fhd()))])
+        // borderless. The dialog is offered borderless, as it runs, and
+        // the saved kind as chosen, and reports the audio alone.
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = saved_fhd(true, DELL);
+        let mut app = display_app(&window, &[audio_only(FullscreenKind::Borderless)])
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         app.take_warnings();
         press_on(&mut app, &mut window, Key::Char('p'));
         assert_eq!(
-            app.screen().offers[0].1,
-            FullscreenKind::Exclusive(fhd()),
-            "the saved kind"
+            app.screen().offers,
+            [(
+                vec![],
+                FullscreenKind::Borderless,
+                FullscreenKind::Exclusive(fhd())
+            )],
+            "what runs, and the saved kind"
         );
         press_on(&mut app, &mut window, Key::Space);
         assert_eq!(window.fullscreen, [BORDERLESS], "nothing more asked");
         let saved = stored(&store);
         assert!(!saved.audio.music, "the audio saved");
-        assert_eq!(saved.fullscreen_kind, fhd_on("LG HDR 4K"), "kept");
+        assert_eq!(saved.fullscreen_kind, fhd_on(DELL), "kept");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn prefs_naming_another_kind_without_a_pick_enter_nothing() {
+        let mut window = on_monitor();
+        let store = MemorySettings::new();
+        let exclusive = FullscreenKind::Exclusive(qhd());
+        let mut app = display_app(&window, &[audio_only(exclusive)]).with_settings(keeper(&store));
+        press_on(&mut app, &mut window, Key::Space);
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN);
+        assert_eq!(
+            stored(&store).fullscreen_kind,
+            FullscreenSetting::Borderless
+        );
+    }
+
+    #[test]
+    fn the_saved_mode_picked_after_a_monitor_name_fallback_enters_and_saves_this_monitor() {
+        // The DELL lists the mode saved on the LG: the launch falls back,
+        // and picking the mode enters it here.
+        let mut window = on_monitor();
+        let store = saved_fhd(true, "LG HDR 4K");
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(fhd()))])
+            .with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        assert_eq!(app.take_warnings().len(), 1);
+        press_on(&mut app, &mut window, Key::Char('p'));
+        let (_, current, chosen) = &app.screen().offers[0];
+        assert_eq!(
+            (*current, *chosen),
+            (FullscreenKind::Borderless, FullscreenKind::Exclusive(fhd())),
+            "borderless shown, the saved mode chosen"
+        );
+        press_on(&mut app, &mut window, Key::Space);
+        assert_eq!(window.fullscreen, [BORDERLESS, exclusive(fhd())]);
+        let saved = stored(&store);
+        assert!(saved.fullscreen);
+        assert_eq!(saved.fullscreen_kind, fhd_on(DELL), "this monitor's name");
         assert_eq!(app.take_warnings(), Vec::<String>::new());
     }
 

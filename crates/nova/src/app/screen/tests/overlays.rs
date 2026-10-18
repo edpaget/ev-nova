@@ -430,11 +430,11 @@ fn an_offer_of_display_modes_shows_in_the_open_dialog_alone() {
     };
     let exclusive = nova_view::FullscreenKind::Exclusive(fhd);
     let mut screen = with_dialogs(data()).with_prefs(quiet());
-    screen.offer_display(&[fhd], exclusive);
+    screen.offer_display(&[fhd], exclusive, exclusive);
     assert!(screen.preferences().is_none());
     assert_eq!(screen.prefs(), quiet(), "no dialog, no change");
     open_prefs(&mut screen);
-    screen.offer_display(&[fhd], exclusive);
+    screen.offer_display(&[fhd], exclusive, exclusive);
     let picker = prefs_dialog(&screen).display();
     assert_eq!(
         picker.entries(),
@@ -450,6 +450,29 @@ fn an_offer_of_display_modes_shows_in_the_open_dialog_alone() {
         "the dialog's next opening starts there"
     );
     assert_eq!(screen.take_prefs(), None, "an offer is no change");
+}
+
+#[test]
+fn a_pick_in_the_dialog_comes_out_once_after_it_closes() {
+    let fhd = nova_view::VideoMode {
+        width: 1920,
+        height: 1080,
+        refresh_millihertz: 60_000,
+    };
+    let mut screen = with_dialogs(data()).with_prefs(quiet());
+    assert_eq!(screen.take_display_choice(), None);
+    open_prefs(&mut screen);
+    let borderless = nova_view::FullscreenKind::Borderless;
+    screen.offer_display(&[fhd], borderless, borderless);
+    let down = prefs_dialog(&screen).display().rects().down.center();
+    click_at(&mut screen, down);
+    assert_eq!(screen.take_display_choice(), None, "held while open");
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.showing(), Showing::ShipBrowser, "closed");
+    let picked = nova_view::FullscreenKind::Exclusive(fhd);
+    assert_eq!(screen.take_display_choice(), Some(picked));
+    assert_eq!(screen.take_display_choice(), None, "once");
+    assert_eq!(screen.prefs().fullscreen, picked);
 }
 
 #[test]

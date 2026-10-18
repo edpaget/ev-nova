@@ -143,12 +143,26 @@ pub trait Screen {
         None
     }
     /// The display modes the current monitor offers for exclusive
-    /// fullscreen, as listed ([`listed_modes`](crate::video_mode::listed_modes)), and the kind the game runs
-    /// fullscreen in now, for the Preferences dialog's picker. The app
-    /// offers them each time the Preferences dialog opens. Does nothing by
-    /// default.
-    fn offer_display(&mut self, modes: &[VideoMode], current: FullscreenKind) {
-        let _ = (modes, current);
+    /// fullscreen, as listed
+    /// ([`listed_modes`](crate::video_mode::listed_modes)), the kind the
+    /// game runs fullscreen in now, `current`, and the kind the player
+    /// chose, `chosen`, for the Preferences dialog's picker. The two kinds
+    /// differ when the game could not enter `chosen` and fell back to
+    /// borderless. The app offers them each time the Preferences dialog
+    /// opens. Does nothing by default.
+    fn offer_display(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        let _ = (modes, current, chosen);
+    }
+    /// The fullscreen kind the player picked in the Preferences dialog
+    /// since this was last taken, for the app to enter and save: each pick
+    /// is reported once. None by default.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        None
     }
     /// The galaxy map's borders setting to save since this was last taken,
     /// if a map's close changed it, as the original's map saves
@@ -319,8 +333,10 @@ mod tests {
             height: 1080,
             refresh_millihertz: 60_000,
         };
-        screen.offer_display(&[mode], FullscreenKind::Exclusive(mode));
+        let exclusive = FullscreenKind::Exclusive(mode);
+        screen.offer_display(&[mode], FullscreenKind::Borderless, exclusive);
         assert_eq!(screen.take_prefs(), None);
+        assert_eq!(screen.take_display_choice(), None);
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);

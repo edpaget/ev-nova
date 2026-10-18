@@ -254,6 +254,7 @@ use nova_sim::{
     Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HireTerms, LegalCode,
     PersonRules, PilotKeeper, PilotStore, PointDefenceRule, Rulebook,
 };
+use nova_view::FullscreenKind;
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
@@ -422,6 +423,9 @@ pub struct AppScreen {
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.
     prefs_change: Option<Prefs>,
+    /// The fullscreen kind picked in the Preferences dialog since it was
+    /// last taken.
+    display_choice: Option<FullscreenKind>,
     /// The main menu and where pilots are kept, once given.
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.

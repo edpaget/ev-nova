@@ -56,6 +56,7 @@ impl AppScreen {
             prefs: Prefs::default(),
             preferences: None,
             prefs_change: None,
+            display_choice: None,
             menu: None,
             new_pilot: None,
             open_pilot: None,

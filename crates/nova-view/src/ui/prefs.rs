@@ -190,8 +190,13 @@ pub struct PrefsDialog {
     /// How the game runs fullscreen, as reported: the picker's choice is
     /// held until the dialog closes.
     fullscreen: FullscreenKind,
+    /// The kind the player chose, which differs from `fullscreen` when the
+    /// game could not enter it.
+    chosen: FullscreenKind,
     /// Whether the player has stepped the picker since it was offered.
     stepped: bool,
+    /// The kind picked, once the dialog closed on a pick, until taken.
+    choice: Option<FullscreenKind>,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -310,7 +315,9 @@ impl PrefsDialog {
             movies,
             display,
             fullscreen,
+            chosen: fullscreen,
             stepped: false,
+            choice: None,
             inert,
             dialog,
             style,
@@ -339,12 +346,26 @@ impl PrefsDialog {
     }
 
     /// Offers `modes` in the display picker after "Borderless", on
-    /// `current`, the kind the game runs fullscreen in now: "Borderless"
-    /// when `current` is a mode not among them. An offer is no change.
-    pub fn set_display_modes(&mut self, modes: &[VideoMode], current: FullscreenKind) {
+    /// `current`, the kind the game runs fullscreen in now ("Borderless"
+    /// when `current` is a mode not among them), the player having chosen
+    /// `chosen`. The two differ when the game could not enter `chosen` and
+    /// fell back: then a pick of either counts. An offer is no change.
+    pub fn set_display_modes(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
         self.display.set_entries(modes, current);
         self.fullscreen = current;
+        self.chosen = chosen;
         self.stepped = false;
+    }
+
+    /// The kind the player picked, once after the dialog closed on a pick
+    /// ([`Screen::take_display_choice`]).
+    pub fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        self.choice.take()
     }
 
     /// The preferences, once after each change: `None` when nothing has
@@ -423,14 +444,17 @@ impl PrefsDialog {
     }
 
     /// Closes the dialog, committing the display picker's choice as a
-    /// change when the player stepped it and it differs from the kind the
-    /// dialog opened on.
+    /// pick when the player stepped it and it differs from the kind the
+    /// game runs in or from the kind chosen: after a fallback, picking
+    /// either counts.
     fn close(&mut self) {
         self.closed = true;
         let picked = self.display.selected();
-        if self.stepped && picked != self.fullscreen {
+        if self.stepped && (picked != self.fullscreen || picked != self.chosen) {
+            self.changed |= picked != self.fullscreen;
             self.fullscreen = picked;
-            self.changed = true;
+            self.chosen = picked;
+            self.choice = Some(picked);
         }
     }
 
@@ -573,6 +597,11 @@ impl Screen for PrefsDialog {
     /// The preferences once after each change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.take_change()
+    }
+
+    /// The kind picked, once after the dialog closed on a pick.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        PrefsDialog::take_display_choice(self)
     }
 }
 
@@ -1480,7 +1509,11 @@ mod tests {
     /// The dialog offered [`modes`], on borderless.
     fn offered() -> PrefsDialog {
         let mut dialog = prefs();
-        dialog.set_display_modes(&modes(), FullscreenKind::Borderless);
+        dialog.set_display_modes(
+            &modes(),
+            FullscreenKind::Borderless,
+            FullscreenKind::Borderless,
+        );
         dialog
     }
 
@@ -1538,7 +1571,11 @@ mod tests {
     fn the_modes_offered_follow_borderless_and_the_current_kind_is_selected() {
         let [qhd, fhd] = modes();
         let mut dialog = prefs();
-        dialog.set_display_modes(&modes(), FullscreenKind::Exclusive(fhd));
+        dialog.set_display_modes(
+            &modes(),
+            FullscreenKind::Exclusive(fhd),
+            FullscreenKind::Exclusive(fhd),
+        );
         assert_eq!(
             dialog.display().entries(),
             [
@@ -1555,7 +1592,11 @@ mod tests {
     #[test]
     fn no_modes_offered_leave_only_borderless() {
         let mut dialog = prefs();
-        dialog.set_display_modes(&[], FullscreenKind::Exclusive(modes()[0]));
+        dialog.set_display_modes(
+            &[],
+            FullscreenKind::Exclusive(modes()[0]),
+            FullscreenKind::Exclusive(modes()[0]),
+        );
         assert_eq!(dialog.display().entries(), [FullscreenKind::Borderless]);
         assert_eq!(dialog.display().selected(), FullscreenKind::Borderless);
         focus_display(&mut dialog);
@@ -1611,6 +1652,82 @@ mod tests {
             Some(FullscreenKind::Exclusive(qhd)),
             "Space on OK"
         );
+    }
+
+    #[test]
+    fn a_pick_is_reported_as_a_choice_once() {
+        let [qhd, _] = modes();
+        let mut dialog = offered();
+        focus_display(&mut dialog);
+        dialog.input(&key(Key::Down));
+        assert_eq!(dialog.take_display_choice(), None, "held while open");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_display_choice(),
+            Some(FullscreenKind::Exclusive(qhd))
+        );
+        assert_eq!(dialog.take_display_choice(), None, "once");
+        let mut dialog = offered();
+        focus_display(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_display_choice(), None, "back where it was");
+    }
+
+    /// The dialog after a fallback: the saved kind, `chosen`, could not be
+    /// entered, and the game runs borderless.
+    fn fallen_back(chosen: VideoMode) -> PrefsDialog {
+        let mut dialog = prefs();
+        dialog.set_display_modes(
+            &modes(),
+            FullscreenKind::Borderless,
+            FullscreenKind::Exclusive(chosen),
+        );
+        dialog
+    }
+
+    #[test]
+    fn after_a_fallback_the_picker_shows_borderless_and_reports_nothing_untouched() {
+        let [_, fhd] = modes();
+        let mut dialog = fallen_back(fhd);
+        assert_eq!(dialog.display().selected(), FullscreenKind::Borderless);
+        assert_eq!(dialog.prefs().fullscreen, FullscreenKind::Borderless);
+        let point = dialog.music().rect().center();
+        click(&mut dialog, point);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_change().map(|prefs| prefs.fullscreen),
+            Some(FullscreenKind::Borderless),
+            "the audio, with what runs"
+        );
+        assert_eq!(dialog.take_display_choice(), None, "no pick");
+    }
+
+    #[test]
+    fn after_a_fallback_picking_borderless_or_the_saved_mode_is_a_choice() {
+        let [_, fhd] = modes();
+        let mut dialog = fallen_back(fhd);
+        focus_display(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_display_choice(),
+            Some(FullscreenKind::Borderless),
+            "borderless, which the saved kind is not"
+        );
+        let mut dialog = fallen_back(fhd);
+        focus_display(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_display_choice(),
+            Some(FullscreenKind::Exclusive(fhd)),
+            "the saved mode, which is not what runs"
+        );
+        assert_eq!(dialog.prefs().fullscreen, FullscreenKind::Exclusive(fhd));
     }
 
     #[test]
