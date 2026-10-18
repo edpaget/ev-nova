@@ -358,6 +358,40 @@ mod tests {
         );
     }
 
+    /// Braking at 6 of a top speed of 9, by 0.18 a tick, the speed's
+    /// glow target is 16 before the tick and 15 after it: from 16 the
+    /// glow follows the braked speed down to 14, where the inertial ramp
+    /// would hold 15 and the unbraked speed raise 16. From 0 it rises to
+    /// 1, where the inertial ramp holds 0 and no speed would lower it.
+    #[test]
+    fn the_inertialess_pre_jump_brakes_the_glow_toward_the_braked_speed() {
+        let mut session = super::super::tests::bound_for_131(
+            &hull(),
+            super::super::tests::OUT,
+            Vec2::new(0.0, -6.0),
+            0.0,
+        );
+        session.player_speed = 6.0;
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        let max_speed = session.flying_handling().max_speed;
+        for (base, glow) in [(16_i16, 14_i16), (0, 1)] {
+            session.engine_glow = base;
+            session.tick(Controls::default());
+            assert!(!slow_enough(session.player.velocity), "still braking");
+            let follow = Follow::Speed {
+                speed: session.player_speed(),
+                max_speed,
+            };
+            assert_eq!(
+                session.engine_glow,
+                ramp_inertialess_glow(base, false, follow),
+                "from {base}"
+            );
+            assert_eq!(session.engine_glow, glow, "from {base}");
+            assert_ne!(glow, crate::glow::ramp_glow(base, false), "from {base}");
+        }
+    }
+
     #[test]
     fn a_new_pilot_starts_at_none_and_landing_and_a_jumps_arrival_set_none() {
         let catalog = hull();
