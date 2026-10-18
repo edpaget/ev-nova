@@ -84,25 +84,39 @@ fn has_mod(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord], mod_type: 
         .any(|m| m.count > 0 && m.mod_type == mod_type)
 }
 
-/// The escape ship the player can eject into, if any: of `weapons`, in
-/// `wëap` order, the first fighter bay whose `rounds` (the fighters
-/// aboard) are above 0 and whose fighter's record among `ships` has
-/// [`ESCAPE_SHIP_FLAG`] (see the module docs). A fighter with no record
-/// has no flags.
+/// The escape ship the player can eject into, if any: the fighter of
+/// [`escape_ship_bay`]'s bay (see the module docs).
 pub fn escape_ship_type<'a>(
     weapons: impl IntoIterator<Item = &'a WeaponSpec>,
     rounds: impl Fn(WeaponId) -> u32,
     ships: &[ShipRecord],
 ) -> Option<ShipId> {
+    escape_ship_bay(weapons, rounds, ships).and_then(|bay| bay.carried)
+}
+
+/// The bay a ship's escape ship leaves from, if any (`_EscapeShipWeapType`
+/// @0x3936, the walk `_HasEscapeShip` @0x386e and `_EscapeShipType` @0x38d0
+/// make too): of `weapons`, in `wëap` order, the first fighter bay whose
+/// `rounds` (the fighters aboard) are above 0 and whose fighter's record
+/// among `ships` has [`ESCAPE_SHIP_FLAG`]. A fighter with no record has
+/// no flags. The player's eject and a dying NPC's last launch (see
+/// [`npc_escape`](crate::npc_escape)) both walk it, each over its own
+/// rounds.
+pub fn escape_ship_bay<'a>(
+    weapons: impl IntoIterator<Item = &'a WeaponSpec>,
+    rounds: impl Fn(WeaponId) -> u32,
+    ships: &[ShipRecord],
+) -> Option<&'a WeaponSpec> {
     weapons
         .into_iter()
         .filter(|weapon| rounds(weapon.id) > 0)
-        .filter_map(|weapon| weapon.carried)
-        .find(|&fighter| {
-            ships
-                .iter()
-                .find(|record| record.id == fighter)
-                .is_some_and(|record| record.flags & ESCAPE_SHIP_FLAG != 0)
+        .find(|weapon| {
+            weapon.carried.is_some_and(|fighter| {
+                ships
+                    .iter()
+                    .find(|record| record.id == fighter)
+                    .is_some_and(|record| record.flags & ESCAPE_SHIP_FLAG != 0)
+            })
         })
 }
 
@@ -271,6 +285,30 @@ mod tests {
             ..weapon(140)
         });
         assert_eq!(escape_ship_type(&[gun], full, &ships), None, "not a bay");
+    }
+
+    #[test]
+    fn the_escape_bay_is_the_one_whose_fighter_is_the_escape_ship() {
+        let ships = [flagged(144, 0x8000), flagged(146, 0x7fff)];
+        let weapons = [bay(150, 146), bay(151, 144), bay(152, 144)];
+        let bay_of = |rounds: &dyn Fn(WeaponId) -> u32| {
+            escape_ship_bay(&weapons, rounds, &ships).map(|bay| bay.id)
+        };
+        assert_eq!(bay_of(&|_| 1), Some(WeaponId(151)), "the first flagged");
+        assert_eq!(
+            bay_of(&|id: WeaponId| u32::from(id.0 == 152)),
+            Some(WeaponId(152)),
+            "the first with fighters aboard"
+        );
+        assert_eq!(bay_of(&|id: WeaponId| u32::from(id.0 == 150)), None);
+        for rounds in [0, 1] {
+            let held = |id: WeaponId| u32::from(id.0 == 152) * rounds;
+            assert_eq!(
+                escape_ship_type(&weapons, held, &ships),
+                escape_ship_bay(&weapons, held, &ships).and_then(|bay| bay.carried),
+                "the type is the bay's fighter"
+            );
+        }
     }
 
     #[test]

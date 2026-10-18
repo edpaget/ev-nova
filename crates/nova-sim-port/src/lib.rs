@@ -98,6 +98,7 @@ pub mod gate_sprite;
 pub mod grant;
 pub mod hire;
 pub mod iff;
+pub mod npc_escape;
 pub mod order_loop;
 pub mod outfitter;
 pub mod player_info;
