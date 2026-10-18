@@ -14,6 +14,9 @@
 //! - [`logo`]: the logo's flicker.
 //! - [`rollover`]: the picture naming the button under the pointer.
 //! - [`slides`]: the rows of buttons sliding in as the screen appears.
+//! - [`pilot_panel`]: the panel about the pilot loaded under the
+//!   buttons, or the message in its place, and the port its looks come
+//!   through ([`PilotPanelSource`]).
 //! - [`pilot_list`]: the [`PilotList`], the saved pilots to open one of,
 //!   over the main menu.
 
@@ -26,6 +29,7 @@ pub mod fixture;
 pub mod logo;
 pub mod main_menu;
 pub mod pilot_list;
+pub mod pilot_panel;
 pub mod rollover;
 pub mod slides;
 pub mod tracking;
@@ -33,3 +37,4 @@ pub mod tracking;
 pub use art::{MainScreenArt, MainScreenSource};
 pub use main_menu::{Chosen, ChosenBy, MainMenu, MenuChoice};
 pub use pilot_list::{PilotList, PilotListOutcome};
+pub use pilot_panel::{PanelPilot, PilotPanelSource};

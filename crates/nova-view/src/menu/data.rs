@@ -1,18 +1,86 @@
 //! The main screen's port over the game data ([`GameData`]): `cölr` 128,
 //! `spïn` 600 to 610 and what they name, decoded only as far as the core
-//! needs (the sizes, and the buttons' frame-0 masks). Thin lookups; the
-//! decisions are the core's.
+//! needs (the sizes, and the buttons' frame-0 masks), and the pilot
+//! panel's ([`PilotPanelSource`]): `cölr` 128's menu font and colours,
+//! `STR#` 2002's labels, and each `shïp`'s Subtitle and target picture.
+//! Thin lookups; the decisions are the core's.
 
 use nova_data::GameData;
 use nova_data::graphics::{Image, PICT, RLED, SpriteSheet, decode_pict, decode_rled};
 use nova_data::records::colors::Colors;
+use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
+use nova_sim::catalog::{CommCatalog, ShipId};
+use nova_sim::news::MISC_STRINGS;
 
 use super::art::{
     BACKGROUND_PICT, BUTTON_SPINS, ButtonArt, COLORS_ID, LOGO_SPIN, MainScreenArt,
     MainScreenSource, PictFrames, ROLLOVER_SPIN, RolloverArt, SLIDE_SPINS, SpriteMask,
 };
+use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource, ShipPicture};
+use crate::color::Color;
+use crate::flight::data::FIRST_TARGET_PICTURE;
+use crate::font::Font;
 use crate::geometry::Point;
+
+/// The first `shïp`, whose target picture is [`FIRST_TARGET_PICTURE`].
+const FIRST_SHIP: i16 = 128;
+
+/// Reads afresh on every call; the router reads the looks once and a
+/// ship's picture when the pilot's ship type changes.
+impl PilotPanelSource for GameData {
+    fn pilot_panel_looks(&self) -> PanelLooks {
+        let labels = PanelLabels::from_list(&self.string_list(MISC_STRINGS));
+        let Some(Ok(colors)) = self.get::<Colors>(COLORS_ID) else {
+            return PanelLooks::stock(labels);
+        };
+        let colors = &colors.record;
+        PanelLooks {
+            font: Font::named(colors.menu_font.as_str()),
+            size: f32::from(colors.menu_font_size),
+            value: Color::from_rgb24(colors.menu_color1),
+            label: Color::from_rgb24(colors.menu_color2),
+            labels,
+        }
+    }
+
+    fn panel_ship(&self, ship: ShipId) -> PanelShip {
+        let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
+            return PanelShip::default();
+        };
+        PanelShip {
+            subtitle: entry.record.subtitle.as_str().to_owned(),
+            picture: ship_picture(self, ship.0),
+        }
+    }
+}
+
+/// `shïp` `id`'s target picture, or its base ship's (see [`PanelShip`]).
+fn ship_picture(data: &GameData, id: i16) -> Option<ShipPicture> {
+    let base_image = |id: i16| {
+        data.get::<Ship>(id)?.ok()?;
+        Some(data.get::<ShipAnim>(id)?.ok()?.record.base_image_id)
+    };
+    let image = base_image(id)?;
+    target_picture(data, id).or_else(|| {
+        let base = (FIRST_SHIP..id).find(|&lower| base_image(lower) == Some(image))?;
+        target_picture(data, base)
+    })
+}
+
+/// `shïp` `id`'s own target picture, `PICT` 3000 + (`id` − 128), if it
+/// exists and decodes.
+fn target_picture(data: &GameData, id: i16) -> Option<ShipPicture> {
+    let picture = FIRST_TARGET_PICTURE.checked_add(id.checked_sub(FIRST_SHIP)?)?;
+    let image = data.resource(PICT, picture)?;
+    let image = decode_pict(image.resource.data()).ok()?;
+    Some(ShipPicture {
+        picture,
+        width: image.width(),
+        height: image.height(),
+    })
+}
 
 impl MainScreenSource for GameData {
     fn main_screen_art(&self) -> Result<MainScreenArt, String> {
@@ -116,6 +184,7 @@ fn picture(data: &GameData, id: i16) -> Result<Image, String> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_data::Record;
+    use nova_data::records::string_list::StrList;
     use nova_rsrc::ResType;
 
     use super::*;
@@ -346,5 +415,211 @@ mod tests {
             .main_screen_art()
             .expect("resolves");
         assert_eq!((art.logo.columns, art.logo.frames), (2, 6));
+    }
+
+    // The pilot panel's port.
+
+    /// A `cölr` whose menu font is `font` at `size`, its colours
+    /// `values` and `labels`.
+    fn menu_colors(font: &[u8], size: i16, values: u32, labels: u32) -> Vec<u8> {
+        let mut bytes = vec![0; Colors::SIZE.expect("fixed")];
+        bytes[0x0C..0x0C + font.len()].copy_from_slice(font);
+        bytes[0x4C..0x4E].copy_from_slice(&size.to_be_bytes());
+        bytes[0x4E..0x52].copy_from_slice(&values.to_be_bytes());
+        bytes[0x52..0x56].copy_from_slice(&labels.to_be_bytes());
+        bytes
+    }
+
+    /// A `STR#` of `strings`.
+    fn str_list(strings: &[String]) -> Vec<u8> {
+        let mut bytes = u16::try_from(strings.len())
+            .expect("few")
+            .to_be_bytes()
+            .to_vec();
+        for string in strings {
+            bytes.push(u8::try_from(string.len()).expect("short"));
+            bytes.extend(string.as_bytes());
+        }
+        bytes
+    }
+
+    /// `STR#` 2002 up to #279, each label "#n" and the rest empty.
+    fn labels_list() -> Vec<u8> {
+        let mut strings = vec![String::new(); 279];
+        for n in [251, 252, 254, 255, 256, 276, 277, 278, 279] {
+            strings[n - 1] = format!("#{n}");
+        }
+        str_list(&strings)
+    }
+
+    #[test]
+    fn the_panels_looks_are_colr_128s_menu_font_and_colours_and_str_2002s_labels() {
+        let data = game(&[
+            (
+                Colors::TYPE,
+                128,
+                menu_colors(b"Charcoal", 12, 0x0011_2233, 0x0044_5566),
+            ),
+            (StrList::TYPE, 2002, labels_list()),
+        ]);
+        let looks = data.pilot_panel_looks();
+        assert_eq!((looks.font, looks.size), (Font::Charcoal, 12.0));
+        assert_eq!(looks.value, Color::from_rgb24(0x0011_2233));
+        assert_eq!(looks.label, Color::from_rgb24(0x0044_5566));
+        assert_eq!(looks.labels.pilot_name, "#251");
+        assert_eq!(looks.labels.date, "#252");
+        assert_eq!(looks.labels.combat_rating, "#254");
+        assert_eq!(looks.labels.ship_name, "#255");
+        assert_eq!(looks.labels.ship_class, "#256");
+        assert_eq!(looks.labels.no_pilot, "#276");
+        assert_eq!(looks.labels.killed, "#277");
+        assert_eq!(looks.labels.legal_status, "#278");
+        assert_eq!(looks.labels.current_system, "#279");
+        let geneva = game(&[(Colors::TYPE, 128, menu_colors(b"Geneva", 9, 0, 0))]);
+        assert_eq!(geneva.pilot_panel_looks().font, Font::Geneva);
+    }
+
+    #[test]
+    fn without_colr_128_the_panel_takes_the_stock_looks_and_its_labels_still_read() {
+        let data = game(&[(StrList::TYPE, 2002, labels_list())]);
+        let looks = data.pilot_panel_looks();
+        assert_eq!(looks, PanelLooks::stock(looks.labels.clone()));
+        assert_eq!(looks.labels.no_pilot, "#276");
+        let broken = game(&[(Colors::TYPE, 128, vec![0; 3])]);
+        assert_eq!(
+            broken.pilot_panel_looks(),
+            PanelLooks::stock(PanelLabels::default()),
+            "undecodable, and no labels"
+        );
+    }
+
+    /// A `shïp` subtitled `subtitle`.
+    fn ship_record(subtitle: &str) -> Vec<u8> {
+        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+        bytes[0x6E6..0x6E6 + subtitle.len()].copy_from_slice(subtitle.as_bytes());
+        bytes
+    }
+
+    /// A `shän` whose `BaseImage` is `base`.
+    fn anim(base: i16) -> Vec<u8> {
+        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
+        bytes[0..2].copy_from_slice(&base.to_be_bytes());
+        bytes
+    }
+
+    /// A blank `PICT` `width` x `height`.
+    fn blank(width: i16, height: i16) -> Vec<u8> {
+        nova_data::graphics::fixture::PictBuilder::new([0, 0, height, width])
+            .end()
+            .build()
+    }
+
+    fn shown(picture: i16, width: u32, height: u32) -> ShipPicture {
+        ShipPicture {
+            picture,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_ships_subtitle_and_its_own_target_picture() {
+        let data = game(&[
+            (Ship::TYPE, 130, ship_record("Light Transport")),
+            (ShipAnim::TYPE, 130, anim(1000)),
+            (PICT, 3002, blank(41, 20)),
+        ]);
+        assert_eq!(
+            data.panel_ship(ShipId(130)),
+            PanelShip {
+                subtitle: "Light Transport".to_owned(),
+                picture: Some(shown(3002, 41, 20)),
+            }
+        );
+        assert_eq!(
+            data.panel_ship(ShipId(131)),
+            PanelShip::default(),
+            "no shïp"
+        );
+    }
+
+    #[test]
+    fn a_ship_without_a_picture_takes_the_first_lower_one_sharing_its_base_image() {
+        let data = game(&[
+            (Ship::TYPE, 128, ship_record("")),
+            (ShipAnim::TYPE, 128, anim(1100)),
+            (PICT, 3000, blank(5, 5)),
+            (Ship::TYPE, 129, ship_record("")),
+            (ShipAnim::TYPE, 129, anim(1000)),
+            (PICT, 3001, blank(6, 3)),
+            (Ship::TYPE, 130, ship_record("")),
+            (ShipAnim::TYPE, 130, anim(1000)),
+            (PICT, 3002, blank(7, 4)),
+            (Ship::TYPE, 131, ship_record("Variant")),
+            (ShipAnim::TYPE, 131, anim(1000)),
+            // 134 shares 133's base image and has a picture, but comes after it.
+            (Ship::TYPE, 133, ship_record("")),
+            (ShipAnim::TYPE, 133, anim(1200)),
+            (Ship::TYPE, 134, ship_record("")),
+            (ShipAnim::TYPE, 134, anim(1200)),
+            (PICT, 3006, blank(9, 9)),
+        ]);
+        assert_eq!(
+            data.panel_ship(ShipId(131)).picture,
+            Some(shown(3001, 6, 3)),
+            "129's, the lowest sharing 1000"
+        );
+        assert_eq!(data.panel_ship(ShipId(131)).subtitle, "Variant", "its own");
+        assert_eq!(
+            data.panel_ship(ShipId(133)).picture,
+            None,
+            "only lower ships are searched"
+        );
+    }
+
+    #[test]
+    fn a_ship_with_no_shan_or_no_picture_anywhere_has_none() {
+        let data = game(&[
+            (Ship::TYPE, 128, ship_record("")),
+            (ShipAnim::TYPE, 128, anim(1000)),
+            (Ship::TYPE, 129, ship_record("")),
+            (ShipAnim::TYPE, 129, anim(1000)),
+            (Ship::TYPE, 130, ship_record("Bare")),
+            (PICT, 3002, blank(4, 4)),
+            // 131's picture does not decode.
+            (Ship::TYPE, 131, ship_record("")),
+            (ShipAnim::TYPE, 131, anim(1300)),
+            (PICT, 3003, vec![0, 4]),
+            // 134 shares 133's base image, but 133's shïp does not decode.
+            (Ship::TYPE, 133, vec![0; 3]),
+            (ShipAnim::TYPE, 133, anim(1400)),
+            (PICT, 3005, blank(4, 4)),
+            (Ship::TYPE, 134, ship_record("")),
+            (ShipAnim::TYPE, 134, anim(1400)),
+        ]);
+        assert_eq!(
+            data.panel_ship(ShipId(129)).picture,
+            None,
+            "no base picture"
+        );
+        assert_eq!(
+            data.panel_ship(ShipId(130)),
+            PanelShip {
+                subtitle: "Bare".to_owned(),
+                picture: None
+            },
+            "no shän, though PICT 3002 exists"
+        );
+        assert_eq!(data.panel_ship(ShipId(131)).picture, None, "undecodable");
+        assert_eq!(
+            data.panel_ship(ShipId(134)).picture,
+            None,
+            "133's shïp does not decode, so it is no base"
+        );
+        assert_eq!(
+            data.panel_ship(ShipId(127)),
+            PanelShip::default(),
+            "below the first shïp"
+        );
     }
 }
