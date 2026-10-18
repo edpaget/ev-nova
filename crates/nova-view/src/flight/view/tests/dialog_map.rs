@@ -206,6 +206,20 @@ fn in_flight_mission_infos_map_keeps_the_clicks_nav_and_cues_the_course() {
         NavMode::Hyperspace(Some(SystemId(131))),
         "the close's cue stands"
     );
+    // A plain click's mode 3 stands too, with no course to cue.
+    let mut view = holding();
+    view.session
+        .as_mut()
+        .expect("flying")
+        .select_stellar(nova_sim::StellarPick::Slot(1));
+    view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
+    port_click(&mut view, 131);
+    press_map(&mut view);
+    assert_eq!(
+        nav_mode(&view),
+        NavMode::Hyperspace(Some(SystemId(131))),
+        "the click's nav stands"
+    );
 }
 
 #[test]

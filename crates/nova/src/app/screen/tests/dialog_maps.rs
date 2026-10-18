@@ -85,3 +85,21 @@ fn a_dialogs_map_over_flight_is_drawn_over_the_dialog() {
         "the offer under it"
     );
 }
+
+#[test]
+fn command_comma_on_a_dialogs_map_over_flight_opens_the_preferences_unless_find_is_open() {
+    let mut screen = offered_in_flight();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    command_comma(&mut screen);
+    assert!(screen.preferences().is_some(), "as on flight's own map");
+    let mut screen = offered_in_flight();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    screen.input(&key(Key::Char('f'), true));
+    screen.input(&key(Key::Char('f'), false));
+    assert!(flight(&screen).map_finding());
+    command_comma(&mut screen);
+    assert!(screen.preferences().is_none(), "Find takes every key");
+    assert!(flight(&screen).map_finding());
+}
