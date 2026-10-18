@@ -104,10 +104,16 @@
 //!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
 //! - With no target it goes about its business ([`idle`](super::idle)),
 //!   short of ammunition or not: the out-of-ammo retreat needs a target.
+//!   Once it has visited a stellar of the system, it leaves, or stops and
+//!   waits when it can't jump ([`Goal::Wait`], state 6; see
+//!   [`idle_block`](super::idle_block)).
+//! - **Waiting** (state 6, @0x8bbab-0x8bc37), it looks for a target as in
+//!   state 0, attacking one found; with none it waits while any of its own
+//!   fighters is out, and otherwise takes state 0 ([`wait`]).
 //! - **Leaving with no way to jump** (@0x8bf8c-0x8c0de), last: a warship
 //!   whose think ends in leaving ([`Goal::JumpOut`], state 2) but cannot
 //!   jump ([`leave::can_jump`]) lands on or enters a stellar picked at
-//!   random, or stops with none ([`grounded`]). The other types keep
+//!   random, or stops and waits with none ([`grounded`]). The other types keep
 //!   leaving (see [`idle`](super::idle)).
 //!
 //! A held ship ([`Goal::Hold`], the original's goal 10 with no leader)
@@ -128,7 +134,8 @@ use crate::ai::reinforcements::odds_factor;
 use crate::ai::target::select_target;
 use crate::ai::target::{Pick, TargetRules, dropped, pick_target};
 use crate::ai::{
-    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, out_of_ammo, react,
+    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, out_of_ammo,
+    react, wait,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -164,6 +171,12 @@ pub struct Retreat {
     /// Whether it retreats when its weapons run out of ammunition, by its
     /// hull's `Flags2` 0x0080 ([`out_of_ammo::retreats`]).
     pub out_of_ammo: bool,
+    /// Whether it looks for a target while it waits ([`Goal::Wait`], state
+    /// 6): a warship does (`_SelectWarshipTarget` @0x8bbc2), an interceptor
+    /// doesn't, as its search needs a goal of 1 or below, or 0x14
+    /// (`_InterceptorAI` @0x8cc6d-0x8cc7d). One that doesn't still answers
+    /// its attacker, as a held ship does.
+    pub searches_waiting: bool,
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
@@ -239,7 +252,7 @@ pub fn hunt(
             let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
             let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
             let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && held(ship));
-            if npc.goal == Goal::Hold {
+            if npc.goal == Goal::Hold || (npc.goal == Goal::Wait && !retreat.searches_waiting) {
                 return Hunt {
                     goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
                     ..nothing(false)
@@ -418,7 +431,8 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
 /// `chance` (`_WarshipAI` @0x8bf8c-0x8c0de, after the hunt and the idle
 /// block): it heads for a stellar picked as the idle block picks
 /// ([`random_stellar`](super::random_stellar), `_SelectRandomStellarDest(ship,
-/// 0, 0)` @0x8c025), or stops ([`Goal::Idle`], state 6) with none. The
+/// 0, 0)` @0x8c025), or stops and waits ([`Goal::Wait`], state 6) with
+/// none (@0x8c0de). The
 /// original tests the fuel again before it stops (@0x8c058-0x8c0b2), which
 /// cannot pass after the first test failed, so its leave there
 /// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands.
@@ -426,7 +440,7 @@ fn grounded(npc: &Npc, goal: Goal, around: &Surroundings, chance: &mut dyn Chanc
     if goal != Goal::JumpOut || leave::can_jump(npc, around.jump_fuel) {
         return goal;
     }
-    super::random_stellar(npc, around, chance, Admit::All).unwrap_or(Goal::Idle)
+    super::random_stellar(npc, around, chance, Admit::All).unwrap_or(Goal::Wait)
 }
 
 /// Nova's warship (see the module docs).
@@ -453,6 +467,7 @@ pub const WARSHIP_RETREAT: Retreat = Retreat {
     shields: true,
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
+    searches_waiting: true,
 };
 
 impl Behaviour for Warship {
@@ -460,9 +475,11 @@ impl Behaviour for Warship {
         self.decision(npc, around, chance).goal
     }
 
-    /// Its [`hunt`], or with nothing to fight its business ([`idle`]),
-    /// the hunt's call on the player kept either way; an attack fully dry
-    /// is dropped ([`out_of_ammo::drop_when_dry`]).
+    /// Its [`hunt`], or with nothing to fight its business ([`idle`]), or
+    /// waiting ([`Goal::Wait`]) its wait for its fighters
+    /// ([`wait::warship_waits`]), the hunt's call on the player kept
+    /// either way; an attack fully dry is dropped
+    /// ([`out_of_ammo::drop_when_dry`]).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
@@ -476,7 +493,13 @@ impl Behaviour for Warship {
             self.target,
             chance,
         )
-        .or(|| idle(npc, around, chance));
+        .or(|| {
+            if npc.goal == Goal::Wait {
+                wait::warship_waits(npc, around)
+            } else {
+                idle(npc, around, chance)
+            }
+        });
         let goal = grounded(npc, decision.goal, around, chance);
         Decision {
             goal: out_of_ammo::drop_when_dry(npc, goal),
@@ -1873,10 +1896,84 @@ mod tests {
     }
 
     #[test]
-    fn a_leaving_warship_that_cannot_jump_with_nowhere_to_land_stops() {
+    fn a_leaving_warship_that_cannot_jump_with_nowhere_to_land_stops_and_waits() {
         let mut chance = Draws::of(&[]);
-        assert_eq!(leaving(0, &[], &mut chance), Goal::Idle);
+        assert_eq!(leaving(0, &[], &mut chance), Goal::Wait, "@0x8c0de");
         assert!(chance.asked.is_empty());
+    }
+
+    /// A police warship waiting (state 6).
+    fn waiting() -> Npc {
+        Npc {
+            goal: Goal::Wait,
+            ..police()
+        }
+    }
+
+    /// A fighter, NPC `id`, launched by NPC `carrier`, in `condition`.
+    fn fighter(id: u32, carrier: u32, condition: Condition) -> Npc {
+        Npc {
+            carrier: Some(crate::bay::Carrier {
+                ship: n(carrier),
+                window: 100.0,
+                reach: 30.0,
+            }),
+            leader: Some(NpcId(carrier)),
+            condition,
+            ..ship(id, POLICE, AiType::Warship, 0.0, 50.0)
+        }
+    }
+
+    #[test]
+    fn a_waiting_warship_waits_while_its_fighters_are_out() {
+        let npcs = [waiting(), fighter(2, 1, Condition::Intact)];
+        assert_eq!(decided(&npcs, 0), Goal::Wait);
+    }
+
+    #[test]
+    fn a_waiting_warship_with_no_fighter_out_goes_idle() {
+        for others in [
+            vec![fighter(2, 1, Condition::Disabled)],
+            vec![fighter(2, 3, Condition::Intact)],
+            Vec::new(),
+        ] {
+            let npcs: Vec<Npc> = std::iter::once(waiting()).chain(others).collect();
+            assert_eq!(decided(&npcs, 0), Goal::Idle, "{:?}", npcs.get(1));
+        }
+    }
+
+    #[test]
+    fn a_waiting_warship_that_finds_a_target_attacks_it() {
+        // `_SelectWarshipTarget` @0x8bbc2, then goal 4 (@0x8be09-0x8be2d).
+        let npcs = [waiting(), fighter(2, 1, Condition::Intact)];
+        assert_eq!(decided(&npcs, -10), Goal::Attack(P));
+    }
+
+    #[test]
+    fn a_visited_warship_leaves_or_waits() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let visited = Npc {
+            visited: Some(StellarId(128)),
+            ..police()
+        };
+        let stranded = Npc {
+            class_fuel: 99,
+            ..visited.clone()
+        };
+        for (npc, goal) in [(visited, Goal::JumpOut), (stranded, Goal::Wait)] {
+            let npcs = [npc];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(&sites, &npcs)
+            };
+            let mut chance = Draws::of(&[]);
+            assert_eq!(
+                Warship::default().decide(&npcs[0], &around, &mut chance),
+                goal
+            );
+            assert!(chance.asked.is_empty(), "no pick");
+        }
     }
 
     #[test]

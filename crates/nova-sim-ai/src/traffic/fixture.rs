@@ -58,6 +58,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         cloak_gear: CloakGear::default(),
         led_out: false,
         emerges_from: None,
+        visited: None,
         self_repair: false,
         immobile: false,
         miner: 0,

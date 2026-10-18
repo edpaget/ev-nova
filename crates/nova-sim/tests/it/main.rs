@@ -9,6 +9,7 @@ mod common;
 mod asteroids;
 mod frame_rate;
 mod headless;
+mod idle_block;
 mod landing;
 mod missions;
 mod plugin_strings;

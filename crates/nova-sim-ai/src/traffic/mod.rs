@@ -2140,10 +2140,8 @@ impl Traffic {
                 cloak: starting_cloak(ship.cloaked),
                 cloak_gear: kind.cloak,
                 led_out: false,
-                emerges_from: match ship.entry {
-                    Entry::Emerging { gate, .. } => Some(gate),
-                    Entry::Placed | Entry::JumpingIn => None,
-                },
+                emerges_from: ship.entry.gate(),
+                visited: ship.entry.visited(reserves.fuel.max),
                 self_repair: kind.self_repair,
                 immobile: kind.immobile,
                 miner: kind.miner,
@@ -2750,6 +2748,11 @@ mod tests {
         let arrived = &traffic.npcs()[1];
         assert_eq!(arrived.mode, Mode::Emerging { ticks_left: 59 });
         assert_eq!(arrived.emerges_from, Some(StellarId(129)));
+        assert_eq!(
+            arrived.visited,
+            Some(StellarId(129)),
+            "its tank holds fuel: it has visited the gate (@0x89574)"
+        );
         assert_eq!(arrived.trigger, Trigger::default(), "it holds no trigger");
         assert_eq!(arrived.target, None);
         assert_eq!(arrived.state.position, Vec2::new(300.0, -400.0));
@@ -2770,6 +2773,7 @@ mod tests {
             "top speed 6: 30 down to 6.7, then with no lead 30 + Rand(30), the draw 2"
         );
         assert_eq!(out.emerges_from, None, "the burst over");
+        assert_eq!(out.visited, Some(StellarId(129)), "kept past the burst");
         // 30 - 1.165t for ticks 0 to 20: 630 - 1.165 x 210.
         assert!((out.state.position - Vec2::new(685.35, -400.0)).length() < 1e-3);
     }

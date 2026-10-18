@@ -110,7 +110,8 @@
 //!   the velocity it has, unclamped (under
 //!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
 //!   its top speed).
-//! - [`Goal::Idle`], [`Goal::Mine`] (order 1 for now, see its docs),
+//! - [`Goal::Idle`], [`Goal::Wait`] (state 6, a stop, @0x8f101),
+//!   [`Goal::Mine`] (order 1 for now, see its docs),
 //!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c), or a
 //!   goal it cannot fly (a stellar, lead, player or carrier that is not
 //!   there): it brakes to a stop.
@@ -485,8 +486,11 @@ fn fly_mobile(
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
-        // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c).
-        Goal::Idle | Goal::Mine | Goal::CountWait { .. } => brake(&state, &handling, inertia),
+        // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
+        // is a wait (state 6, @0x8f101).
+        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait { .. } => {
+            brake(&state, &handling, inertia)
+        }
         // A drift moves on with no turn or thrust (its wait above).
         Goal::Hold | Goal::Drift => Controls::default(),
     };
@@ -2736,6 +2740,20 @@ mod tests {
                 ship.state
             );
         }
+    }
+
+    #[test]
+    fn a_waiting_ship_brakes_to_a_stop_as_state_6_does() {
+        // `_HighLevelAIHandler` flies state 6 as +0x50 = 0, sub 1 (@0x8f101).
+        let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
+        let mut waiting = npc(FAST, Goal::Wait, start);
+        let mut idle = npc(FAST, Goal::Idle, start);
+        for _ in 0..200 {
+            assert_eq!(fly(&mut waiting, &[], None), Outcome::Flying);
+            fly(&mut idle, &[], None);
+            assert_eq!(waiting.state, idle.state, "the idle ship's brake");
+        }
+        assert!(waiting.state.velocity.length() < 0.5, "{:?}", waiting.state);
     }
 
     #[test]

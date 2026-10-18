@@ -1,6 +1,7 @@
 //! Nova's brave trader (AI type 2, `_BraveTraderAI` in the `EV Nova`
-//! executable): it goes about its business ([`idle`](super::idle)), and
-//! once provoked it attacks its attacker while it is within
+//! executable): it goes about its business ([`idle`](super::idle)),
+//! stopping to wait ([`Goal::Wait`], state 6) where it can't leave until
+//! provoked, and once provoked it attacks its attacker while it is within
 //! [`STAND_AND_FIGHT`] pixels on both axes (@0x8b616), and flees from it
 //! beyond, or when the chase is hopeless; with the attacker gone it
 //! decides again. Fleeing, or fighting a warship or an interceptor, it
@@ -111,6 +112,24 @@ mod tests {
         let sites = sites();
         let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
         BraveTrader::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn a_visited_brave_trader_leaves_waits_when_it_cannot_jump_and_fights_or_flees_provoked() {
+        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 200.0, 100.0);
+        trader.visited = Some(StellarId(128));
+        assert_eq!(decided(&[trader.clone()]), Goal::JumpOut);
+        trader.class_fuel = 99;
+        assert_eq!(decided(&[trader.clone()]), Goal::Wait);
+        trader.goal = Goal::Wait;
+        assert_eq!(decided(&[trader]), Goal::Wait, "state 6 is sticky");
+        let waiting = |x, y| {
+            let mut npcs = provoked(x, y);
+            npcs[0].goal = Goal::Wait;
+            npcs
+        };
+        assert_eq!(decided(&waiting(0.0, 0.0)), Goal::Attack(n(2)));
+        assert_eq!(decided(&waiting(1251.0, 0.0)), Goal::Flee(n(2)));
     }
 
     #[test]

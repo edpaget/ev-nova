@@ -672,7 +672,7 @@ mod tests {
         assert_eq!(idle.class_fuel, 300);
         for (reading, goal) in [
             (RuleSource::Engine, Goal::JumpOut),
-            (RuleSource::Bible, Goal::Idle),
+            (RuleSource::Bible, Goal::Wait),
         ] {
             let (after, _) = traffic_tick(idle.clone(), None, reading);
             assert_eq!(after.expect("still here").goal, goal, "{reading:?}");

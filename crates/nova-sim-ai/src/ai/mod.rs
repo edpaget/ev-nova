@@ -49,6 +49,7 @@ pub mod fire;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub mod flee_drop;
+pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
 pub mod miner;
@@ -64,6 +65,7 @@ pub mod reinforcements;
 pub mod stand_off;
 pub mod target;
 pub mod threatened;
+pub mod wait;
 pub mod warship;
 pub mod wimpy;
 
@@ -232,9 +234,21 @@ fn blessed_slot(govt: GovtId) -> Option<usize> {
 /// What an NPC sets out to do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Goal {
-    /// Nothing: it comes to a stop where it is.
+    /// Nothing yet: the original's state 0, which a type's think reads to
+    /// run its idle block (see [`idle`]). It comes to a stop where it is.
     #[default]
     Idle,
+    /// Stop and wait: the original's state 6 (`_IsShipWaiting` @0x82f96),
+    /// which the idle blocks write when a ship that would leave can't jump
+    /// (see [`idle_block`]), the interceptor's patrol when its pick is
+    /// destroyed, and the warship's while its fighters are out (see
+    /// [`wait`]). `_HighLevelAIHandler` flies it as a stop (+0x50 = 0, sub 1,
+    /// @0x8f101-0x8f112). It is sticky for the traders and the interceptor:
+    /// their idle blocks need state 0, so only provocation, or a hunter's
+    /// government's word, lifts it. It fights nothing and scoops nothing,
+    /// and `_ExtendedIsThreatToPlayer` doesn't spare it (6 is none of its
+    /// states).
+    Wait,
     /// Land on this stellar, and leave the system that way. A stellar
     /// that is a hypergate or wormhole is entered instead, as
     /// [`Goal::EnterGate`] (`_HighLevelAIHandler` state 1, @0x8d8b8-0x8d8fe).
@@ -383,6 +397,7 @@ impl Goal {
     pub fn scooping(self) -> bool {
         match self {
             Self::Idle
+            | Self::Wait
             | Self::Land(_)
             | Self::EnterGate(_)
             | Self::JumpOut
@@ -431,6 +446,7 @@ impl Goal {
             | Self::Formation { .. }
             | Self::Hold => true,
             Self::Idle
+            | Self::Wait
             | Self::Land(_)
             | Self::EnterGate(_)
             | Self::JumpOut
@@ -845,75 +861,64 @@ impl Behaviour for Peaceful {
     }
 }
 
-/// The idle block the four AI types share (e.g. `_WarshipAI` @0x8b06c in
-/// the `EV Nova` executable), picking as their (ship, 0, 0) call does
-/// ([`idle_admitting`] with [`Admit::All`]).
-pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-    idle_admitting(npc, around, chance, Admit::All)
-}
-
-/// The idle block, its pick admitting `admit` (see
+/// The idle block the AI types share (e.g. `_WarshipAI` @0x8b06c in the
+/// `EV Nova` executable; see [`idle_block`]), picking as their (ship, 0, 0)
+/// call does ([`Admit::All`], see
 /// [`destination`](crate::traffic::destination)):
 ///
 /// - An escort follows its lead while the lead is in the system; once it
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
-///   landable, a gate it enters that is still there, a jump out, or a
-///   hold. A leaving ship (state 2) keeps leaving whether or not it can
-///   jump: no type's idle block tests it again (`_WimpyTraderAI`
+///   landable, a gate it enters that is still there, a jump out, a hold,
+///   or a wait. A leaving ship (state 2) keeps leaving whether or not it
+///   can jump: no type's idle block tests it again (`_WimpyTraderAI`
 ///   @0x8b06c, `_BraveTraderAI` @0x8b4d6 and `_InterceptorAI` @0x8d010
 ///   pick only in state 0); the warship's and the pirate's own re-tests
-///   are theirs ([`warship`], [`pirate`]).
-/// - Otherwise it heads for a stellar picked at random among
+///   are theirs ([`warship`], [`pirate`]). A waiting ship ([`Goal::Wait`],
+///   state 6) keeps waiting, as those idle blocks need state 0; the
+///   warship's state 6 is its own ([`wait`]).
+/// - A ship that has visited a stellar of the system, or is in a system
+///   with none ([`idle_block::visited_here`], @0x8b0a3-0x8b0c8), skips the
+///   pick. One that hasn't heads for a stellar picked at random among
 ///   `_SelectRandomStellarDest`'s candidates (@0x805de): landable, within
 ///   999 of the centre on each axis, not uninhabited unless a gate, not
 ///   of a government at war with its own, the gates chosen by its
-///   government's `Flags2`; or it jumps out when there is none. The
-///   original sends a ship that has not visited a stellar of the system
-///   there, and one that has away; here a ship that lands leaves the
-///   system, so none has, and every ship, of any AI type, heads for a
-///   stellar (as `_HyperShipSpawn` makes every arrival do). The pick is
-///   one `below(candidates)` draw in the system's stellar order: what the
-///   original's `Rand(16)` loop decides, a uniform pick among them. A
-///   hypergate or wormhole picked is entered ([`Goal::EnterGate`]), the
-///   ship leaving the system through it.
+///   government's `Flags2`. The pick is one `below(candidates)` draw in
+///   the system's stellar order: what the original's `Rand(16)` loop
+///   decides, a uniform pick among them. A hypergate or wormhole picked
+///   is entered ([`Goal::EnterGate`]), the ship leaving the system through
+///   it. A ship visits a stellar coming out of its gate
+///   ([`Npc::gate_visit`]), so it leaves on its first idle think; landing
+///   writes the visit too (`_HighLevelAIHandler` @0x8db00), which is
+///   rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's, and until
+///   then a ship that lands leaves the system.
 /// - A held ship ([`Goal::Hold`], the original's goal 10 with no
 ///   leader) keeps its hold and picks nothing: every type's destination
 ///   pick needs goal 0 (`_WimpyTraderAI` @0x8b06c, `_BraveTraderAI`
 ///   @0x8b4d6), and `_AICheckParentExists` (@0x8926a-0x89281) never
 ///   clears the goal of a ship with no leader. Only provocation, or a
 ///   hunter's government's word, lifts it.
-/// - A ship that would jump but cannot ([`leave::can_jump`]: its class's
-///   `Fuel` 99 or less, held in another's tractor beam, or a person that
-///   starts with zero fuel and has less than a jump's) stays idle, as
-///   the idle blocks' inlined `_AIShipHasFuelForJump` sends it to state 6
-///   (`_WimpyTraderAI` @0x8b11d-0x8b1a3). Any other ship jumps with an
-///   empty tank.
-pub fn idle_admitting(
-    npc: &Npc,
-    around: &Surroundings,
-    chance: &mut dyn Chance,
-    admit: Admit,
-) -> Goal {
-    if let Some(lead) = npc.leader
-        && around.npc(lead).is_some()
-    {
-        return Goal::Follow(lead);
+/// - With no pick, or once visited, it jumps out if it can
+///   ([`leave::can_jump`]: its class's `Fuel` above 99, held in no other
+///   ship's tractor beam, and a jump's fuel for a person that starts with
+///   zero fuel), and otherwise stops and waits ([`Goal::Wait`]), as the
+///   idle blocks' inlined `_AIShipHasFuelForJump` sends it to state 6
+///   (`_WimpyTraderAI` @0x8b11d-0x8b1a3): [`idle_block::leave_or_wait`].
+///   Any other ship jumps with an empty tank.
+pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    if let Some(kept) = kept(npc, around) {
+        return kept;
     }
-    if can_still_fly(npc, around) {
-        return npc.goal;
+    if idle_block::visited_here(npc, around) {
+        return idle_block::leave_or_wait(npc, around);
     }
-    let leave = if leave::can_jump(npc, around.jump_fuel) {
-        Goal::JumpOut
-    } else {
-        Goal::Idle
-    };
-    random_stellar(npc, around, chance, admit).unwrap_or(leave)
+    random_stellar(npc, around, chance, Admit::All)
+        .unwrap_or_else(|| idle_block::leave_or_wait(npc, around))
 }
 
 /// A stellar picked at random for `npc` among `around`'s, admitting
 /// `admit`, as `_SelectRandomStellarDest` picks (@0x805de; see
-/// [`idle_admitting`]): one `below(candidates)` draw, a hypergate or
+/// [`idle`]): one `below(candidates)` draw, a hypergate or
 /// wormhole entered ([`Goal::EnterGate`]), any other landed on. `None`,
 /// drawing nothing, when there is no candidate.
 pub(crate) fn random_stellar(
@@ -937,6 +942,18 @@ pub(crate) fn random_stellar(
     })
 }
 
+/// What `npc` keeps to among `around` before its idle block runs, if
+/// anything: an escort follows its lead while the lead is in the system,
+/// and a goal it can still fly is kept.
+pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
+    if let Some(lead) = npc.leader
+        && around.npc(lead).is_some()
+    {
+        return Some(Goal::Follow(lead));
+    }
+    can_still_fly(npc, around).then_some(npc.goal)
+}
+
 /// The ship that provoked `npc`, its target since the hit, while it is
 /// provoked and that ship is live among `around`.
 #[must_use]
@@ -956,7 +973,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .iter()
             .any(|site| site.id == stellar && landable(site)),
         Goal::EnterGate(gate) => around.sites.iter().any(|site| site.id == gate),
-        Goal::JumpOut | Goal::Hold => true,
+        Goal::JumpOut | Goal::Hold | Goal::Wait => true,
         _ => false,
     }
 }
@@ -1195,10 +1212,9 @@ mod tests {
         };
         let sites = [gate, planet(128, 0.0, 0.0)];
         let around = Surroundings::new(&sites, &[]);
-        let plain = Admit::PlainOnly { uninhabited: true };
         let mut chance = Draws::of(&[0]);
         assert_eq!(
-            idle_admitting(&npc(1, AiType::Interceptor), &around, &mut chance, plain),
+            idle_block::patrol(&npc(1, AiType::Interceptor), &around, &mut chance, true),
             Goal::Land(StellarId(128))
         );
         assert_eq!(chance.asked, [1]);
@@ -1283,23 +1299,23 @@ mod tests {
             assert_eq!(decide(&dry, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
             dry.class_fuel = 99;
             dry.reserves.fuel.now = 300.0;
-            assert_eq!(decide(&dry, &[], &[], &mut Draws::of(&[])), Goal::Idle);
+            assert_eq!(decide(&dry, &[], &[], &mut Draws::of(&[])), Goal::Wait);
         }
     }
 
     #[test]
-    fn a_person_that_starts_with_zero_fuel_jumps_with_a_jumps_fuel_and_stays_idle_without() {
+    fn a_person_that_starts_with_zero_fuel_jumps_with_a_jumps_fuel_and_waits_without() {
         for ai_type in [AiType::WimpyTrader, AiType::Warship] {
             let mut short = zero_fuelled(npc(1, ai_type));
             short.reserves.fuel.now = 99.9;
-            assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Idle);
+            assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Wait);
             short.reserves.fuel.now = 100.0;
             assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
         }
     }
 
     #[test]
-    fn by_the_other_reading_a_ship_without_a_jumps_fuel_that_would_jump_stays_idle() {
+    fn by_the_other_reading_a_ship_without_a_jumps_fuel_that_would_jump_waits() {
         let mut short = npc(1, AiType::WimpyTrader);
         short.reserves.fuel.now = 99.9;
         let npcs = [short.clone()];
@@ -1307,17 +1323,17 @@ mod tests {
             jump_fuel: RuleSource::Bible,
             ..Surroundings::new(&[], &npcs)
         };
-        assert_eq!(idle(&short, &around, &mut Draws::of(&[])), Goal::Idle);
+        assert_eq!(idle(&short, &around, &mut Draws::of(&[])), Goal::Wait);
         short.reserves.fuel.now = 100.0;
         assert_eq!(idle(&short, &around, &mut Draws::of(&[])), Goal::JumpOut);
     }
 
     #[test]
-    fn a_ship_without_a_jumps_fuel_that_would_jump_stays_idle() {
+    fn a_ship_without_a_jumps_fuel_that_would_jump_waits() {
         for ai_type in [AiType::WimpyTrader, AiType::Warship] {
             let mut short = npc(1, ai_type);
             short.class_fuel = 99;
-            assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Idle);
+            assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Wait);
             short.class_fuel = 100;
             short.reserves.fuel.now = 0.0;
             assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
@@ -1472,6 +1488,26 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_ship_of_every_idle_type_keeps_waiting_drawing_nothing() {
+        // Their idle blocks need state 0 (@0x8b06c, @0x8b4d6).
+        let deciders: [(AiType, &dyn Behaviour); 3] = [
+            (AiType::WimpyTrader, &Peaceful),
+            (AiType::WimpyTrader, &WimpyTrader::default()),
+            (AiType::BraveTrader, &BraveTrader::default()),
+        ];
+        let sites = sites();
+        for (ai_type, decider) in deciders {
+            let mut waiting = npc(1, ai_type);
+            waiting.goal = Goal::Wait;
+            let npcs = [waiting.clone()];
+            let mut chance = Draws::of(&[]);
+            let goal = decider.decide(&waiting, &Surroundings::new(&sites, &npcs), &mut chance);
+            assert_eq!(goal, Goal::Wait, "{decider:?}");
+            assert!(chance.asked.is_empty(), "{decider:?} drew");
+        }
+    }
+
+    #[test]
     fn a_goal_it_cannot_fly_is_decided_again() {
         let mut lander = npc(1, AiType::WimpyTrader);
         for gone in [129, 131, 140] {
@@ -1576,6 +1612,16 @@ mod tests {
             assert!(!wait.scooping());
             assert!(!wait.spares_player_threat(), "0x16 isn't in the list");
         }
+    }
+
+    #[test]
+    fn a_wait_fights_nothing_scoops_nothing_and_is_not_spared_as_a_threat() {
+        let wait = Goal::Wait;
+        assert_eq!((wait.quarry(), wait.attacking()), (None, None));
+        assert!(!wait.fights());
+        assert_eq!((wait.plundering(), wait.inspecting()), (None, None));
+        assert!(!wait.scooping());
+        assert!(!wait.spares_player_threat(), "6 isn't in the list");
     }
 
     #[test]

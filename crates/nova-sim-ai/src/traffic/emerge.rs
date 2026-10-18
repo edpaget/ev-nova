@@ -94,7 +94,11 @@
 //!   for `Rand(30) + 30` ticks (@0x34d5c-0x34d8b), as after a glide in
 //!   from hyperspace: [`Mode::Coasting`](crate::traffic::npc::Mode::Coasting).
 //!
-//! Not modelled: the stellar the ship remembers (+0x92).
+//! A ship with a fuel tank has visited the gate it comes out of (+0x92 the
+//! gate when `_ShipFuelCapacity` is above 0, else -2, @0x8955e-0x89574;
+//! [`Npc::visited`](crate::traffic::npc::Npc::visited)), so on its first
+//! idle think it leaves rather than heading for a stellar (see
+//! [`idle_block`](crate::ai::idle_block)).
 
 use crate::catalog::{GovtId, LandingSite};
 use crate::chance::Chance;

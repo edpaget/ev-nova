@@ -373,6 +373,19 @@ pub struct Npc {
     /// gate (@0x89d47). The gate's sprite opens while it waits
     /// ([`Npc::holds_gate_open`]).
     pub emerges_from: Option<StellarId>,
+    /// The stellar of this system it has visited, the original's +0x92,
+    /// which the idle block reads to send a ship that has visited away
+    /// rather than to another stellar
+    /// ([`idle_block::visited_here`](crate::ai::idle_block::visited_here)).
+    /// `None` stands for both the original's -1 and -2: every spawn starts
+    /// it at -2 (e.g. @0x1c3d6, @0x41ed4, @0x7f3fa), and the interceptor's
+    /// patrol writes -2 (@0x8d01e). Its writers here: the gate emerge
+    /// ([`Npc::emerge_from_gate`], @0x8955e-0x89574). The landing's end
+    /// (`_HighLevelAIHandler` @0x8db00) is
+    /// rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's, and the
+    /// miner's (@0x8b3ae) is left out (see
+    /// [`idle_block`](crate::ai::idle_block)).
+    pub visited: Option<StellarId>,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
@@ -953,7 +966,8 @@ impl Npc {
     /// (`_AIMakeShipEmergeFromHyperGate` @0x89518): goal 0x15 and
     /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b), its travel
     /// stellar the gate ([`Npc::emerges_from`], @0x8954a), no target
-    /// (+0x70 = -1, @0x89544), and its trigger released.
+    /// (+0x70 = -1, @0x89544), and its trigger released. A ship with a
+    /// fuel tank has visited the gate ([`Npc::visited`], [`Npc::gate_visit`]).
     ///
     /// The original holds no trigger from one frame to the next: each
     /// frame `_LowLevelAIHandler` clears the fire flag +0xba (@0x851f6)
@@ -968,8 +982,19 @@ impl Npc {
     pub fn emerge_from_gate(&mut self, gate: StellarId, ticks_left: u32) {
         self.mode = Mode::Emerging { ticks_left };
         self.emerges_from = Some(gate);
+        self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
+    }
+
+    /// The stellar a ship whose tank holds `fuel_capacity` has visited as it
+    /// comes out of `gate`: the gate when `_ShipFuelCapacity` is above 0,
+    /// else none (-2, @0x8955e-0x89574). The original makes the write under
+    /// its gate-index test of at most 0x7ff (@0x8952d, @0x8955c), which
+    /// every stellar passes.
+    #[must_use]
+    pub fn gate_visit(gate: StellarId, fuel_capacity: f32) -> Option<StellarId> {
+        (fuel_capacity > 0.0).then_some(gate)
     }
 
     /// Whether it is in hyperspace: its jump state +0x50 outside
@@ -1699,6 +1724,27 @@ mod tests {
         assert_eq!(npc.trigger, Trigger::default());
         assert_eq!(npc.state, state, "the caller places it");
         assert!(npc.led_out, "the caller decides it");
+    }
+
+    #[test]
+    fn a_ship_with_a_fuel_tank_that_comes_out_of_a_gate_has_visited_it() {
+        // `_AIMakeShipEmergeFromHyperGate` writes +0x92 the gate when
+        // `_ShipFuelCapacity` > 0, else -2 (@0x8955e-0x89574).
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
+        npc.reserves.fuel.max = 300.0;
+        npc.reserves.fuel.now = 0.0;
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(
+            npc.visited,
+            Some(StellarId(310)),
+            "by its tank, not its fuel"
+        );
+        npc.reserves.fuel.max = 0.0;
+        npc.visited = Some(StellarId(128));
+        npc.emerge_from_gate(StellarId(310), 40);
+        assert_eq!(npc.visited, None, "no tank: -2, never visited");
+        assert_eq!(Npc::gate_visit(StellarId(311), 1.0), Some(StellarId(311)));
+        assert_eq!(Npc::gate_visit(StellarId(311), 0.0), None);
     }
 
     #[test]

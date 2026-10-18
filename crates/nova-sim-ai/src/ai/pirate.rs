@@ -20,18 +20,21 @@
 //!   no target: its target cleared (@0x8c35d), first the ship to plunder
 //!   ([`plunder_target::find`]), then the warship's target
 //!   ([`pick_target`] with none kept, `_SelectWarshipTarget`), then its
-//!   business ([`idle`]), its target left cleared
-//!   ([`Decision::clears_target`]). A pirate leaving ([`Goal::JumpOut`])
-//!   that cannot jump ([`leave::can_jump`]) stops ([`Goal::Idle`]), as the
-//!   idle block's inlined `_AIShipHasFuelForJump` (@0x8c53f) sends it to
-//!   state 6 (@0x8c5c9); one that can keeps leaving, with the goal-2
-//!   writes (@0x8c59b-0x8c5bd). The idle block's stellar pick for a
-//!   pirate that has not visited one (@0x8c472-0x8c51f) is
-//!   rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols's. A pirate holding ([`Goal::Hold`])
-//!   with no target so leaves the hold. A pirate with any other goal and a
+//!   copy of the idle block ([`idle_block::pirate_idle`],
+//!   @0x8c410-0x8c5d2), its target left cleared
+//!   ([`Decision::clears_target`]). A pirate that has visited a stellar of
+//!   the system, or is already bound for one, leaving or waiting (its
+//!   travel stellar +0x6c set, @0x8c472-0x8c477), takes the inlined
+//!   `_AIShipHasFuelForJump` (@0x8c53f, [`leave::can_jump`](super::leave::can_jump)):
+//!   it leaves ([`Goal::JumpOut`], with the goal-2 writes @0x8c59b-0x8c5bd)
+//!   or stops and waits ([`Goal::Wait`], state 6, @0x8c5c9). So a pirate
+//!   with nothing to fight never lands: on the think after its pick it
+//!   leaves or stops. One that has not picks a stellar as the idle block
+//!   does (@0x8c49d-0x8c4a3). A pirate holding ([`Goal::Hold`]) with no
+//!   target so leaves the hold. A pirate with any other goal and a
 //!   target set keeps both and thinks no more (@0x8c34d → @0x8c5e8): one
 //!   bound to land that an NPC's hit gave a target lands on, holding the
-//!   target, and one holding holds. Its target is the reaction's
+//!   target, one holding holds, and one waiting waits. Its target is the reaction's
 //!   (`_DamageShip` @0x3be5d), which [`PirateWarship::target`] keeps.
 //! - **The classification** (@0x8c5e1-0x8c743), of the ship it found or
 //!   the target an attack or plunder holds (the reaction's write included):
@@ -87,18 +90,20 @@
 //! ([`Decision::turns_on_player`]); a plunder pick of the player makes no
 //! such call (`_AIFindShipToPlunder` @0x7fd10-0x7feb5).
 //!
-//! **Left out**, owned elsewhere (see the phase body of
-//! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board): the
-//! idle block (@0x8c410-0x8c5d2) is
-//! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols's, and
-//! [`idle`] stands in. The plunder's +0x8c write (-1, @0x8c791) is the
+//! **Left out**, owned elsewhere (see the phase bodies of
+//! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board and
+//! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols): the
+//! travel stellar a pirate keeps through goal 0 after a drop, and a waiting
+//! pirate's fresh pick once its failed pick could succeed, are
+//! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12's (see
+//! [`idle_block`]). The plunder's +0x8c write (-1, @0x8c791) is the
 //! defence ships', which rdm:task/planet-domination owns.
 
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::hopeless_chase;
 use crate::ai::target::{TargetRules, pick_target, spares};
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, plunder_target, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_target, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -193,12 +198,8 @@ pub fn think(
         };
         // The idle block tests the fuel of a pirate it does not send to a
         // stellar (@0x8c52d-0x8c5d2): it leaves (state 2) or stops (6).
-        let goal = match idle(&idler, around, chance) {
-            Goal::JumpOut if !leave::can_jump(npc, around.jump_fuel) => Goal::Idle,
-            goal => goal,
-        };
         return Decision {
-            goal,
+            goal: idle_block::pirate_idle(&idler, around, chance),
             clears_target: true,
             ..Decision::default()
         };
@@ -747,7 +748,11 @@ mod tests {
             dropped().goal_of(Goal::JumpOut)
         );
         leaving.class_fuel = 99;
-        assert_eq!(decided(&[leaving.clone()]), dropped());
+        assert_eq!(
+            decided(&[leaving.clone()]),
+            dropped().goal_of(Goal::Wait),
+            "state 6 (@0x8c5c9)"
+        );
         leaving.class_fuel = 300;
         leaving.person = Some(crate::traffic::npc::NpcPerson {
             zero_fuel: true,
@@ -756,7 +761,11 @@ mod tests {
                 false,
             )
         });
-        assert_eq!(decided(&[leaving.clone()]), dropped(), "a person with none");
+        assert_eq!(
+            decided(&[leaving.clone()]),
+            dropped().goal_of(Goal::Wait),
+            "a person with none"
+        );
         leaving.reserves.fuel.now = 100.0;
         assert_eq!(decided(&[leaving]), dropped().goal_of(Goal::JumpOut));
     }
@@ -778,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_to_land_with_a_target_an_npcs_hit_gave_it_it_keeps_landing() {
+    fn bound_to_land_with_a_target_an_npcs_hit_gave_it_it_keeps_landing_and_with_none_leaves() {
         let hitter = ship(3, NEUTRAL, AiType::Warship, 0.0, 200.0);
         let bound = holding(IDLE, Some(n(3)));
         assert_eq!(
@@ -798,17 +807,77 @@ mod tests {
         let mut chance = Draws::of(&[]);
         assert_eq!(
             think(&npcs[0], &seen, TargetRules::default(), &mut chance),
-            Decision {
-                clears_target: true,
-                ..only(IDLE)
-            },
-            "with nothing to fight it keeps the stellar it is bound for"
+            dropped().goal_of(Goal::JumpOut),
+            "with nothing to fight it leaves: its travel stellar is set (@0x8c472)"
         );
         assert!(chance.asked.is_empty(), "no new pick");
         let gate = holding(Goal::EnterGate(StellarId(130)), Some(n(2)));
         assert_eq!(decided(&[gate.clone(), wreck(2, 300.0)]), only(gate.goal));
         let jumping = holding(Goal::JumpOut, Some(n(2)));
         assert_eq!(decided(&[jumping, wreck(2, 300.0)]), only(Goal::JumpOut));
+    }
+
+    /// The decision of `npc` alone among [`sites`], the player far off,
+    /// and the draws it asked.
+    fn alone(npc: Npc) -> (Decision, Vec<u32>) {
+        let sites = sites();
+        let govts = govts(0, 0);
+        let npcs = [npc];
+        let seen = around(&sites, &npcs, &govts, (0.0, 3000.0), 0);
+        let mut chance = Draws::of(&[0]);
+        let decision = think(&npcs[0], &seen, TargetRules::default(), &mut chance);
+        (decision, chance.asked)
+    }
+
+    #[test]
+    fn a_pirate_bound_for_a_stellar_with_nothing_to_fight_leaves_or_waits_when_it_cannot_jump() {
+        let bound = holding(IDLE, None);
+        assert_eq!(
+            alone(bound.clone()),
+            (dropped().goal_of(Goal::JumpOut), vec![])
+        );
+        let stranded = Npc {
+            class_fuel: 99,
+            ..bound
+        };
+        assert_eq!(alone(stranded), (dropped().goal_of(Goal::Wait), vec![]));
+    }
+
+    #[test]
+    fn an_idle_pirate_that_has_not_visited_picks_a_stellar() {
+        assert_eq!(
+            alone(holding(Goal::Idle, None)),
+            (dropped().goal_of(IDLE), vec![1])
+        );
+    }
+
+    #[test]
+    fn a_visited_pirate_leaves() {
+        let visited = Npc {
+            visited: Some(StellarId(128)),
+            ..holding(Goal::Idle, None)
+        };
+        assert_eq!(alone(visited), (dropped().goal_of(Goal::JumpOut), vec![]));
+    }
+
+    #[test]
+    fn a_waiting_pirate_never_picks_again() {
+        let waiting = Npc {
+            class_fuel: 99,
+            ..holding(Goal::Wait, None)
+        };
+        assert_eq!(alone(waiting), (dropped().goal_of(Goal::Wait), vec![]));
+    }
+
+    #[test]
+    fn a_waiting_pirate_with_a_target_keeps_both_and_searches_no_more() {
+        // @0x8c345-0x8c34d -> @0x8c5e8.
+        let hitter = ship(3, NEUTRAL, AiType::Warship, 0.0, 200.0);
+        let waiting = holding(Goal::Wait, Some(n(3)));
+        assert_eq!(
+            decided(&[waiting, hitter, wreck(2, 300.0)]),
+            only(Goal::Wait)
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Nova's wimpy trader (AI type 1, `_WimpyTraderAI` in the `EV Nova`
-//! executable): it goes about its business ([`idle`](super::idle)), and
-//! once provoked it flees from its attacker (@0x8b1ac), never fighting
+//! executable): it goes about its business ([`idle`](super::idle)),
+//! stopping to wait ([`Goal::Wait`], state 6) where it can't leave until
+//! provoked, and once provoked it flees from its attacker (@0x8b1ac), never fighting
 //! back by choice, calling for help on every think it flees
 //! (`_AICallForHelp` @0x8b1f5; see
 //! [`call_for_help`](super::call_for_help)); with the attacker gone it
@@ -84,6 +85,31 @@ mod tests {
             WimpyTrader::default().trigger(&npcs[0], &around),
             Trigger::default()
         );
+    }
+
+    #[test]
+    fn a_visited_wimpy_trader_leaves_waits_when_it_cannot_jump_and_flees_provoked() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.visited = Some(StellarId(128));
+        let decided = |trader: &Npc, npcs: &[Npc]| {
+            let around = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+            WimpyTrader::default().decide(trader, &around, &mut Draws::of(&[]))
+        };
+        assert_eq!(decided(&trader, &[trader.clone()]), Goal::JumpOut);
+        trader.class_fuel = 99;
+        assert_eq!(decided(&trader, &[trader.clone()]), Goal::Wait);
+        trader.goal = Goal::Wait;
+        assert_eq!(
+            decided(&trader, &[trader.clone()]),
+            Goal::Wait,
+            "state 6 is sticky"
+        );
+        trader.provoked = 10.0;
+        trader.target = Some(n(2));
+        let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        assert_eq!(decided(&trader, &npcs), Goal::Flee(n(2)), "@0x8b1ac");
     }
 
     #[test]

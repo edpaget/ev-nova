@@ -40,18 +40,28 @@
 //!   (@0x8d343-0x8d391), it flees the ship it attacks, snipes at or
 //!   inspects, and with none it stops, unless it is leaving; it has no
 //!   fully-dry drop (see [`out_of_ammo`]).
-//! - With nothing to inspect it patrols: the idle block, but its
-//!   `_SelectRandomStellarDest` call is (ship, 0, 1) (@0x8d027-0x8d03a),
-//!   plain stellars only ([`idle_admitting`] with [`Admit::PlainOnly`]):
-//!   never a gate, and an uninhabited stellar as
+//! - With nothing to inspect it patrols ([`idle_block::patrol`],
+//!   @0x8d00d-0x8d136): its `_SelectRandomStellarDest` call is
+//!   `(ship, 0, 1)` (@0x8d027-0x8d03a), plain stellars only
+//!   ([`Admit::PlainOnly`](crate::ai::Admit::PlainOnly)): never a gate,
+//!   and an uninhabited stellar as
 //!   [`RuleKey::PatrolUninhabited`](crate::RuleKey::PatrolUninhabited)
-//!   says.
+//!   says. It has no visited test, so it goes on patrolling stellar to
+//!   stellar. A destroyed pick makes it stop and wait ([`Goal::Wait`],
+//!   state 6, @0x8d124); with no pick it leaves, or waits when it can't
+//!   jump.
+//! - Waiting (state 6) it inspects nothing, looks for no target and
+//!   patrols nowhere: those blocks need a goal of 1 or below, or 0x14
+//!   (@0x8cc6d-0x8cc7d). Only provocation (@0x8cbf6-0x8cc28) or its
+//!   government's word lifts the wait. Short of ammunition, a waiting
+//!   interceptor goes idle as a stopped one does (state 6 to 3 to 0,
+//!   @0x8d391 and @0x8e228; see [`out_of_ammo`]).
 
 use crate::ai::fire::FireRules;
 use crate::ai::target::TargetRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
-    Admit, Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_admitting,
+    Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
     out_of_ammo, react,
 };
 use crate::chance::Chance;
@@ -80,6 +90,7 @@ pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
     shields: false,
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
+    searches_waiting: false,
 };
 
 /// Nova's interceptor (see the module docs).
@@ -165,21 +176,26 @@ impl Interceptor {
         {
             return (Goal::Inspect(ship), None);
         }
-        if npc.goal == Goal::Hold {
+        if matches!(npc.goal, Goal::Hold | Goal::Wait) {
             // The patrol and inspect block needs goal 1 or below, or
             // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
-            // holds.
+            // holds, and a waiting one (state 6) waits.
             return (idle(npc, around, chance), None);
         }
-        let patrol = Admit::PlainOnly {
-            uninhabited: self.patrol_uninhabited == RuleSource::Engine,
-        };
         match inspect(npc, around, chance) {
             Some(goal) => {
                 let call = (goal == Goal::Inspect(ShipRef::Player)).then_some(CommCall::PreScan);
                 (goal, call)
             }
-            None => (idle_admitting(npc, around, chance, patrol), None),
+            None => (
+                idle_block::patrol(
+                    npc,
+                    around,
+                    chance,
+                    self.patrol_uninhabited == RuleSource::Engine,
+                ),
+                None,
+            ),
         }
     }
 }
@@ -461,6 +477,98 @@ mod tests {
             patrols(&sites, RuleSource::Bible, 0),
             (Goal::Land(StellarId(128)), vec![1])
         );
+    }
+
+    /// A lone interceptor, as `npc`, deciding among `sites`; and the draws
+    /// asked.
+    fn lone(npc: Npc, sites: &[crate::catalog::LandingSite], draws: &[u32]) -> (Goal, Vec<u32>) {
+        let govts = govts(0, 0);
+        let npcs = [npc];
+        let around = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(sites, &npcs)
+        };
+        let mut chance = Draws::of(draws);
+        let goal = Interceptor::default().decide(&npcs[0], &around, &mut chance);
+        (goal, chance.asked)
+    }
+
+    #[test]
+    fn an_interceptor_patrols_even_when_it_has_visited() {
+        let gate = crate::catalog::LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..nova_sim_catalog::fixture::planet(129, 0.0, 0.0)
+        };
+        let sites = [gate, nova_sim_catalog::fixture::planet(128, 0.0, 0.0)];
+        for visited in [128, 129] {
+            let cop = Npc {
+                visited: Some(StellarId(visited)),
+                ..police()
+            };
+            assert_eq!(
+                lone(cop, &sites, &[0]),
+                (Goal::Land(StellarId(128)), vec![1]),
+                "no visited test (@0x8d00d): {visited}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_destroyed_patrol_pick_makes_it_wait() {
+        let ruin = crate::catalog::LandingSite {
+            flags: crate::landing::StellarFlags::CAN_LAND
+                | crate::landing::StellarFlags::ONLY_WHEN_DESTROYED,
+            destroyed: true,
+            ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
+        };
+        assert_eq!(lone(police(), &[ruin], &[0]), (Goal::Wait, vec![1]));
+    }
+
+    #[test]
+    fn no_patrol_pick_leaves_or_waits() {
+        assert_eq!(lone(police(), &[], &[]), (Goal::JumpOut, vec![]));
+        let stranded = Npc {
+            class_fuel: 99,
+            ..police()
+        };
+        assert_eq!(lone(stranded, &[], &[]), (Goal::Wait, vec![]));
+    }
+
+    #[test]
+    fn a_waiting_interceptor_inspects_and_searches_nothing() {
+        let mut waiting = police();
+        waiting.goal = Goal::Wait;
+        let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 300.0);
+        let mut trader_cop = waiting.clone();
+        trader_cop.govt = Some(TRADERS);
+        for npcs in [
+            vec![waiting, ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)],
+            vec![trader_cop, pirate],
+        ] {
+            let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), -10, &[0]);
+            assert_eq!(goal, Goal::Wait, "{:?}", npcs[0].govt);
+            assert!(asked.is_empty(), "no pick");
+        }
+    }
+
+    #[test]
+    fn a_provoked_waiting_interceptor_attacks() {
+        let mut waiting = police();
+        waiting.goal = Goal::Wait;
+        waiting.provoked = 1.0;
+        waiting.target = Some(n(2));
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        assert_eq!(decided(&[waiting, neutral], 0, &[]), Goal::Attack(n(2)));
+    }
+
+    #[test]
+    fn a_waiting_interceptor_short_of_ammo_goes_idle() {
+        // State 6 to 3 to 0 (@0x8d391, @0x8e228).
+        let waiting = Npc {
+            goal: Goal::Wait,
+            ..short_of_ammo(police(), AmmoLeft::Dry, true)
+        };
+        assert_eq!(lone(waiting, &sites(), &[]).0, Goal::Idle);
     }
 
     #[test]
