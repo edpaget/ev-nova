@@ -728,6 +728,34 @@ mod tests {
     }
 
     #[test]
+    fn a_dying_hulk_of_a_pod_carrying_class_ejects_its_crew_pods() {
+        let mut catalog = ejecting(100);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.pod_count = 3;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        let left = hulk(&session).id;
+        let mut pods = 0;
+        for _ in 0..400 {
+            let (_, events) = fight(&mut session, false);
+            pods += events
+                .iter()
+                .filter(|event| {
+                    matches!(event, CombatEvent::PodEjected { ship, .. } if *ship == ShipRef::Npc(left))
+                })
+                .count();
+            if session.npc(left).is_none() {
+                break;
+            }
+        }
+        assert!(session.npc(left).is_none(), "the hulk explodes");
+        assert!((1..=3).contains(&pods), "{pods} of its 3 pods");
+    }
+
+    #[test]
     fn a_dying_player_without_a_pod_or_escape_ship_never_ejects() {
         let catalog = ejecting(2);
         let mut session = flying(&catalog, &[AUTO]);

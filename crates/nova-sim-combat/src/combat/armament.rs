@@ -1315,7 +1315,7 @@ fn burst_end(
 /// inaccurate leaves, drawn on `chance`: `Rand(2i) − i`, none with no draw
 /// for none. A beam turns by it every tick
 /// ([`Beam::follow`](super::beam::Beam::follow)).
-pub(super) fn inaccuracy(inaccuracy: u32, chance: &mut dyn Chance) -> f32 {
+pub fn inaccuracy(inaccuracy: u32, chance: &mut dyn Chance) -> f32 {
     if inaccuracy == 0 {
         return 0.0;
     }

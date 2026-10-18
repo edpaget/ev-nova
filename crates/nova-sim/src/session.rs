@@ -390,6 +390,7 @@ mod missions;
 mod nav;
 mod nebulae;
 mod news;
+mod npc_escape;
 mod outfits;
 mod person_offers;
 mod persons;
@@ -2769,8 +2770,8 @@ impl Session {
         }
         self.raise_disabled(&was, &mut &mut *chance);
         self.settle_strikes(strikes, &was, rules.law);
-        let sorties = self.combat.take_sorties();
-        self.launch_fighters(&sorties);
+        self.launch_sorties();
+        self.npc_escapes(&was, &mut &mut *chance);
         self.sync_fleet();
         self.lose_escorts();
         self.lose_dying_mission_escorts();

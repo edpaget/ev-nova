@@ -244,3 +244,20 @@ pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
 /// 129 (@0x2d8cb), and the warp-out `warpOutSnd`, 130 (@0x2d8ea).
 pub const PLAYER_EXPLOSION_HALTS: [SoundId; 4] =
     [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];
+
+/// `_escapePodSnd`, `snd ` 372 "Eject" (`_LoadSounds` @0x1c240-0x1c252):
+/// the player's eject plays it ([`SimSound::Ejected`]), and so does a dying
+/// NPC's every escape pod, from where the NPC is, at priority 5
+/// (`_HandleShip` @0x351fa, @0x35300), which the view plays for the fight's
+/// `CombatEvent::PodEjected`.
+pub const ESCAPE_POD_SOUND: SoundId = SoundId(372);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_escape_pod_sound_is_snd_372() {
+        assert_eq!(ESCAPE_POD_SOUND, SoundId(372));
+    }
+}

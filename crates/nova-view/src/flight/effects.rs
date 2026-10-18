@@ -288,6 +288,7 @@ impl Effects {
             // A hit's shield flash is the flight view's
             // ([`ShieldFlash`](super::flash::ShieldFlash)).
             CombatEvent::Fired { sound: None, .. }
+            | CombatEvent::PodEjected { .. }
             | CombatEvent::Disabled { .. }
             | CombatEvent::BreakingUp { .. }
             | CombatEvent::Hit { .. } => {}

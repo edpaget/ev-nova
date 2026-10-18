@@ -57,30 +57,31 @@ use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
+    /// Puts each fighter the fight's tick launched in the system
+    /// ([`Combat::take_sorties`](crate::combat::Combat::take_sorties)), as
+    /// [`Session::launch_fighters`] does.
+    pub(super) fn launch_sorties(&mut self) {
+        let sorties = self.combat.take_sorties();
+        self.launch_fighters(&sorties);
+    }
+
     /// Puts each fighter of `sorties` in the system (see the module
     /// docs); one with no room, or whose ship type has no record, goes
     /// back into its bay.
     pub(super) fn launch_fighters(&mut self, sorties: &[Sortie]) {
         for sortie in sorties {
-            if !self.launch_fighter(sortie) {
+            if self.launch_fighter(sortie).is_none() {
                 self.put_back(sortie);
             }
         }
     }
 
-    /// Puts the fighter of `sortie` in the system, and says whether it
-    /// did.
-    fn launch_fighter(&mut self, sortie: &Sortie) -> bool {
-        if self
-            .traffic
-            .free_berth(self.spawn_reserve(SPAWN_RESERVE))
-            .is_none()
-        {
-            return false;
-        }
-        let Some(record) = self.ship_record(sortie.ship).cloned() else {
-            return false;
-        };
+    /// Puts the fighter of `sortie` in the system: its number, or none
+    /// when it found no room or no record of its ship type. A dying NPC's
+    /// last launch comes this way too (see the `npc_escape` module).
+    pub(super) fn launch_fighter(&mut self, sortie: &Sortie) -> Option<NpcId> {
+        self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
+        let record = self.ship_record(sortie.ship).cloned()?;
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
         let kind = table::kind(&record, &self.outfits, &self.arsenal);
         // `_LaunchFighter` sets the fighter's leader before it reads its
@@ -108,10 +109,9 @@ impl Session {
         };
         let npc = fighter(&kind, sortie.ship, state, speed, carrier);
         match sortie.carrier {
-            ShipRef::Player => self.join_as_fighter(npc, sortie.target),
+            ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
         }
-        true
     }
 
     /// The reach of a fighter docking with `carrier`: its sprite's width,
@@ -125,8 +125,8 @@ impl Session {
     }
 
     /// The player's fighter `npc` joins the fleet, launched while the
-    /// player targets `target` (see the module docs).
-    fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) {
+    /// player targets `target` (see the module docs): its number.
+    fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
         let target = target
             .filter(|_| self.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
@@ -157,14 +157,14 @@ impl Session {
         self.fleet.resize(self.pilot.escorts.len() - 1, None);
         self.fleet.push(Some(id));
         self.reform();
+        id
     }
 
     /// NPC `carrier`'s fighter `npc` joins its fleet, of its government,
-    /// attacking its target unless that is the carrier or of its fleet.
-    fn join_carrier(&mut self, mut npc: Npc, carrier: NpcId) {
-        let Some(launcher) = self.npc(carrier).cloned() else {
-            return;
-        };
+    /// attacking its target unless that is the carrier or of its fleet:
+    /// its number, or none with its carrier gone.
+    fn join_carrier(&mut self, mut npc: Npc, carrier: NpcId) -> Option<NpcId> {
+        let launcher = self.npc(carrier).cloned()?;
         let fleet = launcher.fleet();
         let target = launcher
             .target
@@ -174,7 +174,7 @@ impl Session {
         npc.aggression = launcher.aggression;
         npc.target = target;
         npc.goal = target.map_or(Goal::Idle, Goal::Attack);
-        self.traffic.add_npc(npc);
+        Some(self.traffic.add_npc(npc))
     }
 
     /// `ship`'s fleet, if it is in the system.
@@ -1485,7 +1485,7 @@ mod tests {
             target: None,
         };
         let launched = |session: &mut Session, carrier| {
-            assert!(session.launch_fighter(&sortie(carrier)));
+            assert!(session.launch_fighter(&sortie(carrier)).is_some());
             session.npcs().last().expect("launched").state.velocity
         };
         assert_eq!(
@@ -1514,7 +1514,7 @@ mod tests {
             heading: 0.0,
             target: None,
         };
-        assert!(session.launch_fighter(&sortie));
+        assert!(session.launch_fighter(&sortie).is_some());
         assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
     }
 
@@ -1533,7 +1533,7 @@ mod tests {
                 heading: 0.0,
                 target: None,
             };
-            assert!(session.launch_fighter(&sortie));
+            assert!(session.launch_fighter(&sortie).is_some());
             assert_eq!(session.npcs().last().expect("launched").speed, speed);
         }
     }

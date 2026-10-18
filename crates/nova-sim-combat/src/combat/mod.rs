@@ -465,6 +465,23 @@ pub enum CombatEvent {
         /// extra explosions scatter, and how many there are.
         size: f32,
     },
+    /// A dying NPC ejected an escape pod, one of its crew's or its
+    /// person's (`_SpawnEscapePod` @0x45547-0x456cc, called from
+    /// `_HandleShip` @0x351c3 and @0x352c9; see `nova_sim::npc_escape`).
+    /// The pod is a sprite, no ship: the view sets it adrift from here and
+    /// plays `_escapePodSnd` from here, `snd ` 372
+    /// ([`ESCAPE_POD_SOUND`](nova_sim_catalog::sound::ESCAPE_POD_SOUND)),
+    /// whether or not it has room for the pod, as `_HandleShip` plays it
+    /// after the spawn at priority 5 (`_PlaySoundDistance` @0x351fa,
+    /// @0x35300), which the view doesn't play by yet.
+    PodEjected {
+        /// The ship it left.
+        ship: ShipRef,
+        /// Where the ship was.
+        at: Vec2,
+        /// How the ship was moving.
+        velocity: Vec2,
+    },
 }
 
 /// How a weapon's firing sounds: its `Sound` (`snd ` 200 + `Sound`,
@@ -2890,6 +2907,13 @@ impl Combat {
         });
     }
 
+    /// Reports an escape pod `ship` ejected at `at`, moving at `velocity`
+    /// ([`CombatEvent::PodEjected`]).
+    pub fn eject_pod(&mut self, ship: ShipRef, at: Vec2, velocity: Vec2) {
+        self.events
+            .push(CombatEvent::PodEjected { ship, at, velocity });
+    }
+
     /// Reports `burst`'s particles: a shot's hit on an asteroid's, or an
     /// asteroid's as it is destroyed.
     pub fn particles(&mut self, burst: ParticleBurst) {
@@ -4046,6 +4070,21 @@ mod tests {
                 "player {player}"
             );
         }
+    }
+
+    #[test]
+    fn an_ejected_pod_is_raised_from_where_its_ship_is_at_its_velocity() {
+        let mut combat = Combat::default();
+        let (at, velocity) = (Vec2::new(10.0, -4.0), Vec2::new(1.5, 0.5));
+        combat.eject_pod(ShipRef::Npc(NpcId(3)), at, velocity);
+        assert_eq!(
+            combat.take_events(),
+            [CombatEvent::PodEjected {
+                ship: ShipRef::Npc(NpcId(3)),
+                at,
+                velocity,
+            }]
+        );
     }
 
     #[test]

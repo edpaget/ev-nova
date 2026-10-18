@@ -99,6 +99,8 @@
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
+//! - [`npc_escape`]: what a dying NPC leaves behind: its crew's escape
+//!   pods, its person's pod, and its one roll for an escape ship.
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -334,6 +336,7 @@ pub mod course;
 pub use nova_sim_ai::escort;
 pub use nova_sim_catalog::data;
 pub use nova_sim_port::escape;
+pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
 pub use nova_sim_story::exploration;
