@@ -25,7 +25,10 @@
 //! - **Storage:** the output must be private: MetalFX asserts it under
 //!   Metal's validation layer. The output is made on the raw device and
 //!   wrapped for wgpu, which then takes it as initialised and never clears
-//!   it over MetalFX's write.
+//!   it over MetalFX's write. So the crate clears it to opaque black itself,
+//!   once, before handing it out ([`SpatialScaler::output_texture`]): no
+//!   safe caller can read the memory it was made in, whether or not it
+//!   encodes first.
 //! - **Alpha:** the output is opaque (255) wherever the input is.
 //! - **Sizes:** any size from 1x1 up, enlarging, shrinking or neither. A
 //!   zero side aborts the process inside MetalFX (it is not an

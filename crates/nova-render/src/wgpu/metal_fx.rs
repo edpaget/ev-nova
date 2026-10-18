@@ -7,7 +7,8 @@
 //! of its input). MetalFX scales it, colour mode perceptual, into an RGBA8
 //! output texture of the viewport's size: private storage, Metal usage
 //! `ShaderRead | RenderTarget`, made on the raw device and wrapped so wgpu
-//! never clears it over MetalFX's write (`nova_metalfx` says why). The
+//! never clears it over MetalFX's write, and cleared to black once when it
+//! is made (`nova_metalfx` says why). The
 //! output is opaque, so a plain copy lands it on the scene at the
 //! viewport, before the overlay is drawn over it.
 //!
@@ -46,16 +47,20 @@ pub(super) trait Scalers {
     fn make(&mut self, input: (u32, u32), output: (u32, u32)) -> Option<Box<dyn Scale>>;
 }
 
-/// MetalFX's own scalers, through `nova_metalfx`'s safe API, on a device.
+/// MetalFX's own scalers, through `nova_metalfx`'s safe API, on a device
+/// and its queue.
 pub(super) struct MetalFxScalers {
     device: wgpu::Device,
+    queue: wgpu::Queue,
 }
 
 impl MetalFxScalers {
-    /// Scalers on `device`.
-    pub(super) fn new(device: &wgpu::Device) -> Self {
+    /// Scalers on `device`, their output textures cleared through
+    /// `queue`.
+    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Self {
             device: device.clone(),
+            queue: queue.clone(),
         }
     }
 }
@@ -66,19 +71,22 @@ impl Scalers for MetalFxScalers {
         Some(Box::new(MetalFxScale {
             scaler,
             device: self.device.clone(),
+            queue: self.queue.clone(),
         }))
     }
 }
 
-/// One of MetalFX's spatial scalers, with the device it was made on.
+/// One of MetalFX's spatial scalers, with the device it was made on and
+/// its queue.
 struct MetalFxScale {
     scaler: nova_metalfx::SpatialScaler,
     device: wgpu::Device,
+    queue: wgpu::Queue,
 }
 
 impl Scale for MetalFxScale {
     fn output_texture(&self) -> wgpu::Texture {
-        self.scaler.output_texture(&self.device)
+        self.scaler.output_texture(&self.device, &self.queue)
     }
 
     fn encode(&self, world: &wgpu::Texture, output: &wgpu::Texture) -> wgpu::CommandBuffer {

@@ -47,6 +47,32 @@ fn raw_texture(texture: &wgpu::Texture) -> Retained<ProtocolObject<dyn MTLTextur
     hal.raw_handle().retain()
 }
 
+/// Clears `texture` to opaque black with one render pass, submitted
+/// through `queue` at once.
+fn clear(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) {
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("nova MetalFX output clear"),
+    });
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("nova MetalFX output clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    queue.submit(Some(encoder.finish()));
+}
+
 /// Whether MetalFX's spatial scaler runs on `device`: it is on the Metal
 /// backend and MetalFX says it supports its GPU. Sizes aren't asked: the
 /// scaler takes any size but a zero side ([`SpatialScaler::new`]).
@@ -120,19 +146,23 @@ impl SpatialScaler {
 
     /// A texture for [`encode`](Self::encode) to write into: the output
     /// size, RGBA8, private storage (MetalFX's assertion demands it), with
-    /// the Metal usage MetalFX asks for plus shader reads, and wgpu's
-    /// `COPY_SRC | TEXTURE_BINDING`.
+    /// the Metal usage MetalFX asks for plus shader reads and render
+    /// targets, and wgpu's `COPY_SRC | TEXTURE_BINDING |
+    /// RENDER_ATTACHMENT`, cleared to opaque black through `queue`.
     ///
     /// It is made on the raw device and wrapped, so wgpu takes it as
-    /// initialised and never clears it: a clear would wipe MetalFX's
-    /// write, which wgpu can't see.
+    /// initialised and never clears it itself: a lazy clear would wipe
+    /// MetalFX's write, which wgpu can't see. So this clears it once,
+    /// before handing it out: whatever a caller reads before an `encode`
+    /// is that black, never the memory it was made in. Made once a size
+    /// pair, the clear costs nothing per frame.
     ///
     /// # Panics
     ///
     /// If `device` is not the one the scaler was made on, or Metal can't
     /// make the texture.
     #[must_use]
-    pub fn output_texture(&self, device: &wgpu::Device) -> wgpu::Texture {
+    pub fn output_texture(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
         let raw_device = self.same_device(device);
         let (width, height) = self.output;
         // SAFETY: a plain descriptor constructor and property reads.
@@ -147,7 +177,7 @@ impl SpatialScaler {
                 self.raw.outputTextureUsage(),
             )
         };
-        descriptor.setUsage(usage | MTLTextureUsage::ShaderRead);
+        descriptor.setUsage(usage | MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
         descriptor.setStorageMode(MTLStorageMode::Private);
         let raw = raw_device
             .newTextureWithDescriptor(&descriptor)
@@ -160,13 +190,16 @@ impl SpatialScaler {
         // SAFETY: `texture_from_raw` wraps a 2D, one-layer, one-level
         // RGBA8 texture of exactly `size`, which is what `raw` is; and
         // `create_texture_from_hal`'s contract holds: the hal texture was
-        // made on `device`'s own Metal device (`same_device`), it matches
-        // the descriptor below (size, format, one level, one sample, 2D;
-        // `COPY_SRC` and `TEXTURE_BINDING` are blits and shader reads,
-        // which `ShaderRead` covers), and it is initialised as far as wgpu
-        // can tell: it is only ever read after `encode` has written all
-        // of it, earlier in the same submission.
-        unsafe {
+        // made on `device`'s own Metal device (`same_device`), and it
+        // matches the descriptor below (size, format, one level, one
+        // sample, 2D; `COPY_SRC` and `TEXTURE_BINDING` are blits and
+        // shader reads, which `ShaderRead` covers, and
+        // `RENDER_ATTACHMENT` is `RenderTarget`, set above). It must also
+        // be initialised: the wrapped texture never leaves this function
+        // before the clear below is submitted, and the queue runs that
+        // clear before anything a caller submits after, so every read a
+        // safe caller can make sees the clear or MetalFX's later write.
+        let texture = unsafe {
             let hal = wgpu::hal::metal::Device::texture_from_raw(
                 raw,
                 FORMAT,
@@ -189,12 +222,16 @@ impl SpatialScaler {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: FORMAT,
-                    usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+                    usage: wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
                 },
                 wgpu::TextureUses::UNINITIALIZED,
             )
-        }
+        };
+        clear(device, queue, &texture);
+        texture
     }
 
     /// A command buffer that scales `world` into `output`, to submit after
@@ -417,7 +454,7 @@ mod tests {
     ) -> Vec<u8> {
         let world = world(device, queue, input, &pattern(input));
         let scaler = SpatialScaler::new(device, input, output).expect("a scaler at this size");
-        let out = scaler.output_texture(device);
+        let out = scaler.output_texture(device, queue);
         queue.submit(Some(scaler.encode(device, &world, &out)));
         read(device, queue, &out)
     }
@@ -511,11 +548,11 @@ mod tests {
 
     #[test]
     fn the_output_texture_has_the_output_size_and_is_copyable() {
-        let Some((device, _queue)) = metal_fx_gpu() else {
+        let Some((device, queue)) = metal_fx_gpu() else {
             return;
         };
         let scaler = SpatialScaler::new(&device, (32, 24), (60, 45)).expect("a scaler");
-        let out = scaler.output_texture(&device);
+        let out = scaler.output_texture(&device, &queue);
         assert_eq!((out.width(), out.height()), (60, 45));
         assert_eq!(out.format(), wgpu::TextureFormat::Rgba8Unorm);
         assert!(out.usage().contains(wgpu::TextureUsages::COPY_SRC));
@@ -524,12 +561,32 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_output_texture_reads_as_opaque_black_before_any_encode() {
+        // wgpu takes the wrapped texture as initialised and never clears
+        // it, so the crate clears it itself: no safe caller can read the
+        // GPU memory it was made in.
+        let Some((device, queue)) = metal_fx_gpu() else {
+            return;
+        };
+        for output in [(64, 48), (2560, 1440)] {
+            let scaler = SpatialScaler::new(&device, (32, 24), output).expect("a scaler");
+            let out = scaler.output_texture(&device, &queue);
+            let pixels = read(&device, &queue, &out);
+            assert_eq!(pixels.len(), (output.0 * output.1 * 4) as usize);
+            assert!(
+                pixels.chunks(4).all(|pixel| pixel == [0, 0, 0, 255]),
+                "{output:?} is not cleared"
+            );
+        }
+    }
+
+    #[test]
     fn the_output_texture_has_the_usage_metal_fx_asks_plus_shader_reads_privately() {
-        let Some((device, _queue)) = metal_fx_gpu() else {
+        let Some((device, queue)) = metal_fx_gpu() else {
             return;
         };
         let scaler = SpatialScaler::new(&device, (32, 24), (64, 48)).expect("a scaler");
-        let raw = raw_texture(&scaler.output_texture(&device));
+        let raw = raw_texture(&scaler.output_texture(&device, &queue));
         // SAFETY: a plain property read of a live scaler.
         let asked = unsafe { scaler.raw.outputTextureUsage() };
         assert!(!asked.is_empty());

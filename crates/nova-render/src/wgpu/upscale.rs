@@ -104,7 +104,7 @@ pub(super) fn upscale_for(
 #[cfg(target_os = "macos")]
 fn metal_fx(device: &wgpu::Device, queue: &wgpu::Queue) -> Box<dyn Upscale> {
     use super::metal_fx::{MetalFxScalers, MetalFxSpatial};
-    let scalers = Box::new(MetalFxScalers::new(device));
+    let scalers = Box::new(MetalFxScalers::new(device, queue));
     Box::new(MetalFxSpatial::new(scalers, device, queue))
 }
 

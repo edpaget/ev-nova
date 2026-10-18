@@ -238,11 +238,18 @@ exclude_re = [
     # same value: these mutants cannot change behaviour. `ensure_scene`
     # combines the scene's and the backdrop's texture usages; `canvas`
     # (which it now calls) the canvas's. MetalFX's output texture's wgpu
-    # usage (`COPY_SRC | TEXTURE_BINDING`, column 58) is disjoint bits too;
-    # its Metal usage's `|` (MetalFX's ask plus `ShaderRead`, which
-    # overlap) is mutated and tested.
+    # usage (`COPY_SRC | TEXTURE_BINDING | RENDER_ATTACHMENT`, the `|`s at
+    # column 25) is disjoint bits too.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene|canvas))",
-    "nova-metalfx/src/scaler\\.rs:\\d+:58: replace \\| with \\^ in SpatialScaler::output_texture$",
+    "nova-metalfx/src/scaler\\.rs:\\d+:25: replace \\| with \\^ in SpatialScaler::output_texture$",
+    # Its Metal usage is MetalFX's ask `| ShaderRead | RenderTarget`, and
+    # MetalFX asks for both bits itself on every GPU the macOS host has
+    # (the phase 7 spike), so dropping either added bit (`&` for the first
+    # `|`, column 35; `^` or `&` for the second, column 65, which binds
+    # `ShaderRead ^ RenderTarget` first) leaves the same usage. `^` at
+    # column 35 clears `ShaderRead` and is caught.
+    "nova-metalfx/src/scaler\\.rs:\\d+:35: replace \\| with & in SpatialScaler::output_texture$",
+    "nova-metalfx/src/scaler\\.rs:\\d+:65: replace \\| with (\\^|&) in SpatialScaler::output_texture$",
     # The glow ramp's thrust step raises the base only below cruise (24).
     # With `<=` a thrusting base of 24 steps to 25, and the next step, the
     # decay above cruise, takes it straight back to 24: the same result for
