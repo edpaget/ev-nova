@@ -451,3 +451,34 @@ fn double_times_second_pass_runs_the_players_point_defence_and_no_npcs() {
         "the advance pass's, the player's reloading"
     );
 }
+
+#[test]
+fn a_lock_meets_its_target_where_it_is_not_where_it_stood() {
+    // `_HandleShot`'s lock (@0x35855) reads the target as it is when the
+    // missile moves, where the collision passes and the ends of life meet
+    // an NPC where it stood as the last tick ran.
+    let mut ships = [player_with(missile()), far_b()];
+    let mut combat = Combat::default();
+    for _ in 1..=40 {
+        // B moves between ticks, as a session's traffic would.
+        ships[1].state.position.y += 10.0;
+        let now = ships[1].state.position;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        let locked = combat.take_strikes().iter().any(|strike| strike.lock);
+        if locked {
+            let at: Vec<Vec2> = combat
+                .take_events()
+                .iter()
+                .filter_map(|event| match *event {
+                    CombatEvent::Hit { ship, at, .. } if ship == B => Some(at),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(at, [now]);
+            return;
+        }
+        combat.take_events();
+    }
+    panic!("never locked");
+}
