@@ -165,10 +165,9 @@
 //! [`Chance`], seeing the player's ship, the governments read when the
 //! session starts, the system's government and the player's legal record
 //! in the system (see [`legal`](crate::legal)), and answering the fight's strikes since the last traffic
-//! tick; it stands still while the player is landed, and once the
-//! player's warp is past its lead-in ([`Session::in_warp_lead_in`]), as
-//! the player's own ship does. Through the lead-in the ships the player
-//! leads keep their place beside it.
+//! tick; it stands still while the player is landed, and flies on through
+//! the player's jump, the ships the player leads warping out with it (see
+//! the `warp_stage` module).
 //!
 //! Ships fight ([`combat`](crate::combat)): the player holds a fire
 //! command ([`Session::hold_trigger`]) and aims at its target, and each
@@ -431,6 +430,7 @@ mod target_panel;
 #[cfg(test)]
 mod thrust;
 mod tutorial;
+mod warp_stage;
 
 pub use hooks::HookRules;
 pub use map_click::{MapClicked, MapPress};
@@ -531,7 +531,6 @@ use crate::outfitter::{
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, ExploredLevel, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
-use crate::player_turn::brake_aim;
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
@@ -643,7 +642,7 @@ impl FightTerms {
             jamming: self.jamming,
             class_speed: self.class_speed,
             top_speed: self.top_speed,
-            jumping: false,
+            jumping: npc.warp.under_way(),
             afterburner: false,
             tractor,
             ion,
@@ -790,6 +789,9 @@ pub struct Session {
     /// natural end (see [`warp::WarpOut`]); not saved, as the original's
     /// sounds are not.
     warp_out: warp::WarpOut,
+    /// The player's warp stage: its +0x50, the warp end's flags and the
+    /// screen's white (see the `warp_stage` module).
+    warp: warp_stage::PlayerWarp,
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
@@ -1535,6 +1537,7 @@ impl Session {
             warp_ups: warp::WarpUps::default(),
             warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
             warp_out: warp::WarpOut::default(),
+            warp: warp_stage::PlayerWarp::default(),
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
@@ -2021,6 +2024,7 @@ impl Session {
     /// frame counter moves on. Only the advance pass steps the Red
     /// Alert's blink, as `_HandleAlertSprite` runs on it alone.
     fn fly_player(&mut self, frame: i16, controls: Controls, pass: GamePass) {
+        self.gamma_tick();
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
@@ -2108,52 +2112,17 @@ impl Session {
                 self.burn_afterburner();
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
-                let handling = self.flying_handling();
-                let slow_down = !self.stats.fast_jump;
-                let flight = self.flight_rules();
-                let inertialess = self.player_inertialess();
-                let stage = pre_jump::stage(
-                    &self.player,
-                    &handling,
-                    bearing,
-                    slow_down,
-                    flight.player_turn,
-                    inertialess,
-                );
-                // An inertialess ship's brake writes no aim (@0x6b6c3).
-                if stage != PreJump::Brake {
-                    self.aim_at_jump(to);
-                } else if !inertialess {
-                    self.aim = brake_aim(self.player.velocity);
-                }
-                let caps = self.player_caps();
-                let speed = inertialess.then_some(&mut self.player_speed);
-                let thrust = pre_jump::fly(
-                    &mut self.player,
-                    &handling,
-                    bearing,
-                    slow_down,
-                    caps,
-                    flight,
-                    speed,
-                );
-                self.ramp_pre_jump(thrust);
-                self.burn_afterburner();
-                let warp = if again {
-                    warp
-                } else {
-                    warp.map(|ticks| ticks.saturating_add(1))
-                };
-                self.stage_jump(to, bearing, warp);
+                self.fly_pre_jump(to, bearing, warp, controls, again);
             }
             Some(Jump::Hyperspace { to, warp }) => {
-                self.burn_afterburner();
                 self.aim_at_jump(to);
                 self.jump = Some(Jump::Hyperspace {
                     to,
-                    warp: warp.saturating_add(1),
+                    warp: if again { warp } else { warp.saturating_add(1) },
                 });
-                self.let_go_of_led_targets();
+                let bearing = self.jump_aim(to);
+                self.fly_warp_stage(bearing, controls);
+                self.burn_afterburner();
                 return;
             }
         }
@@ -2394,11 +2363,10 @@ impl Session {
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
-    /// says, rolling on `chance`. While the ship is landed, or jumping
-    /// past the warp's lead-in ([`Session::in_warp_lead_in`]), it stands
-    /// still; through the lead-in it flies on, so an interceptor can still
-    /// look the player over, but for the ships the player leads and their
-    /// fighters, which keep their place beside it. The first tick in flight after the session starts
+    /// says, rolling on `chance`. While the ship is landed it stands
+    /// still; through a jump it flies on, the ships the player leads
+    /// warping out with it (see the `warp_stage` module and
+    /// `nova_sim::traffic::warp_out`). The first tick in flight after the session starts
     /// instead populates the system ([`Session::populate`]) from
     /// `catalog`, as the original sets a system up on arrival; its NPCs
     /// move from the next. A take-off populates the system itself
@@ -2419,8 +2387,7 @@ impl Session {
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let flying = self.jumping().is_none() || self.in_warp_lead_in();
-        if self.landed.is_none() && flying {
+        if self.landed.is_none() {
             if self.traffic_due {
                 if self.jumping().is_none() {
                     self.populate(catalog, chance);
@@ -2432,9 +2399,8 @@ impl Session {
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
                 let marks = self.mission_marks();
-                let still = self.held_through_the_warp();
                 self.step_traffic(|traffic, world| {
-                    traffic.tick_holding(behaviour, world, &strikes, &still, chance);
+                    traffic.tick_in(behaviour, world, &strikes, chance);
                 });
                 self.announce_fleets(chance);
                 self.answer_comm_calls(chance);
@@ -2463,10 +2429,11 @@ impl Session {
     /// after double time's second pass ([`Session::tick_again`]), as
     /// `_HandleShot` runs on both passes. Whatever
     /// is left unanswered, [`Session::tick_traffic`] answers (as for a
-    /// caller that never calls this). While the ship is landed or jumping,
-    /// or before the system is set up, nothing is answered.
+    /// caller that never calls this). While the ship is landed, or before
+    /// the system is set up, nothing is answered; the world runs through a
+    /// jump, so a hit in it is answered.
     pub fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
-        if self.landed.is_some() || self.jumping().is_some() || self.traffic_due {
+        if self.landed.is_some() || self.traffic_due {
             return;
         }
         let strikes = std::mem::take(&mut self.strikes);
@@ -2522,6 +2489,7 @@ impl Session {
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            warp: self.warp_world(),
         };
         f(&mut self.traffic, world);
     }
@@ -2598,6 +2566,7 @@ impl Session {
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            warp: self.warp_world(),
         }
     }
 
@@ -2695,10 +2664,10 @@ impl Session {
     /// at its target, by `rules`, drawing each shot's inaccuracy and
     /// spread on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
     /// the system, and the target is let go once it is breaking up or
-    /// gone. While the ship is landed or jumping, it stands still. While
-    /// it brakes and turns for a jump ([`Session::preparing_jump`]) the
-    /// fight goes on, but the player's held trigger fires nothing but its
-    /// point defence (see `player_trigger`, @0x6aaf0 and @0x6ab75).
+    /// gone. While the ship is landed, it stands still. Through a jump,
+    /// from its brake to its arrival, the fight goes on, but the player's
+    /// held trigger fires nothing but its point defence (see
+    /// `player_trigger`, @0x6aaf0 and @0x6ab75).
     ///
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
@@ -2713,8 +2682,9 @@ impl Session {
     /// the scan itself is held, as `_ScanPlayer`'s jump-timing check holds
     /// it (@0x7e562-0x7e633). A scan queued in a lead-in step's traffic
     /// tick is taken here in the same step, so it settles before the
-    /// frame is drawn and before the arrival. Then the fight stands still
-    /// while the ship jumps. The stellars
+    /// frame is drawn and before the arrival. The fight runs on through a
+    /// jump, as the original's does (see the `warp_stage` module). The
+    /// stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module). While the player's ship breaks up, the klaxon sounds
@@ -2728,8 +2698,9 @@ impl Session {
     /// ([`impact`](crate::combat::impact)); the player's is not pushed
     /// while its jump is under way, the pre-jump stage included. A tractor
     /// beam sets the lock of the ship it holds, the player's
-    /// ([`Session::tractor`]) or an NPC's. Before anything else,
-    /// unless landed or jumping, the sabotage clock ticks, and what it sets
+    /// ([`Session::tractor`]) or an NPC's; an NPC whose warp out is under
+    /// way is not pushed either. Before anything else, unless landed, the
+    /// sabotage clock ticks, and what it sets
     /// off goes off (see the `sabotage` module), and the eject is checked
     /// (see the `eject` module), both before the scans. The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
@@ -2745,11 +2716,9 @@ impl Session {
     /// original draws it again.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
-        if self.landed.is_some() || self.jumping().is_some() {
-            // The fight stands still, but a scan a lead-in step's traffic
-            // tick queued still settles (see `take_scans`), and the pass's
-            // asteroid work runs (see the `asteroids` module).
-            self.take_scans(rules.law, &mut &mut *chance);
+        if self.landed.is_some() {
+            // The fight stands still, but the pass's asteroid work runs
+            // (see the `asteroids` module).
             self.drawn.clear();
             self.tick_asteroids(&mut *chance);
             return;
@@ -2859,6 +2828,7 @@ impl Session {
         // The lines are `_DamageShip`'s, said as each hit lands, so before
         // the eject below can take the player into a new ship.
         let strikes = self.combat.take_strikes();
+        let struck = struck_npcs(&strikes);
         self.player_downed(player_was, &strikes, &mut &mut *chance);
         self.take_shoves();
         self.eject_on_breakup(pass, &mut &mut *chance);
@@ -2869,7 +2839,7 @@ impl Session {
         self.launch_fighters(&sorties, &mut &mut *chance);
         self.npc_escapes(&was, &mut &mut *chance);
         self.sync_fleet();
-        self.lose_escorts();
+        self.lose_escorts(&was, &struck);
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_destroyed(&mut &mut *chance);
@@ -3508,9 +3478,10 @@ impl Session {
     /// asking the rules again, so a ship that brakes into its no-jump zone
     /// still jumps. Once it has stopped braking the warp's clock runs (see
     /// [`Session::tick`]), and the warp-up sounds here when the ship needs
-    /// no braking. In hyperspace the ship stays where it is until it
-    /// arrives; the traffic flies on, and the scans are taken, only
-    /// through the warp's lead-in ([`Session::in_warp_lead_in`]).
+    /// no braking. Through the warp stage the ship moves off toward the
+    /// bearing and the world runs on (see the `warp_stage` module) until
+    /// the warp ends ([`Session::warp_end_due`]); the scans are held past
+    /// the warp's lead-in ([`Session::in_warp_lead_in`]).
     /// Only this first hop of a multi-jump turns and slows: the rest are
     /// made in hyperspace, on arrival.
     ///
@@ -3574,9 +3545,10 @@ impl Session {
 
     /// Sets the jump to `to` in the stage the ship is now in, on its way
     /// to `bearing`, `warp` the warp's clock this tick (see [`Jump`]):
-    /// none while it brakes, and from 0 on the tick it stops braking,
-    /// which leaves the pilot past the tutorial (@0x6b603) and sounds the
-    /// warp-up: `snd ` 129 in double time
+    /// none while it brakes, holding +0x50 at 1.0, and from 0 on the tick
+    /// it stops braking, which starts the warp stage
+    /// ([`Session::start_warp`]): +0x50 = 2.0, the pilot past the tutorial
+    /// (@0x6b603) and the warp-up sounded: `snd ` 129 in double time
     /// ([`SimSound::JumpBeganInDoubleTime`], @0x6b60d-0x6b63f), else 128
     /// ([`SimSound::JumpBegan`], @0x6b645-0x6b669), played at
     /// @0x6b690, unless that warp-up is still playing
@@ -3584,8 +3556,7 @@ impl Session {
     /// skips the play alone: the clock and the tutorial's flag are already
     /// set.
     /// Once the ship is ready to turn no further and slow no more, the
-    /// jump begins: the thrust stops, the glow goes out and the led ships
-    /// let go of their targets.
+    /// jump begins: the thrust sound stops, as the warp takes no thrust.
     fn stage_jump(&mut self, to: SystemId, bearing: Option<i16>, warp: Option<u32>) {
         let handling = self.flying_handling();
         let stage = pre_jump::stage(
@@ -3604,33 +3575,38 @@ impl Session {
         match (stage, warp) {
             (PreJump::Ready, Some(warp)) => {
                 self.jump = Some(Jump::Hyperspace { to, warp });
-                self.stop_thrust();
+                self.sound_thrust(false);
             }
             _ => self.jump = Some(Jump::PreJump { to, bearing, warp }),
         }
-        if started {
-            // The pilot is past the tutorial (`_HandlePlayer` @0x6b603).
-            self.tutorial.jumped();
-            self.sound_warp_up();
+        if stage == PreJump::Brake {
+            self.hold_warp_stage();
         }
-        if self.jumping().is_some() {
-            self.let_go_of_led_targets();
+        if started {
+            self.start_warp();
         }
     }
 
     /// Sounds the warp-up for the warp stage's start: 129 in double time,
-    /// else 128, unless it is still playing (see [`Session::stage_jump`]).
+    /// else 128, unless it is still playing (see [`Session::stage_jump`]),
+    /// pitched by the ship class's warp factor (`_AdjustWarpSoundSpeed`
+    /// @0x6b66f-0x6b688, [`warp::warp_up_rate`]), so it lasts its pitched
+    /// length ([`warp::pitched_length`]); a warp-up played clears
+    /// `_warpSoundDone` (@0x6b695).
     fn sound_warp_up(&mut self) {
         let double_time = self.double_time;
         if self.warp_ups.playing(double_time) {
             return;
         }
+        let rate = warp::warp_up_rate(self.player_warp_factor());
         let duration = self.warp_sounds[usize::from(double_time)];
-        self.warp_ups.start(double_time, duration);
+        self.warp_ups
+            .start(double_time, warp::pitched_length(duration, rate));
+        self.clear_warp_sound_done();
         self.sounds.push(if double_time {
-            SimSound::JumpBeganInDoubleTime
+            SimSound::JumpBeganInDoubleTime { rate }
         } else {
-            SimSound::JumpBegan
+            SimSound::JumpBegan { rate }
         });
     }
 
@@ -3677,35 +3653,12 @@ impl Session {
 
     /// Whether the jump has begun ([`Session::jumping`]) and its warp is
     /// still in its lead-in, where the player is scanned as before the
-    /// warp: the traffic flies on and the scans are taken until the
-    /// lead-in ends, then both stand still until the ship arrives. A
-    /// disabled player's warp never ends its lead-in (see the `warp`
-    /// module).
+    /// warp: past it, until the ship arrives, `_ScanPlayer` holds every
+    /// scan. A disabled player's warp never ends its lead-in (see the
+    /// `warp` module).
     #[must_use]
     pub fn in_warp_lead_in(&self) -> bool {
         self.jumping().is_some() && !self.warp_holds_scans()
-    }
-
-    /// The NPCs the traffic holds still while the player's jump is under
-    /// way: none before it begins; once it has, the ships the player leads
-    /// ([`Session::player_led`]) and the fighters they lead, which keep
-    /// their place beside the player, as the original's led ships time
-    /// their warp-out by the player's clock (`_HandleShip`
-    /// @0x347c1-0x348bd) and do not accelerate before t > 0.45·d/w²,
-    /// after the lead-in.
-    fn held_through_the_warp(&self) -> BTreeSet<NpcId> {
-        if self.jumping().is_none() {
-            return BTreeSet::new();
-        }
-        let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
-        self.traffic
-            .npcs()
-            .iter()
-            .filter(|npc| {
-                led.contains(&npc.id) || npc.leader.is_some_and(|leader| led.contains(&leader))
-            })
-            .map(|npc| npc.id)
-            .collect()
     }
 
     /// The system being jumped to, once the jump itself has begun and
@@ -3810,6 +3763,7 @@ impl Session {
             return None;
         };
         self.jump = None;
+        self.end_warp();
         // The natural end, the warp-ups finished (`_warpSoundDone`
         // @0x6bb5e-0x6bba4), read before the halt ends them.
         let natural_end = !self.warp_ups.playing(false) && !self.warp_ups.playing(true);
@@ -6295,6 +6249,17 @@ impl Session {
     }
 }
 
+/// The NPCs `strikes` hit.
+fn struck_npcs(strikes: &[Strike]) -> BTreeSet<NpcId> {
+    strikes
+        .iter()
+        .filter_map(|strike| match strike.ship {
+            ShipRef::Npc(id) => Some(id),
+            ShipRef::Player => None,
+        })
+        .collect()
+}
+
 /// An NPC as it was before a fight's tick: what the tick's disablings,
 /// crimes and kills are read against, as the tick can change each (a
 /// mission failed by its ship's loss can lose the ship its mark).
@@ -6643,6 +6608,14 @@ fn fill_in(
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(super) mod tests {
+
+    /// The warp-up `session`'s ship sounds as its warp stage starts out of
+    /// double time, pitched by its class's warp factor.
+    pub(crate) fn jump_began(session: &Session) -> SimSound {
+        SimSound::JumpBegan {
+            rate: crate::warp::warp_up_rate(session.player_warp_factor()),
+        }
+    }
     use super::*;
     use crate::catalog::{CharacterStart, GateSite, LandingSite, SoundId, StellarId};
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
@@ -7672,19 +7645,24 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn while_jumping_ticks_move_nothing() {
+    fn while_jumping_the_thrust_key_does_nothing_and_the_ship_stays_in_its_system() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(session.jumping(), Some(SystemId(131)));
-        let leaving = *session.player();
         for _ in 0..10 {
+            let speed = session.player().velocity.length();
             session.tick(THRUST);
+            assert!(
+                session.player().velocity.length() <= speed,
+                "only the warp's drag: {:?}",
+                session.player()
+            );
         }
-        assert_eq!(*session.player(), leaving);
         assert_eq!(session.system(), SystemId(130), "not there yet");
+        assert!(!session.thrusting);
     }
 
     #[test]
@@ -7872,7 +7850,7 @@ pub(super) mod tests {
     fn warp_ups(sounds: &[SimSound]) -> usize {
         sounds
             .iter()
-            .filter(|sound| **sound == SimSound::JumpBegan)
+            .filter(|sound| matches!(**sound, SimSound::JumpBegan { .. }))
             .count()
     }
 
@@ -8057,7 +8035,7 @@ pub(super) mod tests {
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         assert_eq!(session.jumping(), Some(SystemId(131)));
         assert_eq!(session.preparing_jump(), None);
-        assert_eq!(session.take_sounds(), [SimSound::JumpBegan], "one warp-up");
+        assert_eq!(session.take_sounds(), [jump_began(&session)], "one warp-up");
         assert_eq!(
             session.warp_clock(),
             Some(0),
@@ -8111,7 +8089,9 @@ pub(super) mod tests {
         // The warp-up sounds as the brake ends and the warp stage begins
         // (@0x6b690), and the thrust stops as the turn takes over.
         assert_eq!(warp_ups(&sounds), 1);
-        let warp_up = sounds.iter().position(|s| *s == SimSound::JumpBegan);
+        let warp_up = sounds
+            .iter()
+            .position(|s| matches!(s, SimSound::JumpBegan { .. }));
         assert!(
             warp_up.is_some_and(|at| at > 0),
             "after the brake: {sounds:?}"
@@ -8123,16 +8103,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_jump_that_begins_mid_thrust_stops_the_thrust_first() {
+    fn a_jump_that_begins_mid_thrust_stops_the_thrust_first_and_keeps_its_glow() {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
         session.tick(THRUST);
         session.take_sounds();
+        assert_eq!(session.engine_glow(), 1);
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         assert_eq!(
             session.take_sounds(),
-            [SimSound::ThrustStopped, SimSound::JumpBegan]
+            [SimSound::ThrustStopped, jump_began(&session)]
         );
-        assert_eq!(session.engine_glow(), 0);
+        assert_eq!(session.engine_glow(), 1, "the warp's glow runs on from it");
     }
 
     #[test]
@@ -9142,7 +9123,7 @@ pub(super) mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.take_sounds(),
-            [SimSound::ThrustStopped, SimSound::JumpBegan]
+            [SimSound::ThrustStopped, jump_began(&session)]
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "jumping, nothing thrusts");
@@ -9392,7 +9373,7 @@ pub(super) mod tests {
         session.tick(Controls::default());
         session.take_sounds();
         begin_jump_now(&mut session).expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+        assert_eq!(session.take_sounds(), [jump_began(&session)]);
     }
 
     #[test]
@@ -15538,7 +15519,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn traffic_stands_still_while_landed_or_jumping_past_the_warps_lead_in() {
+    fn traffic_stands_still_while_landed_and_flies_on_through_a_jump() {
         let mut catalog = trafficked(130, 1, 1);
         let elsewhere = (SystemId(131), catalog.traffic[0].1);
         catalog.traffic.push(elsewhere);
@@ -15559,8 +15540,12 @@ pub(super) mod tests {
         let before = session.npcs().to_vec();
         let mut chance = Draws::of(&[]);
         session.tick_traffic(&catalog, &Peaceful, &mut chance);
-        assert_eq!(session.npcs(), before, "jumping, past the lead-in");
-        assert!(chance.asked.is_empty());
+        assert_eq!(session.npcs().len(), 1, "not populated again");
+        assert_ne!(
+            session.npcs()[0].state,
+            before[0].state,
+            "jumping, past the lead-in, it flies on"
+        );
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let before = session.npcs().to_vec();
         session.tick_traffic(&catalog, &Peaceful, &mut chance);
@@ -19244,7 +19229,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_watched_ship_is_not_observed_while_landed_or_jumping_past_the_warps_lead_in() {
+    fn a_watched_ship_is_not_observed_while_landed_but_is_through_a_jump() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.landed = Some(StellarId(128));
@@ -19258,8 +19243,8 @@ pub(super) mod tests {
         });
         assert!(!session.in_warp_lead_in());
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
-        assert_eq!(fates(&session), [], "jumping");
-        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)], "jumping");
+        assert!(session.story.watched.is_empty());
     }
 
     #[test]

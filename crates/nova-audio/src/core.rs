@@ -7,7 +7,7 @@ use nova_data::SoundId;
 use nova_view::Showing;
 use nova_view::sound::{CombatSound, SimSound, Sound, UiSound};
 
-use crate::port::{Audio, AudioCommand, Priority, Volume};
+use crate::port::{Audio, AudioCommand, PlaybackRate, Priority, Volume};
 use crate::settings::{AudioSettings, music_volume_level};
 use crate::table::SoundTable;
 
@@ -178,9 +178,12 @@ impl<A: Audio> AudioCore<A> {
             SimSound::ThrustStopped => self.thrusting = false,
             SimSound::Landed => self.play(self.table.landing, at::LANDING),
             SimSound::TookOff => self.play(self.table.take_off, at::TAKE_OFF),
-            SimSound::JumpBegan => self.play(self.table.jump, at::JUMP),
-            SimSound::JumpBeganInDoubleTime => {
-                self.play(self.table.jump_double_time, at::JUMP);
+            SimSound::JumpBegan { rate } => {
+                self.play_at_rate(self.table.jump, at::JUMP, PlaybackRate::from_fixed(rate));
+            }
+            SimSound::JumpBeganInDoubleTime { rate } => {
+                let rate = PlaybackRate::from_fixed(rate);
+                self.play_at_rate(self.table.jump_double_time, at::JUMP, rate);
             }
             SimSound::Arrived => self.play(self.table.arrival, at::ARRIVAL),
             SimSound::ScriptMessage => {
@@ -397,6 +400,24 @@ impl<A: Audio> AudioCore<A> {
     /// `priority`, while sound is on.
     fn play(&mut self, sound: Option<SoundId>, priority: Priority) {
         self.play_at(sound, self.settings.effects_volume, priority);
+    }
+
+    /// Plays `sound`, if there is one, at the effects' volume, `priority`
+    /// and `rate`, while sound is on: a sound at its own rate as any other
+    /// ([`AudioCommand::Play`]), else pitched ([`AudioCommand::PlayAtRate`]).
+    fn play_at_rate(&mut self, sound: Option<SoundId>, priority: Priority, rate: PlaybackRate) {
+        if rate == PlaybackRate::NATURAL {
+            self.play(sound, priority);
+        } else if let Some(sound) = sound
+            && self.settings.sound
+        {
+            self.audio.run(AudioCommand::PlayAtRate {
+                sound,
+                volume: self.settings.effects_volume,
+                priority,
+                rate,
+            });
+        }
     }
 
     /// Plays `sound`, if there is one, at `volume` and `priority`, while
@@ -665,7 +686,7 @@ mod tests {
     const THRUST: Sound = Sound::Sim(SimSound::ThrustStarted);
     const COAST: Sound = Sound::Sim(SimSound::ThrustStopped);
     const TOOK_OFF: Sound = Sound::Sim(SimSound::TookOff);
-    const JUMP: Sound = Sound::Sim(SimSound::JumpBegan);
+    const JUMP: Sound = Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 });
     const ARRIVED: Sound = Sound::Sim(SimSound::Arrived);
 
     const LANDED: Sound = Sound::Sim(SimSound::Landed);
@@ -800,7 +821,10 @@ mod tests {
         let cases = [
             (LANDED, at::LANDING),
             (JUMP, at::JUMP),
-            (Sound::Sim(SimSound::JumpBeganInDoubleTime), at::JUMP),
+            (
+                Sound::Sim(SimSound::JumpBeganInDoubleTime { rate: 0x1_0000 }),
+                at::JUMP,
+            ),
             (ARRIVED, at::ARRIVAL),
             (Sound::Sim(SimSound::ScriptMessage), at::SCRIPT_MESSAGE),
             (Sound::Sim(SimSound::RedAlert), at::RED_ALERT),
@@ -1289,7 +1313,7 @@ mod tests {
 
     #[test]
     fn a_jump_begun_in_double_time_plays_warp_up_x2_at_the_effects_volume() {
-        let jump = Sound::Sim(SimSound::JumpBeganInDoubleTime);
+        let jump = Sound::Sim(SimSound::JumpBeganInDoubleTime { rate: 0x1_0000 });
         let (mut core, log) = original();
         core.set_effects_volume(Volume::new(0.5));
         core.update(Some(Showing::Flight), &[jump]);
@@ -1303,6 +1327,44 @@ mod tests {
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::Flight), &[jump]);
         assert_eq!(drain(&log), [], "none in the table");
+    }
+
+    #[test]
+    fn a_warp_up_pitched_by_w_plays_at_its_rate_and_one_at_its_own_plainly() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        let pitched = |rate| Sound::Sim(SimSound::JumpBegan { rate });
+        core.update(Some(Showing::Flight), &[pitched(50_412)]);
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::PlayAtRate {
+                sound: SoundId(128),
+                volume: Volume::new(0.5),
+                priority: crate::priority::JUMP,
+                rate: PlaybackRate::from_fixed(50_412),
+            }]
+        );
+        let double = Sound::Sim(SimSound::JumpBeganInDoubleTime { rate: 72_017 });
+        core.update(Some(Showing::Flight), &[double]);
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::PlayAtRate {
+                sound: SoundId(129),
+                volume: Volume::new(0.5),
+                priority: crate::priority::JUMP,
+                rate: PlaybackRate::from_fixed(72_017),
+            }]
+        );
+        core.update(Some(Showing::Flight), &[pitched(0x1_0000)]);
+        assert_eq!(drain(&log), [play(128, 0.5)], "its own rate");
+        core.set_sound(false);
+        core.update(Some(Showing::Flight), &[pitched(50_412)]);
+        assert!(
+            drain(&log)
+                .iter()
+                .all(|command| !matches!(command, AudioCommand::PlayAtRate { .. })),
+            "sound off"
+        );
     }
 
     #[test]

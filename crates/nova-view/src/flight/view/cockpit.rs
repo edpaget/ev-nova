@@ -111,9 +111,7 @@ impl<C> FlightView<C> {
     /// hovering as the pointer is over something targetable now
     /// ([`FlightView::hovering`]), once the session's steps have run and
     /// the ships are where the frame draws them. A key pressed since the
-    /// last step, or a flight key held, fades it. While the jump's streak
-    /// and fade-out hold flight no step runs, and the cursor holds, which
-    /// no player sees under the streak.
+    /// last step, or a flight key held, fades it.
     pub(super) fn step_cursor(&mut self, steps: u32) {
         if steps == 0 {
             return;
@@ -850,7 +848,7 @@ impl<C> FlightView<C> {
     }
 
     /// Closes the escort menu once it has timed out or the fleet is empty
-    /// ([`EscortMenu::update`]), every frame, the streak's included, as
+    /// ([`EscortMenu::update`]), every frame, the warp's included, as
     /// the original checks it on every frame of a jump (@0x6df59).
     pub(super) fn update_escort_menu(&mut self) {
         let rows = self.escort_rows();

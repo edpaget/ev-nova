@@ -23,14 +23,23 @@ pub enum SimSound {
     /// @0x6b645-0x6b690), before the turn to the jump's bearing. None
     /// sounds while 128 still plays from an earlier start: the
     /// still-playing skip (@0x6b645-0x6b658), which the session decides
-    /// (see the [`warp`](crate::warp) module's `WarpUps`).
-    JumpBegan,
+    /// (see the [`warp`](crate::warp) module's `WarpUps`). It plays at
+    /// `rate`, a 16.16 fraction of its own rate, pitched by the ship
+    /// class's warp factor (`_AdjustWarpSoundSpeed` @0x5ecc, called
+    /// @0x6b67d-0x6b688; [`warp_up_rate`](crate::warp::warp_up_rate)).
+    JumpBegan {
+        /// The playback rate, 0x10000 at its own.
+        rate: u32,
+    },
     /// The warp stage of a jump began in double time: the double-time
     /// warp-up, `_warpUpSnd[1]`, `snd ` 129 "Warp up x2" (`_HandlePlayer`
     /// @0x6b60d-0x6b63f, @0x6b66f-0x6b690), in place of
     /// [`SimSound::JumpBegan`], with its own still-playing skip
-    /// (@0x6b617-0x6b62b).
-    JumpBeganInDoubleTime,
+    /// (@0x6b617-0x6b62b), pitched as it is.
+    JumpBeganInDoubleTime {
+        /// The playback rate, 0x10000 at its own.
+        rate: u32,
+    },
     /// A jump ended in the next system: the warp-out, `snd ` 130
     /// (`_HandlePlayer` @0x6bbd3-0x6bc08; the hypergate @0x63e57 and the
     /// wormhole @0x6443d play it too). A jump's warp end first halts the

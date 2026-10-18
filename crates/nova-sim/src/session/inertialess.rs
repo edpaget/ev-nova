@@ -115,20 +115,6 @@ impl Session {
         self.engine_glow = ramp_inertialess_glow(self.engine_glow, thrust, follow, burning);
     }
 
-    /// Ramps the glow after a pre-jump tick in which the ship thrust or
-    /// not, following its speed if it is inertialess.
-    pub(super) fn ramp_pre_jump(&mut self, thrust: bool) {
-        if self.player_inertialess() {
-            let follow = Follow::Speed {
-                speed: self.player_speed,
-                max_speed: self.flying_handling().max_speed,
-            };
-            self.ramp_inertialess(thrust, follow);
-        } else {
-            self.thrust(thrust);
-        }
-    }
-
     /// Sets the player's speed as it arrives moving at its velocity: its
     /// length (see the module docs).
     pub(super) fn arrive_at_speed(&mut self) {

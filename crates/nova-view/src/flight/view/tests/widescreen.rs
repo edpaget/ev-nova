@@ -210,7 +210,8 @@ fn the_jumps_white_fade_covers_the_widened_view() {
     let mut view = widened(view);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1125));
+    tick_until_lit(&mut view);
+    view.tick(ms(500));
     let list = drawn(&view);
     assert!(
         list.iter().any(|command| matches!(

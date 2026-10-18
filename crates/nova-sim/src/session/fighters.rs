@@ -516,6 +516,7 @@ fn fighter(
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.pod_count,
+        warp: crate::traffic::warp_out::Warp::default(),
     }
 }
 

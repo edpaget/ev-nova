@@ -46,7 +46,7 @@
 //! on its own, is gone at [`npc_warped_out`]; the player's warp ends by
 //! [`warp_end`]. The warp-up plays pitched by w ([`warp_up_rate`]), so it
 //! lasts [`pitched_length`]. The session's warp stage and the traffic's
-//! warp-out wire them (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
+//! warp-out wire them.
 //!
 //! Left out: `_LoadObjectData`'s guard that sets a negative factor to 0.5
 //! (@0x7aefe-0x7af07), which no `Flags` reaches.
@@ -222,8 +222,7 @@ pub fn lead_in_speed(since: u32, factor: f32, duration: u32) -> f32 {
 ///
 /// Out of double time it is [`lead_in_speed`] bit for bit: a − b is
 /// a + (−b) in IEEE arithmetic. The cap at 50.0 the motion applies after
-/// it (@0x6d2c3-0x6d2f8) is the motion's
-/// (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
+/// it (@0x6d2c3-0x6d2f8) is the session's warp stage's.
 #[must_use]
 pub fn move_off_speed(since: u32, factor: f32, duration: u32, double_time: bool) -> f32 {
     let term = if double_time {

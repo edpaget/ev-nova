@@ -407,6 +407,7 @@ impl Session {
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
             pods_left: kind.hull.pod_count,
+            warp: crate::traffic::warp_out::Warp::default(),
         }
     }
 

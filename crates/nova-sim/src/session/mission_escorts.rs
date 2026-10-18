@@ -621,14 +621,22 @@ mod tests {
             braking += 1;
             assert!(braking < 1000, "the jump never began");
         }
-        let frozen = led_offsets(&session);
-        assert_eq!(frozen.len(), 3, "all still led");
+        assert_eq!(led_offsets(&session).len(), 3, "all still led");
         for _ in 0..30 {
             session.tick(crate::flight::Controls::default());
             session.tick_traffic(&catalog, &ai, &mut NeverFires);
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
-            assert_eq!(led_offsets(&session), frozen, "held beside the player");
-            assert!(session.traffic.departed().is_empty());
+            for npc in session.player_led() {
+                assert_eq!(
+                    npc.warp.goal,
+                    Some(crate::traffic::warp_out::WarpGoal::Follow(
+                        crate::combat::ShipRef::Player
+                    )),
+                    "on the player's jump: {:?}",
+                    npc.id
+                );
+            }
+            assert!(session.traffic.departed().is_empty(), "none leaves alone");
         }
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),

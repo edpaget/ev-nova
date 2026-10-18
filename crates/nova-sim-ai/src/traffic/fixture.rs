@@ -72,5 +72,6 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         docking: None,
         marines: ClassMarines::default(),
         pods_left: 0,
+        warp: crate::traffic::warp_out::Warp::default(),
     }
 }

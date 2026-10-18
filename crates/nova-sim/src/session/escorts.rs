@@ -318,6 +318,7 @@ impl Session {
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
             // `_RespawnEscort` leaves +0xc908 alone.
             pods_left: kind.hull.pod_count,
+            warp: crate::traffic::warp_out::Warp::default(),
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),
@@ -465,9 +466,15 @@ impl Session {
         }
     }
 
-    /// Every escort disabled, breaking up or gone leaves the fleet: its
-    /// record goes, and its NPC is no longer an escort. A save is due when
-    /// any did. Each that is not a carried fighter and whose ship is still
+    /// Every escort the fight's tick left disabled or breaking up, or
+    /// that is gone, leaves the fleet: its record goes, and its NPC is no
+    /// longer an escort. A save is due when any did. The original clears
+    /// a led ship's leader in `_DamageShip`, on a hit that leaves it
+    /// disabled or dying (@0x3ae5b-0x3afdd), so the tick loses an escort
+    /// that was intact before it (`was`) or that it hit (`struck`), and
+    /// keeps one already disabled that nothing hit: a former escort that
+    /// rejoined repaired but still disabled stays led (see the
+    /// `self_repair` module). Each that is not a carried fighter and whose ship is still
     /// here, disabled, breaking up or destroyed, then takes its share of
     /// the fleet's cargo ([`Session::lose_cargo_share`]), as `_DamageShip`
     /// does after clearing its leader (@0x3afdd, call @0x3b013). One whose
@@ -478,7 +485,13 @@ impl Session {
     /// here they are taken in fleet order, each after the ones before it
     /// have left the fleet's holds. No boundary the player can see is
     /// crossed within the tick.
-    pub(super) fn lose_escorts(&mut self) {
+    pub(super) fn lose_escorts(&mut self, was: &[super::NpcBefore], struck: &BTreeSet<NpcId>) {
+        let downed = |id: NpcId| {
+            struck.contains(&id)
+                || was
+                    .iter()
+                    .any(|before| before.id == id && before.condition == Condition::Intact)
+        };
         let lost: Vec<NpcId> = self
             .fleet
             .iter()
@@ -486,7 +499,7 @@ impl Session {
             .copied()
             .filter(|&id| {
                 self.npc(id)
-                    .is_none_or(|npc| npc.condition != Condition::Intact)
+                    .is_none_or(|npc| npc.condition != Condition::Intact && downed(id))
             })
             .collect();
         for id in lost {
@@ -658,12 +671,9 @@ impl Session {
             return None;
         }
         // The original lets go of the escorts' targets earlier in every
-        // hyperspace frame (@0x6bb0a, before the escort keys @0x6e192).
-        // The flight does not tick the session while the stars streak,
-        // so each command there lets go first, as that frame would have.
-        if self.jumping().is_some() {
-            self.let_go_of_led_targets();
-        }
+        // warp-stage frame (@0x6bb0a, before the escort keys @0x6e192);
+        // the warp stage's own pass does here (see the `warp_stage`
+        // module), so a target a command gives is let go on the next.
         // Reported, "attacking target.", for a target the player does not
         // lead (@0x6653f-0x66559); copied only when it is not allied with
         // the player either (@0x6625f).
@@ -737,20 +747,6 @@ impl Session {
         let npcs = self.traffic.npcs();
         self.npc(id)
             .is_some_and(|npc| Surroundings::new(&[], npcs).allied_with_player(npc))
-    }
-
-    /// Lets go of every target of the ships the player leads, as
-    /// `_MakeEscortsHyperWithParent` does on every frame of the
-    /// hyperspace stage (@0x3fdc0-0x3fdc2): an Attack given in hyperspace
-    /// then always copies the player's target afresh, and the escorts
-    /// arrive holding none.
-    pub(super) fn let_go_of_led_targets(&mut self) {
-        let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
-        for id in led {
-            if let Some(npc) = self.npc_mut(id) {
-                npc.target = None;
-            }
-        }
     }
 
     /// `class`'s row in the escort menu: whether the player leads a ship
@@ -2136,14 +2132,14 @@ mod tests {
             session.tick(Controls::default());
             assert!(
                 escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
-                "let go every tick of the streak"
+                "let go every pass of the warp"
             );
         }
         session.command_escorts(EscortGroup::All, EscortCommand::Attack);
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Attack),
-            attacked,
-            "the streak's frames run no session tick: each command lets go first"
+            None,
+            "the warp lets go on its pass, not on a second command in the frame"
         );
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert!(

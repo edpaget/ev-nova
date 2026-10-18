@@ -1485,7 +1485,7 @@ fn multi_jumping() -> FakeCatalog {
     }
 }
 
-/// Taps J and ticks until the streak begins, as the session says the
+/// Taps J and ticks until the jump's effect begins, as the session says the
 /// jump has begun.
 fn jump_now(view: &mut View) {
     tap(view, JUMP);
@@ -1514,7 +1514,7 @@ fn arrive_now(view: &mut View) {
 
 /// Two of `build`'s flights, each with its course to Alpha Centauri
 /// plotted and flown out: the first braking and turning for the jump
-/// on a tap of J, the second 300 ms into the jump's streak. Boxed: two flights
+/// on a tap of J, the second 300 ms into the jump's warp. Boxed: two flights
 /// are too large for the stack together.
 fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
     let mut braking = Box::new(build());
@@ -1522,13 +1522,13 @@ fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
     fly_out(&mut braking);
     tap(&mut braking, JUMP);
     assert!(braking.preparing_jump(), "braking");
-    let mut streaking = Box::new(build());
-    plot(&mut streaking, 131);
-    fly_out(&mut streaking);
-    jump_now(&mut streaking);
-    streaking.tick(ms(300));
-    assert!(streaking.jump_effect().is_some(), "streaking");
-    [braking, streaking]
+    let mut warping = Box::new(build());
+    plot(&mut warping, 131);
+    fly_out(&mut warping);
+    jump_now(&mut warping);
+    warping.tick(ms(300));
+    assert!(warping.jump_effect().is_some(), "warping");
+    [braking, warping]
 }
 
 /// Which stage of the jump `view` is in, for a failing assertion.
@@ -1536,8 +1536,20 @@ fn stage(view: &View) -> &'static str {
     if view.preparing_jump() {
         "braking"
     } else {
-        "streaking"
+        "warping"
     }
+}
+
+/// Ticks `view` until its session's `_hyperGamma` is above 0, and gives
+/// how many ticks that took.
+fn tick_until_lit(view: &mut View) -> u32 {
+    for n in 1..2000 {
+        view.tick(TICK);
+        if view.session().expect("flying").hyper_gamma() > 0.0 {
+            return n;
+        }
+    }
+    panic!("never lit: {:?}", player(view));
 }
 
 /// Ticks until the ship has arrived in another system, the jump's
@@ -1563,7 +1575,8 @@ fn fading_in_on_course_to_barnard() -> View {
     plot(&mut view, 132);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1550));
+    tick_to_arrival(&mut view);
+    view.tick(ms(50));
     assert_eq!(system_of(&view), SystemId(131));
     assert!(matches!(
         view.jump_effect().map(JumpEffect::phase),

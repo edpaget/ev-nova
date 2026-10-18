@@ -150,8 +150,9 @@ pub const INERTIALESS_HULL: u16 = 0x0040;
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
 pub const TURN_MOD_PER_MANEUVER: f32 = 10.0;
 
-/// How a ship performs, its outfits included.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// How a ship performs, its outfits included. By default, nothing at
+/// all, of a class with no `Flags`, whose warp factor is 1.3.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShipStats {
     /// How it flies.
     pub handling: Handling,
@@ -185,6 +186,33 @@ pub struct ShipStats {
     /// The fuel its afterburner uses a tick, if it carries an
     /// [`AFTERBURNER`] (see the module docs).
     pub afterburner: Option<f32>,
+    /// Its class's warp factor, class +0x44, from its `Flags`
+    /// ([`warp_factor`](nova_sim_catalog::warp::warp_factor)), which an
+    /// NPC's warp-out reads.
+    pub warp_factor: f32,
+}
+
+impl Default for ShipStats {
+    fn default() -> Self {
+        Self {
+            handling: Handling::default(),
+            shield: 0.0,
+            armor: 0.0,
+            fuel: 0.0,
+            fuel_regen: 0.0,
+            shield_regen: 0.0,
+            armor_regen: 0.0,
+            capacity: 0,
+            jump_distance: 0.0,
+            jump_days: 0,
+            fast_jump: false,
+            multi_jump: 0,
+            inertialess_hull: false,
+            dampener: false,
+            afterburner: None,
+            warp_factor: nova_sim_catalog::warp::warp_factor(0),
+        }
+    }
 }
 
 /// The fuel a tick of the afterburner among `outfits` uses (see the module
@@ -298,6 +326,7 @@ impl ShipStats {
                 .iter()
                 .any(|outfit| outfit.mod_type == INERTIAL_DAMPENER && outfit.count > 0),
             afterburner: afterburner_usage(outfits),
+            warp_factor: nova_sim_catalog::warp::warp_factor(fields.flags),
         }
     }
 
@@ -642,6 +671,20 @@ mod tests {
         let one = ShipStats::new(AVERAGE, &[outfit(HYPERSPACE_DAYS, i16::MAX, u16::MAX)]);
         let most = 1 + i64::from(i16::MAX) * i64::from(u16::MAX);
         assert_eq!(i64::from(one.jump_days), most);
+    }
+
+    #[test]
+    fn the_warp_factor_is_the_classs_by_its_flags() {
+        assert_eq!(ShipStats::new(AVERAGE, &[]).warp_factor, 1.3);
+        assert_eq!(ShipStats::default().warp_factor, 1.3, "no Flags");
+        let slow = ShipFields {
+            flags: 0x0001,
+            ..AVERAGE
+        };
+        assert_eq!(
+            ShipStats::new(slow, &[]).warp_factor,
+            nova_sim_catalog::warp::warp_factor(0x0001)
+        );
     }
 
     #[test]

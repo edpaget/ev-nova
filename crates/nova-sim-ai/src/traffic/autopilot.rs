@@ -399,7 +399,9 @@ fn fly_mobile(
         }
         Goal::JumpOut => {
             if state.position.length() >= npc.stats.jump_distance {
-                return Outcome::JumpedOut;
+                // Its warp out begins: sub-goal 4 (see `warp_out`).
+                npc.begin_own_jump();
+                return Outcome::Flying;
             }
             run_out(&state, &handling, inertia)
         }
@@ -426,7 +428,8 @@ fn fly_mobile(
                 // Running out from its attacker beyond its reach.
                 let out = state.position.length();
                 if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
-                    return Outcome::JumpedOut;
+                    npc.begin_own_jump();
+                    return Outcome::Flying;
                 }
                 run_out(&state, &handling, inertia)
             }
@@ -1188,6 +1191,7 @@ mod tests {
     use crate::traffic::gate_entry::ENTRY_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
+    use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
     use std::collections::BTreeMap;
@@ -2424,21 +2428,20 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_jumping_out_heads_out_and_jumps_at_its_jump_distance() {
+    fn a_ship_jumping_out_heads_out_and_begins_its_warp_out_at_its_jump_distance() {
         for start in [
             at(100.0, -50.0, 0.0, 0.0, 180.0),
             at(0.0, 0.0, 0.0, 0.0, 30.0),
         ] {
             let mut ship = npc(FAST, Goal::JumpOut, start);
             let mut farthest = 0.0_f32;
-            let (outcome, ticks) = (0..2000)
-                .find_map(|tick| {
-                    let outcome = fly(&mut ship, &[], None);
+            let ticks = (0..2000)
+                .find(|_| {
+                    assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
                     farthest = farthest.max(ship.state.position.length());
-                    (outcome != Outcome::Flying).then_some((outcome, tick))
+                    ship.warp.goal.is_some()
                 })
-                .expect("jumps");
-            assert_eq!(outcome, Outcome::JumpedOut);
+                .expect("its warp out begins");
             assert!(ticks < 400, "{ticks}");
             assert!(farthest >= ship.stats.jump_distance, "{farthest}");
             assert!(farthest < ship.stats.jump_distance + 10.0, "{farthest}");
@@ -2651,12 +2654,15 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_at_its_jump_distance_jumps_without_moving() {
+    fn a_ship_at_its_jump_distance_begins_its_warp_out_without_moving() {
         let mut ship = npc(FAST, Goal::JumpOut, at(0.0, -1000.0, 0.0, 0.0, 0.0));
-        assert_eq!(fly(&mut ship, &[], None), Outcome::JumpedOut);
+        assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own), "sub-goal 4");
+        assert!(ship.jumping());
         assert_eq!(ship.state.position, Vec2::new(0.0, -1000.0));
         let mut short = npc(FAST, Goal::JumpOut, at(0.0, -999.0, 0.0, 0.0, 0.0));
         assert_eq!(fly(&mut short, &[], None), Outcome::Flying);
+        assert_eq!(short.warp.goal, None);
     }
 
     #[test]
@@ -3086,7 +3092,8 @@ mod tests {
         let start = at(300.0, -400.0, 0.0, 0.0, 200.0);
         let mut ship = npc(FAST, Goal::JumpOut, start);
         let mut last = start.position;
-        while fly(&mut ship, &[], None) == Outcome::Flying {
+        while ship.warp.goal.is_none() {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
             last = ship.state.position;
         }
         let off = shortest_turn(heading_of(start.position), heading_of(last));
@@ -3094,7 +3101,8 @@ mod tests {
         // From the centre itself, straight ahead.
         let mut ship = npc(FAST, Goal::JumpOut, at(0.0, 0.0, 0.0, 0.0, 30.0));
         let mut last = Vec2::ZERO;
-        while fly(&mut ship, &[], None) == Outcome::Flying {
+        while ship.warp.goal.is_none() {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
             last = ship.state.position;
         }
         let off = shortest_turn(30.0, heading_of(last));
@@ -3247,17 +3255,19 @@ mod tests {
     }
 
     #[test]
-    fn fleeing_from_afar_it_runs_out_from_the_centre_and_jumps_with_the_fuel() {
+    fn fleeing_from_afar_it_runs_out_from_the_centre_and_begins_its_warp_out_with_the_fuel() {
         // The attacker 251 right: run straight out, up from (0, -10).
         let attacker = at(251.0, -10.0, 0.0, 0.0, 0.0);
         let mut runner = npc(FAST, Goal::Flee(FOE), at(0.0, -10.0, 0.0, 0.0, 0.0));
-        let (outcome, _) = (0..1000)
-            .find_map(|tick| {
+        (0..1000)
+            .find(|_| {
                 let outcome = fly(&mut runner, &[planet(140, 0.0, -10.0)], Some(&attacker));
-                (outcome != Outcome::Flying).then_some((outcome, tick))
+                assert_eq!(outcome, Outcome::Flying, "never lands");
+                runner.warp.goal.is_some()
             })
-            .expect("leaves");
-        assert_eq!(outcome, Outcome::JumpedOut, "never lands");
+            .expect("its warp out begins");
+        assert_eq!(runner.goal, Goal::Flee(FOE), "still fleeing");
+        assert!(runner.jumping());
         assert!(runner.state.position.x.abs() < 1.0, "{:?}", runner.state);
         assert!(
             runner.state.position.length() >= runner.stats.jump_distance,

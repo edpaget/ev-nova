@@ -31,10 +31,9 @@
 //! ([`MAX_ESCORTS`](crate::board::MAX_ESCORTS)) is not checked. A ship
 //! the rule still disables once repaired (a class that is not tough
 //! holding more than 33,333 armour) rejoins all the same, as the
-//! original's does, but [`Session::lose_escorts`] loses it again at the
-//! next fight tick where the original keeps it led and disabled: a
-//! divergence filed with
-//! rdm:phase/player-led-ships/phase-26-warp-out-motion-and-disabled-drag.
+//! original's does, and stays led and disabled until a hit leaves it
+//! disabled again, as [`Session::lose_escorts`] loses an escort only at
+//! the hit or the tick that downs it (`_DamageShip` @0x3af8f-0x3afdd).
 //!
 //! A repaired ship that remembers nothing (traffic carrying the gear, or
 //! a disabled mission escort, which never left its formation) only gets
@@ -414,6 +413,12 @@ mod tests {
         assert_eq!(npc.reserves.armor.now, repaired_armor(40_000.0, false));
         assert_eq!(npc.condition, Condition::Disabled, "below a third");
         assert!(session.is_escort(hired), "rejoins all the same");
+        // Led and disabled, as the original keeps it: only a hit that
+        // leaves it disabled loses it again (`_DamageShip` @0x3af8f).
+        for _ in 0..3 {
+            fight(&mut session, &[1]);
+            assert!(session.is_escort(hired), "kept, though disabled");
+        }
     }
 
     #[test]

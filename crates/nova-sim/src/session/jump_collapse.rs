@@ -7,8 +7,8 @@
 //! `_IsDisabled` is an armour test (@0x2d95-0x2dcc), so a dying player,
 //! its armour gone, collapses too. The engine runs the collapse
 //! ([`Session::collapse_jump`]) in [`Session::tick`]'s arm for a disabled
-//! or dying player, and only for a [`Jump::PreJump`]: the engine never
-//! ticks the world through [`Jump::Hyperspace`] (see Left out).
+//! or dying player, in its [`Jump::PreJump`] or its [`Jump::Hyperspace`],
+//! as the world runs through the warp (see the `warp_stage` module).
 //!
 //! **The speed.** el = `TickCount` − +0xa4 (@0x688bb-0x688c0), the Mac
 //! ticks of the warp clock. While the ship brakes the original restamps
@@ -67,13 +67,6 @@
 //!
 //! **Left out.**
 //!
-//! - The collapse during [`Jump::Hyperspace`]. While the streak runs,
-//!   the flight view advances only the jump effect and never calls
-//!   [`Session::tick`], `tick_traffic` or `tick_combat`, so nothing can
-//!   disable the player there and no warp speed builds up. It needs the
-//!   world to run through the player's warp, the player warp-out motion
-//!   of rdm:phase/ship-handling-fidelity/phase-8-warp-out, and reuses
-//!   this module unchanged.
 //! - The `_warpSoundDone` clears (@0x68a61, 0x68a84). The flag gates
 //!   only the warp stage's warp-out sound (read @0x6bbc5 and 0x6c6dc),
 //!   and the next warp start clears it again (@0x6b695), so nothing reads
@@ -121,8 +114,10 @@ impl Session {
     /// the module docs), on double time's second pass when `again`:
     /// nothing without one.
     pub(super) fn collapse_jump(&mut self, again: bool) {
-        let Some(Jump::PreJump { warp, .. }) = self.jump else {
-            return;
+        let warp = match self.jump {
+            Some(Jump::PreJump { warp, .. }) => warp,
+            Some(Jump::Hyperspace { warp, .. }) => Some(warp),
+            None => return,
         };
         let flags = self
             .ship_record(self.pilot.ship)
@@ -266,7 +261,9 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.take_sounds(),
-            [SimSound::JumpBegan],
+            [SimSound::JumpBegan {
+                rate: warp::warp_up_rate(session.player_warp_factor())
+            }],
             "the warp-up the halt halts"
         );
         for _ in 0..2 {
@@ -280,6 +277,32 @@ mod tests {
         assert!(speed > 0.0 && speed < session.top_speed(), "{speed}");
         assert_ne!(speed, warp::lead_in_speed(2, factor(), 25));
         assert_eq!(session.player().velocity, accel(6, speed) * DISABLED_DRAG);
+    }
+
+    #[test]
+    fn a_player_disabled_in_its_warp_collapses_on_the_warps_clock() {
+        // At rest facing east, the bearing: the jump begins at once, and
+        // the fight runs through it.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+        session.warp_sounds[0] = 25;
+        session.begin_jump().expect("jumps");
+        for _ in 0..3 {
+            session.tick(Controls::default());
+        }
+        assert!(session.jumping().is_some());
+        assert_eq!(session.warp_clock(), Some(3));
+        let at = session.player().velocity;
+        disable_and_tick(&mut session);
+        assert_eq!(session.jumping(), None, "collapsed");
+        let speed = warp::lead_in_speed(warp::mac_ticks(4), factor(), 25);
+        assert!(speed > 0.0, "{speed}");
+        assert_ne!(session.player().velocity, at);
+        let top = session.top_speed();
+        assert_eq!(
+            session.player().velocity,
+            accel(90, speed.min(top)) * DISABLED_DRAG
+        );
+        assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);
     }
 
     #[test]

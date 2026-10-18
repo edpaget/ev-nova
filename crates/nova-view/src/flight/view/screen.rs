@@ -14,7 +14,6 @@ use crate::flight::boxes::{self};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::hud::{self};
-use crate::flight::jump::JumpPhase;
 use crate::flight::weapons::{self};
 use crate::galaxy::GalaxyCatalog;
 use crate::system::camera::Camera;
@@ -176,19 +175,16 @@ impl<
     /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
     /// advances the stellars' animations, each hypergate drawing the frame
     /// the session stepped it to ([`show_gate_frames`](super::show_gate_frames)). While the map is
-    /// open nothing moves. During the pre-jump stage the session flies on,
-    /// and the streak starts on the step the session begins the jump,
-    /// which is the last step run. While the stars streak and the old
-    /// system fades out the jump's effect moves, and the session runs its
-    /// steps only while its warp is in its lead-in
-    /// ([`Session::in_warp_lead_in`]): the ship stays where it is, but the
-    /// traffic flies on and the scans are taken, as the original still
-    /// scans a warping player then. The ship arrives when the effect says,
-    /// after the last step. From then on the session flies again while the
-    /// rest of the effect, the fade-in or the white flash, plays over it;
-    /// that plays on with the map open too, as the original's display fade
-    /// does. The escort menu times out on every step the map is shut, the
-    /// streak's included.
+    /// open nothing moves. The session flies on through the whole jump, its
+    /// warp included: the jump's effect starts once the jump has begun,
+    /// fades to white from the first step the session's `_hyperGamma` is
+    /// above 0 ([`Session::hyper_gamma`]), and the ship arrives on the step
+    /// the session says the warp has ended ([`Session::warp_end_due`]),
+    /// whose steps stop there, before the frame is drawn. From then on the
+    /// rest of the effect, the fade-in or the white flash, plays over the
+    /// new system; that plays on with the map open too, as the original's
+    /// display fade does. The escort menu times out on every step the map
+    /// is shut.
     ///
     /// Each step runs the session's tick, the traffic's, the assistance's
     /// and the fight's, then has the NPCs answer the fight's hits
@@ -221,31 +217,28 @@ impl<
         self.elapsed += dt;
         self.held_keys_frame();
         self.floating_frame();
-        if self.jump.is_some() {
-            let leading_in = self.session.as_ref().is_ok_and(Session::in_warp_lead_in);
-            if leading_in {
-                let Steps { steps, alpha } = self.clock.advance(dt);
-                self.run_steps(steps, Session::in_warp_lead_in);
-                self.alpha = alpha;
-            }
-            if let Some(effect) = &mut self.jump
-                && effect.advance(dt)
-            {
-                self.arrive();
-                self.fade_in = self.jump.take().filter(|effect| !effect.done());
-            }
-            self.update_escort_menu();
-            self.advance_hud();
-            return;
-        }
         let Steps { steps, alpha } = self.clock.advance(dt);
         self.run_steps(steps, |session| {
-            session.jumping().is_none() && !session.hold_expired()
+            !session.warp_end_due() && !session.hold_expired()
         });
         self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps);
-        self.start_streak_if_jumping();
+        self.start_jump_effect();
+        if let Some(effect) = &mut self.jump {
+            effect.advance(dt);
+        }
+        if self.session.as_ref().is_ok_and(Session::warp_end_due) {
+            self.arrive();
+            self.fade_in = self
+                .jump
+                .take()
+                .map(|mut effect| {
+                    effect.arrive();
+                    effect
+                })
+                .filter(|effect| !effect.done());
+        }
         self.advance_hud();
     }
 
@@ -407,12 +400,7 @@ impl<
     /// and the smoke. The message line is text, so it is overlay among
     /// the world ([`DrawList::world`]).
     fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
-        match self.jump.map(|effect| (effect, effect.phase())) {
-            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
-                starfield::draw_streaked(list, camera, effect.direction(), effect.streak_length());
-            }
-            _ => starfield::draw(list, camera),
-        }
+        starfield::draw(list, camera);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
             hud::draw_message(list, message, self.view, metrics);

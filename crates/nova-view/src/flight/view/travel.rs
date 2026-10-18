@@ -508,7 +508,7 @@ impl<
                 for text in [TOO_CLOSE, FAR_ENOUGH, NOTHING_OUT_HERE] {
                     self.clear_message(text);
                 }
-                self.start_streak_if_jumping();
+                self.start_jump_effect();
             }
             Err(refusal) => {
                 if session.jump_refusal_told(&refusal)
@@ -527,8 +527,8 @@ impl<
     /// ([`Session::tick_again`]) with the answers to its hits and their
     /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
-    /// system the session populated afresh. Flight and the warp's lead-in
-    /// under the streak both step this way. The eject chord, the land key
+    /// system the session populated afresh. Flight and the jump's warp
+    /// both step this way. The eject chord, the land key
     /// and double time are held as the keys say, and a pass whose ship
     /// tick brings the escape pod's rescue ends the stepping there, the
     /// view laid out afresh where the rescue put the ship.
@@ -549,6 +549,7 @@ impl<
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
             session.set_double_time_key(self.double_time);
+            session.set_hyperspace_effects(self.hyperspace_effects);
             session.set_land_key(self.held.contains(&LAND_KEY));
             'steps: for _ in 0..steps {
                 if !go_on(session) {
@@ -643,19 +644,23 @@ impl<
         self.read_npc_sheets();
     }
 
-    /// Starts the jump's streak, from the current system towards the next,
-    /// once the session says the jump has begun, unless it is playing
-    /// already.
-    pub(super) fn start_streak_if_jumping(&mut self) {
+    /// Starts the jump's effect once the session says the jump has begun,
+    /// or lights the screen, unless it is playing already; and starts its
+    /// fade to white once the session's `_hyperGamma` is above 0
+    /// ([`Session::hyper_gamma`]).
+    pub(super) fn start_jump_effect(&mut self) {
         let Ok(session) = &self.session else {
             return;
         };
-        if let (None, Some(next)) = (&self.jump, session.jumping()) {
-            let position = |id| session.star_map().position(id).unwrap_or_default();
-            self.jump = Some(
-                JumpEffect::toward(position(session.system()), position(next))
-                    .with_fades(self.hyperspace_effects),
-            );
+        // `_hyperGamma` goes back to -1 on the first pass after the
+        // arrival, so it lights only a jump still under way.
+        let under_way = session.jumping().is_some() || session.preparing_jump().is_some();
+        let lit = under_way && session.hyper_gamma() > 0.0;
+        if self.jump.is_none() && (session.jumping().is_some() || lit) {
+            self.jump = Some(JumpEffect::warp(self.hyperspace_effects));
+        }
+        if lit && let Some(effect) = &mut self.jump {
+            effect.light();
         }
     }
 

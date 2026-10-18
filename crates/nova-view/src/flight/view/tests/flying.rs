@@ -1391,9 +1391,9 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
-    // Coast two ticks, so the arrival falls between the radar's refreshes
+    // Coast a tick, so the arrival falls between the radar's refreshes
     // and the test shows the arrival's own refresh.
-    ticks(&mut view, 2);
+    ticks(&mut view, 1);
     jump_now(&mut view);
     let leaving = view.session().expect("flying").system();
     for _ in 0..1000 {

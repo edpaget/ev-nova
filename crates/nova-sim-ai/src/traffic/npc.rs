@@ -22,6 +22,7 @@ use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
 use crate::traffic::plunder_dock::Docking;
+use crate::traffic::warp_out::Warp;
 
 pub use crate::combat::NpcId;
 
@@ -446,6 +447,10 @@ pub struct Npc {
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
     pub marines: ClassMarines,
+    /// Its warp stage, +0x50 and +0xa4, and the sub-goal that drives it
+    /// (see [`warp_out`](crate::traffic::warp_out)): none as it spawns,
+    /// as every spawn clears +0x50. Never saved.
+    pub warp: Warp,
 }
 
 /// The commodities 0-5 the original's ship records count.
@@ -885,10 +890,12 @@ impl Npc {
     /// fighter bays and point defence, its pick kept
     /// ([`fire::gated`](crate::ai::fire::gated)). So does its AI wait
     /// while it flies ([`Npc::ai_wait`]): a pirate's dock and hold after a
-    /// plunder, and a ship a pirate took into its fleet. The waits the
-    /// engine doesn't fly yet (a landed ship's stay, a launched fighter's,
-    /// the warp out after a leader) will count here once built (rdm
-    /// weapons-fidelity phase 17's findings).
+    /// plunder, a ship a pirate took into its fleet, and the wait of a
+    /// ship following its leader's warp out while the leader still turns
+    /// (`_LowLevelAIHandler` @0x85bc3, see
+    /// [`warp_out`](crate::traffic::warp_out)). The waits the engine
+    /// doesn't fly yet (a landed ship's stay, a launched fighter's) will
+    /// count here once built (rdm weapons-fidelity phase 17's findings).
     ///
     /// A pirate's count wait ([`Goal::CountWait`]) runs it while ticks are
     /// left: it is the original's +0x4c too, read so by
@@ -971,15 +978,15 @@ impl Npc {
     /// from its first moving tick (@0x8dd8a), so -999.0 too; on tick 0 its
     /// goal is still 0x15. Waiting in its gate or held there
     /// ([`Mode::Emerging`], [`Mode::HeldAtGate`]) it is -1.0 (@0x89555);
-    /// entering a gate, coasting or flying, 0. The engine has no NPC
-    /// warp-out stage (+0x50 above 0, rdm:phase/ship-handling-fidelity/phase-8-warp-out);
-    /// a ship warping out is in hyperspace too once it has one.
+    /// entering a gate, coasting or flying, 0; a ship whose warp out is
+    /// under way, above 0 ([`Warp::under_way`], see
+    /// [`warp_out`](crate::traffic::warp_out)), is in hyperspace too.
     #[must_use]
     pub fn in_hyperspace(&self) -> bool {
         match self.mode {
             Mode::JumpingIn { .. } => true,
             Mode::LeavingGate { tick } => tick > 0,
-            _ => false,
+            _ => self.warp.under_way(),
         }
     }
 

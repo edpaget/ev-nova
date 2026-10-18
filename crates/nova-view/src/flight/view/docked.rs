@@ -77,9 +77,8 @@ impl<C> FlightView<C> {
         self.map.zoom()
     }
 
-    /// The jump's effect, while it plays: the streak and the fade-out
-    /// that hold flight, or else the arrival's fade-in (or flash) that
-    /// flight goes on under.
+    /// The jump's effect, while it plays: the warp and its fade to white
+    /// until the ship arrives, or else the arrival's fade-in (or flash).
     #[must_use]
     pub fn jump_effect(&self) -> Option<&JumpEffect> {
         self.jump.as_ref().or(self.fade_in.as_ref())

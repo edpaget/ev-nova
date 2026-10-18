@@ -157,6 +157,7 @@ pub mod snipe;
 pub mod spawn;
 pub mod strength;
 pub mod table;
+pub mod warp_out;
 pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
@@ -484,6 +485,9 @@ pub struct World<'a> {
     /// ([`RuleKey::PlunderMarines`](crate::RuleKey::PlunderMarines), see
     /// [`plunder_contents`](crate::ai::plunder_contents)).
     pub plunder_marines: RuleSource,
+    /// The player's warp, the warp sound's durations and double time,
+    /// which the ships' warp-outs read ([`warp_out`]).
+    pub warp: warp_out::WarpWorld,
 }
 
 /// Nova's disable rule, a world's default.
@@ -499,7 +503,8 @@ impl<'a> World<'a> {
     /// no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
     /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
-    /// no government marked by an IFF scrambler and Nova's disable rule.
+    /// no government marked by an IFF scrambler, Nova's disable rule, and
+    /// no player's warp under way with warp sounds of no length.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -528,6 +533,7 @@ impl<'a> World<'a> {
             afterburner_yardstick: RuleSource::Engine,
             disable: &NOVA_DISABLE,
             plunder_marines: RuleSource::Engine,
+            warp: warp_out::WarpWorld::default(),
         }
     }
 
@@ -1102,8 +1108,12 @@ impl Traffic {
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
         self.cloaks(player, &states, think);
+        if think {
+            // `TickCount` moves on between advance passes alone.
+            self.npcs.iter_mut().for_each(|npc| npc.warp.tick_clock());
+        }
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
-        let outcomes = self.fly_all(world, player, &states, still, chance);
+        let outcomes = self.fly_all(world, player, &states, still, think, chance);
         board_wait::count_down(&mut self.npcs);
         plunder::count_down(&mut self.npcs);
         self.release_followers(&entering);
@@ -1168,9 +1178,14 @@ impl Traffic {
         player: Option<ShipState>,
         states: &[(NpcId, ShipState)],
         still: &BTreeSet<NpcId>,
+        think: bool,
         chance: &mut (impl Chance + ?Sized),
     ) -> Vec<Outcome> {
         let speeds = self.top_speeds(world);
+        let leaders = warp_out::leaders(&self.npcs);
+        if think {
+            warp_out::send_leaders_out(&mut self.npcs);
+        }
         let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
         let disabled: BTreeSet<NpcId> = self
             .npcs
@@ -1206,6 +1221,9 @@ impl Traffic {
                 if still.contains(&npc.id) {
                     return Outcome::Flying;
                 }
+                if let Some(outcome) = warp_out::fly_jump(npc, &leaders, world, speeds, think) {
+                    return outcome;
+                }
                 match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance)
                 {
                     Some(DockOutcome::Started { victim, .. }) => {
@@ -1215,7 +1233,7 @@ impl Traffic {
                     Some(_) => return Outcome::Flying,
                     None => {}
                 }
-                autopilot::fly(
+                let outcome = autopilot::fly(
                     npc,
                     world.sites,
                     world.type_widths,
@@ -1225,7 +1243,9 @@ impl Traffic {
                     world.flight,
                     world.snipe_brake_lead,
                     &mut *chance,
-                )
+                );
+                warp_out::settle(npc, &leaders, &world.warp);
+                outcome
             })
             .collect();
         self.dock_starts(&docked);
@@ -2147,6 +2167,7 @@ impl Traffic {
                 docking: None,
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,
+                warp: warp_out::Warp::default(),
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -2830,16 +2851,57 @@ mod tests {
         traffic.npcs[1].goal = Goal::JumpOut;
         let sites = [planet(140, 0.0, 0.0)];
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs(), []);
         assert_eq!(
             traffic.departed(),
-            [
-                (NpcId(0), Outcome::Landed(StellarId(140))),
-                (NpcId(1), Outcome::JumpedOut)
-            ]
+            [(NpcId(0), Outcome::Landed(StellarId(140)))]
         );
+        assert!(traffic.npcs()[0].jumping(), "its warp out begins");
+        // With warp sounds of no length, its warp is over on its first
+        // advance pass (see `warp_out`).
+        traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs(), []);
+        assert_eq!(traffic.departed(), [(NpcId(1), Outcome::JumpedOut)]);
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         assert_eq!(traffic.departed(), [], "only the last tick's");
+    }
+
+    #[test]
+    fn a_ship_jumping_out_warps_out_and_is_gone_once_t_reaches_d_over_w() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].state = ShipState {
+            position: Vec2::new(0.0, -1000.0),
+            velocity: Vec2::new(0.0, -2.0),
+            heading: 0.0,
+        };
+        traffic.npcs[0].goal = Goal::JumpOut;
+        let world = World {
+            warp: warp_out::WarpWorld {
+                durations: [364, 252],
+                ..warp_out::WarpWorld::default()
+            },
+            ..World::new(&[])
+        };
+        let mut ticks = 0;
+        let mut moved_off = None;
+        while traffic.departed().is_empty() {
+            let before = traffic.npcs()[0].state;
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+            ticks += 1;
+            if let Some(after) = traffic.npcs().first() {
+                let step = before.position.y - after.state.position.y;
+                if step > before.velocity.y.abs() + 0.01 {
+                    moved_off.get_or_insert(ticks);
+                    assert!(step <= 50.0 + 2.0, "capped at 50: {step}");
+                }
+            }
+            assert!(ticks < 400, "never gone");
+        }
+        assert_eq!(traffic.departed(), [(NpcId(0), Outcome::JumpedOut)]);
+        // A tick to begin it, then its clock from the next: 364 / 1.3 =
+        // 280 Mac ticks, 140 ticks, on the 141st after the begin.
+        assert_eq!(ticks, 142);
+        // 0.35 × 364 / 1.69 = 75.4 Mac ticks: it moves off on its 38th.
+        assert_eq!(moved_off, Some(40));
     }
 
     #[test]

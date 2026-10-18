@@ -372,23 +372,23 @@
 //!   the arrival tick, with their sounds; a `\` held from before the jump,
 //!   and J held through it, do nothing after it. J held into a disable, or
 //!   first pressed while disabled, acts on the first tick the ship is
-//!   intact again. The stars streak when the session says
-//!   the jump has begun ([`Session::jumping`]), at once for a ship already
-//!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
-//!   the session waits while the stars streak and the screen, HUD
-//!   included, fades to white, as the original's whole-display fade does;
-//!   then the ship arrives at full white, the new system is read and laid
-//!   out, and the message line says so in the original's words
-//!   ([`arrival_message`]). Flight resumes as the new system fades in
+//!   intact again. The jump plays its [`JumpEffect`] from when the session
+//!   says the jump has begun ([`Session::jumping`]), at once for a ship
+//!   already facing that way and slow enough: the session flies the warp,
+//!   the ship rushing off along its bearing, and the screen, HUD included,
+//!   fades to white once the session lights it, as the original's
+//!   whole-display fade does; then the ship arrives at full white when the
+//!   session ends the warp, the new system is read and laid out, and the
+//!   message line says so in the original's words ([`arrival_message`]). Flight resumes as the new system fades in
 //!   from white: every key works again and the session flies, J included,
 //!   as under the original's asynchronous display fade. A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
 //!   system it passes. With the Hyperspace Effects preference off
 //!   ([`FlightView::with_hyperspace_effects`],
 //!   [`FlightView::set_hyperspace_effects`]) a jump skips the fades, as
-//!   the original's does: the stars streak, the ship arrives as the streak
-//!   ends, and the arrival frame shows solid white once, with flight
-//!   going on under it.
+//!   the original's does: the ship warps away unfaded, arrives when the
+//!   session ends the warp, and the arrival frame shows solid white once,
+//!   with flight going on under it.
 //! - Space fires the primary weapons and Control the secondary selected,
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
@@ -422,7 +422,7 @@
 //!   ([`Boarding::Offered`](nova_sim::Boarding::Offered)), held for the router as a hail's offer is.
 //!   B works during a jump too, as `_HandlePlayerBoardAttempt` reads no
 //!   jump state (0x65000-0x66064): its checks run on the ship as it brakes,
-//!   or as it was when the jump began once the stars streak.
+//!   or as it warps.
 //! - Y (a press) hails the target ([`Session::hail_key`]), and with no
 //!   ship target, or Alt (Option) held, the navigation stellar: one that
 //!   answers opens nothing yet, where the original opens its comm dialog
@@ -498,7 +498,7 @@
 //!   ([`TargetPick::PreviousEscort`](nova_sim::TargetPick::PreviousEscort)), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
 //!   set says ([`FlightView::with_rules`]). While a jump is under way,
-//!   the ship braking and turning for it or the stars streaking, the
+//!   the ship braking and turning for it or warping, the
 //!   escort menu's keys are taken, among the few that are (see J above),
 //!   as the original runs its escort block on every frame of a jump but
 //!   the arrival (`_HandlePlayer` @0x6dd00-0x6e452): a command then says what the
@@ -1072,8 +1072,8 @@ pub struct FlightView<C> {
     /// What the floating map draws, taken at its last show
     /// ([`FlightView::show_floating_map`]).
     floating_picture: Option<MapPicture>,
-    /// The jump's effect, while it holds flight: the streak and the
-    /// fade-out, until the ship arrives.
+    /// The jump's effect, until the ship arrives: the warp and its fade to
+    /// white.
     jump: Option<JumpEffect>,
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.

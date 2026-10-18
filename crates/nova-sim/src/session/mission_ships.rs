@@ -2989,12 +2989,20 @@ pub(super) mod tests {
         }
     }
 
-    /// Sends the NPC at `index` out of the system by hyperspace, from far
-    /// out, on one traffic tick.
-    fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+    /// Puts the NPC at `index` at the end of its warp out, far out, its
+    /// clock past d / w (see `nova_sim::traffic::warp_out`).
+    fn warped(session: &mut Session, index: usize) {
         let npc = &mut session.traffic.npcs_mut()[index];
-        npc.goal = Goal::JumpOut;
         npc.state.position = Vec2::new(0.0, -100_000.0);
+        npc.begin_own_jump();
+        npc.warp.stage = 2.0;
+        npc.warp.since = 1_000;
+    }
+
+    /// Sends the NPC at `index` out of the system by hyperspace, at the
+    /// end of its warp out, on one traffic tick.
+    fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+        warped(session, index);
         session.tick_traffic(catalog, &Keeping, &mut NeverFires);
     }
 
@@ -3042,18 +3050,21 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_ship_jumping_out_on_double_times_second_pass_raises_its_departure() {
+    fn a_ship_jumping_out_leaves_on_the_advance_pass_alone() {
+        // Its warp's end is sub-goal 4's, `_LowLevelAIHandler`'s
+        // (@0x8595b), which `_AIDispatch` runs on the advance pass alone.
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
         let id = session.npcs()[0].id;
-        let npc = &mut session.traffic.npcs_mut()[0];
-        npc.goal = Goal::JumpOut;
-        npc.state.position = Vec2::new(0.0, -100_000.0);
+        warped(&mut session, 0);
         session.tick_again(
             crate::flight::Controls::default(),
             crate::Rules::default(),
             &mut NeverFires,
         );
+        assert!(session.npcs().iter().any(|npc| npc.id == id), "still here");
+        assert!(!departed(&session, id));
+        session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
         assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
         assert!(departed(&session, id));
         assert_eq!(chased_and_left(&session), (1, 1));

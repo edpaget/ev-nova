@@ -625,7 +625,7 @@ fn arriving_repopulates_from_the_new_system() {
 }
 
 #[test]
-fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_still() {
+fn the_traffic_flies_on_through_the_whole_warp_and_the_ship_moves_off() {
     // The traffic follows the ship out, then makes for planet 128 at
     // the centre as the ship jumps.
     let catalog = FakeCatalog {
@@ -640,30 +640,26 @@ fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_stil
     ready_to_jump(&mut view);
     jumped.set(true);
     view.input(&key(JUMP, true));
-    assert!(view.jump_effect().is_some(), "streaking on J");
+    assert!(view.jump_effect().is_some(), "jumping on J");
     let leaving = player(&view);
     let start = npc_states(&view);
     assert_eq!(start.len(), 2);
-    // The lead-in lasts 36 ticks (`nova_sim::warp`): 1.2 s.
     view.tick(ms(500));
-    let session = view.session().expect("flying");
-    assert!(session.in_warp_lead_in());
-    assert_ne!(
-        npc_states(&view),
-        start,
-        "the traffic flies on under the streak"
-    );
-    assert_eq!(player(&view), leaving, "the ship stays where it is");
-    view.tick(ms(800));
-    let session = view.session().expect("flying");
-    assert!(!session.in_warp_lead_in(), "past the lead-in");
-    assert_eq!(session.system(), SystemId(130), "not yet arrived");
+    assert!(view.session().expect("flying").in_warp_lead_in());
+    assert_ne!(npc_states(&view), start, "the traffic flies on");
+    while view.session().expect("flying").in_warp_lead_in() {
+        view.tick(TICK);
+    }
     let past = npc_states(&view);
     view.tick(ms(150));
-    assert_eq!(npc_states(&view), past, "the traffic stands still");
+    assert_ne!(npc_states(&view), past, "past the lead-in too");
+    assert_ne!(
+        player(&view).position,
+        leaving.position,
+        "the ship moves off"
+    );
     assert_eq!(view.session().expect("flying").system(), SystemId(130));
-    // The arrival keeps the effect's time: past 1.5 s.
-    view.tick(ms(100));
+    tick_to_arrival(&mut view);
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
 }
 

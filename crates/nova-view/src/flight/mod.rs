@@ -21,8 +21,8 @@
 //! - [`floating`]: the floating map shown while H or `\` is held: its
 //!   frame, clock, zoom and click boxes, and the pass that clips and
 //!   fades it.
-//! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
-//!   and the screen fading to white and back.
+//! - [`jump`]: the hyperspace jump's [`JumpEffect`], the screen fading to
+//!   white as the ship warps away, and back.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`lightning`]: a lightning beam's zig-zag.

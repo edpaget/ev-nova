@@ -63,7 +63,10 @@ mod tests {
         let (core, warning) = game_audio::<_, String>(Ok(audio));
         assert_eq!(warning, None);
         let mut core = core.expect("a core");
-        core.update(Some(Showing::MainMenu), &[Sound::Sim(SimSound::JumpBegan)]);
+        core.update(
+            Some(Showing::MainMenu),
+            &[Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 })],
+        );
         assert_eq!(
             *log.borrow(),
             [
