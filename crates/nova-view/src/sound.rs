@@ -2,7 +2,7 @@
 //! The audio side decides which `snd ` each one plays, if any.
 //!
 //! - [`UiSound`]: the interface's own, a main-menu button pressed and
-//!   released, the alert as something is refused, the news dialog's
+//!   released, the main screen's rows sliding in, the alert as something is refused, the news dialog's
 //!   beeps, the course map's beeps (opening, closing, Space and Find),
 //!   and the beep of the player info
 //!   refused.
@@ -78,6 +78,15 @@ pub enum UiSound {
     /// ([`Screen::keyed_click_ended`](crate::Screen::keyed_click_ended)).
     /// E clicks on its release, not its press.
     ButtonKeyed,
+    /// A main-screen slide stepped from its first frame, a row of buttons
+    /// starting to slide in: `_MainScreenAnimIdle` plays snd 602, "Menu
+    /// button start", at priority 50 (@0x188e6-0x188fc).
+    RowSlideStart,
+    /// A main-screen slide reached its count, its row of buttons shown:
+    /// `_MainScreenAnimIdle` plays snd 603, "Menu button end", at
+    /// priority 50 (@0x1891c-0x18932). A click that finishes the slides
+    /// at once plays none (`_MainScreenMouse` @0x1ae3a-0x1ae99).
+    RowSlideEnd,
     /// Enter Ship was chosen on the main screen with no pilot loaded, or
     /// a dying one: `_MainScreenChoice(3)` @0x1aa89-0x1aaac plays
     /// `_beepSnd[3]`. E raises it after its click.

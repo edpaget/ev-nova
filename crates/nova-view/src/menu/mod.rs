@@ -10,6 +10,7 @@
 //! - [`tracking`]: the main screen's own button tracking and its sounds.
 //! - [`logo`]: the logo's flicker.
 //! - [`rollover`]: the picture naming the button under the pointer.
+//! - [`slides`]: the rows of buttons sliding in as the screen appears.
 //! - [`pilot_list`]: the [`PilotList`], the saved pilots to open one of,
 //!   over the main menu.
 
@@ -22,6 +23,7 @@ pub mod logo;
 pub mod main_menu;
 pub mod pilot_list;
 pub mod rollover;
+pub mod slides;
 pub mod tracking;
 
 pub use art::{MainScreenArt, MainScreenSource};

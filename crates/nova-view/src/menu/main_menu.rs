@@ -1,25 +1,38 @@
 //! The main menu: the original's main screen, its six buttons New Pilot,
 //! Open Pilot, Quit, Enter Ship, Preferences and About.
 //!
-//! **Drawing** (`_MainScreenUpdate` @0x17c0d, finished: the appear
-//! animation is rdm:phase/main-screen/phase-2-appear-animation-and-fades).
-//! The port painted black, `PICT` 8000 placed by
-//! [`interface_background`], the logo's frame, each button's `rlëD` frame
-//! 0 (frame 1 for the one pressed) at its `cölr` 128 position from
-//! `menuTopCorner` (@0x184f8-0x186f7), then the rollover over them
-//! (@0x18713). Every position is an offset from `menuTopCorner`.
+//! **Drawing** (`_MainScreenUpdate` @0x17c0d). The port painted black,
+//! `PICT` 8000 placed by [`interface_background`], the logo's frame, each
+//! slide's frame while it runs (`_MainScreenAnimDraw` @0x16146), each
+//! shown row's buttons' `rlëD` frame 0 (frame 1 for the one pressed) at
+//! its `cölr` 128 position from `menuTopCorner` (@0x184f8-0x186f7), then
+//! the rollover over them (@0x18713). Every position is an offset from
+//! `menuTopCorner`.
+//!
+//! **The appear** ([`MainMenu::appear`], `_LoadMainScreenAnim`). The
+//! three slides set off ([`Slides`]), and each row of buttons, 0 and 3,
+//! 1 and 4, 2 and 5, shows once its slide has finished, with 602 as a
+//! slide leaves its first frame and 603 as it finishes. While any slide
+//! runs the rollover is held clear ([`Rollover::clear`]), and the step
+//! after the last finishes comes at once. A primary press finishes every
+//! slide at once, silently, and is tracked as a press as well
+//! (`_MainScreenMouse` @0x1ae3a-0x1ae99). A menu made new shows its
+//! slides finished; the router has it appear.
 //!
 //! **The pointer** ([`MainScreenTracker`]). A press is hit-tested per
 //! pixel on each button's frame-0 mask, the first hit in button order
 //! winning (`_SWRLECollisionWithPoint`, @0x19626-0x19648); the tracker
 //! plays 600 and 601 as the original's does.
 //!
-//! **Moving on its own.** The logo picks a new frame every 5 Mac ticks
-//! ([`Logo`]) and the rollover fades toward the button under the pointer
-//! ([`Rollover`]). While a press is held the logo stops, as
-//! `_TrackMainScreenButtons`'s loop runs the rollover's idle
-//! (@0x198b0-0x198b5) but not `_MainScreenAnimIdle`; the time still
-//! counts, so a pick due meanwhile comes on the next tick after.
+//! **Moving on its own**, in `_MainScreenAnimIdle`'s order: the logo
+//! picks a new frame every 5 Mac ticks ([`Logo`]), the slides step, and
+//! the rollover fades toward the button under the pointer ([`Rollover`]).
+//! While a press is held the logo stops, as `_TrackMainScreenButtons`'s
+//! loop runs the rollover's idle (@0x198b0-0x198b5) but not
+//! `_MainScreenAnimIdle`; the time still counts, so a pick due meanwhile
+//! comes on the next tick after. While the menu waits unseen behind the
+//! router's fade ([`MainMenu::wait`]), nothing moves, but the logo's and
+//! the slides' time counts, as their timers were set before the fade.
 //!
 //! **Without the art** (plug-in data, or test data that has none), the
 //! menu draws a stand-in: the game's name and six Nova-skin rectangle
@@ -29,10 +42,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use super::art::MainScreenArt;
+use super::art::{MainScreenArt, PictFrames};
 use super::background::{Background, interface_background};
 use super::logo::Logo;
 use super::rollover::Rollover;
+use super::slides::{SlideSound, Slides};
 use super::tracking::{MainScreenTracker, Tracked};
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -156,6 +170,7 @@ struct ArtLayout {
     background: Background,
     logo: Logo,
     rollover: Rollover,
+    slides: Slides,
 }
 
 impl ArtLayout {
@@ -188,21 +203,16 @@ impl ArtLayout {
             ImageKey::picture(self.art.background),
             self.background.picture_top_left,
         );
-        let logo = &self.art.logo;
-        let frame = Bounds::at(
-            Point::new(corner.x + logo.position.x, corner.y + logo.position.y),
-            logo.frame_size.0,
-            logo.frame_size.1,
-        );
-        let origin = logo.frame_origin(self.logo.frame());
-        list.clipped(
-            frame,
-            DrawCommand::Picture {
-                image: ImageKey::picture(logo.picture),
-                top_left: Point::new(frame.min.x - origin.x, frame.min.y - origin.y),
-            },
-        );
+        draw_frame(list, &self.art.logo, self.logo.frame(), corner);
+        for (slide, art) in self.art.slides.iter().enumerate() {
+            if let Some(frame) = self.slides.frame(slide) {
+                draw_frame(list, art, frame, corner);
+            }
+        }
         for (index, button) in self.art.buttons.iter().enumerate() {
+            if !self.slides.row_shown(row_of(index)) {
+                continue;
+            }
             let frame = u16::from(pressed == Some(index));
             list.picture(
                 ImageKey::sprite(button.sprite, frame),
@@ -211,6 +221,30 @@ impl ArtLayout {
         }
         self.rollover.draw(list, &self.art.rollover, corner);
     }
+}
+
+/// Draws frame `frame` of `art`, clipped to its place from `corner`.
+fn draw_frame(list: &mut DrawList, art: &PictFrames, frame: u16, corner: Point) {
+    let clip = Bounds::at(
+        Point::new(corner.x + art.position.x, corner.y + art.position.y),
+        art.frame_size.0,
+        art.frame_size.1,
+    );
+    let origin = art.frame_origin(frame);
+    list.clipped(
+        clip,
+        DrawCommand::Picture {
+            image: ImageKey::picture(art.picture),
+            top_left: Point::new(clip.min.x - origin.x, clip.min.y - origin.y),
+        },
+    );
+}
+
+/// The row of slides button `index` comes in with: 0 and 3 with the
+/// first, 1 and 4 with the second, 2 and 5 with the third
+/// (`_MainScreenUpdate` @0x184f8-0x186f7).
+fn row_of(index: usize) -> usize {
+    index % 3
 }
 
 /// The main menu: a button for each [`MenuChoice`].
@@ -253,6 +287,7 @@ impl MainMenu {
                 background: interface_background(CLASSIC_SIZE, art.background_size),
                 logo: Logo::new(art.logo.frames),
                 rollover: Rollover::new(art.rollover.frames),
+                slides: Slides::finished(art.slides.map(|slide| slide.frames)),
                 art,
             })),
             None => Layout::StandIn(Box::new(stand_in_buttons())),
@@ -327,6 +362,48 @@ impl MainMenu {
         match &self.layout {
             Layout::Art(layout) => Some(layout.logo.frame()),
             Layout::StandIn(_) => None,
+        }
+    }
+
+    /// Sets the screen appearing, as `_LoadMainScreenAnim` does each time
+    /// the main screen comes up: the slides set off, the rollover cleared
+    /// with its frame kept and its first step due, and the logo's 5 ticks
+    /// started again on the frame it shows (@0x179d8-0x17a73). The
+    /// stand-in has nothing to set off.
+    pub fn appear(&mut self) {
+        if let Layout::Art(layout) = &mut self.layout {
+            layout.slides.start();
+            layout.rollover.clear();
+            layout.logo.restart();
+        }
+    }
+
+    /// `dt` passes while the menu waits unseen, behind the router's fade:
+    /// nothing moves, but the time counts toward the logo's next pick and
+    /// the slides' next step, as `TickCount` runs on.
+    pub fn wait(&mut self, dt: Duration) {
+        if let Layout::Art(layout) = &mut self.layout {
+            layout.logo.wait(dt);
+            layout.slides.wait(dt);
+        }
+    }
+
+    /// Whether row `row`'s buttons show: its slide has finished; always
+    /// for the stand-in.
+    #[must_use]
+    pub fn row_shown(&self, row: usize) -> bool {
+        match &self.layout {
+            Layout::Art(layout) => layout.slides.row_shown(row),
+            Layout::StandIn(_) => true,
+        }
+    }
+
+    /// Whether any slide still runs.
+    #[must_use]
+    pub fn slides_running(&self) -> bool {
+        match &self.layout {
+            Layout::Art(layout) => layout.slides.running(),
+            Layout::StandIn(_) => false,
         }
     }
 
@@ -429,6 +506,9 @@ impl Screen for MainMenu {
                 at,
             } => {
                 self.pointer = Some(at);
+                if pressed && let Layout::Art(layout) = &mut self.layout {
+                    layout.slides.skip();
+                }
                 let hit = self.hit(at);
                 let tracked = if pressed {
                     self.tracker.cancel();
@@ -457,18 +537,37 @@ impl Screen for MainMenu {
         ScreenAction::None
     }
 
-    /// The logo and the rollover move on, with the art: the rollover
-    /// toward the button under the pointer, the logo only while no press
-    /// is held.
+    /// The logo, the slides and the rollover move on, with the art, in
+    /// `_MainScreenAnimIdle`'s order: the logo and the slides only while
+    /// no press is held, then the rollover toward the button under the
+    /// pointer, held clear while any slide runs and stepping at once in
+    /// the tick the last one finishes (`_MainScreenRolloverIdle`
+    /// @0x1647f-0x164b1).
     fn tick(&mut self, dt: Duration) {
         let target = self.pointer.and_then(|at| self.hit(at));
         let held = self.tracker.tracking();
-        if let Layout::Art(layout) = &mut self.layout {
-            if held {
-                layout.logo.wait(dt);
-            } else {
-                layout.logo.tick(dt, &mut self.chance);
-            }
+        let Layout::Art(layout) = &mut self.layout else {
+            return;
+        };
+        let ran = layout.slides.running();
+        if held {
+            layout.logo.wait(dt);
+            layout.slides.wait(dt);
+        } else {
+            layout.logo.tick(dt, &mut self.chance);
+            let sounds = layout.slides.tick(dt).into_iter().map(|sound| {
+                Sound::Ui(match sound {
+                    SlideSound::Start(_) => UiSound::RowSlideStart,
+                    SlideSound::End(_) => UiSound::RowSlideEnd,
+                })
+            });
+            self.sounds.extend(sounds);
+        }
+        if layout.slides.running() {
+            layout.rollover.clear();
+        } else if ran {
+            layout.rollover.tick(Duration::ZERO, target);
+        } else {
             layout.rollover.tick(dt, target);
         }
     }
@@ -509,7 +608,7 @@ impl Screen for MainMenu {
         self.tracker.cancel();
     }
 
-    /// The buttons' sounds as they are clicked or keyed.
+    /// The buttons' sounds as they are clicked or keyed, and the slides'.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -527,7 +626,8 @@ mod tests {
     use crate::draw::{Blend, lights_tint};
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME, LOGO_PICT,
-        LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, main_screen_art,
+        LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_PICTS,
+        SLIDE_POSITIONS, main_screen_art,
     };
     use crate::text::fixture::MonoMetrics;
 
@@ -1029,6 +1129,303 @@ mod tests {
         menu.tick(Duration::ZERO);
         menu.tick(mac_ticks(1));
         assert_eq!(menu.rollover(), Some((2, 4)));
+    }
+
+    // The appear: the slides.
+
+    /// The fixture's menu, appearing: its slides start at -1, -2 and -3
+    /// (counts 3, 2 and 3).
+    fn appearing() -> MainMenu {
+        let mut menu = with_art();
+        menu.appear();
+        menu
+    }
+
+    /// The slides' frames as drawn: each slide's picture and the frame its
+    /// offset from the clip shows, with the clip.
+    fn drawn_slides(menu: &MainMenu) -> Vec<(i16, u16, Bounds)> {
+        let mut list = DrawList::new();
+        menu.draw(&mut list);
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { clip, command } => match **command {
+                    DrawCommand::Picture { image, top_left } if SLIDE_PICTS.contains(&image.id) => {
+                        assert_eq!(top_left.x, clip.min.x, "one frame across");
+                        let frame = (clip.min.y - top_left.y) / f32::from(SLIDE_FRAME.1);
+                        Some((image.id, frame as u16, *clip))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where slide `slide`'s frame is drawn.
+    fn slide_clip(slide: usize) -> Bounds {
+        let (x, y) = SLIDE_POSITIONS[slide];
+        Bounds::at(
+            Point::new(f32::from(x), f32::from(y)),
+            f32::from(SLIDE_FRAME.0),
+            f32::from(SLIDE_FRAME.1),
+        )
+    }
+
+    /// The buttons drawn, by index.
+    fn buttons_drawn(menu: &MainMenu) -> Vec<usize> {
+        button_frames(menu)
+            .iter()
+            .map(|&(sprite, ..)| {
+                BUTTON_SPRITES
+                    .iter()
+                    .position(|&id| id == sprite)
+                    .expect("a button")
+            })
+            .collect()
+    }
+
+    const START: Sound = Sound::Ui(UiSound::RowSlideStart);
+    const END: Sound = Sound::Ui(UiSound::RowSlideEnd);
+
+    #[test]
+    fn a_menu_made_shows_its_slides_finished() {
+        let menu = with_art();
+        assert!(!menu.slides_running());
+        assert_eq!(drawn_slides(&menu), []);
+        assert_eq!(buttons_drawn(&menu), [0, 1, 2, 3, 4, 5]);
+        assert!((0..3).all(|row| menu.row_shown(row)));
+    }
+
+    #[test]
+    fn appearing_draws_each_slides_frame_in_its_rectangle_from_its_strip() {
+        let mut menu = appearing();
+        assert!(menu.slides_running());
+        assert_eq!(drawn_slides(&menu), [], "every slide below frame 0");
+        assert_eq!(buttons_drawn(&menu), [0_usize; 0], "no row shown");
+        menu.tick(mac_ticks(1));
+        assert_eq!(drawn_slides(&menu), [(8030, 0, slide_clip(0))]);
+        menu.tick(mac_ticks(1));
+        assert_eq!(
+            drawn_slides(&menu),
+            [(8030, 1, slide_clip(0)), (8031, 0, slide_clip(1))]
+        );
+        menu.tick(mac_ticks(1));
+        assert_eq!(
+            drawn_slides(&menu),
+            [
+                (8030, 2, slide_clip(0)),
+                (8031, 1, slide_clip(1)),
+                (8032, 0, slide_clip(2))
+            ]
+        );
+    }
+
+    #[test]
+    fn no_frame_is_drawn_past_the_count() {
+        let mut menu = appearing();
+        menu.tick(mac_ticks(4));
+        assert_eq!(drawn_slides(&menu), [(8032, 1, slide_clip(2))]);
+        menu.tick(mac_ticks(2));
+        assert_eq!(drawn_slides(&menu), []);
+    }
+
+    #[test]
+    fn the_slides_are_drawn_over_the_logo_and_under_the_buttons() {
+        let mut menu = appearing();
+        menu.tick(mac_ticks(4));
+        let mut list = DrawList::new();
+        menu.draw(&mut list);
+        let place =
+            |wanted: &dyn Fn(&DrawCommand) -> bool| list.iter().position(wanted).expect("drawn");
+        let logo = place(&|command| {
+            matches!(command, DrawCommand::Clipped { command, .. }
+                if matches!(**command, DrawCommand::Picture { image, .. } if image.id == LOGO_PICT))
+        });
+        let slide = place(&|command| {
+            matches!(command, DrawCommand::Clipped { command, .. }
+                if matches!(**command, DrawCommand::Picture { image, .. } if image.id == 8032))
+        });
+        let button = place(
+            &|command| matches!(command, DrawCommand::Picture { image, .. } if image.kind == ImageKind::Rled),
+        );
+        assert!(logo < slide && slide < button, "{logo} {slide} {button}");
+    }
+
+    #[test]
+    fn the_menus_ticks_raise_602_and_603() {
+        let mut menu = appearing();
+        let mut heard = Vec::new();
+        for _ in 0..7 {
+            menu.tick(mac_ticks(1));
+            heard.push(menu.take_sounds());
+        }
+        assert_eq!(
+            heard,
+            [
+                vec![],
+                vec![START],
+                vec![START],
+                vec![END, END, START],
+                vec![],
+                vec![END],
+                vec![],
+            ]
+        );
+    }
+
+    #[test]
+    fn each_rows_buttons_show_once_its_slide_finishes() {
+        let mut menu = appearing();
+        let mut shown = Vec::new();
+        for _ in 0..6 {
+            menu.tick(mac_ticks(1));
+            shown.push(buttons_drawn(&menu));
+        }
+        assert_eq!(
+            shown,
+            [
+                vec![],
+                vec![],
+                vec![],
+                vec![0, 1, 3, 4],
+                vec![0, 1, 3, 4],
+                vec![0, 1, 2, 3, 4, 5],
+            ]
+        );
+    }
+
+    #[test]
+    fn row_shown_follows_the_slides() {
+        let mut menu = appearing();
+        assert!((0..3).all(|row| !menu.row_shown(row)));
+        menu.tick(mac_ticks(4));
+        assert!(menu.row_shown(0) && menu.row_shown(1));
+        assert!(!menu.row_shown(2));
+        assert!(menu.slides_running());
+        menu.tick(mac_ticks(2));
+        assert!(menu.row_shown(2));
+        assert!(!menu.slides_running());
+    }
+
+    #[test]
+    fn the_stand_in_shows_every_row_and_appears_as_it_is() {
+        let mut menu = stand_in();
+        menu.appear();
+        assert!((0..3).all(|row| menu.row_shown(row)));
+        assert!(!menu.slides_running());
+        let before = drawn(&menu);
+        menu.wait(mac_ticks(10));
+        menu.tick(mac_ticks(10));
+        assert_eq!(drawn(&menu), before);
+        assert_eq!(menu.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_rollover_stays_clear_while_any_slide_runs_and_steps_once_they_finish() {
+        let mut menu = appearing();
+        menu.input(&Input::PointerMoved(
+            menu.press_point(MenuChoice::Preferences),
+        ));
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            menu.tick(mac_ticks(1));
+            seen.push(menu.rollover().expect("the art"));
+        }
+        assert_eq!(
+            seen,
+            [
+                (6, 0),
+                (6, 0),
+                (6, 0),
+                (6, 0),
+                (6, 0),
+                (4, 0),
+                (4, 4),
+                (4, 8)
+            ],
+            "held on the none frame, then one step in the finishing tick"
+        );
+    }
+
+    #[test]
+    fn a_click_during_the_slides_finishes_them_without_603_and_presses_the_button() {
+        let mut menu = appearing();
+        menu.tick(mac_ticks(2));
+        assert_eq!(menu.take_sounds(), [START]);
+        let quit = menu.press_point(MenuChoice::Quit);
+        menu.input(&button(true, quit));
+        assert_eq!(menu.take_sounds(), [DOWN], "no 603");
+        assert!(!menu.slides_running());
+        assert_eq!(drawn_slides(&menu), []);
+        assert_eq!(buttons_drawn(&menu), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(menu.tracker.pressed(), Some(MenuChoice::Quit.index()));
+        menu.tick(mac_ticks(10));
+        assert_eq!(menu.take_sounds(), [], "nothing more from the slides");
+        assert_eq!(click_release(&mut menu, quit), Some(MenuChoice::Quit));
+    }
+
+    #[test]
+    fn a_miss_during_the_slides_finishes_them_silently() {
+        let mut menu = appearing();
+        menu.tick(mac_ticks(1));
+        assert_eq!(click(&mut menu, Point::new(5.0, 5.0)), []);
+        assert!(!menu.slides_running());
+        assert_eq!(buttons_drawn(&menu), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(menu.take_choice(), None);
+    }
+
+    #[test]
+    fn a_slide_skipped_before_frame_0_never_plays_602() {
+        let mut menu = appearing();
+        menu.input(&button(true, Point::new(5.0, 5.0)));
+        menu.tick(mac_ticks(20));
+        assert_eq!(menu.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_secondary_click_leaves_the_slides_running() {
+        let mut menu = appearing();
+        for pressed in [true, false] {
+            menu.input(&Input::PointerButton {
+                button: MouseButton::Right,
+                pressed,
+                at: Point::new(5.0, 5.0),
+            });
+        }
+        assert!(menu.slides_running());
+        menu.tick(mac_ticks(2));
+        assert_eq!(menu.take_sounds(), [START]);
+    }
+
+    #[test]
+    fn waiting_unseen_moves_nothing_and_leaves_the_logo_and_one_step_due() {
+        let (mut menu, rolls) = rolling(&[3]);
+        menu.appear();
+        menu.wait(Duration::from_secs(1));
+        assert_eq!(drawn_slides(&menu), []);
+        assert_eq!(drawn_logo_frame(&menu), 0);
+        assert!(rolls.borrow().sides.is_empty(), "no pick while it waits");
+        menu.tick(Duration::ZERO);
+        assert_eq!(drawn_logo_frame(&menu), 4, "the pick due comes at once");
+        assert_eq!(drawn_slides(&menu), [(8030, 0, slide_clip(0))], "one step");
+        menu.tick(Duration::from_millis(10));
+        assert_eq!(drawn_slides(&menu), [(8030, 0, slide_clip(0))], "no more");
+    }
+
+    #[test]
+    fn appearing_again_keeps_the_logo_and_rollover_frames_and_clears_the_rollover() {
+        let (mut menu, _rolls) = rolling(&[3]);
+        menu.input(&Input::PointerMoved(menu.press_point(MenuChoice::NewPilot)));
+        menu.tick(mac_ticks(5));
+        assert_eq!(menu.rollover(), Some((0, 20)));
+        assert_eq!(menu.logo_frame(), Some(4));
+        menu.tick(mac_ticks(4));
+        menu.appear();
+        assert_eq!(menu.rollover(), Some((0, 0)), "clear, its frame kept");
+        assert_eq!(menu.logo_frame(), Some(4), "kept");
+        menu.wait(mac_ticks(4));
+        menu.tick(Duration::ZERO);
+        assert_eq!(menu.logo_frame(), Some(4), "the logo's 5 ticks start again");
     }
 
     // The stand-in.

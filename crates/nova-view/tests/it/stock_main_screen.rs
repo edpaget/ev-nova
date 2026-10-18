@@ -73,6 +73,77 @@ fn the_stock_art_resolves_where_it_was_recorded() {
     assert_eq!(art.rollover.position, Point::new(444.0, 465.0));
 }
 
+/// A slide as the phase recorded it: `PICT`, frame size, frames and
+/// `cölr` 128 position.
+type RecordedSlide = (i16, (f32, f32), u16, (f32, f32));
+
+/// The three slides as the phase recorded them.
+const SLIDES: [RecordedSlide; 3] = [
+    (8030, (338.0, 63.0), 11, (343.0, 399.0)),
+    (8031, (351.0, 64.0), 10, (337.0, 462.0)),
+    (8032, (351.0, 65.0), 11, (337.0, 526.0)),
+];
+
+#[test]
+fn the_stock_slides_resolve_where_they_were_recorded() {
+    let Some((_, art)) = stock() else {
+        return;
+    };
+    for (slide, (picture, size, frames, (x, y))) in art.slides.iter().zip(SLIDES) {
+        assert_eq!(slide.picture, picture);
+        assert_eq!(slide.frame_size, size, "{picture}");
+        assert_eq!(slide.frames, frames, "{picture}");
+        assert_eq!(slide.position, Point::new(x, y), "{picture}");
+    }
+}
+
+/// The slides' `PICT`s drawn, each with its frame, in order.
+fn slides_drawn(menu: &MainMenu) -> Vec<(i16, u16)> {
+    let mut list = DrawList::new();
+    menu.draw(&mut list);
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Clipped { clip, command } => match **command {
+                DrawCommand::Picture { image, top_left }
+                    if SLIDES.iter().any(|slide| slide.0 == image.id) =>
+                {
+                    let (_, (_, height), ..) = SLIDES
+                        .iter()
+                        .find(|slide| slide.0 == image.id)
+                        .expect("a slide");
+                    Some((image.id, ((clip.min.y - top_left.y) / height) as u16))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_stock_slides_start_at_minus_1_minus_6_and_minus_11() {
+    let Some((_, art)) = stock() else {
+        return;
+    };
+    let mut menu = MainMenu::new(
+        Some(art),
+        nova_view::ui::ButtonStyle::STOCK,
+        Rc::new(MonoMetrics),
+    );
+    menu.appear();
+    let tick = nova_sim::mission::screens::mac_ticks(1);
+    let mut first_frames = Vec::new();
+    for at in 1..=12 {
+        menu.tick(tick);
+        for (picture, frame) in slides_drawn(&menu) {
+            if frame == 0 {
+                first_frames.push((at, picture));
+            }
+        }
+    }
+    assert_eq!(first_frames, [(1, 8030), (6, 8031), (11, 8032)]);
+}
+
 fn press(menu: &mut MainMenu, at: Point) -> Vec<Sound> {
     menu.input(&Input::PointerButton {
         button: MouseButton::Left,

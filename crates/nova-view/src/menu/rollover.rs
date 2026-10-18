@@ -30,10 +30,13 @@
 //! once, without the fade out (@0x1654e), and draws the rollover opaque
 //! (@0x17be5). The engine draws at depth 16, the depth stock asks for
 //! ("Thousands of colors", `STR#` 140 #18), and the roadmap leaves depth
-//! 32 out. While the main screen's slides run the alpha is held at 0
-//! (@0x1647f-0x164b1), and in the background it shows the none frame at
-//! 32 (@0x16593-0x165bc): rdm:phase/main-screen/phase-2-appear-animation-and-fades
-//! builds the slides, and the roadmap leaves the background out.
+//! 32 out. In the background it shows the none frame at 32
+//! (@0x16593-0x165bc), which the roadmap leaves out too.
+//!
+//! **The slides' hold.** While any of the main screen's slides runs, the
+//! idle sets the alpha to 0 and returns before its timer check
+//! (@0x1647f-0x164b1), keeping the frame shown: [`Rollover::clear`] each
+//! tick, so the first step after the last slide finishes comes at once.
 
 use std::time::Duration;
 
@@ -84,6 +87,15 @@ impl Rollover {
     #[must_use]
     pub fn alpha(&self) -> u8 {
         self.alpha
+    }
+
+    /// Clears it, keeping the frame shown, with one step due at once: as
+    /// `_LoadMainScreenAnim` sets the alpha to 0 and the last step to 0
+    /// (@0x179d8-0x179dd, @0x17a73), and as the idle holds it while the
+    /// slides run (@0x1647f-0x164b1).
+    pub fn clear(&mut self) {
+        self.alpha = 0;
+        self.since = Duration::from_nanos(MAC_TICK_NANOS as u64);
     }
 
     /// The frame shown over no button: the last.
@@ -154,6 +166,20 @@ mod tests {
         let rollover = Rollover::new(7);
         assert_eq!((rollover.shown(), rollover.alpha()), (6, 0));
         assert_eq!(rollover.none_frame(), 6);
+    }
+
+    #[test]
+    fn clearing_it_keeps_its_frame_and_leaves_one_step_due() {
+        let mut rollover = Rollover::new(7);
+        rollover.tick(mac_ticks(20), Some(2));
+        assert_eq!((rollover.shown(), rollover.alpha()), (2, 32));
+        rollover.tick(Duration::from_millis(10), Some(2));
+        rollover.clear();
+        assert_eq!((rollover.shown(), rollover.alpha()), (2, 0));
+        rollover.tick(Duration::ZERO, Some(2));
+        assert_eq!(rollover.alpha(), 4, "one step at once");
+        rollover.tick(Duration::from_millis(10), Some(2));
+        assert_eq!(rollover.alpha(), 4, "and only one");
     }
 
     #[test]

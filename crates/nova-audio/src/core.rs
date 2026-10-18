@@ -270,6 +270,8 @@ impl<A: Audio> AudioCore<A> {
             UiSound::ButtonDown => self.play(self.table.button_down, at::BUTTON),
             UiSound::ButtonUp => self.play(self.table.button_up, at::BUTTON),
             UiSound::ButtonKeyed => self.click_keyed(),
+            UiSound::RowSlideStart => self.play(self.table.row_slide_start, at::ROW_SLIDE),
+            UiSound::RowSlideEnd => self.play(self.table.row_slide_end, at::ROW_SLIDE),
             UiSound::Alert => self.play(self.table.alert, at::ALERT),
             UiSound::EscortMenuToggled => {
                 self.play(self.table.escort_menu, at::ESCORT_MENU);
@@ -798,6 +800,8 @@ mod tests {
             (DOWN, at::BUTTON),
             (UP, at::BUTTON),
             (KEYED, at::BUTTON),
+            (Sound::Ui(UiSound::RowSlideStart), at::ROW_SLIDE),
+            (Sound::Ui(UiSound::RowSlideEnd), at::ROW_SLIDE),
             (
                 Sound::Sim(SimSound::EscortsCommanded),
                 at::ESCORTS_COMMANDED,
@@ -903,6 +907,26 @@ mod tests {
                 play(601, EFFECTS)
             ]
         );
+    }
+
+    #[test]
+    fn the_main_screens_slides_play_602_and_603_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::MainMenu),
+            &[
+                Sound::Ui(UiSound::RowSlideStart),
+                Sound::Ui(UiSound::RowSlideEnd),
+            ],
+        );
+        assert_eq!(
+            drain(&log),
+            [start_music(MUSIC), play(602, EFFECTS), play(603, EFFECTS)]
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &[Sound::Ui(UiSound::RowSlideStart)]);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     const KEYED: Sound = Sound::Ui(UiSound::ButtonKeyed);

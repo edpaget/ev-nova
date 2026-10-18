@@ -67,6 +67,13 @@ impl Logo {
         }
     }
 
+    /// Starts the 5 ticks again, keeping the frame shown, as
+    /// `_LoadMainScreenAnim` sets the last pick to now (@0x17a66) each
+    /// time the screen appears.
+    pub fn restart(&mut self) {
+        self.since = Duration::ZERO;
+    }
+
     /// `dt` passes with nothing picked: the time counts towards the next
     /// pick, as `TickCount` runs on while the original's idle is not
     /// called.
@@ -187,6 +194,21 @@ mod tests {
         assert_eq!(logo.frame(), 0);
         logo.tick(Duration::ZERO, &mut chance);
         assert_eq!(logo.frame(), 1);
+    }
+
+    #[test]
+    fn a_restart_keeps_the_frame_and_waits_5_ticks_again() {
+        let mut logo = Logo::new(7);
+        let mut chance = Scripted::new(&[2, 0]);
+        logo.tick(mac_ticks(5), &mut chance);
+        assert_eq!(logo.frame(), 3);
+        logo.wait(mac_ticks(4));
+        logo.restart();
+        assert_eq!(logo.frame(), 3, "kept");
+        logo.tick(mac_ticks(4), &mut chance);
+        assert_eq!(logo.frame(), 3, "the wait starts again");
+        logo.tick(mac_ticks(1), &mut chance);
+        assert_eq!(logo.frame(), 0);
     }
 
     #[test]
