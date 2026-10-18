@@ -41,14 +41,25 @@ use crate::afterburner::{afterburner_top, drain, engages, push_speed, push_veloc
 use crate::combat::hull::Condition;
 use crate::flight::{Caps, Controls};
 
-/// Whether any gravity source is in the system, `_gravitySourcesPresent`
-/// (*0x3b5568), which keeps the afterburner from widening the thrust's
-/// top, the box and the knockback's cap. None in the stock data; it is
-/// `ship-handling-fidelity/phase-14-gravity-and-deadly-stellars`' to
-/// work out.
-const GRAVITY_SOURCES_PRESENT: bool = false;
-
 impl Session {
+    /// Whether any gravity source is in the system, `_gravitySourcesPresent`
+    /// (*0x3b5568), which keeps the afterburner from widening the thrust's
+    /// top, the box and the knockback's cap. None in the stock data; it is
+    /// `ship-handling-fidelity/phase-14-gravity-and-deadly-stellars`' to
+    /// work out, in this body alone.
+    #[allow(clippy::unused_self)]
+    fn gravity_sources_present(&self) -> bool {
+        false
+    }
+
+    /// Whether the afterburner widens the player's caps this tick: it is on
+    /// and no gravity source is present. The thrust's top
+    /// ([`Session::player_caps`]) and the knockback's cap
+    /// ([`Session::afterburner_knockback`]) both read it.
+    fn afterburner_widens(&self) -> bool {
+        self.afterburner_on && !self.gravity_sources_present()
+    }
+
     /// Whether the player's afterburner is on this tick, `_abOn`, as
     /// [`Session::tick`] last engaged it: what the fight's knockback reads
     /// (see the module docs).
@@ -61,7 +72,7 @@ impl Session {
     /// top speed, `_DamageShip`'s test (@0x3ab19-0x3ab68): its afterburner
     /// is on and no gravity source is present.
     pub(super) fn afterburner_knockback(&self) -> bool {
-        self.afterburner_on && !GRAVITY_SOURCES_PRESENT
+        self.afterburner_widens()
     }
 
     /// The afterburner's engage test for this tick under `controls`
@@ -85,9 +96,12 @@ impl Session {
     /// clamped to the box the last tick left (@0x6d43f-0x6d4aa).
     pub(super) fn player_caps(&self) -> Caps {
         let top = self.top_speed();
-        let burning = self.afterburner_on && !GRAVITY_SOURCES_PRESENT;
         Caps {
-            thrust_top: if burning { afterburner_top(top) } else { top },
+            thrust_top: if self.afterburner_widens() {
+                afterburner_top(top)
+            } else {
+                top
+            },
             max_vel: self.player_max_vel.get(),
         }
     }
@@ -105,7 +119,8 @@ impl Session {
             self.player_max_vel.bleed(top, accel);
             return;
         }
-        self.player_max_vel.burn(top, GRAVITY_SOURCES_PRESENT);
+        let gravity = self.gravity_sources_present();
+        self.player_max_vel.burn(top, gravity);
         if self.player_inertialess() {
             self.player_speed = push_speed(self.player_speed, accel, top);
         } else {
