@@ -7,7 +7,10 @@
 //! it always does. What the appear holds is replayed through
 //! [`Screen::input`] once it ends, in order, as the original's queue
 //! reaches the main screen after its synchronous fade; a replayed key
-//! that holds the menu queues the rest, as at a keyed click. While the
+//! that holds the menu queues the rest, as at a keyed click. The keys'
+//! letting go when the window loses focus waits among them, after the
+//! presses it lets go of. The pointer's cancel needs no such place: the
+//! appear holds no pointer input for it to cancel. While the
 //! appear waits unseen, the main menu doesn't tick, but its logo's and
 //! slides' time counts ([`MainMenu::wait`](nova_view::menu::MainMenu::wait)).
 //!
@@ -20,7 +23,7 @@ use nova_sim::{RuleKey, RuleSource};
 use nova_view::menu::appear::{Appear, Deferred, Verdict};
 use nova_view::{Input, Screen, ScreenAction};
 
-use super::{AppScreen, Side};
+use super::{AppScreen, MenuKeys, Side};
 
 impl AppScreen {
     /// Puts play away and shows the main screen as a return from play
@@ -73,6 +76,24 @@ impl AppScreen {
         !appear.menu_live()
     }
 
+    /// The keys were let go of outside the game (the window losing
+    /// focus): while the main screen waits, the router's notes of them
+    /// are cleared now, for the appear's own verdicts, and the letting go
+    /// waits in its place among what the appear holds, so a press held
+    /// before it doesn't leave its key down once replayed. Whether the
+    /// appear takes it.
+    pub(super) fn appear_release_keys(&mut self) -> bool {
+        let Some(appear) = &mut self.appear else {
+            return false;
+        };
+        if appear.release_keys() != Verdict::Held {
+            return false;
+        }
+        self.command_held = false;
+        self.keys_held = MenuKeys::default();
+        true
+    }
+
     /// Whether an appear keeps the main menu waiting unseen, unticked.
     pub(super) fn appear_holds_menu(&self) -> bool {
         self.appear
@@ -104,6 +125,7 @@ impl AppScreen {
                     }
                 }
                 Deferred::Close => self.replay_close(),
+                Deferred::ReleaseKeys => self.release_keys(),
             }
         }
     }

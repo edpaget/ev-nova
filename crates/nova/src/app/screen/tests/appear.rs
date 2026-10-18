@@ -167,6 +167,23 @@ fn a_close_during_the_start_up_fade_asks_once_it_ends() {
 }
 
 #[test]
+fn a_focus_loss_during_the_start_up_fade_lets_go_of_command_after_its_press() {
+    let store = MemoryPilots::new();
+    let mut screen = opening(&store);
+    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::Tab, true));
+    // Command's release goes to the app switcher.
+    screen.release_keys();
+    screen.tick(DEATH_FADE_FOR);
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::None,
+        "a plain Q, Command let go of"
+    );
+    assert!(!screen.take_quit());
+}
+
+#[test]
 fn the_start_up_drops_the_same_whatever_the_return_rule() {
     let store = MemoryPilots::new();
     let mut screen = opening_by(&store, RuleSource::Bible);
@@ -300,6 +317,24 @@ fn a_key_typed_during_the_return_reaches_the_main_screen_after_it() {
     );
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::NewPilot);
+}
+
+#[test]
+fn a_focus_loss_during_the_return_lets_go_of_a_key_after_its_press() {
+    let store = MemoryPilots::new();
+    let mut screen = flying(&store, RuleSource::Engine);
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    screen.input(&key(Key::Char('e'), true));
+    screen.release_keys();
+    screen.tick(DEATH_FADE_FOR);
+    assert_eq!(screen.take_sounds(), []);
+    screen.input(&Input::Text('e'));
+    assert_eq!(
+        screen.take_sounds(),
+        [Sound::Ui(UiSound::ButtonKeyed)],
+        "E clicks at once, its key let go of"
+    );
 }
 
 #[test]

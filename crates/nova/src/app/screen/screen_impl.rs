@@ -250,9 +250,13 @@ impl Screen for AppScreen {
         }
     }
 
-    /// While the main menu waits, the letting go waits too, in its place
-    /// among the inputs; while E's wait holds, it counts as E's release.
+    /// While the main menu appears unseen or waits, the letting go waits
+    /// too, in its place among the inputs; while E's wait holds, it
+    /// counts as E's release.
     fn release_keys(&mut self) {
+        if self.appear_release_keys() {
+            return;
+        }
         if let Some(hold) = self.menu_hold {
             self.held.push(Held::ReleaseKeys);
             if hold == MenuHold::EHeld {

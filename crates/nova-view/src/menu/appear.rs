@@ -65,6 +65,10 @@ pub enum Deferred {
     Input(Input),
     /// The window's close.
     Close,
+    /// The keys let go of at once, outside the game (the window losing
+    /// focus): in its place after the presses held before it, so their
+    /// replay doesn't leave them down.
+    ReleaseKeys,
 }
 
 /// Which appear this is.
@@ -186,6 +190,19 @@ impl Appear {
             Kind::Return => Verdict::Drop,
             Kind::LiveReturn => Verdict::Pass,
         }
+    }
+
+    /// What becomes of the keys' letting go outside the game (the window
+    /// losing focus, whose releases never arrive): held in its place
+    /// after the presses held before it, so their replay lets go of them
+    /// again, while the main screen waits; passed to the live menu by
+    /// the other reading.
+    pub fn release_keys(&mut self) -> Verdict {
+        if self.menu_live() {
+            return Verdict::Pass;
+        }
+        self.held.push(Deferred::ReleaseKeys);
+        Verdict::Held
     }
 
     /// What was held, in order, once.
@@ -446,5 +463,26 @@ mod tests {
         }
         appear.input(&button(MouseButton::Left, true), false);
         assert_eq!(appear.take_held(), typed.map(Deferred::Input));
+    }
+
+    #[test]
+    fn a_letting_go_of_the_keys_waits_after_the_presses_held_before_it() {
+        let command = key(Key::Command, true);
+        for mut appear in [Appear::start_up(), Appear::returning(false, true)] {
+            appear.input(&command, false);
+            assert_eq!(appear.release_keys(), Verdict::Held);
+            appear.input(&command, false);
+            assert_eq!(
+                appear.take_held(),
+                [
+                    Deferred::Input(command),
+                    Deferred::ReleaseKeys,
+                    Deferred::Input(command)
+                ]
+            );
+        }
+        let mut live = Appear::returning(true, false);
+        assert_eq!(live.release_keys(), Verdict::Pass, "the live menu's now");
+        assert_eq!(live.take_held(), []);
     }
 }
