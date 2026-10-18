@@ -5,6 +5,8 @@
 //! - [`appear`]: how the main screen appears, at start-up and on each
 //!   return from play: its fade, and what it does with the input
 //!   meanwhile.
+//! - [`intro`]: the intro screen a pilot sees as it first enters play,
+//!   and the port its pictures come through ([`IntroSource`]).
 //! - [`art`]: the main screen's art in the core's terms, and the port it
 //!   comes through ([`MainScreenSource`]); `data` adapts the game data
 //!   to it.
@@ -26,6 +28,7 @@ pub mod background;
 mod data;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod intro;
 pub mod logo;
 pub mod main_menu;
 pub mod pilot_list;
@@ -35,6 +38,7 @@ pub mod slides;
 pub mod tracking;
 
 pub use art::{MainScreenArt, MainScreenSource};
+pub use intro::{CharacterIntro, IntroSource};
 pub use main_menu::{Chosen, ChosenBy, MainMenu, MenuChoice};
 pub use pilot_list::{PilotList, PilotListOutcome};
 pub use pilot_panel::{PanelPilot, PilotPanelSource};

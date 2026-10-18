@@ -3,11 +3,14 @@
 //! needs (the sizes, and the buttons' frame-0 masks), and the pilot
 //! panel's ([`PilotPanelSource`]): `cölr` 128's menu font and colours,
 //! `STR#` 2002's labels, each `shïp`'s Subtitle, and the `shän` base
-//! images and `PICT` sizes [`target_picture`] picks its picture from.
-//! Thin lookups; the decisions are the core's.
+//! images and `PICT` sizes [`target_picture`] picks its picture from,
+//! and the intro screen's ([`IntroSource`]): the first `chär`'s intro
+//! fields, `PICT` sizes, and whether a `snd ` exists. Thin lookups; the
+//! decisions are the core's.
 
 use nova_data::GameData;
 use nova_data::graphics::{Image, PICT, RLED, SpriteSheet, decode_pict, decode_rled};
+use nova_data::records::character::Character;
 use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
 use nova_data::records::spin::Spin;
@@ -18,11 +21,40 @@ use super::art::{
     BACKGROUND_PICT, BUTTON_SPINS, ButtonArt, COLORS_ID, LOGO_SPIN, MainScreenArt,
     MainScreenSource, PictFrames, ROLLOVER_SPIN, RolloverArt, SLIDE_SPINS, SpriteMask,
 };
+use super::intro::{CharacterIntro, IntroPicture, IntroSource};
 use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource, target_picture};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Point;
+use crate::sound::SoundId;
 use crate::spaceport::ShipBaseImages;
+
+/// The `snd ` resource type.
+const SND: nova_rsrc::ResType = nova_rsrc::ResType::new(*b"snd ");
+
+/// Reads afresh on every call; the router reads the first `chär`'s intro
+/// as New Pilot makes a pilot and as play is entered.
+impl IntroSource for GameData {
+    fn first_character_intro(&self) -> Option<CharacterIntro> {
+        let (_, first) = self.records::<Character>().next()?;
+        let character = &first.ok()?.record;
+        Some(CharacterIntro {
+            pictures: std::array::from_fn(|slot| IntroPicture {
+                picture: character.intro_pict[slot].map_or(-1, |id| id.0),
+                delay: character.pict_delay[slot],
+            }),
+            text: character.intro_text_id.map(|id| id.0),
+        })
+    }
+
+    fn intro_picture_size(&self, picture: i16) -> Option<(u32, u32)> {
+        picture_size(self, picture)
+    }
+
+    fn has_sound(&self, sound: SoundId) -> bool {
+        self.resource(SND, sound.0).is_some()
+    }
+}
 
 /// Reads afresh on every call; the router reads the looks once and a
 /// ship's picture when the pilot's ship type changes.
@@ -598,5 +630,98 @@ mod tests {
             PanelShip::default(),
             "below the first shïp"
         );
+    }
+
+    /// A `chär` whose intro is `pictures` (each its `PICT` and delay) and
+    /// `text`.
+    fn character(pictures: [(i16, i16); 4], text: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Character::SIZE.expect("fixed")];
+        for (slot, (picture, delay)) in pictures.into_iter().enumerate() {
+            let at = 0x20 + 2 * slot;
+            bytes[at..at + 2].copy_from_slice(&picture.to_be_bytes());
+            let at = 0x28 + 2 * slot;
+            bytes[at..at + 2].copy_from_slice(&delay.to_be_bytes());
+        }
+        bytes[0x30..0x32].copy_from_slice(&text.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn the_intro_is_the_first_chars_by_ascending_id() {
+        let data = game(&[
+            (
+                Character::TYPE,
+                129,
+                character([(9000, 1), (-1, 0), (-1, 0), (-1, 0)], 300),
+            ),
+            (
+                Character::TYPE,
+                128,
+                character([(8200, 45), (-1, 0), (8201, -1), (0, 5)], 128),
+            ),
+        ]);
+        assert_eq!(
+            data.first_character_intro(),
+            Some(CharacterIntro {
+                pictures: [
+                    IntroPicture {
+                        picture: 8200,
+                        delay: 45
+                    },
+                    IntroPicture {
+                        picture: -1,
+                        delay: 0
+                    },
+                    IntroPicture {
+                        picture: 8201,
+                        delay: -1
+                    },
+                    IntroPicture {
+                        picture: 0,
+                        delay: 5
+                    },
+                ],
+                text: Some(128),
+            })
+        );
+    }
+
+    #[test]
+    fn a_text_of_minus_1_is_none_and_no_char_no_intro() {
+        let data = game(&[(
+            Character::TYPE,
+            128,
+            character([(-1, 0), (0, 0), (-1, 0), (-1, 0)], -1),
+        )]);
+        let intro = data.first_character_intro().expect("a chär");
+        assert_eq!(intro.text, None);
+        assert_eq!(
+            intro.pictures.map(|picture| picture.picture),
+            [-1, 0, -1, -1]
+        );
+        let zero = game(&[(Character::TYPE, 128, character([(-1, 0); 4], 0))]);
+        assert_eq!(
+            zero.first_character_intro().map(|intro| intro.text),
+            Some(Some(0)),
+            "0 is a text, as only -1 is none"
+        );
+        assert_eq!(game(&[]).first_character_intro(), None);
+        let broken = game(&[(Character::TYPE, 128, vec![0; 3])]);
+        assert_eq!(broken.first_character_intro(), None, "undecodable");
+    }
+
+    #[test]
+    fn the_intro_reads_picture_sizes_and_whether_a_sound_exists() {
+        let data = game(&[
+            (PICT, 8200, blank(64, 48)),
+            (PICT, 8201, vec![0, 4]),
+            (SND, 30_003, vec![0; 8]),
+        ]);
+        assert_eq!(data.intro_picture_size(8200), Some((64, 48)));
+        assert_eq!(data.intro_picture_size(8201), None, "undecodable");
+        assert_eq!(data.intro_picture_size(8202), None, "missing");
+        assert!(data.has_sound(SoundId(30_003)));
+        assert!(!data.has_sound(SoundId(30_004)));
+        assert!(!game(&[]).has_sound(SoundId(30_003)));
     }
 }
