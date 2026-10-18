@@ -107,7 +107,7 @@
 //!      whoever fired it and whatever it is aimed at, but one that touched
 //!      a ship on its move, whose hit comes first; a missile hit after its
 //!      durability is used up is shot down where the point-defence shot
-//!      is, and vanishes.
+//!      is, and vanishes from the shots in flight.
 //!    - Each shot whose proximity fuse a ship sets off at the end of its
 //!      move hits it, as
 //!      [`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse) reads it
@@ -117,6 +117,11 @@
 //!    - Each shot whose move spent its life is tested against no ship,
 //!      fuse or stellar, but meets an asteroid it touched; met by none, it
 //!      waits in the table for its end of life in step 5.
+//!    - Each shot point defence ended, this pass's and the missiles the
+//!      last tick's point-defence beams downed, is kept hidden at life 0:
+//!      neither drawn nor counted, it meets no ship, but a stellar, if it
+//!      is planet-type, or an asteroid in its armed fuse's reach still
+//!      sets it off ([`hidden`]).
 //!    - Each planet-type shot left meets the stellars (see 2b).
 //!
 //!    A shot that hits damages the ship, less a point of mass and of energy
@@ -210,8 +215,9 @@
 //!    beam whose target is destroyed or gone, or whose missile is gone,
 //!    goes with it.
 //! 7. A point-defence beam hits the missile it is held on the same way as
-//!    a point-defence shot; a missile downed leaves the fight before the
-//!    next hit pass tests its move, as `_HandleBeams` runs last in the
+//!    a point-defence shot; a missile downed leaves the shots in flight
+//!    before the next hit pass tests its move, kept hidden for that pass's
+//!    stellars and asteroids ([`hidden`]), as `_HandleBeams` runs last in the
 //!    frame (@0x4453d).
 //! 8. The beams' hits land. A beam damages
 //!    the nearest ship it may hit in its cone, or the first its segment
@@ -337,6 +343,7 @@ mod expiry;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flags;
+pub mod hidden;
 pub mod hull;
 pub mod impact;
 pub mod ion;
@@ -1131,8 +1138,14 @@ pub struct Combat {
     /// ([`Combat::fly_shots`]), the missiles point-defence beams downed;
     /// from the collision passes on, those and the passes' own ends, as
     /// each is ended; in `_HandleShot`, the ends of life so far, freed as
-    /// it ends; none from then to step 7.
+    /// it ends; none from then to step 7. Those point defence ended are
+    /// also kept in `hidden` until a proximity pass tests them, but are
+    /// counted here alone.
     ended_shots: usize,
+    /// The shots point defence ended at life 0, their sprites hidden,
+    /// kept for the next proximity pass's stellar and asteroid branches
+    /// (see [`hidden`]).
+    hidden: Vec<Shot>,
     /// The beams that ended in the last tick's step 6 and after: under the
     /// caps each still holds its slot through the next tick's firing (see
     /// [`Combat::beam_room`]).
@@ -1546,6 +1559,9 @@ impl Combat {
     /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots`]), finds
     ///   them all freed, the spent shots' too, and a shot of no life is
     ///   freed by the `_HandleShot` that first visits it, so it holds none.
+    ///
+    /// A shot point defence ended holds its slot once, here, while it is
+    /// kept hidden for the proximity pass ([`hidden`]).
     fn shot_room(&self) -> bool {
         !self.capped || self.shots.len() + self.ended_shots < MAX_SHOTS
     }
@@ -2196,7 +2212,10 @@ impl Combat {
     /// 1. contact with a ship, then with an asteroid (`rock_met`);
     /// 2. the point-defence layer against the missiles
     ///    ([`Combat::intercept`]);
-    /// 3. the proximity fuse, a ship then an asteroid;
+    /// 3. the proximity fuse, a ship then an asteroid; then the shots
+    ///    point defence ended, kept hidden at life 0, which only a stellar
+    ///    or an asteroid sets off ([`hidden`], [`Combat::test_hidden`]):
+    ///    this pass's point-defence ends and the last tick's beam kills;
     /// 4. the stellars ([`Combat::strike_stellars`]).
     ///
     /// A shot whose move spent it meets only the asteroids it touches, and
@@ -2264,14 +2283,15 @@ impl Combat {
         let first_strike = self.strikes.len();
         let mut gone = vec![false; self.shots.len()];
         self.intercept(camera, &touch, &mut gone);
-        let hits = self.resolve(
+        let mut hits = self.resolve(
             fighters,
             (&sides, &touch),
             &gone,
             arsenal,
             chance,
-            asteroids,
+            &mut *asteroids,
         );
+        hits.extend(self.test_hidden(fighters, &mut *stellars, asteroids));
         self.land(fighters, hits, rule);
         self.strike_stellars(stellars);
         for (fighter, position) in fighters.iter_mut().zip(now) {
@@ -2336,7 +2356,7 @@ impl Combat {
     /// it ([`defence::sprites_meet`]), and is spent on them: each it meets
     /// takes [`defence::pd_damage`], and one destroyed
     /// ([`Shot::take_pd_hit`]) is shot down where the point-defence shot
-    /// is, and vanishes. There is no other test: a lost missile, one
+    /// is, and vanishes from the shots in flight. There is no other test: a lost missile, one
     /// point defence cannot target (`Flags` 0x0080), a friendly one or one
     /// aimed elsewhere is met all the same (`_PointDefenseCollisionHandler`
     /// @0x37776-0x3785d). A missile shot down by an earlier shot this
@@ -2344,7 +2364,8 @@ impl Combat {
     /// ([`touches_a_ship`], which the original's contact passes take
     /// first, @0x43e75-0x43ffa), is not met; one whose move spent its life
     /// still is, as the pass tests no life. What is spent or destroyed is
-    /// marked `gone`.
+    /// marked `gone`, and [`Combat::resolve`] keeps it hidden at life 0
+    /// for the proximity pass that follows ([`hidden`]).
     ///
     /// The shots go in the order they are kept, the order they were fired,
     /// each against every missile in that order. The original walks each
@@ -2384,9 +2405,10 @@ impl Combat {
 
     /// Step 7: each point-defence beam hits the missile it is held on, its
     /// damage multiplied by `factor` ([`GamePass`]); a missile destroyed is
-    /// shot down and leaves the fight, counted among the shots whose slots
-    /// the original frees only at its next `_HandleShot` (@0x30ab1, see
-    /// [`Combat::shot_room`]), and the beams held on a missile no longer
+    /// shot down and leaves the shots in flight, counted among the shots
+    /// whose slots the original frees only at its next `_HandleShot`
+    /// (@0x30ab1, see [`Combat::shot_room`]); it is kept hidden at life 0
+    /// for the next tick's proximity pass ([`hidden`]). The beams held on a missile no longer
     /// in flight go. This comes after the shots fly, as `_HandleBeams`
     /// runs last in the frame (@0x4453d), so a beam downs a missile before
     /// the next hit pass tests its move.
@@ -2407,10 +2429,15 @@ impl Combat {
                 });
             }
         }
-        let mut downed = gone.iter();
-        self.shots
-            .retain(|_| !downed.next().is_some_and(|&gone| gone));
-        self.ended_shots += gone.iter().filter(|&&gone| gone).count();
+        let shots = std::mem::take(&mut self.shots);
+        for (shot, gone) in shots.into_iter().zip(gone) {
+            if gone {
+                self.ended_shots += 1;
+                self.hide(shot);
+            } else {
+                self.shots.push(shot);
+            }
+        }
         let shots = &self.shots;
         self.beams.retain(|beam| match beam.aiming {
             Aiming::Shot(id) => shots.iter().any(|shot| shot.id == id),
@@ -2421,7 +2448,7 @@ impl Combat {
     /// The hit pass's ship and asteroid tests (see [`Combat::hit_pass`]):
     /// the hits and blasts of the shots that have moved, among `sides`
     /// and, for contact, `touch`, those `gone` to point defence taken out
-    /// first; each sub-munition's weapon is read from `arsenal`, its spread
+    /// first and kept hidden at life 0 ([`Combat::hide`]); each sub-munition's weapon is read from `arsenal`, its spread
     /// drawn on `chance`. Gives the hits on ships to land, in the
     /// original's pass order: contacts, then proximities. A shot its move
     /// spent that meets no asteroid is kept for its end of life in
@@ -2461,6 +2488,7 @@ impl Combat {
             };
             if gone {
                 ended += 1;
+                self.hide(shot);
                 continue;
             }
             let hit = Hit {
@@ -2868,25 +2896,32 @@ impl Combat {
                 kept.push(shot);
                 continue;
             };
-            if let Some(explosion) = shot.weapon.explosion {
-                self.events.push(CombatEvent::Exploded {
-                    at,
-                    explosion,
-                    size: shot.weapon.blast_radius,
-                });
-            }
-            self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-            let target = &mut stellars[index];
-            let damage = stellar::damage(&shot.weapon);
-            target.strength -= damage;
-            self.stellar_strikes.push(StellarStrike {
-                stellar: target.stellar,
-                by: shot.attacker(),
-                damage,
-                destroyed: stellar::shot_down(target.strength),
-            });
+            self.strike_stellar(&shot, &mut stellars[index], at);
         }
         self.shots = kept;
+    }
+
+    /// `shot`'s hit on `target` at `at`, which spends it (see
+    /// [`Combat::strike_stellars`]): it explodes there with its hit
+    /// particles, with no blast and no sub-munitions, and takes its damage
+    /// off the stellar's strength.
+    fn strike_stellar(&mut self, shot: &Shot, target: &mut StellarTarget, at: Vec2) {
+        if let Some(explosion) = shot.weapon.explosion {
+            self.events.push(CombatEvent::Exploded {
+                at,
+                explosion,
+                size: shot.weapon.blast_radius,
+            });
+        }
+        self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
+        let damage = stellar::damage(&shot.weapon);
+        target.strength -= damage;
+        self.stellar_strikes.push(StellarStrike {
+            stellar: target.stellar,
+            by: shot.attacker(),
+            damage,
+            destroyed: stellar::shot_down(target.strength),
+        });
     }
 
     /// Puts in flight the sub-munitions `parent` releases at `target`
@@ -3170,6 +3205,7 @@ impl Combat {
     /// Clears the shots and beams, as the ship leaves the system.
     pub fn clear(&mut self) {
         self.shots.clear();
+        self.hidden.clear();
         self.beams.clear();
         self.ended_shots = 0;
         self.ended_beams = 0;
@@ -3651,6 +3687,7 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod exit_steps;
+    mod hidden_shots;
     mod plunder_fire;
     mod strike_terms;
     mod tick_phases;

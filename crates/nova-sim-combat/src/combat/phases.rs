@@ -153,7 +153,10 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let rule = arena.rules.disable;
         // `_HandleShot` frees the slots of the shots ended since its last
-        // pass, each at its visit (@0x356c1, @0x30ab1).
+        // pass, each at its visit (@0x356c1, @0x30ab1). A shot point
+        // defence ended, hidden at life 0, is freed with no end of life
+        // (@0x36195 → @0x35f0a → @0x3617c); the collision passes have
+        // already tested and let it go (`Combat::test_hidden`).
         self.ended_shots = 0;
         let now = self.stand_where_they_stood(fighters);
         let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
