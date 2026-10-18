@@ -201,9 +201,10 @@ fn kin(victim: &Npc, attacker: Attacker, independent_kin: RuleSource) -> bool {
     if matches!(attacker, Attacker::None) {
         return false;
     }
+    // An independent attacker of a governed victim differs already, so
+    // the other reading need ask only whether the attacker is one.
     let govt = attacker.govt();
-    govt != victim.govt
-        || (independent_kin == RuleSource::Bible && govt.is_none() && victim.govt.is_none())
+    govt != victim.govt || (independent_kin == RuleSource::Bible && govt.is_none())
 }
 
 /// Leaders (@0x3b503-0x3b571): whether `victim`, led by L, was hit `by`

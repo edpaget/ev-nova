@@ -55,12 +55,12 @@ impl Traffic {
 
     /// Eases every NPC's stray provocation by [`STRAY_EASE`] while it is
     /// above none, to no lower than none, as `_HandleShip` does each frame
-    /// (@0x35374-0x353b2) after the collision passes and the shots.
+    /// (@0x35374-0x353b2) after the collision passes and the shots. It is
+    /// never below none (every weight is none or more), so the original's
+    /// test that it is above none is the floor's.
     pub fn ease_stray(&mut self) {
         for npc in &mut self.npcs {
-            if npc.stray > 0.0 {
-                npc.stray = (npc.stray - STRAY_EASE).max(0.0);
-            }
+            npc.stray = (npc.stray - STRAY_EASE).max(0.0);
         }
     }
 }
@@ -176,17 +176,15 @@ mod tests {
         let mut traffic = of(vec![
             ship(1, NEUTRAL, AiType::Warship, 0.0, 0.0),
             ship(2, NEUTRAL, AiType::Warship, 0.0, 0.0),
-            ship(3, NEUTRAL, AiType::Warship, 0.0, 0.0),
         ]);
         traffic.npcs[0].stray = 1.25;
         traffic.npcs[1].stray = 0.0;
-        traffic.npcs[2].stray = -1.0;
         traffic.ease_stray();
-        assert_eq!(strays(&traffic), [0.75, 0.0, -1.0]);
+        assert_eq!(strays(&traffic), [0.75, 0.0]);
         traffic.ease_stray();
-        assert_eq!(strays(&traffic), [0.25, 0.0, -1.0]);
+        assert_eq!(strays(&traffic), [0.25, 0.0]);
         traffic.ease_stray();
-        assert_eq!(strays(&traffic), [0.0, 0.0, -1.0], "floored at none");
+        assert_eq!(strays(&traffic), [0.0, 0.0], "floored at none");
         assert_eq!(STRAY_EASE, 0.5);
     }
 }
