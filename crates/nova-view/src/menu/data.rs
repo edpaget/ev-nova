@@ -179,6 +179,19 @@ mod tests {
     }
 
     #[test]
+    fn the_fixtures_logo_is_a_strip_of_its_frames() {
+        let data = crate::menu::fixture::main_screen_data();
+        let logo = picture(&data, LOGO_PICT).expect("decodes");
+        assert_eq!(
+            (logo.width(), logo.height()),
+            (
+                u32::from(LOGO_FRAME.0),
+                u32::from(LOGO_FRAME.1 * LOGO_FRAMES)
+            )
+        );
+    }
+
+    #[test]
     fn the_fixtures_button_style_is_the_stock_one() {
         use crate::ui::{ButtonStyle, DescriptionSource};
         assert_eq!(

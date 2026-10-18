@@ -823,6 +823,34 @@ mod tests {
     }
 
     #[test]
+    fn a_logo_frame_across_the_picture_is_cut_from_its_column() {
+        let mut art = main_screen_art();
+        art.logo.columns = 2;
+        art.logo.frames = 4;
+        let menu = MainMenu::new(Some(art), ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        let mut menu = menu.with_chance(SharedChance::new(Rc::new(RefCell::new(Rolls {
+            outcomes: vec![0],
+            sides: Vec::new(),
+        }))));
+        menu.tick(mac_ticks(5));
+        assert_eq!(menu.logo_frame(), Some(1), "the second column");
+        let mut list = DrawList::new();
+        menu.draw(&mut list);
+        let picture = list.iter().find_map(|command| match command {
+            DrawCommand::Clipped { command, .. } => match **command {
+                DrawCommand::Picture { top_left, .. } => Some(top_left),
+                _ => None,
+            },
+            _ => None,
+        });
+        let logo = Point::new(f32::from(LOGO_POSITION.0), f32::from(LOGO_POSITION.1));
+        assert_eq!(
+            picture,
+            Some(Point::new(logo.x - f32::from(LOGO_FRAME.0), logo.y))
+        );
+    }
+
+    #[test]
     fn a_chance_set_later_is_the_one_rolled() {
         let rolls = Rc::new(RefCell::new(Rolls::default()));
         let mut menu = with_art();

@@ -133,7 +133,10 @@ impl DirLister for OneFile {
 
 impl ForkReader for OneFile {
     fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
-        Ok((fork == Fork::Data).then(|| self.0.clone()))
+        Ok(match fork {
+            Fork::Data => Some(self.0.clone()),
+            Fork::Resource => None,
+        })
     }
 }
 
@@ -163,9 +166,10 @@ fn colors() -> Vec<u8> {
 /// (across, down).
 fn spin_record(sprites: i16, size: (u16, u16), tiles: (u16, u16)) -> Vec<u8> {
     let wide = |n: u16| i16::try_from(n).expect("small");
+    // No masks `PICT`: the main screen reads none.
     [
         sprites,
-        -1,
+        0,
         wide(size.0),
         wide(size.1),
         wide(tiles.0),

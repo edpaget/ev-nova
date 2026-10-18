@@ -242,6 +242,19 @@ mod tests {
             .filter(|&(x, y)| mask.opaque_at(x, y))
             .collect();
         assert_eq!(opaque, [(1, 0), (2, 1)]);
+        // Past the right edge is outside, not the next row's start.
+        let next_row =
+            SpriteMask::new(3, 2, vec![false, false, false, true, false, false]).expect("6 pixels");
+        assert!(!next_row.opaque_at(3, 0));
+        assert!(next_row.opaque_at(0, 1));
+    }
+
+    #[test]
+    fn debug_shows_a_masks_size() {
+        assert_eq!(
+            format!("{:?}", mask()),
+            "SpriteMask { width: 3, height: 2, .. }"
+        );
     }
 
     #[test]
@@ -260,6 +273,10 @@ mod tests {
         assert_eq!(mask().opaque_pixel(), Some((1, 0)));
         let centred = SpriteMask::new(3, 3, vec![true; 9]).expect("9 pixels");
         assert_eq!(centred.opaque_pixel(), Some((1, 1)));
+        let tall = SpriteMask::new(3, 5, vec![true; 15]).expect("15 pixels");
+        assert_eq!(tall.opaque_pixel(), Some((1, 2)));
+        let wide = SpriteMask::new(5, 3, vec![true; 15]).expect("15 pixels");
+        assert_eq!(wide.opaque_pixel(), Some((2, 1)));
         let late =
             SpriteMask::new(2, 3, vec![false, false, false, false, false, true]).expect("6 pixels");
         assert_eq!(late.opaque_pixel(), Some((1, 2)));
