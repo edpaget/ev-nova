@@ -799,8 +799,12 @@ mod tests {
 
     #[test]
     fn a_ship_shows_its_own_target_picture_when_it_exists() {
-        let bases = [(ShipId(129), 1000), (ShipId(130), 1000)];
-        let found = existing(&[(3001, 6, 3), (3002, 41, 20)]);
+        let bases = [
+            (ShipId(128), 1000),
+            (ShipId(129), 1000),
+            (ShipId(130), 1000),
+        ];
+        let found = existing(&[(3000, 2, 2), (3001, 6, 3), (3002, 41, 20)]);
         assert_eq!(
             target_picture(ShipId(130), &bases, &found),
             Some(shown(3002, 41, 20))
@@ -808,6 +812,11 @@ mod tests {
         assert_eq!(
             target_picture(ShipId(129), &bases, &found),
             Some(shown(3001, 6, 3))
+        );
+        assert_eq!(
+            target_picture(ShipId(128), &bases, &found),
+            Some(shown(3000, 2, 2)),
+            "the first shïp"
         );
     }
 
