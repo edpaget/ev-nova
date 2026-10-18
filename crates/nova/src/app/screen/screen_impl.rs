@@ -58,7 +58,7 @@ impl Screen for AppScreen {
     /// pilot flies it; one whose load fell back first shows its note over
     /// the menu, which takes every event until Return, Escape or OK
     /// dismisses it and flight shows. Escape in flight goes back to the menu, saving
-    /// the pilot and putting it away. Escape quits at once; Quit quits
+    /// the pilot and putting it away. Escape on the menu does nothing; Quit quits
     /// after [`QUIT_DELAY`](super::QUIT_DELAY) ([`Screen::take_quit`]), and its key first
     /// waits for its click, as every main-menu key does
     /// ([`Screen::keyed_click_ended`]): input meanwhile is held and

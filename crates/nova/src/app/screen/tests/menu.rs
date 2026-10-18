@@ -35,7 +35,7 @@ fn with_pilots_the_app_opens_on_the_main_menu() {
 }
 
 #[test]
-fn quit_waits_out_the_quit_delay_and_escape_quits_at_once() {
+fn quit_waits_out_the_quit_delay() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     ui_sounds(&mut screen);
@@ -51,10 +51,27 @@ fn quit_waits_out_the_quit_delay_and_escape_quits_at_once() {
     screen.tick(Duration::from_millis(1));
     assert!(screen.take_quit(), "the delay is over");
     assert!(!screen.take_quit(), "once");
+}
 
+#[test]
+fn escape_on_the_main_menu_does_nothing() {
+    let store = MemoryPilots::new();
     let mut screen = menu(&store);
-    assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
-    assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    ui_sounds(&mut screen);
+    for input in [
+        key(Key::Escape, true),
+        held(Key::Escape),
+        key(Key::Escape, false),
+    ] {
+        assert_eq!(screen.input(&input), ScreenAction::None, "{input:?}");
+    }
+    assert_eq!(ui_sounds(&mut screen), [], "silent");
+    assert!(!screen.take_quit());
+    screen.tick(QUIT_DELAY * 2);
+    assert!(!screen.take_quit(), "no quit is under way");
+    // Nothing is held: a click on New Pilot opens its dialog at once.
+    choose(&mut screen, MenuChoice::NewPilot);
+    assert_eq!(screen.showing(), Showing::NewPilot);
 }
 
 #[test]
@@ -102,15 +119,16 @@ fn keyed_q_quits_only_after_its_click_and_the_quit_delay() {
 }
 
 #[test]
-fn an_escape_typed_during_a_keyed_click_quits_once_it_is_replayed() {
+fn a_command_q_typed_during_a_keyed_click_quits_once_it_is_replayed() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     // E is refused with no pilot: the replay reaches the menu.
     screen.input(&Input::Text('e'));
-    assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::Command, true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
     assert!(!screen.take_quit(), "held for the click");
     screen.keyed_click_ended();
-    assert!(screen.take_quit(), "the replayed Escape quit");
+    assert!(screen.take_quit(), "the replayed Command-Q quit");
     assert!(!screen.take_quit(), "once");
 }
 
@@ -120,8 +138,10 @@ fn input_while_a_replayed_quit_is_untaken_does_nothing() {
     let mut screen = menu(&store);
     // E is refused with no pilot: the replay reaches the menu.
     screen.input(&Input::Text('e'));
-    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::Char('q'), true));
     screen.keyed_click_ended();
+    screen.input(&key(Key::Command, false));
     ui_sounds(&mut screen);
     assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
     assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);

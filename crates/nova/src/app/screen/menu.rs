@@ -27,9 +27,9 @@ impl AppScreen {
     /// `_MainScreenMouse` (@0x1aea4-0x1aead) reaches the same
     /// `_MainScreenChoice(2)` as the key. A click on Enter Ship,
     /// Preferences or About runs at once the choice E, P or A runs once
-    /// its click has played: the same arm of `_MainScreenChoice`. The
-    /// engine's Escape quits at once, silently. Tab goes to the ship
-    /// browser.
+    /// its click has played: the same arm of `_MainScreenChoice`. Escape
+    /// does nothing, as `_MainScreenKey` has no branch for it. Tab goes
+    /// to the ship browser.
     ///
     /// Each key clicks ([`UiSound::ButtonKeyed`]) and its choice waits
     /// for the click to end ([`MenuHold`]): typed N, O and Q (the menu's
@@ -110,10 +110,6 @@ impl AppScreen {
                 choice,
                 by: ChosenBy::Shortcut,
             }) => self.menu_hold = Some(MenuHold::Click(MenuAction::Choice(choice))),
-            Some(Chosen {
-                choice: MenuChoice::Quit,
-                by: ChosenBy::Escape,
-            }) => return ScreenAction::Quit,
             Some(Chosen { choice, .. }) => self.run_menu_action(MenuAction::Choice(choice)),
             None => {}
         }

@@ -54,7 +54,7 @@ use crate::flight::SharedChance;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -142,8 +142,6 @@ pub enum ChosenBy {
     /// the original runs the choice only once that click has played
     /// (`_PlayMainScreenClickSound` @0x177af).
     Shortcut,
-    /// The engine's Escape, which chooses Quit silently.
-    Escape,
 }
 
 /// A choice made on the main menu, and how.
@@ -466,9 +464,9 @@ fn stand_in_buttons() -> [Button; 6] {
 impl Screen for MainMenu {
     /// A primary-button press on a button, held and let go of over one,
     /// chooses the button let go of over, with the original's sounds
-    /// ([`MainScreenTracker`]); the other mouse buttons do nothing. An Escape press chooses Quit, silently: an
-    /// engine key, as the original's main screen ignores Escape
-    /// (`_MainScreenKey` @0x1ac2d). Typing N, O or Q, in either case,
+    /// ([`MainScreenTracker`]); the other mouse buttons do nothing. Escape
+    /// does nothing, as `_MainScreenKey` @0x1aba0 has no branch for it
+    /// (@0x1ac2d). Typing N, O or Q, in either case,
     /// chooses New Pilot, Open Pilot or Quit with [`UiSound::ButtonKeyed`],
     /// as `_MainScreenKey` @0x1aba0 does through
     /// `_PlayMainScreenClickSound`. The router takes its other keys (E, P,
@@ -488,16 +486,6 @@ impl Screen for MainMenu {
                 self.choice = Some(Chosen {
                     choice,
                     by: ChosenBy::Shortcut,
-                });
-            }
-            Input::Key {
-                key: Key::Escape,
-                pressed: true,
-                repeat: false,
-            } => {
-                self.choice = Some(Chosen {
-                    choice: MenuChoice::Quit,
-                    by: ChosenBy::Escape,
                 });
             }
             Input::PointerButton {
@@ -624,6 +612,7 @@ mod tests {
 
     use super::*;
     use crate::draw::{Blend, lights_tint};
+    use crate::input::Key;
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME, LOGO_PICT,
         LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_PICTS,
@@ -1535,20 +1524,16 @@ mod tests {
     // The keys.
 
     #[test]
-    fn escape_chooses_quit_but_its_repeats_and_release_do_not() {
+    fn escape_chooses_nothing_and_is_silent() {
         let mut menu = with_art();
-        menu.input(&key(Key::Escape, true, true));
-        menu.input(&key(Key::Escape, false, false));
-        assert_eq!(menu.take_choice(), None);
-        menu.input(&key(Key::Escape, true, false));
-        assert_eq!(
-            menu.take_choice(),
-            Some(Chosen {
-                choice: MenuChoice::Quit,
-                by: ChosenBy::Escape
-            })
-        );
-        assert_eq!(menu.take_sounds(), [], "silently");
+        for (pressed, repeat) in [(true, false), (true, true), (false, false)] {
+            assert_eq!(
+                menu.input(&key(Key::Escape, pressed, repeat)),
+                ScreenAction::None
+            );
+            assert_eq!(menu.take_choice(), None, "{pressed} {repeat}");
+            assert_eq!(menu.take_sounds(), [], "{pressed} {repeat}");
+        }
     }
 
     #[test]
@@ -1610,10 +1595,10 @@ mod tests {
     fn debug_shows_the_press_and_the_choice() {
         let mut menu = with_art();
         menu.input(&button(true, menu.press_point(MenuChoice::Quit)));
-        menu.input(&key(Key::Escape, true, false));
+        menu.input(&Input::Text('q'));
         assert_eq!(
             format!("{menu:?}"),
-            "MainMenu { pressed: Some(2), choice: Some(Chosen { choice: Quit, by: Escape }), .. }"
+            "MainMenu { pressed: Some(2), choice: Some(Chosen { choice: Quit, by: Shortcut }), .. }"
         );
     }
 }
