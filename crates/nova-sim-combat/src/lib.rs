@@ -35,6 +35,10 @@
 //!   [`RuleKey::PdHostility`], and destruction, reported as [`CombatEvent`](combat::CombatEvent)s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`](combat::report::SimDiagnostic).
+//! - [`comm_line`]: the message line's countdown, `_commCount`, as one
+//!   [`CommLine`](comm_line::CommLine): set by each message shown,
+//!   counted down each frame, and read by the calls that wait for a free
+//!   line.
 //! - [`fleet`]: the player's fleet as data: each ship in it, an
 //!   [`Escort`](fleet::Escort), and the
 //!   [`EscortOrder`](fleet::EscortOrder) it follows.
@@ -81,6 +85,7 @@ pub mod asteroid;
 pub mod bay;
 pub mod cloak;
 pub mod combat;
+pub mod comm_line;
 pub mod fleet;
 pub mod message;
 pub mod player_fate;

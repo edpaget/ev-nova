@@ -87,6 +87,9 @@
 //!   [`CombatEvent`]s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`].
+//! - [`comm_line`]: the message line's countdown, `_commCount`, as one
+//!   [`CommLine`] the session keeps: what the calls that wait for a free
+//!   line read.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
@@ -331,6 +334,7 @@ pub use nova_sim_combat::asteroid;
 pub use nova_sim_combat::bay;
 pub use nova_sim_combat::cloak;
 pub use nova_sim_combat::combat;
+pub use nova_sim_combat::comm_line;
 pub use nova_sim_port::board;
 pub use nova_sim_state::clearance;
 pub mod course;
@@ -442,6 +446,7 @@ pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Field, FireSound, GamePass, Rules, ShipRef, Sortie, Strike};
+pub use comm_line::CommLine;
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
