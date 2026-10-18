@@ -150,3 +150,26 @@ fn a_ship_whose_target_is_seen_again_flies_its_fight() {
     assert_eq!(ship.pursuit.kept, Some(Kept::Rush), "its pursuit ran");
     assert!(ship.pursuit.frame.is_some(), "with this tick's frame");
 }
+
+#[test]
+fn a_searching_ship_whose_ai_wait_runs_skips_its_high_level() {
+    // The AI wait skips the whole handler (@0x8d4b9-0x8d4d2), the
+    // search's stop with it: its pursuit and docking stand.
+    let mut traffic = attacker(Some(10));
+    let kept = Pursuit {
+        kept: Some(Kept::Rush),
+        frame: None,
+    };
+    let docking = Some(Docking {
+        ship: ShipRef::Player,
+        sub: DockSub::Approach,
+    });
+    traffic.npcs[0].pursuit = kept;
+    traffic.npcs[0].docking = docking;
+    traffic.npcs[0].ai_wait = 5;
+    tick(&mut traffic, &attack(None));
+    let ship = &traffic.npcs()[0];
+    assert_eq!(ship.lost_sight, Some(10));
+    assert_eq!(ship.pursuit, kept);
+    assert_eq!(ship.docking, docking);
+}
