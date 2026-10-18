@@ -176,6 +176,16 @@ mod tests {
     }
 
     #[test]
+    fn pixels_not_the_sides_decide_which_is_larger() {
+        // 1440x1440 has more pixels than 2560x768, but shorter sides.
+        let modes = monitor(&[mode(2560, 768, 60), mode(1440, 1440, 60)]);
+        assert_eq!(
+            listed_modes(&modes),
+            [mode(1440, 1440, 60), mode(2560, 768, 60)]
+        );
+    }
+
+    #[test]
     fn no_modes_list_nothing() {
         assert_eq!(listed_modes(&[]), Vec::<VideoMode>::new());
     }

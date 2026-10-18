@@ -140,6 +140,9 @@ exclude_re = [
     # The port's defaults for a window with no pointer of its own, that
     # cannot go fullscreen or be sized, do nothing already.
     "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",
+    # Its default `video_modes` is `Vec::new()`; replacing it with `vec![]`
+    # builds the same empty list, so it cannot be observed.
+    "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
@@ -166,6 +169,9 @@ exclude_re = [
     # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
     "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
+    # The trait's default `offer_display` ignores its arguments already:
+    # replacing it with `()` changes nothing.
+    "replace Screen::offer_display with \\(\\)",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.
