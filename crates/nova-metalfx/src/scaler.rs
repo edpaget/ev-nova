@@ -245,8 +245,12 @@ impl SpatialScaler {
     ///
     /// # Panics
     ///
-    /// If `device` is not the one the scaler was made on, or `world` and
-    /// `output` are not RGBA8 textures of the input and output sizes.
+    /// If `device` is not the one the scaler was made on (or not on the
+    /// Metal backend); if `world` and `output` are not RGBA8 textures of
+    /// the input and output sizes; if `world`'s Metal usage doesn't cover
+    /// the colour usage MetalFX asks of it (`ShaderRead`: make it with
+    /// wgpu's `TEXTURE_BINDING`); or if the fresh encoder gives no open
+    /// Metal command buffer to record into.
     #[must_use]
     pub fn encode(
         &self,
