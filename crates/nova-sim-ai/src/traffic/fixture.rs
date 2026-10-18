@@ -73,5 +73,6 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         marines: ClassMarines::default(),
         pods_left: 0,
         warp: crate::traffic::warp_out::Warp::default(),
+        display: crate::traffic::ship_display::NpcDisplay::default(),
     }
 }

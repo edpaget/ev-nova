@@ -87,11 +87,13 @@
 //! `_HandleShip`'s position step (@0x34264) and turn (@0x3443f) come
 //! first.
 //!
+//! The warp-out raises the glow (+0xc8d4) by 3 to 32 as it moves the ship
+//! (@0x349fc-0x34a25), and sub-goal 0xd copies its leader's glow while
+//! the leader's +0x50 is 1.0 or below (@0x85a2d-0x85a4a); see
+//! [`ship_display`](crate::traffic::ship_display).
+//!
 //! **Left out.**
 //!
-//! - The warp-out's glow, +0xc8d4 += 3 to 32 (@0x349fc-0x34a25), and
-//!   sub-goal 0xd's glow copy (@0x85a2d-0x85a4a): NPCs have no glow yet;
-//!   rdm:phase/ship-handling-fidelity/phase-10-ship-drawing owns it.
 //! - Sub-goal 0xd's nav copy, +0x6c (@0x85bf1-0x85bf6), and goal 0xb's
 //!   (@0x8de9d-0x8deb0, @0x8df18-0x8df22): the engine's NPCs keep no
 //!   travel stellar for a jump; the system they jump to is never read.
@@ -118,6 +120,7 @@ use crate::traffic::World;
 use crate::traffic::autopilot::{steer, step};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::{Mode, Npc, NpcId};
+use crate::traffic::ship_display;
 use crate::trig::{accel, angular_difference, intercept_angle, whole};
 use crate::warp::{
     WarpOutClock, mac_ticks, npc_warp_out_speed, npc_warped_out, warp_sound_duration,
@@ -243,6 +246,10 @@ pub struct LeaderWarp {
     /// Whether it is on its way out, the original's sub-goal 1 or 4
     /// (goal 0xb's test, @0x8defc-0x8df13): an NPC's goal to jump out.
     pub leaving: bool,
+    /// Its engine glow's base, +0xc8d4, which a follower keeping formation
+    /// copies (see [`follow_jump`], and the close formation's copy in
+    /// [`ship_display`](crate::traffic::ship_display)).
+    pub glow: i16,
 }
 
 /// What the traffic reads of the warps: the player's, the warp sound's
@@ -352,6 +359,7 @@ pub fn follow_jump(npc: &mut Npc, leader: LeaderWarp, player: bool) -> FollowSte
     npc.warp.aim = whole(leader.heading);
     if leader.stage <= 1.0 {
         npc.state.velocity = leader.velocity;
+        npc.display.glow = leader.glow;
         return FollowStep::Formation;
     }
     if npc.warp.stage > DETACH_STAGE && !player {
@@ -439,8 +447,11 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld) {
             )
         }
     };
-    // No move at v ≤ 0 or a NaN v (@0x349c1).
-    npc.state.position = npc.state.position + accel(whole(npc.state.heading), v.max(0.0));
+    // No move, and no glow, at v ≤ 0 or a NaN v (@0x349c1).
+    if v > 0.0 {
+        npc.state.position = npc.state.position + accel(whole(npc.state.heading), v);
+        ship_display::warp_glow(npc);
+    }
 }
 
 /// One pass of a jumping ship's flight before its warp-out: it moves on
@@ -475,6 +486,7 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
                 aim: npc.warp.aim,
                 velocity: npc.state.velocity,
                 leaving: npc.goal == Goal::JumpOut,
+                glow: npc.display.glow,
             };
             (npc.id, view)
         })
@@ -775,6 +787,7 @@ mod tests {
             aim: 90,
             velocity: Vec2::new(1.0, 0.5),
             leaving: true,
+            glow: 20,
         }
     }
 
@@ -787,6 +800,7 @@ mod tests {
         };
         assert_eq!(follow_jump(&mut ship, slow, true), FollowStep::Formation);
         assert_eq!(ship.state.velocity, slow.velocity);
+        assert_eq!(ship.display.glow, 20, "and its glow");
         assert_eq!(ship.warp.aim, 90, "its leader's whole-degree heading");
     }
 
@@ -882,8 +896,11 @@ mod tests {
         warp_block(&mut early, Led::No, &world);
         assert_eq!(early.state.velocity, Vec2::new(1.9, 0.0), "× 0.95");
         assert_eq!(early.state.position, Vec2::new(2000.0, 0.0), "v ≤ 0");
+        assert_eq!(early.display.glow, 0, "no move, no glow");
         let mut moving = warping(3.0, 100);
+        moving.display.glow = 10;
         warp_block(&mut moving, Led::No, &world);
+        assert_eq!(moving.display.glow, 13, "moving, its glow 3 higher");
         let v = npc_warp_out_speed(WarpOutClock::Own, 200, warp_factor(0), 364, false);
         assert!(v > 0.0 && v < 50.0, "{v}");
         assert_eq!(
@@ -1025,6 +1042,7 @@ mod tests {
         let mut leaving = warping(4.0, 9);
         leaving.state.velocity = Vec2::new(1.0, 2.0);
         leaving.warp.aim = 33;
+        leaving.display.glow = 7;
         let mut idle = ship();
         idle.id = crate::traffic::npc::NpcId(2);
         let views = leaders(&[leaving.clone(), idle]);
@@ -1038,6 +1056,7 @@ mod tests {
                 aim: 33,
                 velocity: Vec2::new(1.0, 2.0),
                 leaving: true,
+                glow: 7,
             }
         );
         assert!(!views[&crate::traffic::npc::NpcId(2)].leaving);

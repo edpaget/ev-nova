@@ -202,6 +202,7 @@ use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
+use crate::traffic::ship_display;
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
@@ -388,7 +389,7 @@ fn fly_mobile(
     let controls = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
             Some(site) if over(&state, site) => return Outcome::Landed(stellar),
-            Some(site) => approach(&state, &handling, site.position, inertia),
+            Some(site) => land_approach(npc, site, &handling, inertia),
             None => brake(&state, &handling, inertia),
         },
         Goal::EnterGate(gate) => {
@@ -483,6 +484,7 @@ pub(crate) fn step(
     flight: FlightRules,
     inertia: Inertia,
 ) {
+    ship_display::record(npc, handling, controls, flight, inertia);
     match inertia {
         Inertia::Inertial => flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc),
         Inertia::Inertialess { .. } => {
@@ -1008,6 +1010,23 @@ fn over(state: &ShipState, site: &LandingSite) -> bool {
         && state.velocity.length() <= LANDING_SPEED
 }
 
+/// How `npc`, landing on `site` but not over it, flies on `handling` as
+/// `inertia` says: toward it ([`approach`]), a folding ship unfolding
+/// once within its landing radius (`_HighLevelAIHandler` state 1
+/// @0x8da0c-0x8da38, see [`ship_display`]).
+fn land_approach(
+    npc: &mut Npc,
+    site: &LandingSite,
+    handling: &Handling,
+    inertia: Inertia,
+) -> Controls {
+    let state = npc.state;
+    if (site.position - state.position).length() <= landing_radius(site) {
+        ship_display::landing_unfold(npc);
+    }
+    approach(&state, handling, site.position, inertia)
+}
+
 /// Heads for `target` at full speed, and brakes once the ship's stopping
 /// distance reaches the distance left.
 fn approach(state: &ShipState, handling: &Handling, target: Vec2, inertia: Inertia) -> Controls {
@@ -1117,6 +1136,7 @@ fn close_on(
 /// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it: the
 /// thrust `handling` flies it with.
 fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2, handling: &Handling) {
+    npc.display.drive.formation = true;
     let state = &mut npc.state;
     state.velocity = leader.velocity;
     state.heading = leader.heading;
@@ -1606,6 +1626,47 @@ mod tests {
             at(61.0, 0.0, 0.0, 0.0, 0.0),
         );
         assert_eq!(fly(&mut far, &sites, None), Outcome::Flying, "too far");
+    }
+
+    #[test]
+    fn a_folding_ship_landing_unfolds_near_its_stellar_too_fast_to_land() {
+        let sites = [planet(140, 10.0, 0.0)];
+        let folding = |x: f32, vx: f32| {
+            let mut ship = npc(FAST, Goal::Land(StellarId(140)), at(x, 0.0, vx, 0.0, 0.0));
+            ship.hull.frames.flags = crate::combat::ship_frames::FOLDS;
+            ship.hull.frames.base_sets = 6;
+            ship.armament.fold_mut().set = 5;
+            ship
+        };
+        let mut near = folding(0.0, 1.5);
+        assert_eq!(fly(&mut near, &sites, None), Outcome::Flying, "too fast");
+        assert_eq!(near.armament.fold().dir, -1, "near: unfolding");
+        let mut far = folding(-80.0, 0.0);
+        fly(&mut far, &sites, None);
+        assert_eq!(far.armament.fold().dir, 0, "too far");
+    }
+
+    #[test]
+    fn a_step_records_its_drive_and_keeping_formation_marks_it() {
+        let mut ship = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 0.0));
+        let flight = FlightRules::default();
+        let handling = flight.handling(ship.stats.handling);
+        let controls = Controls {
+            thrust: true,
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        step(&mut ship, &handling, controls, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.turn, -1);
+        assert_eq!(ship.display.drive.thrust, ship_display::Thrust::Plain);
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        let mut kept = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 0.0));
+        fly(&mut kept, &[], Some(&leader));
+        assert!(kept.display.drive.formation, "close formation");
+        let mut far = escort(FAST, at(slot.x + 400.0, slot.y, 0.0, 0.0, 0.0));
+        fly(&mut far, &[], Some(&leader));
+        assert!(!far.display.drive.formation, "rejoining");
     }
 
     #[test]

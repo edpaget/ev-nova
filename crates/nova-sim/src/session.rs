@@ -426,6 +426,7 @@ mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
+mod ship_display;
 mod status_cargo;
 mod steering;
 mod stellars;
@@ -509,7 +510,7 @@ use crate::gate::{
 };
 use crate::gate_sprite::GateSprite;
 use crate::geometry::Vec2;
-use crate::glow::{ramp_afterburner_glow, ramp_glow};
+use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
@@ -821,6 +822,9 @@ pub struct Session {
     /// The engine glow's base level (see [`glow`](crate::glow)), an
     /// `i16` as the original's, which an inertialess ship's dips to -1.
     engine_glow: i16,
+    /// The player's drawn state: its bank, display timers and sets (see
+    /// the `ship_display` module). Unsaved.
+    ship_display: ship_display::PlayerDisplay,
     /// The player's speed along its heading, the original's +0x48, which
     /// an inertialess ship flies by (see the `inertialess` module).
     player_speed: f32,
@@ -1342,7 +1346,11 @@ impl Session {
     pub fn start(
         catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
     ) -> Result<Self, StartError> {
-        Self::fly(catalog, Pilot::new(catalog, "")?)
+        let mut session = Self::fly(catalog, Pilot::new(catalog, "")?)?;
+        // A new pilot's ship folds as `_ResetPlayer` leaves it
+        // (@0x1d55a-0x1d565; see the `ship_display` module).
+        session.reset_fold();
+        Ok(session)
     }
 
     /// `pilot`'s session, its ship's fields and default items, the
@@ -1560,6 +1568,7 @@ impl Session {
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
+            ship_display: ship_display::PlayerDisplay::default(),
             player_speed: 0.0,
             afterburner_on: false,
             player_max_vel: MaxVel::START,
@@ -1747,6 +1756,9 @@ impl Session {
         // Game entry's reset (`_EnterGameFromMainScreen` @0x19ffb; see the
         // `precalced` module).
         session.reset_precalced();
+        // `_LoadPilotData`'s fold (@0x76348-0x76376; see the
+        // `ship_display` module).
+        session.last_set_fold();
         Ok(session)
     }
 
@@ -2016,6 +2028,9 @@ impl Session {
         // them.
         self.warp_ups.step();
         self.warp_out.step();
+        // The last shot's clock is `TickCount`, real time (see the
+        // `ship_display` module).
+        self.armament.tick_fire_clock();
         self.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
@@ -2110,6 +2125,7 @@ impl Session {
         match self.jump {
             None => {
                 let aim = self.steer(controls);
+                self.bank_player(self.turn_way(controls, aim), aim.is_some());
                 if self.player_inertialess() {
                     self.fly_inertialess(controls, aim);
                 } else {
@@ -2247,15 +2263,12 @@ impl Session {
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
-    /// the engine glow with it and the afterburner
-    /// ([`ramp_afterburner_glow`] while it is on).
+    /// the engine glow with it, the banking glow and the afterburner
+    /// ([`step_glow`]).
     fn thrust(&mut self, thrust: bool) {
         self.sound_thrust(thrust);
-        self.engine_glow = if self.afterburner_on {
-            ramp_afterburner_glow(self.engine_glow, thrust)
-        } else {
-            ramp_glow(self.engine_glow, thrust)
-        };
+        let banking = self.banking_glow();
+        self.engine_glow = step_glow(self.engine_glow, thrust, banking, None, self.afterburner_on);
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says.
@@ -2866,6 +2879,7 @@ impl Session {
         self.settle_asteroid_hits(&rocks, chance);
         self.see_stellars();
         self.lay_out_ships();
+        self.display_ships(&mut *chance);
         self.note_drawn();
     }
 
@@ -3777,6 +3791,9 @@ impl Session {
             return None;
         };
         self.jump = None;
+        // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
+        // module).
+        self.arrival_fold();
         // The natural end, the warp-ups finished (`_warpSoundDone`
         // @0x6bb5e-0x6bba4), read before the halt ends them.
         let natural_end = !self.warp_ups.playing(false) && !self.warp_ups.playing(true);
@@ -4515,6 +4532,8 @@ impl Session {
         // The dock request's tail clears the player's ionization, charge
         // and colour, before the strength timer (@0x67008, @0x67020).
         self.ion = Ion::default();
+        // Its fold (@0x66f83-0x66ff6; see the `ship_display` module).
+        self.take_off_fold();
         self.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
         // setup (@0x6709b; see the `precalced` module).

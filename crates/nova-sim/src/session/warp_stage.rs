@@ -165,6 +165,7 @@ impl Session {
                 aim: self.aim,
                 velocity: self.player.velocity,
                 leaving: false,
+                glow: self.engine_glow,
             },
             durations: self.warp_sounds,
             double_time: self.double_time,
@@ -223,15 +224,20 @@ impl Session {
             }
             self.warp_end_tick();
         }
+        // A folding ship unfolds as it warps (see the `ship_display`
+        // module).
+        self.jump_unfold();
         let handling = self.flying_handling();
         let flight = self.flight_rules();
-        (self.player.heading, _) = turn(
+        let way;
+        (self.player.heading, way) = turn(
             self.player.heading,
             handling.turn_rate,
             bearing,
             Turn::None,
             flight.player_turn,
         );
+        self.bank_through_jump(way);
         let moved = staged && self.move_off(bearing, handling.turn_rate);
         let caps = self.player_caps();
         if self.player_inertialess() {
@@ -258,6 +264,7 @@ impl Session {
         self.ramp_jump(
             JumpRaises {
                 brake: false,
+                bank: self.banking_glow(),
                 move_off: moved,
             },
             controls.thrust,
@@ -295,6 +302,7 @@ impl Session {
             }
             let caps = self.player_caps();
             let speed = inertialess.then_some(&mut self.player_speed);
+            let before = self.player.heading;
             let thrust = pre_jump::fly(
                 &mut self.player,
                 &handling,
@@ -304,10 +312,12 @@ impl Session {
                 flight,
                 speed,
             );
+            self.bank_through_jump(super::ship_display::way_turned(before, self.player.heading));
             self.sound_thrust(thrust);
             self.ramp_jump(
                 JumpRaises {
                     brake: thrust,
+                    bank: self.banking_glow(),
                     move_off: false,
                 },
                 controls.thrust,
@@ -573,8 +583,8 @@ mod tests {
         advance(&mut plain, &handling, false, caps, flight, Flyer::Player);
         assert_ne!(inertialess.velocity, plain.velocity);
         let raises = JumpRaises {
-            brake: false,
             move_off: true,
+            ..JumpRaises::default()
         };
         let follow = Follow::Speed {
             speed: followed,
@@ -755,13 +765,17 @@ mod tests {
         session.begin_jump().expect("jumps");
         tick(&mut session);
         assert!(session.thrusting, "the brake's thrust");
-        assert_eq!(session.engine_glow(), 2, "+3, then the coast's -1");
+        assert_eq!(
+            session.engine_glow(),
+            1,
+            "+3, then the coast's -1 and the jump's -1"
+        );
         session.engine_glow = 23;
         tick(&mut session);
-        assert_eq!(session.engine_glow(), 24, "26, -1, -1 above 24");
+        assert_eq!(session.engine_glow(), 24, "26, -1, -1, not above 24");
         session.engine_glow = 24;
         tick(&mut session);
-        assert_eq!(session.engine_glow(), 23, "no raise above 23");
+        assert_eq!(session.engine_glow(), 22, "no raise above 23");
     }
 
     // The warp-up's pitch.

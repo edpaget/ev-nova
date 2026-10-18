@@ -49,7 +49,7 @@
 
 use super::Session;
 use crate::flight::{Controls, Flyer, drag, inertialess_player_step};
-use crate::glow::{Follow, ramp_inertialess_glow};
+use crate::glow::{Follow, step_glow};
 use crate::inertialess::{PLAYER_DISABLED_DECAY, is_inertialess};
 
 impl Session {
@@ -108,11 +108,13 @@ impl Session {
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
     /// an inertialess ship's glow, following `follow`, with the
-    /// afterburner's step while it is on ([`ramp_inertialess_glow`]).
+    /// banking glow and the afterburner's step while it is on
+    /// ([`step_glow`]).
     pub(super) fn ramp_inertialess(&mut self, thrust: bool, follow: Follow) {
         self.sound_thrust(thrust);
         let burning = self.afterburner_on;
-        self.engine_glow = ramp_inertialess_glow(self.engine_glow, thrust, follow, burning);
+        let banking = self.banking_glow();
+        self.engine_glow = step_glow(self.engine_glow, thrust, banking, Some(follow), burning);
     }
 
     /// Sets the player's speed as it arrives moving at its velocity: its
@@ -364,7 +366,7 @@ mod tests {
         session.player_speed = 6.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let max_speed = session.flying_handling().max_speed;
-        for (base, glow) in [(16_i16, 14_i16), (0, 1)] {
+        for (base, glow) in [(16_i16, 15_i16), (0, 1)] {
             session.engine_glow = base;
             session.tick(Controls::default());
             assert!(!slow_enough(session.player.velocity), "still braking");
@@ -372,13 +374,11 @@ mod tests {
                 speed: session.player_speed(),
                 max_speed,
             };
-            assert_eq!(
-                session.engine_glow,
-                ramp_inertialess_glow(base, false, follow, false),
-                "from {base}"
-            );
+            let raises = crate::glow::JumpRaises::default();
+            let jumped = |follow| crate::glow::ramp_jump_glow(base, raises, follow, false, false);
+            assert_eq!(session.engine_glow, jumped(Some(follow)), "from {base}");
             assert_eq!(session.engine_glow, glow, "from {base}");
-            assert_ne!(glow, crate::glow::ramp_glow(base, false), "from {base}");
+            assert_ne!(glow, jumped(None), "from {base}: it follows");
         }
     }
 

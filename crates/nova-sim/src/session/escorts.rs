@@ -105,9 +105,11 @@ use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
+use crate::combat::armament::Fold;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
+use crate::combat::ship_frames::ShipFrames;
 use crate::escort::{
     self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
     FormationSlot,
@@ -123,12 +125,16 @@ use crate::traffic::table::{self, ShipKind};
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Session::fleet_kept`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
     /// Its ion colour ([`Ion::colour`]); its charge is cleared.
     pub(super) ion_colour: u32,
+    /// Its display state and fold, its ship-table slot's, which
+    /// `_RespawnEscort` leaves (see the `ship_display` module); none when
+    /// its NPC was not in the system, and it takes a loaded pilot's.
+    pub(super) display: Option<(ShipFrames, Fold)>,
 }
 
 impl Session {
@@ -184,6 +190,7 @@ impl Session {
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
                     aux: npc.aux,
                     ion_colour: npc.ion.colour,
+                    display: Some((npc.display.frames, npc.armament.fold())),
                 })
             })
             .collect()
@@ -193,7 +200,9 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark, and its ion colour with no charge.
+    /// mark, its ion colour with no charge, and its display and fold, or a
+    /// loaded pilot's fold set with none kept
+    /// ([`Session::loaded_escort_set`]).
     pub(super) fn enter_escorts(&mut self, berths: &[u32], kept: &[KeptEscort]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
@@ -210,12 +219,22 @@ impl Session {
             .map(|index| {
                 let id = self.place_escort_at(index, berths.get(index).copied())?;
                 let kept = kept.get(index).copied().unwrap_or_default();
+                let loaded = self
+                    .npc(id)
+                    .map(|npc| self.loaded_escort_set(&npc.hull.frames));
                 if let Some(npc) = self.npc_mut(id) {
                     npc.aux = kept.aux;
                     npc.ion = Ion {
                         charge: 0.0,
                         colour: kept.ion_colour,
                     };
+                    match kept.display {
+                        Some((frames, fold)) => {
+                            npc.display.frames = frames;
+                            *npc.armament.fold_mut() = fold;
+                        }
+                        None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
+                    }
                 }
                 Some(id)
             })
@@ -319,6 +338,9 @@ impl Session {
             // `_RespawnEscort` leaves +0xc908 alone.
             pods_left: kind.hull.pod_count,
             warp: crate::traffic::warp_out::Warp::default(),
+            // `_RespawnEscort` clears its glow (@0x3d505); its display
+            // otherwise its slot's (see `Session::enter_escorts`).
+            display: crate::traffic::ship_display::NpcDisplay::default(),
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

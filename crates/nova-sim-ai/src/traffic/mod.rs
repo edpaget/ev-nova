@@ -137,6 +137,8 @@ pub mod board_wait;
 #[cfg(test)]
 mod comm_call_tests;
 pub mod destination;
+#[cfg(test)]
+mod display_tests;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -153,6 +155,7 @@ pub mod pod_flight;
 mod pursuit_tests;
 pub mod quote;
 mod reinforcing;
+pub mod ship_display;
 pub mod snipe;
 pub mod spawn;
 pub mod strength;
@@ -1091,10 +1094,12 @@ impl Traffic {
             // high level holds each ship's warp to its goal.
             for npc in &mut self.npcs {
                 npc.warp.tick_clock();
+                npc.armament.tick_fire_clock();
                 // `_AIDispatch` runs no high level for a disabled ship.
                 if npc.condition == Condition::Intact {
                     warp_out::hold_stage(npc);
                 }
+                ship_display::dispatch_fold(npc);
             }
         }
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
@@ -1201,35 +1206,67 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
-                if let Some(outcome) = warp_out::fly_jump(npc, &leaders, world, think) {
-                    return outcome;
-                }
-                match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance)
-                {
-                    Some(DockOutcome::Started { victim, .. }) => {
-                        docked.push((npc.id, victim));
-                        return Outcome::Flying;
-                    }
-                    Some(_) => return Outcome::Flying,
-                    None => {}
-                }
-                let outcome = autopilot::fly(
+                let held = ship_display::held(npc);
+                let outcome = Self::fly_one(
                     npc,
-                    world.sites,
-                    world.type_widths,
-                    other.as_ref(),
+                    &leaders,
+                    world,
+                    think,
+                    other,
                     other_disabled,
                     speeds,
-                    world.flight,
-                    world.snipe_brake_lead,
+                    &mut docked,
                     &mut *chance,
                 );
-                warp_out::settle(npc, &leaders, &world.warp);
+                let derelict = world.govts.derelict(npc.govt);
+                ship_display::bank_and_glow(npc, held, derelict, Some(world.warp.player.glow));
                 outcome
             })
             .collect();
         self.dock_starts(&docked);
         outcomes
+    }
+
+    /// Flies `npc` a tick in `world` (see [`Traffic::fly_all`]): its jump,
+    /// its dock with a ship it plunders, or its goal, toward `other`,
+    /// disabled as `other_disabled` says, at `speeds`, a dock it starts
+    /// noted in `docked`, rolling on `chance`.
+    #[allow(clippy::too_many_arguments)]
+    fn fly_one(
+        npc: &mut Npc,
+        leaders: &BTreeMap<NpcId, warp_out::LeaderWarp>,
+        world: &World,
+        think: bool,
+        other: Option<ShipState>,
+        other_disabled: bool,
+        speeds: TopSpeeds,
+        docked: &mut Vec<(NpcId, ShipRef)>,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Outcome {
+        if let Some(outcome) = warp_out::fly_jump(npc, leaders, world, think) {
+            return outcome;
+        }
+        match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance) {
+            Some(DockOutcome::Started { victim, .. }) => {
+                docked.push((npc.id, victim));
+                return Outcome::Flying;
+            }
+            Some(_) => return Outcome::Flying,
+            None => {}
+        }
+        let outcome = autopilot::fly(
+            npc,
+            world.sites,
+            world.type_widths,
+            other.as_ref(),
+            other_disabled,
+            speeds,
+            world.flight,
+            world.snipe_brake_lead,
+            &mut *chance,
+        );
+        warp_out::settle(npc, leaders, &world.warp);
+        outcome
     }
 
     /// Each dock a pirate started this tick, `docked` as (pirate, victim):
@@ -2036,6 +2073,7 @@ impl Traffic {
     /// beeps for none. The ships were rolled whole beforehand
     /// ([`spawn::fleet`]), the cap applied only here as they are placed, in
     /// the same call and before any frame.
+    #[allow(clippy::too_many_lines)] // one line for each of the NPC's fields
     fn add(
         &mut self,
         ships: Vec<NewShip>,
@@ -2075,6 +2113,10 @@ impl Traffic {
                 AfterburnerRoll::has(afterburners.as_deref_mut(), &ship, kind, person);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
+            let (display, fold) = ship_display::NpcDisplay::spawned(
+                &kind.hull.frames,
+                ship_display::Spawn::of(&ship),
+            );
             let npc = Npc {
                 id,
                 berth,
@@ -2104,7 +2146,8 @@ impl Traffic {
                 armament: kind
                     .armament
                     .clone()
-                    .with_exit_cursors(self.berth_cursors(berth)),
+                    .with_exit_cursors(self.berth_cursors(berth))
+                    .with_fold(fold),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
                 // No spawn writes the pick (+0x72): it is the berth's last.
@@ -2148,6 +2191,7 @@ impl Traffic {
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,
                 warp: warp_out::Warp::default(),
+                display,
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);

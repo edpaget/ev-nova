@@ -43,7 +43,7 @@ use crate::ai::{Goal, afterburner};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
+use crate::combat::armament::{Fold, MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
 use crate::combat::{ShipRef, Sortie};
@@ -56,6 +56,7 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
+use crate::traffic::ship_display::NpcDisplay;
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
@@ -477,7 +478,11 @@ fn fighter(
         goal: Goal::Idle,
         condition: Condition::Intact,
         hull: kind.hull,
-        armament: kind.armament.clone(),
+        // `_LaunchFighter` folds it to its last set (@0x3d91f, @0x3d92b).
+        armament: kind
+            .armament
+            .clone()
+            .with_fold(Fold::default().at(kind.hull.frames.last_set())),
         rounds: kind.rounds.clone(),
         trigger: Trigger::default(),
         pick: None,
@@ -517,6 +522,8 @@ fn fighter(
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.pod_count,
         warp: crate::traffic::warp_out::Warp::default(),
+        // Its glow is left as its slot had it, none for a fresh one.
+        display: NpcDisplay::default(),
     }
 }
 

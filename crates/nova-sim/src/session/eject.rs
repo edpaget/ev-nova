@@ -167,6 +167,7 @@ use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::ship_layer::Slot;
 use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
+use crate::traffic::ship_display::{NpcDisplay, Spawn};
 use crate::traffic::table;
 
 impl Session {
@@ -347,6 +348,9 @@ impl Session {
     /// (see the module docs).
     fn hulk(&self, old: &ShipRecord, condition: Condition) -> Npc {
         let kind = table::kind(old, &self.outfits, &self.arsenal);
+        // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
+        // glow, fold and rolls (see `nova_sim::traffic::ship_display`).
+        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
         let mut reserves = kind.stats.full();
         reserves.shield = self.pilot.reserves.shield;
         reserves.armor = self.pilot.reserves.armor;
@@ -368,7 +372,7 @@ impl Session {
             goal: Goal::Idle,
             condition,
             hull: kind.hull,
-            armament: kind.armament,
+            armament: kind.armament.with_fold(fold),
             rounds: kind.rounds,
             trigger: Trigger::default(),
             pick: None,
@@ -408,6 +412,7 @@ impl Session {
             // its class's `PodCount` (@0x3ca48).
             pods_left: kind.hull.pod_count,
             warp: crate::traffic::warp_out::Warp::default(),
+            display,
         }
     }
 

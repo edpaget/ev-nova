@@ -22,6 +22,7 @@ use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
 use crate::traffic::plunder_dock::Docking;
+use crate::traffic::ship_display::NpcDisplay;
 use crate::traffic::warp_out::Warp;
 
 pub use crate::combat::NpcId;
@@ -451,6 +452,10 @@ pub struct Npc {
     /// (see [`warp_out`](crate::traffic::warp_out)): none as it spawns,
     /// as every spawn clears +0x50. Never saved.
     pub warp: Warp,
+    /// Its drawn state: its bank, engine glow, display timers and sets,
+    /// and how it was flown this tick (see
+    /// [`ship_display`](crate::traffic::ship_display)). Never saved.
+    pub display: NpcDisplay,
 }
 
 /// The commodities 0-5 the original's ship records count.

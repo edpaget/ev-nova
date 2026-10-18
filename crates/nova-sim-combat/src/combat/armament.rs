@@ -771,6 +771,16 @@ impl Armament {
         mount.affords(rounds, fuel, shooter.npc)
     }
 
+    /// Whether its class's `KeyCarried` ship `key` is aboard, a fighter
+    /// bay launching it holding rounds of its own in `rounds`:
+    /// `_KeyCarriedShipTypeOnboard` (@0x399c-0x3a13), which
+    /// `_HandleShipDisplay` reads for `shän` `Flags` 0x0004 (see
+    /// [`ship_frames`](super::ship_frames)); never without a `key`.
+    #[must_use]
+    pub fn key_ship_aboard(&self, key: Option<ShipId>, rounds: &dyn Rounds) -> bool {
+        self.key_aboard(key, rounds)
+    }
+
     /// Whether a fighter bay launching `key` holds rounds of its own in
     /// `rounds`; never without a `key`.
     fn key_aboard(&self, key: Option<ShipId>, rounds: &dyn Rounds) -> bool {
