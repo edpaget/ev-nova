@@ -578,9 +578,9 @@ struct FightTerms {
 }
 
 impl FightTerms {
-    /// `npc` in the fight, on these terms. Its jump is never under way:
-    /// an NPC's jump out has no stage here, as it leaves on the tick it
-    /// reaches its jump distance.
+    /// `npc` in the fight, on these terms. Its jump is under way while its
+    /// warp stage is ([`Fighter::jumping`], the original's +0x50 above 0):
+    /// its own jump or its leader's.
     fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
         let fleet = npc.fleet();
         let leader = npc.leader_ref();
@@ -19033,6 +19033,19 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_npc_whose_warp_is_under_way_is_hit_by_an_impact_shot_but_not_pushed() {
+        let catalog = armed();
+        let mut session = knocking(&catalog, (Some(knocker()), 100.0), (None, 100.0));
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.begin_own_jump();
+        npc.warp.stage = 2.0;
+        fight_until(&mut session, |session| {
+            session.npcs()[0].reserves.shield.now < 1000.0
+        });
+        assert_eq!(session.npcs()[0].state.velocity, Vec2::ZERO);
+    }
+
+    #[test]
     fn an_npcs_heavy_tractor_leaves_the_player_held_by_it() {
         let catalog = armed();
         let mut session = knocking(&catalog, (None, 100.0), (Some(tractor_beam()), 200.0));
@@ -22250,6 +22263,20 @@ pub(super) mod tests {
         session.tick_traffic(&catalog, &Defending { goal }, &mut NeverFires);
         setup(&mut session);
         session
+    }
+
+    #[test]
+    fn an_npcs_point_defence_rests_while_its_warp_is_under_way() {
+        let fires = |setup: fn(&mut Session)| {
+            let mut session = defending_session(Goal::Attack(ShipRef::Player), setup);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            quad_fired(&session.take_combat_events(), ShipRef::Npc(NpcId(0)))
+        };
+        assert!(fires(|_| {}), "not warping, it fires");
+        assert!(
+            !fires(|session| session.traffic.npcs_mut()[0].follow_player_jump(2.0, 0)),
+            "following the player's jump"
+        );
     }
 
     #[test]

@@ -837,8 +837,8 @@ pub struct Fighter<'a> {
     /// original's +0x50 above 0): no hit, blast, beam or shockwave pushes
     /// it, though a tractor still holds it and it still pulls itself
     /// along its own tractor beam, and its point defence rests
-    /// (`_HandleShipPointDefense` @0x392d6). An NPC's jump out has no
-    /// stage in the simulation, so only the player's is.
+    /// (`_HandleShipPointDefense` @0x392d6). The player's from J on, an
+    /// NPC's through its warp stage, its own jump or its leader's.
     pub jumping: bool,
     /// Whether it is the player with its afterburner on and no gravity
     /// source present, which widens a push's clamp to 1.8 times its top
