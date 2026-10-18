@@ -465,6 +465,15 @@ pub struct Npc {
     /// once its plunder runs, and with any goal but an attack or a plunder.
     /// Never saved.
     pub docking: Option<Docking>,
+    /// The ticks left of its search for a target it lost sight of (the
+    /// original's timer +0xc90c), `None` for the original's -1: written
+    /// only by `_HighLevelAIHandler`'s lost-sight block (see
+    /// [`lost_sight`](crate::ai::lost_sight)). None at every spawn and
+    /// launch, the engine's reading: the original never clears it, so a
+    /// slot carries its last occupant's timer
+    /// (rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13).
+    /// Never saved.
+    pub lost_sight: Option<u32>,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).

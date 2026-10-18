@@ -345,6 +345,7 @@ impl Hunt {
             clears_target: false,
             keeps_pursuit: false,
             plunders: None,
+            lost_sight: None,
         }
     }
 }
@@ -1198,6 +1199,7 @@ mod tests {
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: None,
             }
         );
         assert!(
@@ -1658,6 +1660,7 @@ mod tests {
             clears_target: false,
             keeps_pursuit: false,
             plunders: None,
+            lost_sight: None,
         }
     }
 
@@ -1738,6 +1741,7 @@ mod tests {
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: None,
             }
         );
         let mut calm = grudger;
@@ -1758,6 +1762,7 @@ mod tests {
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: None,
             },
             "no grudge: dropped, and nothing picked"
         );

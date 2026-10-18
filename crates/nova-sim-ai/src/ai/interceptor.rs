@@ -56,13 +56,24 @@
 //!   government's word lifts the wait. Short of ammunition, a waiting
 //!   interceptor goes idle as a stopped one does (state 6 to 3 to 0,
 //!   @0x8d391 and @0x8e228; see [`out_of_ammo`]).
+//! - Inspecting a ship it no longer sees (`_ShipVisibleToShip`, see
+//!   [`sight`](super::sight)), it drops it: target -1, state 0
+//!   (@0x8d39a-0x8d3ee, [`lost_sight::after_inspection`]). An inspection
+//!   the out-of-ammo retreat turned into a flight is left alone.
+//! - Its re-pick while inspecting (@0x8d404-0x8d43a, `_SelectWarshipTarget`
+//!   with a government, the inspection kept when it finds none) is not
+//!   what the engine's [`hunt`] gives, which runs first on every think and
+//!   attacks what it picks: the original's needs a government, and its
+//!   hunt pick writes the target alone (@0x8ad11), so the interceptor goes
+//!   on to inspect it. Left out, in
+//!   rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
 
 use crate::ai::fire::FireRules;
 use crate::ai::target::TargetRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
     Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
-    out_of_ammo, react,
+    lost_sight, out_of_ammo, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -120,7 +131,8 @@ impl Behaviour for Interceptor {
     /// Its [`hunt`], or with nothing to fight its inspection, hold or
     /// patrol, after its out-of-ammo retreat
     /// ([`out_of_ammo::after_patrol`]), the hunt's call on the player kept
-    /// through each.
+    /// through each; then an inspection of a ship it no longer sees is
+    /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
@@ -140,10 +152,14 @@ impl Behaviour for Interceptor {
             comm_call = call;
             out_of_ammo::after_patrol(npc, goal)
         });
-        Decision {
-            comm_call,
-            ..decision
-        }
+        lost_sight::after_inspection(
+            npc,
+            Decision {
+                comm_call,
+                ..decision
+            },
+            around,
+        )
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -686,6 +702,7 @@ mod tests {
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: None,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -787,6 +804,7 @@ mod tests {
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: None,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );
@@ -910,5 +928,54 @@ mod tests {
             Goal::JumpOut,
             "leaving, state 2"
         );
+    }
+
+    /// `npc` fully cloaked.
+    fn cloaked(mut npc: Npc) -> Npc {
+        npc.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        npc
+    }
+
+    /// The decision of `cop` inspecting NPC 2, a trader 500 off, cloaked
+    /// as `hidden` says.
+    fn inspecting(cop: Npc, hidden: bool) -> Decision {
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let npcs = [cop, if hidden { cloaked(trader) } else { trader }];
+        let (sites, govts) = (sites(), govts(0, 0));
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn an_interceptor_drops_an_inspection_it_loses_sight_of() {
+        let cop = Npc {
+            goal: Goal::Inspect(n(2)),
+            ..police()
+        };
+        let decision = inspecting(cop, true);
+        assert_eq!(decision.goal, Goal::Idle, "@0x8d39a-0x8d3ee");
+        assert!(decision.clears_target);
+    }
+
+    #[test]
+    fn one_whose_inspected_ship_is_seen_keeps_inspecting_it() {
+        let cop = Npc {
+            goal: Goal::Inspect(n(2)),
+            ..police()
+        };
+        let decision = inspecting(cop, false);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
+        assert!(!decision.clears_target);
+    }
+
+    #[test]
+    fn an_inspection_the_out_of_ammo_retreat_turned_to_flight_is_left_alone() {
+        let cop = short(Goal::Inspect(n(2)), AmmoLeft::Dry, true);
+        let decision = inspecting(cop, true);
+        assert_eq!(decision.goal, Goal::Flee(n(2)), "state 3, not 7");
+        assert!(!decision.clears_target);
     }
 }

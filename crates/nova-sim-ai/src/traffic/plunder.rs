@@ -114,6 +114,10 @@ pub enum HighLevel {
     },
     /// It flies its fight, if any.
     Fights,
+    /// It stops (sub 1) while it searches for a target it lost sight of
+    /// ([`lost_sight::searching`](crate::ai::lost_sight::searching)),
+    /// dropping any docking.
+    Stops,
 }
 
 /// What `npc`'s high level does this think among `around` (see the module
@@ -160,7 +164,7 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
             ship,
             step: DockStep::Sub(sub),
         } => npc.docking = Some(Docking { ship, sub }),
-        HighLevel::Fights => npc.docking = None,
+        HighLevel::Fights | HighLevel::Stops => npc.docking = None,
     }
 }
 

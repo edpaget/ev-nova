@@ -88,6 +88,10 @@
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
 //!   sub-goal 0xe, @0x8709d-0x87334).
+//! - [`Goal::Attack`], [`Goal::Snipe`] or [`Goal::Plunder`] while it
+//!   searches for a target it lost sight of
+//!   ([`lost_sight::searching`]): it brakes to a stop, sub 1, as a wait
+//!   does (`_HighLevelAIHandler` @0x8d814).
 //! - [`Goal::Plunder`] of an intact ship flies as an attack, or as a
 //!   snipe when hopeless, by its frame (see [`pursuit`]); a disabled one it
 //!   docks with, as the traffic flies its [`Npc::docking`] (see
@@ -188,6 +192,7 @@
 //!   never lands or jumps. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
+use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
 use crate::ai::{Goal, fire, fire::Manoeuvre};
 use crate::bay::DOCK_TURN_SLACK;
@@ -433,6 +438,10 @@ fn fly_mobile(
         // Goal 0xd against a disabled ship docks with it, which the
         // traffic flies ([`plunder_dock`](crate::traffic::plunder_dock));
         // with no docking yet, its high level not having run, it brakes.
+        // Searching for a target out of sight: sub 1, a stop (@0x8d814).
+        Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } if lost_sight::searching(npc) => {
+            brake(&state, &handling, inertia)
+        }
         Goal::Plunder { .. } if other_disabled => brake(&state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
@@ -469,18 +478,9 @@ fn fly_mobile(
             }
             _ => brake(&state, &handling, inertia),
         },
-        Goal::Formation { .. } => match (other, npc.formation()) {
-            (Some(leader), Some(place)) => {
-                let slot = place.position(leader);
-                let off = slot - state.position;
-                let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
-                if within(KEEP_FORMATION) {
-                    keep_formation(npc, leader, slot, &handling);
-                    return Outcome::Flying;
-                }
-                rejoin(&state, &handling, slot, leader.velocity, inertia)
-            }
-            _ => brake(&state, &handling, inertia),
+        Goal::Formation { .. } => match formation(npc, other, &handling, inertia) {
+            Ok(controls) => controls,
+            Err(outcome) => return outcome,
         },
         Goal::Dock(_) => match dock(npc, other, &handling, flight, inertia) {
             Ok(controls) => controls,
@@ -553,6 +553,27 @@ fn enter_box(
         ticks_left: ENTRY_TICKS - 1,
     };
     Err(Outcome::Flying)
+}
+
+/// How `npc` keeps its slot in the formation of its leader at `leader`
+/// (see the module docs): the controls to rejoin it, or braking with no
+/// leader or slot; or, within [`KEEP_FORMATION`] of it, having flown.
+fn formation(
+    npc: &mut Npc,
+    leader: Option<&ShipState>,
+    handling: &Handling,
+    inertia: Inertia,
+) -> Result<Controls, Outcome> {
+    let (Some(leader), Some(place)) = (leader, npc.formation()) else {
+        return Ok(brake(&npc.state, handling, inertia));
+    };
+    let slot = place.position(leader);
+    let off = slot - npc.state.position;
+    if off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION {
+        keep_formation(npc, leader, slot, handling);
+        return Err(Outcome::Flying);
+    }
+    Ok(rejoin(&npc.state, handling, slot, leader.velocity, inertia))
 }
 
 /// How `npc` flies back to its carrier at `carrier` (see the module

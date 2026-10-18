@@ -88,7 +88,7 @@ fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> b
 /// Whether `other` reads as an AI type above 2 (+0x88): a carried fighter
 /// (5), any other ship with a leader (6), a warship (3) or an interceptor
 /// (4).
-fn reads_above_trader(other: &Npc) -> bool {
+pub(crate) fn reads_above_trader(other: &Npc) -> bool {
     other.carrier.is_some() || other.leader_ref().is_some() || !other.ai_type.trades()
 }
 

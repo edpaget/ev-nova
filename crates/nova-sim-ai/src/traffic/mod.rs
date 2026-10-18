@@ -145,6 +145,8 @@ pub mod gate_entry;
 mod hit_goal_tests;
 pub mod inertialess;
 pub mod leave_flight;
+#[cfg(test)]
+mod lost_sight_tests;
 pub mod npc;
 pub mod persons;
 pub mod plunder;
@@ -161,6 +163,7 @@ pub mod table;
 pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
+use crate::ai::lost_sight::{self, LostSight};
 use crate::ai::pursuit::{self, Pursuit, PursuitRules};
 use crate::ai::{
     Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
@@ -1027,6 +1030,8 @@ impl Traffic {
     /// Each NPC whose decision is `due` takes its high level and pursuit in
     /// `world`, rolling on `chance`: none while its AI wait runs, its
     /// docking with a disabled victim it plunders ([`plunder::high_level`]),
+    /// a stop while it searches for a target it lost sight of
+    /// ([`lost_sight::searching`], sub 1 overwriting any substate kept),
     /// or its fight ([`pursuit::step`]). `_LowLevelAIHandler` runs
     /// in the same frame as the think (`_AIDispatch` @0x901e5-0x901f4),
     /// after the goal and before the passes and the flight read its frame.
@@ -1049,7 +1054,11 @@ impl Traffic {
             .zip(due)
             .map(|(npc, &due)| {
                 due.then(|| {
-                    let high = plunder::high_level(npc, &around);
+                    let high = match plunder::high_level(npc, &around) {
+                        HighLevel::Skipped => HighLevel::Skipped,
+                        _ if lost_sight::searching(npc) => HighLevel::Stops,
+                        high => high,
+                    };
                     let pursuit = if high == HighLevel::Fights {
                         pursuit::step(npc, &around, rules, &mut *chance)
                     } else {
@@ -1067,7 +1076,7 @@ impl Traffic {
                 continue;
             }
             plunder::take_high_level(npc, high);
-            npc.pursuit = if keep {
+            npc.pursuit = if keep && high != HighLevel::Stops {
                 Pursuit {
                     kept: npc.pursuit.kept,
                     ..pursuit
@@ -1871,18 +1880,27 @@ impl Traffic {
     /// ([`Decision::provokes`]) has a provocation of 1, the word's +0x96
     /// (@0x8b7e5, @0x8cb9d); one that does not fight loses its
     /// provocation; and one whose decision clears its target
-    /// ([`Decision::clears_target`]) loses it.
+    /// ([`Decision::clears_target`]) loses it. Its search timer takes the
+    /// lost-sight block's write ([`Decision::lost_sight`]), and stays as
+    /// it was when the block did not run.
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
             let Some(Decision {
                 goal,
                 provokes,
                 clears_target,
+                lost_sight,
                 ..
             }) = decision
             else {
                 continue;
             };
+            if let Some(write) = lost_sight {
+                npc.lost_sight = match write {
+                    LostSight::Searching(left) => Some(left),
+                    LostSight::Seen | LostSight::GaveUp => None,
+                };
+            }
             if let Goal::Inspect(ship) = npc.goal
                 && goal != npc.goal
             {
@@ -2155,6 +2173,7 @@ impl Traffic {
                 pursuit: Pursuit::default(),
                 ai_wait: 0,
                 docking: None,
+                lost_sight: None,
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,
             };
@@ -4144,6 +4163,7 @@ mod tests {
             clears_target: false,
             keeps_pursuit: false,
             plunders: None,
+            lost_sight: None,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

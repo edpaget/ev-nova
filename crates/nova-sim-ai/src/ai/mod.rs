@@ -52,6 +52,7 @@ pub mod flee_drop;
 pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
+pub mod lost_sight;
 pub mod miner;
 pub mod nova;
 pub mod odds;
@@ -802,6 +803,10 @@ pub struct Decision {
     /// order ([`plunder::resolve`](crate::traffic::plunder::resolve)), and
     /// the wait loop drops it when it makes the pirate wait instead.
     pub plunders: Option<ShipRef>,
+    /// `_HighLevelAIHandler`'s lost-sight block's write of the search
+    /// timer, when it ran ([`lost_sight::after_think`]); none otherwise,
+    /// which leaves [`Npc::lost_sight`] as it was.
+    pub lost_sight: Option<lost_sight::LostSight>,
 }
 
 /// How NPCs decide what to do.
