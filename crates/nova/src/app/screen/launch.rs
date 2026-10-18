@@ -13,11 +13,11 @@
 //!   (@0x765a2-0x765ce). The original sweeps after the load; both settle
 //!   before the menu's first frame;
 //! - its ship facing a drawn heading and the offers' rolls drawn
-//!   ([`FlightView::resume`]);
+//!   ([`FlightView::resume`](nova_view::flight::FlightView::resume));
 //! - every active mission's auxiliary ships restarted in the unguarded
 //!   form the take-off uses, and the player's system explored, as
 //!   `_OpenLastPilotFile`'s loop (@0x765d4-0x76637) and `_DoMainScreen`'s
-//!   once-a-launch setup (@0x1affe) do ([`FlightView::open_at_launch`]).
+//!   once-a-launch setup (@0x1affe) do ([`FlightView::open_at_launch`](nova_view::flight::FlightView::open_at_launch)).
 //!
 //! What its hooks then make due is settled at once, and any save they make
 //! due is dropped: the original saves nothing at launch.
@@ -29,7 +29,7 @@
 //! `_DeletePilotFile` never touches the alias, @0x72e6b-0x72ef6), a save
 //! that can't be read or is from a newer version, a pilot whose session
 //! can't start on this game data, and a load that had to
-//! fall back ([`FlightView::load_repaired`]), which `_LoadPilotData`
+//! fall back ([`FlightView::load_repaired`](nova_view::flight::FlightView::load_repaired)), which `_LoadPilotData`
 //! reports as -46 (@0x7648b-0x76498) and `_OpenLastPilotFile` treats as a
 //! failure; Open Pilot's note `STR#` 140 #52 is `_MainScreenChoice`'s, not
 //! the launch's. The original's player globals then hold the repaired or
