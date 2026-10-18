@@ -5,6 +5,9 @@
 //! - [`appear`]: how the main screen appears, at start-up and on each
 //!   return from play: its fade, and what it does with the input
 //!   meanwhile.
+//! - [`entry`]: how play is entered from the main screen: its fades,
+//!   the intro, the handover to flight, and what it does with the input
+//!   meanwhile.
 //! - [`intro`]: the intro screen a pilot sees as it first enters play,
 //!   and the port its pictures come through ([`IntroSource`]).
 //! - [`art`]: the main screen's art in the core's terms, and the port it
@@ -26,6 +29,7 @@ pub mod appear;
 pub mod art;
 pub mod background;
 mod data;
+pub mod entry;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod intro;

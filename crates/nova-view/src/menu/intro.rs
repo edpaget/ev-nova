@@ -1,6 +1,6 @@
 //! The intro screen a pilot sees as it enters play for the first time:
 //! `_ShowIntroScreen` @0x16cf1's decisions, in the core's terms. The
-//! entry (`menu::entry`) runs it between the main screen's
+//! entry ([`menu::entry`](super::entry)) runs it between the main screen's
 //! fade out and the handover to flight, and the router shows its text.
 //!
 //! **The pictures.** A `chär` names four intro `PICT`s, each with its
@@ -350,6 +350,15 @@ impl Intro {
     /// window losing focus): each counts as up.
     pub fn release_keys(&mut self) {
         self.keys = IntroKeys::default();
+        if self.stage == Stage::AwaitingRelease {
+            self.poll_release();
+        }
+    }
+
+    /// The primary button was let go of outside the game (the pointer
+    /// cancelled): it counts as up.
+    pub fn cancel_pointer(&mut self) {
+        self.keys.primary = false;
         if self.stage == Stage::AwaitingRelease {
             self.poll_release();
         }
@@ -886,6 +895,28 @@ mod tests {
         screen.tick(ms(1));
         screen.tick(ms(500));
         assert_eq!(drawn(&screen).1, Some(128));
+    }
+
+    #[test]
+    fn cancelling_the_pointer_lets_go_of_the_button_alone() {
+        let data = sized();
+        let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
+        screen.input(&click(true));
+        faded_in(&mut screen);
+        screen.tick(secs(5));
+        screen.cancel_pointer();
+        screen.tick(ms(1999));
+        assert_eq!(drawn(&screen).1, None, "timed from the cancel");
+        screen.tick(ms(1));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, Some(128));
+        let mut space = begun(&two_pictures(), &data, IntroKeys::default());
+        space.input(&click(true));
+        space.input(&key(Key::Space, true));
+        faded_in(&mut space);
+        space.cancel_pointer();
+        space.tick(secs(5));
+        assert_eq!(drawn(&space).1, None, "Space is still down");
     }
 
     #[test]
