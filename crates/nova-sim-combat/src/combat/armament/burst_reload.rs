@@ -12,7 +12,7 @@ impl Armament {
     /// its `BurstReload`.
     ///
     /// The original loops over every weapon index and reads the count in
-    /// the ship's class record (`shïp` +0x5e8[i] > 0, @0x84c5f), not the
+    /// the ship's class record (`shïp` `+0x5e8[i] > 0`, @0x84c5f), not the
     /// ship's own count, so a weapon a person adds beyond its class is
     /// left alone. It sets the ship's burst counter (+0x17c + i·0xc8) to 0
     /// and its reload timer (+0xf8 + i·0xc8) to `BurstReload` as a float
