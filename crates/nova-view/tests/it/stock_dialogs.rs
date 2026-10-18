@@ -459,7 +459,46 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 || rect.min.y >= music.max.y;
             assert!(apart, "{name}: {}", toggle.label());
         }
-        assert_eq!(prefs.inert().len(), 9, "{name}: QuickTime Movies works");
+        assert_eq!(
+            prefs.inert().len(),
+            8,
+            "{name}: QuickTime Movies works, and Run in a window is the display picker"
+        );
+        assert!(
+            prefs
+                .inert()
+                .iter()
+                .all(|toggle| toggle.label() != "Run in a window"),
+            "{name}"
+        );
+        // The display picker fills "Run in a window"'s row, clear of every
+        // other part, inside the dialog.
+        let picker = prefs.display().rects().bounds();
+        let row = dialog.item_bounds(11).expect("Run in a window");
+        assert_eq!(
+            (picker.min.y, picker.max.y),
+            (row.min.y, row.max.y),
+            "{name}"
+        );
+        assert!(dialog.bounds().contains(picker.min) && dialog.bounds().contains(picker.max));
+        for rect in prefs
+            .inert()
+            .iter()
+            .chain([
+                prefs.music(),
+                prefs.sound(),
+                prefs.hyperspace_effects(),
+                prefs.quicktime_movies(),
+            ])
+            .map(nova_view::ui::toggle::Toggle::rect)
+            .chain([prefs.effects_volume().rects().bounds(), music, ok, keys])
+        {
+            let apart = rect.max.x <= picker.min.x
+                || rect.min.x >= picker.max.x
+                || rect.max.y <= picker.min.y
+                || rect.min.y >= picker.max.y;
+            assert!(apart, "{name}: {rect:?} under the picker {picker:?}");
+        }
     }
 }
 
