@@ -120,6 +120,11 @@ pub const PD_TARGET: u16 = 0x0008;
 /// out of ammunition (class +0x9ea, `_WarshipAI` @0x8bf50,
 /// `_InterceptorAI` @0x8d358; see `nova_sim::ai::out_of_ammo`).
 pub const RETREATS_DRY: u16 = 0x0080;
+/// The `shïp` `Flags2` bit of a ship that stands off: it keeps beyond
+/// 0.85 of its longest weapon's reach and backs away inside the dogfight
+/// box (class +0x9ea, `_HighLevelAIHandler` @0x8e48e and @0x8e6b7; see
+/// `nova_sim::ai::stand_off`).
+pub const STANDS_OFF: u16 = 0x0002;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -203,6 +208,9 @@ pub struct HullSpec {
     /// Whether it retreats once its weapons run out of ammunition, its
     /// `Flags2` [`RETREATS_DRY`] (see `nova_sim::ai::out_of_ammo`).
     pub retreats_dry: bool,
+    /// Whether it stands off from its target at its weapons' reach, its
+    /// `Flags2` [`STANDS_OFF`] (see `nova_sim::ai::stand_off`).
+    pub stands_off: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -258,6 +266,7 @@ impl Default for HullSpec {
             planet_type: false,
             pd_target: false,
             retreats_dry: false,
+            stands_off: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
@@ -292,6 +301,7 @@ impl HullSpec {
             planet_type: record.flags & PLANET_TYPE != 0,
             pd_target: record.flags2 & PD_TARGET != 0,
             retreats_dry: record.flags2 & RETREATS_DRY != 0,
+            stands_off: record.flags2 & STANDS_OFF != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
@@ -696,6 +706,28 @@ mod tests {
         assert!(!flags.retreats_dry, "its Flags never");
         assert!(!HullSpec::default().retreats_dry);
         assert_eq!(RETREATS_DRY, 0x0080);
+    }
+
+    #[test]
+    fn a_hull_that_stands_off_has_its_flags2_0x0002() {
+        let stands_off = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .stands_off
+        };
+        assert!(stands_off(0x0002));
+        assert!(stands_off(0x0083), "with other bits");
+        assert!(!stands_off(0xfffd), "every other bit");
+        assert!(!stands_off(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0002,
+            ..hull(167)
+        });
+        assert!(!flags.stands_off, "its Flags never");
+        assert!(!HullSpec::default().stands_off);
+        assert_eq!(STANDS_OFF, 0x0002);
     }
 
     #[test]

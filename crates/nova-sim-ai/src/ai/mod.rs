@@ -14,6 +14,8 @@
 //! - [`target`]: whom a warship or interceptor attacks: the player, by its
 //!   government's relations and the player's legal record, or an NPC.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
+//! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
+//!   weapons' longest reach, and how it flies there.
 //! - [`react`]: how a ship hit answers, and how others come to its help.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
@@ -37,6 +39,7 @@ pub mod nova;
 pub mod odds;
 pub mod out_of_ammo;
 pub mod react;
+pub mod stand_off;
 pub mod target;
 pub mod warship;
 pub mod wimpy;
