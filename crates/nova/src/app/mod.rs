@@ -59,15 +59,16 @@
 //!
 //! - **The picker.** Each time the Preferences dialog opens, the app
 //!   offers it the modes the window's monitor lists
-//!   ([`listed_modes`]) and the live kind
+//!   ([`listed_modes`]) and the chosen kind
 //!   ([`Screen::offer_display`]). A kind the dialog reports
 //!   ([`Prefs::fullscreen`](nova_view::Prefs::fullscreen)) other than the
-//!   live one is entered once the event is handled, and saved, with the
+//!   chosen one is entered once the event is handled, and saved, with the
 //!   monitor's name, as [`GameSettings::fullscreen_kind`].
 //! - **Fallback.** A saved mode the monitor does not offer, or one chosen
 //!   on another monitor, opens borderless with a warning naming it, and the
-//!   session stays borderless. The saved kind is kept, so the next launch
-//!   on that monitor gets the mode back.
+//!   session stays borderless. The saved kind is kept, and still chosen,
+//!   so the next launch on that monitor gets the mode back, and picking
+//!   borderless in the dialog saves borderless.
 //! - **Focus.** Losing focus while exclusive leaves the mode until focus
 //!   comes back ([`WindowEvent::FocusGained`]), when it is entered again.
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
@@ -339,8 +340,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// Offers the Preferences dialog, once each time it opens, the modes
-    /// the window's monitor lists and the kind the game runs fullscreen in
-    /// now ([`Screen::offer_display`]).
+    /// the window's monitor lists and the chosen fullscreen kind, the
+    /// saved one even when this session fell back from it
+    /// ([`Screen::offer_display`]).
     fn offer_display(&mut self, window: &impl WindowPort) {
         let open = self.screen.now_showing() == Some(Showing::Preferences);
         if open && !self.display_offered {
@@ -412,7 +414,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
     /// them but the fullscreen kind), each when there is one. A fullscreen
-    /// kind other than the live one is held, to be entered and saved once
+    /// kind other than the chosen one is held, to be entered and saved once
     /// the event is handled, which has the window; then a galaxy map borders setting
     /// its map's close reports ([`Screen::take_map_borders_save`]) is
     /// saved through the keeper with the other settings as they are. A
@@ -3234,21 +3236,50 @@ mod tests {
     const NO_SIZES: Vec<(u32, u32)> = Vec::new();
 
     #[test]
-    fn an_audio_change_with_the_live_kind_asks_nothing_and_keeps_the_saved_kind() {
+    fn an_audio_change_after_a_fallback_asks_nothing_and_keeps_the_saved_kind() {
         // The monitor lacks the saved mode: the session falls back to
-        // borderless, and the dialog reports borderless with the audio.
+        // borderless. The dialog is offered the saved kind, and reports it
+        // with the audio.
         let mut window = on_monitor();
         let store = saved_fhd(true, "LG HDR 4K");
-        let mut app = display_app(&window, &[choosing(FullscreenKind::Borderless)])
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(fhd()))])
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         app.take_warnings();
+        press_on(&mut app, &mut window, Key::Char('p'));
+        assert_eq!(
+            app.screen().offers[0].1,
+            FullscreenKind::Exclusive(fhd()),
+            "the saved kind"
+        );
         press_on(&mut app, &mut window, Key::Space);
         assert_eq!(window.fullscreen, [BORDERLESS], "nothing more asked");
         let saved = stored(&store);
         assert!(!saved.audio.music, "the audio saved");
         assert_eq!(saved.fullscreen_kind, fhd_on("LG HDR 4K"), "kept");
         assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn borderless_picked_after_a_fallback_is_saved_and_the_next_launch_is_quiet() {
+        let mut window = on_monitor();
+        let store = saved_fhd(true, "LG HDR 4K");
+        let mut app = display_app(&window, &[choosing(FullscreenKind::Borderless)])
+            .with_settings(keeper(&store));
+        app.restore_window(&mut window);
+        assert_eq!(app.take_warnings().len(), 1);
+        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::Space);
+        let saved = stored(&store);
+        assert!(saved.fullscreen);
+        assert_eq!(saved.fullscreen_kind, FullscreenSetting::Borderless);
+        assert_eq!(*window.fullscreen.last().expect("entered"), BORDERLESS);
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+        let mut relaunched = display_app(&window, &[]).with_settings(keeper(&store));
+        let mut window = on_monitor();
+        relaunched.restore_window(&mut window);
+        assert_eq!(window.fullscreen, [BORDERLESS]);
+        assert_eq!(relaunched.take_warnings(), Vec::<String>::new(), "quiet");
     }
 
     #[test]

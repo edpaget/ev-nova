@@ -11,13 +11,15 @@
 //!
 //! # Kinds
 //!
-//! Entering enters the live kind ([`Fullscreen::kind`]), the saved one
-//! unless this session fell back from it. An exclusive kind is entered
-//! only when the window's monitor offers its mode (listed by
+//! Entering enters the chosen kind ([`Fullscreen::kind`]), the saved one
+//! unless the player picks another. An exclusive kind is entered only
+//! when the window's monitor offers its mode (listed by
 //! [`listed_modes`]) and, when both are named, is the monitor it was
 //! chosen on. Otherwise the game enters borderless with a warning naming
-//! the mode, and stays borderless for the session; it never guesses at
-//! the nearest mode.
+//! the mode, and stays borderless for the session, until the player
+//! chooses a kind; it never guesses at the nearest mode. The chosen kind
+//! is kept through the fallback, so the Preferences dialog shows it, and
+//! picking borderless there is a change, saved.
 //!
 //! # Focus and exit
 //!
@@ -58,13 +60,18 @@ struct Modifiers {
 /// window's size to give back on leaving, and what the shortcut needs to
 /// know of the keys held.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // Independent flags, each its own rule.
 pub(crate) struct Fullscreen {
     os: Os,
     /// How the game is fullscreen now, as asked or as the system reported;
     /// `None` when windowed.
     current: Option<FullscreenKind>,
-    /// The kind entering enters.
+    /// The kind the player chose, which entering enters unless the
+    /// session fell back from it.
     kind: FullscreenSetting,
+    /// Whether the window's monitor did not offer the chosen kind's mode,
+    /// and the session runs borderless instead, warned once.
+    fell_back: bool,
     /// Whether an exclusive mode was left for a focus loss, to be entered
     /// again when focus comes back.
     suspended: bool,
@@ -90,6 +97,7 @@ impl Fullscreen {
             os,
             current: None,
             kind: FullscreenSetting::Borderless,
+            fell_back: false,
             suspended: false,
             exited: false,
             windowed_size_px: size_px,
@@ -107,9 +115,10 @@ impl Fullscreen {
     /// Enters `kind` from now on, without changing the state now.
     pub(crate) fn set_kind(&mut self, kind: FullscreenSetting) {
         self.kind = kind;
+        self.fell_back = false;
     }
 
-    /// The kind entering enters.
+    /// The kind the player chose, kept through a fallback.
     pub(crate) fn kind(&self) -> &FullscreenSetting {
         &self.kind
     }
@@ -198,9 +207,10 @@ impl Fullscreen {
         self.exited = true;
     }
 
-    /// Enters the live kind, remembering `window`'s size to give back, or
-    /// leaves fullscreen, giving that size back. A warning when the live
-    /// kind's mode is not offered and borderless is entered instead.
+    /// Enters the chosen kind, remembering `window`'s size to give back, or
+    /// leaves fullscreen, giving that size back. A warning when the chosen
+    /// kind's mode is first found not offered and borderless is entered
+    /// instead.
     pub(crate) fn toggle(&mut self, window: &mut impl WindowPort) -> Option<String> {
         if self.current.is_some() {
             window.set_fullscreen(None);
@@ -214,28 +224,28 @@ impl Fullscreen {
         }
     }
 
-    /// Makes `kind` the live kind and enters it: from a window, remembering
-    /// its size; from fullscreen, switching to it alone. A warning as
-    /// [`Fullscreen::toggle`] gives one.
+    /// Makes `kind` the chosen kind and enters it, afresh after a
+    /// fallback: from a window, remembering its size; from fullscreen,
+    /// switching to it alone. A warning as [`Fullscreen::toggle`] gives one.
     pub(crate) fn choose(
         &mut self,
         kind: FullscreenSetting,
         window: &mut impl WindowPort,
     ) -> Option<String> {
-        self.kind = kind;
+        self.set_kind(kind);
         if self.current.is_none() {
             self.windowed_size_px = window.size_px();
         }
         self.enter(window)
     }
 
-    /// Asks `window` for the live kind, falling back to borderless, for
+    /// Asks `window` for the chosen kind, falling back to borderless, for
     /// the rest of the session, when its monitor does not offer the
     /// kind's mode.
     fn enter(&mut self, window: &mut impl WindowPort) -> Option<String> {
         let warning = match &self.kind {
             FullscreenSetting::Exclusive { mode, monitor }
-                if !offered(window, mode, monitor.as_deref()) =>
+                if !self.fell_back && !offered(window, mode, monitor.as_deref()) =>
             {
                 let on = monitor
                     .as_ref()
@@ -246,12 +256,16 @@ impl Fullscreen {
                      opening borderless fullscreen",
                     mode.label()
                 );
-                self.kind = FullscreenSetting::Borderless;
+                self.fell_back = true;
                 Some(warning)
             }
             _ => None,
         };
-        let kind = self.kind.kind();
+        let kind = if self.fell_back {
+            FullscreenKind::Borderless
+        } else {
+            self.kind.kind()
+        };
         window.set_fullscreen(Some(kind));
         self.current = Some(kind);
         self.suspended = false;
@@ -262,7 +276,7 @@ impl Fullscreen {
     /// and says whether that changed the state. Entering asks nothing of
     /// the window, which is already fullscreen, and counts as borderless;
     /// leaving gives back the size it had, however the player left, and
-    /// keeps the live kind. A window left for a focus loss, or on the
+    /// keeps the chosen kind. A window left for a focus loss, or on the
     /// way out, is expected, and changes nothing.
     pub(crate) fn observed(&mut self, fullscreen: bool, window: &mut impl WindowPort) -> bool {
         if fullscreen == self.current.is_some() || self.suspended || self.exited {
@@ -366,7 +380,7 @@ mod tests {
         Call::SetFullscreen(Some(FullscreenKind::Exclusive(mode)))
     }
 
-    /// Windowed in a 1024x768 window, its live kind `kind`.
+    /// Windowed in a 1024x768 window, its chosen kind `kind`.
     fn set_to(kind: FullscreenSetting) -> Fullscreen {
         let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
         fullscreen.set_kind(kind);
@@ -620,7 +634,11 @@ mod tests {
             "no such rate"
         );
         assert_eq!(window.calls, [BORDERLESS]);
-        assert_eq!(*fullscreen.kind(), FullscreenSetting::Borderless);
+        assert_eq!(
+            *fullscreen.kind(),
+            exclusive(gone, Some(MONITOR)),
+            "the chosen kind is kept"
+        );
         fullscreen.toggle(&mut window);
         assert_eq!(fullscreen.toggle(&mut window), None, "warned once");
         assert_eq!(window.calls[3], BORDERLESS);
@@ -632,6 +650,29 @@ mod tests {
             "another monitor"
         );
         assert_eq!(window.calls, [BORDERLESS]);
+    }
+
+    #[test]
+    fn choosing_after_a_fallback_tries_the_new_kind_afresh() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some("LG HDR 4K")));
+        assert!(fullscreen.toggle(&mut window).is_some());
+        assert_eq!(
+            fullscreen.choose(FullscreenSetting::Borderless, &mut window),
+            None
+        );
+        assert_eq!(*fullscreen.kind(), FullscreenSetting::Borderless);
+        assert_eq!(
+            fullscreen.choose(exclusive(qhd(), Some(MONITOR)), &mut window),
+            None
+        );
+        assert_eq!(window.calls, [BORDERLESS, BORDERLESS, entered(qhd())]);
+        let mut fell_back = set_to(exclusive(fhd(), Some("LG HDR 4K")));
+        fell_back.toggle(&mut window);
+        fell_back.set_kind(exclusive(fhd(), Some(MONITOR)));
+        fell_back.toggle(&mut window);
+        assert_eq!(fell_back.toggle(&mut window), None, "a new kind, afresh");
+        assert_eq!(window.calls[6..], [entered(fhd())]);
     }
 
     #[test]
