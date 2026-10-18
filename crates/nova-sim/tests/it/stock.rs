@@ -6672,3 +6672,47 @@ fn stock_proximity_fuses_reach_every_ship_they_pass() {
         .collect();
     assert_eq!(lifeless, [] as [i16; 0]);
 }
+
+/// The stock Pulse Laser (146, `AmmoType` -1250) burns 25 fuel a shot,
+/// and a ship carrying it alone reads out of ammunition below 250, ten of
+/// its shots (`_AIShipIsOutOfAmmo` @0x7f77a-0x7f7a2), though it affords a
+/// shot. Its first carrier, ship 158, has `shïp` `Flags2` 0x0080, as 278
+/// of the 288 stock ships do, so it retreats then (`_WarshipAI`
+/// @0x8bf3e-0x8bf83).
+#[test]
+#[allow(clippy::float_cmp)]
+fn a_stock_pulse_laser_ship_reads_dry_below_ten_shots_of_fuel_and_retreats() {
+    use nova_sim::ai::fire::{AmmoLeft, ammo_left};
+    use nova_sim::combat::armament::Armament;
+    use nova_sim::combat::hull::HullSpec;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let laser = stock_weapon(&data, 146);
+    let Ammo::Fuel(cost) = laser.ammo else {
+        panic!("the Pulse Laser burns fuel: {:?}", laser.ammo);
+    };
+    assert_eq!(cost, 25.0, "-1250");
+    let hulls = data.hulls();
+    let retreating = hulls
+        .iter()
+        .filter(|hull| HullSpec::new(hull).retreats_dry)
+        .count();
+    assert_eq!((retreating, hulls.len()), (278, 288));
+    let carrier = hulls
+        .iter()
+        .find(|hull| hull.weapons.iter().any(|slot| slot.weapon == WeaponId(146)))
+        .expect("a stock Pulse Laser ship");
+    assert_eq!(carrier.id, ShipId(158));
+    let mut npc = nova_sim::traffic::fixture::npc(1, ShipStats::default());
+    npc.armament = Armament::new([(laser, 1)]);
+    npc.hull = HullSpec::new(carrier);
+    npc.reserves.fuel.now = cost * 10.0;
+    assert_eq!(ammo_left(&npc), AmmoLeft::Armed);
+    assert!(!nova_sim::ai::out_of_ammo::retreats(&npc));
+    npc.reserves.fuel.now = cost * 10.0 - 0.01;
+    assert!(npc.reserves.fuel.now >= cost, "it affords a shot");
+    assert_eq!(ammo_left(&npc), AmmoLeft::Dry);
+    assert!(nova_sim::ai::out_of_ammo::retreats(&npc));
+}

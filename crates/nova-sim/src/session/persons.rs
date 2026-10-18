@@ -1793,7 +1793,9 @@ mod tests {
 
     /// [`quoting`] with Ace of `flags`, AI type `ai_type`, flying for
     /// government 140 of `Flags` 0x0004 (it always attacks the player),
-    /// already quoted and holding no grudge; Bee flies no person.
+    /// already quoted and holding no grudge, armed with a gun of unlimited
+    /// ammunition (an unarmed warship is fully dry, and drops the player
+    /// at once, `_WarshipAI` @0x8c0e7-0x8c117); Bee flies no person.
     fn hunted_by_ace(flags: u16, ai_type: i16) -> (FakePilotCatalog, Session) {
         let mut catalog = quoters([flags, 0]);
         catalog.persons[0].govt = Some(crate::catalog::GovtId(140));
@@ -1806,6 +1808,10 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
         session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
+            1,
+        )]);
         let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
         ace.quoted = true;
         assert!(!ace.grudge);
