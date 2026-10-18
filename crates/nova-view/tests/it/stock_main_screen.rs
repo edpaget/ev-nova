@@ -287,3 +287,76 @@ fn the_yes_no_dialog_asks_in_stock_dlog_3002s_item_3_and_return_answers_yes() {
     });
     assert_eq!(dialog.take_answer(), Some(true));
 }
+
+// The pilot panel.
+
+/// The stock pilot panel's looks: Geneva 9, values 0xFF0000 and labels
+/// 0x800000, and `STR#` 2002's labels.
+#[test]
+fn the_stock_pilot_panels_looks_are_geneva_9_in_its_reds_with_its_labels() {
+    use nova_view::menu::PilotPanelSource;
+    use nova_view::menu::pilot_panel::{PanelLabels, PanelLooks};
+    let Some((data, _)) = stock() else {
+        return;
+    };
+    assert_eq!(
+        data.pilot_panel_looks(),
+        PanelLooks::stock(PanelLabels {
+            pilot_name: "Pilot Name:".to_owned(),
+            date: "Current Date:".to_owned(),
+            combat_rating: "Combat Rating:".to_owned(),
+            ship_name: "Ship Name:".to_owned(),
+            ship_class: "Ship Class:".to_owned(),
+            no_pilot: "No Pilot File Loaded".to_owned(),
+            killed: "has been killed".to_owned(),
+            legal_status: "Legal status in".to_owned(),
+            current_system: "current system:".to_owned(),
+        })
+    );
+}
+
+/// Every stock `shïp` has a target picture, its own or its base ship's,
+/// and `PICT` 8000 is black under each where the panel puts it at the
+/// classic centre (512, 384), so the original's wrapping addOver and the
+/// engine's saturating add draw it alike.
+#[test]
+fn every_stock_ship_has_a_picture_over_black() {
+    use nova_data::graphics::{PICT, decode_pict};
+    use nova_data::records::ship::Ship;
+    use nova_view::menu::PilotPanelSource;
+    let Some((data, _)) = stock() else {
+        return;
+    };
+    let found = data.resource(PICT, 8000).expect("PICT 8000");
+    let background = decode_pict(found.resource.data()).expect("decodes");
+    let mut missing = Vec::new();
+    let mut lit = Vec::new();
+    assert_eq!(data.ids(Ship::TYPE).len(), 288, "every stock shïp");
+    for &id in data.ids(Ship::TYPE) {
+        let Some(picture) = data.panel_ship(nova_sim::ShipId(id)).picture else {
+            missing.push(id);
+            continue;
+        };
+        let left = 512 - i64::from(picture.width / 2);
+        let top = 384 + 280;
+        for y in top..top + i64::from(picture.height) {
+            for x in left..left + i64::from(picture.width) {
+                let (Ok(px), Ok(py)) = (u32::try_from(x), u32::try_from(y)) else {
+                    continue;
+                };
+                if let Some([r, g, b, _]) = background.pixel(px, py)
+                    && (r, g, b) != (0, 0, 0)
+                {
+                    lit.push((id, x, y, [r, g, b]));
+                }
+            }
+        }
+    }
+    assert_eq!(missing, Vec::<i16>::new(), "ships with no picture");
+    assert_eq!(
+        lit.len(),
+        0,
+        "lit pixels under a picture: {:?}",
+        &lit[..lit.len().min(20)]
+    );
+}
