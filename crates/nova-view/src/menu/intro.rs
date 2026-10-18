@@ -43,7 +43,7 @@
 //! The pointer is hidden while the pictures show; the original keeps it
 //! shown when it runs in a window (`_settings`+0xc `RunInAWindow`
 //! @0x16d1d), which the engine doesn't know here
-//! (rdm:phase/main-screen-fidelity, the entry's left-out branches).
+//! (rdm:phase/main-screen-fidelity/phase-6-entry-left-outs).
 //!
 //! The original polls the keys' and the button's state. The engine tracks
 //! them as down or up from the inputs ([`IntroKeys`]), and a press that
