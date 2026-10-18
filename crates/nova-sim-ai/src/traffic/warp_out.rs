@@ -312,11 +312,20 @@ pub fn own_jump(npc: &mut Npc, duration: u32) -> bool {
 /// under way is held to the player's jump, goal 0xb. Any other ship
 /// under way keeps goal 2 or 3, by whether it holds a target, which the
 /// engine's jump-out and flee goals already are.
+///
+/// Such a ship drops its own jump too, sub-goal 4. The hold writes only
+/// +0x50, but each goal's state in `_HighLevelAIHandler` writes its own
+/// sub-goal +0xc8ca on every pass, so a sub-goal 4 doesn't outlive its
+/// goal: goal 3 with +0x50 at 0 sets sub-goal 1, 3 or 4 by its distance
+/// from its target and its jump test (@0x8e0e1-0x8e21d), or goal 0 and
+/// sub-goal 0 with no target (@0x8e228-0x8e234). A later flee runs out
+/// first, as the autopilot flies it.
 pub fn hold_stage(npc: &mut Npc) {
     let jumping_goal = matches!(npc.goal, Goal::JumpOut | Goal::Flee(_))
         || matches!(npc.warp.goal, Some(WarpGoal::Follow(_)));
     if !jumping_goal {
         npc.warp.stage = 0.0;
+        npc.warp.goal = None;
     }
     if npc.warp.under_way() && npc.escorts_player() {
         npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
@@ -646,6 +655,25 @@ mod tests {
         follower.warp.stage = -1.0;
         hold_stage(&mut follower);
         assert_eq!(follower.warp.stage, -1.0, "goal 0xb keeps it");
+    }
+
+    #[test]
+    fn a_ship_whose_goal_left_its_jump_drops_its_own_jump_so_a_later_flee_runs_out_first() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let mut ship = ship();
+        ship.begin_own_jump();
+        ship.goal = Goal::Attack(ShipRef::Player);
+        hold_stage(&mut ship);
+        assert_eq!(ship.warp.goal, None, "the attack state's own sub-goal");
+        ship.goal = Goal::Flee(ShipRef::Player);
+        assert!(!ship.jumping(), "goal 3 runs out before sub-goal 4");
+        assert_eq!(
+            fly_jump(&mut ship, &views, &world, true),
+            None,
+            "the autopilot flies its run-out"
+        );
+        assert_eq!(ship.warp.stage, 0.0, "no stage started");
     }
 
     #[test]
