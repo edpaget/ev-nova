@@ -166,6 +166,14 @@ pub struct HullSpec {
     pub hides_status: bool,
     /// Ticks it breaks up for before it is destroyed.
     pub death_delay: u32,
+    /// Its `DeathDelay` as the data gives it, negative too: the escape
+    /// pods' and the escape ship's tests compare the death timer with half
+    /// of it (see `nova_sim::npc_escape`), while the breakup floors it
+    /// ([`HullSpec::death_delay`]).
+    pub signed_death_delay: i32,
+    /// The crew pods a dying ship of the type ejects, its `PodCount`
+    /// (class +0xa20); none below none.
+    pub pod_count: u16,
     /// The explosion as it breaks up, its `Explode1`.
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
@@ -240,6 +248,8 @@ impl Default for HullSpec {
             shows_armor: false,
             hides_status: false,
             death_delay: 0,
+            signed_death_delay: 0,
+            pod_count: 0,
             breakup: None,
             explosion: None,
             mass: 0.0,
@@ -273,6 +283,8 @@ impl HullSpec {
             shows_armor: record.flags & SHOWS_ARMOR != 0,
             hides_status: record.flags & HIDES_STATUS != 0,
             death_delay: u32::try_from(record.death_delay).unwrap_or(0),
+            signed_death_delay: i32::from(record.death_delay),
+            pod_count: u16::try_from(record.pod_count).unwrap_or(0),
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
@@ -608,6 +620,34 @@ mod tests {
         assert_eq!(trader.strength, 0.0, "none below none");
         assert_eq!((trader.breakup, trader.explosion), (None, None));
         assert_eq!(TOUGH, 0x0010);
+    }
+
+    #[test]
+    fn a_hull_reads_its_pod_count_floored_and_its_signed_death_delay() {
+        let liner = HullSpec::new(&HullRecord {
+            death_delay: 100,
+            pod_count: 10,
+            ..hull(134)
+        });
+        assert_eq!((liner.pod_count, liner.signed_death_delay), (10, 100));
+        let odd = HullSpec::new(&HullRecord {
+            death_delay: -5,
+            pod_count: -3,
+            ..hull(128)
+        });
+        assert_eq!(odd.pod_count, 0, "none below none");
+        assert_eq!(
+            (odd.death_delay, odd.signed_death_delay),
+            (0, -5),
+            "the breakup's floored, the escape tests' raw"
+        );
+        assert_eq!(
+            (
+                HullSpec::default().pod_count,
+                HullSpec::default().signed_death_delay
+            ),
+            (0, 0)
+        );
     }
 
     #[test]

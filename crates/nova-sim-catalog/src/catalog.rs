@@ -1442,6 +1442,9 @@ pub struct HullRecord {
     pub flags2: u16,
     /// Its `DeathDelay`, in ticks.
     pub death_delay: i16,
+    /// Its `PodCount`, raw: the crew pods a dying ship of the type ejects
+    /// (see `nova_sim::npc_escape`).
+    pub pod_count: i16,
     /// Its `Explode1`, encoded.
     pub explode1: i16,
     /// Its `Explode2`, encoded.

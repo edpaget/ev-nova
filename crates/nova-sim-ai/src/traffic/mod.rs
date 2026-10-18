@@ -1677,6 +1677,7 @@ impl Traffic {
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
+                pods_left: kind.hull.pod_count,
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -1939,6 +1940,20 @@ mod tests {
         let (immobile, state) = shoved(crate::handling::ShipFields { speed: 0, ..FAST });
         assert!(!immobile, "it can thrust");
         assert_ne!(state.position, Vec2::ZERO, "a push moves it");
+    }
+
+    #[test]
+    fn a_spawned_ship_carries_its_classs_crew_pods() {
+        let mut kinds = table(1);
+        if let Some(kind) = kinds.ships.get_mut(&ShipId(200)) {
+            kind.hull.pod_count = 10;
+        }
+        let mut traffic = Traffic::new();
+        traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
+        assert_eq!(traffic.npcs()[0].pods_left, 10);
+        let mut traffic = Traffic::new();
+        traffic.enter(table(1), &mut Draws::of(&placed(750, 750)));
+        assert_eq!(traffic.npcs()[0].pods_left, 0, "a class of none");
     }
 
     #[test]

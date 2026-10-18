@@ -394,6 +394,9 @@ impl Session {
             former: None,
             tractor: None,
             ion: Ion::default(),
+            // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
+            // its class's `PodCount` (@0x3ca48).
+            pods_left: kind.hull.pod_count,
         }
     }
 
@@ -708,6 +711,20 @@ mod tests {
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
         assert_eq!(hulk(&session).ion, Ion::default());
+    }
+
+    #[test]
+    fn the_players_hulk_carries_its_classs_crew_pods() {
+        let mut catalog = ejecting(100);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.pod_count = 3;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert_eq!(hulk(&session).pods_left, 3);
     }
 
     #[test]

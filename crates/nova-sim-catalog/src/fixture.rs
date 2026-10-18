@@ -254,6 +254,7 @@ pub fn hull(id: i16) -> HullRecord {
         flags: 0,
         flags2: 0,
         death_delay: 0,
+        pod_count: 0,
         explode1: -1,
         explode2: -1,
         mass: 0,

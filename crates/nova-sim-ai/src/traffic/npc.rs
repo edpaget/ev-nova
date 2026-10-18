@@ -370,6 +370,13 @@ pub struct Npc {
     /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
     /// ship-handling-fidelity phase 11 lowers it. Never saved.
     pub ion: Ion,
+    /// The crew pods it has left to eject as it dies (the original's
+    /// +0xc908): its class's `PodCount` as it spawns, launches or is left
+    /// as the player's hulk, as `_RandomShipSpawn`,
+    /// `_GenericRandomShipSpawn`, `_MissionDudeSpawn` and `_LaunchFighter`
+    /// set it (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe), one fewer for each
+    /// pod it ejects (see `nova_sim::npc_escape`). Never saved.
+    pub pods_left: u16,
 }
 
 /// The commodities 0-5 the original's ship records count.

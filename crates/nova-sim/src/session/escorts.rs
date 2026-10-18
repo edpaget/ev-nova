@@ -274,6 +274,10 @@ impl Session {
             former: None,
             tractor: None,
             ion: Ion::default(),
+            // A hired escort's slot keeps the `PodCount` its first spawn
+            // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
+            // `_RespawnEscort` leaves +0xc908 alone.
+            pods_left: kind.hull.pod_count,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

@@ -845,6 +845,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         flags: 0,
         flags2: 0,
         death_delay: 0,
+        pod_count: 0,
         explode1: -1,
         explode2: -1,
         mass: 0,

@@ -60,5 +60,6 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         former: None,
         tractor: None,
         ion: Ion::default(),
+        pods_left: 0,
     }
 }

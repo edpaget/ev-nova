@@ -494,6 +494,8 @@ fn fighter(
         former: None,
         tractor: None,
         ion: Ion::default(),
+        // `_LaunchFighter` @0x3d8fe.
+        pods_left: kind.hull.pod_count,
     }
 }
 
@@ -1497,6 +1499,23 @@ mod tests {
             from.velocity,
             "at or past its own top speed: no gain"
         );
+    }
+
+    #[test]
+    fn a_fighter_launched_carries_its_classs_crew_pods() {
+        let mut catalog = carrying();
+        catalog.hulls[1].pod_count = 2;
+        let (mut session, raider, _) = raided(&catalog);
+        let sortie = Sortie {
+            carrier: ShipRef::Npc(raider),
+            bay: BAY,
+            ship: VIPER,
+            from: ShipState::default(),
+            heading: 0.0,
+            target: None,
+        };
+        assert!(session.launch_fighter(&sortie));
+        assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
     }
 
     #[test]
