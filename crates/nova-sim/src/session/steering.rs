@@ -381,6 +381,26 @@ mod tests {
     }
 
     #[test]
+    fn reverse_under_0_05_leaves_the_face_keys_aim_and_the_turn_keys_held_off() {
+        let catalog = pegasus();
+        let mut session = flying(&catalog, 0.0);
+        target_at(&mut session, Vec2::new(500.0, 0.0));
+        session.aim = 45;
+        session.player.velocity = Vec2::new(0.049, -0.049);
+        session.tick(Controls {
+            reverse: true,
+            face: Face::Target,
+            turn: Turn::Left,
+            ..Controls::default()
+        });
+        assert_eq!(session.aim, 90, "the target's bearing, not cleared");
+        assert_eq!(
+            session.player.heading, 2.0,
+            "toward the target, the keys held off"
+        );
+    }
+
+    #[test]
     fn in_a_jump_the_face_key_and_reverse_are_ignored() {
         let catalog = pegasus();
         let mut session = flying(&catalog, 0.0);
