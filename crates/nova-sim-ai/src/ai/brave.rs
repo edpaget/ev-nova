@@ -3,7 +3,10 @@
 //! once provoked it attacks its attacker while it is within
 //! [`STAND_AND_FIGHT`] pixels on both axes (@0x8b616), and flees from it
 //! beyond, or when the chase is hopeless; with the attacker gone it
-//! decides again.
+//! decides again. A stand-off ship (`shïp` `Flags2` 0x0002) never asks
+//! whether the chase is hopeless: `_HighLevelAIHandler` tests the bit
+//! first and jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its
+//! band instead (see [`stand_off`](super::stand_off)).
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::hopeless_chase;
@@ -36,7 +39,7 @@ impl Behaviour for BraveTrader {
             let off = state.position - npc.state.position;
             off.x.abs() <= STAND_AND_FIGHT && off.y.abs() <= STAND_AND_FIGHT
         });
-        if near && !hopeless_chase(npc, attacker, around) {
+        if near && (npc.hull.stands_off || !hopeless_chase(npc, attacker, around)) {
             Goal::Attack(attacker)
         } else {
             Goal::Flee(attacker)
@@ -118,6 +121,19 @@ mod tests {
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = Vec2::new(0.0, -1.0);
         assert_eq!(decided(&npcs), Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn a_stand_off_brave_trader_never_asks_whether_a_chase_is_hopeless() {
+        let mut npcs = provoked(0.0, -300.0);
+        npcs[0].hull.mass = 100.0;
+        npcs[0].hull.stands_off = true;
+        npcs[1].goal = Goal::Flee(n(1));
+        npcs[1].state.velocity = Vec2::new(0.0, -1.0);
+        assert_eq!(decided(&npcs), Goal::Attack(n(2)));
+        let mut far = provoked(1251.0, 0.0);
+        far[0].hull.stands_off = true;
+        assert_eq!(decided(&far), Goal::Flee(n(2)), "still flees beyond 1250");
     }
 
     #[test]

@@ -54,6 +54,22 @@
 //!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
 //!   towards it. Within the carrier's reach on both axes it docks, and
 //!   leaves the system ([`Outcome::Docked`]).
+//! - [`Goal::Attack`] and [`Goal::Snipe`]: it flies the manoeuvre
+//!   [`fire::manoeuvre`] gives, reading whether its target is disabled.
+//!   Approaching, it faces the heading it wants to fire along
+//!   and thrusts within [`APPROACH_THRUST`] turns of it; dogfighting,
+//!   within a turn and [`DOGFIGHT_THRUST`]; sniping, it brakes to a stop,
+//!   then turns to that heading without thrusting; backing away, a
+//!   stand-off ship inside the dogfight box flees close (sub 5,
+//!   below), never running out to jump (see
+//!   [`stand_off`](crate::ai::stand_off)).
+//! - [`Goal::Flee`]: within [`FLEE_CLOSE`] of its attacker on both axes it
+//!   flees close: it turns straight away, thrusting within a turn and
+//!   [`FLEE_THRUST`] of that heading (`_LowLevelAIHandler` sub 5,
+//!   @0x85c62-0x85d72, which heads along `_CalcInterceptAngle` from the
+//!   attacker to itself; here the plain away bearing). Farther off it runs
+//!   out from the centre and jumps once past its jump distance with the
+//!   fuel.
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, under its top speed's cap.
@@ -234,7 +250,9 @@ impl TopSpeeds {
 /// Flies `npc` one tick towards its goal, among `sites`, the gates among
 /// them as wide as `type_widths` says ([`gate_entry::gate_reach`]), the
 /// ship its goal is about (the lead it follows, the ship it fights or
-/// inspects) at `other`, when it is there, at its top speed
+/// inspects) at `other`, when it is there, disabled as `other_disabled`
+/// says (a stand-off ship's band halves against a disabled target, see
+/// [`stand_off`](crate::ai::stand_off)), at its top speed
 /// `speeds.own`, its burst out of a gate or glide in capped at
 /// [`TopSpeeds::burst_cap`], the wait a leaderless ship takes after it
 /// rolled on `chance`.
@@ -243,6 +261,7 @@ pub fn fly(
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
+    other_disabled: bool,
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
@@ -275,28 +294,15 @@ pub fn fly(
             Some(other) => follow(&state, &handling, other),
             None => brake(&state, &handling),
         },
-        Goal::Attack(_) => match other {
-            Some(target) => attack(npc, target, &handling),
+        Goal::Attack(_) | Goal::Snipe(_) => match other {
+            Some(target) => fight(npc, target, other_disabled, &handling),
             None => brake(&state, &handling),
-        },
-        Goal::Snipe(_) => match other {
-            Some(target) if state.velocity.length() <= AT_REST_SPEED => Controls {
-                turn: steer(state.heading, fire::wanted_heading(npc, target), &handling),
-                ..Controls::default()
-            },
-            _ => brake(&state, &handling),
         },
         Goal::Flee(_) => match other {
             Some(attacker) => {
                 let off = state.position - attacker.position;
                 if off.x.abs() <= FLEE_CLOSE && off.y.abs() <= FLEE_CLOSE {
-                    let away = heading_of(off);
-                    Controls {
-                        thrust: shortest_turn(state.heading, away).abs()
-                            <= handling.turn_rate + FLEE_THRUST,
-                        turn: steer(state.heading, away, &handling),
-                        reverse: false,
-                    }
+                    flee_close(&state, attacker, &handling)
                 } else {
                     let out = state.position.length();
                     if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
@@ -476,16 +482,61 @@ fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
     }
 }
 
-/// Attacks a target at `target`: faces the heading it wants to fire along
-/// ([`fire::wanted_heading`]), thrusting within [`APPROACH_THRUST`] turns
-/// of it approaching from beyond the dogfight box, and within a turn and
-/// [`DOGFIGHT_THRUST`] dogfighting inside it.
-fn attack(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
+/// Fights a target at `target`, disabled as `disabled` says, attacking or
+/// sniping, as its manoeuvre says ([`fire::manoeuvre`]): approaching, it
+/// faces the heading it wants to fire along ([`fire::wanted_heading`]),
+/// thrusting within [`APPROACH_THRUST`] turns of it; dogfighting, within a
+/// turn and [`DOGFIGHT_THRUST`]; sniping, it brakes to a stop, then turns
+/// to that heading without thrusting; backing away (a stand-off ship
+/// inside the dogfight box), it flees close ([`flee_close`]).
+fn fight(npc: &Npc, target: &ShipState, disabled: bool, handling: &Handling) -> Controls {
+    match fire::manoeuvre(npc, target, disabled) {
+        Some(fire::Manoeuvre::Snipe) => snipe(npc, target, handling),
+        Some(fire::Manoeuvre::Flee) => flee_close(&npc.state, target, handling),
+        Some(fire::Manoeuvre::Dogfight) => {
+            attack(npc, target, handling.turn_rate + DOGFIGHT_THRUST, handling)
+        }
+        Some(fire::Manoeuvre::Approach) | None => {
+            attack(npc, target, APPROACH_THRUST * handling.turn_rate, handling)
+        }
+    }
+}
+
+/// Snipes at a target at `target`: brakes until at rest, then turns to the
+/// heading it wants to fire along, without thrusting.
+fn snipe(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
+    if npc.state.velocity.length() <= AT_REST_SPEED {
+        Controls {
+            turn: steer(
+                npc.state.heading,
+                fire::wanted_heading(npc, target),
+                handling,
+            ),
+            ..Controls::default()
+        }
+    } else {
+        brake(&npc.state, handling)
+    }
+}
+
+/// Flees close from a ship at `from` (`_LowLevelAIHandler` sub 5,
+/// @0x85c62-0x85d72): turns straight away from it, thrusting within a
+/// turn and [`FLEE_THRUST`] of that heading. The original heads along
+/// `_CalcInterceptAngle` from the other ship to itself (@0x85ceb); here
+/// the plain away bearing.
+fn flee_close(state: &ShipState, from: &ShipState, handling: &Handling) -> Controls {
+    let away = heading_of(state.position - from.position);
+    Controls {
+        thrust: shortest_turn(state.heading, away).abs() <= handling.turn_rate + FLEE_THRUST,
+        turn: steer(state.heading, away, handling),
+        reverse: false,
+    }
+}
+
+/// Faces the heading `npc` wants to fire along at a target at `target`,
+/// thrusting within `window` degrees of it.
+fn attack(npc: &Npc, target: &ShipState, window: f32, handling: &Handling) -> Controls {
     let wanted = fire::wanted_heading(npc, target);
-    let window = match fire::manoeuvre(npc.goal, &npc.state, target) {
-        Some(fire::Manoeuvre::Dogfight) => handling.turn_rate + DOGFIGHT_THRUST,
-        _ => APPROACH_THRUST * handling.turn_rate,
-    };
     Controls {
         thrust: shortest_turn(npc.state.heading, wanted).abs() <= window,
         turn: steer(npc.state.heading, wanted, handling),
@@ -867,6 +918,7 @@ mod tests {
             sites,
             &BTreeMap::new(),
             other,
+            false,
             speeds,
             &mut Draws::of(&[]),
         )
@@ -1562,6 +1614,7 @@ mod tests {
                 &[],
                 &BTreeMap::new(),
                 Some(&player),
+                false,
                 top,
                 &mut draws,
             );
@@ -1717,9 +1770,25 @@ mod tests {
             primary: true,
             ..Trigger::default()
         };
-        super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
+        super::fly(
+            &mut ship,
+            &sites,
+            &BTreeMap::new(),
+            None,
+            false,
+            speeds,
+            draws,
+        );
         while let Mode::LeavingGate { .. } = ship.mode {
-            super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
+            super::fly(
+                &mut ship,
+                &sites,
+                &BTreeMap::new(),
+                None,
+                false,
+                speeds,
+                draws,
+            );
         }
         ship
     }
@@ -1749,6 +1818,7 @@ mod tests {
                         &sites,
                         &BTreeMap::new(),
                         None,
+                        false,
                         speeds,
                         &mut draws
                     ),
@@ -1770,6 +1840,7 @@ mod tests {
                 &sites,
                 &BTreeMap::new(),
                 None,
+                false,
                 speeds,
                 &mut draws,
             );
@@ -1810,14 +1881,30 @@ mod tests {
             let mut ship = jumping_in(AVERAGE);
             let mut draws = Draws::of(&[draw]);
             while let Mode::JumpingIn { .. } = ship.mode {
-                super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
+                super::fly(
+                    &mut ship,
+                    &[],
+                    &BTreeMap::new(),
+                    None,
+                    false,
+                    speeds,
+                    &mut draws,
+                );
             }
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: wait });
             assert_eq!(draws.asked, [30]);
             let along = flight::facing(180.0) * glide_speed(37);
             assert!((ship.state.velocity - along).length() < 1e-4);
             let before = ship.state;
-            super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
+            super::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                None,
+                false,
+                speeds,
+                &mut draws,
+            );
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
             assert_eq!(ship.state.position, before.position + before.velocity);
         }
@@ -1880,7 +1967,7 @@ mod tests {
         widths: &BTreeMap<StellarId, TypeWidth>,
     ) -> Outcome {
         let speeds = TopSpeeds::own_of(npc);
-        super::fly(npc, sites, widths, None, speeds, &mut Draws::of(&[]))
+        super::fly(npc, sites, widths, None, false, speeds, &mut Draws::of(&[]))
     }
 
     #[test]
@@ -2569,6 +2656,134 @@ mod tests {
             assert_eq!(fly(&mut dry, &[], Some(&attacker)), Outcome::Flying);
         }
         assert!(dry.state.position.y < -1100.0, "runs on: {:?}", dry.state);
+    }
+
+    /// A ship at rest at the centre facing `heading`, 3 degrees a tick,
+    /// with `goal`, its hull standing off, carrying a beam 1000 long: a
+    /// band of 850, and of 425 against a disabled target.
+    fn stand_off(goal: Goal, heading: f32) -> Npc {
+        use crate::catalog::WeaponRecord;
+        use crate::combat::armament::Armament;
+        use crate::combat::weapon::WeaponSpec;
+        let mut ship = fighter(goal, heading);
+        ship.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..nova_sim_catalog::fixture::weapon(128)
+            }),
+            1,
+        )]);
+        ship.hull.stands_off = true;
+        ship
+    }
+
+    /// Flies `npc` a tick at a target at `other`, disabled as `disabled`
+    /// says.
+    fn fly_at_quarry(npc: &mut Npc, other: &ShipState, disabled: bool) -> Outcome {
+        let speeds = TopSpeeds::own_of(npc);
+        super::fly(
+            npc,
+            &[],
+            &BTreeMap::new(),
+            Some(other),
+            disabled,
+            speeds,
+            &mut Draws::of(&[]),
+        )
+    }
+
+    /// Whether `ship` thrusts this tick at a target at `other`, disabled
+    /// as `disabled` says, and which way it turns.
+    fn thrust_turn(ship: &Npc, other: &ShipState, disabled: bool) -> (bool, Turn) {
+        let mut flown = ship.clone();
+        let before = flown.state;
+        fly_at_quarry(&mut flown, other, disabled);
+        let turned = shortest_turn(before.heading, flown.state.heading);
+        let turn = if turned > 0.0 {
+            Turn::Right
+        } else if turned < 0.0 {
+            Turn::Left
+        } else {
+            Turn::None
+        };
+        (flown.state.velocity != before.velocity, turn)
+    }
+
+    #[test]
+    fn a_stand_off_attacker_beyond_its_band_approaches() {
+        // 3 degrees a tick: thrust within 12 of the target 1000 above.
+        let target = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let ship = stand_off(Goal::Attack(FOE), 12.0);
+        assert_eq!(thrust_turn(&ship, &target, false), (true, Turn::Left));
+        let ship = stand_off(Goal::Attack(FOE), 12.1);
+        assert_eq!(thrust_turn(&ship, &target, false), (false, Turn::Left));
+    }
+
+    #[test]
+    fn a_stand_off_attacker_within_its_band_brakes_then_faces_its_target() {
+        let target = at(-600.0, 0.0, 0.0, 0.0, 0.0);
+        let mut moving = stand_off(Goal::Attack(FOE), 0.0);
+        moving.state.velocity = Vec2::new(0.0, -3.0);
+        for _ in 0..200 {
+            fly_at_quarry(&mut moving, &target, false);
+        }
+        assert!(moving.state.velocity.length() <= crate::flight::AT_REST_SPEED);
+        let bearing = crate::combat::aim::bearing(moving.state.position, target.position);
+        assert!(
+            shortest_turn(moving.state.heading, bearing).abs() < 3.0,
+            "{:?}",
+            moving.state
+        );
+        let still = stand_off(Goal::Attack(FOE), 0.0);
+        assert_eq!(thrust_turn(&still, &target, false), (false, Turn::Left));
+    }
+
+    #[test]
+    fn a_stand_off_attacker_inside_165_turns_away_and_thrusts() {
+        // The target 165 below: away is up, 0; thrust within 3 + 20.
+        let target = at(0.0, 165.0, 0.0, 0.0, 0.0);
+        let ship = stand_off(Goal::Attack(FOE), 23.0);
+        assert_eq!(thrust_turn(&ship, &target, false), (true, Turn::Left));
+        let ship = stand_off(Goal::Attack(FOE), 23.1);
+        assert_eq!(thrust_turn(&ship, &target, false), (false, Turn::Left));
+        let ship = stand_off(Goal::Attack(FOE), 0.0);
+        assert_eq!(
+            thrust_turn(&ship, &target, false),
+            (true, Turn::None),
+            "facing away already"
+        );
+    }
+
+    #[test]
+    fn a_stand_off_attacker_keeps_approaching_a_disabled_target_inside_its_full_band() {
+        // 600 above: within 850, beyond 425.
+        let target = at(0.0, -600.0, 0.0, 0.0, 0.0);
+        let ship = stand_off(Goal::Attack(FOE), 0.0);
+        assert_eq!(thrust_turn(&ship, &target, true), (true, Turn::None));
+        assert_eq!(thrust_turn(&ship, &target, false), (false, Turn::None));
+    }
+
+    #[test]
+    fn a_stand_off_sniper_flies_its_band_too() {
+        let far = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let ship = stand_off(Goal::Snipe(FOE), 0.0);
+        assert_eq!(thrust_turn(&ship, &far, false), (true, Turn::None));
+        let close = at(0.0, 100.0, 0.0, 0.0, 0.0);
+        assert_eq!(thrust_turn(&ship, &close, false), (true, Turn::None));
+        let within = at(0.0, -600.0, 0.0, 0.0, 0.0);
+        assert_eq!(thrust_turn(&ship, &within, false), (false, Turn::None));
+    }
+
+    #[test]
+    fn an_attacker_that_does_not_stand_off_closes_on_a_target_inside_the_band() {
+        let mut ship = stand_off(Goal::Attack(FOE), 0.0);
+        ship.hull.stands_off = false;
+        let within = at(0.0, -600.0, 0.0, 0.0, 0.0);
+        assert_eq!(thrust_turn(&ship, &within, false), (true, Turn::None));
+        // Below and to the right, it turns to it rather than away.
+        let close = at(10.0, 100.0, 0.0, 0.0, 0.0);
+        assert_eq!(thrust_turn(&ship, &close, false).1, Turn::Right);
     }
 
     #[test]

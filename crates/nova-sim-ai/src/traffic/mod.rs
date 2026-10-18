@@ -912,6 +912,12 @@ impl Traffic {
         chance: &mut (impl Chance + ?Sized),
     ) -> Vec<Outcome> {
         let speeds = self.top_speeds(world);
+        let disabled: BTreeSet<NpcId> = self
+            .npcs
+            .iter()
+            .filter(|npc| npc.condition == Condition::Disabled)
+            .map(|npc| npc.id)
+            .collect();
         self.npcs
             .iter_mut()
             .zip(speeds)
@@ -922,6 +928,12 @@ impl Traffic {
                     Goal::Dock(carrier) => Some(carrier),
                     goal => goal.quarry().or(goal.inspecting()),
                 };
+                let other_disabled = other.is_some_and(|ship| match ship {
+                    ShipRef::Player => world
+                        .player
+                        .is_some_and(|player| player.condition == Condition::Disabled),
+                    ShipRef::Npc(id) => disabled.contains(&id),
+                });
                 let other = other.and_then(|ship| match ship {
                     ShipRef::Player => player,
                     ShipRef::Npc(id) => states
@@ -937,6 +949,7 @@ impl Traffic {
                     world.sites,
                     world.type_widths,
                     other.as_ref(),
+                    other_disabled,
                     speeds,
                     &mut *chance,
                 )
@@ -3211,6 +3224,58 @@ mod tests {
             "turning to fly at the player: {:?}",
             returning.state
         );
+    }
+
+    /// Whether a stand-off ship (a beam 1000 long: a band of 850, 425
+    /// against a disabled target), at rest and facing its target 600
+    /// above, moves in a tick of attacking it: NPC 1 or, with `player`,
+    /// the player, each of `condition`.
+    fn stand_off_closes(player: bool, condition: Condition) -> bool {
+        use crate::catalog::WeaponRecord;
+        use crate::combat::armament::Armament;
+        use crate::combat::weapon::WeaponSpec;
+        let mut traffic = populated(2, 1);
+        let target = traffic.npcs[1].id;
+        let shooter = &mut traffic.npcs[0];
+        shooter.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..nova_sim_catalog::fixture::weapon(128)
+            }),
+            1,
+        )]);
+        shooter.hull.stands_off = true;
+        shooter.state = ShipState::default();
+        shooter.goal = Goal::Attack(if player {
+            ShipRef::Player
+        } else {
+            ShipRef::Npc(target)
+        });
+        let quarry = &mut traffic.npcs[1];
+        quarry.state = ShipState {
+            position: Vec2::new(0.0, -600.0),
+            ..ShipState::default()
+        };
+        quarry.goal = Goal::Hold;
+        quarry.condition = if player { Condition::Intact } else { condition };
+        let world = World {
+            player: Some(PlayerSide {
+                condition: if player { condition } else { Condition::Intact },
+                ..player_at(0.0, -600.0)
+            }),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        traffic.npcs()[0].state.velocity != Vec2::ZERO
+    }
+
+    #[test]
+    fn a_stand_off_ship_flies_its_band_halved_against_a_disabled_target() {
+        assert!(!stand_off_closes(false, Condition::Intact), "an NPC");
+        assert!(stand_off_closes(false, Condition::Disabled), "an NPC");
+        assert!(!stand_off_closes(true, Condition::Intact), "the player");
+        assert!(stand_off_closes(true, Condition::Disabled), "the player");
     }
 
     #[test]

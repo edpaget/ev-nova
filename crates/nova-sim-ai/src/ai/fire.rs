@@ -44,9 +44,14 @@
 //!   ship is not disabled, @0x85240). A captured ship's pick is cleared
 //!   (`_DoShipCapture` @0x41207).
 //!
-//! - **Its manoeuvre** ([`Manoeuvre`]): attacking, it approaches outside
-//!   [`DOGFIGHT_BOX`] on either axis and dogfights within it; it snipes;
-//!   or it flees.
+//! - **Its manoeuvre** ([`Manoeuvre`], [`manoeuvre`]): attacking, it
+//!   approaches outside [`DOGFIGHT_BOX`] on either axis and dogfights
+//!   within it; it snipes; or it flees. A stand-off ship (`shïp` `Flags2`
+//!   0x0002) attacking or sniping keeps its band instead
+//!   ([`stand_off::keep`], `_HighLevelAIHandler` @0x8e48e-0x8e5ee and
+//!   @0x8e6b7-0x8e6c4): it approaches beyond it, snipes within it, and
+//!   backs away (fleeing, its turret pass alone) inside the box, its band
+//!   halved against a disabled target.
 //! - **The heading it wants** ([`wanted_heading`]): the lead angle for its
 //!   first forward gun's speed, or the plain bearing with none.
 //! - **A gun** (guidance -1, 0 and 6; a homing weapon only while no other
@@ -132,7 +137,7 @@
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
-use crate::ai::{Goal, Surroundings};
+use crate::ai::{Goal, Surroundings, stand_off};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{
@@ -141,6 +146,7 @@ use crate::combat::aim::{
 #[cfg(doc)]
 use crate::combat::armament::Armament;
 use crate::combat::armament::{GUN_RANGE_MARGIN, Mount, Shooter, Trigger};
+use crate::combat::hull::Condition;
 use crate::combat::projectile::Target;
 use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
@@ -200,21 +206,26 @@ pub enum Manoeuvre {
     Flee,
 }
 
-/// How a ship at `from` flies `goal` at a ship at `at`: none for a goal
-/// that is no fight.
+/// How `npc` flies its goal at a ship at `at`, disabled as `at_disabled`
+/// says: none for a goal that is no fight (see the module docs).
 #[must_use]
-pub fn manoeuvre(goal: Goal, from: &ShipState, at: &ShipState) -> Option<Manoeuvre> {
-    match goal {
-        Goal::Attack(_) => {
-            let off = at.position - from.position;
-            Some(
-                if off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX {
-                    Manoeuvre::Approach
-                } else {
-                    Manoeuvre::Dogfight
-                },
-            )
-        }
+pub fn manoeuvre(npc: &Npc, at: &ShipState, at_disabled: bool) -> Option<Manoeuvre> {
+    let off = at.position - npc.state.position;
+    // Attacking and sniping are both the original's state 4, which
+    // re-decides a stand-off ship's manoeuvre on every think.
+    if matches!(npc.goal, Goal::Attack(_) | Goal::Snipe(_))
+        && let Some(band) = stand_off::band(npc, at_disabled)
+    {
+        return Some(stand_off::keep(off, band));
+    }
+    match npc.goal {
+        Goal::Attack(_) => Some(
+            if off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX {
+                Manoeuvre::Approach
+            } else {
+                Manoeuvre::Dogfight
+            },
+        ),
         Goal::Snipe(_) => Some(Manoeuvre::Snipe),
         Goal::Flee(_) => Some(Manoeuvre::Flee),
         _ => None,
@@ -250,7 +261,7 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
         radius: 0.0,
         sprite_x: 0.0,
         sheet: true,
-        condition: crate::combat::hull::Condition::Intact,
+        condition: Condition::Intact,
         miss_class: crate::combat::hull::HEAVY_MISS_CLASS,
     };
     lead(&npc.state, &target, speed)
@@ -479,14 +490,23 @@ pub fn after_firing(npc: &mut Npc) {
 /// while facing within [`GUN_FACING`] turns of the heading it wants (7,
 /// @0x868d3-0x868f6).
 fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
-    let Some(at) = npc.goal.quarry().and_then(|ship| around.state_of(ship)) else {
+    let Some(ship) = npc.goal.quarry() else {
         return false;
     };
-    match manoeuvre(npc.goal, &npc.state, &at) {
+    let Some(at) = around.state_of(ship) else {
+        return false;
+    };
+    match manoeuvre(npc, &at, disabled(around, ship)) {
         None => false,
         Some(Manoeuvre::Approach) => facing(npc, &at, GUN_FACING),
         Some(_) => true,
     }
+}
+
+/// Whether `ship` is disabled, as `_IsDisabled` says of a stand-off
+/// ship's target (@0x8e4ca).
+fn disabled(around: &Surroundings, ship: ShipRef) -> bool {
+    around.condition_of(ship) == Some(Condition::Disabled)
 }
 
 /// Whether `npc` faces within `turns` of its turn rate of the heading it
@@ -656,7 +676,7 @@ fn sight<'a>(npc: &'a Npc, around: &Surroundings, rules: FireRules) -> Option<Si
             .map(|other| (other.stats.handling.turn_rate, other.hull.planet_type)),
     }
     .unwrap_or_default();
-    let manoeuvre = manoeuvre(npc.goal, &npc.state, &at)?;
+    let manoeuvre = manoeuvre(npc, &at, disabled(around, ship))?;
     Some(Sight {
         npc,
         at,
@@ -1352,7 +1372,13 @@ mod tests {
             ..ShipState::default()
         };
         let target = ShipRef::Npc(NpcId(2));
-        let of = |goal, x, y| manoeuvre(goal, &from, &at(x, y));
+        let of = |goal, x, y| {
+            let npc = Npc {
+                state: from,
+                ..shooter(&[], goal)
+            };
+            manoeuvre(&npc, &at(x, y), false)
+        };
         assert_eq!(
             of(Goal::Attack(target), 165.0, -165.0),
             Some(Manoeuvre::Dogfight)
@@ -1369,6 +1395,115 @@ mod tests {
         assert_eq!(of(Goal::Flee(target), 10.0, 0.0), Some(Manoeuvre::Flee));
         assert_eq!(of(Goal::Inspect(target), 10.0, 0.0), None);
         assert_eq!(of(Goal::Idle, 10.0, 0.0), None);
+    }
+
+    /// A ship at [`SHOOTER`] with `goal`, its hull standing off as
+    /// `stands_off` says, carrying a beam 1000 long: a band of 850, and of
+    /// 425 against a disabled target.
+    fn standing_off(goal: Goal, stands_off: bool) -> Npc {
+        let mut npc = shooter(
+            &[WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..weapon(128)
+            }],
+            goal,
+        );
+        npc.hull.stands_off = stands_off;
+        npc
+    }
+
+    /// How `npc` flies at a ship (`x`, `y`) from [`SHOOTER`], disabled as
+    /// `disabled` says.
+    fn flown(npc: &Npc, x: f32, y: f32, disabled: bool) -> Option<Manoeuvre> {
+        let at = ShipState {
+            position: SHOOTER + Vec2::new(x, y),
+            ..ShipState::default()
+        };
+        manoeuvre(npc, &at, disabled)
+    }
+
+    #[test]
+    fn a_stand_off_attacker_approaches_beyond_its_band_and_snipes_within_it() {
+        let npc = standing_off(ATTACK, true);
+        assert_eq!(flown(&npc, 850.1, 0.0, false), Some(Manoeuvre::Approach));
+        assert_eq!(flown(&npc, 0.0, -850.1, false), Some(Manoeuvre::Approach));
+        assert_eq!(flown(&npc, 850.0, -850.0, false), Some(Manoeuvre::Snipe));
+        assert_eq!(flown(&npc, 165.1, 0.0, false), Some(Manoeuvre::Snipe));
+    }
+
+    #[test]
+    fn a_stand_off_attacker_backs_away_inside_the_box() {
+        let npc = standing_off(ATTACK, true);
+        assert_eq!(flown(&npc, 165.0, -165.0, false), Some(Manoeuvre::Flee));
+        assert_eq!(flown(&npc, 10.0, 0.0, true), Some(Manoeuvre::Flee));
+    }
+
+    #[test]
+    fn a_stand_off_attackers_band_halves_against_a_disabled_target() {
+        let npc = standing_off(ATTACK, true);
+        assert_eq!(flown(&npc, 600.0, 0.0, false), Some(Manoeuvre::Snipe));
+        assert_eq!(flown(&npc, 600.0, 0.0, true), Some(Manoeuvre::Approach));
+        assert_eq!(flown(&npc, 425.0, 0.0, true), Some(Manoeuvre::Snipe));
+        assert_eq!(flown(&npc, 425.1, 0.0, true), Some(Manoeuvre::Approach));
+    }
+
+    #[test]
+    fn a_stand_off_sniper_keeps_its_band_too() {
+        let npc = standing_off(Goal::Snipe(ShipRef::Player), true);
+        assert_eq!(flown(&npc, 900.0, 0.0, false), Some(Manoeuvre::Approach));
+        assert_eq!(flown(&npc, 600.0, 0.0, false), Some(Manoeuvre::Snipe));
+        assert_eq!(flown(&npc, 100.0, 0.0, false), Some(Manoeuvre::Flee));
+    }
+
+    #[test]
+    fn a_stand_off_ship_flees_or_ignores_as_any_other() {
+        let flee = standing_off(Goal::Flee(ShipRef::Player), true);
+        assert_eq!(flown(&flee, 900.0, 0.0, false), Some(Manoeuvre::Flee));
+        let idle = standing_off(Goal::Idle, true);
+        assert_eq!(flown(&idle, 600.0, 0.0, false), None);
+    }
+
+    #[test]
+    fn a_ship_that_does_not_stand_off_ignores_the_band() {
+        let npc = standing_off(ATTACK, false);
+        assert_eq!(flown(&npc, 600.0, 0.0, false), Some(Manoeuvre::Approach));
+        assert_eq!(flown(&npc, 600.0, 0.0, true), Some(Manoeuvre::Approach));
+        assert_eq!(flown(&npc, 100.0, 0.0, false), Some(Manoeuvre::Dogfight));
+        let sniper = standing_off(Goal::Snipe(ShipRef::Player), false);
+        assert_eq!(flown(&sniper, 900.0, 0.0, false), Some(Manoeuvre::Snipe));
+        assert_eq!(flown(&sniper, 100.0, 0.0, false), Some(Manoeuvre::Snipe));
+    }
+
+    #[test]
+    fn a_stand_off_ship_backing_away_fires_its_turrets_but_not_its_guns() {
+        let mut turret = shooter(&[guided(128, 4)], ATTACK);
+        turret.hull.stands_off = true;
+        assert_eq!(fired(&turret, 0.0, -100.0, 50.0), id(128));
+        let mut gunner = shooter(&[gun(128, 1, 1)], ATTACK);
+        assert_eq!(fired(&gunner, 0.0, -100.0, 50.0), id(128), "dogfighting");
+        gunner.hull.stands_off = true;
+        assert_eq!(fired(&gunner, 0.0, -100.0, 50.0), None, "backing away");
+    }
+
+    #[test]
+    fn a_stand_off_ship_reads_its_targets_disablement() {
+        // A turret reaching 1000 gives a band of 850, 425 against a
+        // disabled target. 600 off to the side, it snipes at an intact
+        // target, running its turret pass; it approaches a disabled one,
+        // facing away, so runs none.
+        let mut npc = shooter(
+            &[WeaponRecord {
+                count: 100,
+                ..guided(128, 4)
+            }],
+            ATTACK,
+        );
+        npc.hull.stands_off = true;
+        let at =
+            |condition| trigger_at_npc(&npc, 600.0, 0.0, |other| other.condition = condition).only;
+        assert_eq!(at(Condition::Intact), id(128));
+        assert_eq!(at(Condition::Disabled), None);
     }
 
     #[test]

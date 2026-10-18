@@ -82,7 +82,10 @@
 //!   hull's `Flags2` 0x0080 rather than its government: short of
 //!   ammunition, it flees its target (see [`out_of_ammo`]).
 //! - **A hopeless chase** ([`hopeless_chase`]) stands off and snipes;
-//!   anything else is attacked.
+//!   anything else is attacked. A stand-off ship (`shïp` `Flags2`
+//!   0x0002) never asks: `_HighLevelAIHandler` tests the bit first and
+//!   jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its band
+//!   instead (see [`stand_off`](super::stand_off)).
 //! - **Fully dry** (@0x8c0e7-0x8c117), an attack or snipe is dropped: it
 //!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
 //! - With no target it goes about its business ([`idle`](super::idle)),
@@ -276,11 +279,12 @@ impl Hunt {
 /// What a hunter `npc`, judged by the goal it holds, does about
 /// `target`: it retreats from it as `retreat` says, the odds and shield
 /// retreats then the out-of-ammo one (@0x8bcd9-0x8bf35, then
-/// @0x8bf3e-0x8bf83), or snipes at it in a hopeless chase, or attacks it.
+/// @0x8bf3e-0x8bf83), or snipes at it in a hopeless chase (which a
+/// stand-off ship never asks, @0x8e48e), or attacks it.
 fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
     if retreats(npc, around, retreat) || (retreat.out_of_ammo && out_of_ammo::retreats(npc)) {
         Goal::Flee(target)
-    } else if hopeless_chase(npc, target, around) {
+    } else if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
         Goal::Snipe(target)
     } else {
         Goal::Attack(target)
@@ -703,6 +707,18 @@ mod tests {
         let mut trader_cop = hunter;
         trader_cop.govt = Some(TRADERS);
         assert_eq!(decided(&[trader_cop, quarry], 0), Goal::Snipe(n(2)));
+    }
+
+    #[test]
+    fn a_stand_off_hunter_never_asks_whether_a_chase_is_hopeless() {
+        let mut hunter = police();
+        hunter.hull.mass = 100.0;
+        hunter.hull.stands_off = true;
+        hunter.govt = Some(TRADERS);
+        let mut quarry = ship(2, PIRATES, AiType::WimpyTrader, 0.0, -300.0);
+        quarry.goal = Goal::Flee(n(1));
+        quarry.state.velocity = Vec2::new(0.0, -1.0);
+        assert_eq!(decided(&[hunter, quarry], 0), Goal::Attack(n(2)));
     }
 
     #[test]
