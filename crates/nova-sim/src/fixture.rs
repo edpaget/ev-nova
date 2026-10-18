@@ -8,7 +8,8 @@
 //! [`put_player_over`], for bringing the player over a ship to board it;
 //! [`cloak`], for setting a ship's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
-//! ship somewhere directly; and
+//! ship somewhere directly; [`sabotage_kill`], for setting off the
+//! player's kill outfit directly; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites.
 
@@ -83,6 +84,14 @@ pub fn place(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) {
         npc.state.position = at;
         npc.state.velocity = crate::geometry::Vec2::ZERO;
     }
+}
+
+/// Sets off a sabotage kill outfit on the player in `session` at once, as
+/// its sabotage clock does when it runs out: for a test that needs the
+/// player's jump given up and its ship breaking up without waiting on the
+/// clock.
+pub fn sabotage_kill(session: &mut Session) {
+    session.sabotage_kill();
 }
 
 /// A [`PilotStore`] in memory that records each write and delete. Clones

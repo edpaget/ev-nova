@@ -74,7 +74,7 @@ impl<
             } => Some(key),
             _ => None,
         };
-        let jumping = self.jump.is_some() || self.preparing_jump();
+        let jumping = self.jump_under_way();
         if jumping && press == Some(PLAYER_INFO_KEY) {
             return self.refuse_player_info();
         }
@@ -183,8 +183,9 @@ impl<
     /// whose steps stop there, before the frame is drawn. From then on the
     /// rest of the effect, the fade-in or the white flash, plays over the
     /// new system; that plays on with the map open too, as the original's
-    /// display fade does. The escort menu times out on every step the map
-    /// is shut.
+    /// display fade does. A jump the session gave up instead is settled at
+    /// the top of the next tick ([`FlightView::settle_given_up_jump`]). The
+    /// escort menu times out on every step the map is shut.
     ///
     /// Each step runs the session's tick, the traffic's, the assistance's
     /// and the fight's, then has the NPCs answer the fight's hits
@@ -205,6 +206,7 @@ impl<
                 self.fade_in = None;
             }
         }
+        self.settle_given_up_jump();
         if self.map_open {
             // The map's own frame: its borders' null events.
             self.map.tick(dt);

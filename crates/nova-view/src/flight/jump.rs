@@ -17,6 +17,20 @@
 //! 4. [`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]: the new system fades in
 //!    from white.
 //!
+//! # A jump given up
+//!
+//! A jump given up before it arrives (the session's jump collapsed under a
+//! disabled player, or cut by a sabotage kill outfit) ends the effect
+//! there ([`JumpEffect::given_up`]). `_HandlePlayer` @0x6840b-0x6841f
+//! calls `_FadeWhiteOut` on its first pass with +0x50 no longer above 0
+//! and `_hyperGamma` at 0 or more, which a given-up warp leaves as an
+//! arrival does: a screen lit fades back from white over [`FADE_IN_FOR`],
+//! as `CGDisplayFade` starts from solid white (blend 1.0) wherever the fade
+//! to white had got. An unlit one shows nothing: `_FadeWhiteIn` never
+//! acquired a fade reservation (@0x548c), so `_FadeWhiteOut`'s
+//! `CGDisplayFade` @0x550c runs on a token already released, or never
+//! issued, and does nothing.
+//!
 //! # Without the fades
 //!
 //! When the Hyperspace Effects preference is off ([`JumpEffect::warp`]'s
@@ -187,6 +201,19 @@ impl JumpEffect {
         }
     }
 
+    /// The jump is given up before the ship arrives: once lit, the screen
+    /// fades back from white ([`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]),
+    /// whatever the fade to white had reached; unlit, nothing more shows.
+    /// See "A jump given up" in the module docs.
+    #[must_use]
+    pub fn given_up(self) -> Option<Self> {
+        self.white.map(|_| Self {
+            fades: true,
+            white: None,
+            arrived: Some(Duration::ZERO),
+        })
+    }
+
     /// The ship arrives: the arrival's half plays from now, unless it is
     /// playing already.
     pub fn arrive(&mut self) {
@@ -323,6 +350,21 @@ mod tests {
         assert_eq!(unlit.phase(), JumpPhase::FadeIn(0.0), "white at arrival");
         unlit.light();
         assert_eq!(unlit.phase(), JumpPhase::FadeIn(0.0), "lit too late");
+    }
+
+    #[test]
+    fn a_jump_given_up_lit_fades_back_from_white_and_unlit_shows_nothing() {
+        for at in [Duration::ZERO, ms(300), ms(3000)] {
+            let mut effect = lit(at).given_up().expect("lit");
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.0), "{at:?}");
+            assert_eq!(effect.fade_alpha(), 255, "from white");
+            effect.advance(ms(750));
+            assert_eq!(effect.phase(), JumpPhase::FadeIn(0.5));
+            effect.advance(ms(750));
+            assert!(effect.done());
+        }
+        assert_eq!(JumpEffect::warp(true).given_up(), None);
+        assert_eq!(JumpEffect::warp(false).given_up(), None);
     }
 
     #[test]

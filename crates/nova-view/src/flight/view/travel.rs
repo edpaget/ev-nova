@@ -500,6 +500,7 @@ impl<
     /// nothing after it: its latch is set on every frame of the jump
     /// ([`FlightView::jump_frame`]).
     fn jump(&mut self) {
+        self.settle_given_up_jump();
         let Ok(session) = &mut self.session else {
             return;
         };
@@ -664,7 +665,28 @@ impl<
         }
     }
 
+    /// Settles the jump's effect once the session has given its jump up
+    /// before arrival (its warp collapsed under a disabled player, or cut
+    /// by a sabotage kill outfit): lit, the screen fades back from white;
+    /// unlit, the effect is dropped ([`JumpEffect::given_up`]).
+    ///
+    /// It runs at the top of a tick, before the keys, and before a jump
+    /// begins ([`FlightView::jump`]), as `_HandlePlayer` calls
+    /// `_FadeWhiteOut` at the top of its first pass with +0x50 no longer
+    /// above 0 (@0x6840b-0x6841f): the frame drawn after the cancelling
+    /// tick still shows the fade to white where it had got, as the
+    /// original's asynchronous `CGDisplayFade` runs on under it.
+    pub(super) fn settle_given_up_jump(&mut self) {
+        if self.jump.is_none() || self.jump_under_way() {
+            return;
+        }
+        if let Some(fade) = self.jump.take().and_then(JumpEffect::given_up) {
+            self.fade_in = Some(fade);
+        }
+    }
+
     /// Whether the ship is braking and turning before a jump.
+    #[cfg(test)]
     pub(super) fn preparing_jump(&self) -> bool {
         self.session
             .as_ref()

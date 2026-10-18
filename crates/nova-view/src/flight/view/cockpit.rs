@@ -456,14 +456,13 @@ impl<C> FlightView<C> {
         self.nav_keys_frame(nav_off, option, h);
     }
 
-    /// Whether a jump is under way, the pre-jump stage included: the
-    /// original's +0x50 > 0, which its key blocks test.
+    /// Whether the session has a jump under way, the pre-jump stage
+    /// included: the original's +0x50 > 0, which its key blocks test live.
+    /// A jump given up is over at once, whatever its effect still shows.
     pub(super) fn jump_under_way(&self) -> bool {
-        self.jump.is_some()
-            || self
-                .session
-                .as_ref()
-                .is_ok_and(|session| session.preparing_jump().is_some())
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.jumping().is_some() || session.preparing_jump().is_some())
     }
 
     /// One frame of Option-\` and the Nav Off / Hyperspace Mode block,
@@ -604,9 +603,8 @@ impl<C> FlightView<C> {
     /// frame, not once a pass: double time's second pass would only show
     /// it again at the same tick.
     pub(super) fn floating_frame(&mut self) {
+        let jumping = self.jump_under_way();
         let session = self.session.as_ref();
-        let jumping =
-            self.jump.is_some() || session.is_ok_and(|session| session.preparing_jump().is_some());
         let mode_3 =
             session.is_ok_and(|session| matches!(session.nav_mode(), NavMode::Hyperspace(_)));
         let h =

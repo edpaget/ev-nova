@@ -138,7 +138,7 @@ impl Session {
 
     /// A kill outfit goes off (`_HandlePlayer` @0x69384-0x696a2; see the
     /// module docs' **A kill outfit**).
-    fn sabotage_kill(&mut self) {
+    pub(crate) fn sabotage_kill(&mut self) {
         let reserves = &mut self.pilot.reserves;
         reserves.armor.now = -1.0;
         reserves.shield.now = -1.0;

@@ -729,6 +729,108 @@ fn the_fade_starts_on_the_tick_the_screen_is_lit_and_arrival_waits_for_the_sessi
     );
 }
 
+/// A flight warping to Alpha Centauri, its screen lit when `lit` and its
+/// fade to white under way, given up as `give_up` gives the session's
+/// jump up within a tick, then ticked once more.
+fn given_up(lit: bool, give_up: fn(&mut Session)) -> View {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    if lit {
+        tick_until_lit(&mut view);
+        ticks(&mut view, 2);
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeOut(_))
+        ));
+    } else {
+        assert!(view.session().expect("flying").hyper_gamma() <= 0.0);
+    }
+    let Ok(session) = &mut view.session else {
+        panic!("flying");
+    };
+    give_up(session);
+    view.tick(TICK);
+    let session = view.session().expect("flying");
+    assert_eq!(session.jumping(), None, "lit: {lit}");
+    assert_eq!(session.preparing_jump(), None, "lit: {lit}");
+    assert_eq!(session.system(), SystemId(130), "no arrival");
+    view.tick(TICK);
+    view
+}
+
+/// Disables the player: its jump collapses on the next step.
+fn disable_player(session: &mut Session) {
+    nova_sim::fixture::set_player_condition(session, Condition::Disabled);
+}
+
+/// A way to give the session's jump up, named.
+type GiveUp = (&'static str, fn(&mut Session));
+
+/// The ways a jump is given up before arrival: collapsed by a disable,
+/// and cut by a sabotage kill outfit.
+const GIVE_UPS: [GiveUp; 2] = [
+    ("collapsed", disable_player),
+    ("sabotaged", nova_sim::fixture::sabotage_kill),
+];
+
+#[test]
+fn a_jump_given_up_before_the_screen_is_lit_drops_its_effect() {
+    for (how, give_up) in GIVE_UPS {
+        let mut view = given_up(false, give_up);
+        assert_eq!(view.jump_effect(), None, "{how}");
+        assert_eq!(fade(&drawn(&view)), None, "{how}: nothing white");
+        view.tick(ms(3000));
+        assert_eq!(fade(&drawn(&view)), None, "{how}: nor later");
+    }
+}
+
+#[test]
+fn a_jump_given_up_once_the_screen_is_lit_fades_back_from_white() {
+    for (how, give_up) in GIVE_UPS {
+        let mut view = given_up(true, give_up);
+        assert!(
+            matches!(
+                view.jump_effect().map(JumpEffect::phase),
+                Some(JumpPhase::FadeIn(_))
+            ),
+            "{how}: {:?}",
+            view.jump_effect()
+        );
+        let (_, color) = fade(&drawn(&view)).expect("a fade");
+        assert!(color.a > 240, "{how}: from white, {color:?}");
+        view.tick(ms(750));
+        let (_, color) = fade(&drawn(&view)).expect("a fade");
+        assert!(color.a < 200, "{how}: falling back, {color:?}");
+        view.tick(FADE_IN_FOR);
+        assert_eq!(view.jump_effect(), None, "{how}");
+        assert_eq!(fade(&drawn(&view)), None, "{how}: the white gone");
+    }
+}
+
+#[test]
+fn a_player_whose_jump_collapsed_can_jump_again_once_intact() {
+    for lit in [false, true] {
+        let mut view = given_up(lit, disable_player);
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_condition(session, Condition::Intact);
+        view.take_sounds();
+        view.input(&key(PLAYER_INFO_KEY, true));
+        view.input(&key(PLAYER_INFO_KEY, false));
+        assert!(view.take_player_info_request(), "lit: {lit}: P is taken");
+        assert!(!view.take_sounds().contains(&REFUSED), "lit: {lit}");
+        tap(&mut view, JUMP);
+        let session = view.session().expect("flying");
+        assert!(
+            session.preparing_jump().is_some() || session.jumping().is_some(),
+            "lit: {lit}: jumping again"
+        );
+    }
+}
+
 #[test]
 fn hyperspace_effects_default_on() {
     let mut view = flight();
