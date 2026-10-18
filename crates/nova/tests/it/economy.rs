@@ -873,6 +873,7 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert_eq!(game.pilot().ship(), OLD);
@@ -1060,6 +1061,7 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     let restored = game.pilot();
     assert_eq!(restored, flown);

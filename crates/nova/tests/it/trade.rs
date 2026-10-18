@@ -563,6 +563,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game.land();
@@ -617,6 +618,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game.land();

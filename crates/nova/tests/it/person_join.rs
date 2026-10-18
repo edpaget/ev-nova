@@ -649,6 +649,7 @@ impl Game {
         game.click(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
+        game.click(crate::common::enter_ship_at(game.app.screen()));
         assert_eq!(game.showing(), showing);
         game.frame();
         game.frame();

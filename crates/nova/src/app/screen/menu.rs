@@ -3,14 +3,16 @@
 
 use std::rc::Rc;
 
-use nova_sim::{Pilot, pilot_key};
+use nova_sim::{OpenError, Pilot, pilot_key};
+#[cfg(doc)]
 use nova_view::flight::FlightView;
 use nova_view::menu::{Chosen, ChosenBy, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
-use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog};
+use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog, VERSION_NOTE};
 use nova_view::ui::{DescriptionSource, DialogResources};
 use nova_view::{Input, Key, Screen, ScreenAction, Sound, UiSound};
 
+use super::quit_question::Question;
 use super::{
     ABOUT_TEXT, AppScreen, Held, MENU, MENU_X_TEXT, MenuAction, MenuHold, QUIT_DELAY, Side,
     UNUSABLE_NAME,
@@ -34,8 +36,9 @@ impl AppScreen {
     /// Each key clicks ([`UiSound::ButtonKeyed`]) and its choice waits
     /// for the click to end ([`MenuHold`]): typed N, O and Q (the menu's
     /// own), and, with dialogs, A (the About text, @0x1ac70) and X
-    /// (`dësc` 32766, @0x1ac7e, munged as before any pilot). P is the
-    /// router's ([`preferences_key`](Self::preferences_key)).
+    /// (`dësc` 32766, @0x1ac7e, munged for the pilot held, or as before
+    /// any pilot). A's and X's repeats act as presses (see below). P is
+    /// the router's ([`preferences_key`](Self::preferences_key)).
     ///
     /// - O does nothing while the physical S or L key is held
     ///   (@0x1abd3-0x1abf5). No other code reads those two keys, so the
@@ -43,10 +46,9 @@ impl AppScreen {
     /// - Typed E with the physical E key held waits for its release
     ///   (@0x1ac32-0x1ac57) before it clicks; typed with the E key up
     ///   (another layout) it clicks at once. Then it is Enter Ship
-    ///   (`_MainScreenChoice(3)`), which this menu, never holding a
-    ///   loaded pilot, always refuses: [`UiSound::EnterRefused`]. Choice
-    ///   3's entering the game and its dying-pilot refusal are left out
-    ///   (rdm:task/main-screen-loaded-pilot).
+    ///   (`_MainScreenChoice(3)`, [`AppScreen::enter_ship`]): it flies the
+    ///   game held, or, with none or a dying pilot, refuses with
+    ///   [`UiSound::EnterRefused`].
     ///
     /// With Command held, the typed keys and A and X go to the
     /// original's menus and do nothing here.
@@ -54,12 +56,17 @@ impl AppScreen {
         if let Input::Key {
             key: key @ Key::Char('a' | 'x'),
             pressed,
-            repeat,
+            ..
         } = *input
             && self.dialogs.is_some()
             && !self.command_held
         {
-            if pressed && !repeat {
+            // A held key's repeats act as presses: `_MainScreenKey`
+            // reads the character alone, never the event's kind (@0x1abaf),
+            // so an autoKey that reaches it once the text's dialog has
+            // closed opens it again; the dialog itself drops those that
+            // reach it (`_TextDialogFilter` @0x51f86-0x51fe5).
+            if pressed {
                 self.click_then(if key == Key::Char('a') {
                     MenuAction::Choice(MenuChoice::About)
                 } else {
@@ -142,14 +149,10 @@ impl AppScreen {
     /// Runs a main-menu `action`, as `_MainScreenChoice` @0x1a72a does.
     pub(super) fn run_menu_action(&mut self, action: MenuAction) {
         match action {
-            MenuAction::Choice(MenuChoice::NewPilot) => self.open_new_pilot(),
+            MenuAction::Choice(MenuChoice::NewPilot) => self.new_pilot_chosen(),
             MenuAction::Choice(MenuChoice::OpenPilot) => self.open_pilot_list(),
             MenuAction::Choice(MenuChoice::Quit) => self.quit_in = Some(QUIT_DELAY),
-            // `_MainScreenChoice(3)` with no game in progress beeps
-            // `_beepSnd[3]` and redraws (@0x1aa89-0x1aac2).
-            MenuAction::Choice(MenuChoice::EnterShip) => {
-                self.sounds.push(Sound::Ui(UiSound::EnterRefused));
-            }
+            MenuAction::Choice(MenuChoice::EnterShip) => self.enter_ship(),
             MenuAction::Choice(MenuChoice::Preferences) => self.open_preferences(),
             MenuAction::Choice(MenuChoice::About) => self.open_text(ABOUT_TEXT),
             MenuAction::Text => self.open_text(MENU_X_TEXT),
@@ -192,9 +195,20 @@ impl AppScreen {
         self.click_then(MenuAction::Choice(MenuChoice::EnterShip));
     }
 
+    /// New Pilot, as `_MainScreenChoice(0)` runs it: with a game in
+    /// progress it asks `STR#` 140 #8 in the Yes/No dialog first, and only
+    /// Yes goes on (@0x1a74a-0x1a78f); without one, or with no Yes/No
+    /// dialog to ask in, the New Pilot dialog opens at once.
+    fn new_pilot_chosen(&mut self) {
+        if self.game.is_some() && self.ask(Question::NewPilot) {
+            return;
+        }
+        self.open_new_pilot();
+    }
+
     /// Opens the New Pilot dialog: the interface file's, or the built-in
     /// one without it (with a warning when the interface file has none).
-    fn open_new_pilot(&mut self) {
+    pub(super) fn open_new_pilot(&mut self) {
         let style = self.data.button_style();
         let built = self.dialogs.as_ref().map(|dialogs| {
             dialogs
@@ -240,10 +254,11 @@ impl AppScreen {
 
     /// The New Pilot dialog's input. A name already saved, or one no file
     /// can be saved under, is refused; any other creates the pilot with the
-    /// gender and Strict Play chosen and flies it, begins its game (the `chär`'s `OnStart`,
-    /// [`FlightView::begin`]) and saves it at once, with what that did (so
-    /// Open Pilot lists it before it lands), as `_DoNewPilot` runs
-    /// `OnStart` before the first save.
+    /// gender and Strict Play chosen, begins its game (the `chär`'s
+    /// `OnStart`, [`FlightView::begin`]), saves it at once, with what that
+    /// did (so Open Pilot lists it), as `_DoNewPilot` runs `OnStart`
+    /// before the first save, and holds it on the main menu, not flying,
+    /// in place of any game held ([`AppScreen::hold_new_pilot`]).
     pub(super) fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.new_pilot.as_mut().expect("open");
         dialog.input(input);
@@ -270,12 +285,9 @@ impl AppScreen {
                 match Pilot::new(self.data.as_ref(), &name) {
                     Ok(pilot) => {
                         self.close_new_pilot();
-                        self.start_flight(pilot.with_gender(gender).with_strict_play(strict_play));
-                        if let Some(flight) = &mut self.flight {
-                            flight.begin();
-                            flight.take_save_due();
-                        }
-                        self.save_pilot();
+                        let pilot = pilot.with_gender(gender).with_strict_play(strict_play);
+                        let flight = self.pilot_flight(pilot, false);
+                        self.hold_new_pilot(flight);
                     }
                     Err(error) => {
                         let why = error.to_string();
@@ -297,15 +309,32 @@ impl AppScreen {
         }
     }
 
-    /// The saved pilots' list's input: the pilot chosen is opened and
-    /// flown; one that cannot be opened says why in the list, and in a
-    /// warning. One whose load fell back ([`FlightView::load_repaired`])
-    /// has its flight built, faced and kept behind the note `STR#` 140 #52
-    /// over the main menu, as `_MainScreenChoice` shows it through
-    /// `_EVNoteAlert` over the main screen (@0x1a817-0x1a85b), so the note
-    /// is seen before any flight frame; flight shows once it is dismissed
-    /// ([`AppScreen::load_note_input`]). Without dialogs, or with no
-    /// note to build, the note is a warning and flight shows at once.
+    /// The saved pilots' list's input. The pilot chosen is opened as
+    /// `_MainScreenChoice(1)` opens it and held on the main menu, not
+    /// flying, in place of any game held: its ship faces a drawn heading
+    /// ([`FlightView::resume`]), its explored systems' nebulae are swept
+    /// as its session is built ([`nova_sim::Session::load`]), and its
+    /// active missions' auxiliary ships restart
+    /// ([`FlightView::open_on_main_screen`], @0x1a918-0x1a982). The engine
+    /// sweeps as it builds the session, before the note below, where the
+    /// original sweeps after it (@0x1a8d4, after @0x1a85b); nothing the
+    /// sweep changes shows on the main screen.
+    ///
+    /// One whose load fell back ([`FlightView::load_repaired`]) shows the
+    /// note `STR#` 140 #52 over the main menu, as `_MainScreenChoice`
+    /// shows it through `_EVNoteAlert` (@0x1a817-0x1a85b); without
+    /// dialogs, or with no note to build, the note is a warning.
+    ///
+    /// One that can't be opened closes the list, as the original's
+    /// Navigation panel is gone by then, and leaves the game held as it
+    /// was (`_MainScreenChoice` does nothing more on false,
+    /// @0x1a80f-0x1a811): a save of another version shows `STR#` 140 #34
+    /// in the note alert ([`VERSION_NOTE`], `_OpenPilotFile`'s -42,
+    /// @0x766c8-0x766ef), and any other failure shows nothing
+    /// (@0x766fb-0x76701); each is a warning too. The original resets the
+    /// held player before its load fails, which the engine's whole-file
+    /// load leaves out
+    /// (rdm:phase/main-screen-fidelity/phase-3-main-screen-left-outs).
     pub(super) fn open_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let list = self.open_pilot.as_mut().expect("open");
         list.input(input);
@@ -313,37 +342,33 @@ impl AppScreen {
             Some(PilotListOutcome::Cancel) => self.close_pilot_list(),
             Some(PilotListOutcome::Open(key)) => {
                 let opened = match self.keeper() {
-                    Some(keeper) => keeper.open(&key).map_err(|error| error.to_string()),
-                    None => Err(format!(
+                    Some(keeper) => keeper.open(&key),
+                    None => Err(OpenError::Unreadable(format!(
                         "nova: there is nowhere to open the pilot {key} from"
-                    )),
+                    ))),
                 };
+                self.close_pilot_list();
                 match opened {
                     Ok(pilot) => {
-                        self.close_pilot_list();
-                        self.build_flight(pilot, true);
+                        let mut flight = self.pilot_flight(pilot, true);
                         // The load's heading, before any frame is drawn.
-                        if let Some(flight) = &mut self.flight {
-                            flight.resume();
+                        flight.resume();
+                        flight.open_on_main_screen();
+                        let repaired = flight.load_repaired();
+                        self.hold_game(flight);
+                        // The original saves only on creation, landing
+                        // and rescue (`_SavePilotFile` @0x76876), never on
+                        // an open: a save its hooks make due is dropped.
+                        let _ = self.settle_game();
+                        if repaired {
+                            self.show_note(LOAD_FALLBACK_NOTE);
                         }
-                        if self.flight.as_ref().is_some_and(FlightView::load_repaired) {
-                            match self.load_note_dialog() {
-                                Some(note) => {
-                                    let menu = self.shown_mut();
-                                    menu.cancel_pointer();
-                                    menu.release_keys();
-                                    self.load_note = Some(note);
-                                    return ScreenAction::None;
-                                }
-                                None => self.warnings.push(LOAD_FALLBACK_NOTE.to_owned()),
-                            }
-                        }
-                        self.enter_built_flight();
                     }
-                    Err(error) => {
-                        self.open_pilot.as_mut().expect("open").show_error(&error);
-                        self.warnings.push(error);
+                    Err(OpenError::WrongVersion(warning)) => {
+                        self.warnings.push(warning);
+                        self.show_note(VERSION_NOTE);
                     }
+                    Err(OpenError::Unreadable(warning)) => self.warnings.push(warning),
                 }
             }
             None => {}
@@ -351,29 +376,43 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// The note `STR#` 140 #52 in the note alert (`DLOG` 3000), if the
-    /// router has dialogs and the alert can be built.
-    fn load_note_dialog(&self) -> Option<NoteDialog> {
+    /// Shows `text` in the note alert over the main menu, cancelling the
+    /// menu's pointer and letting go of its keys; without dialogs, or with
+    /// no note to build, `text` is a warning.
+    fn show_note(&mut self, text: &str) {
+        match self.note_dialog(text) {
+            Some(note) => {
+                let menu = self.shown_mut();
+                menu.cancel_pointer();
+                menu.release_keys();
+                self.load_note = Some(note);
+            }
+            None => self.warnings.push(text.to_owned()),
+        }
+    }
+
+    /// `text` in the note alert (`DLOG` 3000), if the router has dialogs
+    /// and the alert can be built.
+    fn note_dialog(&self, text: &str) -> Option<NoteDialog> {
         let dialogs = self.dialogs.as_ref()?;
         let template = dialogs.resources.dialog_template(NOTE_DIALOG).ok()?;
         Some(NoteDialog::new(
             &template,
-            LOAD_FALLBACK_NOTE,
+            text,
             self.data.button_style(),
             Rc::clone(&dialogs.metrics),
         ))
     }
 
-    /// The load's note's input, all of it: once OK is activated, the note
-    /// closes, keeping its sounds, and the flight built behind it shows.
+    /// The note's input, all of it: once OK is activated, the note
+    /// closes, keeping its sounds, back to the main menu.
     pub(super) fn load_note_input(&mut self, input: &Input) -> ScreenAction {
         let note = self.load_note.as_mut().expect("open");
         note.input(input);
-        if note.closed() {
-            if let Some(mut note) = self.load_note.take() {
-                self.sounds.extend(note.take_sounds());
-            }
-            self.enter_built_flight();
+        if note.closed()
+            && let Some(mut note) = self.load_note.take()
+        {
+            self.sounds.extend(note.take_sounds());
         }
         ScreenAction::None
     }

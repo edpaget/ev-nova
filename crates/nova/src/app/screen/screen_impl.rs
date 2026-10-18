@@ -54,12 +54,16 @@ impl Screen for AppScreen {
     /// With a main menu ([`AppScreen::with_pilots`]), the router opens on
     /// it. Its New Pilot opens the New Pilot dialog and Open Pilot the
     /// saved pilots' list over it; while either is open, every event goes
-    /// to it first, so typing a name never opens a dialog. Choosing a
-    /// pilot flies it; one whose load fell back first shows its note over
-    /// the menu, which takes every event until Return, Escape or OK
-    /// dismisses it and flight shows. Escape in flight goes back to the menu, saving
-    /// the pilot and putting it away. Escape on the menu does nothing; Quit quits
-    /// after [`QUIT_DELAY`](super::QUIT_DELAY) ([`Screen::take_quit`]), and its key first
+    /// to it first, so typing a name never opens a dialog. A pilot created
+    /// or opened is held on the menu, not flying; New Pilot over a pilot
+    /// held asks `STR#` 140 #8 first, and a note over the menu (`STR#` 140
+    /// #52 or #34) takes every event until Return, Escape or OK dismisses
+    /// it. Enter Ship (E after its click, or a click) flies the pilot held,
+    /// and refuses with snd 153 when none is held or it is dying. Escape
+    /// in flight goes back to the menu, by the engine's reading of
+    /// `escape_to_main_screen`, saving the pilot and holding it. Escape on
+    /// the menu does nothing; Quit quits after
+    /// [`QUIT_DELAY`](super::QUIT_DELAY) ([`Screen::take_quit`]), and its key first
     /// waits for its click, as every main-menu key does
     /// ([`Screen::keyed_click_ended`]): input meanwhile is held and
     /// replayed after, and input during the delay is dropped. I and P work
@@ -198,7 +202,7 @@ impl Screen for AppScreen {
             self.load_note.as_ref().map(|note| note as &dyn Screen),
             self.question
                 .as_ref()
-                .map(|question| question as &dyn Screen),
+                .map(|(_, question)| question as &dyn Screen),
             self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
             self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
@@ -328,7 +332,7 @@ impl Screen for AppScreen {
             self.load_note.as_mut().map(|note| note as &mut dyn Screen),
             self.question
                 .as_mut()
-                .map(|question| question as &mut dyn Screen),
+                .map(|(_, question)| question as &mut dyn Screen),
             self.about.as_mut().map(|about| about as &mut dyn Screen),
             self.preferences
                 .as_mut()
@@ -347,6 +351,7 @@ impl Screen for AppScreen {
                 .map(|dialogs| dialogs as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
             self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
+            self.game.as_mut().map(|game| game as &mut dyn Screen),
         ];
         for screen in open.into_iter().flatten() {
             sounds.extend(screen.take_sounds());
@@ -416,7 +421,9 @@ impl Screen for AppScreen {
 
     /// Puts the pilot flying away, in flight or in the spaceport, when it
     /// has a name: saves it, or deletes a strict pilot dying
-    /// ([`AppScreen::put_away_pilot`]).
+    /// ([`AppScreen::put_away_pilot`]). A game only held on the menu is
+    /// put away by nothing: the original saves nothing on a quit from the
+    /// main screen.
     fn quit(&mut self) {
         self.put_away_pilot();
     }
@@ -428,12 +435,12 @@ impl Screen for AppScreen {
         std::mem::take(&mut self.warnings)
     }
 
-    /// The flight's diagnostics, once flight has been entered.
+    /// The diagnostics of the flight shown and of the game held, so a
+    /// game's come out on the menu as it is built.
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        self.flight
-            .as_mut()
-            .map(Screen::take_diagnostics)
-            .unwrap_or_default()
+        self.flights_mut()
+            .flat_map(Screen::take_diagnostics)
+            .collect()
     }
 
     /// Widened while flight shows, with anything over it; classic on the
@@ -447,10 +454,11 @@ impl Screen for AppScreen {
         }
     }
 
-    /// Keeps `size` for every flight, and tells the one built.
+    /// Keeps `size` for every flight, and tells those built, shown or
+    /// held.
     fn set_widened_size(&mut self, size: (f32, f32)) {
         self.widened = size;
-        if let Some(flight) = &mut self.flight {
+        for flight in self.flights_mut() {
             flight.set_view_size(size);
         }
     }

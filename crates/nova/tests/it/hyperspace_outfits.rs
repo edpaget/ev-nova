@@ -512,6 +512,7 @@ impl Harness {
             game.type_key(code, Some(letter));
         }
         game.press(KeyCode::Enter);
+        game.click(crate::common::enter_ship_at(game.app.screen()));
         assert_eq!(game.showing(), Showing::Flight);
         game.frame();
         game

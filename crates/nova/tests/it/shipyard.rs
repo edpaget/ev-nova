@@ -693,6 +693,7 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert!((game.top_speed() - 3.0).abs() < 1e-6);
@@ -772,6 +773,7 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.pilot(), flown);
     assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
     assert!((game.top_speed() - 6.0).abs() < 1e-6);
@@ -797,6 +799,7 @@ fn info_on_a_class_whose_description_has_a_graphic_opens_the_picture_panel() {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     game.frame();
     game.land();
     game.open_shipyard();

@@ -517,6 +517,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
+    driver.click(crate::common::enter_ship_at(driver.app.screen()));
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
     let session = driver.flight().session().expect("flying");
     assert_eq!(session.landed(), None);
@@ -661,6 +662,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
+    driver.click(crate::common::enter_ship_at(driver.app.screen()));
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
     driver.press(Key::Char('l'));
     // Two redraws, at least a tick, for the dock approach to clear the
@@ -754,6 +756,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     driver.press(Key::Enter);
+    driver.click(crate::common::enter_ship_at(driver.app.screen()));
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
     driver.press(Key::Char('l'));
     // Two redraws, at least a tick, for the dock approach to clear the

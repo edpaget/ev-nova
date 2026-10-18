@@ -328,7 +328,11 @@ fn a_key_typed_during_the_return_reaches_the_main_screen_after_it() {
         "N's keyed click, once the fade ends"
     );
     screen.keyed_click_ended();
-    assert_eq!(screen.showing(), Showing::NewPilot);
+    assert_eq!(
+        screen.showing(),
+        Showing::Question,
+        "New Pilot asks #8 over the pilot held"
+    );
 }
 
 #[test]
@@ -391,7 +395,11 @@ fn by_the_other_reading_the_return_fades_over_a_menu_that_takes_input() {
         choose(&mut screen, MenuChoice::NewPilot),
         ScreenAction::None
     );
-    assert_eq!(screen.showing(), Showing::NewPilot, "the menu takes input");
+    assert_eq!(
+        screen.showing(),
+        Showing::Question,
+        "the menu takes input: New Pilot asks #8 over the pilot held"
+    );
 }
 
 #[test]

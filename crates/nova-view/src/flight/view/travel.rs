@@ -128,6 +128,14 @@ impl<
         self.session.as_ref().is_ok_and(Session::may_save)
     }
 
+    /// Whether the pilot is dying, as `_IsDying` (@0x253d) says: its ship
+    /// breaking up or destroyed, which [`FlightView::may_save`] answers.
+    /// Enter Ship refuses such a pilot. Never without a session.
+    #[must_use]
+    pub fn is_dying(&self) -> bool {
+        self.session.is_ok() && !self.may_save()
+    }
+
     /// Whether ending play now deletes the pilot, as
     /// [`Session::deletes_pilot_on_ending_play`] says: a strict-play pilot
     /// dying outside the escape pod. Never without a session.

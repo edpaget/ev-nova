@@ -400,12 +400,11 @@ fn command_n_o_and_q_on_the_main_menu_neither_click_nor_choose() {
 }
 
 #[test]
-fn the_main_menus_engine_keys_repeats_and_releases_are_silent() {
+fn the_main_menus_engine_keys_releases_are_silent() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     ui_sounds(&mut screen);
     for k in [Key::Char('p'), Key::Char('a'), Key::Char('x')] {
-        screen.input(&held(k));
         screen.input(&key(k, false));
         assert_eq!(screen.showing(), Showing::MainMenu, "{k:?}");
         assert_eq!(ui_sounds(&mut screen), [], "{k:?}");
@@ -518,14 +517,23 @@ fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
 }
 
 #[test]
-fn a_pilot_replaced_while_flying_hands_on_its_layers() {
+fn a_developers_flight_replaced_by_enter_ship_hands_on_its_layers() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
-    create(&mut screen, "Ada");
+    create_held(&mut screen, "Ada");
+    screen.input(&key(Key::Tab, true));
+    fly(&mut screen);
     lay_out(&mut screen, led_berth_1());
-    let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
-    screen.start_flight(bea);
-    assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    enter_ship(&mut screen);
+    assert_eq!(
+        pilot(&screen).name(),
+        "Ada",
+        "the developer's flight is gone"
+    );
+    assert_eq!(screen.slot_sprites, led_berth_1(), "its layers kept");
 }
 
 #[test]
@@ -579,8 +587,7 @@ fn an_opened_pilot_is_never_shown_the_tutorial() {
     create(&mut screen, "Ada");
     assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
     let mut screen = menu(&store);
-    choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Enter, true));
+    open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     for _ in 0..120 {
         screen.tick(FLIGHT_TICK);
@@ -605,8 +612,7 @@ fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
     let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared();
-    choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Enter, true));
+    open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(pilot(&screen).control_bit(bit_5));
 }
@@ -632,7 +638,7 @@ fn a_new_pilot_flies_and_is_saved_with_the_gender_chosen() {
     }
     type_text(&mut screen, "Ada");
     screen.input(&key(Key::Enter, true));
-    assert_eq!(screen.showing(), Showing::Flight);
+    enter_ship(&mut screen);
     assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Female);
     assert_eq!(saved(&store, "Ada").gender(), nova_sim::Gender::Female);
     let mut screen = menu(&store);
@@ -830,19 +836,25 @@ fn open_pilot_lists_the_saved_pilots_and_resumes_the_chosen_one_where_it_landed(
     assert_eq!(screen.pilot_list().expect("open").keys(), ["Ada"]);
     screen.take_sounds();
     screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.showing(), Showing::MainMenu, "held");
+    enter_ship(&mut screen);
+    assert_eq!(
+        screen.take_sounds(),
+        [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)],
+        "Enter Ship's click, and no landing sound"
+    );
     assert_eq!(screen.showing(), Showing::Flight, "in space, no spaceport");
     assert!(screen.spaceport.is_none());
     assert!(undocked(&screen));
     assert_eq!(ship(&screen).position, docked_at, "over its stellar");
     assert_eq!(*pilot(&screen), landed);
     assert!(screen.pilot_list().is_none());
-    assert_eq!(screen.take_sounds(), [], "no landing sound");
 }
 
 // The note on a load that fell back.
 
 /// Rewrites `key`'s save in `store` with `change` over its JSON.
-fn rewrite_save(
+pub(super) fn rewrite_save(
     store: &MemoryPilots,
     key: &str,
     change: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
@@ -870,15 +882,26 @@ fn save_unlisted_ada(store: &MemoryPilots) {
     });
 }
 
-/// Opens the first saved pilot from the main menu's list.
+/// Opens the first saved pilot from the main menu's list and enters play
+/// with it, once the menu holds it ([`open_held`], [`enter_ship`]).
 fn open_first(screen: &mut AppScreen) {
-    choose(screen, MenuChoice::OpenPilot);
-    assert_eq!(screen.showing(), Showing::OpenPilot);
-    screen.input(&key(Key::Enter, true));
+    open_held(screen);
+    if screen.showing() == Showing::MainMenu {
+        enter_ship(screen);
+    }
 }
 
 fn flown_system(screen: &AppScreen) -> nova_sim::SystemId {
     flight(screen).session().expect("flying").system()
+}
+
+fn held_system(screen: &AppScreen) -> nova_sim::SystemId {
+    screen
+        .game_in_progress()
+        .expect("held")
+        .session()
+        .expect("a session")
+        .system()
 }
 
 fn undocked(screen: &AppScreen) -> bool {
@@ -886,7 +909,7 @@ fn undocked(screen: &AppScreen) -> bool {
 }
 
 #[test]
-fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_then_flies() {
+fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_holding_it() {
     let store = MemoryPilots::new();
     save_unlisted_ada(&store);
     let mut screen = menu_with_dialogs(&store);
@@ -898,9 +921,8 @@ fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_th
         screen.load_note().map(NoteDialog::text),
         Some(LOAD_FALLBACK_NOTE)
     );
-    assert!(screen.flight_view().is_some(), "built behind the note");
-    assert_eq!(flown_system(&screen), nova_sim::SystemId(129));
-    assert!(undocked(&screen));
+    assert!(screen.flight_view().is_none(), "not flying");
+    assert_eq!(held_system(&screen), nova_sim::SystemId(129));
     let mut note = DrawList::new();
     screen.load_note().expect("open").draw(&mut note);
     let all = drawn(&screen);
@@ -910,14 +932,33 @@ fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_th
         "the note is drawn last, over the menu"
     );
     screen.input(&key(Key::Enter, true));
-    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(screen.showing(), Showing::MainMenu, "back to the menu");
     assert!(screen.load_note().is_none());
+    enter_ship(&mut screen);
     assert_eq!(flown_system(&screen), nova_sim::SystemId(129));
-    // Back on the menu and open again: the repaired save loads plainly.
+    assert!(undocked(&screen));
+    // Back on the menu (saved) and open again: the repaired save loads
+    // plainly.
     escape_to_menu(&mut screen);
     assert_eq!(screen.showing(), Showing::MainMenu);
-    open_first(&mut screen);
-    assert_eq!(screen.showing(), Showing::Flight, "the note shows once");
+    open_held(&mut screen);
+    assert_eq!(screen.showing(), Showing::MainMenu, "the note shows once");
+}
+
+#[test]
+fn quitting_with_the_note_open_writes_nothing() {
+    let store = MemoryPilots::new();
+    save_unlisted_ada(&store);
+    let mut screen = menu_with_dialogs(&store);
+    let writes = store.writes();
+    open_held(&mut screen);
+    assert_eq!(screen.showing(), Showing::Note);
+    screen.quit();
+    assert_eq!(
+        store.writes(),
+        writes,
+        "the original saves only on creation, landing and rescue"
+    );
 }
 
 #[test]
@@ -929,9 +970,10 @@ fn under_the_engines_reading_the_noted_pilot_flies_in_the_lowest_system() {
     );
     open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Note);
-    assert_eq!(flown_system(&screen), nova_sim::SystemId(128));
+    assert_eq!(held_system(&screen), nova_sim::SystemId(128));
     screen.input(&key(Key::Escape, true));
-    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    enter_ship(&mut screen);
     assert_eq!(flown_system(&screen), nova_sim::SystemId(128));
     assert!(undocked(&screen));
 }
@@ -972,7 +1014,7 @@ fn a_pilot_whose_saved_system_is_gone_notes_and_flies_in_the_lowest_that_exists(
     open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Note);
     screen.input(&key(Key::Enter, true));
-    assert_eq!(screen.showing(), Showing::Flight);
+    enter_ship(&mut screen);
     assert_eq!(flown_system(&screen), nova_sim::SystemId(128));
     assert!(undocked(&screen));
 }
@@ -1021,7 +1063,7 @@ fn the_note_takes_every_event() {
     screen.input(&click(true));
     assert_eq!(screen.take_sounds(), []);
     screen.input(&click(false));
-    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(screen.showing(), Showing::MainMenu);
     assert_eq!(screen.take_sounds(), [], "OK is silent as it closes");
 }
 
@@ -1052,8 +1094,7 @@ fn open_pilot_faces_the_pilot_on_a_drawn_heading() {
     land_twice(&mut screen);
     assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
     let mut screen = menu(&store).with_chance(last_outcome());
-    choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Enter, true));
+    open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(ship(&screen).heading, 359.0);
 }
@@ -1079,27 +1120,6 @@ fn cancelling_open_pilot_goes_back_to_the_menu() {
     );
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::MainMenu);
-}
-
-#[test]
-fn a_pilot_that_cannot_be_opened_says_why_in_the_list() {
-    let store = MemoryPilots::new();
-    store.put("Broken", "not a save");
-    let mut screen = menu(&store);
-    choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Enter, true));
-    assert_eq!(screen.showing(), Showing::OpenPilot);
-    let error = screen
-        .pilot_list()
-        .expect("open")
-        .error()
-        .expect("an error")
-        .to_owned();
-    assert!(
-        error.starts_with("nova: the pilot Broken in memory: "),
-        "{error}"
-    );
-    assert_eq!(screen.take_warnings(), [error]);
 }
 
 #[test]
@@ -1169,8 +1189,7 @@ fn escape_to_the_menu_and_quitting_save_the_pilot() {
     assert_eq!(store.writes(), writes + 1);
     assert!(screen.flight_view().is_none(), "the pilot is put away");
     let mut screen = menu(&store);
-    choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Enter, true));
+    open_first(&mut screen);
     land_twice(&mut screen);
     let writes = store.writes();
     screen.quit();

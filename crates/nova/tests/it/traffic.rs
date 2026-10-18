@@ -425,6 +425,7 @@ impl Harness {
             harness.send(WindowEvent::Text(c));
         }
         harness.press(Key::Enter);
+        harness.click(crate::common::enter_ship_at(harness.app.screen()));
         assert_eq!(harness.showing(), Showing::Flight);
         harness
     }

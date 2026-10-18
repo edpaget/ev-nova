@@ -1,5 +1,6 @@
 //! The program edge shared by the test modules: the stock data's
-//! directory, and the router past its start-up appear ([`appeared`]).
+//! directory, the router past its start-up appear ([`appeared`]), and
+//! where the main menu's Enter Ship is ([`enter_ship_at`]).
 //!
 //! This module is the only place `NOVA_DATA` is read. The game data is
 //! copyrighted and never committed, so each stock test asks [`nova_data`] for
@@ -34,4 +35,15 @@ pub fn appeared(mut screen: nova::app::screen::AppScreen) -> nova::app::screen::
     }
     screen.take_sounds();
     screen
+}
+
+/// Where the main menu's Enter Ship button is pressed. A pilot created or
+/// opened from the menu is held there, not flown, and a click here enters
+/// play with it.
+#[must_use]
+pub fn enter_ship_at(screen: &nova::app::screen::AppScreen) -> nova_view::Point {
+    screen
+        .main_menu()
+        .expect("a main menu")
+        .press_point(nova_view::menu::MenuChoice::EnterShip)
 }

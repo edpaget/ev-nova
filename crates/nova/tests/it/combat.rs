@@ -1629,6 +1629,7 @@ impl Boarder {
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
+        self.click(crate::common::enter_ship_at(self.app.screen()));
         assert_eq!(self.showing(), showing);
     }
 

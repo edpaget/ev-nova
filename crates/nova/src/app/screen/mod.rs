@@ -2,34 +2,47 @@
 //!
 //! # The main menu and pilots
 //!
-//! The game opens on the main menu ([`AppScreen::with_pilots`]): New
-//! Pilot asks for a name in "Create a new pilot:" (the interface file's,
-//! or a built-in one), refusing a name already saved, then creates the
-//! pilot from the first `chär`, saves it and flies it. Open Pilot lists
-//! the saved pilots and flies the one chosen, in space over the stellar
-//! it last landed on, with no spaceport opened. A pilot whose load had to
-//! fall back for data the save references and the game data lacks
-//! ([`nova_sim::Session::load`], under the router's rules) is flown only
-//! once the note `STR#` 140 #52 over the menu is dismissed; its flight,
-//! built behind the note, doesn't tick meanwhile, and quitting with the
-//! note open saves the repaired pilot. Quit quits after
-//! [`QUIT_DELAY`], and each of the menu's keys first waits for its click
-//! to play (see `menu_input`); a click on Enter Ship, Preferences or
-//! About does what E, P or A does. The menu is the original's main
+//! The game opens on the main menu ([`AppScreen::with_pilots`]), which
+//! holds a game in progress, as the original's main screen holds a loaded
+//! pilot (`_gameInProgress`; see `game`). New Pilot asks for a name in
+//! "Create a new pilot:" (the interface file's, or a built-in one),
+//! refusing a name already saved, then creates the pilot from the first
+//! `chär`, saves it and holds it, not flying; with a game held it first
+//! asks `STR#` 140 #8 in the Yes/No dialog, and No leaves the game as it
+//! was. Open Pilot lists the saved pilots and holds the one chosen, its
+//! explored systems' nebulae swept and its missions' auxiliary ships
+//! restarted, as `_MainScreenChoice(1)` does; one of another version
+//! closes the list and shows `STR#` 140 #34 over the menu, and any other
+//! that can't be opened closes it with only a warning, the game held left
+//! as it was. A pilot whose load had to fall back for data the save
+//! references and the game data lacks ([`nova_sim::Session::load`], under
+//! the router's rules) shows the note `STR#` 140 #52 over the menu.
+//! Enter Ship (E, or a click) flies the game held, in space over the
+//! stellar it last landed on, with no spaceport opened; with none, or a
+//! pilot dying, it plays snd 153 and stays. Escape on the menu does
+//! nothing. Quit quits after [`QUIT_DELAY`], and each of the menu's keys
+//! first waits for its click to play (see `menu_input`); a click on Enter
+//! Ship, Preferences or About does what E, P or A does, and a held P, A
+//! or X repeats as a press. X's text and the About text read the pilot
+//! held, or the start-up pilot with none. The menu is the original's main
 //! screen, drawn from the game data's art, or a stand-in without it
 //! ([`MainMenu`]). Closing the window on the menu asks `STR#` 140 #10 in
 //! the Yes/No dialog and quits only on Yes; closing it anywhere else, or
 //! Command-Q anywhere, quits at once (see `quit_question`), but while the
-//! menu appears, below. Escape in
-//! flight goes back to the menu, saving the pilot and putting it away.
-//! Each flight put away leaves its ship slots' draw-layer history, which
-//! every later flight of the run starts from, as the original's sprite
-//! layers outlive a pilot ([`nova_sim::ship_layer`]).
+//! menu appears, below. Escape in flight, by the engine's reading of
+//! [`RuleKey::EscapeToMainScreen`](nova_sim::RuleKey::EscapeToMainScreen),
+//! saves the pilot and goes back to the menu, which holds it, so Enter
+//! Ship resumes it; by the other reading it does nothing, as in the
+//! original. Each flight put away or held leaves its ship slots'
+//! draw-layer history, which every later flight of the run starts from,
+//! as the original's sprite layers outlive a pilot
+//! ([`nova_sim::ship_layer`]).
 //!
-//! A pilot with a name is saved through the [`PilotKeeper`] on landing,
-//! on taking off, after each change made in the spaceport
+//! A pilot with a name is saved through the [`PilotKeeper`] on creation,
+//! on landing, on taking off, after each change made in the spaceport
 //! ([`AppScreen::transact`]), on going back to the menu and when the app
-//! quits ([`Screen::quit`](nova_view::Screen::quit)); each failure is a warning
+//! quits in play ([`Screen::quit`](nova_view::Screen::quit)); never on an
+//! open, nor when the app quits with the game only held; each failure is a warning
 //! ([`Screen::take_warnings`](nova_view::Screen::take_warnings)). Tab on the menu goes to the developer's
 //! sides below, where F flies a fresh pilot without a name, never saved,
 //! and Escape at the top goes back to the menu. A router without a main
@@ -50,10 +63,11 @@
 //! through the hold; when it expires, the router shows the `dësc` of
 //! each of a sabotaged player's outfits over the stopped flight, one
 //! after another, and begins flight's fade to black as the last closes,
-//! or with none on the same tick. When the fade is over the router drops flight, as
-//! Escape's put-away does, and returns to the main menu as it appears
-//! (below), or, without one, to the side flight was entered from, which
-//! fades in from black over
+//! or with none on the same tick. When the fade is over the router
+//! returns to the main menu as it appears (below), holding the dead
+//! pilot as Escape's return holds a live one (Enter Ship refuses it, New
+//! Pilot asks #8), or, without a menu, drops flight and returns to the
+//! side flight was entered from, which fades in from black over
 //! [`DEATH_FADE_FOR`](nova_view::fade::DEATH_FADE_FOR), taking input under the fade.
 //!
 //! The main menu appears as the original's main screen does
@@ -311,6 +325,7 @@ use nova_view::{FullscreenKind, Scaling};
 mod appear;
 mod build;
 mod flight;
+mod game;
 mod menu;
 mod overlays;
 mod port_dialogs;
@@ -429,8 +444,12 @@ pub struct AppScreen {
     /// The galaxy map and any system opened from it, reading the same game
     /// data.
     galaxy: Navigator<Rc<GameData>>,
-    /// Flight, once entered, reading the same game data.
+    /// Flight, once entered, reading the same game data: the flight
+    /// shown, or hidden behind the developer's sides.
     flight: Option<FlightView<Rc<GameData>>>,
+    /// The game in progress the main menu holds, not flying: a pilot
+    /// created or opened, or back from play (see `game`).
+    game: Option<FlightView<Rc<GameData>>>,
     /// The ship slots' draw-layer and cloned-frame history the last
     /// flight put away left, which each new flight starts from: the
     /// original's sprites outlive a pilot, `_InitSprites` running once at
@@ -475,9 +494,10 @@ pub struct AppScreen {
     /// The note that an opened pilot's load fell back (`STR#` 140 #52),
     /// while it is open over the main menu, its flight built behind it.
     load_note: Option<NoteDialog>,
-    /// The quit question (`STR#` 140 #10) the window's close asks over
-    /// the main menu, while it is open.
-    question: Option<YesNoDialog>,
+    /// The question asked over the main menu, and what for, while it is
+    /// open: the window's close's (`STR#` 140 #10) or New Pilot's over a
+    /// game in progress (#8).
+    question: Option<(quit_question::Question, YesNoDialog)>,
     /// The warnings since they were last taken.
     warnings: Vec<String>,
     /// What each flight rolls each day's events and its traffic on.

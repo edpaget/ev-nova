@@ -48,6 +48,7 @@ impl AppScreen {
             ships: ShipBrowser::new(Rc::clone(&data)),
             data,
             flight: None,
+            game: None,
             slot_sprites: SlotSprites::default(),
             course_map_zoom: None,
             map_borders: true,
@@ -434,11 +435,11 @@ impl AppScreen {
         self.load_note.as_ref()
     }
 
-    /// The quit question the window's close asked over the main menu,
-    /// while it is open.
+    /// The question asked over the main menu, while it is open: the
+    /// window's close's, or New Pilot's over a game in progress.
     #[must_use]
     pub fn question(&self) -> Option<&YesNoDialog> {
-        self.question.as_ref()
+        self.question.as_ref().map(|(_, dialog)| dialog)
     }
 
     /// Changes the pilot with `change` while the ship is landed, as a
@@ -712,6 +713,13 @@ impl AppScreen {
     #[must_use]
     pub fn flight_view(&self) -> Option<&FlightView<Rc<GameData>>> {
         self.flight.as_ref()
+    }
+
+    /// The game in progress the main menu holds, not flying, if any: a
+    /// pilot created or opened there, or back from play.
+    #[must_use]
+    pub fn game_in_progress(&self) -> Option<&FlightView<Rc<GameData>>> {
+        self.game.as_ref()
     }
 
     /// The spaceport, while the ship is landed.

@@ -420,19 +420,18 @@ fn a_pilot_desk_edit_that_stays_landed_keeps_the_ambient_sound_and_its_wait() {
     );
 }
 
-/// No UI replaces a docked pilot's flight: the menu that opens or
-/// creates a pilot is reached only once flight is put away. So the
-/// replacement is driven through [`AppScreen::build_flight`] itself,
-/// and its sounds read from the router's queue, as the spaceport side
-/// is left showing with no spaceport to show.
+/// No UI drops a docked pilot's flight: Enter Ship, which drops the
+/// developer's flight, is reached only from the menu, once the spaceport
+/// is left. So the drop is driven through [`AppScreen::drop_flight`]
+/// itself, and its sounds read from the router's queue, as the spaceport
+/// side is left showing with no spaceport to show.
 #[test]
-fn replacing_a_docked_pilot_halts_the_ambient_sound() {
+fn dropping_a_docked_pilot_halts_the_ambient_sound() {
     let mut screen = with_dialogs(data());
     land(&mut screen);
     screen.take_sounds();
     assert_eq!(frame_sounds(&mut screen, TICK), [ambient()]);
-    let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
-    screen.build_flight(bea, false);
+    screen.drop_flight();
     assert!(screen.spaceport_view().is_none(), "gone");
     let sounds = std::mem::take(&mut screen.sounds);
     assert!(sounds.contains(&halted()), "{sounds:?}");

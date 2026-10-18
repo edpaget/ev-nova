@@ -660,6 +660,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     let base_speed = game.top_speed();
@@ -746,6 +747,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game.land();
@@ -782,6 +784,7 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     game.frame();
     game.land();
     game.open_outfitter();

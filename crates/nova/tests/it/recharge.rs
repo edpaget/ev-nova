@@ -617,6 +617,7 @@ fn at_beta_prime(store: &MemoryPilots, cash: i32) -> Harness {
         game.type_key(code, Some(letter));
     }
     game.press(KeyCode::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert_eq!(game.fuel(), Gauge::full(300.0));

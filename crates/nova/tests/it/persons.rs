@@ -515,15 +515,10 @@ impl Game {
             .main_menu()
             .expect("a main menu")
             .press_point(MenuChoice::OpenPilot);
-        // The menu is classic: its point in the window.
-        let (rect, scale) = game.app.viewport().content().expect("a content rect");
-        let px = (
-            f64::from(rect.x) + f64::from(at.x * scale),
-            f64::from(rect.y) + f64::from(at.y * scale),
-        );
-        game.click_px(px);
+        game.click_menu(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
+        game.click_menu(crate::common::enter_ship_at(game.app.screen()));
         assert_eq!(game.showing(), showing);
         game.frame();
         game.frame();
@@ -549,6 +544,16 @@ impl Game {
     pub(crate) fn tap(&mut self, key: Key) {
         self.key(key, true);
         self.key(key, false);
+    }
+
+    /// A click at `at` on the classic main menu: its point in the window.
+    fn click_menu(&mut self, at: nova_view::Point) {
+        let (rect, scale) = self.app.viewport().content().expect("a content rect");
+        let px = (
+            f64::from(rect.x) + f64::from(at.x * scale),
+            f64::from(rect.y) + f64::from(at.y * scale),
+        );
+        self.click_px(px);
     }
 
     /// A click at window pixel `px`.

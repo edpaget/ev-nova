@@ -446,6 +446,7 @@ impl Harness {
             self.send(WindowEvent::Text(c));
         }
         self.press(Key::Enter);
+        self.click(crate::common::enter_ship_at(self.app.screen()));
         assert_eq!(self.showing(), Showing::Flight);
     }
 
@@ -1147,6 +1148,7 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
     harness.choose(MenuChoice::OpenPilot);
     assert_eq!(harness.showing(), Showing::OpenPilot);
     harness.press(Key::Enter);
+    harness.click(crate::common::enter_ship_at(harness.app.screen()));
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().pilot().name(), "Ada");
     harness.jump_to_beta();
@@ -1232,6 +1234,7 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     let mut harness = Harness::on_the_menu(SharedChance::default(), &store);
     harness.choose(MenuChoice::OpenPilot);
     harness.press(Key::Enter);
+    harness.click(crate::common::enter_ship_at(harness.app.screen()));
     assert_eq!(harness.showing(), Showing::Flight);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(129));

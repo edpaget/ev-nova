@@ -93,6 +93,7 @@ mod death;
 mod dialog_maps;
 mod encounters;
 mod flight;
+mod game;
 mod map_find;
 mod menu;
 mod missions;
@@ -503,11 +504,13 @@ fn landable() -> Vec<u8> {
 }
 
 /// The About text's `dësc`: ten short lines, the third holding a pilot
-/// and a mission tag that the briefing munge would replace.
+/// and a mission tag that the briefing munge would replace, the fourth
+/// conditional text that adds " him" for a male pilot.
 fn about_text() -> Vec<u8> {
     let mut bytes: Vec<u8> = (0..10)
         .map(|n| match n {
             2 => "line 2 <PN> <DST>".to_owned(),
+            3 => "line 3{G \" him\" \"\"}".to_owned(),
             n => format!("line {n}"),
         })
         .collect::<Vec<_>>()
@@ -1365,13 +1368,41 @@ fn type_text(screen: &mut AppScreen, text: &str) {
     }
 }
 
-/// Creates a pilot named `name` from the main menu: New Pilot, the
-/// name, Return.
+/// Creates a pilot named `name` from the main menu and enters play with
+/// it: [`create_held`], then a click on Enter Ship once the menu holds it
+/// ([`enter_ship`]).
 pub(crate) fn create(screen: &mut AppScreen, name: &str) {
+    create_held(screen, name);
+    if screen.showing() == Showing::MainMenu {
+        enter_ship(screen);
+    }
+}
+
+/// Creates a pilot named `name` from the main menu, which then holds it:
+/// New Pilot (answering yes to `STR#` 140 #8 when a pilot is held already
+/// and the router can ask), the name, Return.
+pub(crate) fn create_held(screen: &mut AppScreen, name: &str) {
     assert_eq!(choose(screen, MenuChoice::NewPilot), ScreenAction::None);
+    if screen.showing() == Showing::Question {
+        screen.input(&key(Key::Enter, true));
+    }
     assert_eq!(screen.showing(), Showing::NewPilot);
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+}
+
+/// Opens the first saved pilot from the main menu's list, which then
+/// holds it: Open Pilot, Return.
+pub(crate) fn open_held(screen: &mut AppScreen) {
+    choose(screen, MenuChoice::OpenPilot);
+    assert_eq!(screen.showing(), Showing::OpenPilot);
+    screen.input(&key(Key::Enter, true));
+}
+
+/// Enters play with the pilot the main menu holds: a click on Enter Ship.
+pub(crate) fn enter_ship(screen: &mut AppScreen) {
+    choose(screen, MenuChoice::EnterShip);
+    assert_eq!(screen.showing(), Showing::Flight);
 }
 
 fn pilot(screen: &AppScreen) -> &nova_sim::Pilot {
@@ -1385,10 +1416,14 @@ pub(crate) fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {
 // O's guard.
 
 /// Creates a pilot named `name` from the main menu with Strict Play
-/// ticked: New Pilot, a click on the Strict Play box, the name,
-/// Return. The router needs the interface file's dialogs.
+/// ticked and enters play with it: New Pilot, a click on the Strict Play
+/// box, the name, Return, then Enter Ship. The router needs the
+/// interface file's dialogs.
 fn create_strict(screen: &mut AppScreen, name: &str) {
     choose(screen, MenuChoice::NewPilot);
+    if screen.showing() == Showing::Question {
+        screen.input(&key(Key::Enter, true));
+    }
     let at = screen
         .new_pilot()
         .expect("open")
@@ -1405,6 +1440,9 @@ fn create_strict(screen: &mut AppScreen, name: &str) {
     }
     type_text(screen, name);
     screen.input(&key(Key::Enter, true));
+    if screen.showing() == Showing::MainMenu {
+        enter_ship(screen);
+    }
 }
 
 // The note on a load that fell back.

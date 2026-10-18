@@ -948,6 +948,7 @@ impl Game {
             .press_point(MenuChoice::OpenPilot);
         game.click(at);
         game.tap(Key::Enter);
+        game.click(crate::common::enter_ship_at(game.app.screen()));
         assert_eq!(game.showing(), Showing::Flight);
         game
     }
@@ -2828,6 +2829,7 @@ fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
         .press_point(MenuChoice::OpenPilot);
     game.click(at);
     game.tap(Key::Enter);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game.tap(Key::Char('l'));
