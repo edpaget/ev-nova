@@ -174,6 +174,21 @@ exclude_re = [
     "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::world_resolution -> WorldResolution with Default::default\\(\\)",
     "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::set_upscaler with \\(\\)$",
     "nova-render/src/wgpu/surface\\.rs:.*replace <impl UpscalerProbe for SurfaceGpu>::upscalers -> Vec<Upscaler> with ",
+    # So does handing out the warnings its frames raised.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::take_warnings -> Vec<String> with ",
+    # Whether MetalFX runs on a device: `true` on every GPU the macOS
+    # development host has (Apple silicon on Metal), so answering `true`
+    # can't be told apart there. Only a non-Metal device or a GPU MetalFX
+    # doesn't support (a CI VM's paravirtual Metal) says no, and neither
+    # can be opened here; the probe test checks the two agree wherever it
+    # runs.
+    "nova-metalfx/src/scaler\\.rs:.*replace supported -> bool with true$",
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx_spatial -> bool with true$",
+    # The off-macOS twins of `metal_fx_spatial` and `metal_fx` are
+    # compiled only on other targets, so on the macOS development host a
+    # mutated body is never built into the tests. One answers `false`, the
+    # other is never reached (`effective` maps MetalFX away first).
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx -> Box<dyn Upscale> with ",
     # The one-line edge that opens the default audio device through cpal
     # and hands it to `KiraAudio::with_manager`. Running it needs a real
     # output device, which no gating test may open; everything it hands
@@ -221,8 +236,13 @@ exclude_re = [
     "replace > with >= in close_on",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour. `ensure_scene`
-    # combines the scene's and the backdrop's texture usages.
-    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene))",
+    # combines the scene's and the backdrop's texture usages; `canvas`
+    # (which it now calls) the canvas's. MetalFX's output texture's wgpu
+    # usage (`COPY_SRC | TEXTURE_BINDING`, column 58) is disjoint bits too;
+    # its Metal usage's `|` (MetalFX's ask plus `ShaderRead`, which
+    # overlap) is mutated and tested.
+    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene|canvas))",
+    "nova-metalfx/src/scaler\\.rs:\\d+:58: replace \\| with \\^ in SpatialScaler::output_texture$",
     # The glow ramp's thrust step raises the base only below cruise (24).
     # With `<=` a thrusting base of 24 steps to 25, and the next step, the
     # decay above cruise, takes it straight back to 24: the same result for

@@ -276,6 +276,8 @@ impl SpatialScaler {
 
 #[cfg(test)]
 mod tests {
+    use objc2_metal::MTLResource;
+
     use super::*;
 
     /// A device on the default adapter, when there is one.
@@ -519,5 +521,19 @@ mod tests {
         assert!(out.usage().contains(wgpu::TextureUsages::COPY_SRC));
         assert_eq!(scaler.input(), (32, 24));
         assert_eq!(scaler.output(), (60, 45));
+    }
+
+    #[test]
+    fn the_output_texture_has_the_usage_metal_fx_asks_plus_shader_reads_privately() {
+        let Some((device, _queue)) = metal_fx_gpu() else {
+            return;
+        };
+        let scaler = SpatialScaler::new(&device, (32, 24), (64, 48)).expect("a scaler");
+        let raw = raw_texture(&scaler.output_texture(&device));
+        // SAFETY: a plain property read of a live scaler.
+        let asked = unsafe { scaler.raw.outputTextureUsage() };
+        assert!(!asked.is_empty());
+        assert!(raw.usage().contains(asked | MTLTextureUsage::ShaderRead));
+        assert_eq!(raw.storageMode(), MTLStorageMode::Private);
     }
 }
