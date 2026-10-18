@@ -22,6 +22,8 @@
 //!   their standing orders; [`NovaAi`] routes every escort to it.
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
 //!   fight with their carrier; [`NovaAi`] routes every one to it.
+//! - [`miner`]: [`MinerAi`], how a leaderless miner stops, mines, or
+//!   shuttles to its nearest stellar; [`NovaAi`] routes every one to it.
 
 pub mod brave;
 pub mod carried;
@@ -30,6 +32,7 @@ pub mod fire;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub mod interceptor;
+pub mod miner;
 pub mod nova;
 pub mod odds;
 pub mod out_of_ammo;
@@ -57,6 +60,7 @@ use crate::reserves::Reserves;
 use crate::rulebook::RuleSource;
 use crate::traffic::destination;
 use crate::traffic::npc::{Npc, NpcId};
+use nova_sim_combat::asteroid::Asteroid;
 
 pub use crate::traffic::destination::Admit;
 
@@ -64,6 +68,7 @@ pub use brave::BraveTrader;
 pub use carried::CarriedAi;
 pub use escort::EscortAi;
 pub use interceptor::Interceptor;
+pub use miner::MinerAi;
 pub use nova::NovaAi;
 pub use warship::Warship;
 pub use wimpy::WimpyTrader;
@@ -247,6 +252,15 @@ pub enum Goal {
     /// keeps the hold until provoked or its type's think lifts it (see
     /// [`idle`]). It fights nothing: its quarry is none.
     Hold,
+    /// Mine asteroid slot 0: the original's state 16, which a miner takes
+    /// (see [`miner`]). Its quarry is none, it doesn't scoop, and
+    /// `_ExtendedIsThreatToPlayer` doesn't spare it (16 is none of its
+    /// states). `_HighLevelAIHandler` flies it as order 1, a stop, while
+    /// slot 0 is empty (@0x8f879); the traffic brakes it so whether or not
+    /// slot 0 is live, until rdm:phase/asteroids/phase-5-ai-mining adds the
+    /// chase and kill (orders 0x13 and 0x14, @0x8f832-0x8f903) and the
+    /// shots that hit no ship.
+    Mine,
 }
 
 impl Goal {
@@ -305,7 +319,8 @@ impl Goal {
             | Self::Assist(_)
             | Self::Formation { .. }
             | Self::Dock(_)
-            | Self::Hold => false,
+            | Self::Hold
+            | Self::Mine => false,
         }
     }
 
@@ -404,11 +419,15 @@ pub struct Surroundings<'a> {
     /// ([`Combat::targeted_damage`](crate::combat::Combat::targeted_damage)):
     /// an NPC holds its missile while it suffices (see [`fire`]).
     pub targeted: &'a BTreeMap<ShipRef, i32>,
+    /// The asteroid in slot 0 of the system's field, if any: the one every
+    /// miner works (`*0x3b540c`, whose +0x20 says it is live, read by
+    /// `_MinerAI` @0x8b2ad-0x8b2b8; see [`miner`]).
+    pub mining_rock: Option<Asteroid>,
 }
 
 impl<'a> Surroundings<'a> {
-    /// `npcs` among `sites`, with no player, no governments, no record and
-    /// no damage aimed.
+    /// `npcs` among `sites`, with no player, no governments, no record, no
+    /// damage aimed and no asteroid in slot 0.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -419,6 +438,7 @@ impl<'a> Surroundings<'a> {
             system_govt: None,
             record: 0,
             targeted: &NO_AIMED_DAMAGE,
+            mining_rock: None,
         }
     }
 
@@ -743,10 +763,18 @@ mod tests {
             Goal::Formation { guard: None },
             Goal::Dock(ShipRef::Player),
             Goal::Hold,
+            Goal::Mine,
         ] {
             assert!(!goal.scooping(), "{goal:?}");
         }
         assert!(!npc(1, AiType::WimpyTrader).is_scooping());
+    }
+
+    #[test]
+    fn a_miner_mining_fights_nothing_and_is_not_spared_as_a_threat() {
+        assert_eq!(Goal::Mine.quarry(), None);
+        assert!(!Goal::Mine.fights());
+        assert!(!Goal::Mine.spares_player_threat(), "16 isn't in the list");
     }
 
     #[test]

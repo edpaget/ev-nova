@@ -134,6 +134,7 @@ use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
+use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
@@ -362,6 +363,9 @@ pub struct World<'a> {
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
     /// ship (see [`cloak::visible`]).
     pub cloak_scanner: bool,
+    /// The asteroid in slot 0 of the system's field, if any
+    /// ([`Surroundings::mining_rock`]).
+    pub mining_rock: Option<Asteroid>,
 }
 
 /// No gate's width known: each reads as a loaded master does.
@@ -371,7 +375,8 @@ impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
-    /// width known, the engine's [`SPAWN_RESERVE`], and no cloak scanner.
+    /// width known, the engine's [`SPAWN_RESERVE`], no cloak scanner and no
+    /// asteroid in slot 0.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -389,6 +394,7 @@ impl<'a> World<'a> {
             spawn_reserve: SPAWN_RESERVE,
             arrival_hits: RuleSource::Engine,
             cloak_scanner: false,
+            mining_rock: None,
         }
     }
 
@@ -431,6 +437,7 @@ impl<'a> World<'a> {
             system_govt: self.system_govt,
             record: self.record,
             targeted: self.targeted,
+            mining_rock: self.mining_rock,
         }
     }
 }
@@ -1658,6 +1665,9 @@ impl Traffic {
                     Entry::Placed | Entry::JumpingIn => None,
                 },
                 self_repair: kind.self_repair,
+                miner: kind.miner,
+                can_scoop: kind.can_scoop,
+                holds: kind.holds,
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
@@ -1780,6 +1790,8 @@ mod tests {
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
+                    miner: 0,
+                    can_scoop: false,
                     holds: 0,
                     base_armor: 45.0,
                 },
@@ -4776,6 +4788,41 @@ mod tests {
         let plain = with_mission_ship(CloakGear::default(), false, 0.0);
         assert_eq!(plain.npcs()[0].cloak, Cloak::default());
         assert_eq!(plain.npcs()[0].cloak_gear, CloakGear::default());
+    }
+
+    #[test]
+    fn the_world_shows_its_npcs_asteroid_slot_0() {
+        let rock = Asteroid {
+            position: Vec2::new(40.0, -20.0),
+            velocity: Vec2::ZERO,
+            frame: 0.0,
+            spin: 0.0,
+            strength: 30,
+            kind: 2,
+        };
+        assert_eq!(World::new(&[]).around(&[]).mining_rock, None);
+        let world = World {
+            mining_rock: Some(rock),
+            ..World::new(&[])
+        };
+        assert_eq!(world.around(&[]).mining_rock, Some(rock));
+    }
+
+    #[test]
+    fn a_ship_spawns_with_its_ship_types_miner_bits_scoop_and_holds() {
+        let mut mining = table(1);
+        let kind = mining.ships.get_mut(&ShipId(200)).expect("ship 200");
+        kind.miner = 0x0003;
+        kind.can_scoop = true;
+        kind.holds = 12;
+        let mut traffic = Traffic::new();
+        traffic.enter(mining, &mut Draws::of(&placed(0, 0)));
+        let npc = &traffic.npcs()[0];
+        assert_eq!((npc.miner, npc.can_scoop, npc.holds), (0x0003, true, 12));
+        let mut plain = Traffic::new();
+        plain.enter(table(1), &mut Draws::of(&placed(0, 0)));
+        let npc = &plain.npcs()[0];
+        assert_eq!((npc.miner, npc.can_scoop, npc.holds), (0, false, 0));
     }
 
     #[test]

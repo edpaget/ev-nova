@@ -36,6 +36,7 @@ use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::reserves::Reserves;
+use crate::scoop;
 use crate::self_repair;
 use crate::stats::ShipStats;
 use crate::traffic::strength::{STRONG_FLEET, STRONGER_FLEET};
@@ -261,6 +262,14 @@ pub struct ShipKind {
     /// class's: the original reads the class's items (+0x76,
     /// `_ShipCanSelfRepair` @0x91e5-0x922d).
     pub self_repair: bool,
+    /// Its `shïp` `Flags3` & 0x0003, the miner bits `_AIDispatch` routes
+    /// by (`testb $0x3` @0x8ff76; see [`miner`](crate::ai::miner)).
+    pub miner: u16,
+    /// Whether an asteroid scoop is among its default items, the ship's
+    /// +0xc3 as an NPC spawner sets it (`_ShipCanScoop` @0x75c7-0x766b,
+    /// [`scoop::has_asteroid_scoop`]): one of its default items, with a
+    /// count above 0, has `ModType` 31 in any of its four slots.
+    pub can_scoop: bool,
     /// Its `Holds` in tons, the size of a negative one (ship-class +0x00,
     /// as `_LoadObjectData` negates it @0x7a6a5-0x7a6d3): the most a
     /// fleet's random cargo gives it (see
@@ -556,6 +565,8 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         appear_on: record.appear_on.clone(),
         cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
         self_repair: self_repair::has_gear(&defaults, outfits),
+        miner: record.flags3 & crate::ai::miner::MINER_BITS,
+        can_scoop: scoop::has_asteroid_scoop(&defaults, outfits),
         holds: crate::market::hold_tons(record.fields.holds),
         base_armor: f32::from(record.fields.armor.max(0)),
     }
@@ -1371,6 +1382,43 @@ mod tests {
         assert!(!repairs(&carrying(vec![(OutfitId(300), 1)])));
         assert!(!repairs(&carrying(Vec::new())));
         assert!(!ShipKind::default().self_repair);
+    }
+
+    #[test]
+    fn a_ship_type_mines_by_its_flags3_low_bits_and_scoops_with_a_scoop_among_its_default_items() {
+        let outfits = [
+            outfit(300, &[(4, 10)]),
+            outfit(
+                440,
+                &[
+                    (1, 0),
+                    (2, 0),
+                    (3, 0),
+                    (crate::scoop::MOD_ASTEROID_SCOOP, 0),
+                ],
+            ),
+        ];
+        let miner = |flags3: u16, defaults: Vec<(OutfitId, u16)>| {
+            let mut record = ShipRecord {
+                defaults,
+                ..ship(207, FAST)
+            };
+            record.flags3 = flags3;
+            kind(&record, &outfits, &arsenal())
+        };
+        let scooping = miner(0xff03, vec![(OutfitId(300), 1), (OutfitId(440), 1)]);
+        assert_eq!(scooping.miner, 0x0003, "only Flags3's low two bits");
+        assert!(scooping.can_scoop, "ModType 31 in its fourth slot");
+        assert_eq!(miner(0x0002, Vec::new()).miner, 0x0002);
+        assert!(!miner(0x0002, Vec::new()).can_scoop);
+        assert!(
+            !miner(0x0001, vec![(OutfitId(440), 0)]).can_scoop,
+            "none of it"
+        );
+        assert!(!miner(0x0001, vec![(OutfitId(300), 1)]).can_scoop);
+        assert_eq!(miner(0x0004, Vec::new()).miner, 0);
+        assert!(!ShipKind::default().can_scoop);
+        assert_eq!(ShipKind::default().miner, 0);
     }
 
     #[test]

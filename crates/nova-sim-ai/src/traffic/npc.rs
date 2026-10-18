@@ -335,6 +335,20 @@ pub struct Npc {
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
     pub self_repair: bool,
+    /// Its ship type's miner bits, `shïp` `Flags3` & 0x0003
+    /// ([`ShipKind::miner`](crate::traffic::table::ShipKind)): a leaderless
+    /// ship with either goes to the miner's AI (see
+    /// [`miner`](crate::ai::miner)).
+    pub miner: u16,
+    /// Whether its ship type carries an asteroid scoop among its default
+    /// items, the original's +0xc3 (`_ShipCanScoop` @0x75c7, see
+    /// [`ShipKind::can_scoop`](crate::traffic::table::ShipKind)), which
+    /// only the miner's AI reads.
+    pub can_scoop: bool,
+    /// Its ship type's `Holds` in tons (`shïp` +0x0,
+    /// [`ShipKind::holds`](crate::traffic::table::ShipKind)): a scooping
+    /// miner leaves once its own hold ([`NpcHold::total`]) reaches it.
+    pub holds: u16,
     /// What it was, while it is a former escort of the player's: disabled
     /// or breaking up as one, it left the fleet with this record (the
     /// original's +0xc8de). It forgets once intact, boarded or taken into
@@ -391,6 +405,13 @@ impl NpcHold {
         if let Some(held) = self.tons.get_mut(usize::from(commodity)) {
             *held = held.saturating_add(tons);
         }
+    }
+
+    /// The tons it holds in all, `_TotalCargo` of an NPC (@0x4a0b-0x4a26):
+    /// its six commodity words summed.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.tons.iter().map(|&tons| u64::from(tons)).sum()
     }
 
     /// The commodities it holds tons of, in commodity order, with the
@@ -1781,6 +1802,15 @@ mod tests {
         assert_eq!(seventh.tons(6), 0);
         let sixth = NpcHold::of(Some((Good::Commodity(5), 4)));
         assert_eq!(hold(&sixth), [(Good::Commodity(5), 4)]);
+    }
+
+    #[test]
+    fn a_holds_total_sums_its_six_commodities() {
+        let mut held = NpcHold::of(Some((Good::Commodity(0), 7)));
+        held.add(5, 3);
+        held.add(2, u32::MAX);
+        assert_eq!(held.total(), 10 + u64::from(u32::MAX), "wider than a word");
+        assert_eq!(NpcHold::default().total(), 0);
     }
 
     #[test]

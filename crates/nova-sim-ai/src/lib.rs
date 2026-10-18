@@ -18,8 +18,9 @@
 //!   relations and the player's legal record, when they flee, how they
 //!   come to each other's help, and which weapon they fire; the player's
 //!   escorts to [`EscortAi`](ai::EscortAi), which flies them by their
-//!   standing orders; and an NPC carrier's fighters to
-//!   [`CarriedAi`](ai::CarriedAi).
+//!   standing orders; an NPC carrier's fighters to
+//!   [`CarriedAi`](ai::CarriedAi); and a leaderless miner to
+//!   [`MinerAi`](ai::MinerAi).
 //! - [`brackets`]: the corner brackets round the nav target and the ship
 //!   target: their [`FlyIn`](brackets::FlyIn) from a selection and a ship
 //!   target's [`Standing`](brackets::Standing).

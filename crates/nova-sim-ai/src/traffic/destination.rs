@@ -56,13 +56,23 @@
 //!   them unless the government avoids them, and arg2 leaves out every
 //!   gate.
 //!
+//! `_SelectNearestAnyStellar` (@0x7fb00-0x7fc7b), the miner's shuttle pick
+//! ([`select_nearest_any_stellar`]), shares only the enemy test: it walks
+//! the 16 nav slots, skips an empty one, an enemy's stellar
+//! (@0x7fb46-0x7fb95), a gate (in-memory `spöb` +0x34, `Flags2`, & 0x3000,
+//! @0x7fbc4-0x7fbcb) and the stellar it is told to leave out (@0x7fbdb),
+//! and takes the least squared distance from the ship, the first on a tie
+//! (@0x7fc16-0x7fc34). It tests no landability, destruction, distance from
+//! the centre or habitation.
+//!
 //! Left out, of no effect here:
 //!
 //! - A stellar listed in two nav slots weighs double in the `Rand(16)`
 //!   loop (@0x806c1-0x808f4). The engine's sites are distinct stellars.
 
-use crate::catalog::{GovtId, LandingSite};
+use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::gate::GateKind;
+use crate::geometry::Vec2;
 use crate::govt::{AVOIDS_HYPERGATES, Governments, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
 use crate::landing::{StellarFlags, is_landable};
 
@@ -147,6 +157,36 @@ pub fn candidates<'s>(
             Some(GateKind::Hypergate) => !no_hypergates,
         })
         .collect()
+}
+
+/// The stellar among `sites` nearest `at`, as `_SelectNearestAnyStellar`
+/// picks it for a ship of `govt` (see the module docs): no enemy's, no
+/// hypergate or wormhole, and not `exclude`; landable or not, destroyed
+/// or not, anywhere. The first of `sites` wins a tie. None when no
+/// stellar is left.
+#[must_use]
+pub fn select_nearest_any_stellar(
+    at: Vec2,
+    govt: Option<GovtId>,
+    sites: &[LandingSite],
+    govts: &Governments,
+    exclude: Option<StellarId>,
+) -> Option<StellarId> {
+    let mut nearest: Option<(f32, StellarId)> = None;
+    for site in sites {
+        if govts.npc_enemies(govt, site.govt)
+            || GateKind::of(site.flags2).is_some()
+            || Some(site.id) == exclude
+        {
+            continue;
+        }
+        let off = site.position - at;
+        let distance = off.x * off.x + off.y * off.y;
+        if nearest.is_none_or(|(least, _)| distance < least) {
+            nearest = Some((distance, site.id));
+        }
+    }
+    nearest.map(|(_, id)| id)
 }
 
 #[cfg(test)]
@@ -297,6 +337,94 @@ mod tests {
         assert!(
             ids(None, &far, PLAIN).is_empty(),
             "the inhabited one is out"
+        );
+    }
+
+    /// The ID `_SelectNearestAnyStellar` picks among `sites` for a ship
+    /// of `govt` at `at`, leaving out `exclude`.
+    fn nearest(
+        at: Vec2,
+        govt: Option<GovtId>,
+        sites: &[LandingSite],
+        exclude: Option<i16>,
+    ) -> Option<i16> {
+        select_nearest_any_stellar(at, govt, sites, &govts(), exclude.map(StellarId)).map(|id| id.0)
+    }
+
+    #[test]
+    fn the_nearest_any_stellar_is_the_least_distance_from_the_ship() {
+        let sites = [
+            planet(128, 500.0, 0.0),
+            planet(129, 0.0, -200.0),
+            planet(130, -300.0, 300.0),
+        ];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &sites, None), Some(129));
+        assert_eq!(
+            nearest(Vec2::new(-300.0, 250.0), SHIP, &sites, None),
+            Some(130)
+        );
+        assert_eq!(
+            nearest(Vec2::new(5000.0, 0.0), None, &sites, None),
+            Some(128)
+        );
+    }
+
+    #[test]
+    fn the_nearest_any_stellar_skips_an_enemys_a_gate_and_the_one_left_out() {
+        let of = |govt, site| LandingSite { govt, ..site };
+        let sites = [
+            of(FOE, planet(128, 10.0, 0.0)),
+            LandingSite {
+                position: Vec2::new(20.0, 0.0),
+                ..hypergate(129)
+            },
+            LandingSite {
+                position: Vec2::new(30.0, 0.0),
+                ..wormhole(130)
+            },
+            planet(131, 40.0, 0.0),
+            planet(132, 50.0, 0.0),
+        ];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &sites, None), Some(131));
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &sites, Some(131)), Some(132));
+        assert_eq!(
+            nearest(Vec2::ZERO, None, &sites, None),
+            Some(128),
+            "an independent ship has no enemies"
+        );
+        let unruled = [of(None, planet(128, 10.0, 0.0)), planet(131, 40.0, 0.0)];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &unruled, None), Some(128));
+    }
+
+    #[test]
+    fn the_nearest_any_stellar_takes_one_unlandable_destroyed_uninhabited_or_far_off() {
+        let unlandable = LandingSite {
+            flags: 0,
+            ..planet(128, 10.0, 0.0)
+        };
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &[unlandable], None), Some(128));
+        let destroyed = LandingSite {
+            destroyed: true,
+            ..planet(129, 10.0, 0.0)
+        };
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &[destroyed], None), Some(129));
+        let empty = uninhabited(planet(130, 10.0, 0.0));
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &[empty], None), Some(130));
+        let far = planet(131, 5000.0, 0.0);
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &[far], None), Some(131));
+    }
+
+    #[test]
+    fn the_nearest_any_stellar_breaks_a_tie_to_the_first_and_is_none_with_no_candidate() {
+        let sites = [planet(128, 100.0, 0.0), planet(129, -100.0, 0.0)];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &sites, None), Some(128));
+        let sites = [planet(129, -100.0, 0.0), planet(128, 100.0, 0.0)];
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &sites, None), Some(129));
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &[], None), None);
+        assert_eq!(nearest(Vec2::ZERO, SHIP, &[hypergate(129)], None), None);
+        assert_eq!(
+            nearest(Vec2::ZERO, SHIP, &[planet(128, 0.0, 0.0)], Some(128)),
+            None
         );
     }
 }

@@ -2328,7 +2328,7 @@ impl Session {
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
     /// world, the escorts' tons, the led ships' speed factor, the damage
-    /// the fight's shots aim and the gates' widths. The tick
+    /// the fight's shots aim, the gates' widths and asteroid slot 0. The tick
     /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
     /// ([`Session::gate_exit_pass`]) and double time's second pass (see
     /// the `double_time` module) step the traffic in it.
@@ -2362,6 +2362,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             cloak_scanner: self.scanner().on_screen,
+            mining_rock: self.asteroids.get(0).copied(),
         };
         f(&mut self.traffic, world);
     }
@@ -2400,7 +2401,8 @@ impl Session {
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges. No damage is aimed in it, and no
+    /// pilot's persons gone and grudges, and asteroid slot 0. No damage is
+    /// aimed in it, and no
     /// gate's width is known: only the traffic's tick fires and flies, and
     /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
@@ -2426,6 +2428,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             cloak_scanner: self.scanner().on_screen,
+            mining_rock: self.asteroids.get(0).copied(),
         }
     }
 

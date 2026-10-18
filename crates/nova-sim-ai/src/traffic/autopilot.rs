@@ -57,8 +57,9 @@
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, under its top speed's cap.
-//! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
-//!   carrier that is not there): it brakes to a stop.
+//! - [`Goal::Idle`], [`Goal::Mine`] (order 1 for now, see its docs), or a
+//!   goal it cannot fly (a stellar, lead, player or carrier that is not
+//!   there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
 //!   [`glide_speed`] a tick, with no steering, and flies on at that speed
 //!   once the next tick's would be at or below its cap
@@ -331,7 +332,7 @@ pub fn fly(
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
-        Goal::Idle => brake(&state, &handling),
+        Goal::Idle | Goal::Mine => brake(&state, &handling),
         Goal::Hold => Controls::default(),
     };
     flight::step(&mut npc.state, &handling, controls);
@@ -2132,6 +2133,19 @@ mod tests {
                 ship.state
             );
         }
+    }
+
+    #[test]
+    fn a_mining_ship_brakes_to_a_stop_as_order_1_does() {
+        let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
+        let mut miner = npc(FAST, Goal::Mine, start);
+        let mut idle = npc(FAST, Goal::Idle, start);
+        for _ in 0..200 {
+            assert_eq!(fly(&mut miner, &[], None), Outcome::Flying);
+            fly(&mut idle, &[], None);
+            assert_eq!(miner.state, idle.state, "the idle ship's brake");
+        }
+        assert!(miner.state.velocity.length() < 0.5, "{:?}", miner.state);
     }
 
     #[test]

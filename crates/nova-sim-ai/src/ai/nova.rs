@@ -11,6 +11,16 @@
 //! and leader 0 on every think), with no standing order; and an NPC
 //! carrier's fighters, whatever their AI type, to [`CarriedAi`] (the
 //! original's AI type 5 with an NPC parent), until their carrier is gone.
+//! A leaderless miner (`shïp` `Flags3` & 3 with leader +0x9a -1,
+//! `_AIDispatch` @0x8ff64-0x8ff96), whatever its AI type, decides and
+//! targets as [`MinerAi`] instead of its type's think, but fires, waits in
+//! its gate and answers hits as its type does, as `_AIDispatch` replaces
+//! only the type's call. So a warship-typed miner a Good Samaritan's call
+//! turns on the player (`react`'s reaction goal) attacks until its next
+//! think, which the miner's AI then decides, as the original's next
+//! `_MinerAI` does; the type's fire reads the goal, and a miner's own
+//! goals fire at nothing but an attacker it flees. A mission ship of
+//! `ShipBehav` 0 still hunts the player, miner or not.
 //! `_PirateWarshipAI` (a warship of `Flags` 0x1000, which disables and
 //! plunders) waits for NPC boarding, and with it the plunder of the
 //! player's cargo and the mission failure it brings
@@ -24,6 +34,7 @@
 use std::rc::Rc;
 
 use crate::ai::fire::FireRules;
+use crate::ai::miner::{MINER_BITS, MinerAi};
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, GateWait, Goal, Interceptor, Reaction,
     Surroundings, Warship, WimpyTrader,
@@ -43,6 +54,7 @@ pub struct NovaAi {
     interceptor: Rc<dyn Behaviour>,
     escorts: Rc<dyn Behaviour>,
     carried: Rc<dyn Behaviour>,
+    miner: Rc<dyn Behaviour>,
     /// The source of [`RuleKey::HunterBribe`]: whether a paid-off
     /// `ShipBehav` 0 hunter attacks the player again.
     hunter_bribe: RuleSource,
@@ -105,6 +117,7 @@ impl NovaAi {
                 fire,
             }),
             carried: Rc::new(CarriedAi { fire }),
+            miner: Rc::new(MinerAi),
             hunter_bribe: rulebook.source_for(RuleKey::HunterBribe),
         }
     }
@@ -120,6 +133,13 @@ impl NovaAi {
     #[must_use]
     pub fn with_carried(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
         self.carried = behaviour;
+        self
+    }
+
+    /// This AI with `behaviour` for the leaderless miners' thinks.
+    #[must_use]
+    pub fn with_miner(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.miner = behaviour;
         self
     }
 
@@ -156,6 +176,25 @@ impl NovaAi {
             AiType::BraveTrader => &*self.brave,
             AiType::Warship => &*self.warship,
             AiType::Interceptor => &*self.interceptor,
+        }
+    }
+
+    /// The behaviour that decides for `npc` and picks its target: the
+    /// miners' for a leaderless miner (`_AIDispatch` @0x8ff64-0x8ff96: a
+    /// `shïp` `Flags3` & 3, and leader +0x9a -1, which the player's escorts
+    /// and fighters, mission escorts and an NPC carrier's fighters never
+    /// have), otherwise its own ([`NovaAi::of`]). A miner's fire, gate wait
+    /// and answer to hits stay its own: `_AIDispatch` replaces only the
+    /// type's think.
+    fn thinker(&self, npc: &Npc) -> &dyn Behaviour {
+        if npc.miner & MINER_BITS != 0
+            && npc.leader.is_none()
+            && !npc.escorts_player()
+            && npc.carrier.is_none()
+        {
+            &*self.miner
+        } else {
+            self.of(npc)
         }
     }
 }
@@ -198,7 +237,7 @@ impl Behaviour for NovaAi {
                 provokes: false,
             };
         }
-        self.of(npc).decision(npc, around, chance)
+        self.thinker(npc).decision(npc, around, chance)
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -211,7 +250,7 @@ impl Behaviour for NovaAi {
         if self.hunts_player(npc, around) {
             return Some(ShipRef::Player);
         }
-        self.of(npc).target(npc, around)
+        self.thinker(npc).target(npc, around)
     }
 
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
@@ -230,6 +269,7 @@ mod tests {
 
     use super::*;
     use crate::ai::fire;
+    use crate::ai::miner::{MINER_BITS, MINES, SCOOPS};
     use crate::catalog::WeaponId;
     use crate::combat::hull::Condition;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -476,6 +516,135 @@ mod tests {
         assert_eq!(
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(marks[2].ship())
+        );
+    }
+
+    /// `npc` as a miner of `Flags3` `bits`.
+    fn mining(mut npc: Npc, bits: u16) -> Npc {
+        npc.miner = bits;
+        npc
+    }
+
+    /// Nova's AI with marks 1-4 for the four types, 9 for the escorts, 8
+    /// for the carried fighters and 5 for the miners.
+    fn marked() -> (NovaAi, Vec<Rc<Marked>>, [Rc<Marked>; 3]) {
+        let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
+        let others = [Marked::new(9), Marked::new(8), Marked::new(5)];
+        let ai = TYPES
+            .into_iter()
+            .zip(&marks)
+            .fold(NovaAi::default(), |ai, (ai_type, mark)| {
+                ai.with(ai_type, mark.clone())
+            })
+            .with_escorts(others[0].clone())
+            .with_carried(others[1].clone())
+            .with_miner(others[2].clone());
+        (ai, marks, others)
+    }
+
+    #[test]
+    fn a_leaderless_miner_of_any_ai_type_decides_and_targets_as_the_miners_ai() {
+        let (ai, marks, [_, _, miners]) = marked();
+        let strike = Strike {
+            ship: ShipRef::Player,
+            by: Some(ShipRef::Player),
+            damage: 0.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+        };
+        for bits in [MINES, SCOOPS, MINER_BITS] {
+            let npcs: Vec<Npc> = TYPES
+                .into_iter()
+                .enumerate()
+                .map(|(i, ai_type)| mining(of(10 + i as u32, ai_type), bits))
+                .collect();
+            let around = Surroundings::new(&[], &npcs);
+            for (npc, mark) in npcs.iter().zip(&marks) {
+                assert_eq!(
+                    ai.decide(npc, &around, &mut Draws::of(&[])),
+                    Goal::Attack(miners.ship())
+                );
+                assert_eq!(ai.target(npc, &around), Some(miners.ship()));
+                let wanted = Some(WeaponId(i16::try_from(mark.mark).unwrap_or_default()));
+                assert_eq!(ai.trigger(npc, &around).only, wanted, "its type's fire");
+                assert_eq!(ai.gate_wait(npc, &around).trigger.only, wanted);
+                assert_eq!(ai.react(npc, &strike, &around).provoked, mark.mark as f32);
+                assert_eq!(mark.asked.borrow_mut().drain(..).count(), 3);
+            }
+        }
+        assert_eq!(miners.asked.borrow().len(), 24);
+    }
+
+    #[test]
+    fn a_led_miner_flies_its_leaders_way_by_its_type() {
+        let (ai, marks, [_, _, miners]) = marked();
+        let mut led = mining(of(2, AiType::Warship), MINER_BITS);
+        led.leader = Some(NpcId(1));
+        let npcs = [of(1, AiType::Warship), led];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Attack(marks[2].ship())
+        );
+        assert!(miners.asked.borrow().is_empty());
+        let nova = NovaAi::default().with_miner(miners.clone());
+        let mut trader = mining(of(2, AiType::WimpyTrader), SCOOPS);
+        trader.leader = Some(NpcId(1));
+        let npcs = [of(1, AiType::WimpyTrader), trader];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            nova.decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Follow(NpcId(1))
+        );
+        assert!(miners.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_miner_escorting_the_player_or_carried_goes_to_the_escorts_or_fighters_ai() {
+        let (ai, _, [escorts, fighters, miners]) = marked();
+        let npcs = [
+            escorting(mining(of(1, AiType::Warship), MINER_BITS)),
+            carried(
+                mining(of(2, AiType::Warship), MINER_BITS),
+                ShipRef::Npc(NpcId(30)),
+            ),
+        ];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(escorts.ship())
+        );
+        assert_eq!(
+            ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Attack(fighters.ship())
+        );
+        assert!(miners.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_ship_behav_0_miner_still_hunts_the_player() {
+        let (ai, _, [_, _, miners]) = marked();
+        let npcs = [mission_ship(mining(of(1, AiType::Warship), MINER_BITS), 0)];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+        assert!(miners.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn by_default_nova_ai_sends_a_leaderless_miner_to_the_miners_ai() {
+        let npcs = [mining(of(1, AiType::Warship), SCOOPS)];
+        let sites = [nova_sim_catalog::fixture::planet(128, 100.0, 0.0)];
+        let around = Surroundings::new(&sites, &npcs);
+        assert_eq!(
+            NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Land(crate::catalog::StellarId(128)),
+            "drawing nothing"
         );
     }
 
