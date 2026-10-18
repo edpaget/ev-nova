@@ -406,24 +406,28 @@ impl Session {
         self.traffic.remove(id);
     }
 
-    /// NPC `id`, captured, no longer flies as its person, who is gone for
-    /// good, escape pod or not (`_DoShipCapture` @0x41180), its slot holds
-    /// no person from now on, for `<OSN>`, and it has no `düde` (+0x78 = -1,
-    /// @0x411aa).
-    pub(super) fn lose_captured(&mut self, id: NpcId) {
+    /// NPC `id`, captured, no longer flies as its person, its slot holds
+    /// no person from now on, for `<OSN>` (+0xc8d0 = -1: @0x411b3,
+    /// @0x89741, @0x946a6), and it has no `düde` (+0x78 = -1, @0x411aa).
+    /// The person is gone for good, escape pod or not, when `gone`: Use As
+    /// My Ship always (`_DoShipCapture` @0x41180), Use As Escort as
+    /// [`RuleKey::CapturedPerson`](crate::RuleKey::CapturedPerson) reads
+    /// (see the `capture` module); otherwise it lives on with its grudge.
+    ///
+    /// It also unmarks a mission's special ship, which is the engine's
+    /// own: the original's escort path never writes the mark +0xc8d2, and
+    /// `_DoShipCapture`'s @0x413c2 clears the old ship's, not the captured
+    /// one's (rdm:phase/ship-handling-fidelity/phase-21-captured-mission-ship-keeps-its-mark).
+    pub(super) fn lose_captured(&mut self, id: NpcId, gone: bool) {
         let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
-        // A capture also unmarks a mission's special ship, its ships left
-        // kept (`_DoShipCapture` @0x413c2).
         let taken = npc.map(|npc| {
             npc.mission = None;
             npc.booty = None;
             (npc.berth, npc.person.take())
         });
         if let Some((berth, person)) = taken {
-            // The slot's person is cleared too (+0xc8d0 = -1: @0x411b3,
-            // @0x89741, @0x946a6), which `<OSN>` reads.
             self.traffic.forget_berth_person(berth);
-            if let Some(person) = person {
+            if let Some(person) = person.filter(|_| gone) {
                 self.go(person.id);
             }
         }
@@ -817,21 +821,78 @@ mod tests {
         session
     }
 
+    /// [`captured`] with Ace holding a grudge, by `source`'s reading of
+    /// [`RuleKey::CapturedPerson`](crate::RuleKey::CapturedPerson).
+    fn captured_by(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        let rules =
+            crate::Rulebook::default().with_override(crate::RuleKey::CapturedPerson, source);
+        let mut session = captured(catalog).with_rules(rules);
+        session.pilot.grudges.insert(PersonId(600));
+        session
+    }
+
     #[test]
-    fn a_captured_person_is_gone_for_good_escape_pod_or_not() {
+    fn a_person_captured_as_an_escort_lives_on_by_the_engine_and_is_gone_by_the_other_reading() {
         use crate::board::Assignment;
-        for (flags, choice) in [
-            (ESCAPE_POD, Assignment::Escort),
-            (0, Assignment::Escort),
-            (ESCAPE_POD, Assignment::MyShip),
-        ] {
+        for flags in [0, ESCAPE_POD] {
             let catalog = duel(flags, 0);
-            let mut session = captured(&catalog);
-            assert!(session.assign(choice, &mut NeverFires).is_some());
-            assert!(session.pilot().gone(PersonId(600)), "{flags} {choice:?}");
+            let mut session = captured_by(&catalog, RuleSource::Engine);
+            assert!(
+                session
+                    .assign(Assignment::Escort, &mut NeverFires)
+                    .is_some()
+            );
+            assert!(!session.pilot().gone(PersonId(600)), "{flags}: alive");
+            assert!(
+                session.pilot().grudge(PersonId(600)),
+                "{flags}: its grudge kept"
+            );
             assert!(
                 session.npcs().iter().all(|npc| npc.person.is_none()),
-                "no person flies for the player: {choice:?}"
+                "{flags}: its ship flies for the player as no person"
+            );
+            assert_eq!(
+                session
+                    .pilot()
+                    .escorts()
+                    .iter()
+                    .map(|escort| escort.person)
+                    .collect::<Vec<_>>(),
+                [None],
+                "{flags}"
+            );
+            assert!(
+                persons(&flown_again(&catalog, &session)).contains(&Some(600)),
+                "{flags}: it appears again"
+            );
+            let mut session = captured_by(&catalog, RuleSource::Bible);
+            assert!(
+                session
+                    .assign(Assignment::Escort, &mut NeverFires)
+                    .is_some()
+            );
+            assert!(session.pilot().gone(PersonId(600)), "{flags}: gone");
+            assert!(!session.pilot().grudge(PersonId(600)), "{flags}");
+            assert!(session.npcs().iter().all(|npc| npc.person.is_none()));
+        }
+    }
+
+    #[test]
+    fn a_person_whose_ship_the_player_takes_is_gone_for_good_by_either_reading() {
+        use crate::board::Assignment;
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = duel(ESCAPE_POD, 0);
+            let mut session = captured_by(&catalog, source);
+            assert!(
+                session
+                    .assign(Assignment::MyShip, &mut NeverFires)
+                    .is_some()
+            );
+            assert!(session.pilot().gone(PersonId(600)), "{source:?}");
+            assert!(!session.pilot().grudge(PersonId(600)), "{source:?}");
+            assert!(
+                session.npcs().iter().all(|npc| npc.person.is_none()),
+                "no person flies for the player: {source:?}"
             );
         }
     }

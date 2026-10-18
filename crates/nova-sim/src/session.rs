@@ -214,11 +214,14 @@
 //! ([`Session::plunder`]): its cargo into the hold, its credits, its
 //! ammunition as outfits and its energy into the tank, each once, at the
 //! risk of its self-destruct; and captures it, with odds from the crews,
-//! by a [`BoardingRule`]. A ship captured joins the pilot's fleet or
-//! becomes the player's own ship ([`Session::assign`]), which makes a
-//! save due. The boarding under way is never saved. Boarding a person
-//! may grant outfits of its `GrantClass` as the [`BoardingRule`] says
-//! (see [`grant`](crate::grant)), added at once and told once
+//! by a [`BoardingRule`], each press beeping as the original's dialog
+//! does (see the `plunder_loop` module). A ship captured joins the
+//! pilot's fleet or becomes the player's own ship ([`Session::assign`]),
+//! which makes a save due; the escorts the odds and the fleet's room
+//! count are those in the system (see the `capture` module). The
+//! boarding under way is never saved. Boarding a person may grant
+//! outfits of its `GrantClass` as the [`BoardingRule`] says (see
+//! [`grant`](crate::grant)), added at once and told once
 //! ([`Session::take_grant`]); like plunder, a grant makes no save due.
 //!
 //! The player hails its target ([`Session::hail`]), as the
@@ -358,6 +361,7 @@ mod aux_ships;
 mod board_attempt;
 mod brackets;
 mod buoys;
+mod capture;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
@@ -411,6 +415,7 @@ mod player_downed;
 mod player_info;
 mod player_led;
 mod player_repair;
+mod plunder_loop;
 mod precalced;
 mod radar;
 mod ranks;
@@ -432,6 +437,7 @@ mod thrust;
 mod tutorial;
 mod warp_stage;
 
+use capture::CaptureFuel;
 pub use hooks::HookRules;
 pub use map_click::{MapClicked, MapPress};
 pub use nav::SavedNav;
@@ -465,9 +471,9 @@ use crate::bay::FighterNote;
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
     CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE, EscortCrew,
-    HeldRounds, MARINES, MAX_ESCORTS, MissionBoardLine, Plunder, PlunderView, Prize,
-    SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE,
-    Take, Taken, check_board,
+    HeldRounds, MARINES, MissionBoardLine, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL,
+    TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken,
+    check_board,
 };
 use crate::catalog::{
     AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, EscortClass,
@@ -962,6 +968,12 @@ pub struct Session {
     aboard: Option<Aboard>,
     /// What the last boarding granted, until it is taken.
     granted: Option<Granted>,
+    /// Whether the player's fuel capacity is cached, as `_ShipFuelCapacity`
+    /// caches it (`*0x3b508c`, @0x2f55-0x2feb) at the flight tick's fuel
+    /// regeneration and an Energy take, until a reset invalidates it
+    /// (@0xc397): which capacity Use As My Ship draws its fuel below (see
+    /// the `capture` module). Never saved.
+    fuel_cap_cached: bool,
     /// The comm line a failed mission's ship said as the last board
     /// plundered it, until it is taken (see the `board_attempt` module).
     board_line: Option<MissionBoardLine>,
@@ -1597,6 +1609,7 @@ impl Session {
             strikes: Vec::new(),
             aboard: None,
             granted: None,
+            fuel_cap_cached: false,
             board_line: None,
             talk: None,
             comm: Vec::new(),
@@ -2127,6 +2140,10 @@ impl Session {
             }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+        // `_HandlePlayer` reads `_ShipFuelCapacity` right after the
+        // regeneration (@0x6d9cd), which caches it (see the `capture`
+        // module).
+        self.fuel_cap_cached = true;
     }
 
     /// Aims the player at the map bearing of `to`, the jump's next system,
@@ -5727,6 +5744,9 @@ impl Session {
         self.refit(true, self.script_reserves());
         // And again once it is granted (@0x93226).
         self.reset_precalced();
+        // The grant line's beep, only for a count above none (@0x933fe;
+        // none skips it, @0x931f6 → @0x93441).
+        self.sounds.push(SimSound::PlunderBeep);
         Some(granted)
     }
 
@@ -5802,15 +5822,16 @@ impl Session {
         CaptureCrew {
             crew: i32::from(self.crew(self.pilot.ship)),
             strength: self.hull.strength as i32,
+            // The escorts `_SetPlunderValues` counts (@0x92653-0x926c9; see
+            // the `capture` module).
             escorts: self
-                .pilot
-                .escorts
-                .iter()
-                .map(|escort| EscortCrew {
-                    crew: i32::from(self.crew(escort.ship)),
-                    strength: self.arsenal.hull(escort.ship).strength as i32,
+                .led_escorts()
+                .into_iter()
+                .map(|ship| EscortCrew {
+                    crew: i32::from(self.crew(ship)),
+                    strength: self.arsenal.hull(ship).strength as i32,
                     inherent_ai: self
-                        .ship_record(escort.ship)
+                        .ship_record(ship)
                         .map_or(0, |record| record.inherent_ai),
                 })
                 .collect(),
@@ -5822,7 +5843,7 @@ impl Session {
             target_crew: i32::from(self.crew(npc.ship)),
             target_strength: npc.hull.strength as i32,
             derelict: self.govts.derelict(npc.govt),
-            fleet_room: self.pilot.escort_count() < MAX_ESCORTS,
+            fleet_room: self.can_hire_escorts(),
         }
     }
 
@@ -5837,10 +5858,14 @@ impl Session {
     }
 
     /// Presses `take` in the plunder dialog, and gives what it did (see
-    /// [`board`](crate::board)): a press whose value is not on board, or
-    /// with no boarding under way, does nothing. Any press but Abort right
-    /// after a take first rolls the self-destruct on `chance`; a capture
-    /// is rolled as `rule` says.
+    /// [`board`](crate::board) and the `plunder_loop` module): with no
+    /// boarding under way, or a capture awaiting its assignment, nothing.
+    /// Every press but Abort first rolls the armed self-destruct on
+    /// `chance` and otherwise disarms it, a [`Take::Miss`] and a take
+    /// whose value is not on board included; such a take beeps its
+    /// refusal and takes nothing. A capture is rolled as `rule` says.
+    /// Each press beeps as `_DoPlunderDialog` does, and each that leaves
+    /// the dialog open counts the message line down one tick.
     pub fn plunder(
         &mut self,
         take: Take,
@@ -5850,24 +5875,32 @@ impl Session {
         let Some(mut aboard) = self.aboard.filter(|aboard| !aboard.captured) else {
             return Taken::Nothing;
         };
-        if take == Take::Abort || !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
+        if take == Take::Abort {
+            // Abort's beep (@0x935cb).
+            self.sounds.push(SimSound::PlunderBeep);
             self.close_plunder();
             return Taken::Aborted;
         }
-        if !aboard.view().offers(take) {
-            return Taken::Nothing;
+        if !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
+            self.close_plunder();
+            return Taken::Aborted;
         }
         let plunder = &mut aboard.plunder;
+        // The roll (@0x935f7-0x93613), and the disarm of every press that
+        // doesn't trip (@0x935e5).
         if std::mem::take(&mut plunder.armed)
             && chance.below(SELF_DESTRUCT_ROLL) <= plunder.threshold
         {
+            // The trip's beep (@0x93681).
+            self.sounds.push(SimSound::PlunderBeep);
             self.self_destruct(aboard.npc);
             return Taken::Tripped;
         }
         let (taken, growth) = match take {
+            Take::Miss => return self.keep_plunder_open(aboard, Taken::Missed),
             Take::Cargo => {
                 let Some((good, tons)) = plunder.cargo.take() else {
-                    return Taken::Nothing;
+                    return self.refuse_take(aboard);
                 };
                 // The ship's own space, less `_TotalCargo` with the
                 // mission cargo aboard, not the fleet's: plunder into
@@ -5880,22 +5913,32 @@ impl Session {
                 (Taken::Cargo { good, stored }, CARGO_GROWTH)
             }
             Take::Credits => {
+                if plunder.credits <= 0 {
+                    return self.refuse_take(aboard);
+                }
                 let credits = std::mem::take(&mut plunder.credits);
                 self.pilot.cash = self.pilot.cash.saturating_add(credits);
                 (Taken::Credits(credits), CREDITS_GROWTH)
             }
             Take::Ammo => {
-                let Some((outfit, rounds)) = plunder.ammo.take() else {
-                    return Taken::Nothing;
-                };
                 // The ammunition button's reset (`_DoPlunderDialog`
-                // @0x93cc9; see the `precalced` module).
+                // @0x93cc9; see the `precalced` module), before it looks
+                // for rounds on board.
                 self.reset_precalced();
+                let Some((outfit, rounds)) = plunder.ammo.take() else {
+                    return self.refuse_take(aboard);
+                };
                 let count = self.take_ammo(outfit, rounds);
                 (Taken::Ammo { outfit, count }, AMMO_GROWTH)
             }
             Take::Energy => {
+                if plunder.fuel == 0 {
+                    return self.refuse_take(aboard);
+                }
                 let offered = std::mem::take(&mut plunder.fuel);
+                // The take reads `_ShipFuelCapacity` (@0x940a5, @0x94100),
+                // which caches it (see the `capture` module).
+                self.fuel_cap_cached = true;
                 let fuel = &mut self.pilot.reserves.fuel;
                 let room = (fuel.max - fuel.now).max(0.0).trunc();
                 let stored = (offered as f32).min(room);
@@ -5910,10 +5953,12 @@ impl Session {
             Take::Capture => return self.capture(aboard, rule, chance),
             Take::Abort => return Taken::Nothing,
         };
+        // Each take's beep (@0x937a0, @0x939b9, @0x93b3b, @0x93f10,
+        // @0x93f77, @0x94095).
+        self.sounds.push(SimSound::PlunderBeep);
         plunder.threshold = (f64::from(plunder.threshold) * growth) as u32;
         plunder.armed = true;
-        self.aboard = Some(aboard);
-        taken
+        self.keep_plunder_open(aboard, taken)
     }
 
     /// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
@@ -5973,7 +6018,12 @@ impl Session {
     }
 
     /// Rolls the capture of the ship `aboard` boards, at its odds as
-    /// `rule` says on `chance`, and gives what came of it. A capture
+    /// `rule` says on `chance`, and gives what came of it: a failure (odds
+    /// of none included) beeps its refusal and closes the dialog
+    /// (@0x94911-0x94936); the capture's own self-destruct is silent
+    /// (@0x942de-0x94336); a successful roll beeps (@0x94368), and then a
+    /// full fleet (`_CanHireEscorts`, [`Session::can_hire_escorts`])
+    /// beeps its refusal and leaves the dialog open (@0x9487f). A capture
     /// taken straight into the fleet runs its class's `OnCapture` on
     /// `chance` first.
     fn capture(
@@ -5983,6 +6033,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Taken {
         if !rule.captures(aboard.plunder.odds, chance) {
+            self.sounds.push(SimSound::Refused);
             self.close_plunder();
             return Taken::CaptureFailed;
         }
@@ -5990,9 +6041,10 @@ impl Session {
             self.self_destruct(aboard.npc);
             return Taken::Tripped;
         }
-        if self.pilot.escort_count() >= MAX_ESCORTS {
-            self.aboard = Some(aboard);
-            return Taken::FleetFull;
+        self.sounds.push(SimSound::PlunderBeep);
+        if !self.can_hire_escorts() {
+            self.sounds.push(SimSound::Refused);
+            return self.keep_plunder_open(aboard, Taken::FleetFull);
         }
         if self.crew(self.pilot.ship) > 0 {
             aboard.captured = true;
@@ -6005,8 +6057,12 @@ impl Session {
         Taken::Escorted
     }
 
-    /// Trips the self-destruct of NPC `id`: its shield and armour are
-    /// gone, so the fight breaks it up, and the boarding is over.
+    /// Trips the self-destruct of NPC `id`: its shield, armour and death
+    /// timer are zeroed (@0x93632-0x9365a, @0x94306-0x9432e), so the
+    /// fight breaks it up from the next tick, setting its timer afresh
+    /// from its `DeathDelay` (`Condition::Dying { starting: true }`), as
+    /// `_HandleShipDisplay` sets a zero timer (@0x2d834-0x2d850); and the
+    /// boarding is over.
     fn self_destruct(&mut self, id: NpcId) {
         for npc in self.traffic.npcs_mut() {
             if npc.id == id {
@@ -6026,10 +6082,12 @@ impl Session {
     }
 
     /// NPC `id`, captured, joins the fleet where it is: no longer its
-    /// person, intact, its armour at half its most, and then as
+    /// person, who lives on or is gone for good as
+    /// [`RuleKey::CapturedPerson`] reads (see the `capture` module),
+    /// intact, its armour at half its most, and then as
     /// [`Session::fleet_up`] says.
     fn join_fleet(&mut self, id: NpcId) {
-        self.lose_captured(id);
+        self.lose_captured(id, self.escort_capture_loses_person());
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
@@ -6093,35 +6151,48 @@ impl Session {
 
     /// Assigns the ship captured, as `choice` says, and gives what it
     /// did: none when no capture awaits its assignment (see
-    /// [`board`](crate::board)). "Use As Escort" adds it to the fleet;
-    /// "Use As My Ship" swaps the player into it, the old ship joining the
-    /// fleet, its fuel drawn on `chance`, unless no ship slot is free in
-    /// the system for the old ship, when the prize is lost and nothing
-    /// else changes. The player keeps its persistent outfits and gets the
-    /// captured class's default items, then its stock weapons and their
-    /// `AmmoLoad`, topped up as after a purchase. Either change makes a
-    /// save due. The captured class's `OnCapture` runs on `chance` before
-    /// it joins the fleet; on "Use As My Ship" the old class's `OnRetire`
-    /// runs first, both before the fuel draw and, as
+    /// [`board`](crate::board)). Either button beeps first
+    /// ([`SimSound::CaptureAssigned`]). "Use As Escort" adds it to the
+    /// fleet, its person living on or gone as [`RuleKey::CapturedPerson`]
+    /// reads; "Use As My Ship" swaps the player into it, the old ship
+    /// joining the fleet and its person gone for good, unless no ship slot
+    /// is free in the system for the old ship, when the prize is lost and
+    /// nothing else changes. The player keeps its persistent outfits and
+    /// gets the captured class's default items, then its stock weapons and
+    /// their `AmmoLoad`, topped up as after a purchase. Either change
+    /// makes a save due. The captured class's `OnCapture` runs on `chance`
+    /// before it joins the fleet; on "Use As My Ship" the old class's
+    /// `OnRetire` runs first, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
     /// swap (see the `hooks` module). The change of class is applied by
-    /// [`Session::become_class`], with the reserves held. "Use As My
-    /// Ship" leaves no secondary selected (`_DoShipCapture` @0x4173e);
-    /// "Use As Escort" leaves it as it is. By the engine reading of
-    /// [`RuleKey::CaptureCargo`], "Use As My Ship" leaves the commodities
-    /// with the old ship, the `jünk` and the mission cargo staying with the
-    /// player; by the other, the player keeps them. The commodities go,
-    /// and the old ship joins the fleet, before the hooks run, as the
-    /// original sets both up first (@0x412e6-0x412fe, @0x41188-0x4156f),
-    /// so the hooks' resets count its holds when it is a trader; its NPC
-    /// is placed once the player has left it. The session then resets
-    /// twice with the old ship in the fleet (@0x419fd, @0x41a3e) and once
-    /// more as the plunder dialog closes (@0x94a0b), each trim cutting the
-    /// commodities to the new fleet's holds while they are past them;
-    /// every other assignment resets once, as the dialog closes (see the
-    /// `precalced` module).
+    /// [`Session::become_class`], with the reserves held.
+    ///
+    /// "Use As My Ship" takes the captured ship's place, velocity and
+    /// heading (`_DoShipCapture` @0x416e3-0x41722) and lets go of the nav
+    /// selection, the ship target and the secondary (@0x4172e-0x4173e);
+    /// "Use As Escort" leaves them as they are. Its fuel is drawn on
+    /// `chance` below the old ship's capacity while the cache holds it,
+    /// and otherwise below the captured class's `Fuel` and the old
+    /// outfits' `ModType` 12 (see the `capture` module). By the engine
+    /// reading of [`RuleKey::CaptureCargo`] the player's commodities go
+    /// to the old ship's hold and the player holds the captured ship's in
+    /// their place (@0x412e2-0x412fe, @0x41760-0x41779), the `jünk` and
+    /// the mission cargo staying with the player; by the other, the player
+    /// keeps them and the captured hold is lost with its ship. The
+    /// commodities go, and the old ship joins the fleet, before the hooks
+    /// run, as the original sets both up first (@0x41188-0x4156f), so the
+    /// hooks' resets count its holds when it is a trader; its NPC comes in
+    /// where the player was once the player has left it, and flies to its
+    /// slot. The session then resets twice with the old ship in the fleet
+    /// (@0x419fd, @0x41a3e) and once more as the plunder dialog closes
+    /// (@0x94a0b), each trim cutting the commodities to the new fleet's
+    /// holds while they are past them; every other assignment resets once,
+    /// as the dialog closes (see the `precalced` module).
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
+        // Either button's beep, before anything else
+        // (`_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b).
+        self.sounds.push(SimSound::CaptureAssigned);
         self.aboard = None;
         let Some(npc) = self.npcs().iter().find(|npc| npc.id == aboard.npc).cloned() else {
             self.close_plunder();
@@ -6140,24 +6211,14 @@ impl Session {
             return Some(Assigned::Abandoned);
         };
         let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
-        let stock = ShipStats::new(self.fields, &outfit_mods(&self.defaults, &self.outfits));
-        let old = Escort {
-            ship: self.pilot.ship,
-            reserves: stock.full(),
-            order: None,
-            carried: false,
-            wage: None,
-            person: None,
-        };
-        // The commodities stay with the old ship, the player taking the
-        // captured ship's, which the engine's ships carry none of
-        // (@0x412e6-0x412fe, @0x41762-0x41779), as `capture_cargo` reads:
-        // before the hooks, as the original swaps them.
-        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
-            self.pilot
-                .cargo
-                .retain(|good, _| !matches!(good, Good::Commodity(_)));
-        }
+        // Where the player was, which the old ship takes (@0x411bd-0x411ea).
+        let left = self.player;
+        let fuel_old = self.capture_fuel(&record).old;
+        let old = self.old_ship_escort();
+        // The commodities go to the old ship, and the player takes the
+        // captured ship's below, as `capture_cargo` reads: before the
+        // hooks, as the original swaps them.
+        let hold = self.commodities_for_old_ship();
         // The old ship joins the fleet before the hooks run
         // (@0x41188-0x4156f), so their resets count its holds when it is a
         // trader (@0x41662, @0x416c9); its NPC is placed once the player
@@ -6169,6 +6230,12 @@ impl Session {
             self.retire_for_capture(record.id, chance);
         }
         let defaults = pilot::tally(record.defaults.iter().copied());
+        // The capacity worked out afresh, if the cache doesn't hold one:
+        // the old outfits', read before they change (@0x41786).
+        let fuel = CaptureFuel {
+            old: fuel_old,
+            ..self.capture_fuel(&record)
+        };
         let records = &self.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
         // whatever the ship-change rules say, and tops the stock weapons
@@ -6198,27 +6265,29 @@ impl Session {
             if !hooks_first {
                 session.retire_for_capture(record.id, chance);
             }
-            session.take_over_reserves(&record, share, chance);
+            session.take_over_reserves(&record, share, fuel, chance);
         });
-        // No secondary is selected on the captured ship (`_DoShipCapture`
-        // @0x4173e).
-        self.secondary = None;
+        self.take_captured_commodities(&npc.cargo);
+        // The captured ship's place (@0x416e3-0x41722), and no nav
+        // selection, ship target or secondary (@0x4172e-0x4173e).
         self.player = npc.state;
+        self.deselect();
+        self.target = None;
+        self.secondary = None;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
                 other.leader = None;
             }
         }
-        self.lose_captured(npc.id);
+        // Use As My Ship loses the person for good (@0x41180), whatever
+        // `captured_person` says.
+        self.lose_captured(npc.id, true);
         self.leave(npc.id);
-        let placed = self.place_escort(old_slot);
+        let placed = self.place_old_ship(old_slot, left, hold);
         if let Some(slot) = self.fleet.get_mut(old_slot) {
             *slot = placed;
         }
         self.reform();
-        if let Some(id) = placed {
-            self.snap(id);
-        }
         // `_DoShipCapture`'s two resets (`_ShipStatsToSystemInfo` @0x419fd,
         // `_SystemInfoToShipStats` @0x41a3e), the old ship in the fleet,
         // then the plunder dialog's close (@0x94a0b): each trims again
@@ -6231,17 +6300,22 @@ impl Session {
 
     /// The reserves a ship of `record` is taken over with: no shield,
     /// `share` of its armour and [`TAKEOVER_ARMOR_BASE`], and its fuel
-    /// drawn on `chance` below its `Fuel` (none, with no draw, for no
-    /// tank).
-    fn take_over_reserves(&mut self, record: &ShipRecord, share: f64, chance: &mut dyn Chance) {
+    /// drawn on `chance` below the capacity `fuel` gives as the cache
+    /// stands at the draw (none, with no draw, for no tank; see the
+    /// `capture` module).
+    fn take_over_reserves(
+        &mut self,
+        record: &ShipRecord,
+        share: f64,
+        fuel: CaptureFuel,
+        chance: &mut dyn Chance,
+    ) {
+        let drawn = fuel.draw(self.fuel_cap_cached, chance);
         let reserves = &mut self.pilot.reserves;
         reserves.shield.now = 0.0;
         reserves.armor.now =
             f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
-        reserves.fuel.now = u32::try_from(record.fields.fuel)
-            .ok()
-            .filter(|&fuel| fuel > 0)
-            .map_or(0.0, |fuel| chance.below(fuel) as f32);
+        reserves.fuel.now = drawn;
     }
 }
 
@@ -23240,12 +23314,12 @@ pub(super) mod tests {
 
     /// The boarding's draws: the threshold 15, credits 3.75 + 2 thousand,
     /// food, 10 + 3 tons, 170 energy and no jitter.
-    const BOARD_DRAWS: [u32; 6] = [0, 2, 0, 3, 17, 5];
+    pub(super) const BOARD_DRAWS: [u32; 6] = [0, 2, 0, 3, 17, 5];
 
     /// What [`BOARD_DRAWS`] put on board the trader: odds of 10 / 30
     /// (33), and 10 for the player's strength over five times the
     /// trader's.
-    const ON_BOARD: PlunderView = PlunderView {
+    pub(super) const ON_BOARD: PlunderView = PlunderView {
         npc: NpcId(0),
         ship: ShipId(129),
         credits: 5750,
@@ -23777,8 +23851,8 @@ pub(super) mod tests {
         assert_eq!(session.boarding().map(|view| view.cargo), Some(None));
         assert_eq!(
             take(&mut session, Take::Cargo, &[]),
-            (Taken::Nothing, vec![]),
-            "taken once; an ignored press rolls nothing"
+            (Taken::Missed, vec![100]),
+            "taken once; a press with nothing to take rolls and takes nothing"
         );
         let mut session = aboard(&catalog);
         session.pilot.cargo.insert(Good::Commodity(3), 10);
@@ -23818,7 +23892,7 @@ pub(super) mod tests {
         );
         assert_eq!(session.pilot().cash(), 5850);
         assert_eq!(session.boarding().map(|view| view.credits), Some(0));
-        assert_eq!(take(&mut session, Take::Credits, &[]).0, Taken::Nothing);
+        assert_eq!(take(&mut session, Take::Credits, &[]).0, Taken::Missed);
         assert_eq!(session.pilot().cash(), 5850);
     }
 
@@ -23891,7 +23965,7 @@ pub(super) mod tests {
     /// [`boardable`] with rockets (weapon 140, firing rounds of their own,
     /// held by outfit 253) on both ships, the trader holding 9 rounds, and
     /// ammunition outfit 310 for them of `mass` and `max`.
-    fn ammo_aboard(mass: i16, max: i16) -> FakePilotCatalog {
+    pub(super) fn ammo_aboard(mass: i16, max: i16) -> FakePilotCatalog {
         let mut catalog = boardable();
         catalog.weapons.push(secondary(140, 12));
         for hull in &mut catalog.hulls {
@@ -23923,7 +23997,7 @@ pub(super) mod tests {
     /// drawn before the energy.
     const AMMO_DRAWS: [u32; 7] = [0, 2, 0, 3, 0, 17, 5];
 
-    fn ammo_session(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn ammo_session(catalog: &FakePilotCatalog) -> Session {
         let mut session = alongside(catalog);
         let opened = session.board(
             &NovaLaw::default(),
@@ -24322,7 +24396,7 @@ pub(super) mod tests {
     }
 
     /// The trader as an escort: armour at half its most.
-    fn trader_escort() -> Escort {
+    pub(super) fn trader_escort() -> Escort {
         Escort {
             ship: ShipId(129),
             reserves: Reserves {
@@ -24518,9 +24592,10 @@ pub(super) mod tests {
         catalog
     }
 
-    /// The player's old ship, the second NPC, flies as its escort on its
-    /// slot beside the player, stock and full, its record and NPC lined up.
-    fn assert_old_ship_escorts(session: &mut Session) {
+    /// The player's old ship, the second NPC, flies as its escort, slot 2
+    /// of its formation, from `left`, where the player was, stock and full,
+    /// its record and NPC lined up.
+    fn assert_old_ship_escorts(session: &mut Session, left: ShipState) {
         let old = &session.npcs()[1];
         assert!(session.is_escort(old.id));
         let duty = old.escort.expect("an escort");
@@ -24529,18 +24604,10 @@ pub(super) mod tests {
             (2, 2, None)
         );
         assert_eq!(
-            old.state,
-            ShipState {
-                position: crate::escort::slot_position(
-                    session.player(),
-                    2,
-                    2,
-                    duty.formation.spacing
-                ),
-                ..*session.player()
-            },
-            "on its slot"
+            old.state, left,
+            "where the player was, to fly in (@0x411bd-0x411ea, @0x4156a)"
         );
+        assert_eq!(old.goal, Goal::Formation { guard: None });
         assert_eq!(old.reserves, Reserves::full(300.0, 450.0, 300.0));
         assert_eq!(old.govt, None);
         let old = old.id;
@@ -24760,6 +24827,7 @@ pub(super) mod tests {
             take(&mut session, Take::Capture, &[99, 0, 1]).0,
             Taken::Captured
         );
+        let left = *session.player();
         let held = session.pilot().cargo().collect::<Vec<_>>();
         let mut chance = Draws::of(&[123]);
         assert_eq!(
@@ -24830,7 +24898,7 @@ pub(super) mod tests {
             "the captured ship left, and the old one flies beside the player"
         );
         assert_eq!(session.npcs()[0].leader, None, "its escort let go");
-        assert_old_ship_escorts(&mut session);
+        assert_old_ship_escorts(&mut session, left);
         assert_eq!(session.player_condition(), Condition::Intact);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());
@@ -25212,7 +25280,7 @@ pub(super) mod tests {
     /// granting up to 2 outfits of class 7 at odds of 40, and the shield
     /// boosters of class 7 (`oütf` 200, 10 more shield each, a ton, up to
     /// 10), "shield booster" and "shield boosters".
-    fn granting() -> FakePilotCatalog {
+    pub(super) fn granting() -> FakePilotCatalog {
         let mut catalog = boardable();
         catalog.persons = vec![crate::catalog::PersonRecord {
             grant_class: 7,
@@ -25240,7 +25308,7 @@ pub(super) mod tests {
 
     /// Person `id` as the NPC flying it carries it, with nothing of its
     /// own.
-    fn flown_by(id: i16) -> NpcPerson {
+    pub(super) fn flown_by(id: i16) -> NpcPerson {
         NpcPerson {
             id: crate::catalog::PersonId(id),
             flags: 0,
@@ -25257,7 +25325,7 @@ pub(super) mod tests {
     }
 
     /// [`alongside`], the trader flown by Ace, so of no booty.
-    fn alongside_ace(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn alongside_ace(catalog: &FakePilotCatalog) -> Session {
         let mut session = alongside(catalog);
         let trader = &mut session.traffic.npcs_mut()[0];
         trader.booty = Some(0);
@@ -25267,7 +25335,7 @@ pub(super) mod tests {
 
     /// Boards by Nova's law and `rule`, drawing `draws`: what it did, and
     /// the bounds asked.
-    fn board_drawing(
+    pub(super) fn board_drawing(
         session: &mut Session,
         rule: NovaBoarding,
         draws: &[u32],
@@ -25279,7 +25347,7 @@ pub(super) mod tests {
 
     /// Ace's boarding's draws: the threshold, 170 energy, no jitter, the
     /// grant's odds at 39 (40, which grants) and its count at 50 (2).
-    const ACE_DRAWS: [u32; 5] = [0, 17, 5, 39, 50];
+    pub(super) const ACE_DRAWS: [u32; 5] = [0, 17, 5, 39, 50];
 
     #[test]
     fn boarding_a_granting_person_adds_its_grant_after_the_plunder_and_the_odds() {

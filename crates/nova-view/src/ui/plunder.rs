@@ -11,7 +11,15 @@
 //! #109-112): the cargo's tons and good, the ammunition's rounds and
 //! outfit, and the capture odds. A click gives its [`Take`]
 //! ([`PlunderDialog::take_take`]); the router passes it to the flight and
-//! refreshes the dialog ([`PlunderDialog::set_plunder`]).
+//! refreshes the dialog ([`PlunderDialog::set_plunder`]). A click that
+//! reaches no enabled button (on a greyed button, on the text, outside
+//! the dialog, or released off the button it began on) gives
+//! [`Take::Miss`], as `_TrackPlunderButtons` (@0x2732a) hit-tests only the
+//! enabled buttons (@0x273d3-0x27426) and `_PlunderFilter` gives anything
+//! else as item -1, which still ends the modal wait (@0x92fdf). The clicks
+//! themselves are silent; what a press beeps is the session's. The
+//! dialog keeps how long it has been open ([`PlunderDialog::held`]), the
+//! `TickCount` the flight's floating map is read against at each press.
 //!
 //! The assignment dialog asks `STR#` 2002 #118's question in item 3, with
 //! "Use As My Ship" (item 1, `STR#` 150 #47) and "Use As Escort" (item 2,
@@ -31,7 +39,7 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::Input;
+use crate::input::{Input, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -154,6 +162,11 @@ pub struct PlunderDialog {
     dialog: Dialog,
     picture: Option<ImageKey>,
     take: Option<Take>,
+    /// Whether a click is under way: a primary press that has not been
+    /// released or abandoned.
+    pressing: bool,
+    /// How long it has been open.
+    held: Duration,
 }
 
 impl PlunderDialog {
@@ -226,6 +239,8 @@ impl PlunderDialog {
             dialog,
             picture,
             take: None,
+            pressing: false,
+            held: Duration::ZERO,
         };
         plunder.set_plunder(shown);
         Ok(plunder)
@@ -243,6 +258,13 @@ impl PlunderDialog {
     /// The take the player pressed, once.
     pub fn take_take(&mut self) -> Option<Take> {
         self.take.take()
+    }
+
+    /// How long it has been open, in real time: the original's
+    /// `TickCount` moves on under it.
+    #[must_use]
+    pub fn held(&self) -> Duration {
+        self.held
     }
 
     /// The dialog itself, for its layout.
@@ -284,20 +306,36 @@ fn plunder_template() -> DialogTemplate {
 }
 
 impl Screen for PlunderDialog {
-    /// Every event goes to the dialog; a button activated is its take.
-    /// It never quits.
+    /// Every event goes to the dialog; a button activated is its take,
+    /// and a primary click released without activating an enabled button
+    /// is a [`Take::Miss`] (see the module docs). It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Some(DialogEvent::Item(item)) = self.dialog.input(input) {
+        let event = self.dialog.input(input);
+        if let Some(DialogEvent::Item(item)) = event {
             self.take = TAKE_BUTTONS
                 .iter()
                 .find(|&&(button, ..)| button == item)
                 .map(|&(.., take)| take);
         }
+        if let Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            ..
+        } = *input
+        {
+            if pressed {
+                self.pressing = true;
+            } else if std::mem::take(&mut self.pressing) && event.is_none() {
+                self.take = Some(Take::Miss);
+            }
+        }
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// Keeps how long it has been open.
+    fn tick(&mut self, dt: Duration) {
+        self.held += dt;
+    }
 
     /// The picture (or the backdrop), then the dialog.
     fn draw(&self, list: &mut DrawList) {
@@ -307,6 +345,7 @@ impl Screen for PlunderDialog {
 
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
+        self.pressing = false;
     }
 }
 
@@ -613,10 +652,42 @@ mod tests {
             assert_eq!(dialog.take_take(), None, "once");
             assert_eq!(sounds, []);
         }
+    }
+
+    /// `_TrackPlunderButtons` hit-tests only the enabled buttons
+    /// (@0x273d3-0x27426), and `_PlunderFilter` gives anything else as
+    /// item -1, which still ends the modal wait (@0x92fdf).
+    #[test]
+    fn a_click_that_reaches_no_enabled_button_is_a_miss_once_silently() {
         let mut dialog = dialog(loaded());
-        let at = center(dialog.dialog(), TEXT_ITEM);
-        click(&mut dialog, at);
-        assert_eq!(dialog.take_take(), None, "the text is no button");
+        let text = center(dialog.dialog(), TEXT_ITEM);
+        let sounds = click(&mut dialog, text);
+        assert_eq!(
+            dialog.take_take(),
+            Some(Take::Miss),
+            "the text is no button"
+        );
+        assert_eq!(dialog.take_take(), None, "once");
+        assert_eq!(sounds, []);
+        let outside = Point::new(-50.0, -50.0);
+        click(&mut dialog, outside);
+        assert_eq!(dialog.take_take(), Some(Take::Miss), "outside the dialog");
+        let credits = center(dialog.dialog(), 3);
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: credits,
+        });
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: text,
+        });
+        assert_eq!(
+            dialog.take_take(),
+            Some(Take::Miss),
+            "released off the button it began on"
+        );
     }
 
     #[test]
@@ -648,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn a_button_is_greyed_while_its_value_is_not_on_board() {
+    fn a_greyed_button_pressed_is_a_miss() {
         let empty = PlunderView {
             credits: 0,
             cargo: None,
@@ -661,8 +732,12 @@ mod tests {
         for (item, _, take) in TAKE_BUTTONS {
             let at = center(dialog.dialog(), item);
             click(&mut dialog, at);
-            let expected = (take == Take::Abort).then_some(take);
-            assert_eq!(dialog.take_take(), expected, "{item}");
+            let expected = if take == Take::Abort {
+                take
+            } else {
+                Take::Miss
+            };
+            assert_eq!(dialog.take_take(), Some(expected), "{item}");
         }
     }
 
@@ -677,7 +752,7 @@ mod tests {
         assert_eq!(dialog.lines()[2], "Cargo: N/A");
         let cargo = center(dialog.dialog(), 2);
         click(&mut dialog, cargo);
-        assert_eq!(dialog.take_take(), None, "greyed now");
+        assert_eq!(dialog.take_take(), Some(Take::Miss), "greyed now");
         dialog.set_plunder(&shown(loaded()));
         click(&mut dialog, cargo);
         assert_eq!(dialog.take_take(), Some(Take::Cargo), "back on board");
@@ -773,9 +848,20 @@ mod tests {
             pressed: false,
             at,
         });
-        assert_eq!(dialog.take_take(), None);
+        assert_eq!(dialog.take_take(), None, "abandoned, not missed");
         dialog.tick(Duration::from_secs(1));
         assert_eq!(dialog.input(&key(Key::Tab)), ScreenAction::None);
+    }
+
+    /// The time it has been open, `TickCount`'s, which the flight's
+    /// floating map reads at each press (`_HandleComm` @0x30262-0x30285).
+    #[test]
+    fn it_keeps_how_long_it_has_been_open() {
+        let mut dialog = dialog(loaded());
+        assert_eq!(dialog.held(), Duration::ZERO);
+        dialog.tick(Duration::from_millis(250));
+        dialog.tick(Duration::from_millis(500));
+        assert_eq!(dialog.held(), Duration::from_millis(750));
     }
 
     // The assignment dialog.

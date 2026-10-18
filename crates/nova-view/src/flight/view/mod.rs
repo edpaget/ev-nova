@@ -572,7 +572,9 @@
 //! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
 //! flight (the comm, offer and plunder dialogs, the map) leave it as it
 //! is, and it shows again afterwards for the ticks it had left, as
-//! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only
+//! `_RedrawComm` (@0x903a0) redraws it; the plunder dialog counts it down
+//! one tick a press that leaves the dialog open, as its loop calls
+//! `_HandleComm` (@0x949a1). Starting a jump clears it only
 //! when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or [`NOTHING_OUT_HERE`]
 //! (`_HandlePlayer` @0x6b231-0x6b3d9), and
 //! opening the escort menu only when it says [`NO_ESCORTS`](super::escorts::NO_ESCORTS)
@@ -1019,9 +1021,11 @@ pub struct FlightView<C> {
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router
     /// holds flight under a dialog, as `_HandleComm` (@0x301b9) counts
-    /// only in the flight loop. The original's `_HandlePlayerDockRequest`
-    /// counts one tick more just before landing (@0x66da5), which no
-    /// player sees.
+    /// only in the flight loop, but for the plunder dialog, whose loop
+    /// calls it once a press that leaves it open (@0x949a1; see
+    /// [`FlightView::plunder_held`]). The original's
+    /// `_HandlePlayerDockRequest` counts one tick more just before
+    /// landing (@0x66da5), which no player sees.
     message: Option<Message>,
     /// The port's own overlays drawn.
     overlays: FlightOverlays,

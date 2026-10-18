@@ -63,7 +63,6 @@ use std::rc::Rc;
 
 use super::Session;
 use super::control::Facts;
-use crate::board::MAX_ESCORTS;
 use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
 use crate::control::ControlBits;
@@ -197,7 +196,7 @@ impl Session {
             site: &site,
             contributed: self.contributed(),
             cash: self.pilot.cash,
-            room: self.pilot.escort_count() < MAX_ESCORTS,
+            room: self.can_hire_escorts(),
             slot: self.hire_berth().is_some()
                 || self.rules.source_for(RuleKey::HireNoSlot) == RuleSource::Engine,
             terms: &*self.hire_terms.0,
@@ -300,6 +299,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::ai::{Goal, Peaceful};
+    use crate::board::MAX_ESCORTS;
     use crate::catalog::{LandingSite, ShipRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -791,6 +791,30 @@ mod tests {
         let list = list(&mut session);
         assert!(list.room);
         assert_eq!(row(&list, 129).hire, Ok(()));
+    }
+
+    /// `_CanHireEscorts` counts the escorts in the system (see the
+    /// session's `capture` module): seven on file with two not placed
+    /// leave room, and a sixth placed fills the fleet; the save keeps all
+    /// seven.
+    #[test]
+    fn the_room_counts_the_escorts_in_the_system_so_a_fleet_can_pass_six() {
+        let catalog = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        session.pilot.escorts = vec![escort(false); MAX_ESCORTS + 1];
+        session.fleet = (0..session.pilot.escorts.len())
+            .map(|index| {
+                (index < MAX_ESCORTS - 1)
+                    .then(|| session.place_escort(index))
+                    .flatten()
+            })
+            .collect();
+        assert!(list(&mut session).room, "five of the seven in the system");
+        assert_eq!(row(&list(&mut session), 129).hire, Ok(()));
+        session.fleet[MAX_ESCORTS - 1] = session.place_escort(MAX_ESCORTS - 1);
+        assert!(!list(&mut session).room, "six in the system");
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(saved.escorts().len(), MAX_ESCORTS + 1);
     }
 
     #[test]

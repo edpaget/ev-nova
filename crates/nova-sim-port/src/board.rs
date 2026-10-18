@@ -61,7 +61,9 @@
 //!
 //! **Capture odds** ([`NovaBoarding::capture_odds`]): ten times the ratio
 //! of the player's crew (its ship's `Crew`, a tenth of each warship or
-//! interceptor escort's, and the marines outfits' positive `ModVal`s) to
+//! interceptor escort's in the system, as `_SetPlunderValues` counts the
+//! player's AI type 6 ships of no mission mark, @0x92653-0x926c9, and the
+//! marines outfits' positive `ModVal`s) to
 //! the target's, truncated; a negative marines `ModVal` adds its size in
 //! points, and [`STRENGTH_BONUS`] more when the player's strength (with a
 //! tenth of the escorts') is above [`STRENGTH_RATIO`] times the target's;
@@ -74,10 +76,16 @@
 //! [`Taken`]). The self-destruct threshold starts at [`THRESHOLD_BASE`]
 //! and a draw of [`THRESHOLD_SPREAD`], and each take multiplies it
 //! ([`CARGO_GROWTH`] and the others), truncated, whether it stored
-//! anything or not. The press after a take, before it is handled, blows
-//! the ship up when a draw of [`SELF_DESTRUCT_ROLL`] is at or below the
-//! threshold; Abort never rolls. A self-destruct zeroes the ship's shield
-//! and armour, so the fight breaks it up, and is no crime.
+//! anything or not. A take arms the self-destruct. Every press but
+//! Abort, a [`Take::Miss`] and a take with nothing to take included,
+//! first rolls it while it is armed, blowing the ship up when a draw of
+//! [`SELF_DESTRUCT_ROLL`] is at or below the threshold, and otherwise
+//! disarms it (`_DoPlunderDialog` @0x935e5-0x93613); Abort never rolls.
+//! A self-destruct zeroes the ship's shield, armour and death timer, so
+//! the fight breaks it up, and is no crime. Each press that leaves the
+//! dialog open (a take, a miss, a full fleet) counts the message line
+//! down one tick, as the dialog's loop calls `_HandleComm` once a pass
+//! (@0x949a1). The beeps are the session's (`nova_sim::Session::plunder`).
 //!
 //! **The capture roll** ([`NovaBoarding::captures`], `_DoPlunderDialog`
 //! @0x942ad-0x942d8): a draw of [`CAPTURE_ROLL`] at or below the odds
@@ -87,16 +95,19 @@
 //! to -1 for a derelict government just before the roll. So the button,
 //! greyed at odds of none, and the roll agree. A capture that succeeds
 //! still blows the ship up 1 time in [`CAPTURE_TRIP`]; with the fleet
-//! full ([`MAX_ESCORTS`]) nothing changes and the dialog stays open.
-//! Capturing is no crime.
+//! full ([`MAX_ESCORTS`] in the system, `_CanHireEscorts`) nothing changes
+//! and the dialog stays open. Capturing is no crime.
 //!
 //! **A ship captured** ([`Assignment`]) joins the fleet with its armour at
-//! [`ESCORT_ARMOR_SHARE`] of its most; or, "Use As My Ship", the player
-//! takes it over, while a ship slot below the last of the
-//! [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship (`_DoShipCapture`
-//! leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`] reads), which
-//! joins the fleet with its class's stock loadout, full, and by the engine
-//! reading of [`RuleKey::CaptureCargo`] the player's commodities with it;
+//! [`ESCORT_ARMOR_SHARE`] of its most, its person living on by the engine
+//! reading of [`RuleKey::CapturedPerson`]; or, "Use As My Ship", the
+//! player takes it over and its person is gone, while a ship slot below
+//! the last of the [`MAX_SHIPS_IN_SYSTEM`] is free for the old ship
+//! (`_DoShipCapture` leaves 1 free @0x41136, as [`RuleKey::SpawnReserve`]
+//! reads), which comes in where the player was and flies into formation
+//! with its class's stock loadout, full but for its fuel, its class's bare
+//! `Fuel`; by the engine reading of [`RuleKey::CaptureCargo`] the player's
+//! commodities go to its hold and the player holds the captured ship's;
 //! with no slot free the whole swap is dropped. A player of no crew
 //! captures straight into the fleet. The captured class's `OnCapture` runs before it joins the fleet, and on
 //! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
@@ -364,8 +375,10 @@ fn cargo(prize: &Prize, chance: &mut dyn Chance) -> Option<(Good, u32)> {
     Some((Good::Commodity(commodity), tons))
 }
 
-/// The most escorts the player's fleet holds (`_CanHireEscorts`, counting
-/// those that are not fighters).
+/// How many escorts in the system fill the fleet: `_CanHireEscorts`
+/// (@0x5795-0x57e4) counts the player's AI type 6 ships of no mission
+/// mark, so neither fighters nor escorts out of the system, and is true
+/// while it counts 5 or fewer. The fleet itself has no cap.
 pub const MAX_ESCORTS: usize = 6;
 pub use crate::traffic::MAX_SHIPS_IN_SYSTEM;
 /// How much each take multiplies the self-destruct threshold by, per
@@ -414,14 +427,24 @@ pub enum Take {
     Capture,
     /// "Abort" (item 1), and Return, Enter and Escape.
     Abort,
+    /// A press that reaches no enabled button (item -1): one on a greyed
+    /// button, off every button, or released off the button it began on,
+    /// as `_TrackPlunderButtons` (@0x2732a) hit-tests only the enabled
+    /// buttons (@0x273d3-0x27426) and `_PlunderFilter` maps anything else
+    /// to item -1 and still ends the modal wait (@0x92fdf).
+    Miss,
 }
 
 /// What a press in the plunder dialog did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken {
-    /// The press did nothing: no boarding is under way, or what it takes
-    /// is not on board (its button is greyed).
+    /// No boarding is under way, or a capture awaits its assignment: the
+    /// press is not the dialog's.
     Nothing,
+    /// The press took nothing and the boarding goes on: a [`Take::Miss`],
+    /// or a take whose value is not on board, which beeps its refusal.
+    /// Either still rolls an armed self-destruct first, and disarms it.
+    Missed,
     /// The cargo was taken: `stored` tons of `good`, as much as the hold
     /// had room for.
     Cargo {
@@ -532,7 +555,7 @@ pub struct PlunderView {
 
 impl PlunderView {
     /// Whether `take`'s button is enabled: its value is on board. Abort
-    /// always is.
+    /// always is; a [`Take::Miss`] is no button.
     #[must_use]
     pub fn offers(&self, take: Take) -> bool {
         match take {
@@ -542,6 +565,7 @@ impl PlunderView {
             Take::Energy => self.fuel > 0,
             Take::Capture => self.odds > 0,
             Take::Abort => true,
+            Take::Miss => false,
         }
     }
 }
@@ -615,7 +639,9 @@ pub struct CaptureCrew {
     pub crew: i32,
     /// The player's ship's `Strength`.
     pub strength: i32,
-    /// The player's escorts.
+    /// The player's escorts in the system, as `_SetPlunderValues` counts
+    /// them (@0x92653-0x926c9); only those above [`ESCORT_AI_ABOVE`]
+    /// add their crew.
     pub escorts: Vec<EscortCrew>,
     /// Each marines outfit the player owns (`ModType` [`MARINES`]): its
     /// `ModVal`, and how many.
@@ -626,7 +652,8 @@ pub struct CaptureCrew {
     pub target_strength: i32,
     /// Whether the target's government is derelict.
     pub derelict: bool,
-    /// Whether the fleet has room for one more escort.
+    /// Whether the fleet has room for one more escort
+    /// (`_CanHireEscorts`).
     pub fleet_room: bool,
 }
 
@@ -1882,6 +1909,8 @@ mod tests {
         ] {
             assert!(full.offers(take), "{take:?}");
         }
+        assert!(!full.offers(Take::Miss), "a miss is no button");
+        assert!(!empty.offers(Take::Miss));
     }
 
     #[test]

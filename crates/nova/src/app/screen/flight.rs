@@ -5,7 +5,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{Pilot, PilotKeeper, PilotStore, RuleKey, pilot_key};
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::FlightView;
@@ -76,7 +75,11 @@ impl AppScreen {
                 art,
             );
         }
-        if let Some(pilot) = self.flight.as_ref().and_then(FlightView::pilot) {
+        if let Some(session) = self
+            .flight
+            .as_ref()
+            .and_then(|flight| flight.session().ok())
+        {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport
                 .with_bar(
@@ -88,7 +91,8 @@ impl AppScreen {
                     template_of(SHIPYARD_DIALOG),
                     info_templates(),
                     art,
-                    pilot.escort_count() < MAX_ESCORTS,
+                    // `_CanHireEscorts`, as the hire itself reads it.
+                    session.can_hire_escorts(),
                 )
                 .with_missions(
                     template_of(COMPUTER_DIALOG),

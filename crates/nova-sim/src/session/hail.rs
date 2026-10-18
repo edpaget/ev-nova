@@ -55,8 +55,9 @@
 //!   hail lists it ([`Hail::joins`](crate::Hail)) for a person whose
 //!   record allows it ([`offers_to_join`]) and whose `LinkMission` is
 //!   available from a ship (`_HandlePlayerCommunication` @0x6220d) while
-//!   the fleet has room, fewer than [`MAX_ESCORTS`] escorts not counting
-//!   the carried fighters.
+//!   the fleet has room, fewer than
+//!   [`MAX_ESCORTS`](crate::board::MAX_ESCORTS) escorts in the system not
+//!   counting the fighters ([`Session::can_hire_escorts`]).
 //! - **Help** (`_AIMakeShipRefuelPlayer` @0x82dbb,
 //!   `_AIMakeShipRepairPlayer` @0x82df2): it assists the player
 //!   ([`Goal::Assist`]), its provocation gone. Each step
@@ -75,7 +76,6 @@
 use super::Session;
 use super::missions::TextSource;
 use crate::ai::Goal;
-use crate::board::MAX_ESCORTS;
 use crate::catalog::{CommCatalog, MissionId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -375,8 +375,8 @@ impl Session {
 
     /// Whether `npc` is a person who may join the player's fleet: its
     /// record allows it ([`offers_to_join`]), its `LinkMission` is
-    /// available from a ship (@0x6220d), and the fleet has room, fewer
-    /// than [`MAX_ESCORTS`] not counting the carried fighters.
+    /// available from a ship (@0x6220d), and the fleet has room
+    /// (`_CanHireEscorts`, [`Session::can_hire_escorts`]).
     fn joins(&self, npc: &Npc) -> bool {
         npc.person
             .and_then(|person| self.traffic.person(person.id))
@@ -387,7 +387,7 @@ impl Session {
                         .link_mission
                         .is_some_and(|mission| self.ship_mission_available(MissionId(mission)))
             })
-            && self.pilot.escort_count() < MAX_ESCORTS
+            && self.can_hire_escorts()
     }
 
     /// The comm dialog's contents while a hail is under way and its ship
@@ -2814,6 +2814,33 @@ mod tests {
             hailed_labels(&mut session, &catalog, &bible),
             ["Greetings", "Request Assistance"],
             "a person whose mission is not available"
+        );
+    }
+
+    /// The join counts the escorts in the system, as `_CanHireEscorts`
+    /// does (see the session's `capture` module): seven on file, two not
+    /// placed, leave room; a sixth placed fills the fleet.
+    #[test]
+    fn a_join_counts_the_escorts_in_the_system() {
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        session.pilot.escorts = vec![escort_of(false); 7];
+        session.fleet = (0..7)
+            .map(|index| (index < 5).then(|| session.place_escort(index)).flatten())
+            .collect();
+        // Its quarry, NPC 5, is now an escort of the player's: it lets go.
+        let merchant = npc(&mut session);
+        merchant.goal = Goal::Idle;
+        merchant.leader = None;
+        assert!(
+            hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
+            "five of the seven in the system"
+        );
+        session.fleet[5] = session.place_escort(5);
+        assert!(
+            !hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
+            "six in the system"
         );
     }
 

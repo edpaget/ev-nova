@@ -2596,7 +2596,7 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let id = session.npcs()[0].id;
-        session.lose_captured(id);
+        session.lose_captured(id, true);
         assert_eq!(marked(&session), [0]);
         assert_eq!(ships_of(&session).left, 2);
     }

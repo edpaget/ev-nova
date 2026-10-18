@@ -1102,7 +1102,9 @@ pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -
         Taken::CaptureFailed => CAPTURE_FAILED.to_owned(),
         Taken::FleetFull => FLEET_FULL.to_owned(),
         Taken::Escorted => ASSIGNED_ESCORT.to_owned(),
-        Taken::Captured | Taken::Aborted | Taken::Nothing => return None,
+        // A miss, or a take with nothing on board, says nothing: it only
+        // beeps (`_DoPlunderDialog` @0x93ad2, @0x93cb8, @0x93d2f, @0x94256).
+        Taken::Captured | Taken::Aborted | Taken::Nothing | Taken::Missed => return None,
     };
     Some(text)
 }
