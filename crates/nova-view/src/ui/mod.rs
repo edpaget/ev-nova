@@ -20,6 +20,8 @@
 //!   a scrolling box with a Done button.
 //! - [`note`]: the note alert ([`NoteDialog`], `DLOG` 3000): a line of
 //!   text and an OK button.
+//! - [`yes_no`]: the Yes/No dialog ([`YesNoDialog`], `DLOG` 3002): a
+//!   question, OK for yes and Cancel for no.
 //! - [`text_field`]: a one-line [`TextField`] that typed characters fill
 //!   and Backspace empties.
 //! - [`edit_dialog`]: the edit-field modal shell ([`EditDialog`]) the
@@ -33,6 +35,10 @@
 //!   new pilot:"): the new pilot's name.
 //! - [`toggle`]: an on/off check box with a label.
 //! - [`volume`]: a volume level with arrows that step it.
+//! - [`picker`]: a row [`Picker`](picker::Picker) whose arrows step
+//!   through a list of entries, such as the frame upscalers.
+//! - [`mode_picker`]: a [`ModePicker`](mode_picker::ModePicker) of how
+//!   the game runs fullscreen, its arrows stepping through the modes.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
 //! - [`mission_info`]: the key that asks for the mission info screen
@@ -64,8 +70,10 @@ pub mod dialog;
 pub mod edit_dialog;
 pub mod mission_dialogs;
 pub mod mission_info;
+pub mod mode_picker;
 pub mod new_pilot;
 pub mod note;
+pub mod picker;
 pub mod picture_variant;
 pub mod player_info;
 pub mod plunder;
@@ -78,6 +86,7 @@ pub mod text_field;
 pub mod text_input;
 pub mod toggle;
 pub mod volume;
+pub mod yes_no;
 
 pub use button::{Button, ButtonImages, ButtonSkin, ButtonStyle, ButtonTracker};
 pub use catalog::{DescriptionSource, DialogResources};
@@ -98,3 +107,4 @@ pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};
 pub use text_field::TextField;
 pub use text_input::{TextInputDialog, TextInputOutcome};
+pub use yes_no::YesNoDialog;

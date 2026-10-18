@@ -522,6 +522,8 @@ struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     log: AudioLog,
+    /// The recording port, to say what still plays.
+    port: RecordingAudio,
     effects: Rc<RefCell<Script>>,
     /// Frames sent, at 60 a second.
     frames: u64,
@@ -555,12 +557,14 @@ impl Harness {
         let screen = router(screen);
         let audio = RecordingAudio::new();
         let log = audio.log();
+        let port = audio.clone();
         let app = App::new(&FakeWindow, data, screen)
             .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
         let mut harness = Self {
             app,
             gpu: RecordingGpu::new(),
             log,
+            port,
             effects,
             frames: 0,
         };
@@ -721,6 +725,7 @@ fn space_fires_the_blaster_whose_shots_are_drawn_and_heard() {
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(208),
             volume: nova_audio::AudioSettings::default().effects_volume,
+            priority: nova_audio::Priority::new(5),
         }),
         "{:?}",
         harness.log.borrow()
@@ -765,6 +770,7 @@ fn a_trader_shot_down_explodes_scatters_debris_and_is_no_longer_targeted() {
         harness.log.borrow().contains(&AudioCommand::Play {
             sound: SoundId(300),
             volume: nova_audio::AudioSettings::default().effects_volume,
+            priority: nova_audio::Priority::new(6),
         }),
         "the explosion, within 200 pixels: {:?}",
         harness.log.borrow()
@@ -792,13 +798,23 @@ fn chaingun_shots(harness: &Harness) -> Vec<u32> {
         .collect()
 }
 
-#[test]
-fn a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
-    let mut harness = Harness::flying_over(
+/// The app in flight with the player carrying the Chaingun, its trader
+/// idling, the router as `router` makes it.
+fn chaingun_armed(router: impl FnOnce(AppScreen) -> AppScreen) -> Harness {
+    Harness::flying_over(
         data_arming(&[155], &[]),
         &[6, 6, 0, 0, 750, 650, 180],
-        |screen| screen.with_behaviour(Rc::new(Still)),
+        |screen| router(screen.with_behaviour(Rc::new(Still))),
+    )
+}
+
+#[test]
+fn by_the_other_reading_a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
+    let per_firer = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::LoopedSoundWait,
+        nova_sim::RuleSource::Bible,
     );
+    let mut harness = chaingun_armed(|screen| screen.with_rules(per_firer));
     let mut fired = std::collections::BTreeMap::new();
     harness.key(Key::Space, true);
     // 60 ticks, at two frames a tick.
@@ -821,6 +837,48 @@ fn a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
 }
 
 #[test]
+fn a_chaingun_is_unheard_while_its_sound_plays_from_another_ship() {
+    let mut harness = chaingun_armed(|screen| screen);
+    harness.port.set_playing(SoundId(205), true);
+    harness.key(Key::Space, true);
+    harness.until(|harness| chaingun_shots(harness).len() >= 3);
+    assert_eq!(plays(&harness.log, 205), 0, "205 still plays elsewhere");
+    harness.port.set_playing(SoundId(205), false);
+    let fired = chaingun_shots(&harness).len();
+    harness.until(|harness| chaingun_shots(harness).len() > fired);
+    harness.key(Key::Space, false);
+    assert!(plays(&harness.log, 205) > 0, "heard once it has played out");
+}
+
+#[test]
+fn an_npcs_weapon_is_heard_at_its_pick_priority_4() {
+    let mut harness = Harness::flying_over(
+        data_arming(&[], &[155]),
+        &[6, 6, 0, 0, 750, 650, 180],
+        |screen| screen.with_behaviour(Rc::new(Attacking)),
+    );
+    harness.until(|harness| plays(&harness.log, 205) > 0);
+    let priorities: Vec<nova_audio::Priority> = harness
+        .log
+        .borrow()
+        .iter()
+        .filter_map(|command| match *command {
+            AudioCommand::Play {
+                sound: SoundId(205),
+                priority,
+                ..
+            } => Some(priority),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        priorities[0],
+        nova_audio::Priority::new(4),
+        "{priorities:?}"
+    );
+}
+
+#[test]
 fn a_front_quadrant_turret_fires_at_a_trader_targeted_30_degrees_off_the_nose() {
     // The trader at (50, -87) from the player, who faces up.
     let mut harness = Harness::flying_over(
@@ -834,9 +892,12 @@ fn a_front_quadrant_turret_fires_at_a_trader_targeted_30_degrees_off_the_nose() 
     harness.key(Key::Space, true);
     harness.until(|harness| !chaingun_shots(harness).is_empty());
     harness.key(Key::Space, false);
-    let bearing = 50.0_f32.atan2(87.0).to_degrees();
+    // The table's whole-degree bearing (29, where the float one is
+    // 29.9), the trader at rest (`_CalcLeadAngle` @0x3ecdc).
+    let bearing = f32::from(nova_sim::trig::table_arctan(-50.0, 87.0));
     let shot = harness.session().shots()[0];
     assert!((shot.heading - bearing).abs() < 1e-3, "{shot:?}");
+    assert_eq!(bearing.to_bits(), 29.0_f32.to_bits());
     let first = sprites_of(&harness.frame(), SHOT);
     harness.frame();
     let second = sprites_of(&harness.frame(), SHOT);
@@ -1039,6 +1100,10 @@ fn attacking_a_trader_brings_the_police_costs_the_record_and_r_finds_the_threat(
             .find(|npc| npc.id == id)
             .map(|npc| (npc.goal, npc.condition))
     };
+    // Aimed at the trader: a stray hit the answer flag forgives.
+    harness.key(Key::Tab, true);
+    harness.key(Key::Tab, false);
+    assert_eq!(harness.session().target().map(|npc| npc.id), Some(trader));
     harness.key(Key::Space, true);
     let (mut fled, mut answered, mut disabled) = (false, false, false);
     for _ in 0..1200 {
@@ -1470,7 +1535,7 @@ impl Boarder {
             .with_chance(chance);
         let screen = router(screen);
         Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         }
@@ -1560,9 +1625,7 @@ impl Boarder {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(MenuChoice::OpenPilot)
-            .rect
-            .center();
+            .press_point(MenuChoice::OpenPilot);
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
@@ -2511,7 +2574,7 @@ impl Boarder {
             .model()
             .system(nova_sim::SystemId(id))
             .expect("on the map");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Flies out from the centre to the minimum jump distance: turns to
@@ -2552,12 +2615,16 @@ impl Boarder {
         panic!("never got out: {:?}", self.session().player());
     }
 
-    /// Plots a course to Beta on flight's map, flies out and jumps there.
+    /// Plots a course to Beta on flight's map (M, a Shift-click, M), flies
+    /// out and jumps there.
     fn jump_to_beta(&mut self) {
         self.tap(Key::Char('m'));
         let beta = self.on_map(129);
+        self.key(Key::Shift, true);
         self.click(beta);
+        self.key(Key::Shift, false);
         self.tap(Key::Char('m'));
+        assert_eq!(self.session().course(), [nova_sim::SystemId(129)]);
         self.fly_out();
         self.tap(Key::Char('j'));
         for _ in 0..600 {
@@ -2613,8 +2680,11 @@ fn an_escort_command_given_during_a_jump_says_what_the_escorts_will_do() {
     let mut game = escorted(&store, &[], &[130], |screen| screen);
     game.tap(Key::Char('m'));
     let beta = game.on_map(129);
+    game.key(Key::Shift, true);
     game.click(beta);
+    game.key(Key::Shift, false);
     game.tap(Key::Char('m'));
+    assert_eq!(game.session().course(), [nova_sim::SystemId(129)]);
     game.fly_out();
     game.tap(Key::Char('j'));
     for _ in 0..600 {

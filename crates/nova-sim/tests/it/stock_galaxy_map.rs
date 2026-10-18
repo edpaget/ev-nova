@@ -52,7 +52,7 @@ fn a_new_stock_pilot_knows_its_neighbours_and_nothing_far_off() {
         .collect();
     assert!(far.len() > 100, "most of the galaxy is far off");
     assert!(far.iter().all(|system| !session.is_known(*system)));
-    let drawing = session.map_drawing(None, &[]);
+    let drawing = session.map_drawing(None, &[], nova_sim::MapMarks::NONE);
     let drawn: BTreeSet<SystemId> = drawing.systems.iter().map(|system| system.id).collect();
     assert!(drawn.contains(&start));
     assert!(
@@ -73,7 +73,7 @@ fn the_stock_start_system_is_framed_blue() {
         session.system_color_code(session.system()),
         SystemColorCode::Cleared
     );
-    let drawing = session.map_drawing(None, &[]);
+    let drawing = session.map_drawing(None, &[], nova_sim::MapMarks::NONE);
     let start = drawing
         .systems
         .iter()

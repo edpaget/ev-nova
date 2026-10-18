@@ -128,7 +128,8 @@ fn m_inside_of(catalog: FakeCatalog, dialog: PortDialog) -> View {
 
 #[test]
 fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
-    let mut view = in_the_bar(None);
+    // The planner's click writes the nav in port, which the close shows.
+    let mut view = planner(in_the_bar(None));
     view.open_bar_map();
     assert!(view.map_open());
     assert_eq!(view.course_map().mode(), MapMode::Course);
@@ -162,7 +163,8 @@ fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
 /// even after the bar's own map has opened and closed.
 #[test]
 fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
-    let mut view = in_the_bar(None);
+    // The planner's click writes the nav in port, which the close shows.
+    let mut view = planner(in_the_bar(None));
     view.open_bar_map();
     view.port_map_input(&key(MAP, true));
     assert!(!view.map_open(), "the bar's map closed");
@@ -212,10 +214,9 @@ fn the_map_in_port_beeps_neither_as_it_opens_nor_as_it_closes() {
     assert_eq!(map_sounds(&mut view), [], "another map in port");
 }
 
-/// Ours cues a route's first hop at the click ([`Session::plot_course`]),
-/// so the port close's skipped cue (`_DoSystemMap` @0x13be2-0x13c0a)
-/// shows only with a course plotted before the map opened, whose cue
-/// the land key put mode 2 over.
+/// The port close skips the cue (`_DoSystemMap` @0x13be2-0x13c0a): a
+/// course plotted before the map opened, whose cue the land key put
+/// mode 2 over, stays uncued, as does one Shift-clicked in port.
 #[test]
 fn in_port_the_maps_close_cues_no_course() {
     let mut view = in_the_bar(Some(131));
@@ -1630,7 +1631,7 @@ fn in_flight_the_gauges_stay_live_by_the_engine() {
 }
 
 #[test]
-fn beginning_runs_on_start_once_and_the_map_shows_what_it_explored() {
+fn beginning_runs_on_start_once_and_explores_what_it_sets() {
     let catalog = starting_with("R(b5 b6) ^b7 X131");
     let pilot = Pilot::new(&catalog, "Ada").expect("starts");
     let mut view = FlightView::with_pilot(catalog, pilot).with_chance(rolling_one());
@@ -1638,11 +1639,8 @@ fn beginning_runs_on_start_once_and_the_map_shows_what_it_explored() {
     view.begin();
     assert!(bit_set(&view, 5), "on the flight's chance");
     assert!(bit_set(&view, 7), "once");
-    let explored = view
-        .course_map()
-        .explored()
-        .map(|set| set.iter().copied().collect::<Vec<_>>());
-    assert_eq!(explored, Some(vec![SystemId(130), SystemId(131)]));
+    let explored: Vec<SystemId> = view.session().expect("flying").pilot().explored().collect();
+    assert_eq!(explored, [SystemId(130), SystemId(131)]);
     let broken = FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..starting_with("b5")
@@ -1704,4 +1702,61 @@ fn a_failed_flight_resumes_nothing() {
     broken.resume();
     assert_eq!(broken.pilot(), None);
     assert!(script.borrow().asked.is_empty(), "nothing drawn");
+}
+
+#[test]
+fn in_port_a_plain_click_on_the_map_selects_only() {
+    let mut view = in_the_bar(None);
+    view.open_bar_map();
+    port_click(&mut view, 131);
+    assert_eq!(view.course_map().selected(), Some(SystemId(131)));
+    assert_eq!(
+        view.session().map(Session::nav_mode),
+        Ok(NavMode::Stellar(Some(StellarId(128)))),
+        "no nav written docked (@0x136ec)"
+    );
+    assert_eq!(view.session().map(|session| session.course().len()), Ok(0));
+}
+
+#[test]
+fn in_port_a_shift_click_builds_the_course_and_the_close_cues_nothing() {
+    let mut view = in_the_bar(None);
+    view.open_bar_map();
+    view.port_map_input(&key(Key::Shift, true));
+    port_click(&mut view, 131);
+    view.port_map_input(&key(Key::Shift, false));
+    assert_eq!(
+        view.session().map(|session| session.course().to_vec()),
+        Ok(vec![SystemId(131)]),
+        "the Shift-click never tests _onPlanet"
+    );
+    assert!(clear_route_enabled(&view));
+    view.port_map_input(&key(MAP, true));
+    assert!(!view.map_open());
+    assert_eq!(port_nav(&view), naming("Earth"), "no cue drawn");
+    assert_eq!(
+        view.session().map(Session::nav_mode),
+        Ok(NavMode::Stellar(Some(StellarId(128))))
+    );
+}
+
+#[test]
+fn in_port_c_clears_the_route_and_the_close_puts_back_the_bars_nav() {
+    let mut view = in_the_bar(Some(131));
+    view.open_bar_map();
+    assert!(clear_route_enabled(&view), "a course");
+    view.port_map_input(&key(Key::Char('c'), true));
+    assert_eq!(view.session().map(|session| session.course().len()), Ok(0));
+    assert_eq!(
+        view.session().map(Session::nav_mode),
+        Ok(NavMode::Stellar(None)),
+        "let go, the mode kept"
+    );
+    view.port_map_input(&key(MAP, true));
+    assert!(!view.map_open());
+    assert_eq!(
+        view.session().map(Session::nav_mode),
+        Ok(NavMode::Stellar(Some(StellarId(128)))),
+        "the bar's nav put back"
+    );
 }

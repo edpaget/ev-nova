@@ -11,26 +11,48 @@
 //! and leader 0 on every think), with no standing order; and an NPC
 //! carrier's fighters, whatever their AI type, to [`CarriedAi`] (the
 //! original's AI type 5 with an NPC parent), until their carrier is gone.
-//! `_PirateWarshipAI` (a warship of `Flags` 0x1000, which disables and
-//! plunders) waits for NPC boarding, and with it the plunder of the
-//! player's cargo and the mission failure it brings
-//! (`_AIPlunderShipContents` @0x84a0f, `mïsn` `Flags` 0x8000).
+//! A leaderless miner (`shïp` `Flags3` & 3 with leader +0x9a -1,
+//! `_AIDispatch` @0x8ff64-0x8ff96), whatever its AI type, decides and
+//! targets as [`MinerAi`] instead of its type's think, but fires, waits in
+//! its gate and answers hits as its type does, as `_AIDispatch` replaces
+//! only the type's call. So a warship-typed miner a Good Samaritan's call
+//! turns on the player (`react`'s reaction goal) attacks until its next
+//! think, which the miner's AI then decides, as the original's next
+//! `_MinerAI` does; the type's fire reads the goal, and a miner's own
+//! goals fire at nothing but an attacker it flees. A mission ship of
+//! `ShipBehav` 0 still hunts the player, miner or not.
+//! A leaderless warship of a government with `Flags` 0x1000 goes to the
+//! pirate's AI ([`PirateWarship`], `_PirateWarshipAI`, `_AIDispatch`
+//! @0x8ffc8-0x8fff0), which disables, docks with and plunders its victim
+//! (see [`plunder`](crate::traffic::plunder)). A ship a pirate takes into
+//! its fleet (AI type 6, its leader the pirate) is routed by its own AI
+//! type as any fleet escort is, following its lead, until
+//! rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts flies the
+//! original's AI type 6 under an NPC.
 //!
 //! Each decision ([`Behaviour::decision`]) carries whether the think
 //! turned the ship on the player through `_AIMakeShipAttackPlayer`: the
 //! type's own, or a `ShipBehav` 0 mission ship's hunt (`_HighLevelAIHandler`
-//! @0x8d6b7), whose quote gate its mark always fails (+0xc8d2, @0x89c71).
+//! @0x8d6b7), whose quote gate its mark always fails (+0xc8d2, @0x89c71);
+//! and whether it calls for reinforcements, the type's own and
+//! `_HighLevelAIHandler`'s after it (see
+//! [`reinforcements`](crate::ai::reinforcements)).
 
 use std::rc::Rc;
 
 use crate::ai::fire::FireRules;
+use crate::ai::flee_drop;
+use crate::ai::miner::{MINER_BITS, MinerAi};
+use crate::ai::pirate::PirateWarship;
+use crate::ai::target::TargetRules;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, GateWait, Goal, Interceptor, Reaction,
-    Surroundings, Warship, WimpyTrader,
+    Surroundings, Warship, WimpyTrader, reinforcements,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
+use crate::govt::PLUNDERS;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::{AiType, Npc};
 
@@ -43,9 +65,14 @@ pub struct NovaAi {
     interceptor: Rc<dyn Behaviour>,
     escorts: Rc<dyn Behaviour>,
     carried: Rc<dyn Behaviour>,
+    miner: Rc<dyn Behaviour>,
+    pirate: Rc<dyn Behaviour>,
     /// The source of [`RuleKey::HunterBribe`]: whether a paid-off
     /// `ShipBehav` 0 hunter attacks the player again.
     hunter_bribe: RuleSource,
+    /// The source of [`RuleKey::LedAllyAttack`]: which allies a fleeing
+    /// ship gives up fleeing ([`flee_drop`]).
+    led_ally: RuleSource,
 }
 
 impl Default for NovaAi {
@@ -78,6 +105,11 @@ impl NovaAi {
         let fire = FireRules {
             quadrant_arc: rulebook.source_for(RuleKey::QuadrantTurretArc),
         };
+        let led_ally = rulebook.source_for(RuleKey::LedAllyAttack);
+        let target = TargetRules {
+            led_ally,
+            friend_carry: rulebook.source_for(RuleKey::FriendShieldCarry),
+        };
         Self {
             wimpy: Rc::new(WimpyTrader {
                 piracy_police,
@@ -92,6 +124,7 @@ impl NovaAi {
                 person_coward,
                 always_attacks,
                 fire,
+                target,
             }),
             interceptor: Rc::new(Interceptor {
                 piracy_police,
@@ -99,13 +132,21 @@ impl NovaAi {
                 always_attacks,
                 fire,
                 patrol_uninhabited: rulebook.source_for(RuleKey::PatrolUninhabited),
+                target,
             }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
                 fire,
             }),
             carried: Rc::new(CarriedAi { fire }),
+            miner: Rc::new(MinerAi),
+            pirate: Rc::new(PirateWarship {
+                piracy_police,
+                fire,
+                target,
+            }),
             hunter_bribe: rulebook.source_for(RuleKey::HunterBribe),
+            led_ally,
         }
     }
 
@@ -120,6 +161,21 @@ impl NovaAi {
     #[must_use]
     pub fn with_carried(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
         self.carried = behaviour;
+        self
+    }
+
+    /// This AI with `behaviour` for the leaderless miners' thinks.
+    #[must_use]
+    pub fn with_miner(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.miner = behaviour;
+        self
+    }
+
+    /// This AI with `behaviour` for the pirate warships: the leaderless
+    /// warships of a government with `Flags` 0x1000 ([`PLUNDERS`]).
+    #[must_use]
+    pub fn with_pirate(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.pirate = behaviour;
         self
     }
 
@@ -140,11 +196,16 @@ impl NovaAi {
         }
     }
 
-    /// The behaviour for `npc`: the escorts' for the player's escort (its
-    /// fighters too) and for a mission escort ([`Npc::mission_escort`]),
-    /// the carried fighters' for one an NPC launched, otherwise the one for
-    /// its AI type.
-    fn of(&self, npc: &Npc) -> &dyn Behaviour {
+    /// The behaviour for `npc` among `around`: the escorts' for the
+    /// player's escort (its fighters too) and for a mission escort
+    /// ([`Npc::mission_escort`]), the carried fighters' for one an NPC
+    /// launched, the pirate's for a leaderless warship of a government
+    /// with `Flags` 0x1000 ([`PLUNDERS`], `_AIDispatch` @0x8ffc8-0x8fff0:
+    /// a ship with a leader is the original's AI type 5 or 6, so a fleet's
+    /// escort keeps the warship's until
+    /// rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts), otherwise
+    /// the one for its AI type.
+    fn of(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
         if npc.escorts_player() {
             return &*self.escorts;
         }
@@ -154,8 +215,30 @@ impl NovaAi {
         match npc.ai_type {
             AiType::WimpyTrader => &*self.wimpy,
             AiType::BraveTrader => &*self.brave,
+            AiType::Warship if npc.leader.is_none() && around.govts.flag(npc.govt, PLUNDERS) => {
+                &*self.pirate
+            }
             AiType::Warship => &*self.warship,
             AiType::Interceptor => &*self.interceptor,
+        }
+    }
+
+    /// The behaviour that decides for `npc` and picks its target: the
+    /// miners' for a leaderless miner (`_AIDispatch` @0x8ff64-0x8ff96: a
+    /// `shïp` `Flags3` & 3, and leader +0x9a -1, which the player's escorts
+    /// and fighters, mission escorts and an NPC carrier's fighters never
+    /// have), otherwise its own ([`NovaAi::of`]). A miner's fire, gate wait
+    /// and answer to hits stay its own: `_AIDispatch` replaces only the
+    /// type's think.
+    fn thinker(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
+        if npc.miner & MINER_BITS != 0
+            && npc.leader.is_none()
+            && !npc.escorts_player()
+            && npc.carrier.is_none()
+        {
+            &*self.miner
+        } else {
+            self.of(npc, around)
         }
     }
 }
@@ -188,20 +271,33 @@ impl Behaviour for NovaAi {
     /// (`hunts_player`), turning on it through `_AIMakeShipAttackPlayer`
     /// (`_HighLevelAIHandler` @0x8d6b7), whose quote gate its mark fails
     /// (+0xc8d2, @0x89c71); every other NPC decides as its behaviour does,
-    /// its turn on the player with it.
+    /// its turn on the player with it. Either way `_HighLevelAIHandler`'s
+    /// call for reinforcements ends the think
+    /// ([`reinforcements::with_high_level_call`]), whatever type decided,
+    /// as it runs after every type's think (`_AIDispatch` @0x901e5).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        if self.hunts_player(npc, around) {
-            return Decision {
+        let decision = if self.hunts_player(npc, around) {
+            Decision {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
                 dropped_target: false,
-            };
-        }
-        self.of(npc).decision(npc, around, chance)
+                provokes: false,
+                comm_call: None,
+                calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
+                plunders: None,
+            }
+        } else {
+            self.thinker(npc, around).decision(npc, around, chance)
+        };
+        let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
+        reinforcements::with_high_level_call(npc, decision, around)
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        self.of(npc).trigger(npc, around)
+        self.of(npc, around).trigger(npc, around)
     }
 
     /// A mission ship of `ShipBehav` 0 targets the player
@@ -210,15 +306,15 @@ impl Behaviour for NovaAi {
         if self.hunts_player(npc, around) {
             return Some(ShipRef::Player);
         }
-        self.of(npc).target(npc, around)
+        self.thinker(npc, around).target(npc, around)
     }
 
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
-        self.of(npc).gate_wait(npc, around)
+        self.of(npc, around).gate_wait(npc, around)
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-        self.of(npc).react(npc, strike, around)
+        self.of(npc, around).react(npc, strike, around)
     }
 }
 
@@ -229,6 +325,7 @@ mod tests {
 
     use super::*;
     use crate::ai::fire;
+    use crate::ai::miner::{MINER_BITS, MINES, SCOOPS};
     use crate::catalog::WeaponId;
     use crate::combat::hull::Condition;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -326,13 +423,8 @@ mod tests {
             .collect();
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Player,
-            by: Some(ShipRef::Player),
             damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player)
         };
         for (npc, mark) in npcs.iter().zip(&marks) {
             let ship = mark.ship();
@@ -398,13 +490,8 @@ mod tests {
             .collect();
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Player,
-            by: Some(ShipRef::Player),
             damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player)
         };
         for npc in &npcs {
             assert_eq!(
@@ -449,6 +536,7 @@ mod tests {
             .map(|(i, ai_type)| carried(of(10 + i as u32, ai_type), carrier))
             .collect();
         let around = Surroundings::new(&[], &npcs);
+        let strike = crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player);
         for npc in &npcs {
             assert_eq!(
                 ai.decide(npc, &around, &mut Draws::of(&[])),
@@ -456,8 +544,9 @@ mod tests {
             );
             assert_eq!(ai.trigger(npc, &around).only, Some(WeaponId(8)));
             assert_eq!(ai.target(npc, &around), Some(fighters.ship()));
+            assert_eq!(ai.react(npc, &strike, &around).provoked, 8.0);
         }
-        assert_eq!(fighters.asked.borrow().len(), 12);
+        assert_eq!(fighters.asked.borrow().len(), 16);
         assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
         // The player's fighter is the player's escort.
         let players = escorting(carried(of(20, AiType::Warship), ShipRef::Player));
@@ -467,7 +556,7 @@ mod tests {
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(escorts.ship())
         );
-        assert_eq!(fighters.asked.borrow().len(), 12, "not the carried slot");
+        assert_eq!(fighters.asked.borrow().len(), 16, "not the carried slot");
         // Once its carrier is gone, it flies by its AI type.
         let orphan = of(21, AiType::Warship);
         let npcs = [orphan];
@@ -475,6 +564,347 @@ mod tests {
         assert_eq!(
             ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
             Goal::Attack(marks[2].ship())
+        );
+    }
+
+    #[test]
+    fn novas_escorts_and_carried_fighters_answer_as_victims_and_never_as_samaritans() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2);
+        // `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
+        let ai = NovaAi::default();
+        let mut trader = of(1, AiType::WimpyTrader);
+        trader.govt = Some(crate::catalog::GovtId(140));
+        let mut warship = of(2, AiType::Warship);
+        warship.state.position = crate::geometry::Vec2::new(3000.0, 0.0);
+        let escort = escorting(Npc {
+            state: warship.state,
+            ..of(3, AiType::Warship)
+        });
+        let fighter = carried(
+            Npc {
+                state: warship.state,
+                ..of(4, AiType::Warship)
+            },
+            ShipRef::Npc(NpcId(9)),
+        );
+        let npcs = [trader, warship, escort, fighter];
+        let around = Surroundings::new(&[], &npcs);
+        let on_trader = crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player);
+        assert_eq!(
+            ai.react(&npcs[1], &on_trader, &around).goal,
+            Some(Goal::Attack(ShipRef::Player)),
+            "a warship comes to its help"
+        );
+        for npc in &npcs[2..] {
+            assert_eq!(
+                ai.react(npc, &on_trader, &around),
+                Reaction::default(),
+                "{:?}",
+                npc.id
+            );
+            let on_it =
+                crate::combat::fixture::strike(ShipRef::Npc(npc.id), ShipRef::Npc(NpcId(1)));
+            assert_eq!(
+                ai.react(npc, &on_it, &around),
+                Reaction {
+                    target: Some(ShipRef::Npc(NpcId(1))),
+                    provoked: 12.0,
+                    goal: None,
+                },
+                "{:?}",
+                npc.id
+            );
+        }
+    }
+
+    /// `npc` as a miner of `Flags3` `bits`.
+    fn mining(mut npc: Npc, bits: u16) -> Npc {
+        npc.miner = bits;
+        npc
+    }
+
+    /// Nova's AI with marks 1-4 for the four types, 9 for the escorts, 8
+    /// for the carried fighters and 5 for the miners.
+    fn marked() -> (NovaAi, Vec<Rc<Marked>>, [Rc<Marked>; 3]) {
+        let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
+        let others = [Marked::new(9), Marked::new(8), Marked::new(5)];
+        let ai = TYPES
+            .into_iter()
+            .zip(&marks)
+            .fold(NovaAi::default(), |ai, (ai_type, mark)| {
+                ai.with(ai_type, mark.clone())
+            })
+            .with_escorts(others[0].clone())
+            .with_carried(others[1].clone())
+            .with_miner(others[2].clone());
+        (ai, marks, others)
+    }
+
+    /// The traders' government plundering: its warships are pirates.
+    fn plundering() -> crate::govt::Governments {
+        crate::ai::fixture::govts(crate::govt::PLUNDERS, 0)
+    }
+
+    /// NPC `id` of `ai_type`, of the plundering traders' government.
+    fn traders(id: u32, ai_type: AiType) -> Npc {
+        Npc {
+            govt: Some(crate::ai::fixture::TRADERS),
+            ..of(id, ai_type)
+        }
+    }
+
+    /// What each of `ai`'s routes answers for `npc` among `around`:
+    /// its decision's goal, its target, its trigger, its gate wait's
+    /// trigger and its answer's provocation, as the marks carry them.
+    fn routed(ai: &NovaAi, npc: &Npc, around: &Surroundings) -> (Goal, Option<ShipRef>, [f32; 3]) {
+        let strike = Strike {
+            damage: 0.0,
+            ..crate::combat::fixture::strike(ShipRef::Player, ShipRef::Player)
+        };
+        let weapon = |trigger: Trigger| trigger.only.map_or(0.0, |weapon| f32::from(weapon.0));
+        (
+            ai.decide(npc, around, &mut Draws::of(&[0])),
+            ai.target(npc, around),
+            [
+                weapon(ai.trigger(npc, around)),
+                weapon(ai.gate_wait(npc, around).trigger),
+                ai.react(npc, &strike, around).provoked,
+            ],
+        )
+    }
+
+    #[test]
+    fn a_leaderless_warship_of_a_plundering_government_goes_to_the_pirate() {
+        let (ai, marks, _) = marked();
+        let pirates = Marked::new(6);
+        let ai = ai.with_pirate(pirates.clone());
+        let govts = plundering();
+        let npcs = [traders(1, AiType::Warship)];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            routed(&ai, &npcs[0], &around),
+            (Goal::Attack(pirates.ship()), Some(pirates.ship()), [6.0; 3])
+        );
+        assert_eq!(pirates.asked.borrow().len(), 5);
+        assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
+    }
+
+    #[test]
+    fn no_other_ship_of_a_plundering_government_goes_to_the_pirate() {
+        let (ai, marks, [escorts, fighters, miners]) = marked();
+        let pirates = Marked::new(6);
+        let ai = ai.with_pirate(pirates.clone());
+        let govts = plundering();
+        let mut led = traders(5, AiType::Warship);
+        led.leader = Some(NpcId(9));
+        let mut police = of(6, AiType::Warship);
+        police.govt = Some(crate::ai::fixture::POLICE);
+        let npcs = [
+            traders(1, AiType::Interceptor),
+            of(2, AiType::Warship),
+            escorting(traders(3, AiType::Warship)),
+            carried(traders(4, AiType::Warship), ShipRef::Npc(NpcId(30))),
+            led,
+            police,
+            traders(7, AiType::BraveTrader),
+        ];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let all = |mark: &Marked| {
+            (
+                Goal::Attack(mark.ship()),
+                Some(mark.ship()),
+                [mark.mark as f32; 3],
+            )
+        };
+        let wanted = [
+            all(&marks[3]),
+            all(&marks[2]),
+            all(&escorts),
+            all(&fighters),
+            all(&marks[2]),
+            all(&marks[2]),
+            all(&marks[1]),
+        ];
+        for (npc, wanted) in npcs.iter().zip(wanted) {
+            assert_eq!(routed(&ai, npc, &around), wanted, "{:?}", npc.id);
+        }
+        assert!(pirates.asked.borrow().is_empty());
+        // A leaderless miner thinks as the miners' AI, but fires, waits and
+        // answers as its type, the pirate (`_AIDispatch` @0x8ff64).
+        let miner = [mining(traders(8, AiType::Warship), MINER_BITS)];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &miner)
+        };
+        assert_eq!(
+            routed(&ai, &miner[0], &around),
+            (Goal::Attack(miners.ship()), Some(miners.ship()), [6.0; 3])
+        );
+        // A `ShipBehav` 0 mission ship hunts the player, firing as the pirate.
+        let hunter = [mission_ship(traders(9, AiType::Warship), 0)];
+        let mut around = with_player(&hunter, Condition::Intact);
+        around.govts = &govts;
+        assert_eq!(
+            routed(&ai, &hunter[0], &around),
+            (
+                Goal::Attack(ShipRef::Player),
+                Some(ShipRef::Player),
+                [6.0; 3]
+            )
+        );
+    }
+
+    #[test]
+    fn by_default_a_pirates_plunder_calls_no_reinforcements_and_its_attack_does() {
+        use crate::ai::fixture::{NEUTRAL, ship};
+        let govts = plundering();
+        let mut pirate = ship(1, crate::ai::fixture::TRADERS, AiType::Warship, 0.0, 0.0);
+        pirate.berth = 1;
+        let mut wreck = ship(2, NEUTRAL, AiType::WimpyTrader, 0.0, 300.0);
+        wreck.condition = Condition::Disabled;
+        wreck.hull.crew = 1;
+        wreck.hull.inherent_ai = 2;
+        let npcs = [pirate.clone(), wreck.clone()];
+        let around = Surroundings {
+            govts: &govts,
+            ..with_player(&npcs, Condition::Intact)
+        };
+        let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(
+            decision.goal,
+            Goal::Plunder {
+                ship: ShipRef::Npc(NpcId(2)),
+                hopeless: false
+            }
+        );
+        assert!(!decision.calls_reinforcements, "goal 0xd has no call");
+        let mut warship = wreck;
+        warship.condition = Condition::Intact;
+        warship.hull.inherent_ai = 3;
+        pirate.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+        pirate.target = Some(ShipRef::Npc(NpcId(2)));
+        let npcs = [pirate, warship];
+        let around = Surroundings {
+            govts: &govts,
+            ..with_player(&npcs, Condition::Intact)
+        };
+        let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Attack(ShipRef::Npc(NpcId(2))));
+        assert!(decision.calls_reinforcements, "goal 4's (@0x8e70d)");
+    }
+
+    #[test]
+    fn a_leaderless_miner_of_any_ai_type_decides_and_targets_as_the_miners_ai() {
+        let (ai, marks, [_, _, miners]) = marked();
+        let strike = Strike {
+            ship: ShipRef::Player,
+            by: Some(ShipRef::Player),
+            damage: 0.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
+        };
+        for bits in [MINES, SCOOPS, MINER_BITS] {
+            let npcs: Vec<Npc> = TYPES
+                .into_iter()
+                .enumerate()
+                .map(|(i, ai_type)| mining(of(10 + i as u32, ai_type), bits))
+                .collect();
+            let around = Surroundings::new(&[], &npcs);
+            for (npc, mark) in npcs.iter().zip(&marks) {
+                assert_eq!(
+                    ai.decide(npc, &around, &mut Draws::of(&[])),
+                    Goal::Attack(miners.ship())
+                );
+                assert_eq!(ai.target(npc, &around), Some(miners.ship()));
+                let wanted = Some(WeaponId(i16::try_from(mark.mark).unwrap_or_default()));
+                assert_eq!(ai.trigger(npc, &around).only, wanted, "its type's fire");
+                assert_eq!(ai.gate_wait(npc, &around).trigger.only, wanted);
+                assert_eq!(ai.react(npc, &strike, &around).provoked, mark.mark as f32);
+                assert_eq!(mark.asked.borrow_mut().drain(..).count(), 3);
+            }
+        }
+        assert_eq!(miners.asked.borrow().len(), 24);
+    }
+
+    #[test]
+    fn a_led_miner_flies_its_leaders_way_by_its_type() {
+        let (ai, marks, [_, _, miners]) = marked();
+        let mut led = mining(of(2, AiType::Warship), MINER_BITS);
+        led.leader = Some(NpcId(1));
+        let npcs = [of(1, AiType::Warship), led];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Attack(marks[2].ship())
+        );
+        assert!(miners.asked.borrow().is_empty());
+        let nova = NovaAi::default().with_miner(miners.clone());
+        let mut trader = mining(of(2, AiType::WimpyTrader), SCOOPS);
+        trader.leader = Some(NpcId(1));
+        let npcs = [of(1, AiType::WimpyTrader), trader];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            nova.decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Follow(NpcId(1))
+        );
+        assert!(miners.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_miner_escorting_the_player_or_carried_goes_to_the_escorts_or_fighters_ai() {
+        let (ai, _, [escorts, fighters, miners]) = marked();
+        let npcs = [
+            escorting(mining(of(1, AiType::Warship), MINER_BITS)),
+            carried(
+                mining(of(2, AiType::Warship), MINER_BITS),
+                ShipRef::Npc(NpcId(30)),
+            ),
+        ];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(escorts.ship())
+        );
+        assert_eq!(
+            ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Attack(fighters.ship())
+        );
+        assert!(miners.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_ship_behav_0_miner_still_hunts_the_player() {
+        let (ai, _, [_, _, miners]) = marked();
+        let npcs = [mission_ship(mining(of(1, AiType::Warship), MINER_BITS), 0)];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+        assert!(miners.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn by_default_nova_ai_sends_a_leaderless_miner_to_the_miners_ai() {
+        let npcs = [mining(of(1, AiType::Warship), SCOOPS)];
+        let sites = [nova_sim_catalog::fixture::planet(128, 100.0, 0.0)];
+        let around = Surroundings::new(&sites, &npcs);
+        assert_eq!(
+            NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Land(crate::catalog::StellarId(128)),
+            "drawing nothing"
         );
     }
 
@@ -666,7 +1096,7 @@ mod tests {
             let rulebook = Rulebook::default().with_override(RuleKey::QuadrantTurretArc, source);
             let ai = format!("{:?}", NovaAi::from_rulebook(&rulebook));
             let expected = format!("quadrant_arc: {source:?}");
-            assert_eq!(ai.matches(&expected).count(), 6, "all six: {ai}");
+            assert_eq!(ai.matches(&expected).count(), 7, "all seven: {ai}");
         }
     }
 
@@ -685,13 +1115,8 @@ mod tests {
             ..Surroundings::new(&[], &npcs)
         };
         let hit = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 0.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         [&npcs[1], &npcs[2]].map(|npc| ai.react(npc, &hit, &around).goal)
     }
@@ -716,8 +1141,8 @@ mod tests {
             let expected = format!("piracy_police: {source:?}");
             assert_eq!(
                 format!("{ai:?}").matches(&expected).count(),
-                4,
-                "all four types: {ai:?}"
+                5,
+                "all four types and the pirate: {ai:?}"
             );
         }
     }
@@ -768,6 +1193,41 @@ mod tests {
     }
 
     #[test]
+    fn every_think_ends_with_the_high_level_handlers_call_for_reinforcements() {
+        let mark = Marked::new(2);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let npcs = [of(1, AiType::Warship), of(2, AiType::Warship)];
+        let around = with_player(&npcs, Condition::Intact);
+        assert!(
+            ai.decision(&npcs[0], &around, &mut Draws::of(&[]))
+                .calls_reinforcements,
+            "attacking (@0x8e70d)"
+        );
+        let mut disabled = npcs.clone();
+        disabled[0].condition = Condition::Disabled;
+        let around = with_player(&disabled, Condition::Intact);
+        assert!(
+            !ai.decision(&disabled[0], &around, &mut Draws::of(&[]))
+                .calls_reinforcements,
+            "disabled (@0x8e6eb)"
+        );
+        let escorts = NovaAi::default().with_escorts(mark.clone());
+        let mut escort = of(1, AiType::WimpyTrader);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let led = [escort, of(2, AiType::Warship)];
+        let around = with_player(&led, Condition::Intact);
+        assert!(
+            escorts
+                .decision(&led[0], &around, &mut Draws::of(&[]))
+                .calls_reinforcements,
+            "an escort's think too (@0x901e5)"
+        );
+    }
+
+    #[test]
     fn a_mission_ship_of_ship_behav_0_attacks_the_player_on_every_think() {
         let mark = Marked::new(7);
         let ai = NovaAi::default().with(AiType::Warship, mark.clone());
@@ -787,13 +1247,8 @@ mod tests {
             "it fires as its type does"
         );
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 1.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 7.0);
         assert_eq!(
@@ -846,13 +1301,8 @@ mod tests {
         assert_eq!(ai.target(&npcs[0], &around), Some(escorts.ship()));
         assert_eq!(ai.trigger(&npcs[0], &around).only, Some(WeaponId(9)));
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 1.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");
@@ -1026,6 +1476,111 @@ mod tests {
     }
 
     #[test]
+    fn nova_ai_reads_led_ally_attack_from_the_rulebook() {
+        use crate::ai::fixture::{POLICE, TRADERS, around, govts, ship, sites};
+        use crate::escort::{EscortDuty, FormationSlot};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut escort = ship(2, POLICE, AiType::Warship, 0.0, 100.0);
+        escort.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let spare = Rulebook::default().with_override(RuleKey::LedAllyAttack, RuleSource::Bible);
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut hunter = ship(1, TRADERS, ai_type, 0.0, 0.0);
+            hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+            let npcs = [hunter, escort.clone()];
+            let seen = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            let decide = |rulebook: &Rulebook| {
+                NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+            };
+            assert_eq!(
+                decide(&Rulebook::default()),
+                Goal::Attack(ShipRef::Npc(NpcId(2))),
+                "{ai_type:?}: the engine attacks on an ally the player leads"
+            );
+            assert_ne!(
+                decide(&spare),
+                Goal::Attack(ShipRef::Npc(NpcId(2))),
+                "{ai_type:?}: the other reading spares it"
+            );
+        }
+        // The flee drop reads it too.
+        let mut fleeing = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        fleeing.goal = Goal::Flee(ShipRef::Npc(NpcId(2)));
+        let npcs = [fleeing, escort];
+        let seen = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        let flee = |rulebook: &Rulebook| {
+            let ai = NovaAi::from_rulebook(rulebook).with(AiType::WimpyTrader, Rc::new(Fleeing));
+            ai.decision(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+        };
+        assert_eq!(
+            flee(&Rulebook::default()).goal,
+            Goal::Flee(ShipRef::Npc(NpcId(2)))
+        );
+        let given_up = flee(&spare);
+        assert_eq!(given_up.goal, Goal::Idle);
+        assert!(!given_up.calls_reinforcements, "and calls no fleet");
+    }
+
+    /// Flees NPC 2 in each decision.
+    #[derive(Debug)]
+    struct Fleeing;
+
+    impl Behaviour for Fleeing {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Flee(ShipRef::Npc(NpcId(2)))
+        }
+    }
+
+    #[test]
+    fn nova_ai_gives_up_fleeing_a_stranger_ally_within_250() {
+        use crate::ai::fixture::{POLICE, TRADERS, around, govts, ship, sites};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let npcs = [
+            ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0),
+            ship(2, POLICE, AiType::Warship, 0.0, 200.0),
+        ];
+        let seen = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        let ai = NovaAi::default().with(AiType::WimpyTrader, Rc::new(Fleeing));
+        let decision = ai.decision(&npcs[0], &seen, &mut Draws::of(&[0; 4]));
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(!decision.calls_reinforcements);
+    }
+
+    #[test]
+    fn nova_ai_reads_friend_shield_carry_from_the_rulebook() {
+        use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, ship, sites};
+        use crate::reserves::Gauge;
+        // The hunter's own 0.5 of 100, a full-shielded enemy before its
+        // shieldless ally of 40, and a pirate of 75 to take on: by the
+        // engine the ally carries the enemy's factor 1 (50 + 40), by the
+        // other reading its raw 0.25 (50 + 10).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut hunter = ship(1, TRADERS, AiType::Warship, 0.0, 0.0);
+        hunter.reserves.shield.now = 15.0;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.hull.strength = 75.0;
+        let mut ally = ship(3, POLICE, AiType::WimpyTrader, 0.0, 600.0);
+        ally.hull.strength = 40.0;
+        ally.reserves.shield = Gauge { now: 0.0, max: 0.0 };
+        let npcs = [hunter, pirate, ally];
+        let seen = around(&sites, &npcs, &govts, (0.0, -9000.0), 0);
+        let decide = |rulebook: &Rulebook| {
+            NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+        };
+        assert_eq!(
+            decide(&Rulebook::default()),
+            Goal::Attack(ShipRef::Npc(NpcId(2)))
+        );
+        let raw = Rulebook::default().with_override(RuleKey::FriendShieldCarry, RuleSource::Bible);
+        assert_ne!(decide(&raw), Goal::Attack(ShipRef::Npc(NpcId(2))));
+    }
+
+    #[test]
     fn nova_ai_reads_patrol_uninhabited_from_the_rulebook() {
         use crate::ai::fixture::{POLICE, govts, ship};
         use crate::catalog::{LandingSite, StellarId};
@@ -1071,6 +1626,13 @@ mod tests {
                 goal: Goal::Idle,
                 turns_on_player: true,
                 dropped_target: true,
+                provokes: false,
+                comm_call: None,
+                calls_reinforcements: false,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
+                plunders: None,
             }
         }
     }
@@ -1089,6 +1651,13 @@ mod tests {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
                 dropped_target: false,
+                provokes: false,
+                comm_call: None,
+                calls_reinforcements: true,
+                board_wait: None,
+                clears_target: false,
+                keeps_pursuit: false,
+                plunders: None,
             },
             "the mission hunt (@0x8d6b7)"
         );

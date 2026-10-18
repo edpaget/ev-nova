@@ -43,16 +43,16 @@
 //! through `_EscortAI` as AI type 6, and the player's commands reach it
 //! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
-//! An escort answers threats to the player, not the hits it takes: it has
-//! no reaction. It never launches the fighters it carries
-//! ([`Trigger::bays`]).
+//! An escort hit takes its attacker as its target, as any ship does
+//! ([`react::victim`]), but never comes to another ship's help. It never
+//! launches the fighters it carries ([`Trigger::bays`]).
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, GateWait, Goal, Surroundings, fire};
+use crate::ai::{Behaviour, GateWait, Goal, Reaction, Surroundings, fire, react};
 use crate::chance::Chance;
-use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
+use crate::combat::{ShipRef, Strike};
 use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, threats};
 use crate::flight::ShipState;
 use crate::rulebook::RuleSource;
@@ -163,7 +163,21 @@ impl Behaviour for EscortAi {
 
     /// [`fire_unprovoked`], whatever its standing order.
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
-        fire_unprovoked(npc, around)
+        fire_unprovoked(npc, around, self.fire)
+    }
+
+    /// [`react::victim`]: `_DamageShip`'s reaction block reads no AI
+    /// type, so an escort (AI 5 or 6) takes its attacker as its target, as
+    /// any ship does. It is never a Good Samaritan (AI 3 and 4 alone,
+    /// @0x8289f-0x828bb).
+    ///
+    /// Its next think may set another target, as its standing order
+    /// reads its target ([`EscortAi::decide`]). Keeping the hit's attacker
+    /// by order is rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
+    /// Until then the target can hold for as little as one tick, until
+    /// that think. Nothing the player sees reads it in that time.
+    fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+        react::victim(npc, strike, around)
     }
 }
 
@@ -173,12 +187,14 @@ impl Behaviour for EscortAi {
 /// (@0x80e63) it tail-calls `_AIFireTurret` while the target is active and
 /// intact (+0xb8, `_IsDisabled`, @0x80e98), and drops the target otherwise
 /// (+0x70 = -1, @0x80e9d). `_AIFireTurret` runs the point defence first
-/// unless the shooter is disabled (@0x80afa-0x80b0d); its turret fire flag
-/// (+0xba, @0x80e40) is never read, as `_HandleShip` skips the fire step
-/// while the wait runs (@0x34a54-0x34a72). With no target it fires
-/// nothing.
+/// unless the shooter is disabled (@0x80afa-0x80b0d), then searches by
+/// `rules` ([`fire::turret_find`]): a find becomes its pick
+/// ([`Trigger::keep`], +0x72 @0x80e3c), but its fire flag (+0xba,
+/// @0x80e40) is never read, as `_HandleShip` skips the fire step while the
+/// wait runs (@0x34a54-0x34a72), so it fires nothing and the pick stays.
+/// With no target it fires nothing.
 #[must_use]
-pub fn fire_unprovoked(npc: &Npc, around: &Surroundings) -> GateWait {
+pub fn fire_unprovoked(npc: &Npc, around: &Surroundings, rules: FireRules) -> GateWait {
     let Some(target) = npc.target else {
         return GateWait::default();
     };
@@ -191,6 +207,7 @@ pub fn fire_unprovoked(npc: &Npc, around: &Surroundings) -> GateWait {
     GateWait {
         trigger: Trigger {
             point_defence: npc.condition == Condition::Intact,
+            keep: fire::turret_find(npc, target, around, rules),
             ..Trigger::default()
         },
         drops_target: false,
@@ -855,8 +872,36 @@ mod tests {
             assert_eq!(waiting(&ENGINE, &npcs), POINT_DEFENCE);
             assert_eq!(waiting(&BIBLE, &npcs), POINT_DEFENCE);
         }
-        let on_player = [having(escort(None), Goal::Idle, Some(ShipRef::Player))];
-        assert_eq!(waiting(&ENGINE, &on_player), POINT_DEFENCE);
+        let mut on_player = having(escort(None), Goal::Idle, Some(ShipRef::Player));
+        on_player.state.position = crate::geometry::Vec2::new(900.0, 0.0);
+        assert_eq!(waiting(&ENGINE, &[on_player]), POINT_DEFENCE);
+    }
+
+    #[test]
+    fn a_waiting_escorts_turret_find_becomes_its_pick_and_fires_nothing() {
+        // `_AIFireTurret`'s find writes +0x72 and raises +0xba
+        // (@0x80e3c-0x80e40); `_HandleShip` skips the fire block while
+        // the wait runs (@0x34a54-0x34a72), so it fires nothing and the
+        // pick stays.
+        let npcs = [
+            having(escort(None), Goal::Idle, Some(n(2))),
+            pirate(2, 0.0, -100.0),
+        ];
+        let found = GateWait {
+            trigger: Trigger {
+                keep: Some(WeaponId(140)),
+                ..POINT_DEFENCE.trigger
+            },
+            drops_target: false,
+        };
+        assert_eq!(waiting(&ENGINE, &npcs), found, "its turret, in reach");
+        let mut held = npcs[0].clone();
+        held.mode = Mode::Emerging { ticks_left: 30 };
+        held.trigger = found.trigger;
+        assert_eq!(fire::gated(&held).only, None, "fires nothing");
+        // Out of its turret's reach, it finds nothing.
+        let far = [npcs[0].clone(), pirate(2, 0.0, -900.0)];
+        assert_eq!(waiting(&ENGINE, &far), POINT_DEFENCE);
     }
 
     #[test]
@@ -898,27 +943,79 @@ mod tests {
         );
     }
 
+    /// How the escort, `npcs[0]`, answers `strike` among `npcs`, the
+    /// player at the centre.
+    fn reacts(npcs: &[Npc], strike: &crate::combat::Strike) -> crate::ai::Reaction {
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], npcs)
+        };
+        ENGINE.react(&npcs[0], strike, &around)
+    }
+
     #[test]
-    fn an_escort_answers_no_hit() {
+    fn an_escort_hit_by_a_pirate_takes_it_as_its_target() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2):
+        // an escort (AI 5 or 6) takes its attacker as its target.
         let npcs = [escort(None), pirate(2, 100.0, 0.0)];
+        let strike = crate::combat::Strike {
+            damage: 10.0,
+            ..crate::combat::fixture::strike(n(1), n(2))
+        };
+        assert_eq!(
+            reacts(&npcs, &strike),
+            crate::ai::Reaction {
+                target: Some(n(2)),
+                provoked: 10.0,
+                goal: None,
+            }
+        );
+    }
+
+    #[test]
+    fn an_escort_is_no_good_samaritan() {
+        // `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
+        let mut trader = bystander(2, 3000.0, 0.0);
+        trader.ai_type = AiType::WimpyTrader;
+        let npcs = [escort(None), trader];
+        let strike = crate::combat::fixture::strike(n(2), ShipRef::Player);
         let govts = govts(0, 0);
         let around = Surroundings {
             player: Some(player(0.0, 0.0)),
             govts: &govts,
             ..Surroundings::new(&[], &npcs)
         };
-        let strike = crate::combat::Strike {
-            ship: n(1),
-            by: Some(n(2)),
-            damage: 10.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
-        };
+        assert!(
+            crate::ai::react::answer(&npcs[0], &strike, &around, RuleSource::Engine)
+                .goal
+                .is_some(),
+            "a warship would answer"
+        );
+        assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
+    }
+
+    #[test]
+    fn an_escort_attacking_a_nearer_target_ahead_of_it_lets_a_hit_be() {
+        // The focus skip (@0x3bc25-0x3bcac), under the engine's reading
+        // (rdm:phase/weapons-fidelity/phase-37-left-out-of-phase-26 owns
+        // the original's).
+        let mut fighting = having(
+            escort(Some(EscortOrder::Attack)),
+            Goal::Attack(n(3)),
+            Some(n(3)),
+        );
+        fighting.state.heading = 0.0;
+        let npcs = [fighting, pirate(2, 100.0, 0.0), pirate(3, 0.0, -10.0)];
+        let strike = crate::combat::fixture::strike(n(1), n(2));
+        assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
+        let mut far = npcs.clone();
+        far[2].state.position = crate::geometry::Vec2::new(0.0, -60.0);
         assert_eq!(
-            ENGINE.react(&npcs[0], &strike, &around),
-            crate::ai::Reaction::default()
+            reacts(&far, &strike).target,
+            Some(n(2)),
+            "its target too far"
         );
     }
 
@@ -985,5 +1082,37 @@ mod tests {
         assert_eq!(target, Some(n(2)));
         assert!(!trigger.bays, "{trigger:?}");
         assert!(trigger.only.is_some(), "it still fires: {trigger:?}");
+    }
+
+    #[test]
+    fn an_escort_attacking_with_a_ready_bay_neither_keeps_nor_fires_its_bay() {
+        // Review 2026-10-15-1835-a4d7: `trigger_holding_fighters` writes
+        // no bay as the pick, so a gun pass that finds nothing fires none.
+        let bay = WeaponSpec::new(&crate::catalog::WeaponRecord {
+            guidance: 99,
+            ammo_type: 200,
+            reload: 60,
+            flags: crate::combat::weapon::SECONDARY,
+            ..weapon(150)
+        });
+        let mut carrier = having(
+            escort(Some(EscortOrder::Attack)),
+            Goal::Attack(n(2)),
+            Some(n(2)),
+        );
+        let mut mounts: Vec<(WeaponSpec, u32)> = carrier
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec, mount.count))
+            .collect();
+        mounts.push((bay, 1));
+        carrier.armament = Armament::new(mounts);
+        carrier.rounds = crate::combat::armament::LauncherRounds::from([(WeaponId(150), 2)]);
+        // The pirate 600 ahead: beyond its gun and its turret.
+        let npcs = [carrier, pirate(2, 0.0, -600.0)];
+        let (trigger, _) = command(ENGINE, &npcs);
+        assert_ne!(trigger.keep, Some(WeaponId(150)), "{trigger:?}");
+        assert_ne!(trigger.only, Some(WeaponId(150)), "{trigger:?}");
     }
 }

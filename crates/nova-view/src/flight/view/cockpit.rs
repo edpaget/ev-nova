@@ -21,9 +21,14 @@ use crate::flight::escorts::{
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
+use crate::flight::murk::{self, murk_tint, sprite_murk};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
-use crate::flight::weapons::{BeamShown, ShotShown};
+use crate::flight::weapon_glow::npc_glow_level;
+use crate::flight::weapons::{self, BeamShown, ShotShown};
+use nova_sim::sprite_layer::SpriteLayer;
+
+use super::sprites::{Sprite, sprite_stack};
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
 use crate::system::camera::{Camera, VIEW_SIZE};
@@ -31,6 +36,7 @@ use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::{sixtieths, ticks};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
+use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, UiSound};
 
 use super::{
@@ -166,30 +172,36 @@ impl<C> FlightView<C> {
         session.hover(Vec2::new(world.x, world.y), &ships).is_some()
     }
 
-    /// Draws the ships, bottom first, in their layers as
-    /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
-    /// the disabled, then the ships the player leads, then the rest, each
-    /// layer in the order the session's rules overlap them. Without a
-    /// session it draws the player alone.
-    /// The order and each cloak's level are read from the session as the
-    /// frame is drawn, so nothing waits past it.
-    pub(super) fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
+    /// Draws the ships and the shots, bottom first, in their layers as
+    /// the session stacks them ([`sprites`](super::sprites)): the ships as
+    /// [`Session::draw_layers`] gives them (see [`nova_sim::ship_layer`]),
+    /// each layer in the order the session's rules overlap them, and the
+    /// shots among them by their layers ([`nova_sim::sprite_layer`]).
+    /// Without a session it draws the player alone. The order and each
+    /// cloak's level are read from the session as the frame is drawn, so
+    /// nothing waits past it.
+    pub(super) fn draw_sprites(&self, list: &mut DrawList, camera: &Camera) {
         let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
             self.draw_ship(list, player, ShipDrawn::Full);
             return;
         };
         let npcs = self.shown_npcs();
-        for ship in session.draw_order() {
-            match ship {
-                ShipRef::Player => {
+        let fade = session
+            .rules()
+            .source_for(nova_sim::RuleKey::TranslucentShotFade);
+        let stacked = sprite_stack(session.draw_layers(), self.shown_shots(camera));
+        for sprite in stacked {
+            match sprite {
+                Sprite::Ship(ShipRef::Player) => {
                     self.draw_ship(list, player, session.player_fate().row().drawn);
                 }
-                ShipRef::Npc(id) => {
+                Sprite::Ship(ShipRef::Npc(id)) => {
                     if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
                     }
                 }
+                Sprite::Shot(shot) => weapons::draw_shot(list, &shot, &self.looks, fade),
             }
         }
     }
@@ -198,7 +210,9 @@ impl<C> FlightView<C> {
     /// crossed box when its sheet cannot be read, at the alpha its cloak
     /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
     /// waiting at the gate it comes out of is hidden, then fades in over
-    /// its last ticks there ([`npc_tint`]).
+    /// its last ticks there ([`npc_tint`]). Its weapon glow is drawn over
+    /// it while lit ([`weapon_glow`](crate::flight::weapon_glow)), held
+    /// below its murk ([`npc_glow_level`]) and murked.
     fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
         let Some(cloak) = cloak_alpha(session.cloak_shown(npc)) else {
             return;
@@ -215,15 +229,57 @@ impl<C> FlightView<C> {
             Some(Ok(sheet)) => {
                 let frame = rotation_frame(heading, sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+                let glow = sheet.weapon.zip(self.glows.drawn(ShipRef::Npc(npc.id)));
+                if let Some((layer, level)) = glow {
+                    let viewer = session.player().position;
+                    let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
+                    let tint = murk_tint(lights_tint(npc_glow_level(level, murk)), murk);
+                    let layer_frame = frame % layer.frames.get();
+                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
+                }
             }
             _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
     }
 
-    /// The camera, on the ship as drawn.
+    /// The camera, on the ship as drawn, in the view's size.
     #[must_use]
     pub fn camera(&self) -> Camera {
-        Camera::centred_on(self.shown_position())
+        Camera::centred_on_in(self.shown_position(), self.view)
+    }
+
+    /// The view's size in logical units: Nova's 1024 x 768 until
+    /// [`FlightView::set_view_size`] widens it.
+    #[must_use]
+    pub fn view_size(&self) -> (f32, f32) {
+        self.view
+    }
+
+    /// Sets the view's size, `view` logical units: the app's widened size
+    /// ([`Screen::set_widened_size`](crate::Screen::set_widened_size)).
+    /// The camera, the HUD's places, the play area the session is told
+    /// at the next steps, the starfield and the fades all take it from
+    /// the next frame on (see the module docs). Nova's own 1024 x 768
+    /// draws as flight always has.
+    pub fn set_view_size(&mut self, view: (f32, f32)) {
+        self.view = view;
+    }
+
+    /// How far right the course map's 1024 x 768 frame is drawn, and its
+    /// clicks taken: centred in the widened view over flight
+    /// ([`classic_offset`]), and at 0 over the spaceport, which is
+    /// classic, where the bar and the docked mission dialogs open it.
+    pub(super) fn map_offset(&self) -> Point {
+        let in_port = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
+        let x = if in_port {
+            0.0
+        } else {
+            classic_offset(self.view.0)
+        };
+        Point::new(x, 0.0)
     }
 
     /// The frame of the ship's sheet drawn, or `None` without a sheet.
@@ -477,7 +533,8 @@ impl<C> FlightView<C> {
 
     /// A click at screen point `at`, as the original's in space
     /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
-    /// right [`STATUS_BAR_WIDTH`] (0xc2) of the screen, radar included, is
+    /// right [`STATUS_BAR_WIDTH`] (0xc2) of the view at any width, x ≥
+    /// width − 194 (@0x6a046-0x6a065), radar included, is
     /// no click in space and does nothing (@0x6a065, @0x6a36d); nor does
     /// one in the open escort menu's frame, which the original's menu
     /// branch takes and ends (@0x6a060-0x6a12b; its row selection is left
@@ -486,7 +543,7 @@ impl<C> FlightView<C> {
     /// ([`ViewShips`]): a ship under it is targeted, during a jump too, and
     /// otherwise the stellar under it selected.
     pub(super) fn click_in_space(&mut self, at: Point) {
-        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
+        if at.x >= self.view.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
             return;
         }
         let world = self.camera().screen_to_world(at);
@@ -518,16 +575,23 @@ impl<C> FlightView<C> {
     /// @0x114cb) with the mission systems taken now (@0x114ea), and the
     /// system selected now ([`Session::floating_preselection`],
     /// @0x1147b-0x114c8), whose name alone is drawn above a zoom of 1.1.
+    /// It marks no green system, with multiple arrows allowed
+    /// ([`MapMarks::NONE`](nova_sim::MapMarks::NONE)): it shows only from
+    /// `_HandlePlayer`, never under a mission dialog's map.
     /// The frame shows that drawing until the next show: its course and
     /// mode-3 link are those of the last show, not live, as the
     /// original's frame image is drawn only then (at a show, Hyper Select,
     /// a click and a zoom, each of which shows it again here).
     fn show_floating_map(&mut self) {
         self.floating.show(self.mac_now());
+        // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
+        // system as it draws (@0x11338-0x1136d), so the course map opens
+        // there next.
+        self.map.recentre();
         if let Ok(session) = &self.session {
             self.floating.preselect(session.floating_preselection());
             let missions = session.map_mission_systems();
-            let drawing = session.map_drawing(None, &missions);
+            let drawing = session.map_drawing(None, &missions, nova_sim::MapMarks::NONE);
             self.floating_picture = Some(MapPicture::of(&drawing));
         }
     }
@@ -568,7 +632,7 @@ impl<C> FlightView<C> {
     /// click in space selects nothing either; here the session refuses the
     /// hit, so the click does nothing and the map isn't shown again.
     pub(super) fn click_floating_map(&mut self, at: Point) -> bool {
-        let frame = floating::frame(VIEW_SIZE);
+        let frame = floating::frame(self.view);
         if !self.floating.is_up() || !floating::contains(frame, at) {
             return false;
         }
@@ -640,7 +704,7 @@ impl<C> FlightView<C> {
             .galaxy()
             .position(current)
             .map_or_else(Point::default, |at| Point::new(at.x, at.y));
-        let frame = floating::frame(VIEW_SIZE);
+        let frame = floating::frame(self.view);
         let transform = floating::transform(frame, at, self.floating.zoom());
         let Some(picture) = &self.floating_picture else {
             return;
@@ -768,7 +832,7 @@ impl<C> FlightView<C> {
     /// @0x6dd00-0x6dd6a) and hides the floating map (@0x6dd6a-0x6dd75),
     /// during a jump too.
     fn acknowledge(&mut self) {
-        self.message = None;
+        self.acknowledge_message();
         self.escort_menu.close();
         self.floating.hide();
     }
@@ -827,16 +891,26 @@ impl<C> FlightView<C> {
     }
 
     /// The shots in flight, each where it is drawn: `alpha` of the way
-    /// from where it was a step ago, as the ships are.
+    /// from where it was a step ago, as the ships are; each with the
+    /// index its spin started on ([`SpinStarts`](crate::flight::spin::SpinStarts))
+    /// and its murk where the session holds it, seen from the player's
+    /// ship as the session holds it, in the player's effective murk
+    /// ([`murk::sprite_murk`], [`Session::effective_murk`]), as
+    /// `_HandleShot` murks it once a pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
         let Ok(session) = &self.session else {
             return Vec::new();
         };
         let behind = 1.0 - self.alpha;
+        let viewer = session.player().position;
+        let murk = session.effective_murk();
         session
             .shots()
             .iter()
             .map(|shot| ShotShown {
+                id: shot.id,
+                spin_start: self.shot_looks.spin_starts.start(shot.id),
+                murk: murk::sprite_murk(shot.position, viewer, murk),
                 at: camera.world_to_screen(Point::new(
                     shot.velocity.x.mul_add(-behind, shot.position.x),
                     shot.velocity.y.mul_add(-behind, shot.position.y),
@@ -844,6 +918,7 @@ impl<C> FlightView<C> {
                 heading: shot.heading,
                 age: shot.age,
                 weapon: shot.weapon.id,
+                layer: SpriteLayer::from(shot.layer),
             })
             .collect()
     }
@@ -959,7 +1034,7 @@ impl<C> FlightView<C> {
     pub(super) fn draw_red_alert(&self, list: &mut DrawList) {
         let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
         if let (Some(icon), Some(width)) = (icon, self.alert_width) {
-            alert::draw_red_alert(list, icon, width);
+            alert::draw_red_alert(list, icon, width, self.view.0);
         }
     }
 
@@ -967,11 +1042,11 @@ impl<C> FlightView<C> {
     /// and secondary weapon line. The weapon line follows every frame: the
     /// original redraws it (`_statusRedraw[3]`) on every event that
     /// changes it, so drawing it each frame shows the same.
-    fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar) {
+    fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
         let Ok(session) = &self.session else {
             return;
         };
-        let origin = hud::bar_origin(bar);
+        let origin = hud::bar_origin(bar, view_width);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let shown = self.target_shown();
         target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
@@ -984,8 +1059,9 @@ impl<C> FlightView<C> {
     }
 
     /// Draws the player's ship at `at`, as much of it as `drawn` says
-    /// (see [`nova_sim::player_fate`]): its sprite, engine glow and
-    /// running lights, or, when its sheet cannot be read, a crossed box
+    /// (see [`nova_sim::player_fate`]): its sprite, engine glow, running
+    /// lights and weapon glow ([`weapon_glow`](crate::flight::weapon_glow),
+    /// never murked), or, when its sheet cannot be read, a crossed box
     /// and the reason. The box stands in for the sprite and a missing
     /// sheet has no glow or lights, so only a ship drawn in full has one.
     fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
@@ -1005,7 +1081,10 @@ impl<C> FlightView<C> {
                     .zip(glow_level(base, tick, &self.glow_rolls).map(lights_tint));
                 let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
                 let lights = sheet.lights.zip(level.map(lights_tint));
-                for (layer, tint) in [glow, lights].into_iter().flatten() {
+                let weapon = sheet
+                    .weapon
+                    .zip(self.glows.drawn(ShipRef::Player).map(lights_tint));
+                for (layer, tint) in [glow, lights, weapon].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();
                     list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }
@@ -1033,18 +1112,21 @@ impl<C> FlightView<C> {
     /// the bar and its shops cover the bar's left edge (`_DoPortDialog`
     /// @0x5fbca draws the radar blank, as ours does while landed).
     /// Without a status bar it draws nothing: flight says why, and the
-    /// spaceport stays clean.
+    /// spaceport stays clean. The spaceport is Nova's 1024 x 768, however
+    /// wide flight's view is, so the bar is drawn at that width's right
+    /// edge.
     pub fn draw_status_bar(&self, list: &mut DrawList) {
         if let Ok(bar) = &self.status_bar {
-            self.draw_bar(list, bar);
+            self.draw_bar(list, bar, VIEW_SIZE.0);
         }
     }
 
-    /// Draws `bar` showing the HUD: the radar, gauges and nav area as
+    /// Draws `bar` showing the HUD against the right edge of a view
+    /// `view_width` wide: the radar, gauges and nav area as
     /// shown ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
     /// [`FlightView::nav_shown`]), the cargo area, then the target panel
     /// and the secondary weapon's line.
-    pub(super) fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar) {
+    pub(super) fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let radar = self.radar_shown();
         let cargo = self.session.as_ref().ok().map(Session::status_cargo);
@@ -1059,8 +1141,8 @@ impl<C> FlightView<C> {
                 .as_ref()
                 .is_ok_and(|session| session.player_condition() == Condition::Disabled),
         };
-        hud::draw(list, bar, &state, metrics);
-        self.draw_combat_hud(list, bar);
+        hud::draw(list, bar, &state, metrics, view_width);
+        self.draw_combat_hud(list, bar, view_width);
     }
 
     /// Draws the [`HELP`] line when its overlay is on.

@@ -16,14 +16,6 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
-    # `_AngularDifference`'s first fold, from 360 when a and b lie either
-    # side of 179 (`angular_difference`, @0x649e-0x64f4), is ported as the
-    # original has it, but the second fold undoes it: for any |a − b| = d,
-    # folding 360 − d over 180 gives the same as folding d, so every
-    # mutant of that test (columns 11, 18 and 24) is the function itself.
-    # So is the second fold's `>` at 180 (column 19), where 360 − 180 is 180.
-    "trig.rs:[0-9]+:(11|18|24): replace .* in angular_difference",
-    "trig.rs:[0-9]+:19: replace > with >= in angular_difference",
     # `_ShipTurnRate`'s player floor (`floored_turn`) sets a rate below 1.0
     # to 1.0; at exactly 1.0, `<=` sets it to 1.0 too.
     "handling.rs:[0-9]+:[0-9]+: replace < with <= in floored_turn",
@@ -31,6 +23,60 @@ exclude_re = [
     # reads only whether the class turns above none: the class's `Maneuver`
     # / 10 and * 10 (column 50) have the same sign.
     "player_info.rs:[0-9]+:50: replace / with \\* in turn_shown",
+    # A pirate's docking turns against its velocity gap: the gap's table
+    # angle + 180 taken mod 360 (`_LowLevelAIHandler` @0x86b77-0x86ba0);
+    # - 180 mod 360 (`rem_euclid`) is the same angle.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:292:42: replace \\+ with - in dock$",
+    # The approach's speed gap is a float widened to a double and tested
+    # against the double 0.35 (@0x87538, @0x8755b): no float widens to
+    # 0.35 exactly, so `>=` can't be told from `>`.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:250:.*replace > with >= in approach$",
+    # A class item of count 0 multiplies its marines by 0, so counting it
+    # (`>=`) adds nothing, as skipping it (`>`, @0x84129) does.
+    "nova-sim-ai/src/ai/plunder_contents\\.rs:156:.*replace > with >= in ClassMarines::of$",
+    # A take that lands exactly on the victim's holds is cut to holds less
+    # what was stolen, which is the take itself (@0x844ab-0x844b2).
+    "nova-sim-ai/src/ai/plunder_contents\\.rs:248:26: replace > with >= in steal$",
+    # The joust's reverse bearing (`_LowLevelAIHandler` @0x86279-0x862a0)
+    # is the bearing + 180 taken mod 360; - 180 mod 360 is the same angle.
+    "nova-sim-ai/src/ai/pursuit\\.rs:.*replace \\+ with - in joust$",
+    # The break heading's first wrap (@0x86328-0x86331): a 0 raised to 360
+    # by `<= 0` is taken back to 0 by the second wrap (`> 359`).
+    "nova-sim-ai/src/ai/pursuit\\.rs:.*replace < with <= in break_heading$",
+    # `_AIShipFriendStrength` doubles only a weight above 0 (@0x8279b);
+    # doubling a weight of 0 still adds 0, and the threat test it skips
+    # changes nothing, so `>=` can't be told from `>`.
+    "odds.rs:.*replace > with >= in friend_strength",
+    # `_AICallForHelp`'s threat gate (`_ExtendedIsThreatToShip(ship,
+    # player)` @0x830b1) asks whether the player is intact: a ship that
+    # threatens the player fails the like gate before it
+    # (`_AIDoesShipLikePlayer` asks the threat first), so the session
+    # can't tell the player's condition here from the result. The pure
+    # gate's own tests pin it (`threatens_player`).
+    "comm_calls.rs:.*replace == with != in Session::distress_facts",
+    # `_AngularDifference`'s first fold (from 360 when the two lie either
+    # side of 179, @0x649e-0x64f4) is undone or redone by its second (from
+    # 360 above 180) for every pair whose difference fits in 16 bits
+    # (checked exhaustively), so any mutant of its three comparisons
+    # (`!=` at column 18, `a > 179` at 11, `b > 179` at 24) gives the same
+    # answer; the port keeps the fold as the original has it. The second
+    # fold's `> 180` loosened to `>= 180` folds 180 to 180, the same; its
+    # `<` and `==` mutants are not equivalent and stay in.
+    "nova-sim-base/src/trig\\.rs:140:(11|24): replace > with (==|<|>=) in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:140:18: replace != with == in angular_difference$",
+    "nova-sim-base/src/trig\\.rs:143:19: replace > with >= in angular_difference$",
+    # `_TableArcTan`'s `180 + c` for a point below and left of the origin
+    # (@0x25a64-0x25a6d) is taken round into 0..360 after, so `c - 180`
+    # lands on the same heading.
+    "trig.rs:[0-9]+:[0-9]+: replace \\+= with -= in table_arctan",
+    # `open_audio` (nova's `main.rs`) opens the default audio device
+    # through cpal and reads the soundtrack from disk: the program's edge,
+    # which no hermetic test may run. Its decisions are tested on their
+    # own (`music_warning`, `voice_limit`, `game_audio`).
+    "nova/src/main.rs:.*replace open_audio -> ",
+    # `run_seed` reads the clock for a different seed each run: no test
+    # can tell one seed from another.
+    "main.rs:.*replace run_seed -> u64 with",
     # `fitted` scales a movie box down only when the window is smaller
     # (@0x55cb8, @0x55d16); at an equal side the scale is exactly 1, so
     # `<=` gives the same size.
@@ -38,6 +84,14 @@ exclude_re = [
     # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
     # which is `StringPatch::default()`: the same value.
     "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # `Screen::view_shape`'s default is `ViewShape::Classic`, which is
+    # `ViewShape::default()`; `Screen::set_widened_size`'s default ignores
+    # its size, which `()` does too.
+    "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
+    "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
+    # The native upscaler draws the world at `WorldResolution::Native`,
+    # which is `WorldResolution::default()`: the same value.
+    "nova-render/src/wgpu/upscale\\.rs:.*replace <impl Upscale for Native>::resolution -> WorldResolution with Default::default\\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
     # `+ 360` in place of `mod 360` lands on the same heading.
@@ -137,29 +191,57 @@ exclude_re = [
     # forwards to tested parts: the panel (`DevPanel`), the painter
     # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
     "DevTools::(new|on_window_event|run_frame|layer_mut)",
-    # The window port over a real winit window: one-line reads of its size
-    # and scale factor, a redraw request and showing or hiding the system
-    # pointer, observable only with a window.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible)",
-    # The port's default for a window with no pointer of its own does
-    # nothing already.
-    "replace WindowPort::set_pointer_visible with \\(\\)",
+    # The window port over a real winit window: one-line reads of its size,
+    # scale factor and fullscreen state, a redraw request, showing or hiding
+    # the system pointer, the fullscreen and size requests, and its
+    # monitor's modes and name, observable only with a window. The
+    # decisions in them are the tested `deepest` and `offers_exclusive`.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name)",
+    # The port's defaults for a window with no pointer of its own, that
+    # cannot go fullscreen or be sized, do nothing already.
+    "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",
+    # Its default `video_modes` is `Vec::new()`; replacing it with `vec![]`
+    # builds the same empty list, so it cannot be observed.
+    "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
     "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
-    # The surface adapter's raw calls, as whole bodies only: pages and
-    # uploads delegate to `WgpuRenderer` (tested offscreen), and `submit`
+    # The surface adapter's raw calls, as whole bodies only: pages,
+    # uploads and clearing the pages delegate to `WgpuRenderer` (tested
+    # offscreen), and `submit`
     # is the raw configure / get_current_texture / present calls on a
     # window surface, which needs a display. Its decisions are the tested
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|submit) with \\(\\)$",
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|submit) with \\(\\)$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window
     # surface. `OffscreenGpu`'s twin of each is mutated and tested.
     "replace (SurfaceGpu::present|<impl OverlayGpu for SurfaceGpu>::submit_with) with \\(\\)$",
+    # The surface adapter's upscaler bodies delegate to `WgpuRenderer` as
+    # `OffscreenGpu`'s twins do (mutated and tested offscreen): how it
+    # draws the world, setting the upscaler, and which upscalers its
+    # device can use, each observable only with a window.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::set_upscaler with \\(\\)$",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl UpscalerProbe for SurfaceGpu>::upscalers -> Vec<Upscaler> with ",
+    # So does handing out the warnings its frames raised.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::take_warnings -> Vec<String> with ",
+    # Whether MetalFX runs on a device: `true` on every GPU the macOS
+    # development host has (Apple silicon on Metal), so answering `true`
+    # can't be told apart there. Only a non-Metal device or a GPU MetalFX
+    # doesn't support (a CI VM's paravirtual Metal) says no, and neither
+    # can be opened here; the probe test checks the two agree wherever it
+    # runs.
+    "nova-metalfx/src/scaler\\.rs:.*replace supported -> bool with true$",
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx_spatial -> bool with true$",
+    # The off-macOS twins of `metal_fx_spatial` and `metal_fx` are
+    # compiled only on other targets, so on the macOS development host a
+    # mutated body is never built into the tests. One answers `false`, the
+    # other is never reached (`effective` maps MetalFX away first).
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx -> Box<dyn Upscale> with ",
     # The one-line edge that opens the default audio device through cpal
     # and hands it to `KiraAudio::with_manager`. Running it needs a real
     # output device, which no gating test may open; everything it hands
@@ -170,6 +252,10 @@ exclude_re = [
     # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
     "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
+    # The trait's default `offer_display` ignores its arguments already:
+    # replacing it with `()` changes nothing. So does `offer_upscalers`.
+    "replace Screen::offer_display with \\(\\)",
+    "replace Screen::offer_upscalers with \\(\\)",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.
@@ -203,8 +289,20 @@ exclude_re = [
     "replace > with >= in close_on",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour. `ensure_scene`
-    # combines the scene's and the backdrop's texture usages.
-    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene))",
+    # combines the scene's and the backdrop's texture usages; `canvas`
+    # (which it now calls) the canvas's. MetalFX's output texture's wgpu
+    # usage (`COPY_SRC | TEXTURE_BINDING | RENDER_ATTACHMENT`, the `|`s at
+    # column 25) is disjoint bits too.
+    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene|canvas))",
+    "nova-metalfx/src/scaler\\.rs:\\d+:25: replace \\| with \\^ in SpatialScaler::output_texture$",
+    # Its Metal usage is MetalFX's ask `| ShaderRead | RenderTarget`, and
+    # MetalFX asks for both bits itself on every GPU the macOS host has
+    # (the phase 7 spike), so dropping either added bit (`&` for the first
+    # `|`, column 35; `^` or `&` for the second, column 65, which binds
+    # `ShaderRead ^ RenderTarget` first) leaves the same usage. `^` at
+    # column 35 clears `ShaderRead` and is caught.
+    "nova-metalfx/src/scaler\\.rs:\\d+:35: replace \\| with & in SpatialScaler::output_texture$",
+    "nova-metalfx/src/scaler\\.rs:\\d+:65: replace \\| with (\\^|&) in SpatialScaler::output_texture$",
     # The glow ramp's thrust step raises the base only below cruise (24).
     # With `<=` a thrusting base of 24 steps to 25, and the next step, the
     # decay above cruise, takes it straight back to 24: the same result for
@@ -336,4 +434,31 @@ exclude_re = [
     "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in push_speed",
     "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in drain",
     "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in MaxVel::bleed",
+    # The lightning rolls' seed joins a high word shifted past 32 bits and
+    # a low word below 2^32, and a trail colour joins channels shifted to
+    # their own 8 bits: their bits never overlap, so `|` and `^` give the
+    # same word.
+    "nova-view/src/flight/lightning\\.rs:188:30: replace \\| with \\^ in StepRolls::draw$",
+    "nova-view/src/flight/trails\\.rs:90:16: replace \\| with \\^ in scaled_colour$",
+    # A trail's tail angle is taken `% 360` as the original takes it, but
+    # the table trig it feeds (`table_sin`, `table_cos`) takes every angle
+    # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
+    # same tail.
+    "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
+    # Super-xBR computes every texel the same way whichever thread computes
+    # it, so how its work is split changes how fast it runs, never a byte
+    # (pinned by `any_number_of_threads_enlarges_to_the_same_bytes`): the
+    # threads the machine has (1 or 0, which `max(1)` makes 1), each
+    # frame's share of them, a band's length (any length tiles the plane,
+    # as each texel's index is `band * band_len + n`), and whether one band
+    # is computed on the calling thread.
+    "nova-render/src/super_xbr\\.rs:.*replace threads -> usize with (0|1)$",
+    "nova-render/src/super_xbr\\.rs:.*replace / with (%|\\*) in enlarge_all$",
+    "nova-render/src/super_xbr\\.rs:189:30: replace \\* with (\\+|/) in Plane::from_fn$",
+    "nova-render/src/super_xbr\\.rs:196:25: replace <= with > in Plane::from_fn$",
+    # The shaders add 0.000001 to the edge strength only so a strength of
+    # 0 divides by something; the preset's is 3, where 3.000001 and
+    # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
+    # texel shows.
+    "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
 ]

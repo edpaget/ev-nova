@@ -22,19 +22,23 @@ use nova_sim::AlertIcon;
 
 use super::hud::STATUS_BAR_WIDTH;
 use crate::geometry::Point;
-use crate::system::camera::VIEW_SIZE;
 use crate::{DrawList, ImageKey};
 
 /// Where the icon's top-left corner is, for `cïcn` 18000 `width` pixels
-/// wide.
+/// wide, in a view `view_width` wide: x = 2 × trunc((`view_width` − 194) /
+/// 2) − width, the original's doubled `_screenCenter` (set by
+/// `_SetupWind` @0x1b720). That is the bar's left edge less the width,
+/// and a pixel further left when the play area's width is odd.
 #[must_use]
-pub fn alert_origin(width: u32) -> Point {
-    Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH - width as f32, 0.0)
+pub fn alert_origin(width: u32, view_width: f32) -> Point {
+    let half_play = ((view_width - STATUS_BAR_WIDTH) / 2.0).trunc();
+    Point::new(2.0 * half_play - width as f32, 0.0)
 }
 
-/// Draws `icon`, for `cïcn` 18000 `width` pixels wide.
-pub fn draw_red_alert(list: &mut DrawList, icon: AlertIcon, width: u32) {
-    list.picture(ImageKey::icon(icon.cicn()), alert_origin(width));
+/// Draws `icon`, for `cïcn` 18000 `width` pixels wide, in a view
+/// `view_width` wide.
+pub fn draw_red_alert(list: &mut DrawList, icon: AlertIcon, width: u32, view_width: f32) {
+    list.picture(ImageKey::icon(icon.cicn()), alert_origin(width, view_width));
 }
 
 /// The `cïcn` of the double-time icon (0x4e20, @0x21a0e).
@@ -52,8 +56,16 @@ mod tests {
 
     #[test]
     fn the_icon_sits_at_the_playfields_top_right() {
-        assert_eq!(alert_origin(24), Point::new(806.0, 0.0));
-        assert_eq!(alert_origin(32), Point::new(798.0, 0.0));
+        assert_eq!(alert_origin(24, 1024.0), Point::new(806.0, 0.0));
+        assert_eq!(alert_origin(32, 1024.0), Point::new(798.0, 0.0));
+    }
+
+    #[test]
+    fn in_a_widened_view_the_icon_sits_left_of_the_bar_by_the_doubled_half_play_width() {
+        // 1365 − 194 = 1171, odd: trunc(585.5) × 2 = 1170.
+        assert_eq!(alert_origin(24, 1365.0), Point::new(1146.0, 0.0));
+        // 1366 − 194 = 1172, even: flush with the bar.
+        assert_eq!(alert_origin(24, 1366.0), Point::new(1148.0, 0.0));
     }
 
     #[test]
@@ -73,8 +85,8 @@ mod tests {
     #[test]
     fn each_frame_draws_its_cicn_from_the_same_point() {
         let mut list = DrawList::new();
-        draw_red_alert(&mut list, AlertIcon::Red, 24);
-        draw_red_alert(&mut list, AlertIcon::Dark, 24);
+        draw_red_alert(&mut list, AlertIcon::Red, 24, 1024.0);
+        draw_red_alert(&mut list, AlertIcon::Dark, 24, 1024.0);
         let commands: Vec<_> = list.iter().cloned().collect();
         assert_eq!(
             commands,

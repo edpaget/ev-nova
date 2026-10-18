@@ -93,13 +93,12 @@ impl Session {
         self.select_pressed(press.selected);
         self.dock = press.dock;
         match press.said {
-            Some(DockSaid::NoResponse) => self.messages.push(SimMessage::NoResponse),
+            Some(DockSaid::NoResponse) => self.say(SimMessage::NoResponse),
             Some(DockSaid::Requested) => {
                 if let Ok(LandOutcome::Requested { stellar, .. }) = press.outcome {
                     let kind = self.dock_kind(stellar);
                     self.sounds.push(SimSound::TrafficControl);
-                    self.messages
-                        .push(SimMessage::DockRequested { stellar, kind });
+                    self.say(SimMessage::DockRequested { stellar, kind });
                 }
             }
             None => {}
@@ -146,7 +145,7 @@ impl Session {
                     self.dock = (!done.expired).then_some(request);
                     if done.greet {
                         self.sounds.push(SimSound::TrafficControl);
-                        self.messages.push(SimMessage::DockCleared {
+                        self.say(SimMessage::DockCleared {
                             stellar: request.stellar,
                             kind,
                         });
@@ -278,6 +277,14 @@ mod tests {
         );
         assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
         assert_eq!(session.dock_request(), request(129, 0));
+    }
+
+    #[test]
+    fn the_requests_line_holds_the_comm_line() {
+        let mut session = on_129(session());
+        assert!(session.comm_line().free_for_calls(), "free before");
+        assert_eq!(session.land(), requested(129));
+        assert!(!session.comm_line().free_for_calls(), "the line shows it");
     }
 
     #[test]

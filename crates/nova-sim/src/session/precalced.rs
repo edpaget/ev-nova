@@ -10,7 +10,9 @@
 //! [`market::JunkLatches`]), at every reset, a set expression's and a
 //! ship purchase's included, caches the sabotage flag and restarts its
 //! clock (`_playerSabotaged`, `_sabotageCounter`, @0xc3ff-0xc769; see
-//! [`sabotage`](crate::sabotage)), trims the
+//! [`sabotage`](crate::sabotage)), sets the reinforcement inhibitors of
+//! the `ModType` 44 outfits owned (@0xc628-0xc68f; see the
+//! `reinforcements` module), trims the
 //! commodities to the fleet's holds (@0xc7d8-0xc887), and takes the
 //! active ranks the blessing table is built from (@0xc8be-0xc981; see
 //! the `ranks` module), and turns the player's repair inhibit off
@@ -127,6 +129,8 @@ impl Session {
         self.scan_latches = Latches::ARMED;
         self.junk_latches = market::JunkLatches::of(&self.goods, &self.pilot.cargo);
         self.refresh_sabotage();
+        self.reset_inhibitors();
+        self.reset_iff_scramblers();
         if self.trims(cause) {
             self.trim_to_holds();
         }

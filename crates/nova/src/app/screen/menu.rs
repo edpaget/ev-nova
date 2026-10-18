@@ -25,8 +25,11 @@ impl AppScreen {
     /// played, under the pointer). A click on Quit waits out
     /// [`QUIT_DELAY`] and then quits ([`Screen::take_quit`]), as
     /// `_MainScreenMouse` (@0x1aea4-0x1aead) reaches the same
-    /// `_MainScreenChoice(2)` as the key. The engine's Escape quits at
-    /// once, silently. Tab goes to the ship browser.
+    /// `_MainScreenChoice(2)` as the key. A click on Enter Ship,
+    /// Preferences or About runs at once the choice E, P or A runs once
+    /// its click has played: the same arm of `_MainScreenChoice`. The
+    /// engine's Escape quits at once, silently. Tab goes to the ship
+    /// browser.
     ///
     /// Each key clicks ([`UiSound::ButtonKeyed`]) and its choice waits
     /// for the click to end ([`MenuHold`]): typed N, O and Q (the menu's
@@ -58,7 +61,7 @@ impl AppScreen {
         {
             if pressed && !repeat {
                 self.click_then(if key == Key::Char('a') {
-                    MenuAction::About
+                    MenuAction::Choice(MenuChoice::About)
                 } else {
                     MenuAction::Text
                 });
@@ -87,7 +90,7 @@ impl AppScreen {
                 if self.keys_held.e {
                     self.menu_hold = Some(MenuHold::EHeld);
                 } else {
-                    self.click_then(MenuAction::Enter);
+                    self.click_then(MenuAction::Choice(MenuChoice::EnterShip));
                 }
                 return ScreenAction::None;
             }
@@ -98,6 +101,10 @@ impl AppScreen {
         }
         let menu = self.menu.as_mut().expect(MENU);
         menu.screen.input(input);
+        // The click's sounds come before what its choice plays: 601,
+        // then Enter Ship's refusal (@0x19c38, then @0x1aaac).
+        self.sounds.extend(menu.screen.take_sounds());
+        let menu = self.menu.as_mut().expect(MENU);
         match menu.screen.take_choice() {
             Some(Chosen {
                 choice,
@@ -111,6 +118,22 @@ impl AppScreen {
             None => {}
         }
         ScreenAction::None
+    }
+
+    /// Tells the main menu, if any, where the pointer is now
+    /// ([`MainMenu::set_pointer`](nova_view::menu::MainMenu::set_pointer)),
+    /// as `_MainScreenRolloverIdle` reads
+    /// `GetMouse` each idle (@0x16500-0x16528). Pointer moves go only to
+    /// the overlay or side shown, so without this the rollover would aim
+    /// where the pointer last was over the menu once a dialog over it
+    /// closes, the menu is switched back to, or flight returns to it.
+    /// Only its ticks read it, so telling it while it is hidden changes
+    /// nothing.
+    pub(super) fn tell_menu_pointer(&mut self) {
+        let pointer = self.pointer;
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_pointer(pointer);
+        }
     }
 
     /// Clicks a main-menu key ([`UiSound::ButtonKeyed`]) and holds
@@ -128,9 +151,11 @@ impl AppScreen {
             MenuAction::Choice(MenuChoice::Quit) => self.quit_in = Some(QUIT_DELAY),
             // `_MainScreenChoice(3)` with no game in progress beeps
             // `_beepSnd[3]` and redraws (@0x1aa89-0x1aac2).
-            MenuAction::Enter => self.sounds.push(Sound::Ui(UiSound::EnterRefused)),
-            MenuAction::Preferences => self.open_preferences(),
-            MenuAction::About => self.open_text(ABOUT_TEXT),
+            MenuAction::Choice(MenuChoice::EnterShip) => {
+                self.sounds.push(Sound::Ui(UiSound::EnterRefused));
+            }
+            MenuAction::Choice(MenuChoice::Preferences) => self.open_preferences(),
+            MenuAction::Choice(MenuChoice::About) => self.open_text(ABOUT_TEXT),
             MenuAction::Text => self.open_text(MENU_X_TEXT),
         }
     }
@@ -168,7 +193,7 @@ impl AppScreen {
     /// waits on the click.
     pub(super) fn e_released(&mut self) {
         self.keys_held.e = false;
-        self.click_then(MenuAction::Enter);
+        self.click_then(MenuAction::Choice(MenuChoice::EnterShip));
     }
 
     /// Opens the New Pilot dialog: the interface file's, or the built-in

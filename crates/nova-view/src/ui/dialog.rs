@@ -69,6 +69,20 @@ impl Placement {
     }
 }
 
+/// Where `_CenterWindow` (@0x220e-0x2359 in `EV Nova.app`) puts the
+/// top-left corner of a dialog `size` wide and high in a `window`: the
+/// window's centre less half the dialog, each half truncated toward zero
+/// as the original's integer halving is. For an odd size it sits a pixel
+/// right of or below [`Placement::Center`], which floors the spare space
+/// in one step. The galaxy map's dialog (`DLOG` 2000) is placed so; the
+/// other dialogs `_CenterWindow` moves still centre as
+/// [`Placement::Center`] does.
+#[must_use]
+pub fn center_window(window: (f32, f32), size: (f32, f32)) -> Point {
+    let half = |length: f32| (length / 2.0).trunc();
+    Point::new(half(window.0) - half(size.0), half(window.1) - half(size.1))
+}
+
 /// What a dialog item is, with its data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ItemSpec {
@@ -716,6 +730,30 @@ mod tests {
         let bounds = rect(0.0, 0.0, 1021.0, 764.0);
         assert_eq!(Placement::Center.origin(bounds), at(1.0, 2.0));
         assert_eq!(Placement::Alert.origin(bounds), at(1.0, 1.0));
+    }
+
+    #[test]
+    fn center_window_takes_half_the_window_less_half_the_dialog_each_truncated() {
+        // The map's DLOG 2000, 601 x 513: (512 − 300, 384 − 256).
+        assert_eq!(center_window(SCREEN, (601.0, 513.0)), at(212.0, 128.0));
+        let bounds = rect(0.0, 0.0, 601.0, 513.0);
+        assert_eq!(
+            Placement::Center.origin(bounds),
+            at(211.0, 127.0),
+            "a pixel up and left"
+        );
+        // Even sizes agree with the Window Manager's centring.
+        assert_eq!(center_window(SCREEN, (600.0, 512.0)), at(212.0, 128.0));
+        // An odd window too: trunc(1023 / 2) − trunc(601 / 2).
+        assert_eq!(
+            center_window((1023.0, 767.0), (601.0, 513.0)),
+            at(211.0, 127.0)
+        );
+        // A dialog wider than the window sits left of it.
+        assert_eq!(
+            center_window((100.0, 100.0), (201.0, 101.0)),
+            at(-50.0, 0.0)
+        );
     }
 
     /// Stock `YesNo` (`DLOG` 3002): 355 x 109, centred, with OK (1), a

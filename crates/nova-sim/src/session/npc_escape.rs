@@ -179,7 +179,7 @@ impl Session {
                     target: npc.target,
                 })
             });
-        let launched = sortie.map(|sortie| self.launch_fighter(&sortie));
+        let launched = sortie.map(|sortie| self.launch_fighter(&sortie, &mut *chance));
         if let Some(npc) = self.npc_mut(id) {
             npc.armament = crate::combat::armament::Armament::default();
             npc.rounds = crate::combat::armament::LauncherRounds::default();

@@ -13,7 +13,9 @@ use nova_sim::{
 use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
-use nova_view::menu::{MainMenu, PilotList};
+use nova_view::galaxy::find::FIND_DIALOG;
+use nova_view::menu::appear::Appear;
+use nova_view::menu::{MainMenu, MainScreenSource, PilotList};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
@@ -25,13 +27,15 @@ use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, HaggleDialog,
-    PlunderDialog, PrefsDialog,
+    AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
+    HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
 };
-use nova_view::{Input, Key, Navigator, Prefs, Screen, Showing};
+use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::refresh_spaceport;
-use super::{ABOUT_TEXT, AppScreen, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side};
+use super::{
+    ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side,
+};
 
 impl AppScreen {
     /// Every screen over `data`, showing the ship browser.
@@ -45,6 +49,8 @@ impl AppScreen {
             data,
             flight: None,
             slot_sprites: SlotSprites::default(),
+            course_map_zoom: None,
+            map_borders: true,
             dialogs: None,
             about: None,
             about_text: ABOUT_TEXT,
@@ -53,10 +59,13 @@ impl AppScreen {
             prefs: Prefs::default(),
             preferences: None,
             prefs_change: None,
+            display_choice: None,
+            scaling: nova_view::Scaling::list(&[nova_view::Upscaler::Native]),
             menu: None,
             new_pilot: None,
             open_pilot: None,
             load_note: None,
+            question: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
             effects_chance: SharedChance::default(),
@@ -82,6 +91,8 @@ impl AppScreen {
                 Prefs::default().quicktime_movies,
             ),
             fade_in: None,
+            appear: None,
+            button_down: false,
             player_info: None,
             command_held: false,
             keys_held: MenuKeys::default(),
@@ -90,6 +101,8 @@ impl AppScreen {
             quit_in: None,
             quit_due: false,
             double_time: false,
+            widened: CLASSIC_VIEW,
+            pointer: None,
         }
     }
 
@@ -101,9 +114,13 @@ impl AppScreen {
     }
 
     /// The router with each flight's explosions and debris rolled on
-    /// `chance`, apart from the simulation's.
+    /// `chance`, apart from the simulation's, and the main menu's logo
+    /// picked on it, whether the menu was given before or after.
     #[must_use]
-    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+    pub fn with_effects_chance(mut self, effects_chance: SharedChance) -> Self {
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_chance(effects_chance.clone());
+        }
         Self {
             effects_chance,
             ..self
@@ -285,9 +302,21 @@ impl AppScreen {
     /// chance, its effects on the router's effects chance, deciding as its
     /// behaviour says, disabling ships, engaging missiles and judging
     /// crimes as its rules say, naming its ship from the game data's
-    /// string lists, and laying out its HUD's text with the router's
-    /// metrics, if it has any.
+    /// string lists, laying out its HUD's text with the router's
+    /// metrics, if it has any, and in the widened size the router was last
+    /// told ([`Screen::set_widened_size`]), so its first tick already
+    /// uses it.
     pub(super) fn flight(
+        &self,
+        new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
+    ) -> FlightView<Rc<GameData>> {
+        let mut flight = self.configured_flight(new);
+        flight.set_view_size(self.widened);
+        flight
+    }
+
+    /// [`AppScreen::flight`]'s flight, before it is sized.
+    fn configured_flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
     ) -> FlightView<Rc<GameData>> {
@@ -309,11 +338,24 @@ impl AppScreen {
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
             .with_sound_prefs(self.prefs.sound)
-            .with_double_time(self.double_time);
+            .with_double_time(self.double_time)
+            .with_find(self.find_template(), self.data.button_style())
+            .with_map_borders(self.map_borders);
+        let flight = match self.course_map_zoom {
+            Some(zoom) => flight.with_course_map_zoom(zoom),
+            None => flight,
+        };
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
         }
+    }
+
+    /// The maps' Find dialog, `DLOG` 3005, from the dialogs, if they
+    /// were given and have it; `None` lays it out from its fallback.
+    pub(super) fn find_template(&self) -> Option<DialogTemplate> {
+        let dialogs = self.dialogs.as_ref()?;
+        dialogs.resources.dialog_template(FIND_DIALOG).ok()
     }
 
     /// The metrics the router's text is laid out by: the dialogs', or the
@@ -329,15 +371,35 @@ impl AppScreen {
     /// screens lay out their text with `metrics` when there are no
     /// dialogs. With no `pilots` (nowhere to keep them), New Pilot still
     /// flies, saving nothing, and Open Pilot lists nothing.
+    ///
+    /// The menu is drawn from the game data's main-screen art; without
+    /// it (plug-in data that lacks it, say) it draws the stand-in, with a
+    /// warning saying why. Its logo picks on the router's effects chance
+    /// ([`AppScreen::with_effects_chance`]), drawing nothing the
+    /// simulation rolls.
+    ///
+    /// The game opens on the menu as it appears: the second's fade from
+    /// black over it, and its slides after (see the module docs).
     #[must_use]
     pub fn with_pilots(
-        self,
+        mut self,
         pilots: Option<PilotKeeper<Box<dyn PilotStore>>>,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        let screen = MainMenu::new(self.data.button_style(), Rc::clone(&metrics));
+        let art = match self.data.main_screen_art() {
+            Ok(art) => Some(art),
+            Err(reason) => {
+                self.warnings
+                    .push(format!("nova: drawing the stand-in main menu: {reason}"));
+                None
+            }
+        };
+        let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
+            .with_chance(self.effects_chance.clone());
+        screen.appear();
         Self {
             side: Side::MainMenu,
+            appear: Some(Appear::start_up()),
             menu: Some(Menu {
                 screen,
                 metrics,
@@ -370,6 +432,13 @@ impl AppScreen {
     #[must_use]
     pub fn load_note(&self) -> Option<&NoteDialog> {
         self.load_note.as_ref()
+    }
+
+    /// The quit question the window's close asked over the main menu,
+    /// while it is open.
+    #[must_use]
+    pub fn question(&self) -> Option<&YesNoDialog> {
+        self.question.as_ref()
     }
 
     /// Changes the pilot with `change` while the ship is landed, as a
@@ -416,19 +485,37 @@ impl AppScreen {
     }
 
     /// The router with dialogs: I opens the About text in a dialog built
-    /// from `dialogs`, its text laid out by `metrics`. Without dialogs, I
-    /// does nothing.
+    /// from `dialogs`, its text laid out by `metrics`, and the galaxy
+    /// viewer's Find is laid out from them (`DLOG` 3005, or its
+    /// fallback) and measured by `metrics`. Without dialogs, I does
+    /// nothing, and the viewer's Find never opens.
     #[must_use]
     pub fn with_dialogs(
         self,
         dialogs: Rc<dyn DialogResources>,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
+        let template = dialogs.dialog_template(FIND_DIALOG).ok();
+        let galaxy = self
+            .galaxy
+            .with_metrics(Rc::clone(&metrics))
+            .with_find(template, self.data.button_style());
         Self {
             dialogs: Some(Dialogs {
                 resources: dialogs,
                 metrics,
             }),
+            galaxy,
+            ..self
+        }
+    }
+
+    /// The router with each flight's course map showing the borders or
+    /// not, as the player's `ShowMapBorders` setting says.
+    #[must_use]
+    pub fn with_map_borders(self, map_borders: bool) -> Self {
+        Self {
+            map_borders,
             ..self
         }
     }
@@ -490,6 +577,9 @@ impl AppScreen {
         if self.comm.is_some() {
             return Showing::Comm;
         }
+        if self.flight_dialog_map_open() {
+            return Showing::FlightMap;
+        }
         if let Some(missions) = &self.missions {
             if missions.playing() {
                 return Showing::Movie;
@@ -522,6 +612,9 @@ impl AppScreen {
         if self.load_note.is_some() {
             return Showing::Note;
         }
+        if self.question.is_some() {
+            return Showing::Question;
+        }
         match self.side {
             Side::MainMenu => Showing::MainMenu,
             Side::Ships => Showing::ShipBrowser,
@@ -544,22 +637,55 @@ impl AppScreen {
         if !self.port_map_open() {
             return false;
         }
+        self.map_over_input(input);
+        true
+    }
+
+    /// The input to flight's course map open over something: an Escape
+    /// press closes it ([`FlightView::close_map`]), unless its Find is
+    /// open, and anything else goes to it ([`FlightView::port_map_input`]).
+    fn map_over_input(&mut self, input: &Input) {
         let flight = self.flight.as_mut().expect(ENTERED);
         let escape = Input::Key {
             key: Key::Escape,
             pressed: true,
             repeat: false,
         };
-        if *input == escape {
+        // Find, while open, takes Escape too, doing nothing with it.
+        if *input == escape && !flight.map_finding() {
             flight.close_map();
         } else {
             flight.port_map_input(input);
         }
-        true
+    }
+
+    /// Whether a mission dialog's map is open over flight
+    /// ([`FlightView::open_dialog_map`]): over the offer from a ship or the
+    /// mission dialogs, which stay open under it.
+    pub(super) fn flight_dialog_map_open(&self) -> bool {
+        self.side == Side::Flight
+            && self
+                .flight
+                .as_ref()
+                .is_some_and(FlightView::dialog_map_open)
+    }
+
+    /// The input to a mission dialog's map over flight, before anything
+    /// open under it sees it: as flight's own map takes it, the Preferences
+    /// keys first unless Find is open, then the map's
+    /// ([`AppScreen::port_map_input`]'s).
+    pub(super) fn flight_dialog_map_input(&mut self, input: &Input) -> ScreenAction {
+        let finding = self.flight.as_ref().is_some_and(FlightView::map_finding);
+        if !finding && self.preferences_key(input) {
+            return ScreenAction::None;
+        }
+        self.map_over_input(input);
+        ScreenAction::None
     }
 
     /// Whether flight's course map is open over the spaceport: the bar's
-    /// map ([`FlightView::open_bar_map`]).
+    /// map ([`FlightView::open_bar_map`]) or a mission dialog's
+    /// ([`FlightView::open_dialog_map`]).
     pub(super) fn port_map_open(&self) -> bool {
         self.side == Side::Spaceport && self.flight.as_ref().is_some_and(FlightView::map_open)
     }
@@ -602,8 +728,9 @@ impl AppScreen {
 
     /// The screen of the side shown: flight's while its course map is
     /// open over the spaceport ([`AppScreen::port_map_open`]), so the
-    /// spaceport neither ticks nor draws beneath it, paused as under any
-    /// modal dialog. The bar's offer wait pausing under it too is ours'
+    /// spaceport doesn't tick beneath it, paused as under any modal
+    /// dialog, though it is drawn beneath it, as under the other modal
+    /// dialogs. The bar's offer wait pausing under it too is ours'
     /// existing reading
     /// (rdm:phase/missions-fidelity/phase-15-offer-timer-under-nested-dialogs).
     pub(super) fn shown(&self) -> &dyn Screen {

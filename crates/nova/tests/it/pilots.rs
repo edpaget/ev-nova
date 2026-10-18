@@ -45,6 +45,7 @@ use nova_sim::{Pilot, PilotKeeper, PilotStore, ShipId, StellarId, SystemId};
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
+use nova_view::menu::fixture::main_screen_resources;
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -199,6 +200,8 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, state + 100, pict(13, 25, [0, 0, 0])));
         resources.push((PICT, state + 102, pict(13, 25, [0, 0, 0])));
     }
+    // The main menu's art, so the menu draws the original's screen.
+    resources.extend(main_screen_resources());
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -325,7 +328,7 @@ impl Harness {
         let handle = audio.clone();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(settings);
         Self {
-            app: App::new(&FakeWindow, data, screen).with_audio(core),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)).with_audio(core),
             gpu: RecordingGpu::new(),
             frames: 0,
             log,
@@ -399,9 +402,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(choice)
-            .rect
-            .center()
+            .press_point(choice)
     }
 
     /// The music commands since the last call; the effects let go.
@@ -508,6 +509,31 @@ fn texts(frame: &Frame) -> Vec<String> {
         .collect()
 }
 
+/// The main screen's six buttons are each drawn where they are hit.
+fn assert_menu_drawn(game: &mut Harness) {
+    let frame = game.frame();
+    let quads: Vec<nova_render::Rect> = frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let menu = game.app.screen().main_menu().expect("a main menu");
+    assert!(menu.draws_art());
+    for choice in MenuChoice::ALL {
+        let bounds = menu.button_bounds(choice);
+        let drawn = nova_render::Rect {
+            x: bounds.min.x,
+            y: bounds.min.y,
+            w: bounds.width(),
+            h: bounds.height(),
+        };
+        assert!(quads.contains(&drawn), "{choice:?} at {drawn:?}");
+    }
+}
+
 fn saved(store: &MemoryPilots, key: &str) -> Pilot {
     nova_sim::save::decode(&store.text(key).expect("saved")).expect("a pilot")
 }
@@ -517,10 +543,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     let store = MemoryPilots::new();
     let mut game = Harness::opening(&store);
     assert_eq!(game.showing(), Showing::MainMenu);
-    let menu = texts(&game.frame());
-    for label in ["New Pilot", "Open Pilot", "Quit"] {
-        assert!(menu.contains(&label.to_owned()), "{menu:?}");
-    }
+    assert_menu_drawn(&mut game);
 
     // New Pilot asks for a name; typing (with a slip, deleted) fills it.
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
@@ -603,10 +626,14 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
         StellarId(128)
     );
 
-    // Take off, back to the menu, and Quit exits.
+    // Take off, back to the menu, which appears after its black second,
+    // and Quit exits.
     game.press(KeyCode::Escape);
     game.press(KeyCode::Escape);
     assert_eq!(game.showing(), Showing::MainMenu);
+    for _ in 0..frames_to(nova_view::fade::DEATH_FADE_FOR) {
+        assert_eq!(game.redraw(), Control::Continue);
+    }
     let quit = game.menu_button(MenuChoice::Quit);
     game.send(WindowEvent::PointerMoved {
         px: (f64::from(quit.x), f64::from(quit.y)),

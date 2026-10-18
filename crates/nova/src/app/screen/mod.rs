@@ -14,7 +14,13 @@
 //! built behind the note, doesn't tick meanwhile, and quitting with the
 //! note open saves the repaired pilot. Quit quits after
 //! [`QUIT_DELAY`], and each of the menu's keys first waits for its click
-//! to play (see `menu_input`). Escape in
+//! to play (see `menu_input`); a click on Enter Ship, Preferences or
+//! About does what E, P or A does. The menu is the original's main
+//! screen, drawn from the game data's art, or a stand-in without it
+//! ([`MainMenu`]). Closing the window on the menu asks `STR#` 140 #10 in
+//! the Yes/No dialog and quits only on Yes; closing it anywhere else, or
+//! Command-Q anywhere, quits at once (see `quit_question`), but while the
+//! menu appears, below. Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
 //! Each flight put away leaves its ship slots' draw-layer history, which
 //! every later flight of the run starts from, as the original's sprite
@@ -45,10 +51,23 @@
 //! each of a sabotaged player's outfits over the stopped flight, one
 //! after another, and begins flight's fade to black as the last closes,
 //! or with none on the same tick. When the fade is over the router drops flight, as
-//! Escape's put-away does, and returns to the main menu (or, without one,
-//! the side flight was entered from), which fades in from black over
-//! [`DEATH_FADE_FOR`](nova_view::fade::DEATH_FADE_FOR), taking input under the fade, as the original's
-//! `_EnterGameFromMainScreen` (0x1a471) fades the main screen in.
+//! Escape's put-away does, and returns to the main menu as it appears
+//! (below), or, without one, to the side flight was entered from, which
+//! fades in from black over
+//! [`DEATH_FADE_FOR`](nova_view::fade::DEATH_FADE_FOR), taking input under the fade.
+//!
+//! The main menu appears as the original's main screen does
+//! ([`Appear`](nova_view::menu::appear::Appear), see `appear`): at
+//! start-up it fades in from black over a second, its slides playing
+//! after, the clicks and plain keys made meanwhile dropped and its
+//! Command keys and the window's close kept for when it ends; on each
+//! return from play, by the engine's reading of `main_screen_return_fade`,
+//! the screen stays black while the primary button is held and through
+//! the second's fade, the main screen appearing when it ends, the keys
+//! typed meanwhile reaching it after and its pointer events dropped, as
+//! `_EnterGameFromMainScreen` (0x1a471) brings the main screen back. By
+//! the rule's other reading the return fades in over the menu, which
+//! takes input under the fade.
 //!
 //! # The developer's sides
 //!
@@ -239,6 +258,20 @@
 //! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
 //! Apple Event's handler redraws (@0x56195).
 //!
+//! # Display shapes
+//!
+//! Flight, and every dialog or map over it, is drawn widened to the
+//! window's aspect ratio ([`ViewShape::Widened`](nova_view::ViewShape));
+//! the main menu, the developer's sides and the spaceport, with anything
+//! over it, the bar's course map included, stay classic, 1024 x 768. The
+//! router keeps the widened size the app tells it and hands it to every
+//! flight. Over widened flight, the dialogs (About, Preferences, player
+//! info, haggle, comm, the mission texts and info, the offer, plunder and
+//! assignment) are drawn in their 1024 x 768 frame centred in the view
+//! ([`classic_offset`](nova_view::view_shape::classic_offset)), where the
+//! original's `_CenterWindow` puts a dialog in a window that wide, and take
+//! the pointer moved back to match. Flight places its own course map so.
+//!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`](nova_view::Screen::take_sounds), and what it shows through
 //! [`Screen::now_showing`](nova_view::Screen::now_showing). The spaceport and the two dialogs are dropped
@@ -257,6 +290,7 @@ use nova_sim::{
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
+use nova_view::menu::appear::Appear;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList};
 use nova_view::movie::Movies;
 use nova_view::ships::ShipBrowser;
@@ -269,15 +303,18 @@ use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
-    PrefsDialog,
+    PrefsDialog, YesNoDialog,
 };
 use nova_view::{Color, Input, Key, Navigator, Point, Prefs, Sound};
+use nova_view::{FullscreenKind, Scaling};
 
+mod appear;
 mod build;
 mod flight;
 mod menu;
 mod overlays;
 mod port_dialogs;
+mod quit_question;
 mod routing;
 mod screen_impl;
 
@@ -328,17 +365,14 @@ enum Side {
     Spaceport,
 }
 
-/// What a main-menu key does once its click has played.
+/// What a main-menu key does once its click has played, or a click on
+/// a button at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
-    /// The menu's own choice: New Pilot, Open Pilot or Quit.
+    /// One of the six buttons, by its key (N, O, Q, E, P or A) or a
+    /// click: the key and the click reach the same arm of
+    /// `_MainScreenChoice`, so the same result.
     Choice(MenuChoice),
-    /// E: Enter Ship, which with no pilot loaded is refused.
-    Enter,
-    /// P: the Preferences.
-    Preferences,
-    /// A: the About text.
-    About,
     /// X: `dësc` 32766.
     Text,
 }
@@ -349,7 +383,8 @@ enum MenuAction {
 /// The original reads no event during the spin: what arrives meanwhile
 /// stays in the OS queue for whatever the choice opens. So while the
 /// menu waits, the router queues every input (and each letting go of the
-/// pointer or the keys, in its place) and replays them in order once
+/// pointer or the keys, and each close of the window, in its place) and
+/// replays them in order once
 /// the choice has run. The engine notices the click's end at its next
 /// audio feed, an input or a frame, not in a spin; the choice still runs
 /// in the pass that plays 601, before the next frame is drawn, so no
@@ -372,6 +407,9 @@ enum Held {
     Input(Input),
     CancelPointer,
     ReleaseKeys,
+    /// The window's close: the original's close-box click waits in the
+    /// queue for what the choice leaves showing (see `quit_question`).
+    Close,
 }
 
 /// Every screen the app can show, and which side it is showing. The router
@@ -379,6 +417,7 @@ enum Held {
 /// a Tab press (not on its key repeats) and decides what an Escape press
 /// does.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // Each a setting or a state the router keeps.
 pub struct AppScreen {
     side: Side,
     /// The side flight was last entered from, which Escape goes back to.
@@ -397,6 +436,14 @@ pub struct AppScreen {
     /// original's sprites outlive a pilot, `_InitSprites` running once at
     /// launch (see [`nova_sim::ship_layer`]).
     slot_sprites: SlotSprites,
+    /// The course map's zoom the last flight put away left, which each
+    /// new flight's map opens at: the original's `_mapZoom` is set once,
+    /// by its data, and never reset by a new or loaded pilot.
+    course_map_zoom: Option<f64>,
+    /// Whether the course map shows the borders: the player's
+    /// `ShowMapBorders` as the run started, then as the last flight put
+    /// away left it, so a change made docked lasts for the run.
+    map_borders: bool,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
     /// The About dialog, or the main menu's X text, while it is open.
@@ -413,6 +460,12 @@ pub struct AppScreen {
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.
     prefs_change: Option<Prefs>,
+    /// The fullscreen kind picked in the Preferences dialog since it was
+    /// last taken.
+    display_choice: Option<FullscreenKind>,
+    /// The Scaling list, as offered at startup (native and Super-xBR
+    /// before), for every Preferences dialog.
+    scaling: Vec<Scaling>,
     /// The main menu and where pilots are kept, once given.
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.
@@ -422,6 +475,9 @@ pub struct AppScreen {
     /// The note that an opened pilot's load fell back (`STR#` 140 #52),
     /// while it is open over the main menu, its flight built behind it.
     load_note: Option<NoteDialog>,
+    /// The quit question (`STR#` 140 #10) the window's close asks over
+    /// the main menu, while it is open.
+    question: Option<YesNoDialog>,
     /// The warnings since they were last taken.
     warnings: Vec<String>,
     /// What each flight rolls each day's events and its traffic on.
@@ -475,9 +531,16 @@ pub struct AppScreen {
     /// another is given ([`AppScreen::with_movie_player`]), on as the
     /// preferences say.
     movies: Movies,
-    /// The fade back from black over the side shown after a death, while
-    /// it plays.
+    /// The fade back from black over the developer's side shown after a
+    /// death without a main menu, while it plays.
     fade_in: Option<ScreenFade>,
+    /// How the main menu appears, at start-up and on a return from play,
+    /// while it does.
+    appear: Option<Appear>,
+    /// Whether the primary mouse button is down, as the last pointer
+    /// input routed or cancel put it: a return from play waits for it to
+    /// be let go of (`StillDown`).
+    button_down: bool,
     /// The player info screen over flight, while it is open.
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
@@ -498,7 +561,22 @@ pub struct AppScreen {
     /// side, and every flight is told. Never saved, as the original's
     /// `_doubleTime` is not.
     double_time: bool,
+    /// The widened view's size, as the app last told it
+    /// ([`Screen::set_widened_size`](nova_view::Screen::set_widened_size)):
+    /// every flight, built or to be built, draws at it.
+    widened: (f32, f32),
+    /// Where the pointer is, in the classic 1024 x 768 frame, as the last
+    /// pointer input routed put it (`None` once it has left the game).
+    /// The main menu is told it before each of its ticks, wherever the
+    /// moves went meanwhile ([`AppScreen::tell_menu_pointer`]).
+    pointer: Option<Point>,
 }
+
+/// Nova's own 1024 x 768, which every screen but flight draws in.
+const CLASSIC_VIEW: (f32, f32) = (
+    nova_view::view_shape::CLASSIC_SIZE.0 as f32,
+    nova_view::view_shape::CLASSIC_SIZE.1 as f32,
+);
 
 /// The physical keys the main menu reads as held.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

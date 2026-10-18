@@ -52,6 +52,7 @@ use nova_sim::{
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
+use nova_view::menu::fixture::main_screen_resources;
 use nova_view::spaceport::{OutfitterScreen, ShipyardScreen, TradeScreen};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -325,6 +326,8 @@ fn game_data() -> Rc<GameData> {
         resources.push((PICT, state + 100, pict(13, 25, [0, 0, 0])));
         resources.push((PICT, state + 102, pict(13, 25, [0, 0, 0])));
     }
+    // The main menu's art, so the menu draws the original's screen.
+    resources.extend(main_screen_resources());
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -539,7 +542,7 @@ impl Harness {
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
         Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         }
@@ -611,9 +614,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(choice)
-            .rect
-            .center()
+            .press_point(choice)
     }
 
     fn showing(&self) -> Showing {
@@ -821,7 +822,7 @@ impl Harness {
             .expect("flying")
             .course_map();
         let system = map.model().system(SystemId(id)).expect("on the map");
-        map.view().world_to_screen(system.position())
+        map.transform().world_to_screen(system.position())
     }
 
     /// Runs frames until the map key is taken: a take-off refuses it for
@@ -836,14 +837,16 @@ impl Harness {
         panic!("the map was never taken");
     }
 
-    /// Plots a course to Beta on flight's map (M, a click, M), once the
-    /// take-off grace is over, flies out and jumps (J), and runs frames
+    /// Plots a course to Beta on flight's map (M, a Shift-click, M), once
+    /// the take-off grace is over, flies out and jumps (J), and runs frames
     /// until the jump is over.
     fn jump_to_beta(&mut self) {
         self.past_the_takeoff_grace();
         self.press(KeyCode::KeyM);
         let beta = self.on_map(129);
+        self.key(KeyCode::ShiftLeft, true, false);
         self.click(beta);
+        self.key(KeyCode::ShiftLeft, false, false);
         self.press(KeyCode::KeyM);
         assert_eq!(self.session().course(), [SystemId(129)]);
         self.fly_out();

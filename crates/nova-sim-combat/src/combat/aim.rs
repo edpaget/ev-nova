@@ -5,16 +5,20 @@
 //! `_CalcInterceptAngle`, `_CalcLeadAngle` and `_TurretBlindSpot` in the
 //! `EV Nova` executable):
 //!
-//! - The bearing to a ship is the plain heading from the firer to it.
-//! - The lead angle aims where the target will be when a shot at `Speed`
-//!   gets there: with t the distance over the shot's speed, at the
-//!   target's position plus its velocity relative to the firer's, times t.
-//!   A shot of no speed aims at the bearing.
+//! - A shot's heading is a whole degree (`_SpawnShot` @0x3e677-0x3eaa0):
+//!   along the ship's heading truncated, at a point along the table's
+//!   bearing to it (`_CalcInterceptAngle`, [`trig::intercept_angle`]), or
+//!   at a ship's lead angle (`_CalcLeadAngle`, [`trig::lead_angle`]): where
+//!   the target will be when a shot at `Speed` gets there, with t the
+//!   distance over the shot's speed (a rocket's in its own way), at the
+//!   target's position plus its velocity relative to the firer's, times t
+//!   ([`Pointing::whole_from`]).
 //! - A turret is blind in the sectors its weapon's `Flags` or its ship's
-//!   `Flags` mark ([`blind`]): the front up to [`FRONT_ARC`] off the nose
-//!   (0x1000), the sides up to [`SIDE_ARC`] (0x2000), and the rear beyond
-//!   (0x4000). 3 and 4 always test them (`_FirePlayerWeapon` @0x629fe,
-//!   @0x62a94). 7 and 8 test them as the reading [`aim`] is given says
+//!   `Flags` mark ([`blind_spot`], `_TurretBlindSpot` @0xb325): by the
+//!   table's bearing to the target against the ship's truncated heading,
+//!   the front up to [`FRONT_ARC`] whole degrees off the nose (0x1000), the
+//!   sides up to [`SIDE_ARC`] (0x2000), and the rear beyond (0x4000). 3 and
+//!   4 always test them (`_FirePlayerWeapon` @0x629fe, @0x62a94). 7 and 8 test them as the reading [`aim`] is given says
 //!   ([`RuleKey::QuadrantTurretBlindSpots`](crate::RuleKey::QuadrantTurretBlindSpots)):
 //!   by the engine, as `_FirePlayerWeapon` and `_FireAIShipWeapon` fire
 //!   them, never (@0x62aeb-0x62c38); by the other reading, as
@@ -35,6 +39,8 @@
 //!     in its arc but in a blind spot.
 //!   - 8 fires at the lead angle at a target within [`FRONT_ARC`] of the
 //!     tail, and otherwise not at all.
+//!   - The player's arcs are [`player_quadrant_off`]'s, folded; an NPC's
+//!     are [`quadrant_off`]'s, by the rulebook's reading.
 //!   - 9 and 10 never fire on the trigger: only point defence fires them
 //!     (see [`defence`](super::defence)).
 //!   - A turret that does not fire spends nothing.
@@ -50,12 +56,15 @@ use super::weapon::{Guidance, WeaponSpec};
 use crate::flight::{ShipState, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::trig::{self, LeadShot, angular_difference, whole};
 
-/// How far off the nose, in degrees, the front sector reaches; a
-/// front-quadrant turret's arc, and a rear-quadrant turret's off the tail.
-pub const FRONT_ARC: f32 = 45.0;
-/// How far off the nose, in degrees, the side sectors reach.
-pub const SIDE_ARC: f32 = 135.0;
+/// How far off the nose, in whole degrees, the front sector reaches; a
+/// front-quadrant turret's arc, and a rear-quadrant turret's off the tail
+/// (`cmpw $0x2d`, @0xb389, @0x62bc1, @0x88b83).
+pub const FRONT_ARC: i16 = 45;
+/// How far off the nose, in whole degrees, the side sectors reach
+/// (`cmpw $0x87`, @0xb3cc).
+pub const SIDE_ARC: i16 = 135;
 /// `Flags`: a turret blind in front.
 pub const BLIND_FRONT: u16 = 0x1000;
 /// `Flags`: a turret blind to the sides.
@@ -96,24 +105,46 @@ pub enum Pointing {
     Along(f32),
     /// At this point: the bearing to it from where it leaves.
     At(Vec2),
-    /// At `target`'s lead angle for a shot of `speed` pixels a tick, from
-    /// where it leaves ([`lead`]).
+    /// At `target`'s lead angle for `shot`, from where it leaves
+    /// ([`trig::lead_angle`]).
     Leading {
         /// The ship it leads, as it was when it was aimed at.
         target: Target,
-        /// The shot's speed.
-        speed: f32,
+        /// The shot `_CalcLeadAngle` leads with, by its weapon's guidance
+        /// ([`WeaponSpec::lead_shot`]); none for the table bearing.
+        shot: Option<LeadShot>,
     },
 }
 
 impl Pointing {
-    /// The heading it points along from `origin`, before any inaccuracy.
+    /// The whole-degree heading a shot pointing so leaves `origin` along,
+    /// before any inaccuracy, as `_SpawnShot` sets it: the ship's heading
+    /// truncated (`cvttss2si` @0x3e677), the table's bearing to a point
+    /// (`_CalcInterceptAngle`, as point defence aims at a missile,
+    /// @0x39790), or the lead angle from where it leaves (`_CalcLeadAngle`
+    /// @0x3ecdc, @0x397c6), the firer's velocity `origin`'s.
+    #[must_use]
+    pub fn whole_from(&self, origin: &ShipState) -> i16 {
+        match self {
+            Self::Along(heading) => whole(*heading),
+            Self::At(point) => trig::intercept_angle(origin.position, *point),
+            Self::Leading { target, shot } => trig::lead_angle(
+                origin.position,
+                origin.velocity,
+                (target.position, target.velocity),
+                *shot,
+            ),
+        }
+    }
+
+    /// The heading it points along from `origin`, before any inaccuracy:
+    /// along its heading as it is, which a fighter launched from a bay
+    /// keeps, or [`Pointing::whole_from`]'s whole degree.
     #[must_use]
     pub fn heading_from(&self, origin: &ShipState) -> f32 {
         match self {
             Self::Along(heading) => *heading,
-            Self::At(point) => bearing(origin.position, *point),
-            Self::Leading { target, speed } => lead(origin, target, *speed),
+            _ => f32::from(self.whole_from(origin)),
         }
     }
 }
@@ -135,37 +166,61 @@ pub fn angle_off(heading: f32, bearing: f32) -> f32 {
     shortest_turn(heading, bearing).abs()
 }
 
-/// How far `bearing` is off a quadrant turret's `reference` (its heading
-/// for a front turret, 7, or `(heading + 180) mod 360` for a rear one,
-/// 8), as the rulebook's
+/// How far the table's whole-degree `angle` to a target is off a
+/// quadrant turret's arc, as an NPC's turret measures it, by the
+/// rulebook's
 /// [`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)
-/// entry `arc` says: by the engine, made absolute and taken mod 360 with
-/// no fold past 180 (`_AIFireTurret` @0x80c3d-0x80cf3, `_FireAIShipWeapon`
-/// @0x88ac4-0x88b7f), so a reference near 0 holds fire across the seam;
-/// by the other reading, folded ([`angle_off`]).
+/// entry `arc` (`_AIFireTurret` @0x80c4d-0x80ce8, `_FireAIShipWeapon`
+/// @0x88ac4-0x88b7f): by the engine, a front turret (7) takes
+/// `|trunc(angle − heading)|` in `f32` and a rear one (8) `|angle −
+/// (trunc(heading) + 180) mod 360|`, each mod 360 with no fold past 180,
+/// so a heading near 0 holds fire across the seam; by the other reading,
+/// folded as `_AngularDifference` folds.
 #[must_use]
-pub fn quadrant_off(reference: f32, bearing: f32, arc: RuleSource) -> f32 {
-    match arc {
-        RuleSource::Engine => (bearing - reference).abs() % 360.0,
-        RuleSource::Bible => angle_off(reference, bearing),
-    }
-}
-
-/// A quadrant turret's reference: the heading for a front turret, and
-/// `(heading + 180) mod 360` for a rear one.
-#[must_use]
-pub fn quadrant_reference(guidance: Guidance, heading: f32) -> f32 {
-    if guidance == Guidance::RearTurret {
-        (heading + 180.0) % 360.0
+pub fn quadrant_off(guidance: Guidance, heading: f32, angle: i16, arc: RuleSource) -> i16 {
+    let rear = (i32::from(whole(heading)) + 180) % 360;
+    let plain = if guidance == Guidance::RearTurret {
+        (i32::from(angle) - rear).abs() % 360
     } else {
-        heading
+        i32::from(whole(f32::from(angle) - heading)).abs() % 360
+    };
+    match arc {
+        RuleSource::Engine => i16::try_from(plain).unwrap_or(i16::MAX),
+        RuleSource::Bible => {
+            let reference = if guidance == Guidance::RearTurret {
+                i16::try_from(rear).unwrap_or_default()
+            } else {
+                whole(heading)
+            };
+            angular_difference(angle, reference).abs()
+        }
     }
 }
 
-/// Whether a turret blind where `blind_spots` say is blind `off` degrees
-/// off the nose (see the module docs).
+/// How far the table's whole-degree `angle` to a target is off the
+/// player's quadrant turret's arc (`_FirePlayerWeapon` @0x62b13-0x62bc6):
+/// `|_AngularDifference(angle, reference)|`, the reference the truncated
+/// heading for a front turret (7) and `trunc(heading + 180) mod 360` for a
+/// rear one (8), the add in `f32` (0xdd688).
 #[must_use]
-pub fn blind(blind_spots: u16, off: f32) -> bool {
+pub fn player_quadrant_off(guidance: Guidance, heading: f32, angle: i16) -> i16 {
+    let reference = if guidance == Guidance::RearTurret {
+        whole(heading + 180.0) % 360
+    } else {
+        whole(heading)
+    };
+    angular_difference(angle, reference).abs()
+}
+
+/// Whether a turret blind where `blind_spots` say, on a ship facing
+/// `heading`, is blind to a target at the table's whole-degree `angle`
+/// (`_TurretBlindSpot` @0xb325-0xb44b): `_AngularDifference` of the
+/// truncated heading and the angle, folded inline (@0xb341-0xb387), up to
+/// [`FRONT_ARC`] the front, up to [`SIDE_ARC`] the sides, and beyond it
+/// the rear (see the module docs).
+#[must_use]
+pub fn blind_spot(blind_spots: u16, heading: f32, angle: i16) -> bool {
+    let off = angular_difference(whole(heading), angle);
     let sector = if off <= FRONT_ARC {
         BLIND_FRONT
     } else if off <= SIDE_ARC {
@@ -174,18 +229,6 @@ pub fn blind(blind_spots: u16, off: f32) -> bool {
         BLIND_REAR
     };
     blind_spots & sector != 0
-}
-
-/// The lead angle from `firer` to `target` for a shot of `speed` pixels a
-/// tick (see the module docs).
-#[must_use]
-pub fn lead(firer: &ShipState, target: &Target, speed: f32) -> f32 {
-    if speed <= 0.0 {
-        return bearing(firer.position, target.position);
-    }
-    let ticks = (target.position - firer.position).length() / speed;
-    let ahead = target.position + (target.velocity - firer.velocity) * ticks;
-    bearing(firer.position, ahead)
 }
 
 /// Which way `spec` fires from `firer`, of `hull`, at its `target`, if it
@@ -203,12 +246,17 @@ pub fn aim(
     let blind_spots = spec.flags | hull.blind_spots;
     let quadrant = matches!(spec.guidance, Guidance::FrontTurret | Guidance::RearTurret);
     let tested = !quadrant || quadrant_blind == RuleSource::Bible;
-    // The target, its bearing's angle off the nose, and whether it is in a
-    // blind spot that holds the weapon.
+    // The target, the table's angle to it, and whether it is in a blind
+    // spot that holds the weapon (@0x629e3, @0x62a7b, @0x62b13).
     let sighted = target.map(|target| {
-        let off = angle_off(firer.heading, bearing(firer.position, target.position));
-        (target, off, tested && blind(blind_spots, off))
+        let angle = trig::intercept_angle(firer.position, target.position);
+        (
+            target,
+            angle,
+            tested && blind_spot(blind_spots, firer.heading, angle),
+        )
     });
+    let off = |angle| player_quadrant_off(spec.guidance, firer.heading, angle);
     match spec.guidance {
         Guidance::Homing | Guidance::FighterBay => Some(Aim {
             target: target.map(|target| target.ship),
@@ -221,11 +269,13 @@ pub fn aim(
             .filter(|&(_, _, blind)| !blind)
             .map(|(target, _, _)| led(spec, target)),
         Guidance::FrontTurret => match sighted {
-            Some((target, off, blind)) if off <= FRONT_ARC => (!blind).then(|| led(spec, target)),
+            Some((target, angle, blind)) if off(angle) <= FRONT_ARC => {
+                (!blind).then(|| led(spec, target))
+            }
             _ => Some(ahead),
         },
         Guidance::RearTurret => sighted
-            .filter(|&(_, off, blind)| off >= 180.0 - FRONT_ARC && !blind)
+            .filter(|&(_, angle, blind)| off(angle) <= FRONT_ARC && !blind)
             .map(|(target, _, _)| led(spec, target)),
         Guidance::PointDefence | Guidance::PointDefenceBeam => None,
         Guidance::Unguided
@@ -243,7 +293,7 @@ pub fn led(spec: &WeaponSpec, target: &Target) -> Aim {
     Aim {
         pointing: Pointing::Leading {
             target: *target,
-            speed: spec.speed,
+            shot: spec.lead_shot(),
         },
         target: Some(target.ship),
     }
@@ -343,21 +393,26 @@ mod tests {
     }
 
     #[test]
-    fn each_blind_spot_covers_its_sector() {
-        for (off, sector) in [
-            (0.0, BLIND_FRONT),
-            (45.0, BLIND_FRONT),
-            (45.5, BLIND_SIDES),
-            (135.0, BLIND_SIDES),
-            (135.5, BLIND_REAR),
-            (180.0, BLIND_REAR),
+    fn each_blind_spot_covers_its_sector_in_whole_degrees() {
+        for (angle, sector) in [
+            (0, BLIND_FRONT),
+            (45, BLIND_FRONT),
+            (46, BLIND_SIDES),
+            (135, BLIND_SIDES),
+            (136, BLIND_REAR),
+            (180, BLIND_REAR),
+            (315, BLIND_FRONT),
+            (314, BLIND_SIDES),
         ] {
-            assert!(blind(sector, off), "{off}");
-            assert!(!blind(0x7000 & !sector, off), "{off}: only its own sector");
-            assert!(blind(0x7000, off), "{off}");
-            assert!(!blind(0, off), "{off}");
+            assert!(blind_spot(sector, 0.0, angle), "{angle}");
+            assert!(
+                !blind_spot(0x7000 & !sector, 0.0, angle),
+                "{angle}: only its own sector"
+            );
+            assert!(blind_spot(0x7000, 0.0, angle), "{angle}");
+            assert!(!blind_spot(0, 0.0, angle), "{angle}");
         }
-        assert_eq!((FRONT_ARC, SIDE_ARC), (45.0, 135.0));
+        assert_eq!((FRONT_ARC, SIDE_ARC), (45, 135));
         assert_eq!(
             (BLIND_FRONT, BLIND_SIDES, BLIND_REAR),
             (0x1000, 0x2000, 0x4000)
@@ -365,42 +420,58 @@ mod tests {
     }
 
     #[test]
-    fn the_lead_angle_at_a_resting_target_is_its_bearing() {
-        let at_rest = target(100.0, -100.0, 0.0, 0.0);
-        assert!(close(lead(&firer(0.0), &at_rest, 10.0), 45.0));
-        assert!(close(lead(&firer(0.0), &at_rest, 0.0), 45.0), "no speed");
+    fn a_blind_spot_reads_the_truncated_heading() {
+        // 45.9 off by float, 45 by the truncated heading: the front.
+        assert!(blind_spot(BLIND_FRONT, 45.9, 0));
+        assert!(!blind_spot(BLIND_SIDES, 45.9, 0));
+        assert!(blind_spot(BLIND_SIDES, 46.0, 0));
     }
 
     #[test]
-    fn the_lead_angle_aims_ahead_of_a_crossing_target() {
-        // 100 pixels at 10 a tick is 10 ticks, in which it crosses 20.
+    fn a_pointing_points_along_whole_degrees() {
+        let at = ShipState {
+            position: Vec2::new(10.0, 10.0),
+            velocity: Vec2::new(1.0, 0.0),
+            heading: 30.7,
+        };
+        assert_eq!(Pointing::Along(30.7).whole_from(&at), 30);
+        assert_eq!(Pointing::Along(30.7).heading_from(&at), 30.7, "a fighter's");
+        let corner = Vec2::new(20.0, 20.0);
+        assert_eq!(Pointing::At(corner).whole_from(&at), 134, "the table's");
+        assert_eq!(Pointing::At(corner).heading_from(&at), 134.0);
+        let crossing = target(10.0, -90.0, 2.0, 0.0);
+        let shot = Some(LeadShot {
+            speed: 10.0,
+            rocket: false,
+        });
+        let leading = Pointing::Leading {
+            target: crossing,
+            shot,
+        };
+        let expected = trig::lead_angle(
+            at.position,
+            at.velocity,
+            (crossing.position, crossing.velocity),
+            shot,
+        );
+        assert_eq!(leading.whole_from(&at), expected);
+        assert_ne!(expected, 0, "led ahead");
+        let plain = Pointing::Leading {
+            target: crossing,
+            shot: None,
+        };
+        assert_eq!(plain.whole_from(&at), 0, "no shot: the table bearing");
+    }
+
+    #[test]
+    fn a_turret_leads_with_its_weapons_shot() {
         let crossing = target(0.0, -100.0, 2.0, 0.0);
-        let expected = 20.0_f32.atan2(100.0).to_degrees();
-        assert!(close(lead(&firer(0.0), &crossing, 10.0), expected));
         assert_eq!(
-            lead(&firer(0.0), &crossing, 0.0),
-            0.0,
-            "no speed: the bearing"
-        );
-        let alongside = ShipState {
-            velocity: Vec2::new(2.0, 0.0),
-            ..firer(0.0)
-        };
-        assert_eq!(
-            lead(&alongside, &crossing, 10.0),
-            0.0,
-            "relative to the firer"
-        );
-        let slow = lead(&firer(0.0), &crossing, 5.0);
-        assert!(close(slow, 40.0_f32.atan2(100.0).to_degrees()), "{slow}");
-        let elsewhere = ShipState {
-            position: Vec2::new(-300.0, 400.0),
-            ..firer(0.0)
-        };
-        let ahead = target(-300.0, 300.0, 2.0, 0.0);
-        assert!(
-            close(lead(&elsewhere, &ahead, 10.0), expected),
-            "from where it is"
+            super::led(&spec(4, 0), &crossing).pointing,
+            Pointing::Leading {
+                target: crossing,
+                shot: spec(4, 0).lead_shot(),
+            }
         );
     }
 
@@ -434,8 +505,15 @@ mod tests {
         )
     }
 
+    /// The lead angle at the crossing target from the centre at 10 a tick.
     fn led() -> f32 {
-        20.0_f32.atan2(100.0).to_degrees()
+        let crossing = target(0.0, -100.0, 2.0, 0.0);
+        let shot = Some(LeadShot {
+            speed: 10.0,
+            rocket: false,
+        });
+        let at = (crossing.position, crossing.velocity);
+        f32::from(trig::lead_angle(Vec2::ZERO, Vec2::ZERO, at, shot))
     }
 
     /// The heading `aim` points along from the firer at the centre.
@@ -531,6 +609,37 @@ mod tests {
     }
 
     #[test]
+    fn a_turrets_blind_spot_is_read_by_the_tables_bearing_and_the_truncated_heading() {
+        // The diagonal ahead and right is 45 off by float, the front, but
+        // the table reads it 46, the side.
+        let diagonal = target(100.0, -100.0, 0.0, 0.0);
+        let at_diagonal = |raw, flags| {
+            aim(
+                &spec(raw, flags),
+                &firer(0.0),
+                &HullSpec::default(),
+                Some(&diagonal),
+                RuleSource::Engine,
+            )
+        };
+        for raw in [3, 4] {
+            assert!(at_diagonal(raw, BLIND_FRONT).is_some(), "{raw}: 46");
+            assert_eq!(at_diagonal(raw, BLIND_SIDES), None, "{raw}: the side");
+            // Dead ahead of a ship facing 45.9 is 45.9 off by float, the
+            // side, but 45 off its truncated heading, the front.
+            assert!(
+                aimed(&spec(raw, BLIND_SIDES), 45.9, 0, true).is_some(),
+                "{raw}: 45"
+            );
+            assert_eq!(
+                aimed(&spec(raw, BLIND_FRONT), 45.9, 0, true),
+                None,
+                "{raw}: the front"
+            );
+        }
+    }
+
+    #[test]
     fn a_front_quadrant_turret_leads_a_target_within_45_degrees_and_otherwise_fires_ahead() {
         let front = spec(7, 0);
         let at_45 = aimed(&front, 45.0, 0, true).expect("fires");
@@ -605,22 +714,50 @@ mod tests {
     }
 
     #[test]
-    fn a_rear_turrets_reference_is_the_tail_turned_into_0_360() {
-        assert_eq!(quadrant_reference(Guidance::RearTurret, 90.0), 270.0);
-        assert_eq!(quadrant_reference(Guidance::RearTurret, 270.0), 90.0);
-        assert_eq!(quadrant_reference(Guidance::FrontTurret, 90.0), 90.0);
+    fn the_players_quadrant_arc_folds_the_table_angle_against_the_truncated_heading() {
+        let (front, rear) = (Guidance::FrontTurret, Guidance::RearTurret);
+        assert_eq!(player_quadrant_off(front, 10.9, 55), 45, "trunc 10");
+        assert_eq!(player_quadrant_off(front, 10.0, 334), 36, "folded");
+        assert_eq!(player_quadrant_off(rear, 90.5, 270), 0, "trunc(270.5)");
+        assert_eq!(player_quadrant_off(rear, 270.0, 90), 0, "450 mod 360");
+        assert_eq!(
+            player_quadrant_off(rear, 359.5, 134),
+            45,
+            "trunc(539.5) mod 360"
+        );
     }
 
     #[test]
-    fn by_the_engine_a_bearing_is_off_a_quadrant_reference_by_its_difference() {
-        assert_eq!(quadrant_off(90.0, 100.0, RuleSource::Engine), 10.0);
-        assert_eq!(quadrant_off(100.0, 90.0, RuleSource::Engine), 10.0);
+    fn by_the_engine_an_npcs_quadrant_arc_is_the_plain_difference() {
+        let (front, rear) = (Guidance::FrontTurret, Guidance::RearTurret);
+        let engine = RuleSource::Engine;
+        assert_eq!(quadrant_off(front, 90.0, 100, engine), 10);
+        assert_eq!(quadrant_off(front, 100.0, 90, engine), 10);
+        // trunc(100 − 89.5) = 10, where trunc first would give 11.
+        assert_eq!(quadrant_off(front, 89.5, 100, engine), 10);
         assert_eq!(
-            quadrant_off(10.0, 350.0, RuleSource::Engine),
-            340.0,
+            quadrant_off(front, 10.0, 350, engine),
+            340,
             "no fold past 180"
         );
-        assert_eq!(quadrant_off(10.0, 350.0, RuleSource::Bible), 20.0);
+        assert_eq!(
+            quadrant_off(rear, 90.9, 280, engine),
+            10,
+            "(90 + 180) mod 360"
+        );
+        assert_eq!(quadrant_off(rear, 90.0, 260, engine), 10, "under the tail");
+        assert_eq!(
+            quadrant_off(rear, 190.0, 350, engine),
+            340,
+            "10 off by the fold"
+        );
+        assert_eq!(quadrant_off(front, 10.0, 350, RuleSource::Bible), 20);
+        assert_eq!(quadrant_off(rear, 190.0, 350, RuleSource::Bible), 20);
+        assert_eq!(
+            quadrant_off(front, 10.9, 55, RuleSource::Bible),
+            45,
+            "trunc 10"
+        );
     }
 
     #[test]

@@ -192,12 +192,7 @@ pub fn scan(
     record_of: impl Fn(MissionId) -> MissionRecord,
     cash: i64,
 ) -> ScanOutcome {
-    let found = missions.iter().find_map(|(slot, active)| {
-        let record = record_of(active.mission);
-        (active.aboard && active.cargo_type.is_some() && record.scan_mask & govt.scan_mask != 0)
-            .then_some((slot, active, record))
-    });
-    let Some((slot, active, record)) = found else {
+    let Some((slot, active, record)) = masked(govt, missions, record_of, true) else {
         return ScanOutcome::Nothing;
     };
     if record.flags & FAILS_IF_SCANNED != 0 && active.failed.is_none() {
@@ -210,6 +205,38 @@ pub fn scan(
         slot,
         credits: scan_fine(govt.scan_fine, cash),
     }
+}
+
+/// Whether `_InterceptorAI`'s pre-scan hail finds the player's mission
+/// cargo for a ship of government `govt` (@0x8ce84-0x8ceaf): some slot of
+/// `missions`, `record_of` giving each one's record, whose cargo is
+/// aboard and whose mission's `ScanMask` shares a bit with the
+/// government's. Unlike [`scan`] it does not ask whether the cargo is
+/// typed.
+pub fn hail_finds(
+    govt: &GovtRecord,
+    missions: &ActiveMissions,
+    record_of: impl Fn(MissionId) -> MissionRecord,
+) -> bool {
+    masked(govt, missions, record_of, false).is_some()
+}
+
+/// The first slot of `missions` whose cargo is aboard, typed unless
+/// `typed` is false, and whose mission's `ScanMask` shares a bit with
+/// `govt`'s: [`scan`]'s search (@0x7e6a7-0x7e6c7) and, without the type
+/// test, [`hail_finds`]'s.
+fn masked<'a>(
+    govt: &GovtRecord,
+    missions: &'a ActiveMissions,
+    record_of: impl Fn(MissionId) -> MissionRecord,
+    typed: bool,
+) -> Option<(u8, &'a ActiveMission, MissionRecord)> {
+    missions.iter().find_map(|(slot, active)| {
+        let record = record_of(active.mission);
+        let cargo = active.cargo_type.is_some() || !typed;
+        (active.aboard && cargo && record.scan_mask & govt.scan_mask != 0)
+            .then_some((slot, active, record))
+    })
 }
 
 /// What the pickup checks read: the room for the cargo, and the rule
@@ -687,6 +714,27 @@ mod tests {
             scanned(&scanning(500), &missions, &record, 1000),
             ScanOutcome::Nothing
         );
+    }
+
+    #[test]
+    fn the_pre_scan_hail_finds_masked_cargo_aboard_typed_or_not() {
+        let finds = |missions: &ActiveMissions, record: &MissionRecord| {
+            hail_finds(&scanning(500), missions, |_| record.clone())
+        };
+        let (missions, record) = smuggled(3, 0x0006, 0);
+        assert!(finds(&missions, &record));
+        let (mut untyped, record) = smuggled(3, 0x0004, 0);
+        untyped.get_mut(3).expect("held").cargo_type = None;
+        assert!(
+            finds(&untyped, &record),
+            "no cargo-type test, unlike _ScanPlayer (@0x8ce84-0x8ceaf)"
+        );
+        let (mut away, record) = smuggled(3, 0x0004, 0);
+        away.get_mut(3).expect("held").aboard = false;
+        assert!(!finds(&away, &record), "not aboard");
+        let (missions, record) = smuggled(3, 0x0003, 0);
+        assert!(!finds(&missions, &record), "no bit shared");
+        assert!(!finds(&ActiveMissions::default(), &record), "no mission");
     }
 
     #[test]

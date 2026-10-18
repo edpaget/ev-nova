@@ -28,7 +28,7 @@ use nova_view::ui::note::{
 };
 use nova_view::ui::prefs::{
     HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM,
-    PREFS_DIALOG, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM, VOLUME_UP_ITEM,
+    PREFS_DIALOG, SCALING_ITEM, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM, VOLUME_UP_ITEM,
     VOLUME_VALUE_ITEM,
 };
 use nova_view::ui::{
@@ -459,7 +459,111 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 || rect.min.y >= music.max.y;
             assert!(apart, "{name}: {}", toggle.label());
         }
-        assert_eq!(prefs.inert().len(), 9, "{name}: QuickTime Movies works");
+        assert_eq!(
+            prefs.inert().len(),
+            7,
+            "{name}: QuickTime Movies works, Run in a window is the display picker \
+             and Share Processor Time the Scaling list"
+        );
+        assert!(
+            prefs.inert().iter().all(|toggle| {
+                toggle.label() != "Run in a window" && toggle.label() != "Share Processor Time"
+            }),
+            "{name}"
+        );
+        // The display picker fills "Run in a window"'s row, clear of every
+        // other part, inside the dialog.
+        let picker = prefs.display().rects().bounds();
+        let row = dialog.item_bounds(11).expect("Run in a window");
+        assert_eq!(
+            (picker.min.y, picker.max.y),
+            (row.min.y, row.max.y),
+            "{name}"
+        );
+        assert!(dialog.bounds().contains(picker.min) && dialog.bounds().contains(picker.max));
+        for rect in prefs
+            .inert()
+            .iter()
+            .chain([
+                prefs.music(),
+                prefs.sound(),
+                prefs.hyperspace_effects(),
+                prefs.quicktime_movies(),
+            ])
+            .map(nova_view::ui::toggle::Toggle::rect)
+            .chain([prefs.effects_volume().rects().bounds(), music, ok, keys])
+        {
+            let apart = rect.max.x <= picker.min.x
+                || rect.min.x >= picker.max.x
+                || rect.max.y <= picker.min.y
+                || rect.min.y >= picker.max.y;
+            assert!(apart, "{name}: {rect:?} under the picker {picker:?}");
+        }
+    }
+}
+
+/// The Scaling list fills "Share Processor Time"'s row, clear of every
+/// other part, inside the dialog, its label as wide as the display
+/// picker's (the end-to-end preferences test checks the widest label fits
+/// it under the real text metrics).
+#[test]
+fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PREFS_DIALOG)
+            .expect("converts");
+        let prefs = PrefsDialog::new(
+            &template,
+            Prefs::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let dialog = prefs.dialog();
+        let name = path.display();
+        let music = prefs.music_volume().rects().bounds();
+        let picker = prefs.display().rects().bounds();
+        let ok = dialog.item_bounds(OK_ITEM).expect("OK");
+        let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
+        let list = prefs.scaling().rects().bounds();
+        let row = dialog
+            .item_bounds(SCALING_ITEM)
+            .expect("Share Processor Time");
+        assert_eq!(
+            (list.min.x, list.min.y, list.max.y),
+            (row.min.x + 1.0, row.min.y, row.max.y),
+            "{name}"
+        );
+        assert!(dialog.bounds().contains(list.min) && dialog.bounds().contains(list.max));
+        assert_eq!(
+            prefs.scaling().rects().value.width(),
+            prefs.display().rects().value.width(),
+            "{name}"
+        );
+        for rect in prefs
+            .inert()
+            .iter()
+            .chain([
+                prefs.music(),
+                prefs.sound(),
+                prefs.hyperspace_effects(),
+                prefs.quicktime_movies(),
+            ])
+            .map(nova_view::ui::toggle::Toggle::rect)
+            .chain([
+                prefs.effects_volume().rects().bounds(),
+                music,
+                ok,
+                keys,
+                picker,
+            ])
+        {
+            let apart = rect.max.x <= list.min.x
+                || rect.min.x >= list.max.x
+                || rect.max.y <= list.min.y
+                || rect.min.y >= list.max.y;
+            assert!(apart, "{name}: {rect:?} under the Scaling list {list:?}");
+        }
     }
 }
 
@@ -912,5 +1016,110 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(size(BACKGROUND[1]), (413, 215), "middle");
         assert_eq!(size(BACKGROUND[2]), (413, 40), "lower");
         assert_eq!(CAP_HEIGHT, 40.0);
+    }
+}
+
+#[test]
+fn the_maps_find_dialog_lays_out_from_dlog_3005_as_recorded() {
+    use nova_view::galaxy::FindDialog;
+    use nova_view::galaxy::find::{CANCEL_ITEM, FIELD_ITEM, FIND_DIALOG, FIND_ITEM, PROMPT_ITEM};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(FIND_DIALOG)
+            .expect("converts");
+        assert_eq!(template.placement, Placement::Center, "{}", path.display());
+        let dialog = FindDialog::new(&template, ButtonStyle::STOCK, mono()).expect("builds");
+        let bounds = dialog.dialog().bounds();
+        assert_eq!((bounds.width(), bounds.height()), (284.0, 105.0));
+        assert_eq!(bounds.min, Point::new(370.0, 331.0), "centred");
+        let at = |x, y, w, h| Some(rect(x, y, w, h).offset(bounds.min));
+        let item = |n| dialog.dialog().item_bounds(n);
+        assert_eq!(item(FIND_ITEM), at(165.0, 72.0, 70.0, 20.0), "Find");
+        assert_eq!(item(CANCEL_ITEM), at(83.0, 72.0, 70.0, 20.0), "Cancel");
+        assert_eq!(item(FIELD_ITEM), at(60.0, 38.0, 200.0, 16.0), "the field");
+        assert_eq!(dialog.field().text(), "");
+        let prompt = match &template.items[PROMPT_ITEM - 1].kind {
+            ItemSpec::StaticText(text) => text.clone(),
+            kind => panic!("{kind:?}"),
+        };
+        assert_eq!(prompt, nova_view::galaxy::find::PROMPT);
+        let texts: Vec<String> = drawn(&dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        for shown in ["Find", "Cancel", nova_view::galaxy::find::PROMPT] {
+            assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
+        }
+    }
+}
+
+#[test]
+fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
+    use nova_view::galaxy::buttons::MapButton;
+    use nova_view::galaxy::dialog::{DIALOG_SIZE, MAP_DIALOG, MAP_ITEM};
+    use nova_view::galaxy::panel::{INFO_COLUMN, INFO_STRIP, placed};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(MAP_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        let size = (template.bounds.width(), template.bounds.height());
+        assert_eq!(size, DIALOG_SIZE, "{name}");
+        assert_eq!(template.items.len(), 10, "{name}");
+        let corner = Point::new(0.0, 0.0);
+        let item = |n: usize| template.items[n - 1].bounds;
+        let expected = [
+            (1, placed(MapButton::Done.item(), corner)),
+            (2, placed(INFO_STRIP, corner)),
+            (3, placed(MAP_ITEM, corner)),
+            (4, placed(MapButton::ZoomOut.item(), corner)),
+            (5, placed(MapButton::ZoomIn.item(), corner)),
+            (6, placed(INFO_COLUMN, corner)),
+            (8, placed(MapButton::ClearRoute.item(), corner)),
+            (9, placed(MapButton::Borders.item(), corner)),
+            (10, placed(MapButton::Find.item(), corner)),
+        ];
+        for (n, bounds) in expected {
+            assert_eq!(item(n), bounds, "{name}: item {n}");
+            assert!(template.items[n - 1].enabled, "{name}: item {n}");
+            assert!(
+                matches!(template.items[n - 1].kind, ItemSpec::User),
+                "{name}: item {n} is a user item"
+            );
+        }
+        let seventh = &template.items[6];
+        assert!(!seventh.enabled, "{name}: item 7 is disabled");
+        assert!(
+            seventh.bounds.min.y > DIALOG_SIZE.1,
+            "{name}: item 7 is off the dialog"
+        );
+    }
+}
+
+/// Every dialog that opens over flight centres on the screen, so in a
+/// widened flight view each lands where the original's `_CenterWindow`
+/// puts it once its 1024x768 frame is centred: none keeps its `DLOG`
+/// bounds. Comm 1007, haggle 1008, plunder 1011, mission info 1012, the
+/// offers 1016 and 1020, player info 1017, assignment 1018, the map 2000,
+/// yes/no 3002, the texts 3003 and 3004, Find 3005 and the preferences
+/// 4003.
+#[test]
+fn every_dialog_opened_over_flight_is_centred() {
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        for id in [
+            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 2000, 3002, 3003, 3004, 3005, 4003,
+        ] {
+            let template = ui.dialog_template(id).expect("converts");
+            assert_eq!(
+                template.placement,
+                Placement::Center,
+                "{} DLOG {id}",
+                path.display()
+            );
+        }
     }
 }

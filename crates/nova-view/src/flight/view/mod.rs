@@ -57,6 +57,40 @@
 //! while it is on, `cïcn` 20000 is drawn at the top left over the Red
 //! Alert icon (see the `alert` module).
 //!
+//! # The view's size
+//!
+//! Flight asks to be widened ([`ViewShape::Widened`](crate::ViewShape)):
+//! the app tells it the size, 768 high and as wide as the window makes it
+//! ([`FlightView::set_view_size`]), Nova's 1024 x 768 until then. The
+//! original's flight is the window's size, with every piece placed from
+//! the window's edges or the play area left of the status bar
+//! (`_SetupWind` @0x1b720, `_InitSprites`, `_SetupSpriteWorld` @0x21b54),
+//! so each place here takes the view's size:
+//!
+//! - the camera keeps the ship at the view's centre
+//!   ([`FlightView::camera`]; the original's `_screenCenter` is the play
+//!   area's, filed as
+//!   rdm:phase/display-modes-fidelity/phase-1-ship-at-play-area-centre);
+//! - the status bar against the right edge
+//!   ([`bar_origin`](super::hud::bar_origin)), the message box across the
+//!   bottom ([`message_box`](super::hud::message_box)), the Red Alert
+//!   icon at the play area's top right
+//!   ([`alert_origin`](super::alert::alert_origin)) and the floating map
+//!   from the right edge ([`floating::frame`](super::floating::frame));
+//!   the escort menu and the double-time icon stay at the left;
+//! - the play area the session is told each step batch, x from 0 to the
+//!   width less [`STATUS_BAR_WIDTH`], for cloaks, scanners, observed
+//!   goals, brackets and the asteroid field; a click in space, which the
+//!   bar's [`STATUS_BAR_WIDTH`] at the right edge doesn't take; the
+//!   starfield, which covers the whole view; and the fades, which cover
+//!   it.
+//!
+//! The course map, the bar's and the mission dialogs' included, is drawn
+//! in its 1024 x 768 frame, centred over a widened flight and taking the
+//! pointer moved back to match, and where the classic spaceport has it in
+//! port. The status bar drawn under the spaceport
+//! ([`FlightView::draw_status_bar`]) is at the classic width.
+//!
 //! Each step's fight events are drained into the [`Effects`]: its
 //! explosions, debris and sounds, rolled on their own [`SharedChance`]
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
@@ -246,16 +280,31 @@
 //!   `_DrawMap` draws of the known and explored systems, coloured by
 //!   `_ColorCodeSystem`, with the mission systems taken as it opens
 //!   ([`Session::map_mission_systems`]), taken again on the frame after
-//!   the galaxy, the explored or known systems, the course or the nav
-//!   change, and after a plot, a Tab or a hypergate map click. A system
-//!   clicked on the map becomes the destination: the session plots the
-//!   course there and the map shows it, and the hop it cues as the
-//!   selected link. The panel says which systems are unexplored. The
+//!   the galaxy, the explored, charted or known systems, the course or
+//!   the nav change, and after a plot, a Tab or a hypergate map click. A
+//!   system clicked on the map becomes the destination: the session plots
+//!   the course there and the map shows it, and the hop it cues as the
+//!   selected link. Its info panels are the session's for the system it
+//!   selects ([`Session::map_panel`], [`GalaxyMap::show_panel`]), taken
+//!   with each drawing and whenever a click, a Tab or a gate pick changes
+//!   the selection, measured by the flight's text metrics. The
 //!   map's nebulae are the session's galaxy's ([`Session::galaxy`]),
 //!   active and explored, rebuilt on the frame after each change to it;
 //!   its panel's course line is the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
-//!   for it.
+//!   for it. Space centres it on the current system and selects it
+//!   ([`UiSound::MapCentred`]), and Done closes it as Return does. F, S
+//!   or its Find button open Find, which takes every input while it is
+//!   open, M and Escape included; the session searches what the
+//!   original's `_DoSystemSearch` does ([`Session::find_map_system`]),
+//!   and the map selects and centres on a system found
+//!   ([`UiSound::MapSystemFound`], or [`UiSound::MapSystemNotFound`]).
+//!   Closing the map drops an open Find. A mission dialog opens the same
+//!   map on its map key, docked or in flight
+//!   ([`FlightView::open_dialog_map`]): marked with the green mission
+//!   system and the arrow flag the dialog gives it, opening and closing
+//!   in silence, its close followed by the dialog's own restore of the
+//!   nav (see [`MapOpener`]'s module).
 //! - The HUD's nav area shows the session's nav mode and its selection
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
@@ -489,7 +538,8 @@
 //!   say its hail quote ([`Session::tick_quotes`], right after the
 //!   fight and the answer to its hits, [`Session::answer_strikes`]),
 //!   shown in the message line for
-//!   [`HAIL_QUOTE_TICKS`], the last one said winning.
+//!   the session's count ([`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)),
+//!   the last one said winning.
 //! - Each step's fight starts with the asteroid field's work
 //!   ([`Session::tick_asteroids`], which [`Session::tick_combat`] runs
 //!   first): a spawn at the field's edge and the field stepped, on the
@@ -518,7 +568,8 @@
 //! starfield and under everything else, as the original draws it on the
 //! sprite world's background. Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the
-//! constants after it, [`SimMessage::ticks`]). The dialogs drawn over
+//! constants after it, [`SimMessage::ticks`], [`CommNote::ticks`](nova_sim::CommNote::ticks),
+//! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
 //! flight (the comm, offer and plunder dialogs, the map) leave it as it
 //! is, and it shows again afterwards for the ticks it had left, as
 //! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only
@@ -528,6 +579,23 @@
 //! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
 //! port's own, drawn only when turned on ([`FlightOverlays`],
 //! [`FlightView::with_overlays`]).
+//!
+//! # The world layer
+//!
+//! Flight is the one screen that draws a world layer
+//! ([`DrawList::world`](crate::DrawList::world),
+//! [`DrawLayer`](crate::DrawLayer)): the stars, the
+//! stellars, asteroids and boxes, the beams, the ships with their glow and
+//! lights, the shots, the effects and the smoke, everything the original
+//! draws into its sprite world. The brackets, the alerts, the floating
+//! map, the escort menu, the title and help, the status bar, the cursor,
+//! the fades and the course map are overlay, and so is every text: the
+//! message line and a placeholder's reason too, though they are drawn
+//! among the world's commands. Drawn at the window's resolution the
+//! layers change nothing, as each command is drawn in the list's order.
+//! Under a frame upscaler, which draws the world first and the overlay
+//! over it, the message line would show over the ships, where the
+//! original has it under them.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
@@ -559,24 +627,31 @@ use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
 use super::radar::{RadarScene, RadarShip};
 use super::target::TargetPanel;
+use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
-use crate::system::camera::{Camera, VIEW_SIZE};
+use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
+use dialog_map::MapOpened;
 
 mod build;
 mod cockpit;
+mod dialog_map;
 mod docked;
 mod interface;
 mod messages;
 mod readouts;
 mod screen;
+mod shots;
+mod sprites;
 mod travel;
 
+pub use dialog_map::MapOpener;
+pub(crate) use dialog_map::is_map_press;
 pub use messages::*;
 
 /// The developer overlays: the system's title and the help line.
@@ -873,6 +948,7 @@ impl NavFlash {
 struct MapSeen {
     system: SystemId,
     explored: Vec<SystemId>,
+    charted: Vec<SystemId>,
     known: BTreeSet<SystemId>,
     course: Vec<SystemId>,
     nav: NavMode,
@@ -884,6 +960,7 @@ impl MapSeen {
         Self {
             system: session.system(),
             explored: session.pilot().explored().collect(),
+            charted: session.pilot().charted().collect(),
             known: session.known().clone(),
             course: session.course().to_vec(),
             nav: session.nav_mode(),
@@ -977,10 +1054,13 @@ pub struct FlightView<C> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
-    /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
-    /// whose close puts back the nav the bar opened with; cleared as the
-    /// map closes ([`FlightView::close_map`]).
-    bar_map: bool,
+    /// How the map shown was opened (by M, the bar or a mission dialog,
+    /// with its marks) and the nav as it opened: taken as each map opens,
+    /// dropped as it closes ([`FlightView::close_map`]).
+    map_opened: Option<MapOpened>,
+    /// The borders setting the course map's last undocked close changed
+    /// to, not yet taken ([`FlightView::take_map_borders_save`]).
+    map_borders_save: Option<bool>,
     /// The mission systems the course map's red arrows mark, taken as it
     /// opens, as `_DoSystemMap` runs `_RecalcMissionSystsForMap` then
     /// (@0x124a0; [`Session::map_mission_systems`]).
@@ -1011,6 +1091,9 @@ pub struct FlightView<C> {
     /// `cïcn` 18000's width, which places the Red Alert icon, or `None`
     /// when it cannot be read, and the icon is not drawn.
     alert_width: Option<u32>,
+    /// The view's size in logical units: Nova's 1024 x 768 until the app
+    /// widens it ([`FlightView::set_view_size`]; see the module docs).
+    view: (f32, f32),
     /// Whether double time is on, as the screen was last told; handed to
     /// each session it flies before its steps. Never let go with the
     /// flight keys.
@@ -1048,6 +1131,11 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
+    /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
+    glows: WeaponGlows,
+    /// What the view keeps of the shots in flight, drawn on the effects'
+    /// chance ([`ShotLooks`](shots::ShotLooks)).
+    shot_looks: shots::ShotLooks,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
@@ -1355,16 +1443,21 @@ fn point(v: Vec2) -> Point {
 /// ([`step_flashes`]). An NPC's shot hits land before its
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
-/// next.
+/// next. Gives the weapon glows the fight lit, each ship's and whether it
+/// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`].
 fn show_combat(
     session: &mut Session,
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     looks: &Looks,
     chance: &mut dyn Chance,
-) {
+) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
+    let mut glows = Vec::new();
     for event in session.take_combat_events() {
+        if let CombatEvent::WeaponGlow { ship, late } = event {
+            glows.push((ship, late));
+        }
         if let CombatEvent::Hit {
             ship,
             passes_shields,
@@ -1384,6 +1477,27 @@ fn show_combat(
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
+    glows
+}
+
+/// How fast `ship`'s weapon glow falls a frame in `session`, out of 32
+/// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or
+/// the NPCs' `sheets`, none for a sheet not read; `None` for a ship no
+/// longer in the system.
+fn glow_decay(
+    session: &Session,
+    player: &Result<ShipSheet, String>,
+    sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
+    ship: ShipRef,
+) -> Option<f32> {
+    let sheet = match ship {
+        ShipRef::Player => player.as_ref().ok(),
+        ShipRef::Npc(id) => {
+            let npc = session.npcs().iter().find(|npc| npc.id == id)?;
+            sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok())
+        }
+    };
+    Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
 }
 
 /// Steps each ship's shield flash among `flashes` a frame by its shield
@@ -1496,14 +1610,16 @@ fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip
 /// density scanner (`cmpw $0x63` @0x49bb8-0x49c2f).
 const HEAVY_MASS: f32 = 99.0;
 
-/// The play area about the ship, in world units: the screen left of the
-/// status bar, the ship drawn at the screen's centre. The session reads it to
-/// tell whether a ship is on screen.
-fn play_area() -> nova_sim::cloak::Area {
-    let camera = Camera::centred_on(Point::default());
+/// The play area about the ship, in world units, in a view `view` in size:
+/// the view left of the status bar, x from 0 to width − 194 as
+/// `_SetupSpriteWorld` makes the sprite world (@0x21b54-0x21ba4), the ship
+/// drawn at the camera's anchor. The session reads it to tell whether a
+/// ship is on screen, for cloaks, scanners and observed goals, the
+/// brackets and the asteroid field.
+fn play_area(view: (f32, f32)) -> nova_sim::cloak::Area {
+    let camera = Camera::centred_on_in(Point::default(), view);
     let top_left = camera.screen_to_world(Point::default());
-    let bottom_right =
-        camera.screen_to_world(Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH, VIEW_SIZE.1));
+    let bottom_right = camera.screen_to_world(Point::new(view.0 - STATUS_BAR_WIDTH, view.1));
     nova_sim::cloak::Area {
         left: top_left.x,
         top: top_left.y,

@@ -10,11 +10,11 @@ use nova_render::wgpu::{
     InitError, OffscreenGpu, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay,
 };
 use nova_render::{
-    Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
+    Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport, WorldSpace,
 };
-use nova_view::draw::lights_tint;
+use nova_view::draw::{fill_rect, lights_tint};
 use nova_view::geometry::Bounds;
-use nova_view::{Color, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
+use nova_view::{Blend, Color, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
 const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
@@ -51,9 +51,19 @@ fn patterned(w: u32, h: u32) -> Image {
 /// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2), a
 /// patterned 2x4 sprite (`rlëD` 3), an opaque black 4x4 sprite (`rlëD` 4),
 /// an opaque dark orange 4x4 sprite (`rlëD` 5), the 4x4 [`or_sheet`]
-/// (`rlëD` 7), and solid 4x4 sprites of [`DIM`] (`rlëD` 8) and [`LIT`]
-/// (`rlëD` 9).
-struct Images;
+/// (`rlëD` 7), solid 4x4 sprites of [`DIM`] (`rlëD` 8) and [`LIT`]
+/// (`rlëD` 9), and the nebula pictures: solid 4x4 [`TEAL`] (`PICT` 10),
+/// [`VIOLET`] (`PICT` 11) and black (`PICT` 12), and a transparent white
+/// 4x4 (`PICT` 13). Shared with [`super::world_layer`].
+pub(crate) struct Images;
+
+/// `PICT` 10's colour.
+const TEAL: [u8; 4] = [60, 180, 90, 255];
+/// `PICT` 11's colour.
+const VIOLET: [u8; 4] = [120, 20, 250, 255];
+/// The colour of the solid rect the max pictures are drawn over, as a
+/// border cell is painted.
+const BORDER: [u8; 4] = [200, 40, 90, 255];
 
 /// `rlëD` 5's colour.
 const ORANGE: [u8; 4] = [64, 32, 0, 255];
@@ -94,6 +104,10 @@ impl ImageSource for Images {
             (ImageKind::Rled, 7) => Ok(vec![or_sheet()]),
             (ImageKind::Rled, 8) => Ok(vec![solid(DIM)]),
             (ImageKind::Rled, 9) => Ok(vec![solid(LIT)]),
+            (ImageKind::Pict, 10) => Ok(vec![solid(TEAL)]),
+            (ImageKind::Pict, 11) => Ok(vec![solid(VIOLET)]),
+            (ImageKind::Pict, 12) => Ok(vec![solid(BLACK)]),
+            (ImageKind::Pict, 13) => Ok(vec![solid([255, 255, 255, 0])]),
             _ => Err(ImageError::Missing),
         }
     }
@@ -107,7 +121,7 @@ fn gpu() -> Option<OffscreenGpu> {
 
 /// A `width` x `height` offscreen GPU drawing text in `faces`, or `None`
 /// (after a skip message) with no adapter.
-fn gpu_with(width: u32, height: u32, faces: &FontFaces) -> Option<OffscreenGpu> {
+pub(crate) fn gpu_with(width: u32, height: u32, faces: &FontFaces) -> Option<OffscreenGpu> {
     match OffscreenGpu::new(width, height, faces) {
         Ok(gpu) => Some(gpu),
         Err(error @ (InitError::NoAdapter(_) | InitError::NoDevice(_))) => {
@@ -499,6 +513,134 @@ fn an_or_sprite_between_normal_ones_keeps_submission_order() {
     // C painted over B, and C alone.
     assert_area(&pixels, (12, 12), (14, 14), blue, 0);
     assert_area(&pixels, (14, 12), (16, 16), blue, 0);
+}
+
+fn bounds(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+    Bounds {
+        min: Point::new(left, top),
+        max: Point::new(right, bottom),
+    }
+}
+
+/// A max picture of `PICT` `id` stretched over the logical rectangle
+/// `rect`.
+fn max_picture(list: &mut DrawList, id: i16, rect: Bounds) {
+    list.blended_picture(
+        ImageKey::picture(id),
+        rect.min,
+        rect.width(),
+        rect.height(),
+        Blend::Max,
+    );
+}
+
+/// Renders `list` at scale 2 and reads it back, or `None` with no adapter.
+fn render_max(list: &DrawList) -> Option<Vec<u8>> {
+    let mut gpu = gpu()?;
+    let mut renderer = Renderer::new(Images);
+    let report = renderer.render(list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    assert_eq!(report.new_failures, vec![]);
+    Some(gpu.read_pixels().expect("read back"))
+}
+
+#[test]
+fn a_max_picture_takes_the_brighter_of_each_channel_over_a_solid_rect() {
+    // A border cell, painted as `fill_rect` paints, at logical (4..20,
+    // 4..12); a teal max picture over its right half and on past it, at
+    // (12..28, 4..12); a transparent max picture over its left quarter.
+    let mut list = DrawList::new();
+    fill_rect(&mut list, bounds(4.0, 4.0, 20.0, 12.0), tint(BORDER));
+    max_picture(&mut list, 10, bounds(12.0, 4.0, 28.0, 12.0));
+    max_picture(&mut list, 13, bounds(4.0, 4.0, 8.0, 12.0));
+    let Some(pixels) = render_max(&list) else {
+        return;
+    };
+
+    // The cell alone, and under the transparent picture.
+    assert_area(&pixels, (4, 4), (12, 12), BORDER, 1);
+    // Over the cell, the brighter of each channel: red from the cell,
+    // green from the picture, blue from both.
+    assert_area(&pixels, (12, 4), (20, 12), [200, 180, 90, 255], 1);
+    // Over the black clear, the picture as it is.
+    assert_area(&pixels, (20, 4), (28, 12), TEAL, 1);
+    // Around them.
+    assert_area(&pixels, (3, 4), (4, 12), BLACK, 0);
+    assert_area(&pixels, (4, 12), (28, 13), BLACK, 0);
+}
+
+#[test]
+fn two_overlapping_max_pictures_take_the_brighter_of_each_channel() {
+    // Over the black clear: teal at logical (4..12, 4..12) and violet at
+    // (8..16, 8..16). Over a border cell at (18..30, 2..22): teal at
+    // (18..26, 4..12) and violet at (22..30, 8..16).
+    let mut list = DrawList::new();
+    max_picture(&mut list, 10, bounds(4.0, 4.0, 12.0, 12.0));
+    max_picture(&mut list, 11, bounds(8.0, 8.0, 16.0, 16.0));
+    fill_rect(&mut list, bounds(18.0, 2.0, 30.0, 22.0), tint(BORDER));
+    max_picture(&mut list, 10, bounds(18.0, 4.0, 26.0, 12.0));
+    max_picture(&mut list, 11, bounds(22.0, 8.0, 30.0, 16.0));
+    let Some(pixels) = render_max(&list) else {
+        return;
+    };
+
+    // Over black: each alone is its own colour, the overlap the brighter
+    // of each channel of the two.
+    assert_area(&pixels, (4, 4), (8, 12), TEAL, 1);
+    assert_area(&pixels, (8, 4), (12, 8), TEAL, 1);
+    assert_area(&pixels, (8, 8), (12, 12), [120, 180, 250, 255], 1);
+    assert_area(&pixels, (12, 8), (16, 16), VIOLET, 1);
+    assert_area(&pixels, (8, 12), (12, 16), VIOLET, 1);
+    // Over the cell: the brighter of each channel of all that is there.
+    assert_area(&pixels, (18, 2), (30, 4), BORDER, 1);
+    assert_area(&pixels, (18, 4), (22, 12), [200, 180, 90, 255], 1);
+    assert_area(&pixels, (22, 8), (26, 12), [200, 180, 250, 255], 1);
+    assert_area(&pixels, (26, 8), (30, 16), [200, 40, 250, 255], 1);
+    assert_area(&pixels, (18, 16), (30, 22), BORDER, 1);
+}
+
+#[test]
+fn a_plain_picture_after_a_max_one_covers_it() {
+    // The partial update's `srcCopy`: teal max at logical (4..12, 4..12),
+    // then plain black at (8..12, 4..12) and plain violet at (4..8,
+    // 8..12) over it.
+    let mut list = DrawList::new();
+    max_picture(&mut list, 10, bounds(4.0, 4.0, 12.0, 12.0));
+    list.stretched_picture(ImageKey::picture(12), Point::new(8.0, 4.0), 4.0, 8.0)
+        .stretched_picture(ImageKey::picture(11), Point::new(4.0, 8.0), 4.0, 4.0);
+    let Some(pixels) = render_max(&list) else {
+        return;
+    };
+
+    assert_area(&pixels, (4, 4), (8, 8), TEAL, 1);
+    assert_area(&pixels, (8, 4), (12, 12), BLACK, 0);
+    assert_area(&pixels, (4, 8), (8, 12), VIOLET, 1);
+}
+
+#[test]
+fn a_clipped_max_picture_draws_only_inside_its_clip() {
+    // A border cell at logical (4..20, 4..12), and violet max over all of
+    // it, clipped to (8..14, 6..10).
+    let mut list = DrawList::new();
+    fill_rect(&mut list, bounds(4.0, 4.0, 20.0, 12.0), tint(BORDER));
+    list.clipped(
+        bounds(8.0, 6.0, 14.0, 10.0),
+        DrawCommand::BlendedPicture {
+            image: ImageKey::picture(11),
+            top_left: Point::new(4.0, 4.0),
+            width: 16.0,
+            height: 8.0,
+            blend: Blend::Max,
+        },
+    );
+    let Some(pixels) = render_max(&list) else {
+        return;
+    };
+
+    assert_area(&pixels, (8, 6), (14, 10), [200, 40, 250, 255], 1);
+    assert_area(&pixels, (4, 4), (8, 12), BORDER, 1);
+    assert_area(&pixels, (14, 4), (20, 12), BORDER, 1);
+    assert_area(&pixels, (8, 4), (14, 6), BORDER, 1);
+    assert_area(&pixels, (8, 10), (14, 12), BORDER, 1);
 }
 
 #[test]
@@ -922,7 +1064,9 @@ fn the_clear_colour_fills_the_target() {
         },
         logical: LOGICAL,
         clear: Color::rgba(51, 102, 204, 128),
+        world_space: WorldSpace::Target,
         batches: Vec::new(),
+        world: Vec::new(),
     };
 
     gpu.submit(&frame);
@@ -1049,7 +1193,9 @@ fn the_painter_runs_once_per_frame_on_the_offscreen_target() {
         },
         logical: LOGICAL,
         clear: Color::rgba(0, 0, 0, 255),
+        world_space: WorldSpace::Target,
         batches: Vec::new(),
+        world: Vec::new(),
     };
     gpu.submit_with(&frame, &mut painter);
     let target = ((SIZE, SIZE), wgpu::TextureFormat::Rgba8Unorm);

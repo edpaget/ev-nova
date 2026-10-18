@@ -16,14 +16,17 @@
 //! The legal status scans the player's system's `NavDefs` as the
 //! catalog gives them, through the galaxy overlay; a `NavDefs` slot the
 //! catalog cannot read is skipped there, so it does not take up one of
-//! the first three or four places the original's scans count. The
+//! the first three or four places the original's scans count. Its string
+//! is `Session::legal_status_in`, which the galaxy map's panel reads for
+//! the system it selects; there a stellar counts only while active, as
+//! another system's stellars may not be. The
 //! tribute counts each stellar some system lists, held as
 //! [`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder) gives
 //! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
 //! is read from the holder's stellars in `catalog`.
 
 use super::{Session, overlaid_sites};
-use crate::catalog::{GovtId, LandingSite, PilotCatalog};
+use crate::catalog::{GovtId, LandingSite, PilotCatalog, SystemId};
 use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
 use crate::market::{DOMINATED, Good};
@@ -184,7 +187,7 @@ impl Session {
 
     /// The `STR#` 2002 strings the player info shows, from the session's
     /// string lists; a missing one reads empty.
-    fn player_info_words(&self) -> Words {
+    pub(super) fn player_info_words(&self) -> Words {
         Words::from_list(&self.strings().string_list(MISC_STRINGS))
     }
 
@@ -270,11 +273,9 @@ impl Session {
             .sum()
     }
 
-    /// The Legal Status row (`_DrawLegalStatusString` @0xd43f,
-    /// `_SystemIsInhabited` 0x4c4a): the player's system's stellars read
-    /// from `catalog`; "N/A" in an uninhabited system or under a
-    /// xenophobic government; a status missing from the string lists
-    /// reads empty.
+    /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
+    /// [`Session::legal_status_in`]): the player's system's stellars read
+    /// from `catalog`; "N/A" in an uninhabited system.
     fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
         let system = self.pilot.system;
         let sites = overlaid_sites(&self.galaxy, catalog, system);
@@ -284,16 +285,36 @@ impl Session {
         if !inhabited {
             return words.not_available.to_string();
         }
+        self.legal_status_in(catalog, system, words)
+    }
+
+    /// The legal status string in `system`, as `_DrawLegalStatusString`
+    /// (@0xd43f-0xd66d) writes it: the record there as
+    /// [`RuleKey::LegalRecords`] reads it (`Session::record_in`), the
+    /// tolerance of its government (government slot 0's for an
+    /// independent one), "N/A" under a xenophobic government, and the
+    /// domination of its first three stellars that count: each active
+    /// (its holder visible, +0x44 @0xd5ba), inhabited, landable and no
+    /// gate. Its stellars are read from `catalog`; a status missing from
+    /// the string lists reads empty.
+    pub(super) fn legal_status_in(
+        &self,
+        catalog: &impl PilotCatalog,
+        system: SystemId,
+        words: &Words,
+    ) -> String {
+        let sites = overlaid_sites(&self.galaxy, catalog, system);
         let govt = self.galaxy.govt(system);
-        // Each of the player's system's stellars is active: the original
-        // asks (+0x44 @0xd5ba), but its holder is always visible (see the
-        // module docs).
-        let counting = sites
-            .iter()
-            .take(3)
-            .filter(|site| !uninhabited(site) && is_landable(site) && !gate(site));
+        let counting = sites.iter().take(3).filter(|site| {
+            self.galaxy
+                .active_holder(self.listers(site.id), self.pilot.system)
+                .is_some()
+                && !uninhabited(site)
+                && is_landable(site)
+                && !gate(site)
+        });
         let index = player_info::legal_status_index(
-            i64::from(self.system_record()),
+            i64::from(self.record_in(system, None)),
             i64::from(self.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
             self.govts.xenophobic(govt),
             Domination::of(counting.map(|site| site.flags2 & DOMINATED != 0)),
@@ -312,7 +333,6 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::catalog::SystemId;
     use crate::catalog::{
         CommCatalog, GovtRecord, JunkId, JunkRecord, MissionRecord, OutfitId, OutfitRecord, RankId,
         RankRecord, ShipId, ShipRecord,

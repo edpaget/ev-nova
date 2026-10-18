@@ -127,9 +127,9 @@ fn the_ship_browser_draws_stock_ships() {
     assert!(selected(&app).1.contains(&redraw(&mut app)));
 }
 
-/// Tab opens the galaxy map, whose first frame draws every nebula picture
-/// (each decoded and packed without failing) before every hyperlink and
-/// system, and a click on Sol selects it.
+/// Tab opens the galaxy map, whose first frame draws the borders' cells,
+/// then every nebula picture (each decoded and packed without failing)
+/// before every hyperlink and system, and a click on Sol selects it.
 #[test]
 fn the_galaxy_map_draws_the_stock_galaxy() {
     let Some(dir) = common::nova_data() else {
@@ -157,18 +157,27 @@ fn the_galaxy_map_draws_the_stock_galaxy() {
     send(&mut app, &mut gpu, redraw);
     assert_eq!(app.take_failures(), []);
     let frame = (*gpu.submits().last().expect("a frame")).clone();
-    let Some(Batch::Sprites { quads: nebulae, .. }) = frame.batches.first() else {
-        panic!("the nebulae first: {:?}", frame.batches.first());
+    let cells = app.screen().galaxy_map().border_cells().len();
+    let Some(Batch::Solid(borders)) = frame.batches.first() else {
+        panic!("the borders first: {:?}", frame.batches.first());
+    };
+    assert!(
+        cells > 0 && borders.len() <= cells,
+        "{} of {cells}",
+        borders.len()
+    );
+    let Some(Batch::Sprites { quads: nebulae, .. }) = frame.batches.get(1) else {
+        panic!("then the nebulae: {:?}", frame.batches.get(1));
     };
     assert_eq!(nebulae.len(), 4);
-    let Some(Batch::Solid(shapes)) = frame.batches.get(1) else {
-        panic!("then the map's shapes: {:?}", frame.batches.get(1));
+    let Some(Batch::Solid(shapes)) = frame.batches.get(2) else {
+        panic!("then the map's shapes: {:?}", frame.batches.get(2));
     };
     assert!(shapes.len() >= 930 + 545, "{} solid quads", shapes.len());
 
     let map = app.screen().galaxy_map();
     let sol = map.model().system(SystemId(130)).expect("Sol");
-    let at = map.view().world_to_screen(sol.position());
+    let at = map.transform().world_to_screen(sol.position());
     send(
         &mut app,
         &mut gpu,
@@ -226,7 +235,7 @@ fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
 
     let map = app.screen().galaxy_map();
     let sol = map.model().system(SystemId(130)).expect("Sol");
-    let at = map.view().world_to_screen(sol.position());
+    let at = map.transform().world_to_screen(sol.position());
     let moved = WindowEvent::PointerMoved {
         px: (f64::from(at.x), f64::from(at.y)),
     };
@@ -282,7 +291,7 @@ fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
     );
 }
 
-/// A new pilot starts in Kania (128) on 23 June 1177, and a click on
+/// A new pilot starts in Kania (128) on 23 June 1177, and a Shift-click on
 /// Tichel (129) on flight's map plots a course one jump long.
 #[test]
 fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
@@ -314,13 +323,20 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
     let map = flight.course_map();
     let tichel = map.model().system(SystemId(129)).expect("Tichel");
     assert_eq!(tichel.entry.name, "Tichel");
-    let at = map.view().world_to_screen(tichel.position());
+    let at = map.transform().world_to_screen(tichel.position());
     send(
         &mut app,
         WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
         },
     );
+    // A Shift-click adds the hop, as `_DoSystemMap` builds a course.
+    let shift = |pressed| WindowEvent::Key {
+        key: Key::Shift,
+        pressed,
+        repeat: false,
+    };
+    send(&mut app, shift(true));
     for pressed in [true, false] {
         let event = WindowEvent::PointerButton {
             button: MouseButton::Left,
@@ -328,6 +344,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
         };
         send(&mut app, event);
     }
+    send(&mut app, shift(false));
     let flight = app.screen().flight_view().expect("flying");
     let course = flight.session().expect("flying").course();
     assert_eq!(course, [SystemId(129)]);
@@ -487,7 +504,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     keeper.save(&saved).expect("saved");
     let screen = start_screen(Rc::clone(&data)).with_pilots(Some(keeper), Rc::new(MonoMetrics));
     let mut driver = Driver {
-        app: App::new(&Window, data, screen),
+        app: App::new(&Window, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         clock: Duration::ZERO,
     };
@@ -496,9 +513,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
@@ -518,7 +533,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     let map = driver.flight().course_map();
     assert_eq!(map.mode(), MapMode::Hypergate);
     let tichel = map.model().system(SystemId(129)).expect("Tichel");
-    let at = map.view().world_to_screen(tichel.position());
+    let at = map.transform().world_to_screen(tichel.position());
     driver.click(at);
     driver.press(Key::Char('m'));
     assert_eq!(driver.showing(), Showing::Flight);
@@ -573,7 +588,7 @@ fn x_shows_the_stock_desc_32766_over_the_main_menu() {
     let screen = start_screen(Rc::clone(&data))
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
-    let mut app: App<_> = App::new(&Window, data, screen);
+    let mut app: App<_> = App::new(&Window, data, crate::common::appeared(screen));
     let mut gpu = RecordingGpu::new();
     let mut press = |app: &mut App<Rc<GameData>>, key| {
         let event = WindowEvent::Key {
@@ -633,7 +648,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
     let mut driver = Driver {
-        app: App::new(&Window, data, screen),
+        app: App::new(&Window, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         clock: Duration::ZERO,
     };
@@ -642,9 +657,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
@@ -729,7 +742,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
     let mut driver = Driver {
-        app: App::new(&Window, data, screen),
+        app: App::new(&Window, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         clock: Duration::ZERO,
     };
@@ -738,9 +751,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");

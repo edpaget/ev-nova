@@ -67,6 +67,15 @@ pub const INTERCEPTORS_RETREAT: u16 = 0x0100;
 pub const PLUNDERS: u16 = 0x1000;
 /// `Flags`: derelict: no relations at all, and no crime against it.
 pub const DERELICT: u16 = 0x0800;
+/// `Flags2`: a smaller influence on the galaxy map's borders: a system of
+/// it spreads over half the radius, 15.36 / zoom cells, at twice the
+/// value, × 0.4 (`_AddSystemInfluenceToMap` @0x116ca-0x116ff,
+/// @0x11802-0x11825; `_LoadObjectData` copies `Flags2` to the
+/// government's +0x22, @0x7ba6a-0x7ba6e). See `nova_sim::map_borders`.
+pub const SMALL_INFLUENCE: u16 = 0x0002;
+/// `Flags2`: no influence on the galaxy map's borders: a system of it adds
+/// none (`_AddSystemInfluenceToMap` @0x115f9).
+pub const NO_INFLUENCE: u16 = 0x0004;
 /// `Flags2`: its mission ships that attack the player never follow the
 /// player through a hypergate (`_HandlePlayerDockRequest` @0x6721d; see
 /// `nova_sim::mission::ships::through_gate`).

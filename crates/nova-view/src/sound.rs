@@ -2,8 +2,9 @@
 //! The audio side decides which `snd ` each one plays, if any.
 //!
 //! - [`UiSound`]: the interface's own, a main-menu button pressed and
-//!   released, the alert as something is refused, the news dialog's
-//!   beeps, the course map's beeps, and the beep of the player info
+//!   released, the main screen's rows sliding in, the alert as something is refused, the news dialog's
+//!   beeps, the course map's beeps (opening, closing, Space and Find),
+//!   and the beep of the player info
 //!   refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
@@ -57,14 +58,18 @@ pub use nova_sim::{SimSound, SoundId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSound {
     /// A main-menu button was pressed: the pointer went down on it
-    /// (`_TrackMainScreenButtons` @0x195b9). Only the main menu's buttons
+    /// (@0x19687), or onto it with the press held, from off every button
+    /// or straight from another (@0x19974), in
+    /// `_TrackMainScreenButtons` @0x195b9. Only the main menu's buttons
     /// raise it; a key that activates a button never does (see the module
     /// docs).
     ButtonDown,
-    /// A pressed main-menu button popped back up: the pointer was let go,
-    /// on the button or off it (`_TrackMainScreenButtons` @0x195b9). Only
-    /// the main menu's buttons raise it; a key that activates a button
-    /// never does (see the module docs).
+    /// A pressed main-menu button popped back up: the held press was
+    /// dragged off every button (@0x19ac4), or let go of over a button,
+    /// choosing it (@0x19c38), in `_TrackMainScreenButtons` @0x195b9; a
+    /// press let go of off every button is silent. Only the main menu's
+    /// buttons raise it; a key that activates a button never does (see
+    /// the module docs).
     ButtonUp,
     /// A key activated a main-menu button: `_PlayMainScreenClickSound`
     /// @0x177af, which plays snd 600, then 601 once 600 has ended. The
@@ -73,6 +78,15 @@ pub enum UiSound {
     /// ([`Screen::keyed_click_ended`](crate::Screen::keyed_click_ended)).
     /// E clicks on its release, not its press.
     ButtonKeyed,
+    /// A main-screen slide stepped from its first frame, a row of buttons
+    /// starting to slide in: `_MainScreenAnimIdle` plays snd 602, "Menu
+    /// button start", at priority 50 (@0x188e6-0x188fc).
+    RowSlideStart,
+    /// A main-screen slide reached its count, its row of buttons shown:
+    /// `_MainScreenAnimIdle` plays snd 603, "Menu button end", at
+    /// priority 50 (@0x1891c-0x18932). A click that finishes the slides
+    /// at once plays none (`_MainScreenMouse` @0x1ae3a-0x1ae99).
+    RowSlideEnd,
     /// Enter Ship was chosen on the main screen with no pilot loaded, or
     /// a dying one: `_MainScreenChoice(3)` @0x1aa89-0x1aaac plays
     /// `_beepSnd[3]`. E raises it after its click.
@@ -111,6 +125,17 @@ pub enum UiSound {
     /// plays `_beepSnd[0]` once `_DoSystemMap` returns (`PlaySound`
     /// @0x6a85a). The hypergate's map does not raise it.
     MapClosed,
+    /// Space centred a map on the current system: `_MapFilter` plays
+    /// `_beepSnd[4]` (`snd ` 154) first, on key-down, on every map
+    /// (`PlaySound` @0x14119).
+    MapCentred,
+    /// The map's Find found a system: `_DoSystemSearch` plays
+    /// `_beepSnd[4]` (`snd ` 154) as it selects it (@0x120c6-0x120f3).
+    MapSystemFound,
+    /// The map's Find found no system: `_DoSystemSearch` plays
+    /// `_beepSnd[3]` (`snd ` 153) (@0x120d0-0x120f3). An empty text plays
+    /// nothing.
+    MapSystemNotFound,
     /// The stellar's ambient sound, its `CustSndID` (128 and up), plays
     /// while the spaceport is frontmost: `_PortFilter` @0x4f041 plays
     /// `_planetSnd` (@0x4f0e8, @0x4f106), and so does a press on the
@@ -142,6 +167,13 @@ pub struct CombatSound {
     /// Where it happened from the player, in whole pixels, x right and y
     /// down: how far away it is heard.
     pub offset: (i32, i32),
+    /// The original's priority for it, `_PlaySoundDistance`'s third
+    /// argument: how much it matters when the voices are full.
+    pub priority: u16,
+    /// Whether it is skipped while its `snd ` plays on any voice, as the
+    /// original's looped weapons are (`ST_IsSoundPlaying`); named after
+    /// [`UiSound::PortAmbient`]'s field.
+    pub until_stopped: bool,
 }
 
 /// A sound a screen reports.
@@ -225,22 +257,26 @@ mod tests {
 
     #[test]
     fn a_combat_sound_is_its_snd_heard_from_where_it_happened() {
-        let fired = Sound::Combat(CombatSound {
+        let heard = CombatSound {
             sound: SoundId(208),
             offset: (-300, 40),
-        });
-        assert_eq!(
+            priority: 4,
+            until_stopped: true,
+        };
+        let fired = Sound::Combat(heard);
+        assert_eq!(fired, Sound::Combat(heard));
+        assert_ne!(
             fired,
             Sound::Combat(CombatSound {
-                sound: SoundId(208),
-                offset: (-300, 40),
+                offset: (0, 0),
+                ..heard
             })
         );
         assert_ne!(
             fired,
             Sound::Combat(CombatSound {
-                sound: SoundId(208),
-                offset: (0, 0),
+                priority: 6,
+                ..heard
             })
         );
     }

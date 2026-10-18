@@ -39,6 +39,7 @@ use super::Session;
 use super::missions::TextSource;
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
+use crate::galaxy_map::MapMarks;
 use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
     AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
@@ -185,6 +186,13 @@ pub struct MissionText {
     /// is no `dësc`'s, a `STR#` text, carries the last `dësc` loaded's
     /// after-movie instead, or none ([`Session::loaded_after_movie`]).
     pub movie: Option<DescMovie>,
+    /// The marks of the map the map key opens from it, or `None` when it
+    /// opens none. Only the accept's `BriefText` opens one
+    /// (`_ShowTextDialog(1, 0, 1)` @0xa1f0e, whose first argument allows
+    /// item 4, @0x5b135-0x5b146), marked as `_DoMissionAccept` marks it
+    /// just before (@0xa1e8d-0xa1eda; see the `mission_map` module);
+    /// `_ShowTextDialog`'s other 25 calls pass 0.
+    pub map: Option<MapMarks>,
 }
 
 /// The status bar as a mission text noted it as it was queued: what the
@@ -302,7 +310,7 @@ impl Session {
         let info = self.mission_info();
         if info.rows.is_empty() {
             self.sounds.push(SimSound::Refused);
-            self.messages.push(crate::SimMessage::NoActiveMissions);
+            self.say(crate::SimMessage::NoActiveMissions);
             return MissionInfoPress::NoActiveMissions;
         }
         MissionInfoPress::Opens(info)
@@ -437,12 +445,26 @@ impl Session {
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
     /// as a `dësc` ([`TextSource::Desc`](super::missions::TextSource::Desc), drawing on `chance`) and filled for `slot`
     /// ([`Session::mission_text`]), or with no mission
-    /// ([`Session::plain_text`]): whether it had one.
+    /// ([`Session::plain_text`]): whether it had one. It opens no map
+    /// ([`MissionText::map`]).
     pub(super) fn show_mission_text(
         &mut self,
         kind: MissionTextKind,
         mission: MissionId,
         slot: Option<u8>,
+        chance: &mut dyn Chance,
+    ) -> bool {
+        self.show_mission_text_with_map(kind, mission, slot, None, chance)
+    }
+
+    /// [`Session::show_mission_text`], the text opening a map marked
+    /// `map` on the map key, or none.
+    pub(super) fn show_mission_text_with_map(
+        &mut self,
+        kind: MissionTextKind,
+        mission: MissionId,
+        slot: Option<u8>,
+        map: Option<MapMarks>,
         chance: &mut dyn Chance,
     ) -> bool {
         let Some((raw, graphic, movie)) = self.mission_texts.get(&mission).and_then(|texts| {
@@ -465,6 +487,7 @@ impl Session {
             text,
             graphic,
             movie,
+            map,
         });
         true
     }
@@ -482,6 +505,7 @@ impl Session {
             text,
             graphic: None,
             movie,
+            map: None,
         });
     }
 
@@ -1546,6 +1570,8 @@ mod tests {
         );
     }
 
+    /// `mission`'s `kind` text: a briefing opens the map, marking none of
+    /// these missions, which lack `Flags` 0x0100.
     fn text(kind: MissionTextKind, mission: i16, text: &str) -> MissionText {
         MissionText {
             kind,
@@ -1553,6 +1579,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: (kind == MissionTextKind::Brief).then_some(MapMarks::NONE),
         }
     }
 

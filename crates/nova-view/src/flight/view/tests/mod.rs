@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::num::NonZeroU16;
 
-use crate::system::camera::VIEW_CENTER;
+use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
 use nova_sim::flight::player_step;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
@@ -61,17 +61,24 @@ use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
 mod combat;
+mod comm_line;
 mod controls;
+mod dialog_map;
 mod docked;
 mod escorts;
 mod flying;
 mod hyperspace;
 mod landing;
+mod layers;
+mod map_borders;
+mod map_find;
 mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod shots;
 mod stellars;
+mod widescreen;
 
 /// The first `chär` flies ship 128 (an average ship that turns 3° a
 /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -102,6 +109,8 @@ struct FakeCatalog {
     sol_navs: Vec<Option<(u32, u16)>>,
     /// System 130's `Interference`: none, by default.
     sol_interference: i16,
+    /// System 130's `Murk`: none, by default.
+    sol_murk: i16,
     /// System 131's `Message`: no buoy (−1), by default.
     alpha_buoy: i16,
     /// The stellars Sol lists after Earth and the Moon: none, by
@@ -181,6 +190,12 @@ struct FakeCatalog {
     /// Whether system 128 exists, the escape pod's rescue's fallback,
     /// with no links and no stellars: not by default.
     home: bool,
+    /// Whether the map's catalog has nebula 128, (−20, −20) 60 × 60 over
+    /// Sol, with a 30 × 30 picture in slot 0 (`PICT` 9500) and a
+    /// 120 × 120 one in slot 2 (9502): not by default. The session's
+    /// catalog has no `nëbu`, so it is active, and unexplored until a
+    /// test explores it.
+    nebula: bool,
     /// The stellars that can be destroyed and regenerated: none, by
     /// default.
     lives: Vec<nova_sim::StellarLife>,
@@ -195,6 +210,12 @@ struct FakeCatalog {
     place_names: nova_sim::catalog::PlaceNames,
     /// The `crön`s: none, by default.
     crons: Vec<nova_sim::catalog::CronRecord>,
+    /// Each system's government, in the session's map and the course
+    /// map's catalog: none, by default.
+    governed: Vec<(i16, i16)>,
+    /// The systems besides Sol with a lived-in `NavDefs` slot on the
+    /// map: none, by default.
+    lived: Vec<i16>,
 }
 
 /// No strings unless a test sets them.
@@ -208,6 +229,14 @@ impl nova_sim::CommCatalog for FakeCatalog {
 }
 
 impl FakeCatalog {
+    /// System `id`'s government, as [`FakeCatalog::governed`] says.
+    fn govt_of(&self, id: i16) -> Option<GovtId> {
+        self.governed
+            .iter()
+            .find(|&&(system, _)| system == id)
+            .map(|&(_, govt)| GovtId(govt))
+    }
+
     /// Sol's links: Alpha Centauri, then Barnard with `fan`, then
     /// Proxima Near with `near`.
     fn sol_links(&self) -> Vec<i16> {
@@ -244,6 +273,8 @@ const FIELDS: ShipFields = ShipFields {
 
 fn sheet() -> ShipSheet {
     ShipSheet {
+        weapon: None,
+        weap_decay: 0,
         image_id: 2000,
         rotations: NonZeroU16::new(36).expect("non-zero"),
         frame_width: 40,
@@ -297,10 +328,12 @@ fn catalog() -> FakeCatalog {
         cards: Vec::new(),
         codes: Vec::new(),
         box_sheet: Ok(EffectSheet {
+            frame_width: 0,
             image_id: 500,
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
+            frame_width: 0,
             image_id: 651,
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
@@ -314,8 +347,10 @@ fn catalog() -> FakeCatalog {
         near: false,
         reborn: false,
         home: false,
+        nebula: false,
         sol_navs: Vec::new(),
         sol_interference: 0,
+        sol_murk: 0,
         alpha_buoy: -1,
         sol_more: Vec::new(),
         gates: Vec::new(),
@@ -326,6 +361,8 @@ fn catalog() -> FakeCatalog {
         visibility: Vec::new(),
         place_names: nova_sim::catalog::PlaceNames::default(),
         crons: Vec::new(),
+        governed: Vec::new(),
+        lived: Vec::new(),
     }
 }
 
@@ -348,6 +385,7 @@ fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
         type_counts_frames: true,
         exit_angle: -1,
         tribute: 0,
+        gravity: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
     }
 }
@@ -422,7 +460,7 @@ impl PilotCatalog for FakeCatalog {
         match system.0 {
             130 => self.sites.clone(),
             131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
-            132 if self.onward => Vec::new(),
+            132 if self.onward || self.fan => Vec::new(),
             133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
             128 if self.home => Vec::new(),
             134 if self.near => Vec::new(),
@@ -438,6 +476,7 @@ impl PilotCatalog for FakeCatalog {
             govt: None,
             stellars: Vec::new(),
             interference: 0,
+            murk: 0,
             message: -1,
         };
         let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
@@ -446,6 +485,7 @@ impl PilotCatalog for FakeCatalog {
             StarSystem {
                 stellars: self.sol_navs.clone(),
                 interference: self.sol_interference,
+                murk: self.sol_murk,
                 ..star(130, (0.0, 0.0), &sol)
             },
             StarSystem {
@@ -462,6 +502,12 @@ impl PilotCatalog for FakeCatalog {
         }
         if self.near {
             systems.push(star(134, (40.0, 30.0), &[130]));
+        }
+        for system in &mut systems {
+            system.govt = self.govt_of(system.id.0);
+            if self.lived.contains(&system.id.0) {
+                system.stellars = vec![Some((StellarFlags::CAN_LAND, 0))];
+            }
         }
         systems
     }
@@ -728,8 +774,34 @@ impl GalaxyCatalog for FakeCatalog {
         if self.near {
             systems.push(entry(134, "Proxima Near", (40, 30), &[130]));
         }
+        if self.home {
+            systems.push(entry(128, "Home", (-300, 200), &[]));
+        }
+        let picture = |slot: u8, side| crate::galaxy::NebulaPicture {
+            id: 9500 + i16::from(slot),
+            slot,
+            width: side,
+            height: side,
+        };
+        let nebulae = if self.nebula {
+            vec![crate::galaxy::NebulaEntry {
+                id: nova_sim::NebulaId(128),
+                name: "Sol Nebula".to_owned(),
+                left: -20,
+                top: -20,
+                width: 60,
+                height: 60,
+                pictures: vec![picture(0, 30), picture(2, 120)],
+            }]
+        } else {
+            Vec::new()
+        };
+        for system in &mut systems {
+            system.govt = self.govt_of(system.id.0);
+        }
         Galaxy {
             systems,
+            nebulae,
             ..Galaxy::default()
         }
     }
@@ -737,8 +809,8 @@ impl GalaxyCatalog for FakeCatalog {
 
 impl ShipSprites for FakeCatalog {
     /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
-    /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
-    /// `rlëD` 2201; ship 130's cannot be read, nor can the escape
+    /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101, lights
+    /// `rlëD` 2201 and weapon glow `rlëD` 2301 of `WeapDecay` 3; ship 130's cannot be read, nor can the escape
     /// pod's, 895.
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         self.sheets_asked.borrow_mut().push(id);
@@ -750,6 +822,8 @@ impl ShipSprites for FakeCatalog {
                 rotations: NonZeroU16::new(72).expect("non-zero"),
                 glow: Some(layer(2101, 72)),
                 lights: Some(layer(2201, 72)),
+                weapon: Some(layer(2301, 72)),
+                weap_decay: 3,
                 ..sheet()
             }),
             130 => Err("no shän 130".to_owned()),
@@ -765,7 +839,8 @@ impl ShipSprites for FakeCatalog {
 }
 
 /// The looks, cards and codes given; any other weapon cannot be read,
-/// and there is no other explosion type.
+/// and there is no other explosion type. Smoke sets 0 and 1 have their
+/// sprites.
 impl CombatLooks for FakeCatalog {
     fn weapon_look(&self, id: nova_sim::WeaponId) -> Result<WeaponLook, String> {
         self.looks
@@ -805,6 +880,7 @@ impl CombatLooks for FakeCatalog {
         match graphic {
             0 => self.box_sheet.clone(),
             1..=4 => Ok(EffectSheet {
+                frame_width: 0,
                 image_id: 500 + graphic.cast_signed(),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
@@ -815,6 +891,7 @@ impl CombatLooks for FakeCatalog {
     /// Type `kind`'s sheet: `rlëD` 1800 + `kind`, of 36 frames.
     fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
+            frame_width: 0,
             image_id: 1800 + i16::from(kind),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
@@ -829,6 +906,13 @@ impl CombatLooks for FakeCatalog {
         Ok(EffectSheet {
             image_id: 1095,
             frames: NonZeroU16::new(36).expect("non-zero"),
+            frame_width: 0,
+        })
+    }
+
+    fn smoke_sheet(&self, set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
+        (set < 2).then(|| crate::flight::catalog::SmokeSheet {
+            first_icon: 1000 + 8 * i16::from(set),
         })
     }
 }
@@ -1215,11 +1299,21 @@ fn tap(view: &mut View, k: Key) {
     view.input(&key(k, false));
 }
 
-/// Where system `id` is on the course map.
-fn on_map(view: &View, id: i16) -> Point {
+/// Where system `id` is on the course map, brought into item 3 first: the
+/// map opens at 0.5625 on the current system and shows little of the
+/// galaxy.
+fn on_map(view: &mut View, id: i16) -> Point {
+    view.map.centre_on_system(SystemId(id));
     let map = view.course_map();
     let system = map.model().system(SystemId(id)).expect("on the map");
-    map.view().world_to_screen(system.position())
+    map.transform().world_to_screen(system.position())
+}
+
+/// Where system `id` is drawn on the course map as it looks now.
+fn on_map_now(view: &View, id: i16) -> Point {
+    let map = view.course_map();
+    let system = map.model().system(SystemId(id)).expect("on the map");
+    map.transform().world_to_screen(system.position())
 }
 
 /// Clicks the left button at `at`.
@@ -1233,13 +1327,66 @@ fn click(view: &mut View, at: Point) {
     }
 }
 
-/// Opens the map, picks system `id` and closes the map again.
+/// Opens the map, Shift-clicks each hop of the shortest route to system
+/// `id` and closes the map again, as `_DoSystemMap` builds a course a hop
+/// at a time ([`nova_sim::RuleKey::MapPlotting`]), the close cueing its
+/// first hop. The course must come out as the route: a hop past an
+/// unexplored system to an unknown one is refused, so a flight that
+/// plots one reads the planner ([`planner`]), where each click plots the
+/// route to its system.
 fn plot(view: &mut View, id: i16) {
+    let session = view.session().expect("flying");
+    let route = session
+        .star_map()
+        .route(
+            session.system(),
+            SystemId(id),
+            nova_sim::HyperlinkRule::Engine,
+        )
+        .expect("a route");
     tap(view, MAP);
-    let at = on_map(view, id);
-    click(view, at);
+    view.input(&key(Key::Shift, true));
+    for &hop in &route {
+        let at = on_map(view, hop.0);
+        click(view, at);
+    }
+    view.input(&key(Key::Shift, false));
+    assert_eq!(view.session().expect("flying").course(), route, "plotted");
     tap(view, MAP);
     assert!(!view.map_open());
+}
+
+/// `view` reading [`nova_sim::RuleKey::MapPlotting`]'s other reading, the
+/// planner: a click on the map plots the shortest course to its system
+/// and cues its first hop at once.
+fn planner(view: View) -> View {
+    let rules = view
+        .session()
+        .expect("flying")
+        .rules()
+        .with_override(nova_sim::RuleKey::MapPlotting, nova_sim::RuleSource::Bible);
+    view.with_rules(rules)
+}
+
+/// Marks system `id` known, as a map or a visit would.
+fn know(view: &mut View, id: i16) {
+    view.session
+        .as_mut()
+        .expect("flying")
+        .mark_known([SystemId(id)]);
+}
+
+/// Whether the open map draws Clear Route enabled
+/// (`showClearRouteButton`).
+fn clear_route_enabled(view: &View) -> bool {
+    view.course_map().clear_route_enabled()
+}
+
+/// Presses Shift, clicks at `at` and lets Shift go.
+fn shift_click(view: &mut View, at: Point) {
+    view.input(&key(Key::Shift, true));
+    click(view, at);
+    view.input(&key(Key::Shift, false));
 }
 
 /// Thrusts straight up until the ship is at least the minimum jump
@@ -1269,7 +1416,7 @@ fn hyper_selected_links(view: &View) -> Vec<(Point, Point)> {
     view.course_map()
         .picture()
         .and_then(|picture| picture.mode3_link)
-        .map(|(from, to)| (on_map(view, from.0), on_map(view, to.0)))
+        .map(|(from, to)| (on_map_now(view, from.0), on_map_now(view, to.0)))
         .into_iter()
         .collect()
 }
@@ -1409,10 +1556,10 @@ fn tick_to_arrival(view: &mut View) {
 /// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
 /// stops 50 ms into the arrival's fade-in.
 fn fading_in_on_course_to_barnard() -> View {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = planner(FlightView::new(FakeCatalog {
         onward: true,
         ..catalog()
-    });
+    }));
     plot(&mut view, 132);
     fly_out(&mut view);
     jump_now(&mut view);
@@ -1597,6 +1744,8 @@ fn shipbuying() -> FakeCatalog {
                 ..FIELDS
             },
             defaults: vec![(OutfitId(200), 1)],
+            default_slots: [None; 8],
+            strength: 0,
             cost: 900,
             tech_level: 1,
             buy_random: 100,
@@ -1696,7 +1845,11 @@ fn port() -> FakeCatalog {
 /// engine's reading (as [`docked_at_earth`]), with `course` plotted
 /// in flight first if given, and the bar opened.
 fn in_the_bar(course: Option<i16>) -> View {
-    let mut catalog = port();
+    in_the_bar_of(port(), course)
+}
+
+/// [`in_the_bar`] over `catalog`, a [`port`] changed.
+fn in_the_bar_of(mut catalog: FakeCatalog, course: Option<i16>) -> View {
     catalog.sites[0].flags |= StellarFlags::BAR;
     let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Engine);
     let mut view = FlightView::new(catalog).with_rules(rules);
@@ -1844,6 +1997,8 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
             ..FIELDS
         },
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 1,
         tech_level: 1,
         buy_random: 100,
@@ -1995,6 +2150,7 @@ fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::W
         guidance,
         speed: 2000,
         ammo_type: -1,
+        graphic: 0,
         inaccuracy: 0,
         impact: 0,
         explod_type,
@@ -2038,6 +2194,7 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         id: ShipId(id),
         flags: 0,
         flags2: 0,
+        flags3: 0,
         death_delay: 0,
         pod_count: 0,
         explode1: -1,
@@ -2096,6 +2253,7 @@ fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
 
 fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
+        frame_width: 0,
         image_id,
         frames: Frames::new(frames).expect("non-zero"),
     }
@@ -2309,6 +2467,8 @@ fn ship_class(id: i16) -> ShipRecord {
         long_name: String::new(),
         fields: FIELDS,
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 900,
         tech_level: 1,
         buy_random: 100,
@@ -3106,6 +3266,7 @@ fn granting(count: i16) -> FakeCatalog {
     ace.grant_count = count;
     catalog.govts = vec![nova_sim::GovtRecord {
         id: GovtId(140),
+        name: String::new(),
         flags: 0x0800,
         flags2: 0,
         crime_tol: 0,
@@ -3116,6 +3277,7 @@ fn granting(count: i16) -> FakeCatalog {
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: String::new(),
+        medium_name: String::new(),
         scan_mask: 0,
         scan_fine: 0,
         news_pic: -1,

@@ -82,6 +82,7 @@ use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::pilot::ExploredLevel;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 #[cfg(doc)]
@@ -689,9 +690,9 @@ impl Session {
             self.pilot.stellar = placement.stellar;
         }
         if resets.has(Reset::Explore) {
-            // With its place's head, by the engine (see the `explored`
-            // module).
-            self.explore_place(system);
+            // At level 1, with its place's head, by the engine (see the
+            // `explored` module).
+            self.explore_place(system, ExploredLevel::Explored);
         }
         match resets.course {
             CourseStep::Keep => {}
@@ -967,6 +968,12 @@ impl Session {
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
                 self.traffic = Traffic::new();
+                // A new traffic reads reused slots' picks and exit cursors by the
+                // rulebook.
+                self.traffic
+                    .set_reused_slot_pick(self.rules.source_for(RuleKey::ReusedSlotPick));
+                self.traffic
+                    .set_reused_slot_exits(self.rules.source_for(RuleKey::ReusedSlotExits));
                 self.traffic_due = true;
                 self.fleet.clear();
                 self.story.watched.clear();
@@ -1014,7 +1021,7 @@ impl Session {
             if matches!(message, SimMessage::Buoy(_)) {
                 self.fighter_notes.truncate(notes);
             }
-            self.messages.push(message);
+            self.say(message);
             // The hyperspace arrival leaves the pilot past the tutorial
             // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
             self.tutorial.jumped();

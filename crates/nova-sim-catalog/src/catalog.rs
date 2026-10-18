@@ -89,6 +89,11 @@ pub struct StarSystem {
     /// Its `Interference`, raw: the radar's static
     /// (`nova_sim::iff::interference`).
     pub interference: i16,
+    /// Its `Murk`, raw: how murky its space is, which
+    /// `nova_sim::murk::loaded_murk` loads as the original does, and the
+    /// galaxy map panel's "visibility" hazard (`nova_sim::map_panel`;
+    /// `_MapDialogUpdate` @0x1086c-0x1090c reads it at runtime +0xbc).
+    pub murk: i16,
     /// Its `Message`, raw: the message buoy a hyperspace arrival shows,
     /// −1 for none (`nova_sim::StarMap::buoy`).
     pub message: i16,
@@ -151,6 +156,10 @@ pub struct LandingSite {
     /// Its `Tribute`, raw: what it pays a day while dominated, as
     /// `nova_sim::player_info::tribute_of` reads it.
     pub tribute: i16,
+    /// Its `Gravity`, raw: the galaxy map panel's "gravity shear" hazard
+    /// when not 0 (`nova_sim::map_panel`; `_MapDialogUpdate`
+    /// @0x1061f-0x106a9 reads it at runtime +0x46c).
+    pub gravity: i16,
     /// Its animation fields and frame counts, which a hypergate's sprite
     /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
@@ -391,6 +400,12 @@ pub fn loaded_mod_val(mod_type: i16, mod_val: i16) -> i16 {
     }
 }
 
+/// The `ModType` of marines: a positive `ModVal` adds crew, a negative one
+/// defends against boarders. The player's boarding odds read it
+/// (`nova_sim_port::board`), and so does a pirate's plunder
+/// (`nova_sim::ai::plunder_contents`).
+pub const MARINES: i16 = 25;
+
 /// A ship class, raw from its `shïp`: the `nova_sim::shipyard`
 /// rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -411,6 +426,13 @@ pub struct ShipRecord {
     /// slot order, a negative count as none (as
     /// [`PilotCatalog::default_outfits`] gives them).
     pub defaults: Vec<(OutfitId, u16)>,
+    /// Its `DefaultItems` slot by slot, 1-8: each slot's `oütf` ID and
+    /// raw count, none where the slot names no item. A pirate's plunder
+    /// reads an item's place (see `nova_sim::ai::plunder_contents`).
+    pub default_slots: [Option<(OutfitId, i16)>; 8],
+    /// Its `Strength`, raw: a pirate's plunder reads it signed (see
+    /// `nova_sim::ai::plunder_contents`).
+    pub strength: i16,
     /// Its `Cost`.
     pub cost: i32,
     /// Its `TechLevel`.
@@ -640,6 +662,41 @@ pub struct SystemTraffic {
     /// words at 0x7E), in record order: a `përs`, or an unused slot.
     pub persons: [(Option<PersonId>, i16); 8],
 }
+
+/// A system's reinforcement fleet, from its `sÿst`, as `_LoadObjectData`
+/// keeps it (@0x78281-0x78318): a `ReinfFleet` above 127 names the
+/// `flët`, and only then is a `ReinfIntrval` of 0 or less read as 1
+/// (@0x782cb-0x782e9); a `ReinfFleet` of 127 or less names none
+/// (@0x782f4). The `ReinfTime` is kept raw. See
+/// `nova_sim::ai::reinforcements` for what they mean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SystemReinforcements {
+    /// Its `ReinfFleet`.
+    pub fleet: FleetId,
+    /// Its `ReinfTime`, in ticks: how long a called fleet takes to come.
+    pub time: i16,
+    /// Its `ReinfIntrval`, at least 1: the days before the fleet can be
+    /// called again.
+    pub interval: i16,
+}
+
+impl SystemReinforcements {
+    /// The reinforcements a `sÿst` whose `ReinfFleet` is `fleet` (raw,
+    /// -1 for none), `ReinfTime` `time` and `ReinfIntrval` `interval`
+    /// keeps (see the type's docs).
+    #[must_use]
+    pub fn normalised(fleet: i16, time: i16, interval: i16) -> Option<Self> {
+        (fleet > LAST_UNNAMED_REINFORCEMENT).then_some(Self {
+            fleet: FleetId(fleet),
+            time,
+            interval: interval.max(1),
+        })
+    }
+}
+
+/// The highest `ReinfFleet` that names no fleet (`cmpw $0x7f`
+/// @0x782cb).
+const LAST_UNNAMED_REINFORCEMENT: i16 = 127;
 
 /// A `düde`, raw: the `nova_sim::traffic` rules decide what the
 /// values mean.
@@ -1176,6 +1233,12 @@ impl MissionTexts {
 pub trait TrafficCatalog {
     /// System `id`'s traffic, or `None` when it cannot be read.
     fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic>;
+    /// System `id`'s reinforcement fleet ([`SystemReinforcements`]), or
+    /// `None` when it has none or cannot be read. A catalog that keeps no
+    /// reinforcements gives none.
+    fn system_reinforcements(&self, _id: SystemId) -> Option<SystemReinforcements> {
+        None
+    }
     /// `düde` `id`, or `None` when it cannot be read.
     fn dude(&self, id: DudeId) -> Option<DudeRecord>;
     /// Every `flët` that can be read, by ascending ID.
@@ -1188,6 +1251,10 @@ pub trait TrafficCatalog {
 impl<T: TrafficCatalog + ?Sized> TrafficCatalog for &T {
     fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
         (**self).system_traffic(id)
+    }
+
+    fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+        (**self).system_reinforcements(id)
     }
 
     fn dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -1207,6 +1274,10 @@ impl<T: TrafficCatalog + ?Sized> TrafficCatalog for &T {
 impl<T: TrafficCatalog + ?Sized> TrafficCatalog for Rc<T> {
     fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
         (**self).system_traffic(id)
+    }
+
+    fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+        (**self).system_reinforcements(id)
     }
 
     fn dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -1242,6 +1313,9 @@ pub struct WeaponRecord {
     pub speed: i16,
     /// Its `AmmoType`, encoded.
     pub ammo_type: i16,
+    /// Its `Graphic`: the `spïn` its shots are drawn from, less 3000
+    /// (`_SpawnShot` reads it at +0xa).
+    pub graphic: i16,
     /// Its `Inaccuracy`, in degrees.
     pub inaccuracy: i16,
     /// Its `Impact`.
@@ -1440,6 +1514,8 @@ pub struct HullRecord {
     pub flags: u16,
     /// Its `Flags2`.
     pub flags2: u16,
+    /// Its `Flags3`.
+    pub flags3: u16,
     /// Its `DeathDelay`, in ticks.
     pub death_delay: i16,
     /// Its `PodCount`, raw: the crew pods a dying ship of the type ejects
@@ -1501,6 +1577,12 @@ pub struct Penalties {
 pub struct GovtRecord {
     /// The `gövt`'s ID.
     pub id: GovtId,
+    /// Its name as the game shows it: the resource name cut before its
+    /// last ';', with the spaces and ';'s before that dropped, and at most
+    /// 30 characters (`_LoadObjectData` @0x7bde9-0x7be51; stock 186
+    /// "Federation;hates Temmin Shard" shows "Federation"). Empty for an
+    /// unnamed resource.
+    pub name: String,
     /// Its `Flags`.
     pub flags: u16,
     /// Its `Flags2`.
@@ -1524,6 +1606,11 @@ pub struct GovtRecord {
     pub enemies: [i16; 4],
     /// Its `CommName`: what its ships are called by when hailed.
     pub comm_name: String,
+    /// Its `MediumName` (`gövt` +0x64, which `_LoadObjectData` copies into
+    /// the name table at `*0x3b5554`, @0x7bea1-0x7bea8): the name the
+    /// reinforcement line gives its fleet (see
+    /// `nova_sim::ai::reinforcements`).
+    pub medium_name: String,
     /// Its `ScanMask`: the bits it finds a mission's cargo by.
     pub scan_mask: u16,
     /// Its `ScanFine`: the credits a smuggler is fined, or below 0 that
@@ -2484,6 +2571,7 @@ mod tests {
                 type_counts_frames: true,
                 exit_angle: -1,
                 tribute: 0,
+                gravity: 0,
                 animation: crate::catalog::SiteAnimation::default(),
             }]
         }
@@ -2510,6 +2598,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
                 interference: 0,
+                murk: 0,
                 message: -1,
             }]
         }
@@ -2955,8 +3044,17 @@ mod tests {
     }
 
     /// System 130 has düde 128 at 60 % and flët 129 at 20 %, five ships
-    /// on average; düde 128 flies ship 128; flët 129 is led by ship 128.
+    /// on average, and flët 129 for its reinforcements; düde 128 flies
+    /// ship 128; flët 129 is led by ship 128.
     impl TrafficCatalog for One {
+        fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+            (id == SystemId(130)).then_some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        }
+
         fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
             (id == SystemId(130)).then_some(SystemTraffic {
                 dude_types: [
@@ -3019,7 +3117,8 @@ mod tests {
     }
 
     /// Everything `catalog` says about system 130's and 131's traffic,
-    /// düdes 128 and 129, the fleets and the persons.
+    /// düdes 128 and 129, the fleets and the persons, and system 130's
+    /// reinforcements.
     fn traffic(catalog: impl TrafficCatalog) -> Vec<String> {
         vec![
             format!("{:?}", catalog.system_traffic(SystemId(130))),
@@ -3028,12 +3127,34 @@ mod tests {
             format!("{:?}", catalog.dude(DudeId(129))),
             format!("{:?}", catalog.fleets()),
             format!("{:?}", catalog.persons()),
+            format!("{:?}", catalog.system_reinforcements(SystemId(130))),
         ]
+    }
+
+    #[test]
+    fn a_traffic_catalog_keeps_no_reinforcements_unless_it_says_so() {
+        struct Bare;
+        impl TrafficCatalog for Bare {
+            fn system_traffic(&self, _id: SystemId) -> Option<SystemTraffic> {
+                None
+            }
+            fn dude(&self, _id: DudeId) -> Option<DudeRecord> {
+                None
+            }
+            fn fleets(&self) -> Vec<FleetRecord> {
+                Vec::new()
+            }
+            fn persons(&self) -> Vec<PersonRecord> {
+                Vec::new()
+            }
+        }
+        assert_eq!(Bare.system_reinforcements(SystemId(130)), None);
     }
 
     #[test]
     fn borrowed_and_shared_traffic_catalogs_are_catalogs() {
         let direct = traffic(One);
+        assert!(direct[6].contains("FleetId(129)"), "{direct:?}");
         assert!(direct[0].contains("avg_ships: 5"), "{direct:?}");
         assert_eq!(direct[1], "None");
         assert!(direct[2].contains("ShipId(128), 100"), "{direct:?}");

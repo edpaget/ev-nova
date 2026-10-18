@@ -5,7 +5,8 @@
 //! resources' own (all 227 are in `Nova Sounds.ndat`); "the guide" is the
 //! community *EV Nova Resource ID Guide* (github.com/andrews05/evstuff,
 //! `guides/resourceidguide.html`, "snd IDs"), which lists the engine's
-//! fixed sounds.
+//! fixed sounds. The priority each event plays at is
+//! [`crate::priority`]'s.
 
 use nova_data::SoundId;
 
@@ -28,6 +29,10 @@ pub struct SoundTable {
     pub button_down: Option<SoundId>,
     /// Plays as a pressed interface button comes back up.
     pub button_up: Option<SoundId>,
+    /// Plays as a main-screen row starts to slide in.
+    pub row_slide_start: Option<SoundId>,
+    /// Plays as a main-screen row has slid in.
+    pub row_slide_end: Option<SoundId>,
     /// Plays as the interface refuses what was asked of it.
     pub alert: Option<SoundId>,
     /// Plays as a `Q` set operator's message is shown in flight.
@@ -64,6 +69,12 @@ pub struct SoundTable {
     pub floating_map_zoom: Option<SoundId>,
     /// Plays as an announced fleet arrives with its arrival quote.
     pub fleet_quote: Option<SoundId>,
+    /// Plays as a ship calls for help.
+    pub call_for_help: Option<SoundId>,
+    /// Plays as an interceptor hails the player before its scan.
+    pub scan_hail: Option<SoundId>,
+    /// Plays as the sensors detect a reinforcement fleet approaching.
+    pub reinforcements: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
     pub hail_offer: Option<SoundId>,
     /// Plays as a person says its hail quote in flight.
@@ -85,6 +96,12 @@ pub struct SoundTable {
     pub ship_downed: Option<SoundId>,
     /// Plays as the player's ship being downed fails a mission.
     pub downed_mission_failed: Option<SoundId>,
+    /// Plays with a pirate's cargo line, said as it steals from the player
+    /// or a former escort.
+    pub cargo_stolen: Option<SoundId>,
+    /// Plays with the line said as a pirate takes a former escort into its
+    /// fleet.
+    pub ship_stolen: Option<SoundId>,
     /// Plays as a mission's special ship lost fails a mission that isn't
     /// hidden.
     pub mission_ship_lost: Option<SoundId>,
@@ -113,6 +130,12 @@ pub struct SoundTable {
     pub map_open: Option<SoundId>,
     /// Plays as the course map closes in flight.
     pub map_close: Option<SoundId>,
+    /// Plays as Space centres a map on the current system.
+    pub map_centre: Option<SoundId>,
+    /// Plays as a map's Find finds a system.
+    pub map_found: Option<SoundId>,
+    /// Plays as a map's Find finds none.
+    pub map_not_found: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -146,6 +169,11 @@ impl SoundTable {
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).
     /// - `button_up`: 601, "Menu button up" (likewise).
+    /// - `row_slide_start`: 602, "Menu button start" (the stock
+    ///   resource's name), which `_MainScreenAnimIdle` plays as a slide
+    ///   steps from its first frame (@0x188fc).
+    /// - `row_slide_end`: 603, "Menu button end", which it plays as a
+    ///   slide reaches its count (@0x18932).
     /// - `alert`: none. The original calls `SysBeep`, the system's alert
     ///   (as the Text Input dialog refuses a name too long,
     ///   `_EVTextInputDialog` @0x554a9-0x554e7), which no stock `snd `
@@ -171,18 +199,17 @@ impl SoundTable {
     ///   runs (`_InitEVNova` @0x47196, @0x47428).
     /// - `escort_repaired`: 154, `_beepSnd[4]`, which `_HandleShip` plays
     ///   after "Escort repaired." or "Fighter repaired." as a former
-    ///   escort rejoins (@0x33bc9-0x33bd4). The original plays it on
-    ///   channel 8, which is not modelled.
+    ///   escort rejoins (@0x33bc9-0x33bd4), at priority 8.
     /// - `propulsion_repaired`: 154, `_beepSnd[4]`, which `_HandlePlayer`
     ///   plays after "Propulsion systems repaired." as the disabled
-    ///   player's Repair Droids repair it (@0x68c44-0x68c67).
+    ///   player's Repair Droids repair it (@0x68c44-0x68c67), at
+    ///   priority 1.
     /// - `red_alert`: 370, "Red Alert", which `_LoadSounds` loads into
     ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
-    ///   (@0x68cff). The original plays it at priority 5; the audio port
-    ///   has no channel priorities, so that is not modelled.
+    ///   (@0x68cff), at priority 5.
     /// - `jettison`: 154, `_beepSnd[4]` again, which `_JettisonCargo`
     ///   plays when anything went in flight (@0x3e31a-0x3e33d), at
-    ///   priority 1, not modelled either.
+    ///   priority 1.
     /// - `scan_failed`: 151, `_beepSnd[1]`, which `_ScanPlayer` plays as
     ///   it fails a mission it found that is not hidden (@0x7e721-0x7e740),
     ///   at priority 1.
@@ -201,6 +228,13 @@ impl SoundTable {
     /// - `fleet_quote`: 154, `_beepSnd[4]`, which `_HyperSpawnFleet` plays
     ///   as an announced fleet with a `Quote` arrives, even when its line
     ///   is empty (@0x42698-0x426bb).
+    /// - `call_for_help`: 154, `_beepSnd[4]`, which `_AICallForHelp`
+    ///   plays with a ship's distress call (@0x830e0-0x83109).
+    /// - `scan_hail`: 154, `_beepSnd[4]`, which `_InterceptorAI` plays
+    ///   with its pre-scan hail (@0x8cf9d-0x8cfbc).
+    /// - `reinforcements`: 154, `_beepSnd[4]`, which
+    ///   `_HandleReinforcements` plays with "Sensors detect …
+    ///   reinforcement fleet approaching." (@0x3924b).
     /// - `hail_offer`: 154, `_beepSnd[4]`, which
     ///   `_HandlePlayerCommunication` plays as a person offers its mission
     ///   on its hail (@0x62232-0x6223d).
@@ -228,6 +262,9 @@ impl SoundTable {
     /// - `downed_mission_failed`: 151, `_beepSnd[1]`, which `_DamageShip`
     ///   plays as either fails the player's first `Flags2` 0x0004 mission
     ///   (@0x3b04e, @0x3b2f1).
+    /// - `cargo_stolen` and `ship_stolen`: 151, `_beepSnd[1]`, which
+    ///   `_AIPlunderShipContents` plays with its cargo line (@0x84758) and
+    ///   with its stolen-escort line (@0x84908).
     /// - `mission_ship_lost`: 151, `_beepSnd[1]`, which
     ///   `_HandleShipDisplay` plays as a mission's special ship destroyed
     ///   (@0x2db5a) and `_DamageShip` as one disabled (@0x3af11) fails a
@@ -244,7 +281,7 @@ impl SoundTable {
     ///   (@0x1c22c-0x1c23e) and `_HandlePlayer` plays while the player's
     ///   death timer is above 1.0 and it is not already playing
     ///   (@0x6f1e4-0x6f227, `_ST_IsSoundPlaying` @0x6f200). The original
-    ///   plays it at priority 15, not modelled.
+    ///   plays it at priority 15.
     /// - `eject`: 372, "Eject", which `_LoadSounds` loads into
     ///   `_escapePodSnd` (@0x1c240-0x1c252) and `_HandlePlayer` plays as the
     ///   player ejects, with no test of whether it is still playing
@@ -255,11 +292,11 @@ impl SoundTable {
     ///   `_explodSnd`, which `_HandlePlayer` plays as a sabotage outfit goes
     ///   off (`_explodSnd[0]`, `PlaySound` @0x69375), with no test of
     ///   whether it is still playing. The original plays it at priority
-    ///   100, not modelled.
+    ///   100.
     /// - `jump_collapsed`: 151, "Beep2", `_beepSnd[1]`, which
     ///   `_HandlePlayer` plays as a disabled player's pre-jump collapses,
     ///   after halting the warp-up sounds (`_PlaySound` @0x68aaf). The
-    ///   original plays it at priority 50, not modelled.
+    ///   original plays it at priority 50.
     /// - `refused`: 153, "Beep4", `_beepSnd[3]`, the shared refusal beep,
     ///   which `_HandlePlayer` plays as it refuses the player info key
     ///   during a jump or while the ship breaks up (`PlaySound`
@@ -267,7 +304,8 @@ impl SoundTable {
     ///   (@0x6b89f, @0x6b9cc, @0x6ba72), and which
     ///   `_HandlePlayerCommunication` plays with every refusal of a hail,
     ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). The
-    ///   original plays it at priority 5, not modelled.
+    ///   original plays it at priority 5 or 1 by its site (see
+    ///   [`priority::REFUSED`](crate::priority::REFUSED)).
     /// - `map_open`: 152, "Beep3", `_beepSnd[2]`, which `_HandlePlayer`
     ///   plays as the map key's press passes every gate, just before it
     ///   calls `_DoSystemMap` (`PlaySound` @0x6a7e4-0x6a809). A refused
@@ -277,12 +315,21 @@ impl SoundTable {
     ///   (@0x6a842-0x6a85a), however the map closed. The hypergate's map
     ///   plays neither: `_PlayerEnterHypergate` calls `_DoSystemMap`
     ///   (@0x6385b) with no `PlaySound` before or after it.
+    /// - `map_centre`: 154, "Beep5", `_beepSnd[4]`, which `_MapFilter`
+    ///   plays first as Space goes down, on every map (`PlaySound`
+    ///   @0x14119).
+    /// - `map_found`: 154, "Beep5", `_beepSnd[4]`, which
+    ///   `_DoSystemSearch` plays as it selects the system found
+    ///   (@0x120c6-0x120f3).
+    /// - `map_not_found`: 153, "Beep4", `_beepSnd[3]`, which
+    ///   `_DoSystemSearch` plays when it finds none (@0x120d0-0x120f3).
+    ///   Neither plays for an empty text (@0x11e26-0x11e5d).
     /// - `airlock`: 390, "Airlock", which `_LoadSounds` loads
     ///   (@0x1c277-0x1c289) and `_HandlePlayerBoardAttempt` plays as any
     ///   board goes aboard: as a boarded person offers its mission, before
     ///   `_OfferOneMission` (@0x65907), and before `_DoPlunderDialog` on
     ///   its two plunder paths (@0x659b3, @0x65f00). The original plays it
-    ///   at priority 8, not modelled.
+    ///   at priority 8.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -292,6 +339,8 @@ impl SoundTable {
         arrival: Some(SoundId(130)),
         button_down: Some(SoundId(600)),
         button_up: Some(SoundId(601)),
+        row_slide_start: Some(SoundId(602)),
+        row_slide_end: Some(SoundId(603)),
         alert: None,
         script_message: Some(SoundId(154)),
         escort_menu: Some(SoundId(150)),
@@ -309,6 +358,9 @@ impl SoundTable {
         news_close: Some(SoundId(152)),
         floating_map_zoom: Some(SoundId(150)),
         fleet_quote: Some(SoundId(154)),
+        call_for_help: Some(SoundId(154)),
+        scan_hail: Some(SoundId(154)),
+        reinforcements: Some(SoundId(154)),
         hail_offer: Some(SoundId(154)),
         hail_quote: Some(SoundId(154)),
         nav_selected: Some(SoundId(150)),
@@ -318,6 +370,8 @@ impl SoundTable {
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
         downed_mission_failed: Some(SoundId(151)),
+        cargo_stolen: Some(SoundId(151)),
+        ship_stolen: Some(SoundId(151)),
         mission_ship_lost: Some(SoundId(151)),
         mission_ship_boarded: Some(SoundId(154)),
         traffic_control: Some(SoundId(151)),
@@ -329,6 +383,9 @@ impl SoundTable {
         airlock: Some(SoundId(390)),
         map_open: Some(SoundId(152)),
         map_close: Some(SoundId(150)),
+        map_centre: Some(SoundId(154)),
+        map_found: Some(SoundId(154)),
+        map_not_found: Some(SoundId(153)),
     };
 }
 
@@ -359,6 +416,12 @@ mod tests {
         );
         assert_eq!(table.button_down, Some(SoundId(600)), "Menu button down");
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
+        assert_eq!(
+            table.row_slide_start,
+            Some(SoundId(602)),
+            "Menu button start"
+        );
+        assert_eq!(table.row_slide_end, Some(SoundId(603)), "Menu button end");
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.escort_menu, Some(SoundId(150)), "_beepSnd[0]");
@@ -376,6 +439,9 @@ mod tests {
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.floating_map_zoom, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.call_for_help, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.scan_hail, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.reinforcements, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
@@ -384,6 +450,8 @@ mod tests {
         assert_eq!(table.target_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.ship_stolen, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(
             table.downed_mission_failed,
             Some(SoundId(151)),
@@ -404,5 +472,8 @@ mod tests {
         assert_eq!(table.airlock, Some(SoundId(390)), "Airlock");
         assert_eq!(table.map_open, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.map_close, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.map_centre, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.map_found, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.map_not_found, Some(SoundId(153)), "_beepSnd[3]");
     }
 }

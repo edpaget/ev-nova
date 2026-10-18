@@ -655,6 +655,26 @@ fn a_fleets_arrival_quote_says_its_line() {
 }
 
 #[test]
+fn a_distress_call_a_pre_scan_hail_and_reinforcements_say_their_text_as_given() {
+    let view = flight();
+    let session = view.session().expect("flying");
+    let help = "Ship 129:  Help!";
+    let hail = "Ship 129:  Kestrel, halt.";
+    let coming = "Sensors detect Federation reinforcement fleet approaching.";
+    for (message, text) in [
+        (SimMessage::CallForHelp(help.to_owned()), help),
+        (SimMessage::ScanHail(hail.to_owned()), hail),
+        (
+            SimMessage::ReinforcementsApproaching(coming.to_owned()),
+            coming,
+        ),
+    ] {
+        assert_eq!(sim_message_text(&message, session).as_deref(), Some(text));
+        assert_eq!(arrival_lead(&message), None);
+    }
+}
+
+#[test]
 fn the_players_downed_lines_are_str_2002_287_288_and_284() {
     let view = flight();
     let session = view.session().expect("flying");
@@ -730,6 +750,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
     catalog.dudes[0].1.govt = Some(GovtId(140));
     catalog.govts = vec![nova_sim::GovtRecord {
         id: GovtId(140),
+        name: String::new(),
         flags: 0,
         flags2: 0,
         crime_tol: 0,
@@ -743,6 +764,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: String::new(),
+        medium_name: String::new(),
         scan_mask: 0x0004,
         scan_fine: fine,
         news_pic: -1,
@@ -1377,8 +1399,11 @@ fn a_hail_quote_shows_in_the_message_line_for_420_ticks() {
         Some("Ace: Prepare to die, !"),
         "an unnamed pilot"
     );
-    assert_lasts(&mut view, "Ace: Prepare to die, !", 420);
-    assert_eq!(HAIL_QUOTE_TICKS, 420);
+    assert_lasts(
+        &mut view,
+        "Ace: Prepare to die, !",
+        nova_sim::person::QUOTE_SHOWN_TICKS,
+    );
 }
 
 #[test]
@@ -1496,10 +1521,11 @@ fn a_move_while_landed_is_laid_out_once_the_ship_takes_off() {
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
     assert!(
-        view.course_map()
-            .explored()
-            .is_some_and(|explored| explored.contains(&SystemId(131))),
-        "the take-off explores"
+        view.session()
+            .expect("flying")
+            .pilot()
+            .has_charted(SystemId(131)),
+        "the take-off charts"
     );
 }
 
@@ -2090,4 +2116,25 @@ fn an_offer_accepted_at_once_shows_nothing() {
         view.pilot().expect("a pilot").missions().missions(),
         [MissionId(130)]
     );
+}
+
+/// A plunder's lines read as `_AIPlunderShipContents` builds them, the
+/// numbers' millions by the session's rules, and lead no arrival.
+#[test]
+fn a_plunders_lines_are_its_cargo_and_its_stolen_ship() {
+    let view = flight();
+    let session = view.session().expect("flying");
+    let stolen = SimMessage::CargoStolen {
+        tons: 2,
+        credits: 1_234_567,
+    };
+    assert_eq!(
+        sim_message_text(&stolen, session),
+        Some("2 tons of cargo and 1.23M credits stolen!".to_owned())
+    );
+    assert_eq!(
+        sim_message_text(&SimMessage::ShipStolen { fighter: true }, session),
+        Some("Fighter stolen!".to_owned())
+    );
+    assert_eq!(arrival_lead(&stolen), None);
 }

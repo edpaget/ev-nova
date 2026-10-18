@@ -601,12 +601,13 @@ fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() 
 
 /// A flight on to Barnard's Star ([`FakeCatalog::onward`]) with a
 /// course plotted to `to` and flown out, 300 ms into the jump's
-/// streak, its sounds let go.
+/// streak, its sounds let go. The planner plots it, as Barnard's Star
+/// is unknown past the unexplored Alpha Centauri.
 fn streaking_to(to: i16) -> View {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = planner(FlightView::new(FakeCatalog {
         onward: true,
         ..catalog()
-    });
+    }));
     plot(&mut view, to);
     fly_out(&mut view);
     jump_now(&mut view);
@@ -949,10 +950,10 @@ fn j_held_while_intact_is_refused_once() {
 
 #[test]
 fn j_held_through_a_jump_with_a_hop_to_go_does_not_begin_the_next() {
-    let mut view = FlightView::new(FakeCatalog {
+    let mut view = planner(FlightView::new(FakeCatalog {
         onward: true,
         ..catalog()
-    });
+    }));
     plot(&mut view, 132);
     fly_out(&mut view);
     view.input(&key(JUMP, true));

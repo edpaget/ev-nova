@@ -43,8 +43,9 @@ use crate::catalog::{
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
     ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
+    SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
+    WeaponRecord, loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -147,6 +148,8 @@ impl PilotCatalog for GameData {
                     long_name: record.long_name.as_str().to_owned(),
                     fields: ship_fields(record),
                     defaults: default_items(record),
+                    default_slots: default_slots(record),
+                    strength: record.strength,
                     cost: record.cost,
                     tech_level: record.tech_level,
                     buy_random: record.buy_random,
@@ -259,6 +262,7 @@ impl PilotCatalog for GameData {
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
+                    gravity: stellar.gravity,
                     animation: SiteAnimation {
                         delay: stellar.anim_delay,
                         frame0_bias: stellar.frame0_bias,
@@ -282,6 +286,7 @@ impl PilotCatalog for GameData {
                     links: con_slots(system.con),
                     govt: system.govt,
                     interference: system.interference,
+                    murk: system.murk,
                     message: system.message,
                     stellars: system
                         .nav_def
@@ -801,6 +806,16 @@ impl TrafficCatalog for GameData {
         })
     }
 
+    fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+        let system = self.get::<System>(id.0)?.ok()?.record;
+        // A `ReinfFleet` of -1 names none, as any of 127 or less does.
+        SystemReinforcements::normalised(
+            system.reinf_fleet.map_or(0, |fleet| fleet.0),
+            system.reinf_time,
+            system.reinf_intrval,
+        )
+    }
+
     fn dude(&self, id: DudeId) -> Option<DudeRecord> {
         let dude = self.get::<Dude>(id.0)?.ok()?.record;
         Some(DudeRecord {
@@ -945,6 +960,20 @@ fn shown_resource_name(name: &str) -> &str {
     shown.trim_end_matches([' ', ';'])
 }
 
+/// The most characters of a government's name the engine keeps (it
+/// copies 31 bytes, a Pascal string's length byte among them, @0x7be51).
+const GOVT_NAME_CHARS: usize = 30;
+
+/// A `gövt` resource's name as the game shows it: cut as
+/// [`shown_resource_name`] cuts it (`_LoadObjectData` @0x7bde9-0x7be2a),
+/// and at most [`GOVT_NAME_CHARS`] characters.
+fn govt_name(name: &str) -> String {
+    shown_resource_name(name)
+        .chars()
+        .take(GOVT_NAME_CHARS)
+        .collect()
+}
+
 /// The frame size of the sprite a shot of `Graphic` `graphic` is drawn
 /// with in `data`, its `spïn` as the original clones it
 /// ([`shot_spin_id`]): none for a `Graphic` below 0, a missing `spïn` or a
@@ -973,6 +1002,7 @@ impl CombatCatalog for GameData {
                     guidance: record.guidance,
                     speed: record.speed,
                     ammo_type: record.ammo_type,
+                    graphic: record.graphic,
                     inaccuracy: record.inaccuracy,
                     impact: record.impact,
                     explod_type: record.explod_type,
@@ -1027,6 +1057,7 @@ impl CombatCatalog for GameData {
                     id: ShipId(id),
                     flags: record.flags.bits(),
                     flags2: record.flags2.bits(),
+                    flags3: record.flags3.bits(),
                     death_delay: record.death_delay,
                     pod_count: record.pod_count,
                     explode1: record.explode1,
@@ -1053,9 +1084,11 @@ impl CombatCatalog for GameData {
     fn governments(&self) -> Vec<GovtRecord> {
         self.records::<Govt>()
             .filter_map(|(id, govt)| {
-                let record = govt.ok()?.record;
+                let govt = govt.ok()?;
+                let record = govt.record;
                 Some(GovtRecord {
                     id: GovtId(id),
+                    name: govt_name(govt.name.unwrap_or_default()),
                     flags: record.flags.bits(),
                     flags2: record.flags2.bits(),
                     crime_tol: record.crime_tol,
@@ -1072,6 +1105,7 @@ impl CombatCatalog for GameData {
                     allies: record.ally,
                     enemies: record.enemy,
                     comm_name: record.comm_name.as_str().to_owned(),
+                    medium_name: record.medium_name.as_str().to_owned(),
                     scan_mask: record.scan_mask.bits(),
                     scan_fine: record.scan_fine,
                     news_pic: record.news_pic,
@@ -1297,6 +1331,21 @@ fn ship_fields(ship: &Ship) -> ShipFields {
 }
 
 /// A `shïp`'s `DefaultItems`, each item with its count in slot order.
+/// `ship`'s `DefaultItems` slot by slot, 1-8, each with its raw count;
+/// none where a slot names no item.
+fn default_slots(ship: &Ship) -> [Option<(OutfitId, i16)>; 8] {
+    let items = ship
+        .default_items1_4
+        .into_iter()
+        .chain(ship.default_items5_8);
+    let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
+    let mut slots = [None; 8];
+    for (slot, (item, count)) in slots.iter_mut().zip(items.zip(counts)) {
+        *slot = item.map(|item| (item, count));
+    }
+    slots
+}
+
 fn default_items(ship: &Ship) -> Vec<(OutfitId, u16)> {
     let items = ship
         .default_items1_4
@@ -1760,6 +1809,7 @@ mod tests {
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x46, &[-7]);
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
@@ -1794,6 +1844,17 @@ mod tests {
                 ..ShipFields::default()
             },
             defaults: vec![(OutfitId(200), 2), (OutfitId(201), 0), (OutfitId(202), 1)],
+            default_slots: [
+                Some((OutfitId(200), 2)),
+                Some((OutfitId(201), -1)),
+                None,
+                None,
+                Some((OutfitId(202), 1)),
+                None,
+                None,
+                None,
+            ],
+            strength: -7,
             cost: 17_500,
             tech_level: 6,
             buy_random: 45,
@@ -2501,6 +2562,7 @@ mod tests {
                     type_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
+                    gravity: 0,
                     animation: SiteAnimation {
                         type_frames: 1,
                         dead_frames: 1,
@@ -2524,6 +2586,7 @@ mod tests {
                     type_counts_frames: false,
                     exit_angle: 0,
                     tribute: 250,
+                    gravity: 0,
                     animation: SiteAnimation {
                         dead_frames: 1,
                         ..SiteAnimation::default()
@@ -2911,15 +2974,18 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_and_buoy()
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_interference_murk_and_buoy()
      {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                buoyed(
-                    interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
-                    7,
+                murky(
+                    buoyed(
+                        interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
+                        7,
+                    ),
+                    5,
                 ),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
@@ -2935,6 +3001,7 @@ mod tests {
                     govt: None,
                     stellars: vec![None; 16],
                     interference: 0,
+                    murk: 0,
                     message: -1,
                 },
                 StarSystem {
@@ -2944,11 +3011,26 @@ mod tests {
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
                     interference: 45,
+                    murk: 5,
                     message: 7,
                 },
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    #[test]
+    fn a_systems_murk_is_its_sÿsts_raw() {
+        // `_LoadObjectData` stores `Murk` (`sÿst` +0x92) at runtime +0xbc
+        // (@0x77eb7), which the map panel reads.
+        let mut murky = linked(0, 0, &[]);
+        put_i16s(&mut murky, 0x92, &[45]);
+        let data = store(&[
+            (System::TYPE, 130, murky),
+            (System::TYPE, 131, linked(0, 0, &[])),
+        ]);
+        let murk: Vec<i16> = data.star_map().iter().map(|system| system.murk).collect();
+        assert_eq!(murk, [45, 0]);
     }
 
     #[test]
@@ -2969,6 +3051,12 @@ mod tests {
         bytes
     }
 
+    /// `bytes`, a `sÿst`, with this `Murk` (offset 0x92), raw.
+    fn murky(mut bytes: Vec<u8>, murk: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x92, &[murk]);
+        bytes
+    }
+
     /// `bytes`, a `sÿst`, with this `Interference` (offset 0x6C).
     fn interfering(mut bytes: Vec<u8>, interference: i16) -> Vec<u8> {
         put_i16s(&mut bytes, 0x6C, &[interference]);
@@ -2980,6 +3068,26 @@ mod tests {
         let mut bytes = stellar(0, 0, 0, 1, 0);
         put_i16s(&mut bytes, 0x1A, &[cust_snd_id]);
         bytes
+    }
+
+    #[test]
+    fn a_landing_sites_gravity_is_its_spöbs_raw() {
+        // `_LoadObjectData` stores `Gravity` (`spöb` +0x238) at runtime
+        // +0x46c (@0x773de-0x773e5), which the map panel reads.
+        let gravities = [0, 7, -3];
+        let mut resources = vec![(System::TYPE, 130, system_with(&[128, 129, 130]))];
+        for (id, gravity) in (128..).zip(gravities) {
+            let mut bytes = stellar(0, 0, 0, 1, 0);
+            put_i16s(&mut bytes, 0x238, &[gravity]);
+            resources.push((Stellar::TYPE, id, bytes));
+        }
+        let data = store(&resources);
+        let found: Vec<i16> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.gravity)
+            .collect();
+        assert_eq!(found, gravities);
     }
 
     #[test]
@@ -3645,6 +3753,7 @@ mod tests {
             guidance: -1,
             speed: 1500,
             ammo_type: -1010,
+            graphic: 7,
             inaccuracy: 9,
             impact: 25,
             explod_type: 1003,
@@ -3746,6 +3855,7 @@ mod tests {
         put_i16s(&mut bytes, 0x46, &[325]);
         bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x4C, &[3]);
+        bytes[0x726..0x728].copy_from_slice(&0x0040_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
         put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
         put_i16s(&mut bytes, 0x6DE, &[0, 20, 0, 0]);
@@ -3776,6 +3886,7 @@ mod tests {
             id: ShipId(id),
             flags: 0x0130,
             flags2: 0,
+            flags3: 0x0040,
             death_delay: 60,
             pod_count: 3,
             explode1: 4,
@@ -3917,10 +4028,40 @@ mod tests {
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
+        bytes[0x64..0x73].copy_from_slice(b"the Federation\0");
         put_i16s(&mut bytes, 0xAE, &[9001]);
         bytes[0x54..0x5C].copy_from_slice(&0x8000_0000_0000_0021_u64.to_be_bytes());
         put_i16s(&mut bytes, 0x5C, &[25, 0, -3, 0]);
         bytes
+    }
+
+    #[test]
+    fn a_govt_records_name_is_its_resource_name_cut_at_its_last_semicolon() {
+        // `_LoadObjectData` cuts the name before its last ';', dropping
+        // the spaces and ';'s before it (@0x7bde9-0x7be2a), and copies
+        // 31 bytes of it, the length among them (@0x7be51).
+        let long = "A Government Named At Great Length";
+        let data = store_named(&[
+            (
+                Govt::TYPE,
+                128,
+                Some("Federation;hates Temmin Shard"),
+                govt_bytes(),
+            ),
+            (Govt::TYPE, 129, Some("Auroran ; ;notes;more"), govt_bytes()),
+            (Govt::TYPE, 130, Some("Polaris"), govt_bytes()),
+            (Govt::TYPE, 131, None, govt_bytes()),
+            (Govt::TYPE, 132, Some(long), govt_bytes()),
+        ]);
+        let names: Vec<String> = data
+            .governments()
+            .into_iter()
+            .map(|record| record.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["Federation", "Auroran ; ;notes", "Polaris", "", &long[..30]]
+        );
     }
 
     #[test]
@@ -3944,6 +4085,7 @@ mod tests {
         ]);
         let record = |id| GovtRecord {
             id: GovtId(id),
+            name: String::new(),
             flags: 0xE2B0,
             flags2: 0x0012,
             crime_tol: 6,
@@ -3960,6 +4102,7 @@ mod tests {
             allies: [0, 1, 12, 13],
             enemies: [2, 10, 16, 9],
             comm_name: "Federation".to_owned(),
+            medium_name: "the Federation".to_owned(),
             scan_mask: 0x8004,
             scan_fine: -5,
             news_pic: 9001,
@@ -5062,6 +5205,58 @@ mod tests {
             ],
             "-1 and 127 name none"
         );
+    }
+
+    /// A `sÿst` with this `ReinfFleet`, `ReinfTime` and `ReinfIntrval`.
+    fn reinforced(fleet: i16, time: i16, interval: i16) -> Vec<u8> {
+        let mut bytes = system();
+        put_i16s(&mut bytes, 0x196, &[fleet, time, interval]);
+        bytes
+    }
+
+    #[test]
+    fn a_systems_reinforcements_are_its_fleet_above_127_its_time_and_an_interval_of_at_least_1() {
+        let data = store(&[
+            (System::TYPE, 128, reinforced(129, 900, 2)),
+            (System::TYPE, 129, reinforced(128, -5, 0)),
+            (System::TYPE, 130, reinforced(127, 900, 2)),
+            (System::TYPE, 131, reinforced(0, 900, 2)),
+            (System::TYPE, 132, reinforced(-1, 900, 2)),
+            (System::TYPE, 133, reinforced(140, 30, -3)),
+            (System::TYPE, 134, short(reinforced(129, 900, 2))),
+        ]);
+        let reinforcements = |id| data.system_reinforcements(SystemId(id));
+        assert_eq!(
+            reinforcements(128),
+            Some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        );
+        assert_eq!(
+            reinforcements(129),
+            Some(SystemReinforcements {
+                fleet: FleetId(128),
+                time: -5,
+                interval: 1,
+            }),
+            "the time raw, an interval of 0 read as 1 (@0x782df-0x782e9)"
+        );
+        assert_eq!(
+            reinforcements(133).map(|it| it.interval),
+            Some(1),
+            "a negative interval read as 1"
+        );
+        for none in [130, 131, 132] {
+            assert_eq!(
+                reinforcements(none),
+                None,
+                "127 or below names none (@0x782cb)"
+            );
+        }
+        assert_eq!(reinforcements(134), None, "undecodable");
+        assert_eq!(reinforcements(135), None, "missing");
     }
 
     #[test]

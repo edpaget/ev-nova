@@ -58,7 +58,7 @@ fn a_new_pilot_flies_under_the_default_status_bar() {
     assert_eq!(bar.layout.armor, rect(35.0, 216.0, 184.0, 223.0));
     assert_eq!(bar.layout.fuel, rect(35.0, 234.0, 184.0, 241.0));
     assert_eq!(bar.layout.nav, rect(8.0, 254.0, 184.0, 286.0));
-    assert_eq!(bar_origin(bar), Point::new(830.0, 0.0));
+    assert_eq!(bar_origin(bar, 1024.0), Point::new(830.0, 0.0));
     let mut list = DrawList::new();
     view.draw(&mut list);
     assert!(list.iter().any(|c| *c

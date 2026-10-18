@@ -38,9 +38,11 @@
 use std::collections::BTreeMap;
 
 use super::Session;
-use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
+use crate::ai::{Goal, afterburner};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::catalog::{OutfitId, ShipId, WeaponId};
+use crate::chance::Chance;
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
@@ -57,29 +59,27 @@ use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
-    /// Puts each fighter the fight's tick launched in the system
-    /// ([`Combat::take_sorties`](crate::combat::Combat::take_sorties)), as
-    /// [`Session::launch_fighters`] does.
-    pub(super) fn launch_sorties(&mut self) {
-        let sorties = self.combat.take_sorties();
-        self.launch_fighters(&sorties);
-    }
-
     /// Puts each fighter of `sorties` in the system (see the module
     /// docs); one with no room, or whose ship type has no record, goes
-    /// back into its bay.
-    pub(super) fn launch_fighters(&mut self, sorties: &[Sortie]) {
+    /// back into its bay. Each rolls its afterburner on `chance`.
+    pub(super) fn launch_fighters(&mut self, sorties: &[Sortie], chance: &mut dyn Chance) {
         for sortie in sorties {
-            if self.launch_fighter(sortie).is_none() {
+            if self.launch_fighter(sortie, chance).is_none() {
                 self.put_back(sortie);
             }
         }
     }
 
-    /// Puts the fighter of `sortie` in the system: its number, or none
-    /// when it found no room or no record of its ship type. A dying NPC's
-    /// last launch comes this way too (see the `npc_escape` module).
-    pub(super) fn launch_fighter(&mut self, sortie: &Sortie) -> Option<NpcId> {
+    /// Puts the fighter of `sortie` in the system, its afterburner rolled
+    /// on `chance` as `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736,
+    /// see [`afterburner`]): its number, or none when it found no room or
+    /// no record of its ship type. A dying NPC's last launch comes this way
+    /// too (see the `npc_escape` module).
+    pub(super) fn launch_fighter(
+        &mut self,
+        sortie: &Sortie,
+        chance: &mut dyn Chance,
+    ) -> Option<NpcId> {
         self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
         let record = self.ship_record(sortie.ship).cloned()?;
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
@@ -107,7 +107,17 @@ impl Session {
             ShipRef::Player => self.player_speed,
             ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
         };
-        let npc = fighter(&kind, sortie.ship, state, speed, carrier);
+        let mut npc = fighter(&kind, sortie.ship, state, speed, carrier);
+        let side = self.player_side();
+        // A class's `Strength` is none below none, so in 16 bits.
+        #[allow(clippy::cast_possible_truncation)]
+        let own = kind.hull.strength as i16;
+        let yardstick = afterburner::yardstick(
+            self.rules.source_for(RuleKey::AfterburnerYardstick),
+            side.yardstick,
+            own,
+        );
+        npc.afterburner = afterburner::has_afterburner(&kind.hull, side.rating, yardstick, chance);
         match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
@@ -473,6 +483,8 @@ fn fighter(
         pick: None,
         target: None,
         provoked: 0.0,
+        // `_LaunchFighter` zeroes +0xc910 (@0x3d952).
+        stray: 0.0,
         aggression: 0,
         inspected: None,
         booty: None,
@@ -491,9 +503,17 @@ fn fighter(
         emerges_from: None,
         self_repair: kind.self_repair,
         immobile: kind.immobile,
+        miner: kind.miner,
+        can_scoop: kind.can_scoop,
+        holds: kind.holds,
         former: None,
         tractor: None,
         ion: Ion::default(),
+        afterburner: false,
+        pursuit: Pursuit::default(),
+        ai_wait: 0,
+        docking: None,
+        marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.pod_count,
     }
@@ -839,14 +859,38 @@ mod tests {
                 ship: ShipRef::Player,
                 weapon: BAY,
                 at: session.player().position,
+                // `_FirePlayerWeapon`'s looped test (@0x62d98-0x62dbf)
+                // gates its bay branch too (@0x62e40-0x62e44).
                 sound: Some(crate::combat::FireSound {
-                    priority: Some(crate::combat::PLAYER_SECONDARY_FIRE_PRIORITY),
+                    priority: crate::combat::PLAYER_SECONDARY_FIRE_PRIORITY,
+                    unless_playing: true,
                 }),
             }),
             "the bay's sound is heard"
         );
         assert!(!session.take_save_due(), "as firing ammunition");
         assert_eq!(session.traffic_ships(), [VIPER]);
+    }
+
+    #[test]
+    fn a_fighter_launched_rolls_its_afterburner_by_its_classs_flags() {
+        // `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736): a Viper of
+        // `Flags` 0x0040 always has one, of neither bit none.
+        for (flags, has) in [(0x0040, true), (0x0000, false)] {
+            let mut catalog = carrying();
+            for record in &mut catalog.hulls {
+                if record.id == VIPER {
+                    record.flags = flags;
+                }
+            }
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            launch(&mut session);
+            assert_eq!(
+                fleet_npcs(&session).first().map(|npc| npc.afterburner),
+                Some(has),
+                "{flags:#x}"
+            );
+        }
     }
 
     #[test]
@@ -1485,7 +1529,11 @@ mod tests {
             target: None,
         };
         let launched = |session: &mut Session, carrier| {
-            assert!(session.launch_fighter(&sortie(carrier)).is_some());
+            assert!(
+                session
+                    .launch_fighter(&sortie(carrier), &mut NeverFires)
+                    .is_some()
+            );
             session.npcs().last().expect("launched").state.velocity
         };
         assert_eq!(
@@ -1514,7 +1562,7 @@ mod tests {
             heading: 0.0,
             target: None,
         };
-        assert!(session.launch_fighter(&sortie).is_some());
+        assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
         assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
     }
 
@@ -1533,7 +1581,7 @@ mod tests {
                 heading: 0.0,
                 target: None,
             };
-            assert!(session.launch_fighter(&sortie).is_some());
+            assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
             assert_eq!(session.npcs().last().expect("launched").speed, speed);
         }
     }

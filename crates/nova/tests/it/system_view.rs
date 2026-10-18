@@ -200,7 +200,7 @@ impl Harness {
     fn select(&mut self, id: i16) {
         let map = self.app.screen().galaxy_map();
         let system = map.model().system(SystemId(id)).expect("a system");
-        let at = map.view().world_to_screen(system.position());
+        let at = map.transform().world_to_screen(system.position());
         self.click(at);
         assert_eq!(
             self.app.screen().galaxy_map().selected(),

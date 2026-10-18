@@ -38,7 +38,8 @@ The [`nightly` prerelease](https://github.com/edpaget/ev-nova/releases/tag/night
 holds `nova` and `nova-dump` built from the latest commit on `main`:
 
 - `ev-nova-x86_64-unknown-linux-gnu.tar.gz`
-- `ev-nova-universal-apple-darwin.tar.gz` (Apple silicon and Intel)
+- `ev-nova-universal-apple-darwin.tar.gz` (Apple silicon and Intel, macOS 13
+  (Ventura) or later)
 - `ev-nova-x86_64-pc-windows-msvc.zip`
 
 These are unsigned tester builds, and they contain no game data. Each archive

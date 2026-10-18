@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use nova_sim::Governments;
+
 pub use nova_data::{GovtId, NebulaId, StellarId, SystemId};
 
 /// One stellar object in a system: its ID and display name.
@@ -35,11 +37,15 @@ pub struct SystemEntry {
     pub stellars: Vec<StellarEntry>,
 }
 
-/// One of a nebula's pictures: its `PICT` ID and size in pixels.
+/// One of a nebula's pictures: its `PICT` ID, its slot and its size in
+/// pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NebulaPicture {
     /// The `PICT`'s ID.
     pub id: i16,
+    /// Its slot among the nebula's seven, 0 to 6: k in `PICT` 9500 + 7i +
+    /// k. The map falls back to slot 0 when no picture fits.
+    pub slot: u8,
     /// Its width in pixels.
     pub width: u32,
     /// Its height in pixels.
@@ -74,6 +80,9 @@ pub struct Galaxy {
     pub systems: Vec<SystemEntry>,
     /// Every government's map colour, a 24-bit `00RRGGBB` value.
     pub govt_colors: BTreeMap<GovtId, u32>,
+    /// Every government, as the simulation reads them: the viewer's
+    /// borders read their `Flags2` and their alliances.
+    pub govts: Governments,
     /// Every nebula, by ascending ID.
     pub nebulae: Vec<NebulaEntry>,
     /// What could not be read, each a message ready to display.

@@ -219,6 +219,7 @@ mod tests {
             pod: Some(Ok(EffectSheet {
                 image_id: 1095,
                 frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 0,
             })),
             ..Looks::default()
         }

@@ -22,6 +22,7 @@ use nova_sim::{RuleKey, RuleSource};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::map::ENTER_BUTTON;
 use nova_view::geometry::Bounds;
+use nova_view::menu::fixture::main_screen_resources;
 use nova_view::ships::{ShipBrowser, ShipId};
 use nova_view::sound::SimSound;
 use nova_view::spaceport::layout::LEAVE_ITEM;
@@ -87,13 +88,18 @@ use nova_view::ui::plunder::{
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
+mod appear;
 mod death;
+mod dialog_maps;
 mod encounters;
 mod flight;
+mod map_find;
 mod menu;
 mod missions;
 mod overlays;
 mod port;
+mod quit_question;
+mod widescreen;
 
 /// One data file, `/data/Nova Data`, holding a fork.
 struct OneFile(Vec<u8>);
@@ -346,7 +352,8 @@ fn game_data_fork(
     }
     let mut spin = vec![0; Spin::SIZE.expect("fixed")];
     spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
-    fork.resource(Ship::TYPE, 129, Some(b"Second"), &ship)
+    with_main_screen(fork)
+        .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
         .resource(Ship::TYPE, 128, Some(b"First"), &average)
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
         .resource(ShipAnim::TYPE, 128, None, &anim)
@@ -360,6 +367,16 @@ fn game_data_fork(
         .resource(Spin::TYPE, 650, None, &spin)
         .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
         .resource(Desc::TYPE, MENU_X_TEXT, None, &x_text())
+}
+
+/// `fork` with the main menu's art, so the menu draws the original's
+/// screen.
+fn with_main_screen(fork: ForkBuilder) -> ForkBuilder {
+    main_screen_resources()
+        .into_iter()
+        .fold(fork, |fork, (ty, id, data)| {
+            fork.resource(ty, id, None, &data)
+        })
 }
 
 /// The game data of `fork`'s resources.
@@ -543,7 +560,7 @@ fn click_system(screen: &mut AppScreen, id: i16) {
         .system(SystemId(id))
         .expect("a system")
         .position();
-    let at = map.view().world_to_screen(position);
+    let at = map.transform().world_to_screen(position);
     for pressed in [true, false] {
         let input = Input::PointerButton {
             button: MouseButton::Left,
@@ -605,8 +622,8 @@ fn a_held_tab_reaches_neither_screen() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
     let map = screen.galaxy_map();
-    let view = *map.view();
-    let at = map.view().world_to_screen(
+    let view = *map.view().expect("the viewer");
+    let at = map.transform().world_to_screen(
         map.model()
             .system(SystemId(129))
             .expect("a system")
@@ -623,7 +640,11 @@ fn a_held_tab_reaches_neither_screen() {
     screen.input(&held(Key::Tab));
     screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
     assert_eq!(screen.showing(), Showing::GalaxyMap);
-    assert_ne!(*screen.galaxy_map().view(), view, "the drag goes on");
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "the drag goes on"
+    );
 }
 
 #[test]
@@ -632,22 +653,34 @@ fn held_keys_reach_the_screen_shown() {
     screen.input(&held(Key::Right));
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
     screen.input(&key(Key::Tab, true));
-    let fitted = *screen.galaxy_map().view();
+    let fitted = *screen.galaxy_map().view().expect("the viewer");
     screen.input(&held(Key::Right));
-    assert_ne!(*screen.galaxy_map().view(), fitted, "the map pans");
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "the map pans"
+    );
 }
 
 #[test]
 fn keys_reach_only_the_screen_shown() {
     let mut screen = AppScreen::new(data());
-    let fitted = *screen.galaxy_map().view();
+    let fitted = *screen.galaxy_map().view().expect("the viewer");
     assert_eq!(screen.input(&key(Key::Right, true)), ScreenAction::None);
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
-    assert_eq!(*screen.galaxy_map().view(), fitted, "the map stays put");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "the map stays put"
+    );
 
     screen.input(&key(Key::Tab, true));
     screen.input(&key(Key::Right, true));
-    assert_ne!(*screen.galaxy_map().view(), fitted, "the map pans");
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "the map pans"
+    );
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
 }
 
@@ -658,13 +691,16 @@ fn each_screen_keeps_its_state_across_a_round_trip() {
     screen.input(&key(Key::Tab, true));
     click_system(&mut screen, 129);
     screen.input(&key(Key::Char('='), true));
-    let (view, selected) = (*screen.galaxy_map().view(), screen.galaxy_map().selected());
+    let (view, selected) = (
+        *screen.galaxy_map().view().expect("the viewer"),
+        screen.galaxy_map().selected(),
+    );
     assert_eq!(selected, Some(SystemId(129)));
 
     screen.input(&key(Key::Tab, true));
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
     screen.input(&key(Key::Tab, true));
-    assert_eq!(*screen.galaxy_map().view(), view);
+    assert_eq!(*screen.galaxy_map().view().expect("the viewer"), view);
     assert_eq!(screen.galaxy_map().selected(), selected);
 }
 
@@ -673,8 +709,8 @@ fn switching_away_cancels_a_drag_whose_release_the_other_screen_gets() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
     let map = screen.galaxy_map();
-    let view = *map.view();
-    let at = map.view().world_to_screen(
+    let view = *map.view().expect("the viewer");
+    let at = map.transform().world_to_screen(
         map.model()
             .system(SystemId(129))
             .expect("a system")
@@ -692,7 +728,11 @@ fn switching_away_cancels_a_drag_whose_release_the_other_screen_gets() {
     screen.input(&key(Key::Tab, true));
     assert_eq!(screen.showing(), Showing::GalaxyMap);
     screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
-    assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "no drag"
+    );
     assert_eq!(screen.galaxy_map().selected(), None);
 }
 
@@ -817,7 +857,7 @@ fn releasing_the_keys_reaches_the_screen_shown() {
 fn cancelling_the_pointer_reaches_the_screen_shown() {
     let mut screen = AppScreen::new(data());
     screen.input(&key(Key::Tab, true));
-    let view = *screen.galaxy_map().view();
+    let view = *screen.galaxy_map().view().expect("the viewer");
     screen.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: true,
@@ -825,7 +865,11 @@ fn cancelling_the_pointer_reaches_the_screen_shown() {
     });
     screen.cancel_pointer();
     screen.input(&Input::PointerMoved(Point::new(150.0, 100.0)));
-    assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        view,
+        "no drag"
+    );
 }
 
 #[test]
@@ -1027,9 +1071,9 @@ fn yes_no_template() -> DialogTemplate {
 }
 
 /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
-/// (1), the effects volume (4 to 7), the Music (8) and Sound (20)
-/// check boxes, Key Settings (16), a greyed check box (9) and the
-/// Hyperspace Effects check box (21).
+/// (1), the Scaling list's row (2), the effects volume (4 to 7), the
+/// Music (8) and Sound (20) check boxes, Key Settings (16), a greyed
+/// check box (9) and the Hyperspace Effects check box (21).
 fn prefs_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
@@ -1040,6 +1084,7 @@ fn prefs_template() -> DialogTemplate {
         .map(|_| item(0.0, 300.0, 10.0, 10.0, ItemSpec::User))
         .collect();
     items[0] = item(200.0, 230.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
+    items[1] = item(150.0, 40.0, 100.0, 18.0, ItemSpec::User);
     items[3] = item(
         150.0,
         140.0,
@@ -1251,18 +1296,58 @@ fn keeper(store: &MemoryPilots) -> PilotKeeper<Box<dyn PilotStore>> {
     PilotKeeper::new(Box::new(store.clone()))
 }
 
-/// The router with the main menu over `store`, and no dialogs.
+/// The router with the main menu over `store`, and no dialogs, past its
+/// start-up appear ([`appeared`]).
 pub(crate) fn menu(store: &MemoryPilots) -> AppScreen {
-    AppScreen::new(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+    appeared(AppScreen::new(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)))
+}
+
+/// Escape from flight, back to the main menu, past the return's appear
+/// ([`returned`]).
+pub(crate) fn escape_to_menu(screen: &mut AppScreen) {
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    returned(screen);
+}
+
+/// `screen` once the main screen it returned to has appeared: the
+/// second's black ticked out, then a click off every button, which
+/// finishes the slides silently.
+pub(crate) fn returned(screen: &mut AppScreen) {
+    screen.tick(nova_view::fade::DEATH_FADE_FOR);
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: Point::new(1.0, 1.0),
+        });
+    }
+}
+
+/// Builds on past the start-up appear, for chaining ([`appeared`]).
+pub(crate) trait Appeared {
+    /// The router once its main screen has appeared.
+    #[must_use]
+    fn appeared(self) -> Self;
+}
+
+impl Appeared for AppScreen {
+    fn appeared(self) -> Self {
+        appeared(self)
+    }
+}
+
+/// `screen` once its main screen has appeared: the second's fade from
+/// black ticked out, then a click off every button, which finishes the
+/// slides silently, and the sounds taken.
+pub(crate) fn appeared(mut screen: AppScreen) -> AppScreen {
+    returned(&mut screen);
+    screen.take_sounds();
+    screen
 }
 
 fn choose(screen: &mut AppScreen, choice: MenuChoice) -> ScreenAction {
-    let at = screen
-        .main_menu()
-        .expect("a main menu")
-        .button(choice)
-        .rect
-        .center();
+    let at = screen.main_menu().expect("a main menu").press_point(choice);
     let mut action = ScreenAction::None;
     for pressed in [true, false] {
         action = screen.input(&Input::PointerButton {
@@ -1407,7 +1492,8 @@ fn landed_trader_by(store: &MemoryPilots, trade_count: RuleSource) -> AppScreen 
     let mut screen = AppScreen::new(trading_data())
         .with_rules(Rulebook::default().with_override(RuleKey::TradeCount, trade_count))
         .with_dialogs(Rc::new(TradeDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     assert_eq!(screen.showing(), Showing::Flight);
     land_twice(&mut screen);
@@ -1476,7 +1562,8 @@ impl DialogResources for OutfitDialogs {
 fn landed_outfitter_over(store: &MemoryPilots, data: Rc<GameData>) -> AppScreen {
     let mut screen = AppScreen::new(data)
         .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);
@@ -1618,7 +1705,8 @@ fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
 fn landed_shipyard_of(data: Rc<GameData>, store: &MemoryPilots) -> AppScreen {
     let mut screen = AppScreen::new(data)
         .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);
@@ -1783,7 +1871,8 @@ impl DialogResources for VenueDialogs {
 fn landed_at_venues(store: &MemoryPilots, data: Rc<GameData>) -> AppScreen {
     let mut screen = AppScreen::new(data)
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);

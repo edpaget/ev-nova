@@ -666,7 +666,8 @@
 //!    regeneration and `OnRegen`, each `OnRegen` run as its stellar is
 //!    reached (story-runtime phase 5; see "Built by phase 5"), and a
 //!    dominated one's defence regrowing (planet-domination);
-//! 7. the reinforcement countdown, once reinforcements are built;
+//! 7. each visible system's reinforcement countdown, down by one
+//!    (combat-ai-fidelity phase 5; see `nova_sim::ai::reinforcements`);
 //! 8. the ranks' salaries, each active rank's in ID order, the cash
 //!    floored at 0 after each (crons-news-ranks phase 3; see
 //!    [`rank`](crate::rank));
@@ -909,8 +910,9 @@
 //! days, and only landing there again is refused until it regenerates. A
 //! pilot saved docked there resumes in flight over it.
 //!
-//! The galaxy map has no service, trade or colour mode and no stellar
-//! panel yet; when built, they read `is_landable`. Defence fleets,
+//! The galaxy map's panel reads `landable` for its ports, goods and
+//! services (`nova_sim::map_panel`), and its colour code `is_landable`;
+//! it has no service or trade mode yet. Defence fleets,
 //! stellar weapons and the AI's stellar targets do not exist yet (rdm
 //! task planet-domination, story-runtime phase 13); the original's
 //! readers are listed below for them. Shots at stellars are story-runtime

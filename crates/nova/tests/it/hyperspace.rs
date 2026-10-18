@@ -53,16 +53,19 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
-use nova_sim::hyperspace::{JUMP_FUEL, MIN_JUMP_DISTANCE};
+use nova_sim::hyperspace::{HyperlinkRule, JUMP_FUEL, MIN_JUMP_DISTANCE};
 use nova_sim::{
-    Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId, TICKS_PER_SECOND,
+    Chance, DisasterId, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session, ShipState,
+    SystemId, TICKS_PER_SECOND,
 };
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
-use nova_view::galaxy::map::{BRIGHT_GREEN, COURSE_HELP, ENTER_LABEL};
+use nova_view::galaxy::buttons::DONE_LABEL;
+use nova_view::galaxy::dialog::map_area;
+use nova_view::galaxy::map::{BRIGHT_GREEN, ENTER_LABEL};
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::{Key, MouseButton, Point};
@@ -169,6 +172,17 @@ fn status_picture() -> Vec<u8> {
     let bounds = [0, 0, 16, 194];
     PictBuilder::new(bounds)
         .direct_bits(&DirectBits::rgb555(bounds, &[0x4210; 194 * 16]))
+        .end()
+        .build()
+}
+
+/// A grey `PICT`, `width` x 25: a piece of a button, which the course
+/// map's Done and Find draw.
+fn button_picture(width: i16) -> Vec<u8> {
+    let bounds = [0, 0, 25, width];
+    let pixels = vec![0x4210; usize::try_from(width).expect("positive") * 25];
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &pixels))
         .end()
         .build()
 }
@@ -289,6 +303,17 @@ fn data_of(ship: &[u8], beta: &[u8], buoys: Option<&[u8]>) -> Rc<GameData> {
     if let Some(list) = buoys {
         fork = fork.resource(StrList::TYPE, 1000, Some(b"Message Buoy Strings"), list);
     }
+    // The map's background: any picture, stretched over the dialog.
+    fork = fork.resource(PICT, 8509, Some(b"Map"), &button_picture(13));
+    // The buttons' pictures, each state's caps masked.
+    for state in [7500, 7503, 7506] {
+        fork = fork
+            .resource(PICT, state, None, &button_picture(13))
+            .resource(PICT, state + 1, None, &button_picture(2))
+            .resource(PICT, state + 2, None, &button_picture(13))
+            .resource(PICT, state + 100, None, &button_picture(13))
+            .resource(PICT, state + 102, None, &button_picture(13));
+    }
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -318,7 +343,25 @@ impl Harness {
     /// from the ship browser with F, drawing the developer's title, which
     /// these tests read the system shown by.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
+        Self::flying_by(data, chance, Rulebook::default())
+    }
+
+    /// The app in flight reading [`RuleKey::MapPlotting`]'s other reading,
+    /// the planner: a click on the map plots the shortest course there.
+    /// Beta is unexplored and Gamma unknown, so the engine's Shift-click
+    /// can't add Gamma after Beta.
+    fn planning() -> Self {
+        Self::flying_by(
+            data(),
+            SharedChance::default(),
+            Rulebook::default().with_override(RuleKey::MapPlotting, RuleSource::Bible),
+        )
+    }
+
+    /// [`Harness::flying_over`], its rules read as `rules` says.
+    fn flying_by(data: Rc<GameData>, chance: SharedChance, rules: Rulebook) -> Self {
         let screen = start_screen(Rc::clone(&data))
+            .with_rules(rules)
             .with_chance(chance)
             .with_flight_overlays(FlightOverlays {
                 title: true,
@@ -344,7 +387,7 @@ impl Harness {
             .with_chance(chance)
             .with_pilots(Some(keeper), Rc::new(MonoMetrics));
         let harness = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
             held: Vec::new(),
@@ -364,7 +407,7 @@ impl Harness {
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(prefs_fixture::interface()), metrics);
         let harness = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
             held: Vec::new(),
@@ -391,9 +434,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(choice)
-            .rect
-            .center();
+            .press_point(choice);
         self.click(at);
     }
 
@@ -421,12 +462,24 @@ impl Harness {
         self.fly_out();
     }
 
-    /// Plots a course to system `id` on flight's map: M, a click on it, M.
+    /// Plots a course to system `id` on flight's map: M, a Shift-click on
+    /// each hop of the shortest route there, M, as `_DoSystemMap` builds a
+    /// course a hop at a time; the close cues its first hop.
     fn plot(&mut self, id: i16) {
         self.frame();
+        let session = self.session();
+        let route = session
+            .star_map()
+            .route(session.system(), SystemId(id), HyperlinkRule::Engine)
+            .expect("a route");
         self.press(Key::Char('m'));
-        let system = self.on_map(id);
-        self.click(system);
+        self.key(Key::Shift, true);
+        for hop in &route {
+            let at = self.on_map(hop.0);
+            self.click(at);
+        }
+        self.key(Key::Shift, false);
+        assert_eq!(self.session().course(), route, "plotted");
         self.press(Key::Char('m'));
     }
 
@@ -543,11 +596,29 @@ impl Harness {
         *self.session().player()
     }
 
-    /// Where system `id` is on flight's map.
-    fn on_map(&self, id: i16) -> Point {
-        let map = self.flight().course_map();
-        let system = map.model().system(SystemId(id)).expect("on the map");
-        map.view().world_to_screen(system.position())
+    /// Where system `id` is on flight's map, scrolled well into item 3
+    /// with the arrows first: the map opens at 0.5625 on the current
+    /// system and shows little of the galaxy.
+    fn on_map(&mut self, id: i16) -> Point {
+        let shown = map_area().grown(-12.0);
+        for _ in 0..200 {
+            let map = self.flight().course_map();
+            let system = map.model().system(SystemId(id)).expect("on the map");
+            let at = map.transform().world_to_screen(system.position());
+            let key = if at.x < shown.min.x {
+                Key::Left
+            } else if at.x > shown.max.x {
+                Key::Right
+            } else if at.y < shown.min.y {
+                Key::Up
+            } else if at.y > shown.max.y {
+                Key::Down
+            } else {
+                return at;
+            };
+            self.press(key);
+        }
+        panic!("system {id} never scrolled into item 3");
     }
 
     /// Sends the next redraw, 1/60 s after the last, and returns its frame.
@@ -694,9 +765,18 @@ fn solids(frame: &Frame, color: nova_view::Color) -> Vec<SolidQuad> {
         .collect()
 }
 
-/// How many solid quads are in `color`.
-fn solids_in(frame: &Frame, color: nova_view::Color) -> usize {
-    solids(frame, color).len()
+/// How many solid quads of `color` `frame` draws inside the course map's
+/// item 3, the paused scene behind its dialog left out.
+fn solids_on_map(frame: &Frame, color: nova_view::Color) -> usize {
+    let area = map_area().grown(0.01);
+    solids(frame, color)
+        .iter()
+        .filter(|quad| {
+            quad.corners
+                .iter()
+                .all(|corner| area.contains(Point::new(corner.x, corner.y)))
+        })
+        .count()
 }
 
 /// The status bar's whole-jumps fuel colour, the fixture `ïntf`'s
@@ -755,7 +835,9 @@ fn date(harness: &Harness) -> (u8, u8, i32) {
 
 #[test]
 fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
-    let mut harness = Harness::flying();
+    // The planner: Gamma is unknown past unexplored Beta, so the engine's
+    // Shift-click can't add it after Beta.
+    let mut harness = Harness::planning();
     harness.frame();
     assert_eq!(date(&harness), (23, 6, 1177));
 
@@ -764,7 +846,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
     let map = harness.frame();
-    assert!(shows(&map, COURSE_HELP), "{:?}", texts(&map));
+    assert!(shows(&map, DONE_LABEL), "the dialog: {:?}", texts(&map));
     assert!(!shows(&map, ENTER_LABEL), "{:?}", texts(&map));
     assert_eq!(ENTER_LABEL, "Enter system (Return)");
     harness.press(Key::Enter);
@@ -773,20 +855,22 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.press(Key::Char('m'));
     assert_eq!(harness.showing(), Showing::FlightMap);
 
-    // Clicking Gamma plots the course through Beta, drawn on the map.
+    // Gamma, unknown, is accepted only from Beta's link, with Shift and a
+    // course to Beta: Shift-clicking Beta then Gamma plots the course
+    // through Beta, drawn on the map.
+    let beta = harness.on_map(129);
+    harness.key(Key::Shift, true);
+    harness.click(beta);
+    assert_eq!(harness.session().course(), [SystemId(129)]);
     let gamma = harness.on_map(130);
     harness.click(gamma);
+    harness.key(Key::Shift, false);
     assert_eq!(harness.session().course(), [SystemId(129), SystemId(130)]);
     let map = harness.frame();
     assert_eq!(
-        solids_in(&map, BRIGHT_GREEN),
+        solids_on_map(&map, BRIGHT_GREEN),
         2 + 8,
         "a line for each jump, and the brackets' eight ticks round Gamma"
-    );
-    assert!(
-        shows(&map, "Course: 2 jump(s) to Gamma"),
-        "{:?}",
-        texts(&map)
     );
 
     // Back in flight, J at the centre is too close.
@@ -865,7 +949,7 @@ fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
 
 #[test]
 fn j_straight_after_arriving_jumps_on_to_the_next_system() {
-    let mut harness = Harness::flying();
+    let mut harness = Harness::planning();
     harness.out_towards(130);
     harness.arrive_in(129);
     // Once the jump effect is over, and a second later, J still goes on.
@@ -888,7 +972,7 @@ fn j_straight_after_arriving_jumps_on_to_the_next_system() {
 
 #[test]
 fn j_as_the_new_system_fades_in_jumps_on_to_the_next_system() {
-    let mut harness = Harness::flying();
+    let mut harness = Harness::planning();
     harness.out_towards(130);
     let first = harness.arrive_in(129);
     assert!(white(&first) || fading(&first), "fading in from white");
@@ -928,10 +1012,7 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     harness.app = harness
         .app
         .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
-    harness.press(Key::Char('m'));
-    let beta = harness.on_map(129);
-    harness.click(beta);
-    harness.press(Key::Char('m'));
+    harness.plot(129);
     harness.fly_out();
     log.borrow_mut().clear();
     harness.jump_into(129);
@@ -945,6 +1026,11 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     let play = |id| AudioCommand::Play {
         sound: nova_data::SoundId(id),
         volume: AudioSettings::default().effects_volume,
+        priority: if id == 128 {
+            nova_audio::priority::JUMP
+        } else {
+            nova_audio::priority::ARRIVAL
+        },
     };
     assert_eq!(plays, [play(128), play(130)]);
 }
@@ -962,10 +1048,7 @@ fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     harness.app = harness
         .app
         .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
-    harness.press(Key::Char('m'));
-    let beta = harness.on_map(129);
-    harness.click(beta);
-    harness.press(Key::Char('m'));
+    harness.plot(129);
     harness.fly_out();
     log.borrow_mut().clear();
     harness.jump_into(129);
@@ -983,6 +1066,11 @@ fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     let play = |id| AudioCommand::Play {
         sound: nova_data::SoundId(id),
         volume: AudioSettings::default().effects_volume,
+        priority: if id == 128 {
+            nova_audio::priority::JUMP
+        } else {
+            nova_audio::priority::ARRIVAL
+        },
     };
     let halt = |id| AudioCommand::Halt {
         sound: nova_data::SoundId(id),
@@ -1021,10 +1109,7 @@ fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
     let (asked, chance) = always();
     let mut harness = Harness::flying_with(chance);
     harness.frame();
-    harness.press(Key::Char('m'));
-    let beta = harness.on_map(129);
-    harness.click(beta);
-    harness.press(Key::Char('m'));
+    harness.plot(129);
     harness.fly_out();
     assert!(
         asked.borrow().is_empty(),

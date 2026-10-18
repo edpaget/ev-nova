@@ -2,11 +2,15 @@
 
 use std::time::Duration;
 
-use nova_view::{Diagnostic, DrawList, Input, Prefs, Screen, ScreenAction, Showing, Sound};
+use nova_view::view_shape::classic_offset;
+use nova_view::{
+    Diagnostic, DrawList, FullscreenKind, Input, Point, Prefs, Scaling, Screen, ScreenAction,
+    Showing, Sound, VideoMode, ViewShape,
+};
 
 use super::{
-    AppScreen, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS, Held,
-    MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
+    AppScreen, CLASSIC_VIEW, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS,
+    Held, LANDED, MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
 };
 
 impl Screen for AppScreen {
@@ -33,6 +37,12 @@ impl Screen for AppScreen {
     /// In the spaceport, every event goes to it; leaving it takes off,
     /// back into flight, letting go of its keys.
     ///
+    /// M on a mission dialog (an offer, the mission computer, mission info
+    /// or the accept's briefing) opens flight's course map over it, docked
+    /// or over flight ([`FlightView::open_dialog_map`](nova_view::flight::FlightView::open_dialog_map)): every event
+    /// goes to the map until it closes (Escape, M, Return or Done), and
+    /// then to the dialog again.
+    ///
     /// With dialogs, an I press outside flight opens the About dialog
     /// over the side shown, cancelling and letting go on it as Tab does.
     /// A P press, on any side (flight, its map and the spaceport
@@ -55,7 +65,17 @@ impl Screen for AppScreen {
     /// replayed after, and input during the delay is dropped. I and P work
     /// on the menu, and Tab goes to the ship browser; on the ship browser
     /// and the galaxy map, Escape goes back to the menu instead of
-    /// quitting.
+    /// quitting. Closing the window on the menu asks whether to quit
+    /// ([`Screen::close_requested`]); the question takes every event until
+    /// it is answered.
+    ///
+    /// Command-Q quits at once, silently, on every side and under every
+    /// overlay, but while the main menu appears, when it waits for the
+    /// appear's end with the other keys it holds.
+    ///
+    /// While the main menu appears (at start-up, and on a return from
+    /// play), every input goes to the appear first, which drops it, holds
+    /// it for when it ends, or passes it on (see `appear`).
     ///
     /// Before anything else sees it, a Caps Lock press, on any side and
     /// under any overlay, turns double time on or off for flight, built or
@@ -72,6 +92,9 @@ impl Screen for AppScreen {
         if self.quit_in.is_some() || self.quit_due {
             return ScreenAction::None;
         }
+        if let Some(action) = self.appear_input(input) {
+            return action;
+        }
         if let Some(hold) = self.menu_hold {
             self.hold_input(hold, input);
             return ScreenAction::None;
@@ -83,13 +106,17 @@ impl Screen for AppScreen {
         action
     }
 
-    /// Only the side shown ticks; a hidden one is paused. While an overlay
+    /// Only the side shown ticks; a hidden one is paused. The main menu is
+    /// first told where the pointer is ([`AppScreen::tell_menu_pointer`]).
+    /// While an overlay
     /// (the About dialog, the Preferences dialog, the New Pilot dialog or
     /// the saved pilots' list) is open, only it ticks: flight pauses under
     /// the preferences, as in the original. What the offer dialog over
     /// flight asked for is acted on, and the mission dialogs over flight
-    /// dropped once closed, on the tick a movie of theirs ends. A fade back from black after a
-    /// death moves on. Then what flight's tick ended is taken: the seam at
+    /// dropped once closed, on the tick a movie of theirs ends. While the
+    /// main menu appears unseen it doesn't tick, but waits, and the
+    /// appear moves on, replaying what it held once it ends. A fade back
+    /// from black after a death without a main menu moves on. Then what flight's tick ended is taken: the seam at
     /// the hold's expiry, and the return to the main menu once the death's
     /// fade is over. What the set expressions queued is settled, and a
     /// save that is due is made.
@@ -103,20 +130,21 @@ impl Screen for AppScreen {
                 }
             }
         }
-        match self.overlay_mut() {
-            Some(overlay) => {
-                overlay.tick(dt);
-                // The spaceport isn't ticked under it, so says so: the
-                // original's port window comes back to the front once the
-                // overlay closes.
-                if let Some(spaceport) = &mut self.spaceport {
-                    spaceport.cover();
-                }
+        if let Some(overlay) = self.overlay_mut() {
+            overlay.tick(dt);
+            // The spaceport isn't ticked under it, so says so: the
+            // original's port window comes back to the front once the
+            // overlay closes.
+            if let Some(spaceport) = &mut self.spaceport {
+                spaceport.cover();
             }
-            None => self.shown_mut().tick(dt),
+        } else if !self.appear_holds_menu() {
+            self.tell_menu_pointer();
+            self.shown_mut().tick(dt);
         }
         self.settle_offer();
         self.drop_closed_missions();
+        self.advance_appear(dt);
         self.advance_fade_in(dt);
         self.after_flight_tick();
         self.settle_script();
@@ -127,15 +155,29 @@ impl Screen for AppScreen {
     /// help line, or the spaceport), then the overlay open: the New Pilot
     /// dialog, the saved pilots' list or the load's note, then the About
     /// dialog or the Preferences dialog; then the fade back from black
-    /// after a death, over everything. Under the spaceport, flight's status
+    /// after a death, and the main menu's appear, over everything. Under the spaceport, flight's status
     /// bar is drawn at the right edge ([`FlightView::draw_status_bar`](nova_view::flight::FlightView::draw_status_bar)), as
     /// the original's port dialog leaves it beside the dialog and its shops
-    /// cover its left edge (`_DoPortDialog` @0x5fbca).
+    /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
+    /// map is drawn over them both, as the original's map dialog opens
+    /// over the port window (`_DoBarDialog` @0x492a3), and so is a mission
+    /// dialog's; over flight, a mission dialog's map is drawn over the
+    /// offer and the mission dialogs it opened from. Over a widened
+    /// flight every dialog is drawn in its 1024 x 768 frame centred in the
+    /// view ([`AppScreen::overlay_offset`]); flight places its own map.
     fn draw(&self, list: &mut DrawList) {
-        if self.side == Side::Spaceport && !self.port_map_open() {
+        if self.side == Side::Spaceport {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
+            if self.port_map_open() {
+                self.spaceport.as_ref().expect(LANDED).draw(list);
+            }
         }
-        self.shown().draw(list);
+        // A mission dialog's map over flight is drawn over the dialogs it
+        // opened from, after them.
+        let map_over = self.flight_dialog_map_open();
+        if !map_over {
+            self.shown().draw(list);
+        }
         let hint = match (self.side, self.dialogs.is_some()) {
             (Side::Ships | Side::Galaxy, true) => Some(HINT),
             (Side::Ships | Side::Galaxy, false) => Some(HINT_WITHOUT_DIALOGS),
@@ -146,50 +188,58 @@ impl Screen for AppScreen {
         if let Some(hint) = hint {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
-        if let Some(dialog) = &self.new_pilot {
-            dialog.draw(list);
+        // The dialogs, in their 1024 x 768 frame, centred over a widened
+        // flight.
+        let offset = self.overlay_offset();
+        let mut dialogs = DrawList::new();
+        let under_map = [
+            self.new_pilot.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.open_pilot.as_ref().map(|pilots| pilots as &dyn Screen),
+            self.load_note.as_ref().map(|note| note as &dyn Screen),
+            self.question
+                .as_ref()
+                .map(|question| question as &dyn Screen),
+            self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.player_info
+                .as_ref()
+                .map(|screen| screen as &dyn Screen),
+            self.missions.as_ref().map(|dialogs| dialogs as &dyn Screen),
+            self.haggle.as_ref().map(|dialog| dialog as &dyn Screen),
+        ];
+        for overlay in under_map.into_iter().flatten() {
+            overlay.draw(&mut dialogs);
         }
-        if let Some(pilots) = &self.open_pilot {
-            pilots.draw(list);
+        list.extend_translated(&dialogs, offset);
+        if map_over {
+            self.shown().draw(list);
         }
-        if let Some(note) = &self.load_note {
-            note.draw(list);
-        }
-        if let Some(dialog) = &self.plunder {
-            dialog.draw(list);
-        }
-        if let Some(dialog) = &self.assignment {
-            dialog.draw(list);
-        }
-        if let Some(dialog) = &self.comm {
-            dialog.draw(list);
-        }
-        if let Some(dialog) = &self.offer {
-            dialog.draw(list);
-        }
-        if let Some(screen) = &self.player_info {
-            screen.draw(list);
-        }
-        if let Some(dialogs) = &self.missions {
-            dialogs.draw(list);
-        }
-        if let Some(dialog) = &self.haggle {
-            dialog.draw(list);
-        }
+        let mut dialogs = DrawList::new();
         if let Some(about) = &self.about {
-            about.draw(list);
+            about.draw(&mut dialogs);
         }
         if let Some(dialog) = &self.preferences {
-            dialog.draw(list);
+            dialog.draw(&mut dialogs);
         }
+        list.extend_translated(&dialogs, offset);
         if let Some(fade) = &self.fade_in {
-            fade.draw(list);
+            fade.draw(list, CLASSIC_VIEW);
+        }
+        if let Some(appear) = &self.appear {
+            appear.draw(list, CLASSIC_VIEW);
         }
     }
 
-    /// While the main menu waits, the cancel waits too, in its place
-    /// among the inputs.
+    /// While the main menu appears, the cancel ends a return's wait for
+    /// the button, and the menu under it holds nothing to cancel; while
+    /// the main menu waits, the cancel waits too, in its place among the
+    /// inputs.
     fn cancel_pointer(&mut self) {
+        if self.appear_cancel_pointer() {
+            return;
+        }
         if self.menu_hold.is_some() {
             self.held.push(Held::CancelPointer);
             return;
@@ -200,9 +250,13 @@ impl Screen for AppScreen {
         }
     }
 
-    /// While the main menu waits, the letting go waits too, in its place
-    /// among the inputs; while E's wait holds, it counts as E's release.
+    /// While the main menu appears unseen or waits, the letting go waits
+    /// too, in its place among the inputs; while E's wait holds, it
+    /// counts as E's release.
     fn release_keys(&mut self) {
+        if self.appear_release_keys() {
+            return;
+        }
         if let Some(hold) = self.menu_hold {
             self.held.push(Held::ReleaseKeys);
             if hold == MenuHold::EHeld {
@@ -238,13 +292,24 @@ impl Screen for AppScreen {
                 }
                 Held::CancelPointer => self.cancel_pointer(),
                 Held::ReleaseKeys => self.release_keys(),
+                Held::Close => self.replay_close(),
             }
         }
     }
 
-    /// Whether Quit's delay has run out, or a replayed input quit.
+    /// Whether Quit's delay has run out, a replayed input quit, or the
+    /// quit question was answered yes.
     fn take_quit(&mut self) -> bool {
         std::mem::take(&mut self.quit_due)
+    }
+
+    /// On the main menu with nothing over it, the window's close asks
+    /// `STR#` 140 #10 in the Yes/No dialog and keeps the window open;
+    /// while the main menu waits on a keyed click, it waits too, keeping
+    /// the window open; anywhere else it quits at once (see
+    /// `quit_question`).
+    fn close_requested(&mut self) -> bool {
+        self.close_asked()
     }
 
     /// The sounds of the screens closed since, then of every live screen.
@@ -261,6 +326,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &mut dyn Screen),
             self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
             self.load_note.as_mut().map(|note| note as &mut dyn Screen),
+            self.question
+                .as_mut()
+                .map(|question| question as &mut dyn Screen),
             self.about.as_mut().map(|about| about as &mut dyn Screen),
             self.preferences
                 .as_mut()
@@ -290,6 +358,41 @@ impl Screen for AppScreen {
     /// change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.prefs_change.take()
+    }
+
+    /// Offers the open Preferences dialog the display modes, on the kind
+    /// the game runs fullscreen in now and the kind chosen; with none
+    /// open, nothing changes.
+    fn offer_display(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        self.offer_display_to_preferences(modes, current, chosen);
+    }
+
+    /// Keeps the Scaling list for every Preferences dialog, and takes
+    /// `running` as the player's preferences' one, which each dialog opens
+    /// on.
+    fn offer_scaling(&mut self, listed: &[Scaling], running: Scaling) {
+        self.scaling = listed.to_vec();
+        self.prefs.scaling = running;
+    }
+
+    /// The fullscreen kind picked in the Preferences dialog, once after it
+    /// closed on the pick.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        self.display_choice.take()
+    }
+
+    /// The flight's borders setting to save, once after an undocked close
+    /// of its map that changed it
+    /// ([`FlightView::take_map_borders_save`](nova_view::flight::FlightView::take_map_borders_save)).
+    fn take_map_borders_save(&mut self) -> Option<bool> {
+        self.flight
+            .as_mut()
+            .and_then(nova_view::flight::FlightView::take_map_borders_save)
     }
 
     fn now_showing(&self) -> Option<Showing> {
@@ -331,5 +434,38 @@ impl Screen for AppScreen {
             .as_mut()
             .map(Screen::take_diagnostics)
             .unwrap_or_default()
+    }
+
+    /// Widened while flight shows, with anything over it; classic on the
+    /// main menu, the developer's sides and the spaceport, with anything
+    /// over it (see the module docs).
+    fn view_shape(&self) -> ViewShape {
+        if self.side == Side::Flight {
+            ViewShape::Widened
+        } else {
+            ViewShape::Classic
+        }
+    }
+
+    /// Keeps `size` for every flight, and tells the one built.
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        self.widened = size;
+        if let Some(flight) = &mut self.flight {
+            flight.set_view_size(size);
+        }
+    }
+}
+
+impl AppScreen {
+    /// How far right the dialogs over the side shown are drawn, their
+    /// pointer moved back by as much: their 1024 x 768 frame centred over
+    /// a widened flight, and nothing elsewhere.
+    pub(super) fn overlay_offset(&self) -> Point {
+        let x = if self.view_shape() == ViewShape::Widened {
+            classic_offset(self.widened.0)
+        } else {
+            0.0
+        };
+        Point::new(x, 0.0)
     }
 }

@@ -12,9 +12,22 @@
 //! - [`odds`]: how strong a ship and its friends are, the odds against it,
 //!   and whether a chase is hopeless.
 //! - [`target`]: whom a warship or interceptor attacks: the player, by its
-//!   government's relations and the player's legal record, or an NPC.
+//!   government's relations and the player's legal record, or an NPC;
+//!   [`candidates`], the candidate pass its steps share; and
+//!   [`threatened`], whether a friend is threatened by a ship's enemy.
+//! - [`flee_drop`]: a fleeing ship giving up fleeing an ally it spares.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
+//! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
+//!   weapons' longest reach, and how it flies there.
+//! - [`answer_flag`]: whether a ship hit answers the hit at all, and the
+//!   player's stray provocation.
 //! - [`react`]: how a ship hit answers, and how others come to its help.
+//! - [`call_for_help`]: the calls a think makes on the message line
+//!   ([`CommCall`]): a fleeing trader's distress call and an
+//!   interceptor's pre-scan hail, and the distress call's gates.
+//! - [`reinforcements`]: a ship's call for its system's reinforcement
+//!   fleet, the clock that brings it, and the daily countdown before the
+//!   next.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
 //!   NPC to the one for its type.
@@ -22,25 +35,41 @@
 //!   their standing orders; [`NovaAi`] routes every escort to it.
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
 //!   fight with their carrier; [`NovaAi`] routes every one to it.
+//! - [`miner`]: [`MinerAi`], how a leaderless miner stops, mines, or
+//!   shuttles to its nearest stellar; [`NovaAi`] routes every one to it.
 
+pub mod afterburner;
+pub mod answer_flag;
 pub mod brave;
+pub mod call_for_help;
+pub mod candidates;
 pub mod carried;
 pub mod escort;
 pub mod fire;
 #[cfg(test)]
 pub(crate) mod fixture;
+pub mod flee_drop;
 pub mod interceptor;
+pub mod miner;
 pub mod nova;
 pub mod odds;
+pub mod out_of_ammo;
+pub mod pirate;
+pub mod plunder_contents;
+pub mod plunder_target;
+pub mod pursuit;
 pub mod react;
+pub mod reinforcements;
+pub mod stand_off;
 pub mod target;
+pub mod threatened;
 pub mod warship;
 pub mod wimpy;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use crate::catalog::{GovtId, LandingSite, RankId, RankRecord, StellarId};
+use crate::catalog::{EscortClass, GovtId, LandingSite, RankId, RankRecord, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
@@ -56,13 +85,16 @@ use crate::reserves::Reserves;
 use crate::rulebook::RuleSource;
 use crate::traffic::destination;
 use crate::traffic::npc::{Npc, NpcId};
+use nova_sim_combat::asteroid::Asteroid;
 
 pub use crate::traffic::destination::Admit;
 
 pub use brave::BraveTrader;
+pub use call_for_help::CommCall;
 pub use carried::CarriedAi;
 pub use escort::EscortAi;
 pub use interceptor::Interceptor;
+pub use miner::MinerAi;
 pub use nova::NovaAi;
 pub use warship::Warship;
 pub use wimpy::WimpyTrader;
@@ -246,20 +278,76 @@ pub enum Goal {
     /// keeps the hold until provoked or its type's think lifts it (see
     /// [`idle`]). It fights nothing: its quarry is none.
     Hold,
+    /// Mine asteroid slot 0: the original's state 16, which a miner takes
+    /// (see [`miner`]). Its quarry is none, it doesn't scoop, and
+    /// `_ExtendedIsThreatToPlayer` doesn't spare it (16 is none of its
+    /// states). `_HighLevelAIHandler` flies it as order 1, a stop, while
+    /// slot 0 is empty (@0x8f879); the traffic brakes it so whether or not
+    /// slot 0 is live, until rdm:phase/asteroids/phase-5-ai-mining adds the
+    /// chase and kill (orders 0x13 and 0x14, @0x8f832-0x8f903) and the
+    /// shots that hit no ship.
+    Mine,
+    /// Disable this ship to board it: a pirate's goal 0xd (see
+    /// [`pirate`]), which it takes against a trader, a former escort of the
+    /// player's or the player, whose class has a crew. Against the ship
+    /// intact it flies as an attack (`_HighLevelAIHandler`
+    /// @0x8ea49-0x8eb3a, see [`pursuit`]), sniping (sub-goal 0xe) when
+    /// `hopeless`, but it is no attack to the readers of goal 4
+    /// ([`Goal::attacking`]); its shots disable and never destroy (see
+    /// `nova_sim_combat::combat::plunder`). Against the ship disabled it
+    /// docks with it, firing nothing (see
+    /// [`plunder_dock`](crate::traffic::plunder_dock)), never hopeless.
+    Plunder {
+        /// The ship it disables.
+        ship: ShipRef,
+        /// Whether the chase is hopeless, outside the dogfight box
+        /// (`_AIEvalHopelessChase` @0x8eace): it snipes.
+        hopeless: bool,
+    },
+    /// Wait while another ship boards the ship it would plunder: a
+    /// pirate's goal 0x16, its +0x4c the ticks left (see
+    /// [`board_wait`](crate::traffic::board_wait)). It brakes, targets and
+    /// fires nothing, and fights nothing: its quarry is none.
+    CountWait {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
+    /// Drift off from the ship it plundered: a pirate's goal 0xe
+    /// (`_HighLevelAIHandler` @0x8eb6b-0x8ebd4), its ticks the AI wait
+    /// [`Npc::ai_wait`] its plunder set (see
+    /// [`plunder`](crate::traffic::plunder)). It targets and fights
+    /// nothing, fires nothing, and moves on at its velocity 0.7 pixels a
+    /// tick further along its heading, until its wait reads none.
+    Drift,
 }
 
 impl Goal {
-    /// The ship it fights, attacking, sniping at or fleeing from it; none
-    /// for any other goal.
+    /// The ship it fights, attacking, sniping at, fleeing from or
+    /// plundering it; none for any other goal.
     #[must_use]
     pub fn quarry(self) -> Option<ShipRef> {
         match self {
-            Self::Attack(ship) | Self::Snipe(ship) | Self::Flee(ship) => Some(ship),
+            Self::Attack(ship)
+            | Self::Snipe(ship)
+            | Self::Flee(ship)
+            | Self::Plunder { ship, .. } => Some(ship),
             _ => None,
         }
     }
 
-    /// The ship it attacks or snipes at, if any.
+    /// The ship it plunders, `_AIShipIsPlundering` (@0x89841, goal 0xd),
+    /// if any.
+    #[must_use]
+    pub fn plundering(self) -> Option<ShipRef> {
+        match self {
+            Self::Plunder { ship, .. } => Some(ship),
+            _ => None,
+        }
+    }
+
+    /// The ship it attacks or snipes at, if any: the original's goal 4,
+    /// which `_IsShipAttacking` (@0x82f6a) and `_IsShipFightingMe`
+    /// (@0x827fa) test. A plunder (goal 0xd) is none.
     #[must_use]
     pub fn attacking(self) -> Option<ShipRef> {
         match self {
@@ -304,7 +392,11 @@ impl Goal {
             | Self::Assist(_)
             | Self::Formation { .. }
             | Self::Dock(_)
-            | Self::Hold => false,
+            | Self::Hold
+            | Self::Mine
+            | Self::Plunder { .. }
+            | Self::CountWait { .. }
+            | Self::Drift => false,
         }
     }
 
@@ -324,17 +416,30 @@ impl Goal {
     /// | 0xb (jump with parent) | `_AIMakeShipJumpWithParent` @0x82bc7 | none: an escort follows its lead out |
     /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
     /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
+    ///
+    /// A plunder (goal 0xd), a drift (0xe) and a count wait (0x16) are
+    /// none of them.
     #[must_use]
     pub fn spares_player_threat(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Inspect(_)
-                | Self::Assist(_)
-                | Self::Dock(_)
-                | Self::Follow(_)
-                | Self::Formation { .. }
-                | Self::Hold
-        )
+            | Self::Assist(_)
+            | Self::Dock(_)
+            | Self::Follow(_)
+            | Self::Formation { .. }
+            | Self::Hold => true,
+            Self::Idle
+            | Self::Land(_)
+            | Self::EnterGate(_)
+            | Self::JumpOut
+            | Self::Attack(_)
+            | Self::Snipe(_)
+            | Self::Flee(_)
+            | Self::Mine
+            | Self::Plunder { .. }
+            | Self::CountWait { .. }
+            | Self::Drift => false,
+        }
     }
 }
 
@@ -375,6 +480,28 @@ pub struct PlayerSide {
     /// refresh took them (`nova_sim::Session::blessing`):
     /// [`Surroundings::blessed`] reads it.
     pub blessing: Blessing,
+    /// Its ship type: the escape pod ([`ESCAPE_POD_SHIP`](crate::combat::hull::ESCAPE_POD_SHIP), the original's
+    /// class 0x2ff) is no xenophobe's candidate (see [`target`]).
+    pub ship: ShipId,
+    /// The government its ship type fights as, its class's +0x9f4
+    /// ([`ShipRecord::combat_govt`](crate::catalog::ShipRecord::combat_govt)),
+    /// if any: the ships at war with it may turn on the player at the
+    /// 1-in-50 chance (see [`target`]), and the player's friend strength
+    /// counts the ships allied with it (see [`odds`]).
+    pub combat_govt: Option<GovtId>,
+    /// The ship it targets, the original's player +0x70, if any: the
+    /// answer flag reads it ([`answer_flag`]).
+    pub target: Option<ShipRef>,
+    /// Its ship type's class as an escort, the original's ship class +0xe
+    /// ([`EscortClass::of`]): the reaction's entry test reads whether it is
+    /// a fighter ([`answer_flag`]).
+    pub class: EscortClass,
+    /// Whether a pirate has docked with it (+0xb9): set as a pirate starts
+    /// its dock (`_LowLevelAIHandler` @0x86fc7), cleared at landing and on
+    /// each frame it is not disabled (`_HandlePlayer` @0x68b02). A pirate
+    /// passes a boarded player over ([`plunder_target`]) and waits or
+    /// attacks one ([`pirate`]).
+    pub boarded: bool,
 }
 
 /// No governments at all.
@@ -403,11 +530,33 @@ pub struct Surroundings<'a> {
     /// ([`Combat::targeted_damage`](crate::combat::Combat::targeted_damage)):
     /// an NPC holds its missile while it suffices (see [`fire`]).
     pub targeted: &'a BTreeMap<ShipRef, i32>,
+    /// The asteroid in slot 0 of the system's field, if any: the one every
+    /// miner works (`*0x3b540c`, whose +0x20 says it is live, read by
+    /// `_MinerAI` @0x8b2ad-0x8b2b8; see [`miner`]).
+    pub mining_rock: Option<Asteroid>,
+    /// The system's reinforcement fleet while one called is on its way
+    /// (its timer above 0), which doubles an allied ship's `MaxOdds` in
+    /// its odds retreat ([`reinforcements::odds_factor`]).
+    pub reinforcements: Option<reinforcements::Coming>,
+    /// Whether the player scans for cloaked ships on screen, as
+    /// `_ShipVisibleToShip` reads it for the player's sight of a ship
+    /// ([`World::cloak_scanner`](crate::traffic::World::cloak_scanner)):
+    /// whether the player sees a threat to it ([`Surroundings::seen_by_player`]).
+    pub cloak_scanner: bool,
+    /// The governments an IFF scrambler (`oütf` `ModType` 48) has marked,
+    /// their byte +0x83 (see `nova_sim`'s `iff_scramblers` module): a
+    /// warship of one takes no player candidate from its hunt (see
+    /// [`target`]).
+    pub iff_marked: &'a BTreeSet<GovtId>,
 }
 
+/// No government marked by an IFF scrambler.
+pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
+
 impl<'a> Surroundings<'a> {
-    /// `npcs` among `sites`, with no player, no governments, no record and
-    /// no damage aimed.
+    /// `npcs` among `sites`, with no player, no governments, no record, no
+    /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
+    /// cloak scanner and no government marked by an IFF scrambler.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -418,7 +567,33 @@ impl<'a> Surroundings<'a> {
             system_govt: None,
             record: 0,
             targeted: &NO_AIMED_DAMAGE,
+            mining_rock: None,
+            reinforcements: None,
+            cloak_scanner: false,
+            iff_marked: &NO_IFF_MARKS,
         }
+    }
+
+    /// Whether the player sees `npc` (`_ShipVisibleToShip(npc, player)`):
+    /// [`cloak::visible`](crate::cloak::visible) from where the player is
+    /// (the centre with no player), with its
+    /// [`cloak_scanner`](Surroundings::cloak_scanner).
+    #[must_use]
+    pub fn seen_by_player(&self, npc: &Npc) -> bool {
+        let observer = crate::cloak::Observer {
+            at: self
+                .player
+                .map_or(crate::geometry::Vec2::ZERO, |player| player.state.position),
+            scanner: self.cloak_scanner,
+            cloaked_escort: false,
+        };
+        crate::cloak::visible(npc.cloak, npc.state.position, npc.emerging(), observer)
+    }
+
+    /// Whether `govt` is marked by an IFF scrambler: never an independent.
+    #[must_use]
+    pub fn iff_marked(&self, govt: Option<GovtId>) -> bool {
+        govt.is_some_and(|govt| self.iff_marked.contains(&govt))
     }
 
     /// Whether `govt` blesses the player with peace, rank `Flags` 0x0100
@@ -436,6 +611,33 @@ impl<'a> Surroundings<'a> {
     #[must_use]
     pub fn aimed_at(&self, ship: ShipRef) -> i32 {
         self.targeted.get(&ship).copied().unwrap_or(0)
+    }
+
+    /// The NPCs in the original's slot order, by ship-table slot
+    /// ([`Npc::berth`]), those at one slot in the order they appeared: the
+    /// order the original's loops over slots 1-63 meet them, as a tie in
+    /// a nearest pick and a friend strength's carried shield factor read
+    /// it.
+    #[must_use]
+    pub fn by_slot(&self) -> Vec<&'a Npc> {
+        let mut npcs: Vec<&Npc> = self.npcs.iter().collect();
+        npcs.sort_by_key(|npc| npc.berth);
+        npcs
+    }
+
+    /// Whether `npc` is allied with the player, as `_AlliedWithPlayer`
+    /// (@0x6985-0x69d0) has it: a ship the player leads
+    /// ([`Npc::leader_ref`]), or one led by such a ship here, such as a
+    /// fighter an escort launched. The answer flag's blessing and the
+    /// session's escort Attack read it. Combat keeps its own reading
+    /// (`Sides::allied_with_player` in `nova_sim_combat`): that crate sits
+    /// below this one and walks the fight's ties, not its NPCs.
+    #[must_use]
+    pub fn allied_with_player(&self, npc: &Npc) -> bool {
+        let players = |npc: &Npc| npc.leader_ref() == Some(ShipRef::Player);
+        players(npc)
+            || matches!(npc.leader_ref(), Some(ShipRef::Npc(lead))
+                if self.npc(lead).is_some_and(players))
     }
 
     /// NPC `id`, if it is in the system.
@@ -512,6 +714,8 @@ pub struct GateWait {
 
 /// An NPC's decision ([`Behaviour::decision`]): its goal, and whether the
 /// think turned it on the player.
+// Each flag is its own write or call of the original's think.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Decision {
     /// Its goal now.
@@ -533,6 +737,47 @@ pub struct Decision {
     /// (`_WarshipAI` @0x8b800, `_InterceptorAI` @0x8cbc0). The quote's gate
     /// then sees the ship with neither, and finds it no threat.
     pub dropped_target: bool,
+    /// Whether the think sets its provocation to 1: the government's
+    /// 0x0004 word writes +0x96 = 1 as it turns the ship on the player
+    /// (`_WarshipAI` @0x8b7e5, `_InterceptorAI` @0x8cb9d). The traffic sets
+    /// [`Npc::provoked`] so as it takes the goal.
+    pub provokes: bool,
+    /// The call the think makes on the message line, if any: a distress
+    /// call (`_AICallForHelp`) or a pre-scan hail (see
+    /// [`call_for_help`]). The session answers it after the tick's
+    /// decisions (`Session::answer_comm_calls`).
+    pub comm_call: Option<CommCall>,
+    /// Whether the think calls for its system's reinforcement fleet
+    /// (`_AICallForReinforcements(ship, 0)`, see [`reinforcements`]): a
+    /// fleeing brave trader's (@0x8b6dc), and `_HighLevelAIHandler`'s
+    /// in state 3 and 4 ([`reinforcements::high_level_calls`]). The
+    /// traffic asks it after the think's own [`comm_call`](Self::comm_call)
+    /// ([`CommCall::Reinforcements`]).
+    pub calls_reinforcements: bool,
+    /// The ship it would plunder, when the think found another ship had
+    /// boarded it: `_PirateWarshipAI`'s wait loop (@0x8c68c-0x8c730), which
+    /// the traffic runs in slot order
+    /// ([`board_wait::resolve`](crate::traffic::board_wait::resolve)),
+    /// waiting ([`Goal::CountWait`]) when a ship boards it; otherwise the
+    /// think's [`goal`](Self::goal) stands.
+    pub board_wait: Option<ShipRef>,
+    /// Whether the think left the ship with no target (+0x70 = -1) though
+    /// its goal is no fight: `_PirateWarshipAI`'s search (@0x8c35d) finding
+    /// nothing. The traffic clears [`Npc::target`] as it takes the goal; a
+    /// goal it keeps with a target keeps the target.
+    pub clears_target: bool,
+    /// Whether the think dropped its fight leaving its sub-goal as it was:
+    /// `_PirateWarshipAI`'s disabled-warship drop writes the goal and the
+    /// target alone (@0x8c839-0x8c842), so a kept rush or break-off
+    /// ([`Npc::pursuit`]) carries over to its next fight.
+    pub keeps_pursuit: bool,
+    /// The ship it plunders now: `_PirateWarshipAI`'s plunder
+    /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
+    /// out, its [`goal`](Self::goal) the drift that follows
+    /// ([`Goal::Drift`]). The traffic runs it after the goals, in berth
+    /// order ([`plunder::resolve`](crate::traffic::plunder::resolve)), and
+    /// the wait loop drops it when it makes the pirate wait instead.
+    pub plunders: Option<ShipRef>,
 }
 
 /// How NPCs decide what to do.
@@ -737,10 +982,18 @@ mod tests {
             Goal::Formation { guard: None },
             Goal::Dock(ShipRef::Player),
             Goal::Hold,
+            Goal::Mine,
         ] {
             assert!(!goal.scooping(), "{goal:?}");
         }
         assert!(!npc(1, AiType::WimpyTrader).is_scooping());
+    }
+
+    #[test]
+    fn a_miner_mining_fights_nothing_and_is_not_spared_as_a_threat() {
+        assert_eq!(Goal::Mine.quarry(), None);
+        assert!(!Goal::Mine.fights());
+        assert!(!Goal::Mine.spares_player_threat(), "16 isn't in the list");
     }
 
     #[test]
@@ -1036,13 +1289,8 @@ mod tests {
         let npcs = [npc(1, AiType::Warship)];
         let around = Surroundings::new(&[], &npcs);
         let strike = Strike {
-            ship: ShipRef::Npc(NpcId(1)),
-            by: Some(ShipRef::Player),
             damage: 30.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(ShipRef::Npc(NpcId(1)), ShipRef::Player)
         };
         assert_eq!(
             Peaceful.react(&npcs[0], &strike, &around),
@@ -1199,6 +1447,45 @@ mod tests {
     }
 
     #[test]
+    fn a_plunder_fights_its_victim_without_attacking_it() {
+        let n = ShipRef::Npc(NpcId(3));
+        for hopeless in [false, true] {
+            let plunder = Goal::Plunder { ship: n, hopeless };
+            assert_eq!(plunder.quarry(), Some(n), "a target to fight");
+            assert!(plunder.fights());
+            assert_eq!(plunder.attacking(), None, "goal 0xd is not goal 4");
+            assert_eq!(plunder.plundering(), Some(n));
+            assert!(!plunder.scooping());
+            assert!(!plunder.spares_player_threat(), "0xd isn't in the list");
+        }
+        for other in [Goal::Attack(n), Goal::Snipe(n), Goal::Flee(n), Goal::Idle] {
+            assert_eq!(other.plundering(), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn a_count_wait_fights_nothing_and_is_not_spared_as_a_threat() {
+        for ticks_left in [0, 1, 120] {
+            let wait = Goal::CountWait { ticks_left };
+            assert_eq!((wait.quarry(), wait.attacking()), (None, None));
+            assert!(!wait.fights());
+            assert_eq!(wait.plundering(), None);
+            assert!(!wait.scooping());
+            assert!(!wait.spares_player_threat(), "0x16 isn't in the list");
+        }
+    }
+
+    #[test]
+    fn a_drift_fights_nothing_and_is_not_spared_as_a_threat() {
+        let drift = Goal::Drift;
+        assert_eq!((drift.quarry(), drift.attacking()), (None, None));
+        assert!(!drift.fights());
+        assert_eq!((drift.plundering(), drift.inspecting()), (None, None));
+        assert!(!drift.scooping());
+        assert!(!drift.spares_player_threat(), "0xe isn't in the list");
+    }
+
+    #[test]
     fn surroundings_find_each_ship_and_the_player() {
         let mut jumping = npc(2, AiType::Warship);
         jumping.mode = Mode::JumpingIn { tick: 0 };
@@ -1254,6 +1541,11 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
+            target: None,
+            class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         };
         around.player = Some(player);
         assert!(around.live(P));
@@ -1327,5 +1619,39 @@ mod tests {
         blessing.bless(GovtId(383), Blessed::Peace);
         assert!(blessing.blesses(Some(GovtId(383)), Blessed::Peace));
         assert!(!blessing.blesses(Some(GovtId(383)), Blessed::Landing));
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_or_one_led_by_such_a_ship_is_allied_with_the_player() {
+        let escorting = |id| Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..npc(id, AiType::Warship)
+        };
+        let led = |id, lead| Npc {
+            leader: Some(NpcId(lead)),
+            ..npc(id, AiType::Warship)
+        };
+        let npcs = [
+            escorting(1),
+            led(2, 1),
+            led(3, 2),
+            npc(4, AiType::Warship),
+            led(5, 4),
+            led(6, 9),
+        ];
+        let around = Surroundings::new(&[], &npcs);
+        let allied: Vec<bool> = npcs
+            .iter()
+            .map(|npc| around.allied_with_player(npc))
+            .collect();
+        assert_eq!(
+            allied,
+            [true, true, false, false, false, false],
+            "its escort, the escort's fighter, that fighter's own, a stranger, \
+             its fighter, and one whose leader has gone"
+        );
     }
 }

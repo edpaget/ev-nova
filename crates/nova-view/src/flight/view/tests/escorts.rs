@@ -203,7 +203,7 @@ fn label_drawn(view: &View, label: &str) -> Option<Point> {
 fn label_place(view: &View, label: &str) -> Point {
     let bar = view.status_bar().expect("a status bar");
     let layout = &bar.layout;
-    let area = layout.targ.offset(hud::bar_origin(bar));
+    let area = layout.targ.offset(hud::bar_origin(bar, VIEW_SIZE.0));
     let width = crate::text::TextMetrics::width(
         &crate::text::fixture::MonoMetrics,
         layout.font,

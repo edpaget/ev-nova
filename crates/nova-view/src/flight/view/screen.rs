@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use nova_sim::PlayerCommand;
 use nova_sim::{
-    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, Session, Steps, TargetPick,
-    TrafficCatalog,
+    AsteroidCatalog, CombatCatalog, CommCatalog, PilotCatalog, RuleKey, RuleSource, Session, Steps,
+    TargetPick, TrafficCatalog,
 };
 
 use crate::flight::alert;
@@ -17,12 +17,15 @@ use crate::flight::hud::{self};
 use crate::flight::jump::JumpPhase;
 use crate::flight::weapons::{self};
 use crate::galaxy::GalaxyCatalog;
+use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
-use crate::system::scene::{self};
+use crate::system::scene::{self, SystemScene};
 use crate::system::starfield;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound};
+use crate::{
+    Color, Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
+};
 
 use super::{
     BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
@@ -77,7 +80,8 @@ impl<
             return self.refuse_player_info();
         }
         if self.map_open {
-            if press == Some(MAP_KEY) {
+            // M types into Find while it is open.
+            if press == Some(MAP_KEY) && !self.map.finding() {
                 self.close_map();
             } else {
                 self.map_input(input);
@@ -206,6 +210,8 @@ impl<
             }
         }
         if self.map_open {
+            // The map's own frame: its borders' null events.
+            self.map.tick(dt);
             return;
         }
         if self.hold_expired() {
@@ -243,71 +249,31 @@ impl<
         self.advance_hud();
     }
 
+    /// The scene, its HUD and the cursor, then the fades. With the course
+    /// map open, the map's dialog over the paused scene as it would be
+    /// drawn shut, less the cursor, which the map hides, its 1024 x 768
+    /// frame centred in a widened view ([`FlightView::map_offset`]); in
+    /// port, where the bar opens it, the dialog alone, where the classic
+    /// spaceport has it, for the app to draw over the spaceport.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
-            self.map.draw(list);
+            let in_port = self
+                .session
+                .as_ref()
+                .is_ok_and(|session| session.landed().is_some());
+            if !in_port {
+                self.draw_scene(list);
+            }
+            let mut map = DrawList::new();
+            self.map.draw(&mut map);
+            list.extend_translated(&map, self.map_offset());
             self.draw_fades(list);
             return;
         }
-        let Some(scene) = &self.scene else {
-            let reason = self.session().err().unwrap_or_default();
-            list.text(
-                format!("Cannot start flight: {reason}"),
-                TITLE,
-                TITLE_SIZE,
-                None,
-                Color::ERROR,
-            );
-            self.draw_help(list);
-            return;
-        };
-        let camera = self.camera();
-        match self.jump.map(|effect| (effect, effect.phase())) {
-            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
-                starfield::draw_streaked(list, &camera, effect.direction(), effect.streak_length());
-            }
-            _ => starfield::draw(list, &camera),
+        if self.draw_scene(list) {
+            self.cursor.draw(list, &self.looks);
+            self.draw_fades(list);
         }
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        if let Some(message) = self.message() {
-            hud::draw_message(list, message, metrics);
-        }
-        scene::draw_stellars(list, scene, &camera, self.elapsed);
-        asteroids::draw_asteroids(list, &self.shown_asteroids(&camera), &self.looks);
-        boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
-        self.effects.draw_pods(list, &camera, &self.looks);
-        let beams = self.shown_beams(&camera);
-        weapons::draw_beams(list, &beams, &self.looks, true);
-        self.draw_ships(list, &camera);
-        weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
-        weapons::draw_beams(list, &beams, &self.looks, false);
-        self.effects.draw(list, &camera, &self.looks);
-        self.draw_brackets(list, scene, &camera);
-        self.draw_red_alert(list);
-        if self.session.as_ref().is_ok_and(Session::double_time) {
-            alert::draw_double_time(list);
-        }
-        // `_PostDrawCallback`'s order: the floating map over the sprites
-        // and icons, under the escort menu (@0x38b95-0x38c72).
-        self.draw_floating_map(list);
-        self.escort_menu
-            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
-        if self.overlays.title {
-            list.text(
-                format!("{} (sÿst {})", scene.name(), scene.id().0),
-                TITLE,
-                TITLE_SIZE,
-                None,
-                Color::WHITE,
-            );
-        }
-        self.draw_help(list);
-        match &self.status_bar {
-            Ok(bar) => self.draw_bar(list, bar),
-            Err(reason) => hud::draw_unavailable(list, reason),
-        }
-        self.cursor.draw(list, &self.looks);
-        self.draw_fades(list);
     }
 
     /// Abandons any gesture on the course map, and forgets where the
@@ -331,8 +297,8 @@ impl<
 
     /// The session's sounds (thrust, landing, taking off and jumping),
     /// then the interface's (the escort menu's, the floating map's zooms,
-    /// the player info refused), then the fight's. The course map has no
-    /// buttons that sound.
+    /// the player info refused, the course map's beeps), then the fight's.
+    /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session
@@ -361,5 +327,113 @@ impl<
             diagnostics.extend(sim.map(Diagnostic::Sim));
         }
         diagnostics
+    }
+
+    /// Flight widens to the window's aspect ratio
+    /// ([`ViewShape::Widened`]), showing more space.
+    fn view_shape(&self) -> ViewShape {
+        ViewShape::Widened
+    }
+
+    /// Takes the widened size as the view's ([`FlightView::set_view_size`]).
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        self.set_view_size(size);
+    }
+}
+
+impl<
+    C: PilotCatalog
+        + TrafficCatalog
+        + CombatCatalog
+        + AsteroidCatalog
+        + CommCatalog
+        + CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks,
+> FlightView<C>
+{
+    /// Draws the scene and its HUD, the cursor and the fades left out:
+    /// whether there was a scene to draw, or only why flight could not
+    /// start.
+    fn draw_scene(&self, list: &mut DrawList) -> bool {
+        let Some(scene) = &self.scene else {
+            let reason = self.session().err().unwrap_or_default();
+            list.text(
+                format!("Cannot start flight: {reason}"),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::ERROR,
+            );
+            self.draw_help(list);
+            return false;
+        };
+        let camera = self.camera();
+        list.world(|list| self.draw_world(list, scene, &camera));
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        self.draw_brackets(list, scene, &camera);
+        self.draw_red_alert(list);
+        if self.session.as_ref().is_ok_and(Session::double_time) {
+            alert::draw_double_time(list);
+        }
+        // `_PostDrawCallback`'s order: the floating map over the sprites
+        // and icons, under the escort menu (@0x38b95-0x38c72).
+        self.draw_floating_map(list);
+        self.escort_menu
+            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
+        if self.overlays.title {
+            list.text(
+                format!("{} (sÿst {})", scene.name(), scene.id().0),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::WHITE,
+            );
+        }
+        self.draw_help(list);
+        match &self.status_bar {
+            Ok(bar) => self.draw_bar(list, bar, self.view.0),
+            Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
+        }
+        true
+    }
+
+    /// Draws the sprite world, the scene under the HUD: the stars, the
+    /// message line, the stellars, asteroids and boxes, the beams under
+    /// the ships, the ships and shots, the beams over them, the effects
+    /// and the smoke. The message line is text, so it is overlay among
+    /// the world ([`DrawList::world`]).
+    fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+        match self.jump.map(|effect| (effect, effect.phase())) {
+            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
+                starfield::draw_streaked(list, camera, effect.direction(), effect.streak_length());
+            }
+            _ => starfield::draw(list, camera),
+        }
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        if let Some(message) = self.message() {
+            hud::draw_message(list, message, self.view, metrics);
+        }
+        scene::draw_stellars(list, scene, camera, self.elapsed);
+        asteroids::draw_asteroids(list, &self.shown_asteroids(camera), &self.looks);
+        boxes::draw_boxes(list, &self.shown_boxes(camera), &self.looks);
+        self.effects.draw_pods(list, camera, &self.looks);
+        let beams = self.shown_beams(camera);
+        let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::LightningZigZag)
+        });
+        let lightning = (zig_zag, self.shot_looks.lightning());
+        weapons::draw_beams(list, &beams, &self.looks, true, lightning);
+        self.draw_sprites(list, camera);
+        weapons::draw_beams(list, &beams, &self.looks, false, lightning);
+        self.effects.draw(list, camera, &self.looks);
+        if let Ok(session) = &self.session {
+            let viewer = session.player().position;
+            let murk = session.effective_murk();
+            self.shot_looks.draw_smoke(list, camera, viewer, murk);
+        }
     }
 }

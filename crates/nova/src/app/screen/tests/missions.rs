@@ -72,7 +72,8 @@ fn filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Re
         .with_prefs(prefs)
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     (screen, reel)
 }
 
@@ -168,7 +169,8 @@ fn landed_offering(mission: &[u8], descs: &[(i16, Vec<u8>)]) -> (AppScreen, Rc<R
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     (screen, reel)
@@ -310,7 +312,8 @@ fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_mo
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
         .with_dialogs(Rc::new(InfoOverEveryOpener), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     assert_eq!(
@@ -358,7 +361,8 @@ fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 11);
@@ -581,7 +585,8 @@ fn offer_a_moment_after_a_long_offer(clock: RuleSource) -> Option<MissionId> {
     let mut screen = AppScreen::new(venue_data_of(TRADE_CENTER, &[130, 131, 132]))
         .with_rulebook(&rulebook)
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 7);
@@ -639,7 +644,8 @@ fn the_bar_offers_again_after_its_hire_screen_restarts_its_wait() {
     built.put_u16(first + 0x38A, 100);
     let mut screen = AppScreen::new(loaded_bytes(built.bytes))
         .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 10);
@@ -953,7 +959,8 @@ fn a_bar_desc_whose_graphic_is_above_127_and_whose_pict_exists_opens_in_1021() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(loaded(&fork))
         .with_dialogs(Rc::new(PictureDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 10);

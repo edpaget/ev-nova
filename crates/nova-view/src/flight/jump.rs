@@ -109,8 +109,7 @@ use std::time::Duration;
 use nova_sim::Vec2;
 
 use crate::draw::fill_rect;
-use crate::geometry::Bounds;
-use crate::system::camera::VIEW_SIZE;
+use crate::fade::whole_view;
 use crate::{Color, DrawList, Point};
 
 /// How long the stars streak.
@@ -131,12 +130,6 @@ pub const ARRIVAL_FLASH_FOR: Duration = Duration::from_millis(33);
 /// The colour the screen fades to, at full alpha: white, as the original's
 /// `_FadeWhiteIn` and `_FadeWhiteOut` fade the display.
 pub const FADE_COLOR: Color = Color::WHITE;
-
-/// The whole screen, which the fade covers.
-const SCREEN: Bounds = Bounds {
-    min: Point::new(0.0, 0.0),
-    max: Point::new(VIEW_SIZE.0, VIEW_SIZE.1),
-};
 
 /// How far into a jump's effect the ship arrives: the end of the fade-out,
 /// or of the streak without fades.
@@ -299,14 +292,15 @@ impl JumpEffect {
         }
     }
 
-    /// Covers the whole screen in [`FADE_COLOR`] at the fade's alpha, if it
-    /// shows at all.
-    pub fn draw_fade(&self, list: &mut DrawList) {
+    /// Covers the whole of flight's view, `view` in size, in
+    /// [`FADE_COLOR`] at the fade's alpha, if it shows at all, as the
+    /// original's white fades cover the whole display.
+    pub fn draw_fade(&self, list: &mut DrawList, view: (f32, f32)) {
         let alpha = self.fade_alpha();
         if alpha > 0 {
             fill_rect(
                 list,
-                SCREEN,
+                whole_view(view),
                 Color {
                     a: alpha,
                     ..FADE_COLOR
@@ -321,6 +315,7 @@ impl JumpEffect {
 mod tests {
     use super::*;
     use crate::DrawCommand;
+    use crate::system::camera::VIEW_SIZE as CLASSIC;
 
     fn effect() -> JumpEffect {
         JumpEffect::toward(Vec2::new(0.0, 0.0), Vec2::new(600.0, 0.0))
@@ -413,20 +408,23 @@ mod tests {
     #[test]
     fn the_fade_covers_the_screen_in_white() {
         let mut list = DrawList::new();
-        after(ms(1250)).draw_fade(&mut list);
+        after(ms(1250)).draw_fade(&mut list, CLASSIC);
+        after(ms(1250)).draw_fade(&mut list, (1365.0, 768.0));
+        let line = |width| DrawCommand::Line {
+            from: Point::new(0.0, 384.0),
+            to: Point::new(width, 384.0),
+            width: 768.0,
+            color: Color::rgba(255, 255, 255, 128),
+        };
         assert_eq!(
             list.iter().cloned().collect::<Vec<_>>(),
-            [DrawCommand::Line {
-                from: Point::new(0.0, 384.0),
-                to: Point::new(1024.0, 384.0),
-                width: 768.0,
-                color: Color::rgba(255, 255, 255, 128),
-            }]
+            [line(1024.0), line(1365.0)],
+            "the whole view, widened or not"
         );
         assert_eq!(FADE_COLOR, Color::WHITE);
         for at in [500, 3000] {
             let mut none = DrawList::new();
-            after(ms(at)).draw_fade(&mut none);
+            after(ms(at)).draw_fade(&mut none, CLASSIC);
             assert!(none.is_empty(), "{at}");
         }
     }
@@ -492,7 +490,7 @@ mod tests {
             let streak = plain(ms(at));
             assert_eq!(streak.fade_alpha(), 0, "{at}");
             let mut none = DrawList::new();
-            streak.draw_fade(&mut none);
+            streak.draw_fade(&mut none, CLASSIC);
             assert!(none.is_empty(), "{at}");
         }
         assert_eq!(
@@ -504,7 +502,7 @@ mod tests {
             assert_eq!(flash.fade_alpha(), 255, "{at}");
             assert_eq!(flash.streak_length(), 0.0, "{at}");
             let mut list = DrawList::new();
-            flash.draw_fade(&mut list);
+            flash.draw_fade(&mut list, CLASSIC);
             assert_eq!(
                 list.iter().cloned().collect::<Vec<_>>(),
                 [DrawCommand::Line {

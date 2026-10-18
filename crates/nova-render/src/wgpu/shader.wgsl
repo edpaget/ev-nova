@@ -50,6 +50,15 @@ fn sprite_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     return textureSample(page, page_sampler, in.uv) * in.tint;
 }
 
+// A max batch's colour, premultiplied by its alpha so a transparent texel
+// is black and leaves what is beneath as it is: the blend state takes the
+// larger of each channel (`Blend::Max`, QuickDraw's `addMax`).
+@fragment
+fn max_fs(in: SpriteOut) -> @location(0) vec4<f32> {
+    let t = textureSample(page, page_sampler, in.uv) * in.tint;
+    return vec4<f32>(t.rgb * t.a, t.a);
+}
+
 // What an OR batch reads from beneath it: a copy of the scene, at the
 // fragment's own pixel.
 @group(2) @binding(0) var backdrop: texture_2d<f32>;

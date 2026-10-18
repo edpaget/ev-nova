@@ -8,8 +8,12 @@
 //!
 //! - **The frame** ([`frame`]) is `_SetupSpriteWorld`'s
 //!   (@0x21e86-0x21f61): a square of side max(200, trunc(width × 0.25)),
-//!   at (width − side − 210, 150). In the 1024 x 768 window it is 256 x
-//!   256 at (558, 150)-(814, 406). Its clicks are tested half-open, as
+//!   at (width − side − 210, 150), the width the view's, widened or not.
+//!   In the 1024 x 768 window it is 256 x 256 at (558, 150)-(814, 406),
+//!   and in a 16:9 window's 1365-wide view 341 x 341 at (814, 150). With
+//!   no cap on the width its bottom, 150 + trunc(width / 4), passes 768
+//!   from a width of 2476, and the screen's bottom cuts it off, as the
+//!   original's would be. Its clicks are tested half-open, as
 //!   `PtInRect` does ([`contains`]).
 //! - **The clock.** Each show ([`FloatingMap::show`]) restarts it. The map
 //!   is drawn at level w = clamp(150 − (now − start), 0, 32) in 32nds
@@ -132,13 +136,11 @@
 //! [`FlightView`]: super::FlightView
 //! [`GalaxyMap::draw_marks`]: crate::galaxy::GalaxyMap::draw_marks
 
-use std::cmp::Ordering;
-
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::galaxy::SystemId;
 use crate::galaxy::view::{SCALES, Transform};
-use crate::geometry::{Bounds, Point};
+use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 use crate::text::LINE_HEIGHT;
 
 /// The frame's smallest side.
@@ -693,13 +695,6 @@ fn fade(color: Color, level: u8) -> Color {
     }
 }
 
-/// The point `t` of the way from `from` to `to`: exactly `from` at 0 and
-/// `to` at 1.
-fn lerp(from: Point, to: Point, t: f32) -> Point {
-    let mix = |a: f32, b: f32| a * (1.0 - t) + b * t;
-    Point::new(mix(from.x, to.x), mix(from.y, to.y))
-}
-
 /// A dot's square.
 fn dot_rect(center: Point, size: f32) -> Bounds {
     let half = size / 2.0;
@@ -707,13 +702,6 @@ fn dot_rect(center: Point, size: f32) -> Bounds {
         min: Point::new(center.x - half, center.y - half),
         max: Point::new(center.x + half, center.y + half),
     }
-}
-
-/// Where `a` and `b` overlap, if they share any area.
-fn intersection(a: Bounds, b: Bounds) -> Option<Bounds> {
-    let min = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y));
-    let max = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y));
-    (min.x < max.x && min.y < max.y).then_some(Bounds { min, max })
 }
 
 /// What is left of `a` once `b` is taken out of it: up to four
@@ -740,33 +728,6 @@ fn minus(a: Bounds, b: Bounds) -> Vec<Bounds> {
         .map(|(min, max)| Bounds { min, max })
         .filter(|strip| strip.min.x < strip.max.x && strip.min.y < strip.max.y)
         .collect()
-}
-
-/// The stretch of the segment from `from` to `to` inside `area`, edges
-/// included, as fractions of the way along it (Liang-Barsky); `None` when
-/// it misses or only touches it at a point. A segment of no length inside
-/// is all of it.
-fn span_in(from: Point, to: Point, area: Bounds) -> Option<(f32, f32)> {
-    let (dx, dy) = (to.x - from.x, to.y - from.y);
-    let mut span = (0.0_f32, 1.0_f32);
-    for (p, q) in [
-        (-dx, from.x - area.min.x),
-        (dx, area.max.x - from.x),
-        (-dy, from.y - area.min.y),
-        (dy, area.max.y - from.y),
-    ] {
-        match p.partial_cmp(&0.0) {
-            Some(Ordering::Less) => span.0 = span.0.max(q / p),
-            Some(Ordering::Greater) => span.1 = span.1.min(q / p),
-            // Parallel to this edge: in or out along its whole length.
-            _ => {
-                if q < 0.0 {
-                    return None;
-                }
-            }
-        }
-    }
-    (span.0 < span.1).then_some(span)
 }
 
 /// What is left of the stretch `have` once `gone` is cut out of it: the
@@ -806,6 +767,11 @@ mod tests {
             frame((1030.0, 768.0)),
             Bounds::at(at(563.0, 150.0), 257.0, 257.0),
             "trunc(257.5)"
+        );
+        assert_eq!(
+            frame((1365.0, 768.0)),
+            Bounds::at(at(814.0, 150.0), 341.0, 341.0),
+            "a 16:9 window's widened view: trunc(341.25)"
         );
     }
 

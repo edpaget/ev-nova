@@ -47,6 +47,9 @@
 //!   player's outfits give ([`RadarGear`](iff::RadarGear)) and the colour
 //!   a ship or a stellar shows on the radar ([`ShipIff`](iff::ShipIff),
 //!   [`StellarIff`](iff::StellarIff)).
+//! - [`murk`]: a system's murk: its `Murk` as loaded
+//!   ([`loaded_murk`](murk::loaded_murk)) and the player's effective murk
+//!   with its outfits ([`effective_murk`](murk::effective_murk)).
 //! - [`order_loop`]: an order of a count run one pass at a time: each
 //!   pass handed its [`order_loop::Pass`], the buy loop
 //!   ([`order_loop::run`]) stopping at the first refusal and the sell
@@ -101,6 +104,7 @@ pub mod gate_sprite;
 pub mod grant;
 pub mod hire;
 pub mod iff;
+pub mod murk;
 pub mod npc_escape;
 pub mod order_loop;
 pub mod outfitter;

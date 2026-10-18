@@ -353,6 +353,7 @@
 //! [`Session::take_diagnostics`].
 
 mod afterburner;
+mod answer_flag;
 mod asteroids;
 mod aux_ships;
 mod board_attempt;
@@ -361,6 +362,7 @@ mod buoys;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
+mod comm_calls;
 mod control;
 mod course;
 mod crons;
@@ -370,8 +372,12 @@ mod eject;
 mod entry;
 mod escorts;
 mod events;
+#[cfg(test)]
+mod exit_cursors;
 mod explored;
 mod fighters;
+#[cfg(test)]
+mod fire_gates;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
@@ -379,14 +385,21 @@ mod hail;
 mod hire;
 mod hooks;
 mod hover;
+mod iff_scramblers;
 mod inertialess;
 mod jump_collapse;
 mod map;
+mod map_borders;
+mod map_click;
+mod map_panel;
+mod map_search;
 mod mission_cargo;
 mod mission_escorts;
+mod mission_map;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod murk;
 mod nav;
 mod nebulae;
 mod news;
@@ -394,6 +407,7 @@ mod npc_escape;
 mod outfits;
 mod person_offers;
 mod persons;
+mod pirate_plunder;
 mod player_downed;
 mod player_info;
 mod player_led;
@@ -402,6 +416,7 @@ mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
+mod reinforcements;
 mod rescue;
 mod sabotage;
 mod script_effects;
@@ -418,6 +433,8 @@ mod thrust;
 mod tutorial;
 
 pub use hooks::HookRules;
+pub use map_click::{MapClicked, MapPress};
+pub use nav::SavedNav;
 pub use ship_change::{InterfaceLoad, ShipChangeRules};
 
 pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
@@ -453,11 +470,11 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, GateSite, GovtId,
-    JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord,
-    OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
-    ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog,
-    WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, EscortClass,
+    GateSite, GovtId, JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts,
+    NebulaRecord, OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord,
+    ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility,
+    TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -475,6 +492,7 @@ use crate::combat::sides::PassThrough;
 use crate::combat::{
     Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
 };
+use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, FlightRules, ShipState, player_step};
@@ -511,7 +529,7 @@ use crate::outfitter::{
     OutfitVisit, Outfitter, Reselection, SaleAlert, Shop, outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
-use crate::pilot::{self, Escort, Pilot};
+use crate::pilot::{self, Escort, ExploredLevel, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::player_turn::brake_aim;
 use crate::pre_jump::{self, PreJump};
@@ -568,9 +586,18 @@ impl FightTerms {
         let fleet = npc.fleet();
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
+        let plundering = npc.goal.plundering().is_some();
+        // Goal 4 with sub 0xf (`_AIShipIsPlunderingShip` @0x83f6e).
+        let docked = npc.goal.attacking().is_some()
+            && npc
+                .docking
+                .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let cloak_device = npc.cloak_gear.device;
+        // A waiting ship's fire block is skipped (`_HandleShip`
+        // @0x34a54-0x34a72).
+        let trigger = crate::ai::fire::gated(npc);
         let Npc {
             id,
             ship,
@@ -579,7 +606,6 @@ impl FightTerms {
             stats,
             state,
             hull,
-            trigger,
             target,
             reserves,
             condition,
@@ -601,7 +627,7 @@ impl FightTerms {
             hull: *hull,
             shield_regen: stats.shield_regen,
             armor_regen: stats.armor_regen,
-            trigger: *trigger,
+            trigger,
             target: *target,
             reserves,
             condition,
@@ -609,6 +635,8 @@ impl FightTerms {
             cloaked: cloak.is_cloaked(),
             attacking,
             threatens_player: self.threatens_player,
+            plundering,
+            docked,
             emerging,
             cloak_scanner,
             has_cloak: cloak_device,
@@ -799,6 +827,16 @@ pub struct Session {
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
     messages: Vec<SimMessage>,
+    /// The message line's countdown, `_commCount`: set by every line
+    /// shown, counted down each frame (see the `comm_calls` module).
+    comm_line: CommLine,
+    /// Each system's reinforcement timer and the inhibitors (see the
+    /// `reinforcements` module); never saved, as the original saves
+    /// neither.
+    reinforcements: reinforcements::Reinforcements,
+    /// The governments an IFF scrambler has marked (see the
+    /// `iff_scramblers` module); never saved, as the original saves none.
+    iff_marked: BTreeSet<GovtId>,
     /// The events told since they were last taken.
     events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
@@ -1062,6 +1100,9 @@ pub struct Session {
     /// When the player's ship is disabled after a change of ship (see
     /// [`Session::with_disable_rule`]).
     disable_rule: hire::Shared<dyn DisableRule>,
+    /// Whether a pirate has docked with the player's disabled ship (its
+    /// slot's +0xb9; see the `pirate_plunder` module): never saved.
+    player_boarded: bool,
     /// The string lists `T` names the ship from (see
     /// [`Session::with_strings`]).
     strings: ship_change::Strings,
@@ -1589,8 +1630,12 @@ impl Session {
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
+            comm_line: CommLine::default(),
+            reinforcements: reinforcements::Reinforcements::default(),
+            iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
+            player_boarded: false,
             strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
             next_sites: None,
@@ -1753,11 +1798,15 @@ impl Session {
         self.combat
             .set_pd_exit_step(rules.source_for(RuleKey::PdExitStep));
         self.combat
+            .set_stray_beam_exit(rules.source_for(RuleKey::StrayBeamExit));
+        self.combat
             .set_beam_hit_test(rules.source_for(RuleKey::BeamHitTest));
         self.combat
             .set_beam_cone_quirks(rules.source_for(RuleKey::BeamConeQuirks));
         self.combat
             .set_bomb_rocket_launch(rules.source_for(RuleKey::BombRocketLaunch));
+        self.combat
+            .set_bomb_heading_wrap(rules.source_for(RuleKey::BombHeadingWrap));
         self.combat
             .set_pd_hostility(rules.source_for(RuleKey::PdHostility));
         self.combat
@@ -1775,6 +1824,10 @@ impl Session {
         ));
         self.combat
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
+        self.traffic
+            .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
+        self.traffic
+            .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
         self.rules = rules;
         self
     }
@@ -1862,7 +1915,10 @@ impl Session {
     /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
     /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
     /// reads [`RuleKey::ShipChangeReserves`] (see
-    /// [`ReservePolicy::reading`]). Capture, a change of ship and a
+    /// [`ReservePolicy::reading`]). The exit cursors and the fold set carry
+    /// over, as no refit writes them (see the `exit_cursors` tests); a
+    /// change of class then sets the fold set back to 0
+    /// ([`Session::become_class`]). Capture, a change of ship and a
     /// purchase refit through [`Session::become_class`], by the policy
     /// they chose. By the engine, a refit leaves the secondary selected as
     /// it is, one the ship no longer carries too, as the original's
@@ -1872,7 +1928,14 @@ impl Session {
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
-        self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
+        // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
+        // set (+0xc8fc): the new armament carries the old's (a change of
+        // class resets the fold set after, in `become_class`).
+        self.armament = self
+            .arsenal
+            .player(&self.pilot.outfits, &self.outfits)
+            .with_exit_cursors(*self.armament.exit_cursors())
+            .with_fold_set(self.armament.fold_set());
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max, hold) in [
@@ -2248,7 +2311,9 @@ impl Session {
     /// mission slot and not disabled, whole (@0x3bf7e-0x3bfb6). A
     /// disabled escort has left the fleet already, and mission escorts
     /// and fighters carry no aux mark, so the fleet is exactly the kept
-    /// ships with one; each keeps its mark into the new system.
+    /// ships with one; each keeps its mark into the new system. Each
+    /// escort also keeps its ion colour, its charge cleared
+    /// (`_RespawnEscort` @0x3d543 leaves +0xb0).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2256,7 +2321,7 @@ impl Session {
         entering: Option<Entrance>,
     ) {
         let kept: BTreeSet<NpcId> = self.fleet.iter().copied().flatten().collect();
-        let marks = self.fleet_aux_marks();
+        let kept_escorts = self.fleet_kept();
         self.give_back_aux_ships(&kept);
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
@@ -2287,7 +2352,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &marks);
+        self.enter_escorts(&berths, &kept_escorts);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
@@ -2344,7 +2409,9 @@ impl Session {
     /// system raises [`Fate::Departed`] and is counted (see the
     /// `mission_ships` module). Then, unless the ship is docked, each
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
-    /// while a jump plays too. The traffic ticks in the same [`World`] the
+    /// while a jump plays too; before that, in flight or jumping, the
+    /// player's system's reinforcement clock ticks, after the frame's
+    /// calls (see the `reinforcements` module). The traffic ticks in the same [`World`] the
     /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
@@ -2370,6 +2437,8 @@ impl Session {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });
                 self.announce_fleets(chance);
+                self.answer_comm_calls(chance);
+                self.answer_pirates(&mut &mut *chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2377,6 +2446,7 @@ impl Session {
                 self.observe_watched();
             }
         }
+        self.tick_reinforcements(chance);
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
@@ -2407,7 +2477,7 @@ impl Session {
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
     /// world, the escorts' tons, the led ships' speed factor, the damage
-    /// the fight's shots aim and the gates' widths. The tick
+    /// the fight's shots aim, the gates' widths and asteroid slot 0. The tick
     /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
     /// ([`Session::gate_exit_pass`]) and double time's second pass (see
     /// the `double_time` module) step the traffic in it.
@@ -2441,7 +2511,17 @@ impl Session {
             type_widths: &type_widths,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
+            mining_rock: self.asteroids.get(0).copied(),
+            reinforcements: self.reinforcements_coming(),
+            iff_marked: &self.iff_marked,
+            stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
+            independent_kin: self.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.disable_rule.0,
+            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         };
         f(&mut self.traffic, world);
     }
@@ -2471,7 +2551,7 @@ impl Session {
                 .random_string(list, &mut &mut *chance)
                 .unwrap_or_default();
             let text = crate::traffic::quote::fill_digits(&line, chance);
-            self.messages.push(SimMessage::FleetArrivalQuote(text));
+            self.say(SimMessage::FleetArrivalQuote(text));
             self.sounds.push(SimSound::FleetArrivalQuote);
         }
     }
@@ -2480,7 +2560,8 @@ impl Session {
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges. No damage is aimed in it, and no
+    /// pilot's persons gone and grudges, and asteroid slot 0. No damage is
+    /// aimed in it, and no
     /// gate's width is known: only the traffic's tick fires and flies, and
     /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
@@ -2506,24 +2587,48 @@ impl Session {
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
+            snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
+            mining_rock: self.asteroids.get(0).copied(),
+            reinforcements: self.reinforcements_coming(),
+            iff_marked: &self.iff_marked,
+            stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
+            independent_kin: self.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.disable_rule.0,
+            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         }
     }
 
-    /// The player's ship as an NPC sees it.
+    /// The player's ship as an NPC sees it: its class a freighter, as
+    /// [`EscortClass::of`] works out a ship of no record, without a
+    /// record of its ship type.
     fn player_side(&self) -> PlayerSide {
+        let record = self.ship_record(self.pilot.ship);
         PlayerSide {
             state: self.player,
             condition: self.condition,
             reserves: self.pilot.reserves,
-            hull: self.hull,
+            // Its class's `Crew`, which a pirate's plunder tests read
+            // (`_AIFindShipToPlunder` @0x7fe04, `_PirateWarshipAI` @0x8c667).
+            hull: HullSpec {
+                crew: record.map_or(0, |record| record.crew),
+                ..self.hull
+            },
             handling: self.stats.handling,
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
-            untargetable: self
-                .ship_record(self.pilot.ship)
+            untargetable: record
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
             blessing: self.blessing(),
+            ship: self.pilot.ship,
+            combat_govt: record.and_then(|record| record.combat_govt),
+            target: self.target.map(ShipRef::Npc),
+            class: record.map_or(EscortClass::Freighter, |record| {
+                EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
+            }),
+            boarded: self.player_boarded,
         }
     }
 
@@ -2718,6 +2823,7 @@ impl Session {
             cloaked: false,
             attacking: None,
             threatens_player: false,
+            plundering: false,
             emerging: false,
             cloak_scanner: scanner.on_screen,
             has_cloak: false,
@@ -2731,6 +2837,7 @@ impl Session {
             armament: &mut self.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
+            docked: false,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -2747,30 +2854,19 @@ impl Session {
             },
             chance,
         );
-        self.traffic.after_firing();
+        self.traffic.after_firing(&self.arsenal);
+        self.traffic.keep_berth_exits();
         // The lines are `_DamageShip`'s, said as each hit lands, so before
         // the eject below can take the player into a new ship.
         let strikes = self.combat.take_strikes();
         self.player_downed(player_was, &strikes, &mut &mut *chance);
         self.take_shoves();
         self.eject_on_breakup(pass, &mut &mut *chance);
-        let exploded = !was_destroyed && self.condition == Condition::Destroyed;
-        if exploded {
-            // Set only, never cleared here: double time's second pass
-            // keeps an explosion the advance pass saw (see
-            // `player_exploded_this_tick`).
-            self.player_exploded_this_tick = true;
-            self.player_end = Some(Ending::Holding {
-                ticks_left: HOLD_TICKS,
-            });
-        }
-        self.sound_the_klaxon(was_dying, exploded);
-        if exploded {
-            self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
-        }
+        self.settle_player_explosion(was_destroyed, was_dying);
         self.raise_disabled(&was, &mut &mut *chance);
-        self.settle_strikes(strikes, &was, rules.law);
-        self.launch_sorties();
+        self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
+        let sorties = self.combat.take_sorties();
+        self.launch_fighters(&sorties, &mut &mut *chance);
         self.npc_escapes(&was, &mut &mut *chance);
         self.sync_fleet();
         self.lose_escorts();
@@ -2797,6 +2893,28 @@ impl Session {
                     .map(|npc| (ShipRef::Npc(npc.id), npc.state.heading)),
             )
             .collect();
+    }
+
+    /// The fight's end for the player, its ship destroyed before it as
+    /// `was_destroyed` says and dying as `was_dying` says: an explosion
+    /// this tick holds the game's end; the klaxon sounds
+    /// ([`Session::sound_the_klaxon`]); and an explosion halts
+    /// [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS).
+    fn settle_player_explosion(&mut self, was_destroyed: bool, was_dying: bool) {
+        let exploded = !was_destroyed && self.condition == Condition::Destroyed;
+        if exploded {
+            // Set only, never cleared here: double time's second pass
+            // keeps an explosion the advance pass saw (see
+            // `player_exploded_this_tick`).
+            self.player_exploded_this_tick = true;
+            self.player_end = Some(Ending::Holding {
+                ticks_left: HOLD_TICKS,
+            });
+        }
+        self.sound_the_klaxon(was_dying, exploded);
+        if exploded {
+            self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        }
     }
 
     /// Raises [`SimSound::Klaxon`] while the player's ship breaks up, as
@@ -2882,8 +3000,9 @@ impl Session {
     /// order, that the ship does not carry: whether it is held disabled
     /// ([`Session::mission_ship_held`]; the player never is), its class
     /// and top speeds, which every push is capped against, the heading it
-    /// was last drawn at, its own for a ship new to the fight, and how
-    /// strongly it jams.
+    /// was last drawn at, its own for a ship new to the fight, how
+    /// strongly it jams, and whether it threatens the player, as
+    /// `_ExtendedIsThreatToPlayer` asks it, with the player's sight of it.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
         let player = FightTerms {
@@ -2901,7 +3020,8 @@ impl Session {
             .iter()
             .map(|npc| FightTerms {
                 held_disabled: self.mission_ship_held(npc),
-                threatens_player: npc.threatens_player_among(self.traffic.npcs()),
+                threatens_player: npc
+                    .threatens_player_extended(self.traffic.npcs(), self.sees(npc)),
                 class_speed: self.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
@@ -2937,10 +3057,19 @@ impl Session {
     }
 
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
-    /// before it: refilling the invincible, holding persons' grudges,
-    /// convicting the player by `law`, crediting kills and letting each
-    /// hit NPC's cloak take its hit; then keeps them for the app.
-    fn settle_strikes(&mut self, mut strikes: Vec<Strike>, was: &[NpcBefore], law: &dyn LegalCode) {
+    /// before it: weighing whether each is answered, rolling on `chance`
+    /// (see the `answer_flag` module), refilling the invincible, holding
+    /// persons' grudges, convicting the player by `law`, crediting kills
+    /// and letting each hit NPC's cloak take its hit; then keeps them for
+    /// the app.
+    fn settle_strikes(
+        &mut self,
+        mut strikes: Vec<Strike>,
+        was: &[NpcBefore],
+        law: &dyn LegalCode,
+        chance: &mut dyn Chance,
+    ) {
+        self.weigh_strikes(&mut strikes, chance);
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, was, law);
@@ -3333,11 +3462,11 @@ impl Session {
     /// no route the course is cleared, and the nav selection let go with
     /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
     ///
-    /// The original selects at the click only a system the current one
-    /// lists (@0x137b3-0x137bb), and cues a longer route as its map closes
-    /// (@0x13c16); here the cue comes at the click. The map covers the
-    /// whole screen and hides the HUD, so the difference crosses no
-    /// boundary the player sees.
+    /// This is a click on the course map by [`RuleKey::MapPlotting`]'s
+    /// other reading ([`Session::map_click`]), and a helper for tests and
+    /// tools. The original has no planner: its click selects only a system
+    /// the current one lists (@0x137b3-0x137bb), a Shift-click adds a hop
+    /// at a time, and the course is cued as the map closes (@0x13c16).
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
         match self
             .galaxy
@@ -4099,7 +4228,7 @@ impl Session {
         let entered = exit.map(|(system, exit)| {
             self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
-            self.messages.push(SimMessage::ExitedHypergate(system));
+            self.say(SimMessage::ExitedHypergate(system));
             system
         });
         self.set_nav(NavMode::Off);
@@ -4165,7 +4294,7 @@ impl Session {
         let (site, system) = (*exit.site, exit.system);
         self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
-        self.messages.push(SimMessage::PassedWormhole(system));
+        self.say(SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
@@ -4236,6 +4365,7 @@ impl Session {
         // `_PlayerLandOnStellar` @0x63409.
         self.player_speed = 0.0;
         self.landed = Some(stellar);
+        self.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
         self.warp_ups.clear();
@@ -4357,7 +4487,7 @@ impl Session {
     pub(super) fn greet(&mut self, stellar: StellarId, chance: &mut (impl Chance + ?Sized)) {
         if self.tutorial.take_off() {
             let lead = chance.roll(5);
-            self.messages.push(SimMessage::TookOff { stellar, lead });
+            self.say(SimMessage::TookOff { stellar, lead });
         }
     }
 
@@ -4400,9 +4530,10 @@ impl Session {
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
         }
-        // With its place's head, by the engine (`_PlayerLandOnStellar`
-        // @0x63457-0x634a7; see the `explored` module).
-        self.explore_place(self.pilot.system);
+        // At level 2, with its place's head, by the engine
+        // (`_PlayerLandOnStellar` @0x6346d-0x6349e, `_AutoSetExploration`
+        // @0x634b1-0x634c8; see the `explored` module).
+        self.explore_place(self.pilot.system, ExploredLevel::Charted);
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
@@ -5978,8 +6109,6 @@ impl Session {
             return;
         };
         npc.trigger = Trigger::default();
-        // `_DoShipCapture` clears the captured ship's pick (@0x41207).
-        npc.pick = None;
         npc.provoked = 0.0;
         let record = Escort {
             ship: npc.ship,
@@ -5989,6 +6118,9 @@ impl Session {
             wage: None,
             person,
         };
+        // `_DoShipCapture` clears the captured ship's pick (@0x41207), and
+        // so its slot's.
+        self.traffic.clear_pick(id);
         self.drop_quarry(id);
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(id) {
@@ -6227,6 +6359,9 @@ impl Session {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         }];
         self.target = Some(npc);
         self.aboard = Some(Aboard {
@@ -16025,6 +16160,8 @@ pub(super) mod tests {
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
+        // Aimed at it: a stray hit the answer flag forgives.
+        session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         for _ in 0..60 {
             session.tick_combat(Rules::default(), &mut NeverFires);
@@ -16102,10 +16239,14 @@ pub(super) mod tests {
         });
     }
 
-    /// The fight's ticks with the trigger held until NPC 0's shield drops.
+    /// The fight's ticks with the trigger held until NPC 0's shield drops,
+    /// each fired with NPC 0 the player's target (again, should a cloak or
+    /// a gate have let it go), so the hit is no stray one, which the
+    /// answer flag forgives (see the `answer_flag` module).
     fn shoot_until_hit(session: &mut Session) {
         session.hold_trigger(FIRE);
         for _ in 0..60 {
+            session.target = Some(NpcId(0));
             session.tick_combat(Rules::default(), &mut NeverFires);
             if session.npcs()[0].reserves.shield.now < 30.0 {
                 return;
@@ -16421,9 +16562,9 @@ pub(super) mod tests {
             ship: ShipRef::Player,
             weapon: WeaponId(128),
             at: Vec2::ZERO,
-            sound: Some(crate::combat::FireSound {
-                priority: Some(crate::combat::PLAYER_FIRE_PRIORITY),
-            }),
+            sound: Some(crate::combat::FireSound::at(
+                crate::combat::PLAYER_FIRE_PRIORITY
+            )),
         }));
         assert_eq!(session.npcs().len(), 1, "disabled, and still alive");
         for _ in 0..60 {
@@ -16480,7 +16621,9 @@ pub(super) mod tests {
             ship: ShipRef::Npc(NpcId(0)),
             weapon: WeaponId(128),
             at: Vec2::new(0.0, -100.0),
-            sound: Some(crate::combat::FireSound::UNPORTED),
+            sound: Some(crate::combat::FireSound::at(
+                crate::combat::AI_FIRE_PRIORITY
+            )),
         }));
         assert!(
             session.reserves().shield.now < 30.0,
@@ -16776,6 +16919,17 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_rulebook_says_whether_a_bombs_heading_is_wrapped() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut wrapped = Combat::default();
+        wrapped.set_bomb_heading_wrap(RuleSource::Bible);
+        assert_ne!(wrapped, Combat::default());
+        let other = Rulebook::default().with_override(RuleKey::BombHeadingWrap, RuleSource::Bible);
+        assert_eq!(session(other).combat, wrapped);
+    }
+
+    #[test]
     fn the_rulebook_says_how_beams_hit() {
         let catalog = armed();
         let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
@@ -16900,6 +17054,50 @@ pub(super) mod tests {
             assert!(
                 (heading - expected).abs() < 1e-4,
                 "{flags:#x} {ai_type:?} {source:?}: {heading}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_players_missile_reads_its_npc_targets_class_default_jammers_by_either_reading() {
+        // InhJam 57 plus two counted slots of +30; the zero-count slot is skipped.
+        // A roll r is jammed iff the jamming is at least 101 - r.
+        for (flags, ai_type, source, roll, jammed) in [
+            (0, AiType::Warship, RuleSource::Engine, 1, true),
+            (HALF_JAMMING, AiType::Warship, RuleSource::Engine, 43, true),
+            (HALF_JAMMING, AiType::Warship, RuleSource::Engine, 42, false),
+            (
+                HALF_JAMMING,
+                AiType::WimpyTrader,
+                RuleSource::Bible,
+                13,
+                true,
+            ),
+            (
+                HALF_JAMMING,
+                AiType::WimpyTrader,
+                RuleSource::Bible,
+                12,
+                false,
+            ),
+        ] {
+            let mut catalog = jamming_catalog(jammable(0), blaster(), flags);
+            catalog.ship_records[0].defaults =
+                vec![(OutfitId(240), 1), (OutfitId(240), 1), (OutfitId(240), 0)];
+            let rules = Rulebook::default().with_override(RuleKey::JamHalving, source);
+            let mut session = beside_an_npc(&catalog, ai_type).with_rules(rules);
+            session.target = Some(NpcId(0));
+            session.hold_trigger(FIRE);
+            let heading = missile_after(
+                &mut session,
+                16,
+                Rules::default(),
+                &mut Ranged::of(&[(101, roll)]),
+            );
+            let expected = if jammed { 0.0 } else { 7.0 };
+            assert!(
+                (heading - expected).abs() < 1e-4,
+                "{flags:#x} {ai_type:?} {source:?} {roll}: {heading}"
             );
         }
     }
@@ -17184,6 +17382,8 @@ pub(super) mod tests {
     fn npcs_answer_the_fights_strikes_on_the_next_traffic_tick_once() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
+        // Aimed at it: a stray hit the answer flag forgives.
+        session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         let spy = Spy::default();
         let mut hits = 0;
@@ -17855,6 +18055,9 @@ pub(super) mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
         let by_the_police = session.pilot().combat_rating();
@@ -17876,14 +18079,17 @@ pub(super) mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        session.launch_fighters(&[crate::combat::Sortie {
-            carrier: ShipRef::Player,
-            bay: WeaponId(149),
-            ship: ShipId(130),
-            from: *session.player(),
-            heading: 0.0,
-            target: None,
-        }]);
+        session.launch_fighters(
+            &[crate::combat::Sortie {
+                carrier: ShipRef::Player,
+                bay: WeaponId(149),
+                ship: ShipId(130),
+                from: *session.player(),
+                heading: 0.0,
+                target: None,
+            }],
+            &mut crate::chance::NeverFires,
+        );
         let fighter = session
             .npcs()
             .iter()
@@ -17905,6 +18111,9 @@ pub(super) mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
             }],
             &was,
         );
@@ -17934,6 +18143,9 @@ pub(super) mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.credit_kills(
             &[
@@ -18050,7 +18262,7 @@ pub(super) mod tests {
 
     /// A cloak and fuel: a ship of it can cloak, and none of its AI-cloak
     /// conditions fire.
-    const CAN_CLOAK: crate::cloak::CloakGear = crate::cloak::CloakGear {
+    pub(super) const CAN_CLOAK: crate::cloak::CloakGear = crate::cloak::CloakGear {
         device: true,
         decloaks_when_hit: false,
         on_radar: false,
@@ -18425,6 +18637,9 @@ pub(super) mod tests {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
             ..CAN_CLOAK
         };
+        // Aimed at it: a stray hit the answer flag forgives, cloaking
+        // nothing.
+        session.target = Some(NpcId(0));
         session.hold_trigger(FIRE);
         let shield = session.npcs()[0].reserves.shield.now;
         for _ in 0..20 {
@@ -18442,6 +18657,7 @@ pub(super) mod tests {
             ..CAN_CLOAK
         };
         npc.goal = Goal::Attack(ShipRef::Player);
+        fighting.target = Some(NpcId(0));
         fighting.hold_trigger(FIRE);
         for _ in 0..20 {
             fighting.tick_combat(Rules::default(), &mut NeverFires);
@@ -18485,6 +18701,9 @@ pub(super) mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
@@ -18523,6 +18742,9 @@ pub(super) mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
             };
             session.credit_kills(&[by_none], &was);
             session.punish(&[by_none], &was, &witness);
@@ -18544,6 +18766,9 @@ pub(super) mod tests {
             direct: false,
             intended: false,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: false,
         };
         session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
             flags2: crate::cloak::CLOAK_WHEN_HIT,
@@ -21538,7 +21763,7 @@ pub(super) mod tests {
     /// Every NPC attacks the player, firing as Nova's AI picks
     /// ([`crate::ai::fire::trigger`]).
     #[derive(Debug)]
-    struct Missileer;
+    pub(super) struct Missileer;
 
     impl Behaviour for Missileer {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -21608,7 +21833,7 @@ pub(super) mod tests {
     /// a secondary missile (134) aiming 79 at the player, which 30 shield
     /// and 45 armour make enough (1.05 x 75 = 78.75), flying 1 pixel a
     /// tick so the first stays in flight.
-    fn kept_missile_catalog() -> FakePilotCatalog {
+    pub(super) fn kept_missile_catalog() -> FakePilotCatalog {
         let missile = WeaponRecord {
             speed: 100,
             count: 400,
@@ -21638,7 +21863,7 @@ pub(super) mod tests {
 
     /// How many of `session`'s combat events are its NPC firing the
     /// missile (134).
-    fn missiles_fired(session: &mut Session) -> usize {
+    pub(super) fn missiles_fired(session: &mut Session) -> usize {
         session
             .take_combat_events()
             .iter()
@@ -21848,7 +22073,9 @@ pub(super) mod tests {
                 ship: ShipRef::Npc(NpcId(0)),
                 weapon: WeaponId(134),
                 at: Vec2::new(0.0, -200.0),
-                sound: Some(crate::combat::FireSound::UNPORTED),
+                sound: Some(crate::combat::FireSound::at(
+                    crate::combat::AI_FIRE_PRIORITY
+                )),
             }),
             "{events:?}"
         );
@@ -22005,6 +22232,119 @@ pub(super) mod tests {
         );
     }
 
+    /// A session whose NPC 0 defends with weapon 133 against a player of
+    /// `Flags2` 0x0008, has taken `goal` and is then changed by `setup`
+    /// before the fight.
+    fn defending_session(goal: Goal, setup: fn(&mut Session)) -> Session {
+        let mut catalog = arming(blaster(), quad_133(), 0);
+        catalog.hulls[0].flags2 = 0x0088;
+        catalog.outfits.push(outfit(
+            260,
+            &[(crate::cloak::MOD_SCANNER, crate::cloak::SCAN_SCREEN)],
+        ));
+        let mut session = with_an_npc_at(&catalog, 750, 650, 180);
+        session.tick_traffic(&catalog, &Defending { goal }, &mut NeverFires);
+        setup(&mut session);
+        session
+    }
+
+    #[test]
+    fn an_npcs_point_defence_asks_the_whole_extended_threat_to_the_player() {
+        // `_ExtendedIsThreatToPlayer` (@0x81b70-0x81de5), clause by clause.
+        let fires = |goal: Goal, setup: fn(&mut Session)| {
+            let mut session = defending_session(goal, setup);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            quad_fired(&session.take_combat_events(), ShipRef::Npc(NpcId(0)))
+        };
+        let player = ShipRef::Player;
+        // The hit's target (@0x81be1).
+        assert!(
+            fires(Goal::Idle, |s| s.traffic.npcs_mut()[0].target =
+                Some(ShipRef::Player)),
+            "its target is the player"
+        );
+        // The wait (@0x81bed): point defence still fires in a wait, so only
+        // the threat stops it.
+        assert!(
+            !fires(Goal::Idle, |s| {
+                let npc = &mut s.traffic.npcs_mut()[0];
+                npc.target = Some(ShipRef::Player);
+                npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30 };
+            }),
+            "its target is the player, but its wait runs"
+        );
+        // A goal that spares the player (@0x81bf3-0x81c28).
+        assert!(
+            !fires(Goal::Inspect(player), |s| s.traffic.npcs_mut()[0].target =
+                Some(ShipRef::Player)),
+            "its target is the player, but it inspects"
+        );
+        // The escort clause (@0x81cdd-0x81dcc).
+        assert!(
+            fires(Goal::Idle, |s| {
+                s.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(NpcId(9)));
+                let wing = Npc {
+                    leader: Some(NpcId(0)),
+                    goal: Goal::Attack(ShipRef::Player),
+                    target: None,
+                    ..s.traffic.npcs()[0].clone()
+                };
+                s.traffic.add_npc(wing);
+            }),
+            "its escort attacks the player"
+        );
+        assert!(
+            !fires(Goal::Idle, |s| {
+                s.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(NpcId(9)));
+            }),
+            "it targets an NPC, with no escort"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_npc_unseen_by_the_player_is_no_extended_threat_to_it() {
+        // Unseen by the player (@0x81bc6). Point defence can't show it: a
+        // cloaked NPC's point defence holds fire even when the player's
+        // scanner sees it, so read the term.
+        let threat = |setup: fn(&mut Session)| {
+            defending_session(Goal::Attack(ShipRef::Player), setup)
+                .fight_terms()
+                .1[0]
+                .threatens_player
+        };
+        assert!(
+            !threat(|s| s.traffic.npcs_mut()[0].cloak = CLOAKED),
+            "cloaked, unseen"
+        );
+        assert!(
+            threat(|s| {
+                s.traffic.npcs_mut()[0].cloak = CLOAKED;
+                s.pilot.outfits.insert(OutfitId(260), 1);
+            }),
+            "cloaked, seen by the player's scanner"
+        );
+    }
+
+    #[test]
+    fn an_escort_of_the_player_is_no_extended_threat_to_it() {
+        // Led by the player (@0x81b9f). Point defence can't show it:
+        // `FightTerms::fighter` makes the player the escort's leader and
+        // `defence::choose_ship` never picks the guard's leader, so a player
+        // escort holds fire at the player under either reading. Read the term.
+        let threat = |escort: bool| {
+            let mut session = defending_session(Goal::Attack(ShipRef::Player), |_| {});
+            if escort {
+                session.traffic.npcs_mut()[0].escort = Some(EscortDuty {
+                    formation: FormationSlot::default(),
+                    order: None,
+                });
+            }
+            session.fight_terms().1[0].threatens_player
+        };
+        assert!(threat(false), "unled");
+        assert!(!threat(true), "the player's escort");
+    }
+
     #[test]
     fn the_players_point_defence_sees_a_cloaked_attacker_only_by_its_scanner_and_none_in_its_gate()
     {
@@ -22054,20 +22394,50 @@ pub(super) mod tests {
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;
-        for (goal, attacking) in [
-            (Goal::Attack(player), Some(player)),
-            (Goal::Snipe(player), Some(player)),
-            (Goal::Flee(player), None),
-            (Goal::Inspect(player), None),
-            (Goal::Idle, None),
+        let plunder = |hopeless| Goal::Plunder {
+            ship: player,
+            hopeless,
+        };
+        for (goal, attacking, plundering) in [
+            (Goal::Attack(player), Some(player), false),
+            (Goal::Snipe(player), Some(player), false),
+            (Goal::Flee(player), None, false),
+            (Goal::Inspect(player), None, false),
+            (Goal::Idle, None, false),
+            (plunder(false), None, true),
+            (plunder(true), None, true),
+            (Goal::CountWait { ticks_left: 3 }, None, false),
         ] {
             npc.goal = goal;
+            let fighter = terms(false).fighter(&mut npc);
             assert_eq!(
-                terms(false).fighter(&mut npc).attacking,
-                attacking,
-                "{goal:?}"
+                (fighter.attacking, fighter.plundering),
+                (attacking, plundering),
+                "{goal:?}: point defence reads goal 4 alone"
             );
         }
+        npc.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: player,
+            sub: crate::traffic::plunder_dock::DockSub::Dock,
+        });
+        for (goal, docked) in [
+            (Goal::Attack(player), true),
+            (Goal::Snipe(player), true),
+            (plunder(false), false),
+            (Goal::Idle, false),
+        ] {
+            npc.goal = goal;
+            let fighter = terms(false).fighter(&mut npc);
+            assert_eq!(fighter.docked, docked, "{goal:?}: goal 4 with sub 0xf");
+        }
+        npc.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: player,
+            sub: crate::traffic::plunder_dock::DockSub::Close,
+        });
+        npc.goal = Goal::Attack(player);
+        assert!(!terms(false).fighter(&mut npc).docked, "sub 0xb");
+        npc.docking = None;
+        npc.goal = Goal::Idle;
         assert!(terms(true).fighter(&mut npc).threatens_player);
         assert!(!terms(false).fighter(&mut npc).threatens_player);
         let fighter = terms(false).fighter(&mut npc);
@@ -22438,6 +22808,8 @@ pub(super) mod tests {
                 .find(|npc| npc.id == id)
                 .map(|npc| npc.goal)
         };
+        // Aimed at the trader: a stray hit the answer flag forgives.
+        session.target = Some(trader);
         session.hold_trigger(FIRE);
         let mut fled = false;
         let mut picked_while_fleeing = None;
@@ -23078,6 +23450,9 @@ pub(super) mod tests {
                 direct: true,
                 intended: true,
                 lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
             }]
         );
         session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);

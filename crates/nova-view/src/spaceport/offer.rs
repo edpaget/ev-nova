@@ -56,6 +56,11 @@
 //! covered and leaves its movie the last loaded again: the spaceport asks
 //! for that reload as the screen closes
 //! ([`SpaceportView::take_offer_reload`](super::SpaceportView::take_offer_reload)).
+//! M ([`MAP_KEY`](crate::flight::view::MAP_KEY), a press, never a
+//! repeat), the filter's first check (@0x98dab-0x98dd3), asks for the
+//! course map before anything else ([`OfferDialog::take_map_request`]),
+//! marked with the offer's destination; the dialog stays open under it,
+//! and nothing sounds.
 //!
 //! The answer hides the dialog only for an accept from the dialog with a
 //! refuse button (@0xa2df3) or a refusal that showed a `RefuseText`
@@ -93,6 +98,7 @@ use nova_sim::{MissionId, OfferPrompt, RuleSource};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -183,6 +189,19 @@ pub enum OfferChoice {
     Refuse,
 }
 
+/// What the offer dialog's keys asked for, each until it is taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct OfferAsks {
+    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY): the
+    /// player info screen.
+    player_info: bool,
+    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY):
+    /// the mission info screen.
+    mission_info: bool,
+    /// [`MAP_KEY`](crate::flight::view::MAP_KEY): the map.
+    map: bool,
+}
+
 /// The offer dialog over the screen that offers it.
 #[derive(Clone, Debug)]
 pub struct OfferDialog {
@@ -192,11 +211,8 @@ pub struct OfferDialog {
     /// The choice made, until it is taken.
     choice: Option<OfferChoice>,
     answered: bool,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
-    player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
-    /// asked for the mission info screen.
-    info_requested: bool,
+    /// What its keys asked for, until each is taken.
+    asks: OfferAsks,
     /// The picture variant's graphic, drawn in item 8 over
     /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
     picture: Option<i16>,
@@ -266,8 +282,7 @@ impl OfferDialog {
             prompt,
             choice: None,
             answered: false,
-            player_info: false,
-            info_requested: false,
+            asks: OfferAsks::default(),
             picture,
             before: None,
         }
@@ -322,13 +337,22 @@ impl OfferDialog {
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
     /// this was last taken, once.
     pub fn take_player_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.player_info)
+        std::mem::take(&mut self.asks.player_info)
     }
 
     /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// asked for the mission info screen since this was last taken, once.
     pub fn take_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.info_requested)
+        std::mem::take(&mut self.asks.mission_info)
+    }
+
+    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for the
+    /// map since this was last taken, once: `_SingleMissionFilter`'s first
+    /// check gives item 4 (@0x98dab-0x98dd3), and `_OfferOneMission` opens
+    /// the course map over the dialog (@0xa2ffe-0xa3119; see
+    /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)).
+    pub fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.map)
     }
 
     /// The dialog, if it could be laid out.
@@ -397,12 +421,16 @@ impl OfferDialog {
         if self.answered {
             return;
         }
+        if is_map_press(input) {
+            self.asks.map = true;
+            return;
+        }
         if is_player_info_press(input) {
-            self.player_info = true;
+            self.asks.player_info = true;
             return;
         }
         if is_mission_info_press(input) {
-            self.info_requested = true;
+            self.asks.mission_info = true;
             return;
         }
         if let Input::Key {
@@ -620,6 +648,13 @@ impl VenueOffers {
         self.dialog
             .as_mut()
             .is_some_and(OfferDialog::take_info_request)
+    }
+
+    /// The mission of the offer dialog open, when it asked for the map
+    /// since this was last taken, once.
+    pub(crate) fn take_map_request(&mut self) -> Option<MissionId> {
+        let dialog = self.dialog.as_mut()?;
+        dialog.take_map_request().then_some(dialog.prompt().mission)
     }
 
     /// The offer answered since this was last taken, and the choice made,
@@ -1625,6 +1660,57 @@ mod tests {
         assert!(offers.take_info_request());
         assert!(!offers.take_info_request(), "once");
         assert!(offers.dialog().is_some(), "still open");
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_before_the_labels_letters_on_a_press() {
+        let m = crate::flight::view::MAP_KEY;
+        let mut dialog = dialog_of(prompt("Move it", Some("No thanks")));
+        for (input, what) in [
+            (
+                Input::Key {
+                    key: m,
+                    pressed: true,
+                    repeat: true,
+                },
+                "a repeat",
+            ),
+            (
+                Input::Key {
+                    key: m,
+                    pressed: false,
+                    repeat: false,
+                },
+                "a release",
+            ),
+        ] {
+            dialog.input(&input);
+            assert!(!dialog.take_map_request(), "{what}");
+        }
+        dialog.input(&key(m));
+        assert!(dialog.take_map_request());
+        assert!(!dialog.take_map_request(), "once");
+        assert_eq!(dialog.take_choice(), None, "not Move it's letter");
+        assert!(!dialog.answered());
+        assert_eq!(dialog.take_sounds(), [], "silent");
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        assert_eq!(offers.take_map_request(), None, "nothing open");
+        opened(&mut offers);
+        let mut sounds = Vec::new();
+        offers.input(&key(m), &mut sounds);
+        assert_eq!(offers.take_map_request(), Some(MissionId(141)));
+        assert_eq!(offers.take_map_request(), None, "once");
+        assert!(offers.dialog().is_some(), "still open under the map");
+        assert_eq!(sounds, []);
+    }
+
+    #[test]
+    fn an_answered_offer_asks_for_no_map() {
+        let mut dialog = offer();
+        dialog.input(&key(Key::Enter));
+        assert!(dialog.answered());
+        dialog.input(&key(crate::flight::view::MAP_KEY));
+        assert!(!dialog.take_map_request());
     }
 
     fn film(flags: u16) -> Option<DescMovie> {

@@ -7,9 +7,11 @@ use nova_data::graphics::Image;
 
 use super::data::{padded_bytes_per_row, strip_padding};
 use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
+use super::upscale::{Native, Upscale};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
+use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// The offscreen target's format: plain RGBA8, not sRGB.
@@ -44,8 +46,19 @@ pub struct OffscreenGpu {
 
 impl OffscreenGpu {
     /// A `width` x `height` target on the default GPU adapter, drawing
-    /// text in `faces`.
+    /// text in `faces` and the world natively ([`Upscaler::Native`]).
     pub fn new(width: u32, height: u32, faces: &FontFaces) -> Result<Self, InitError> {
+        Self::with_upscale(width, height, faces, |_, _| Box::new(Native))
+    }
+
+    /// [`OffscreenGpu::new`], its world drawn with the upscaler `upscale`
+    /// makes on its device and queue: a stand-in, for tests.
+    pub(super) fn with_upscale(
+        width: u32,
+        height: u32,
+        faces: &FontFaces,
+        upscale: impl FnOnce(&wgpu::Device, &wgpu::Queue) -> Box<dyn Upscale>,
+    ) -> Result<Self, InitError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let (_adapter, device, queue) = acquire(&instance, None)?;
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -63,7 +76,8 @@ impl OffscreenGpu {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let renderer = WgpuRenderer::new(&device, &queue, FORMAT, faces);
+        let upscale = upscale(&device, &queue);
+        let renderer = WgpuRenderer::with_upscale(&device, &queue, FORMAT, faces, upscale);
         Ok(Self {
             device,
             queue,
@@ -154,8 +168,30 @@ impl Gpu for OffscreenGpu {
         self.renderer.upload(page, at, image);
     }
 
+    fn clear_pages(&mut self) {
+        self.renderer.clear_pages();
+    }
+
     fn submit(&mut self, frame: &Frame) {
         self.present(frame, None);
+    }
+
+    fn world_resolution(&self) -> WorldResolution {
+        self.renderer.world_resolution()
+    }
+
+    fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.renderer.set_upscaler(upscaler);
+    }
+
+    fn take_warnings(&mut self) -> Vec<String> {
+        self.renderer.take_warnings()
+    }
+}
+
+impl UpscalerProbe for OffscreenGpu {
+    fn upscalers(&self) -> Vec<Upscaler> {
+        self.renderer.upscalers()
     }
 }
 

@@ -44,7 +44,7 @@
 
 use super::Session;
 use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
-use crate::combat::{ShipRef, Strike};
+use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -82,6 +82,8 @@ impl Session {
     /// (`_DoGoodSamaritan`, called by `_HandlePlayerBoardAttempt` itself,
     /// with no aim to test), unless `npc` is a person with a
     /// `LinkMission`, whose boarding never calls it (see the module docs).
+    /// It never passes `_DamageShip`, so the answer flag never weighs it:
+    /// it is answered as it is.
     pub(super) fn call_good_samaritans(&mut self, npc: &Npc) {
         if !calls_good_samaritan(npc) {
             return;
@@ -94,6 +96,9 @@ impl Session {
             direct: true,
             intended: true,
             lock: false,
+            nominal: Nominal::default(),
+            weight: 0.0,
+            answered: true,
         });
     }
 
@@ -397,6 +402,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: Nominal::default(),
+            weight: 0.0,
+            answered: true,
         }
     }
 

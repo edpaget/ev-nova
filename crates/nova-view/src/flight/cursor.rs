@@ -188,6 +188,7 @@ mod tests {
 
     fn sheet() -> EffectSheet {
         EffectSheet {
+            frame_width: 0,
             image_id: 651,
             frames: NonZeroU16::new(4).expect("non-zero"),
         }
@@ -315,6 +316,7 @@ mod tests {
         frames(&mut cursor, true, 6);
         assert_eq!(cursor.frame(), 3);
         let two = Some(Ok(EffectSheet {
+            frame_width: 0,
             image_id: 651,
             frames: NonZeroU16::new(2).expect("non-zero"),
         }));

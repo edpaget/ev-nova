@@ -564,14 +564,17 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     let view = flight();
     let list = drawn(&view);
     let mut expected = DrawList::new();
-    starfield::draw(&mut expected, &view.camera());
-    scene::draw_stellars(
-        &mut expected,
-        view.scene().expect("a scene"),
-        &view.camera(),
-        Duration::ZERO,
-    );
-    expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
+    // The stars, the stellars and the ship are the world, the HUD over it.
+    expected.world(|expected| {
+        starfield::draw(expected, &view.camera());
+        scene::draw_stellars(
+            expected,
+            view.scene().expect("a scene"),
+            &view.camera(),
+            Duration::ZERO,
+        );
+        expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
+    });
     hud::draw(
         &mut expected,
         view.status_bar().expect("a status bar"),
@@ -601,9 +604,10 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
             disabled: false,
         },
         None,
+        VIEW_SIZE.0,
     );
     let bar = view.status_bar().expect("a status bar");
-    let origin = hud::bar_origin(bar);
+    let origin = hud::bar_origin(bar, VIEW_SIZE.0);
     target::draw_target_panel(&mut expected, &bar.layout, origin, None, None);
     target::draw_secondary(&mut expected, &bar.layout, origin, None, None);
     assert_eq!(list, expected);
@@ -1464,6 +1468,7 @@ fn the_bars_show_the_sessions_reserves() {
             disabled: false,
         },
         None,
+        VIEW_SIZE.0,
     );
     assert_eq!(lines(&drawn(&view)), lines(&expected));
 }
@@ -1481,7 +1486,7 @@ fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
     assert_eq!(player(&view), launched(THRUST, 5));
     let list = drawn(&view);
     let mut reason = DrawList::new();
-    hud::draw_unavailable(&mut reason, "no ïntf 128");
+    hud::draw_unavailable(&mut reason, "no ïntf 128", VIEW_SIZE.0);
     assert_eq!(list.iter().last(), reason.iter().next());
     assert_eq!(lines(&list), [], "no bars");
     assert_eq!(dots_on_radar(&list), [], "no radar");

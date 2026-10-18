@@ -2,14 +2,16 @@
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
+use nova_sim::text_tags::comma_number;
 use nova_sim::{
     Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, Good, HailRefusal, Help,
     JumpRefusal, LandingRefusal, OutfitId, Session, ShipId, SimMessage, StellarId, Taken,
 };
-use nova_sim::{MissionBoardLine, PayNote, TagNames, TutorialHint};
+use nova_sim::{MissionBoardLine, PayNote, RuleSource, TagNames, TutorialHint};
 
 use crate::Key;
 use crate::flight::escorts::NUMBER_WORDS;
+use crate::spaceport::credits::{TON, TONS};
 use crate::system::scene::SystemScene;
 use crate::ui::comm::grouped;
 
@@ -21,20 +23,20 @@ use super::{JUMP_KEY, LAND_KEY, MAP_KEY};
 /// times are recorded in rdm phase hud-fidelity/phase-6-message-line;
 /// those the engine does not raise yet are rdm phase
 /// hud-fidelity/phase-12-flight-messages-the-original-raises's. The
-/// session's own messages carry their time ([`SimMessage::ticks`]).
+/// session's own messages carry their time ([`SimMessage::ticks`]), as
+/// do the ships' comm notes and the hail quotes it raises
+/// ([`CommNote::ticks`](nova_sim::CommNote::ticks),
+/// [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)).
 ///
 /// [`MESSAGE_TICKS`], 240, is the original's common time: "No
 /// response." (`_HandlePlayerCommunication` @0x626c8), "You have no
-/// active missions." (`_HandlePlayer` @0x705a8), the ships' comm notes
-/// (`_HighLevelAIHandler` @0x8f6a1, `_LowLevelAIHandler` @0x86ef4),
-/// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
+/// active missions." (`_HandlePlayer` @0x705a8), the plunder dialog's
+/// lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
 /// [`REPELLED`]) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
-/// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
-pub const HAIL_QUOTE_TICKS: u16 = 420;
 /// A grant's message: 240 (0xf0, `_DoPlunderDialog` @0x9342c).
 pub const GRANT_TICKS: u16 = 240;
 /// A mission ship boarded on the assist path, refuelled, or its cargo
@@ -131,6 +133,67 @@ pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
 /// `STR#` 2002 #37: the disabled player's Repair Droids repaired it
 /// (`_HandlePlayer` @0x68bf0-0x68c3f).
 pub const PROPULSION_REPAIRED: &str = "Propulsion systems repaired.";
+/// `STR#` 2002 #168: a former escort a pirate took (`_AIPlunderShipContents`
+/// @0x8482c).
+pub const ESCORT: &str = "Escort";
+/// `STR#` 2002 #169: a former fighter a pirate took (@0x84822).
+pub const FIGHTER: &str = "Fighter";
+/// `STR#` 2002 #373: what a pirate stole (@0x84665).
+pub const CARGO: &str = "cargo";
+/// `STR#` 2002 #374: how a plunder's lines end (@0x84719, @0x848c9).
+pub const STOLEN: &str = "stolen!";
+/// `STR#` 2002 #391: between the tons and the cargo (@0x8463f).
+pub const OF: &str = "of";
+/// `STR#` 2002 #392: between the cargo and the credits (@0x84698).
+pub const AND: &str = "and";
+
+/// What the message line says as a pirate steals `tons` of cargo and
+/// `credits`, as `_AIPlunderShipContents` builds it (@0x84593-0x84731):
+/// the tons, "ton" at exactly 1 and "tons" otherwise, "of cargo", then
+/// with credits too "and", the credits, "credit" at 1 and "credits"
+/// otherwise, then "stolen!"; each number as `_StrcatCommaNumber` writes
+/// it, from a million as `millions` reads
+/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)).
+#[must_use]
+pub fn cargo_stolen_message(tons: u32, credits: i64, millions: RuleSource) -> String {
+    let mut words = Vec::new();
+    if tons > 0 {
+        let unit = if tons == 1 { TON } else { TONS };
+        words.extend([comma_number(i64::from(tons), millions), unit.to_owned()]);
+        words.extend([OF, CARGO].map(str::to_owned));
+        if credits > 0 {
+            words.push(AND.to_owned());
+        }
+    }
+    if credits > 0 {
+        let unit = if credits > 1 { "credits" } else { "credit" };
+        words.extend([comma_number(credits, millions), unit.to_owned()]);
+    }
+    words.push(STOLEN.to_owned());
+    words.join(" ")
+}
+
+/// What the message line says of a plunder's `message`, the numbers'
+/// millions as `session`'s rules read them; none for any other message.
+fn stolen_text(message: &SimMessage, session: &Session) -> Option<String> {
+    let millions = session.rules().source_for(nova_sim::RuleKey::PayMillions);
+    match message {
+        SimMessage::CargoStolen { tons, credits } => {
+            Some(cargo_stolen_message(*tons, *credits, millions))
+        }
+        SimMessage::ShipStolen { fighter } => Some(ship_stolen_message(*fighter)),
+        _ => None,
+    }
+}
+
+/// What the message line says as a pirate takes a former escort, or one
+/// the player leads, into its fleet (@0x84815-0x848dc): "Escort stolen!",
+/// or "Fighter stolen!" for a former fighter.
+#[must_use]
+pub fn ship_stolen_message(fighter: bool) -> String {
+    let ship = if fighter { FIGHTER } else { ESCORT };
+    format!("{ship} {STOLEN}")
+}
 /// `STR#` 2002 #52: the player ejected into an escape ship, whose long
 /// name follows (`_HandlePlayer` @0x6f595-0x6f5a8).
 pub const ESCAPING_IN: &str = "Escaping in";
@@ -288,7 +351,13 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
         SimMessage::PropulsionRepaired => PROPULSION_REPAIRED,
-        SimMessage::FleetArrivalQuote(text) => return Some(text.clone()),
+        SimMessage::CargoStolen { .. } | SimMessage::ShipStolen { .. } => {
+            return stolen_text(message, session);
+        }
+        SimMessage::FleetArrivalQuote(text)
+        | SimMessage::CallForHelp(text)
+        | SimMessage::ScanHail(text)
+        | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
         SimMessage::EscapingIn { ship } => {
             // "Escaping in", a space, the long name and a full stop
@@ -641,7 +710,12 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
         | SimMessage::PropulsionRepaired
+        | SimMessage::CargoStolen { .. }
+        | SimMessage::ShipStolen { .. }
         | SimMessage::FleetArrivalQuote(_)
+        | SimMessage::CallForHelp(_)
+        | SimMessage::ScanHail(_)
+        | SimMessage::ReinforcementsApproaching(_)
         | SimMessage::JumpCollapsed
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
@@ -1148,6 +1222,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_plunders_cargo_line_reads_as_the_original() {
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            cargo_stolen_message(12, 0, engine),
+            "12 tons of cargo stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(1, 1, engine),
+            "1 ton of cargo and 1 credit stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(0, 1500, engine),
+            "1,500 credits stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(2, 1_234_567, engine),
+            "2 tons of cargo and 1.23M credits stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(0, 1_234_567, RuleSource::Bible),
+            "1,234,567 credits stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(1200, 0, engine),
+            "1,200 tons of cargo stolen!"
+        );
+    }
+
+    #[test]
+    fn a_stolen_ships_line_names_an_escort_or_a_fighter() {
+        assert_eq!(ship_stolen_message(false), "Escort stolen!");
+        assert_eq!(ship_stolen_message(true), "Fighter stolen!");
+    }
+
+    #[test]
     fn every_pick_of_the_request_line_reads_as_the_original() {
         let line = |kind, opening, named| {
             request_line(kind, "Earth", "Kestrel", RequestPicks { opening, named })
@@ -1392,7 +1501,6 @@ mod tests {
         assert_eq!(
             [
                 MESSAGE_TICKS,
-                HAIL_QUOTE_TICKS,
                 GRANT_TICKS,
                 BOARD_LINE_TICKS,
                 BOARD_REFUSAL_TICKS,
@@ -1404,7 +1512,7 @@ mod tests {
                 JUMP_REFUSAL_TICKS,
                 OLD_SHIP_TICKS,
             ],
-            [240, 420, 240, 250, 360, 250, 500, 250, 360, 250, 360, 360]
+            [240, 240, 250, 360, 250, 500, 250, 360, 250, 360, 360]
         );
     }
 

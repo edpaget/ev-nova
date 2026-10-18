@@ -64,7 +64,8 @@
 //! - **Sprite-slot plumbing** (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a):
 //!   visibility, master loading, cloning and location, which the view's
 //!   stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is left
-//!   out for every sprite.
+//!   out, as the view murks shots alone so far
+//!   (rdm:task/murk-other-sprites).
 
 use crate::catalog::{LandingSite, SiteAnimation};
 use crate::chance::Chance;

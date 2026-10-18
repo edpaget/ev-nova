@@ -1,12 +1,20 @@
-//! The fixed logical coordinate space and its fit into the window.
+//! The logical coordinate space of each screen's shape, and its fit into
+//! the window.
 //!
-//! Screens draw in a fixed logical space ([`LOGICAL`], 1024x768, Nova's
-//! largest original mode; one logical unit is one source image pixel). The
-//! [`Viewport`] scales it into the window by the largest factor that keeps
-//! its aspect ratio, centres it on whole physical pixels and leaves the rest
-//! as bars.
+//! Screens draw in a logical space whose size is a per-screen shape
+//! ([`ViewShape`]; one logical unit is one source image pixel). The
+//! classic shape is [`LOGICAL`], 1024x768, Nova's largest original mode:
+//! the [`Viewport`] scales it into the window by the largest factor that
+//! keeps its aspect ratio, centres it on whole physical pixels and leaves
+//! the rest as bars. Flight's widened shape is 768 high and as wide as the
+//! window's aspect ratio makes it ([`widened_size`]), so in a window at
+//! least 4:3 it fills the whole window ([`Viewport::for_shape`]); each
+//! axis then has its own scale, which differ by under half a logical unit
+//! over the width.
 
 use nova_view::Point;
+use nova_view::ViewShape;
+use nova_view::view_shape::widened_size;
 
 /// The size of the logical space, in logical units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,12 +46,17 @@ pub struct PixelRect {
 pub enum Letterbox {
     /// The window has no area (it is minimised): nothing is drawn.
     None,
-    /// The logical space fills `rect`, at `scale` physical pixels per
-    /// logical unit; the rest of the window is bars.
+    /// The logical space fills `rect`, `scale` physical pixels per
+    /// logical unit down; the rest of the window is bars. Across it is
+    /// the same, except in a widened view filling a window wider than
+    /// 4:3, which scales each axis to the window: map x through
+    /// [`Viewport::axis_scales`].
     Content {
         /// The content rectangle, in physical pixels.
         rect: PixelRect,
-        /// Physical pixels per logical unit.
+        /// Physical pixels per logical unit down, which text is sized by.
+        /// In a widened view filling a window wider than 4:3 it is not
+        /// the scale across ([`Viewport::axis_scales`] gives both).
         scale: f32,
     },
 }
@@ -55,6 +68,9 @@ pub struct Viewport {
     window_px: (u32, u32),
     scale_factor: f64,
     letterbox: Letterbox,
+    /// Physical pixels per logical unit across and down: both the
+    /// letterbox's scale, except in a widened view filling the window.
+    axis_scales: (f32, f32),
 }
 
 impl Viewport {
@@ -81,12 +97,64 @@ impl Viewport {
             };
             Letterbox::Content { rect, scale }
         };
+        let axis_scales = match letterbox {
+            Letterbox::None => (0.0, 0.0),
+            Letterbox::Content { scale, .. } => (scale, scale),
+        };
         Self {
             logical,
             window_px,
             scale_factor,
             letterbox,
+            axis_scales,
         }
+    }
+
+    /// Fits `shape` into a window of `window_px` physical pixels whose
+    /// display has `scale_factor` physical pixels per point.
+    ///
+    /// [`ViewShape::Classic`] is [`LOGICAL`] fitted as [`Viewport::new`]
+    /// fits it. [`ViewShape::Widened`] is [`widened_size`]: in a window
+    /// wider than 4:3 its content is the whole window, each axis scaled to
+    /// fill it, so no bars and no rounding slivers show, the letterbox's
+    /// scale being the vertical one, which text is sized by; in a window
+    /// 4:3 or taller it is 1024 wide, the classic viewport.
+    #[must_use]
+    pub fn for_shape(shape: ViewShape, window_px: (u32, u32), scale_factor: f64) -> Self {
+        let (w, h) = match shape {
+            ViewShape::Classic => (LOGICAL.w, LOGICAL.h),
+            ViewShape::Widened => widened_size(window_px),
+        };
+        if w <= LOGICAL.w {
+            return Self::new(LOGICAL, window_px, scale_factor);
+        }
+        let (w_px, h_px) = window_px;
+        let across = w_px as f32 / w as f32;
+        let down = h_px as f32 / h as f32;
+        Self {
+            logical: LogicalSize { w, h },
+            window_px,
+            scale_factor,
+            letterbox: Letterbox::Content {
+                rect: PixelRect {
+                    x: 0,
+                    y: 0,
+                    w: w_px,
+                    h: h_px,
+                },
+                scale: down,
+            },
+            axis_scales: (across, down),
+        }
+    }
+
+    /// Physical pixels per logical unit across and down, or `None` in a
+    /// zero-area window. Both are the letterbox's scale except in a
+    /// widened view filling a window wider than 4:3
+    /// ([`Viewport::for_shape`]).
+    #[must_use]
+    pub fn axis_scales(&self) -> Option<(f32, f32)> {
+        self.content().map(|_| self.axis_scales)
     }
 
     /// Where the logical space lands.
@@ -95,7 +163,10 @@ impl Viewport {
         self.letterbox
     }
 
-    /// The content rectangle and scale, or `None` in a zero-area window.
+    /// The content rectangle and the vertical scale, which text is sized
+    /// by, or `None` in a zero-area window. In a widened view filling a
+    /// window wider than 4:3 the scale is not the horizontal one: map x
+    /// through [`Viewport::axis_scales`].
     #[must_use]
     pub fn content(&self) -> Option<(PixelRect, f32)> {
         match self.letterbox {
@@ -135,11 +206,12 @@ impl Viewport {
     /// it is in a bar (or the window has no area).
     #[must_use]
     pub fn window_to_logical(&self, px: (f64, f64)) -> Option<Point> {
-        let (rect, scale) = self.content()?;
+        let (rect, _) = self.content()?;
+        let (across, down) = self.axis_scales;
         let x = px.0 - f64::from(rect.x);
         let y = px.1 - f64::from(rect.y);
         let inside = (0.0..f64::from(rect.w)).contains(&x) && (0.0..f64::from(rect.h)).contains(&y);
-        inside.then(|| Point::new((x / f64::from(scale)) as f32, (y / f64::from(scale)) as f32))
+        inside.then(|| Point::new((x / f64::from(across)) as f32, (y / f64::from(down)) as f32))
     }
 }
 
@@ -147,6 +219,7 @@ impl Viewport {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use nova_view::ViewShape;
 
     fn rect(x: u32, y: u32, w: u32, h: u32) -> PixelRect {
         PixelRect { x, y, w, h }
@@ -289,6 +362,94 @@ mod tests {
     fn nothing_maps_in_a_zero_area_window() {
         let viewport = Viewport::new(LOGICAL, (0, 0), 1.0);
         assert_eq!(viewport.window_to_logical((0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn a_widened_shape_in_a_4_by_3_window_is_the_classic_viewport() {
+        for window in [(1024, 768), (2048, 1536), (800, 600), (1440, 1080)] {
+            for scale_factor in [1.0, 2.0] {
+                assert_eq!(
+                    Viewport::for_shape(ViewShape::Widened, window, scale_factor),
+                    Viewport::new(LOGICAL, window, scale_factor),
+                    "{window:?} at {scale_factor}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_widened_shape_fills_a_wider_window_whole() {
+        let viewport = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
+        assert_eq!(viewport.logical(), LogicalSize { w: 1365, h: 768 });
+        assert_eq!(content(&viewport).0, rect(0, 0, 1920, 1080));
+        for (window, scale_factor, width) in [
+            ((2560, 1440), 2.0, 1365),
+            ((3840, 2160), 2.0, 1365),
+            ((3440, 1440), 1.0, 1835),
+            ((2880, 1800), 2.0, 1229),
+        ] {
+            let viewport = Viewport::for_shape(ViewShape::Widened, window, scale_factor);
+            assert_eq!(viewport.logical(), LogicalSize { w: width, h: 768 });
+            assert_eq!(
+                content(&viewport).0,
+                rect(0, 0, window.0, window.1),
+                "{window:?}"
+            );
+            assert_eq!(viewport.window_px(), window);
+            assert_eq!(viewport.scale_factor(), scale_factor);
+        }
+    }
+
+    #[test]
+    fn a_widened_shape_scales_each_axis_to_the_window_and_text_by_the_height() {
+        let viewport = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
+        assert_eq!(content(&viewport).1, 1.406_25, "the vertical scale");
+        assert_eq!(viewport.axis_scales(), Some((1920.0 / 1365.0, 1.406_25)));
+        let classic = Viewport::new(LOGICAL, (1280, 768), 1.0);
+        assert_eq!(classic.axis_scales(), Some((1.0, 1.0)));
+        assert_eq!(Viewport::new(LOGICAL, (0, 0), 1.0).axis_scales(), None);
+    }
+
+    #[test]
+    fn a_widened_shape_in_a_taller_window_is_letterboxed() {
+        let viewport = Viewport::for_shape(ViewShape::Widened, (1024, 1280), 1.0);
+        assert_eq!(viewport, Viewport::new(LOGICAL, (1024, 1280), 1.0));
+        assert_eq!(content(&viewport).0, rect(0, 256, 1024, 768));
+    }
+
+    #[test]
+    fn a_classic_shape_is_pillarboxed_in_a_wide_window() {
+        let viewport = Viewport::for_shape(ViewShape::Classic, (1920, 1080), 1.0);
+        assert_eq!(viewport, Viewport::new(LOGICAL, (1920, 1080), 1.0));
+        assert_eq!(content(&viewport).0, rect(240, 0, 1440, 1080));
+    }
+
+    #[test]
+    fn a_widened_shape_with_no_area_draws_nothing() {
+        let viewport = Viewport::for_shape(ViewShape::Widened, (0, 0), 1.0);
+        assert_eq!(viewport.letterbox(), Letterbox::None);
+    }
+
+    #[test]
+    fn every_pixel_of_a_widened_window_maps_into_the_logical_space() {
+        let viewport = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
+        assert_eq!(
+            viewport.window_to_logical((0.0, 540.0)),
+            Some(Point::new(0.0, 384.0))
+        );
+        let right = viewport.window_to_logical((1919.5, 540.0)).expect("inside");
+        assert!(1364.0 < right.x && right.x < 1365.0, "{right:?}");
+        assert_eq!(right.y, 384.0);
+        for px in [0.0, 5.0, 960.0, 1900.0, 1919.99] {
+            for py in [0.0, 1079.99] {
+                assert!(
+                    viewport.window_to_logical((px, py)).is_some(),
+                    "({px}, {py})"
+                );
+            }
+        }
+        let at = viewport.window_to_logical((1900.0, 540.0)).expect("inside");
+        assert!((at.x - 1350.78).abs() < 0.01, "{at:?}");
     }
 
     #[test]

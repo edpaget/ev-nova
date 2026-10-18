@@ -23,19 +23,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::persons::{self, PersonLink, PersonRules};
+use crate::ai::plunder_contents::ClassMarines;
 use crate::catalog::outfit_mods;
 use crate::catalog::{
     DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
-    ShipRecord, SystemId, TrafficCatalog, tally,
+    ShipRecord, SystemId, SystemReinforcements, TrafficCatalog, tally,
 };
 use crate::chance::Chance;
 use crate::cloak::CloakGear;
 use crate::combat::armament::{Armament, Arsenal, LauncherRounds};
+use crate::combat::hull::class_turn;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::reserves::Reserves;
+use crate::scoop;
 use crate::self_repair;
 use crate::stats::ShipStats;
 use crate::traffic::strength::{STRONG_FLEET, STRONGER_FLEET};
@@ -261,6 +264,14 @@ pub struct ShipKind {
     /// class's: the original reads the class's items (+0x76,
     /// `_ShipCanSelfRepair` @0x91e5-0x922d).
     pub self_repair: bool,
+    /// Its `shïp` `Flags3` & 0x0003, the miner bits `_AIDispatch` routes
+    /// by (`testb $0x3` @0x8ff76; see [`miner`](crate::ai::miner)).
+    pub miner: u16,
+    /// Whether an asteroid scoop is among its default items, the ship's
+    /// +0xc3 as an NPC spawner sets it (`_ShipCanScoop` @0x75c7-0x766b,
+    /// [`scoop::has_asteroid_scoop`]): one of its default items, with a
+    /// count above 0, has `ModType` 31 in any of its four slots.
+    pub can_scoop: bool,
     /// Its `Holds` in tons, the size of a negative one (ship-class +0x00,
     /// as `_LoadObjectData` negates it @0x7a6a5-0x7a6d3): the most a
     /// fleet's random cargo gives it (see
@@ -276,6 +287,9 @@ pub struct ShipKind {
     /// @0x7a0b3-0x7a0ef), which `_HandleShip` holds still every frame
     /// (@0x34209-0x3423b; see [`Npc::immobile`](crate::traffic::npc::Npc::immobile)).
     pub immobile: bool,
+    /// Its `Strength` and the marines its default items give a pirate's
+    /// plunder ([`ClassMarines::of`]).
+    pub marines: ClassMarines,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -314,10 +328,14 @@ pub struct SpawnTable {
     /// when one spawns (see [`spawn`](crate::traffic::spawn)), so a bit
     /// set in the system counts without resolving the table again.
     pub link_fleets: BTreeSet<FleetId>,
-    /// The fleets it can spawn, from either list, and the escort-strength
+    /// The fleets it can spawn, from either list, the escort-strength
     /// timer's `flët` 382 and 383 wherever they exist (see
-    /// [`strength`](crate::traffic::strength)).
+    /// [`strength`](crate::traffic::strength)), and its reinforcement
+    /// fleet.
     pub fleets: BTreeMap<FleetId, FleetRecord>,
+    /// Its reinforcement fleet, if it has one (see
+    /// [`reinforcements`](crate::ai::reinforcements)).
+    pub reinforcements: Option<SystemReinforcements>,
     /// Every ship type its `düde`s, fleets and persons name that has a
     /// record.
     pub ships: BTreeMap<ShipId, ShipKind>,
@@ -390,6 +408,8 @@ impl SpawnTable {
             .filter_map(|&(id, _)| Some((id, spawn_dude(catalog, id)?)))
             .collect();
         let named: BTreeSet<_> = decoded.fleets.iter().map(|&(id, _)| id).collect();
+        let reinforcements = catalog.system_reinforcements(system);
+        let reinforcing = reinforcements.map(|kept| kept.fleet);
         let mut link_fleets = BTreeSet::new();
         let mut fleets = BTreeMap::new();
         for fleet in catalog.fleets() {
@@ -397,7 +417,11 @@ impl SpawnTable {
             if linked {
                 link_fleets.insert(fleet.id);
             }
-            if linked || named.contains(&fleet.id) || ESCORT_STRENGTH_FLEETS.contains(&fleet.id) {
+            if linked
+                || named.contains(&fleet.id)
+                || ESCORT_STRENGTH_FLEETS.contains(&fleet.id)
+                || reinforcing == Some(fleet.id)
+            {
                 fleets.insert(fleet.id, fleet);
             }
         }
@@ -432,6 +456,7 @@ impl SpawnTable {
             dude_fleets: decoded.fleets,
             link_fleets,
             fleets,
+            reinforcements,
             ships,
             persons,
             person_slots,
@@ -555,15 +580,23 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         stats: ShipStats::new(record.fields, &outfit_mods(&defaults, outfits)),
         inherent_ai: record.inherent_ai,
         escort_class: EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass),
-        hull: arsenal.hull(record.id),
+        hull: HullSpec {
+            inherent_ai: record.inherent_ai,
+            crew: record.crew,
+            class_turn: class_turn(record.fields.maneuver),
+            ..arsenal.hull(record.id)
+        },
         armament,
         rounds,
         appear_on: record.appear_on.clone(),
         cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
         self_repair: self_repair::has_gear(&defaults, outfits),
+        miner: record.flags3 & crate::ai::miner::MINER_BITS,
+        can_scoop: scoop::has_asteroid_scoop(&defaults, outfits),
         holds: crate::market::hold_tons(record.fields.holds),
         base_armor: f32::from(record.fields.armor.max(0)),
         immobile: record.fields.speed == 0 && record.fields.accel == 0,
+        marines: ClassMarines::of(record.strength, &record.default_slots, outfits),
     }
 }
 
@@ -1242,6 +1275,29 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3, 4]
         );
+        // The hull carries it too, for the break-off's gate.
+        assert_eq!(
+            table
+                .ships
+                .values()
+                .map(|kind| kind.hull.inherent_ai)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn a_ship_kind_carries_its_class_crew_beside_its_inherent_ai() {
+        for crew in [-1, 0, 1, 40] {
+            let record = ShipRecord {
+                crew,
+                inherent_ai: 2,
+                ..ship(200, FAST)
+            };
+            let kind = kind(&record, &[], &arsenal());
+            assert_eq!(kind.hull.crew, crew, "the pirate's tests read it");
+            assert_eq!(kind.hull.inherent_ai, 2);
+        }
     }
 
     #[test]
@@ -1314,6 +1370,25 @@ mod tests {
         };
         assert_eq!(kind(&gated, &[], &arsenal()).appear_on, Test::parse("b7"));
         assert_eq!(ShipKind::default().appear_on, Test::default(), "blank");
+    }
+
+    #[test]
+    fn a_ship_type_carries_its_strength_and_its_default_items_marines_by_slot() {
+        let outfits = [
+            outfit(128, &[(1, 5)]),
+            outfit(227, &[(crate::catalog::MARINES, 25)]),
+        ];
+        let mut record = ship(204, FAST);
+        record.strength = -3;
+        record.default_slots[0] = Some((OutfitId(227), 2));
+        let kind = kind(&record, &outfits, &arsenal());
+        assert_eq!(
+            kind.marines,
+            crate::ai::plunder_contents::ClassMarines::of(-3, &record.default_slots, &outfits)
+        );
+        assert_eq!(kind.marines.strength, -3);
+        assert_eq!(kind.marines.by_outfit.crew, 50);
+        assert_eq!(kind.marines.by_place.crew, 10, "outfit 128's 5 × 2");
     }
 
     #[test]
@@ -1401,10 +1476,56 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_type_mines_by_its_flags3_low_bits_and_scoops_with_a_scoop_among_its_default_items() {
+        let outfits = [
+            outfit(300, &[(4, 10)]),
+            outfit(
+                440,
+                &[
+                    (1, 0),
+                    (2, 0),
+                    (3, 0),
+                    (crate::scoop::MOD_ASTEROID_SCOOP, 0),
+                ],
+            ),
+        ];
+        let miner = |flags3: u16, defaults: Vec<(OutfitId, u16)>| {
+            let mut record = ShipRecord {
+                defaults,
+                ..ship(207, FAST)
+            };
+            record.flags3 = flags3;
+            kind(&record, &outfits, &arsenal())
+        };
+        let scooping = miner(0xff03, vec![(OutfitId(300), 1), (OutfitId(440), 1)]);
+        assert_eq!(scooping.miner, 0x0003, "only Flags3's low two bits");
+        assert!(scooping.can_scoop, "ModType 31 in its fourth slot");
+        assert_eq!(miner(0x0002, Vec::new()).miner, 0x0002);
+        assert!(!miner(0x0002, Vec::new()).can_scoop);
+        assert!(
+            !miner(0x0001, vec![(OutfitId(440), 0)]).can_scoop,
+            "none of it"
+        );
+        assert!(!miner(0x0001, vec![(OutfitId(300), 1)]).can_scoop);
+        assert_eq!(miner(0x0004, Vec::new()).miner, 0);
+        assert!(!ShipKind::default().can_scoop);
+        assert_eq!(ShipKind::default().miner, 0);
+    }
+
+    #[test]
     fn each_ship_type_named_is_armed_from_the_arsenal() {
         let table = resolved();
         let armed = &table.ships[&ShipId(200)];
-        assert_eq!(armed.hull, arsenal().hull(ShipId(200)));
+        assert_eq!(
+            armed.hull,
+            HullSpec {
+                inherent_ai: 1,
+                crew: 3,
+                class_turn: 3.0,
+                ..arsenal().hull(ShipId(200))
+            },
+            "the fixture's crew of 3 and its Maneuver of 30's turn"
+        );
         assert!(
             (armed.hull.hit_radius - 9.9).abs() < 1e-5,
             "{:?}",
@@ -1426,7 +1547,15 @@ mod tests {
         );
         let unarmed = &table.ships[&ShipId(201)];
         assert_eq!(unarmed.armament, Armament::default());
-        assert_eq!(unarmed.hull, HullSpec::default());
+        assert_eq!(
+            unarmed.hull,
+            HullSpec {
+                inherent_ai: 2,
+                crew: 3,
+                class_turn: 3.0,
+                ..HullSpec::default()
+            }
+        );
         assert_eq!(unarmed.rounds, LauncherRounds::default());
     }
 
@@ -1538,6 +1667,81 @@ mod tests {
         for id in [204, 205, 206] {
             assert!(table.ship_types().contains(&ShipId(id)), "ship {id}");
         }
+    }
+
+    /// [`Traffic`] with system 130's reinforcement fleet 129, led by ship
+    /// 207 and linking to system 132 alone.
+    struct Reinforced(Traffic);
+
+    impl TrafficCatalog for Reinforced {
+        fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+            self.0.system_traffic(id)
+        }
+
+        fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+            (id == SystemId(130)).then_some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        }
+
+        fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+            self.0.dude(id)
+        }
+
+        fn fleets(&self) -> Vec<FleetRecord> {
+            let mut fleets = self.0.fleets();
+            fleets.push(FleetRecord {
+                id: FleetId(129),
+                lead: Some(ShipId(207)),
+                escorts: Vec::new(),
+                govt: Some(GovtId(128)),
+                link_syst: 132,
+                appear_on: Test::default(),
+                quote: None,
+                flags: 0,
+            });
+            fleets
+        }
+
+        fn persons(&self) -> Vec<PersonRecord> {
+            self.0.persons()
+        }
+    }
+
+    #[test]
+    fn a_table_keeps_its_systems_reinforcement_fleet_and_its_ships() {
+        let mut ships = records();
+        ships.push(ship(207, FAST));
+        let resolve = |system| {
+            SpawnTable::resolve(
+                &Reinforced(Traffic::default()),
+                SystemId(system),
+                Some(GovtId(128)),
+                &relations(),
+                &ships,
+                &[],
+                &Arsenal::default(),
+                &NovaPersons::default(),
+                &BTreeSet::new(),
+            )
+        };
+        let table = resolve(130);
+        assert_eq!(
+            table.reinforcements,
+            Some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        );
+        assert!(table.fleets.contains_key(&FleetId(129)));
+        assert!(!table.link_fleets.contains(&FleetId(129)), "not linked");
+        assert!(table.ship_types().contains(&ShipId(207)));
+        let elsewhere = resolve(131);
+        assert_eq!(elsewhere.reinforcements, None);
+        assert!(!elsewhere.fleets.contains_key(&FleetId(129)));
     }
 
     #[test]

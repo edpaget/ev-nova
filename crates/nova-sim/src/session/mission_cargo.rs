@@ -181,7 +181,7 @@ impl Session {
             self.sounds.push(SimSound::CargoJettisoned);
         }
         if let Some(message) = decided.message {
-            self.messages.push(match message {
+            self.say(match message {
                 JettisonMessage::MissionFailed => SimMessage::MissionFailed,
                 JettisonMessage::CargoJettisoned => SimMessage::CargoJettisoned,
                 JettisonMessage::NonMissionCargoJettisoned => SimMessage::NonMissionCargoJettisoned,
@@ -284,7 +284,7 @@ impl Session {
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
         self.take_scan_fine(fine);
         self.sounds.push(SimSound::Smuggling);
-        self.messages.push(match found {
+        self.say(match found {
             Contraband::Junk { id: junk, fine } => SimMessage::IllegalJunk {
                 scanner,
                 person,
@@ -331,7 +331,7 @@ impl Session {
                 let record = self.lifecycle_record(mission);
                 if announce {
                     self.sounds.push(SimSound::ScanFailedMission);
-                    self.messages.push(SimMessage::MissionScanned);
+                    self.say(SimMessage::MissionScanned);
                 }
                 self.quick_failure(slot, &record, chance);
                 self.set_on_player(id);
@@ -350,7 +350,7 @@ impl Session {
                 self.set_on_player(id);
                 self.take_scan_fine(credits);
                 self.sounds.push(SimSound::Smuggling);
-                self.messages.push(SimMessage::Smuggling {
+                self.say(SimMessage::Smuggling {
                     scanner,
                     ship_name,
                     fine: credits,
@@ -509,6 +509,8 @@ mod tests {
         }
     }
 
+    /// `mission`'s `kind` text: a briefing opens the map, marking none of
+    /// these missions, which lack `Flags` 0x0100.
     fn text(kind: MissionTextKind, mission: i16, text: &str) -> MissionText {
         MissionText {
             kind,
@@ -516,6 +518,7 @@ mod tests {
             text: text.to_owned(),
             graphic: None,
             movie: None,
+            map: (kind == MissionTextKind::Brief).then_some(crate::MapMarks::NONE),
         }
     }
 

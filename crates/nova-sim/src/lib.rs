@@ -9,9 +9,9 @@
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
 //! [`save`], [`saves`], [`course`], [`galaxy_map`], [`glow`],
-//! [`pre_jump`], [`rating`], [`red_alert`], [`status_cargo`],
-//! [`target_panel`] and [`top_speed`], with the test support in
-//! `fixture`.
+//! [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
+//! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
+//! with the test support in `fixture`.
 //!
 //! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
 //!   [`Goal`] from its [`Surroundings`] and answers hits; [`Peaceful`],
@@ -87,6 +87,9 @@
 //!   [`CombatEvent`]s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`].
+//! - [`comm_line`]: the message line's countdown, `_commCount`, as one
+//!   [`CommLine`] the session keeps: what the calls that wait for a free
+//!   line read.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
@@ -175,6 +178,19 @@
 //!   [`legal::systems_from_govts`], which derives the records in each
 //!   system, and [`legal::spread_statuses`], which spreads a new pilot's
 //!   `chär` statuses.
+//! - [`map_borders`]: the galaxy map's government borders, as
+//!   `_AddSystemInfluenceToMap` and `_RecalcMapInfluence` work them out: a
+//!   grid of screen cells of four slots each ([`map_borders::grid`]), and
+//!   the coarse and fine passes over it ([`map_borders::passes`]).
+//! - [`map_panel`]: what the galaxy map's two info panels say about the
+//!   system selected, as `_MapDialogUpdate` decides it: the ports, the
+//!   hazards, the title, and the explored level's goods and services
+//!   ([`map_panel::map_panel`]).
+//! - [`map_route`]: how a Shift-click on the course map writes the
+//!   course, as `_DoSystemMap` cuts, wraps and appends it
+//!   ([`map_route::shift_click`]).
+//! - [`map_search`]: the galaxy map's Find, as `_DoSystemSearch` matches a
+//!   typed name against the systems' names ([`map_search::search`]).
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
@@ -271,6 +287,9 @@
 //! - [`ship_layer`]: the layers ships are drawn in ([`ShipLayer`]): the
 //!   disabled at the bottom, then the ships the player leads, then the
 //!   rest with the player.
+//! - [`sprite_layer`]: the order the ship and shot layers are drawn in
+//!   ([`SpriteLayer`](sprite_layer::SpriteLayer)), shots under or over the
+//!   ships as `_SpawnShot` and `_SetupSpriteWorld` place them.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -330,6 +349,7 @@ pub use nova_sim_combat::asteroid;
 pub use nova_sim_combat::bay;
 pub use nova_sim_combat::cloak;
 pub use nova_sim_combat::combat;
+pub use nova_sim_combat::comm_line;
 pub use nova_sim_port::board;
 pub use nova_sim_state::clearance;
 pub mod course;
@@ -350,6 +370,10 @@ pub use nova_sim_ai::gate;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
+pub mod map_borders;
+pub mod map_panel;
+pub mod map_route;
+pub mod map_search;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
@@ -362,6 +386,7 @@ pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::grant;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;
+pub use nova_sim_port::murk;
 pub use nova_sim_port::order_loop;
 pub use nova_sim_port::outfitter;
 pub use nova_sim_port::player_info;
@@ -394,6 +419,7 @@ pub use nova_sim_combat::self_repair;
 pub mod session;
 pub use nova_sim_catalog::sound;
 pub use nova_sim_combat::ship_layer;
+pub use nova_sim_combat::sprite_layer;
 pub use nova_sim_port::ship_change;
 pub use nova_sim_port::shipyard;
 pub use nova_sim_state::stats;
@@ -442,6 +468,7 @@ pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Field, FireSound, GamePass, Rules, ShipRef, Sortie, Strike};
+pub use comm_line::CommLine;
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
@@ -452,6 +479,7 @@ pub use escort::{
 };
 pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
+pub use galaxy_map::{MARKS_DESTINATION, MapMarks};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
 pub use glow::{GLOW_AFTERBURNER, GLOW_CRUISE, glow_level, ramp_afterburner_glow, ramp_glow};
@@ -507,10 +535,10 @@ pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
-    HookRules, InfoRow, InterfaceLoad, LandPress, MissionComputer, MissionInfo, MissionInfoPress,
-    MissionShown, MissionText, MissionTextKind, NotOffered, OfferPrompt, PersonQuote, RefuseShown,
-    RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules,
-    StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
+    HookRules, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress, MissionComputer,
+    MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind, NotOffered,
+    OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav, ScriptEffectRules, Session,
+    SessionEvent, Settled, ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{

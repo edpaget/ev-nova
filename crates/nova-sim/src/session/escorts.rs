@@ -16,7 +16,9 @@
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
 //! and armour as they were; taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
-//! recorded. At a hypergate or wormhole exit each is placed on its slot
+//! recorded. Each keeps its ion colour with its charge cleared, as
+//! `_RespawnEscort` clears +0x5c (@0x3d543) but leaves +0xb0, so the
+//! next ionization ORs onto the old colours. At a hypergate or wormhole exit each is placed on its slot
 //! and then comes out of the exit gate after the player (see
 //! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
 //! the record. A trader escort's
@@ -97,7 +99,8 @@
 use std::collections::BTreeSet;
 
 use super::Session;
-use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
+use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
 use crate::cloak::Cloak;
@@ -117,6 +120,16 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
+
+/// What an escort keeps from its old NPC when the fleet enters a system
+/// ([`Session::fleet_kept`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct KeptEscort {
+    /// Its aux mark ([`Npc::aux`]).
+    pub(super) aux: Option<u8>,
+    /// Its ion colour ([`Ion::colour`]); its charge is cleared.
+    pub(super) ion_colour: u32,
+}
 
 impl Session {
     /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
@@ -150,16 +163,28 @@ impl Session {
             .collect()
     }
 
-    /// The auxiliary-ship mark ([`Npc::aux`]) of each of the fleet's
-    /// escorts, by its index: its NPC's in the system, if any. As
-    /// `_DeleteAllComputerShips(0)` keeps the player's ships whole
-    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark across a
-    /// setup.
-    pub(super) fn fleet_aux_marks(&self) -> Vec<Option<u8>> {
+    /// What each of the fleet's escorts keeps across a setup, by its
+    /// index, from its NPC in the system, if any (none and colour 0
+    /// without one).
+    ///
+    /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
+    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark. And as
+    /// `_RespawnEscort` clears an escort's ion charge (+0x5c @0x3d543)
+    /// but never writes its ion colour (+0xb0), the escort keeps the
+    /// colours it was ionized with.
+    pub(super) fn fleet_kept(&self) -> Vec<KeptEscort> {
         (0..self.pilot.escorts.len())
             .map(|index| {
-                let id = self.fleet.get(index).copied().flatten()?;
-                self.npc(id)?.aux
+                let npc = self
+                    .fleet
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .and_then(|id| self.npc(id));
+                npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
+                    aux: npc.aux,
+                    ion_colour: npc.ion.colour,
+                })
             })
             .collect()
     }
@@ -167,8 +192,9 @@ impl Session {
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
-    /// with the aux mark `marks[i]` ([`Session::fleet_aux_marks`]).
-    pub(super) fn enter_escorts(&mut self, berths: &[u32], marks: &[Option<u8>]) {
+    /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
+    /// mark, and its ion colour with no charge.
+    pub(super) fn enter_escorts(&mut self, berths: &[u32], kept: &[KeptEscort]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -183,8 +209,13 @@ impl Session {
         self.fleet = (0..self.pilot.escorts.len())
             .map(|index| {
                 let id = self.place_escort_at(index, berths.get(index).copied())?;
+                let kept = kept.get(index).copied().unwrap_or_default();
                 if let Some(npc) = self.npc_mut(id) {
-                    npc.aux = marks.get(index).copied().flatten();
+                    npc.aux = kept.aux;
+                    npc.ion = Ion {
+                        charge: 0.0,
+                        colour: kept.ion_colour,
+                    };
                 }
                 Some(id)
             })
@@ -253,6 +284,7 @@ impl Session {
             pick: None,
             target: None,
             provoked: 0.0,
+            stray: 0.0,
             aggression: 0,
             inspected: None,
             booty: None,
@@ -271,9 +303,17 @@ impl Session {
             emerges_from: None,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
+            miner: kind.miner,
+            can_scoop: kind.can_scoop,
+            holds: kind.holds,
             former: None,
             tractor: None,
             ion: Ion::default(),
+            afterburner: false,
+            pursuit: Pursuit::default(),
+            ai_wait: 0,
+            docking: None,
+            marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
             // `_RespawnEscort` leaves +0xc908 alone.
@@ -691,12 +731,12 @@ impl Session {
         })
     }
 
-    /// Whether NPC `id` is allied with the player, as `_AlliedWithPlayer`
-    /// (@0x6985-0x69d0) has it: a ship the player leads, or one led by a
-    /// ship the player leads, such as a fighter an escort launched.
+    /// Whether NPC `id` is here and allied with the player
+    /// ([`Surroundings::allied_with_player`]).
     fn allied_with_player(&self, id: NpcId) -> bool {
-        let led = |id| self.player_led().any(|npc| npc.id == id);
-        led(id) || self.npc(id).and_then(|npc| npc.leader).is_some_and(led)
+        let npcs = self.traffic.npcs();
+        self.npc(id)
+            .is_some_and(|npc| Surroundings::new(&[], npcs).allied_with_player(npc))
     }
 
     /// Lets go of every target of the ships the player leads, as
@@ -1255,6 +1295,70 @@ mod tests {
         assert_eq!(escorts[1].reserves.shield.now, 30.0);
         let worst = straying(&mut session, &catalog, 300);
         assert!(worst <= escort::KEEP_FORMATION, "{worst}");
+    }
+
+    /// Ionizes the first escort red, then checks that, once the fleet
+    /// has entered a new system, it has no charge but its colour, onto
+    /// which the next ionization ORs, and the second escort has none.
+    fn assert_ion_colour_kept(session: &mut Session, before: NpcId) {
+        let escorts: Vec<NpcId> = session.fleet.iter().copied().flatten().collect();
+        assert_ne!(escorts[0], before, "a new NPC");
+        let first = session.npc(escorts[0]).expect("there").ion;
+        assert_eq!(
+            first,
+            Ion {
+                charge: 0.0,
+                colour: 0x00FF_0000
+            }
+        );
+        assert_eq!(session.npc(escorts[1]).expect("there").ion, Ion::default());
+        let npc = session.npc_mut(escorts[0]).expect("there");
+        let at = npc.state.position;
+        npc.ion.take(
+            crate::combat::ion::Dose {
+                ionization: 10,
+                colour: 0x0000_00FF,
+                blast: None,
+            },
+            at,
+        );
+        assert_eq!(
+            npc.ion,
+            Ion {
+                charge: 10.0,
+                colour: 0x00FF_00FF
+            }
+        );
+    }
+
+    fn ionize_first_escort(session: &mut Session) -> NpcId {
+        let warship = session.fleet[0].expect("placed");
+        session.npc_mut(warship).expect("there").ion = Ion {
+            charge: 30.0,
+            colour: 0x00FF_0000,
+        };
+        warship
+    }
+
+    #[test]
+    fn an_ionized_escort_arrives_after_a_jump_with_no_charge_and_its_colour() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let before = ionize_first_escort(&mut session);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_ion_colour_kept(&mut session, before);
+    }
+
+    #[test]
+    fn an_ionized_escort_takes_off_with_no_charge_and_its_colour() {
+        let catalog = crate::testkit::far_129_reachable(fleeted());
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let before = ionize_first_escort(&mut session);
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_ion_colour_kept(&mut session, before);
     }
 
     #[test]
@@ -2446,5 +2550,39 @@ mod tests {
         let left = session.npc(ace).expect("leaving");
         assert_eq!(left.person.map(|person| person.id), Some(PersonId(700)));
         assert!(!session.pilot().gone(PersonId(700)));
+    }
+
+    #[test]
+    fn a_player_escort_hit_by_an_npc_takes_it_as_its_target_and_one_hit_by_a_fleetmate_none() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2):
+        // the escort (AI 5) takes its attacker as its target (@0x3bcf6),
+        // once the answer flag lets the hit through; a fleetmate's hit
+        // (same leader, @0x3b94e) it never does.
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let escorts: Vec<NpcId> = escort_npcs(&session).iter().map(|npc| npc.id).collect();
+        let mut pirate = session.npc(escorts[0]).expect("the escort").clone();
+        pirate.escort = None;
+        pirate.govt = Some(crate::catalog::GovtId(142));
+        pirate.state.position.x += 200.0;
+        pirate.target = Some(ShipRef::Npc(escorts[0]));
+        pirate.goal = Goal::Attack(ShipRef::Npc(escorts[0]));
+        let pirate = session.traffic.add_npc(pirate);
+        let answer = |session: &mut Session, by: NpcId| {
+            let mut strikes = vec![crate::combat::fixture::strike(
+                ShipRef::Npc(escorts[0]),
+                ShipRef::Npc(by),
+            )];
+            session.weigh_strikes(&mut strikes, &mut NeverFires);
+            session.strikes = strikes;
+            session.answer_strikes(&NovaAi::default());
+            session.npc(escorts[0]).expect("the escort").target
+        };
+        assert_eq!(answer(&mut session, escorts[1]), None, "its fleetmate");
+        assert_eq!(
+            answer(&mut session, pirate),
+            Some(ShipRef::Npc(pirate)),
+            "the pirate"
+        );
     }
 }

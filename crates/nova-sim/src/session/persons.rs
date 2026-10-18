@@ -34,10 +34,13 @@
 //! `AvailBits` by the engine the verdict cached at the last refresh or
 //! check of it ([`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits)).
 //! A quote said, and that check of a linked person, leave `<OSN>` naming
-//! nobody (see the `person_offers` module). "No quote showing" counts
-//! only the hail quotes, the last said
-//! [`QUOTE_SHOWN_TICKS`] or more ago. A person's quote state is never
-//! saved, and "once" is once for its stay.
+//! nobody (see the `person_offers` module). "No quote showing" is the
+//! message line free, whatever shows on it (`_HandleShip`
+//! @0x33f42-0x33f4b reads `_commCount`, the session's
+//! [`CommLine`](crate::CommLine); see the `comm_calls` module): a hail
+//! quote holds it for [`QUOTE_SHOWN_TICKS`], and any other line for its
+//! own time. A person's quote state is never saved, and "once" is once
+//! for its stay.
 //!
 //! A person of `Flags` 0x0010 turning on the player as
 //! `_AIMakeShipAttackPlayer` has it, while it is no threat to the player
@@ -115,12 +118,22 @@ pub struct PersonQuote {
     pub text: String,
 }
 
-/// The hail quotes' clock: the quote ticks so far, and the tick until
-/// which a quote shows, keeping any other from being said at random.
+impl PersonQuote {
+    /// How long the quote shows: [`QUOTE_SHOWN_TICKS`] (@0x4464d), the
+    /// one count the session sets the message line to and the flight
+    /// shows it for.
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        QUOTE_SHOWN_TICKS
+    }
+}
+
+/// The hail quotes' clock: the quote ticks so far, in place of the
+/// original's `TickCount`, which the personal gap ([`QUOTE_GAP_TICKS`])
+/// reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct QuoteClock {
     pub(super) ticks: u64,
-    quiet_until: u64,
 }
 
 impl Session {
@@ -177,10 +190,13 @@ impl Session {
     /// A tick of the persons' hail quotes in flight, each drawn on
     /// `chance` and read from `catalog`, its `'STR '` patch before
     /// `STR#` 7101 (@0x445b8-0x445e1; see the module docs and
-    /// [`person`](crate::person)): first each attack quote queued, said
+    /// [`person`](crate::person)), at whose head the message line counts
+    /// down a frame, as `_HandleComm` does on the advance pass (see the
+    /// `comm_calls` module): first each attack quote queued, said
     /// with no draw; then, in order, each person NPC whose quote
     /// may be said draws `Rand(140)`, and says it when it is due now, or
-    /// on a draw of 0 when no quote has shown for [`QUOTE_SHOWN_TICKS`]
+    /// on a draw of 0 when the message line is free
+    /// ([`CommLine::free_for_calls`](crate::CommLine::free_for_calls))
     /// and its own last is more than [`QUOTE_GAP_TICKS`] back. While the
     /// ship is landed nothing happens. Then the quote clock moves on a
     /// tick: ours moves it once a frame in place of `TickCount`, and
@@ -190,6 +206,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        self.count_down_comm_line();
         self.roll_quotes(catalog, chance);
         self.quote_clock.ticks += 1;
     }
@@ -271,7 +288,9 @@ impl Session {
             let Some(person) = npc.person.as_mut() else {
                 continue;
             };
-            let quiet = ticks >= self.quote_clock.quiet_until;
+            // No quote showing: the message line free, whatever shows on
+            // it (`_HandleShip` @0x33f42-0x33f4b reads `_commCount`).
+            let quiet = self.comm_line.free_for_calls();
             let rested = person
                 .quoted_at
                 .is_none_or(|at| ticks > at + QUOTE_GAP_TICKS);
@@ -323,7 +342,6 @@ impl Session {
         lines: &[String],
         chance: &mut dyn Chance,
     ) {
-        let ticks = self.quote_clock.ticks;
         let Some(person) = self
             .traffic
             .npcs_mut()
@@ -335,7 +353,7 @@ impl Session {
         };
         person.quoted = true;
         let (person, hail_quote) = (person.id, person.hail_quote);
-        self.quote_clock.quiet_until = ticks + QUOTE_SHOWN_TICKS;
+        self.comm_line.show(QUOTE_SHOWN_TICKS);
         let patch = hail_quote_patch_id(hail_quote)
             .map_or(StringPatch::Absent, |patch| catalog.plugin_string(patch));
         let line = hail_quote_text(hail_quote, patch, lines);
@@ -413,13 +431,16 @@ impl Session {
 
     /// Each person of `Flags` 0x0001 that a shot of the player's hit among
     /// `strikes` holds a grudge against it from now on, on the pilot too
-    /// (`_DamageShip` @0x3be83-0x3beb3); an escort's shot does not count,
-    /// nor does a blast or the player's death shockwave, which is no
-    /// direct hit ([`Strike::direct`]). No save is due.
+    /// (`_DamageShip` @0x3be83-0x3beb3), once the hit is answered
+    /// ([`Strike::answered`]): the grudge is in the reaction block, which a
+    /// clear answer flag skips (see the `answer_flag` module). An escort's
+    /// shot does not count, nor does a blast or the player's death
+    /// shockwave, which is no direct hit and never answered. No save is
+    /// due.
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
         for strike in strikes
             .iter()
-            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.direct)
+            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.answered)
         {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
@@ -469,6 +490,15 @@ mod tests {
     use crate::rulebook::RuleSource;
     use crate::rulebook::{RuleKey, Rulebook};
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
+
+    #[test]
+    fn a_quote_shows_for_420_ticks() {
+        let quote = PersonQuote {
+            npc: NpcId(0),
+            text: String::new(),
+        };
+        assert_eq!(quote.ticks(), 420);
+    }
 
     /// System 130 has no traffic of its own (`AvgShips` `avg_ships`) and
     /// one Person slot, naming "Ace" (`përs` 600, subtitle "Top Gun",
@@ -703,12 +733,14 @@ mod tests {
     const ACE_ABOVE: [u32; 4] = [99, 750, 650, 180];
 
     /// `pilot`'s session over `catalog` with Ace placed 100 above the
-    /// player, who holds its fire on it.
+    /// player, who targets it, so its hits are no stray ones, and holds
+    /// its fire on it.
     fn facing_ace(catalog: &FakePilotCatalog, pilot: Pilot) -> Session {
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.populate(catalog, &mut Draws::of(&ACE_ABOVE));
         assert_eq!(persons(&session), [Some(600)]);
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        session.target = Some(session.npcs()[0].id);
         session.hold_trigger(Trigger {
             primary: true,
             ..Trigger::default()
@@ -839,6 +871,23 @@ mod tests {
     }
 
     #[test]
+    fn an_unanswered_player_hit_holds_no_grudge() {
+        // The grudge (@0x3be83-0x3beb3) is inside the reaction block, which
+        // a clear answer flag skips.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        session.hold_grudges(&[Strike {
+            answered: false,
+            ..hit
+        }]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+        session.hold_grudges(&[hit]);
+        assert!(session.pilot().grudge(PersonId(600)), "answered");
+    }
+
+    #[test]
     fn a_hit_by_no_ship_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
@@ -850,6 +899,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
     }
@@ -866,6 +918,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
@@ -886,6 +941,9 @@ mod tests {
             direct: false,
             intended: false,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: false,
         }]);
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
@@ -918,6 +976,9 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
         };
         let mut strikes = [
             downed(ShipRef::Npc(NpcId(0))),
@@ -1621,6 +1682,21 @@ mod tests {
     }
 
     #[test]
+    fn a_random_quote_waits_while_any_line_shows_and_is_said_once_it_is_free() {
+        // `_HandleShip`'s roll reads `_commCount` (@0x33f42-0x33f4b), set
+        // by every `_DisplayComm`, not only the quotes'.
+        let (catalog, mut session) = quoting([0, 0]);
+        session.say(crate::SimMessage::NoResponse);
+        let _ = session.take_messages();
+        for tick in 0..249 {
+            let (said, _) = quote_tick(&catalog, &mut session, &[0, 0]);
+            assert_eq!(said, Vec::<String>::new(), "tick {tick}");
+        }
+        let (said, _) = quote_tick(&catalog, &mut session, &[0, 0]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"], "the 250th, at 0");
+    }
+
+    #[test]
     fn a_quote_said_once_a_stay_draws_no_more() {
         let (catalog, mut session) = quoting([QUOTE_ONCE, QUOTE_ONCE]);
         assert_eq!(quote_tick(&catalog, &mut session, &[0, 1]).0.len(), 1);
@@ -1793,7 +1869,9 @@ mod tests {
 
     /// [`quoting`] with Ace of `flags`, AI type `ai_type`, flying for
     /// government 140 of `Flags` 0x0004 (it always attacks the player),
-    /// already quoted and holding no grudge; Bee flies no person.
+    /// already quoted and holding no grudge, armed with a gun of unlimited
+    /// ammunition (an unarmed warship is fully dry, and drops the player
+    /// at once, `_WarshipAI` @0x8c0e7-0x8c117); Bee flies no person.
     fn hunted_by_ace(flags: u16, ai_type: i16) -> (FakePilotCatalog, Session) {
         let mut catalog = quoters([flags, 0]);
         catalog.persons[0].govt = Some(crate::catalog::GovtId(140));
@@ -1806,6 +1884,10 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         session.populate(&catalog, &mut NeverFires);
         session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
+            1,
+        )]);
         let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
         ace.quoted = true;
         assert!(!ace.grudge);

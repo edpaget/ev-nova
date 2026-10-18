@@ -211,7 +211,7 @@ pub const NO_RANK: &str = "captain";
 pub const QUOTE_ODDS: u32 = 140;
 /// How long a hail quote shows, and keeps any other from being said at
 /// random, in ticks (420 frames, 0x1a4 @0x4464d).
-pub const QUOTE_SHOWN_TICKS: u64 = 420;
+pub const QUOTE_SHOWN_TICKS: u16 = 420;
 /// How long a person waits after its quote before it says it again at
 /// random, in ticks (2700 Mac ticks, 45 s, 0xa8c @0x33f5b).
 pub const QUOTE_GAP_TICKS: u64 = 1350;
@@ -1281,7 +1281,7 @@ mod tests {
             );
         }
         assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
-        assert_eq!([QUOTE_SHOWN_TICKS, QUOTE_GAP_TICKS], [420, 1350]);
+        assert_eq!([u64::from(QUOTE_SHOWN_TICKS), QUOTE_GAP_TICKS], [420, 1350]);
     }
 
     /// A flying person of `QUOTE_ON_ATTACK` (and `more`), idle.

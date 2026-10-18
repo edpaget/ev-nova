@@ -3,6 +3,8 @@
 
 use super::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::ai::Goal;
+use crate::ai::plunder_contents::ClassMarines;
+use crate::ai::pursuit::Pursuit;
 use crate::catalog::{EscortClass, ShipId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
@@ -39,6 +41,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         pick: None,
         target: None,
         provoked: 0.0,
+        stray: 0.0,
         aggression: 0,
         inspected: None,
         booty: None,
@@ -57,9 +60,17 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         emerges_from: None,
         self_repair: false,
         immobile: false,
+        miner: 0,
+        can_scoop: false,
+        holds: 0,
         former: None,
         tractor: None,
         ion: Ion::default(),
+        afterburner: false,
+        pursuit: Pursuit::default(),
+        ai_wait: 0,
+        docking: None,
+        marines: ClassMarines::default(),
         pods_left: 0,
     }
 }

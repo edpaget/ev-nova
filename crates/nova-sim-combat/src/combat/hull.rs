@@ -116,6 +116,26 @@ pub const PLANET_TYPE: u16 = 0x0400;
 /// fired on by point defense" (class +0x9ea, `_HandleShipPointDefense`
 /// @0x3951d; see [`defence`](super::defence)).
 pub const PD_TARGET: u16 = 0x0008;
+/// The `shïp` `Flags2` bit of a ship that retreats once its weapons run
+/// out of ammunition (class +0x9ea, `_WarshipAI` @0x8bf50,
+/// `_InterceptorAI` @0x8d358; see `nova_sim::ai::out_of_ammo`).
+pub const RETREATS_DRY: u16 = 0x0080;
+/// The `shïp` `Flags2` bit of a ship that stands off: it keeps beyond
+/// 0.85 of its longest weapon's reach and backs away inside the dogfight
+/// box (class +0x9ea, `_HighLevelAIHandler` @0x8e48e and @0x8e6b7; see
+/// `nova_sim::ai::stand_off`).
+pub const STANDS_OFF: u16 = 0x0002;
+/// The `shïp` `Flags3` bit of a ship whose turret shots (4) are drawn
+/// over the ships, in 0x3b5308 (class +0x9ec, filled @0x7a204; `_SpawnShot`
+/// @0x3f101; see [`ShotLayer`](super::shot_layer::ShotLayer)).
+pub const TURRET_SHOTS_OVER: u16 = 0x0040;
+/// The `shïp` `Flags` bit of a class whose AI ships always have an
+/// afterburner, unless it is planet-type (class +0x9e8, `_AIHasAfterburner`
+/// @0x6559; see `nova_sim::ai::afterburner`).
+pub const AFTERBURNER_ALWAYS: u16 = 0x0040;
+/// The `shïp` `Flags` bit of a class whose AI ships have an afterburner by
+/// the player's combat rating (`_AIHasAfterburner` @0x655d-0x6589).
+pub const AFTERBURNER_BY_RATING: u16 = 0x0020;
 /// The `shïp` `Cost` that hides a ship of the type (@0x2b7f3).
 pub const HIDDEN_COST: i32 = -1;
 /// The mass, in tons, from which a ship's death explosion has a size.
@@ -204,6 +224,12 @@ pub struct HullSpec {
     /// when it fights the defender or its leader (see
     /// [`defence::choose_ship`](super::defence::choose_ship)).
     pub pd_target: bool,
+    /// Whether it retreats once its weapons run out of ammunition, its
+    /// `Flags2` [`RETREATS_DRY`] (see `nova_sim::ai::out_of_ammo`).
+    pub retreats_dry: bool,
+    /// Whether it stands off from its target at its weapons' reach, its
+    /// `Flags2` [`STANDS_OFF`] (see `nova_sim::ai::stand_off`).
+    pub stands_off: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -236,6 +262,44 @@ pub struct HullSpec {
     /// rolls in, and the highest roll that hits it while it is intact (see
     /// [`sides`](super::sides)).
     pub miss_class: u32,
+    /// Whether its turret shots (4) are drawn over the ships: its `Flags3`
+    /// [`TURRET_SHOTS_OVER`] (see
+    /// [`ShotLayer::spawned`](super::shot_layer::ShotLayer::spawned)).
+    pub turret_shots_over: bool,
+    /// Its `Flags` afterburner bits, [`AFTERBURNER_ALWAYS`] and
+    /// [`AFTERBURNER_BY_RATING`], which decide with [`HullSpec::planet_type`]
+    /// whether an AI ship of the type has an afterburner (see
+    /// `nova_sim::ai::afterburner`).
+    pub afterburner: u16,
+    /// Its class's `InherentAI` (the original's class +0x12), which a
+    /// dogfighter's break-off reads (see `nova_sim::ai::pursuit`). A
+    /// [`HullRecord`] doesn't carry it: the spawn table sets it from the
+    /// `shïp` (`nova_sim::traffic::table::kind`), and it is none
+    /// otherwise.
+    pub inherent_ai: i16,
+    /// Its class's `Crew` (the original's class +0x9f2), which a pirate's
+    /// plunder tests read (see `nova_sim::ai::pirate`): it plunders only a
+    /// ship whose class has a crew above none. Like
+    /// [`inherent_ai`](Self::inherent_ai), the spawn table sets it from
+    /// the `shïp`, and the session for the player's ship; none otherwise.
+    pub crew: i16,
+    /// Its class's turn, the original's class +0x38: its `Maneuver` × the
+    /// double 0.1 as a float (`_LoadObjectData` @0x7a0db-0x7a10b, see
+    /// [`class_turn`]). A pirate's docking box reads it (see
+    /// `nova_sim::traffic::plunder_dock`). Like [`crew`](Self::crew), the
+    /// spawn table sets it; none otherwise.
+    pub class_turn: f32,
+}
+
+/// A class's turn, the original's class +0x38, from its `Maneuver`: the
+/// whole `Maneuver` × the double 0.1 (0xdd110), stored as a float
+/// (`_LoadObjectData` @0x7a0db-0x7a10b).
+#[must_use]
+pub fn class_turn(maneuver: i16) -> f32 {
+    // A float, as the original stores it.
+    #[allow(clippy::cast_possible_truncation)]
+    let turn = (f64::from(maneuver) * 0.1) as f32;
+    turn
 }
 
 impl Default for HullSpec {
@@ -260,12 +324,19 @@ impl Default for HullSpec {
             sprite_height: None,
             planet_type: false,
             pd_target: false,
+            retreats_dry: false,
+            stands_off: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
             hidden: false,
             exits: None,
             miss_class: miss_class(EscortClass::Freighter),
+            turret_shots_over: false,
+            afterburner: 0,
+            inherent_ai: 0,
+            crew: 0,
+            class_turn: 0.0,
         }
     }
 }
@@ -295,12 +366,19 @@ impl HullSpec {
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
             planet_type: record.flags & PLANET_TYPE != 0,
             pd_target: record.flags2 & PD_TARGET != 0,
+            retreats_dry: record.flags2 & RETREATS_DRY != 0,
+            stands_off: record.flags2 & STANDS_OFF != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
             exits: record.exits.as_ref().and_then(ExitPoints::new),
             miss_class: miss_class(record.escort_class),
+            turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
+            afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
+            inherent_ai: 0,
+            crew: 0,
+            class_turn: 0.0,
         }
     }
 
@@ -370,6 +448,14 @@ impl Condition {
     #[must_use]
     pub fn active(self) -> bool {
         self != Self::Destroyed
+    }
+
+    /// Whether it is disabled as the original's `_IsDisabled` reads it:
+    /// disabled or breaking up. A pirate plunders only such a ship, and
+    /// fires disable-only at one that is not.
+    #[must_use]
+    pub fn disabled(self) -> bool {
+        matches!(self, Self::Disabled | Self::Dying { .. })
     }
 }
 
@@ -473,6 +559,42 @@ mod tests {
         assert!(disabled(9.999, 100.0, true));
         assert!(!disabled(14.99, 45.0, true), "a third does not disable it");
         assert_eq!((DISABLE_PERCENT, TOUGH_DISABLE_PERCENT), (33.333, 10.0));
+    }
+
+    #[test]
+    fn a_ship_types_turret_shots_go_over_the_ships_with_flags3_0x0040() {
+        let over = HullSpec::new(&HullRecord {
+            flags3: 0x0140,
+            ..hull(143)
+        });
+        assert!(over.turret_shots_over);
+        let under = HullSpec::new(&HullRecord {
+            flags3: 0x0100,
+            ..hull(141)
+        });
+        assert!(!under.turret_shots_over);
+        assert!(!HullSpec::default().turret_shots_over);
+        assert_eq!(TURRET_SHOTS_OVER, 0x0040);
+    }
+
+    #[test]
+    fn a_ship_types_afterburner_bits_are_its_flags_0x0020_and_0x0040() {
+        let of = |flags: u16| HullSpec::new(&HullRecord { flags, ..hull(140) }).afterburner;
+        assert_eq!(of(0x0160), 0x0060);
+        assert_eq!(of(0x0420), 0x0020);
+        assert_eq!(of(0x0040), 0x0040);
+        assert_eq!(of(0x0110), 0);
+        assert_eq!(HullSpec::default().afterburner, 0);
+        assert_eq!(
+            (AFTERBURNER_ALWAYS, AFTERBURNER_BY_RATING),
+            (0x0040, 0x0020)
+        );
+        assert_eq!(HullSpec::new(&hull(140)).inherent_ai, 0);
+        assert_eq!(
+            HullSpec::new(&hull(140)).crew,
+            0,
+            "a hull record carries no crew"
+        );
     }
 
     #[test]
@@ -707,6 +829,50 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_that_retreats_out_of_ammunition_has_its_flags2_0x0080() {
+        let retreats = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .retreats_dry
+        };
+        assert!(retreats(0x0080));
+        assert!(retreats(0x0089), "with other bits");
+        assert!(!retreats(0xff7f), "every other bit");
+        assert!(!retreats(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0080,
+            ..hull(167)
+        });
+        assert!(!flags.retreats_dry, "its Flags never");
+        assert!(!HullSpec::default().retreats_dry);
+        assert_eq!(RETREATS_DRY, 0x0080);
+    }
+
+    #[test]
+    fn a_hull_that_stands_off_has_its_flags2_0x0002() {
+        let stands_off = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .stands_off
+        };
+        assert!(stands_off(0x0002));
+        assert!(stands_off(0x0083), "with other bits");
+        assert!(!stands_off(0xfffd), "every other bit");
+        assert!(!stands_off(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0002,
+            ..hull(167)
+        });
+        assert!(!flags.stands_off, "its Flags never");
+        assert!(!HullSpec::default().stands_off);
+        assert_eq!(STANDS_OFF, 0x0002);
+    }
+
+    #[test]
     fn a_hull_is_hidden_when_its_cost_is_minus_one() {
         let hidden = HullSpec::new(&HullRecord {
             cost: -1,
@@ -778,6 +944,16 @@ mod tests {
         assert!(!HullSpec::default().shows_armor);
         assert!(!HullSpec::default().hides_status);
         assert_eq!((SHOWS_ARMOR, HIDES_STATUS), (0x0100, 0x0200));
+    }
+
+    #[test]
+    fn a_class_turn_is_its_maneuver_times_a_tenth_stored_as_a_float() {
+        assert_eq!(class_turn(30), 3.0);
+        assert_eq!(class_turn(80), 8.0);
+        // 3.3000000000000003 in doubles, stored as the float nearest.
+        assert_eq!(class_turn(33), 3.3_f32);
+        assert_eq!(class_turn(-5), -0.5);
+        assert_eq!(HullSpec::default().class_turn, 0.0);
     }
 
     #[test]
@@ -856,6 +1032,22 @@ mod tests {
             );
         }
         assert!(!Condition::Destroyed.active());
+    }
+
+    #[test]
+    fn disabled_and_breaking_up_ships_are_disabled_and_intact_or_destroyed_ones_not() {
+        assert!(!Condition::Intact.disabled());
+        assert!(Condition::Disabled.disabled());
+        for starting in [false, true] {
+            assert!(
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting
+                }
+                .disabled()
+            );
+        }
+        assert!(!Condition::Destroyed.disabled());
     }
 
     #[test]

@@ -19,9 +19,12 @@
 //!    is cleared (`_playerPaint`); the Red Alert forgets its threat and
 //!    its icon (`_playerThreatened`, `_oldPlayerThreatened`,
 //!    `_alertSpritePending`); the rank last activated is forgotten
-//!    (`_recentActivatedRank`, @0x1db44); and its tail call into
-//!    `_ResetPlayerPrecalcedValues` runs (`Session::reset_precalced`: the
-//!    latches, the sabotage clock and the blessing table; the cargo is
+//!    (`_recentActivatedRank`, @0x1db44); the system died in has its
+//!    reinforcement timer cancelled and its countdown cleared
+//!    (@0x1db17-0x1db30; see the `reinforcements` module); and its tail
+//!    call into `_ResetPlayerPrecalcedValues` runs
+//!    (`Session::reset_precalced`: the latches, the sabotage clock, the
+//!    reinforcement inhibitors and the blessing table; the cargo is
 //!    already empty, so its trim never cuts).
 //!    The credits, the records, the exploration, the persons and the
 //!    escort orders are kept: argument 0 skips their block (@0x1d97e).
@@ -283,6 +286,9 @@ impl Session {
         self.pilot.paint = None;
         self.red_alert = RedAlert::default();
         self.recent_rank = None;
+        // The system died in: its timer cancelled and its countdown
+        // cleared (@0x1db17-0x1db30; see the `reinforcements` module).
+        self.reset_reinforcements_here();
         self.reset_precalced();
     }
 
@@ -972,6 +978,31 @@ mod tests {
         assert_eq!(session.nav, crate::navigation::NavMode::Off, "_ResetPlayer");
         assert_eq!(session.blessing_ranks, session.pilot.ranks, "taken again");
         assert_eq!(session.scan_latches, Latches::ARMED);
+    }
+
+    #[test]
+    fn the_rescue_cancels_the_reinforcements_of_the_system_died_in_alone() {
+        let catalog = rescuing();
+        let mut session = explored(&catalog, &[]);
+        let died_in = session.system();
+        session.pod = Some(0);
+        session.rescue_due = true;
+        session.pilot.reinforcement_days =
+            std::collections::BTreeMap::from([(died_in, 2), (SystemId(999), 3)]);
+        session.reinforcements.timers.insert(died_in, 12);
+        session.reinforcements.timers.insert(SystemId(999), 7);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(
+            session.pilot.reinforcement_days.get(&died_in),
+            None,
+            "@0x1db30"
+        );
+        assert_eq!(
+            session.reinforcements.timers.get(&died_in),
+            None,
+            "@0x1db17"
+        );
+        assert_eq!(session.reinforcements.timers.get(&SystemId(999)), Some(&7));
     }
 
     #[test]

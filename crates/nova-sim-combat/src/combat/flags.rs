@@ -157,7 +157,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x0080, Any, Implemented),
     // AI ships won't use it (`Armament::has_ammo`).
     (Flags2, 0x0100, Any, Implemented),
-    // Uses the ship's weapon sprite.
+    // The weapon glow (`WeaponSpec::glows`, `CombatEvent::WeaponGlow`);
+    // the view draws it.
     (Flags2, 0x0200, Any, Presentation),
     // Planet-type weapon. Its shots hit destroyable stellars (`stellar`);
     // the ship side (planet-type ships, blasts sparing ships) is not done

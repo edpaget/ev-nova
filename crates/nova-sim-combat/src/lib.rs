@@ -35,6 +35,10 @@
 //!   [`RuleKey::PdHostility`], and destruction, reported as [`CombatEvent`](combat::CombatEvent)s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`](combat::report::SimDiagnostic).
+//! - [`comm_line`]: the message line's countdown, `_commCount`, as one
+//!   [`CommLine`](comm_line::CommLine): set by each message shown,
+//!   counted down each frame, and read by the calls that wait for a free
+//!   line.
 //! - [`fleet`]: the player's fleet as data: each ship in it, an
 //!   [`Escort`](fleet::Escort), and the
 //!   [`EscortOrder`](fleet::EscortOrder) it follows.
@@ -53,6 +57,7 @@
 //! - [`self_repair`]: a disabled ship repairing itself
 //!   ([`can_self_repair`](self_repair::can_self_repair)), and a former
 //!   escort rejoining the player as it does.
+//! - [`sprite_layer`]: the order the ship and shot layers are drawn in.
 //! - [`ship_layer`]: the layers ships are drawn in
 //!   ([`ShipLayer`](ship_layer::ShipLayer)): the disabled at the bottom,
 //!   then the ships the player leads, then the rest with the player.
@@ -82,10 +87,12 @@ pub mod asteroid;
 pub mod bay;
 pub mod cloak;
 pub mod combat;
+pub mod comm_line;
 pub mod fleet;
 pub mod message;
 pub mod player_fate;
 pub mod sabotage;
 pub mod self_repair;
 pub mod ship_layer;
+pub mod sprite_layer;
 pub mod tutorial;

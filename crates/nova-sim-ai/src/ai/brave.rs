@@ -3,11 +3,22 @@
 //! once provoked it attacks its attacker while it is within
 //! [`STAND_AND_FIGHT`] pixels on both axes (@0x8b616), and flees from it
 //! beyond, or when the chase is hopeless; with the attacker gone it
-//! decides again.
+//! decides again. Fleeing, or fighting a warship or an interceptor, it
+//! calls for help on every think (`_AICallForHelp` @0x8b6cc, @0x8b71c;
+//! see [`call_for_help`](super::call_for_help)), and fleeing it calls
+//! for reinforcements too, after the call for help (@0x8b6dc; see
+//! [`reinforcements`](super::reinforcements)). A stand-off ship (`shïp`
+//! `Flags2` 0x0002) never asks
+//! whether the chase is hopeless: `_HighLevelAIHandler` tests the bit
+//! first and jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its
+//! band instead (see [`stand_off`](super::stand_off)).
 
+use crate::ai::call_for_help::brave_call;
 use crate::ai::fire::FireRules;
 use crate::ai::odds::hopeless_chase;
-use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, provoked_by, react};
+use crate::ai::{
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, provoked_by, react,
+};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
@@ -28,6 +39,19 @@ pub struct BraveTrader {
 }
 
 impl Behaviour for BraveTrader {
+    /// Its [`decide`](Self::decide) goal, with a distress call fleeing or
+    /// fighting a warship or interceptor ([`brave_call`]), and a call for
+    /// reinforcements fleeing (state 3, @0x8b6dc).
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        let goal = self.decide(npc, around, chance);
+        Decision {
+            goal,
+            comm_call: brave_call(goal, around),
+            calls_reinforcements: matches!(goal, Goal::Flee(_)),
+            ..Decision::default()
+        }
+    }
+
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         let Some(attacker) = provoked_by(npc, around) else {
             return idle(npc, around, chance);
@@ -36,7 +60,7 @@ impl Behaviour for BraveTrader {
             let off = state.position - npc.state.position;
             off.x.abs() <= STAND_AND_FIGHT && off.y.abs() <= STAND_AND_FIGHT
         });
-        if near && !hopeless_chase(npc, attacker, around) {
+        if near && (npc.hull.stands_off || !hopeless_chase(npc, attacker, around)) {
             Goal::Attack(attacker)
         } else {
             Goal::Flee(attacker)
@@ -60,6 +84,7 @@ impl Behaviour for BraveTrader {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::CommCall;
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
@@ -111,6 +136,81 @@ mod tests {
         assert_eq!(STAND_AND_FIGHT, 1250.0);
     }
 
+    /// The brave trader's call, among `npcs`.
+    fn call(npcs: &[Npc]) -> Option<CommCall> {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        BraveTrader::default()
+            .decision(&npcs[0], &around, &mut Draws::of(&[0]))
+            .comm_call
+    }
+
+    #[test]
+    fn a_brave_trader_calls_for_help_fleeing_or_fighting_a_warship_or_interceptor() {
+        assert_eq!(
+            call(&provoked(1251.0, 0.0)),
+            Some(CommCall::Distress),
+            "fleeing"
+        );
+        assert_eq!(
+            call(&provoked(100.0, 0.0)),
+            Some(CommCall::Distress),
+            "a warship"
+        );
+        let mut police = provoked(100.0, 0.0);
+        police[1].ai_type = AiType::Interceptor;
+        assert_eq!(call(&police), Some(CommCall::Distress), "an interceptor");
+        for ai_type in [AiType::BraveTrader, AiType::WimpyTrader] {
+            let mut trader = provoked(100.0, 0.0);
+            trader[1].ai_type = ai_type;
+            assert_eq!(call(&trader), None, "{ai_type:?}");
+        }
+        let mut calm = provoked(100.0, 0.0);
+        calm[0].provoked = 0.0;
+        assert_eq!(call(&calm), None, "idle");
+    }
+
+    /// Whether the brave trader's think calls for reinforcements, among
+    /// `npcs`.
+    fn calls_reinforcements(npcs: &[Npc]) -> bool {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        BraveTrader::default()
+            .decision(&npcs[0], &around, &mut Draws::of(&[0]))
+            .calls_reinforcements
+    }
+
+    #[test]
+    fn a_fleeing_brave_trader_calls_for_reinforcements_too_and_a_fighting_one_does_not() {
+        assert!(
+            calls_reinforcements(&provoked(1251.0, 0.0)),
+            "fleeing (@0x8b6dc)"
+        );
+        assert!(
+            !calls_reinforcements(&provoked(100.0, 0.0)),
+            "fighting a warship, only for help"
+        );
+        let mut calm = provoked(100.0, 0.0);
+        calm[0].provoked = 0.0;
+        assert!(!calls_reinforcements(&calm), "idle");
+    }
+
+    #[test]
+    fn a_brave_trader_fighting_the_player_does_not_call() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+        trader.provoked = 10.0;
+        trader.target = Some(ShipRef::Player);
+        let npcs = [trader];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        let decision = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(decision.comm_call, None);
+    }
+
     #[test]
     fn a_brave_trader_flees_a_hopeless_chase() {
         let mut npcs = provoked(0.0, -300.0);
@@ -118,6 +218,19 @@ mod tests {
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = Vec2::new(0.0, -1.0);
         assert_eq!(decided(&npcs), Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn a_stand_off_brave_trader_never_asks_whether_a_chase_is_hopeless() {
+        let mut npcs = provoked(0.0, -300.0);
+        npcs[0].hull.mass = 100.0;
+        npcs[0].hull.stands_off = true;
+        npcs[1].goal = Goal::Flee(n(1));
+        npcs[1].state.velocity = Vec2::new(0.0, -1.0);
+        assert_eq!(decided(&npcs), Goal::Attack(n(2)));
+        let mut far = provoked(1251.0, 0.0);
+        far[0].hull.stands_off = true;
+        assert_eq!(decided(&far), Goal::Flee(n(2)), "still flees beyond 1250");
     }
 
     #[test]
@@ -152,13 +265,8 @@ mod tests {
             Some(WeaponId(128))
         );
         let strike = Strike {
-            ship: n(1),
-            by: Some(n(2)),
             damage: 7.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
+            ..crate::combat::fixture::strike(n(1), n(2))
         };
         assert_eq!(
             BraveTrader::default()

@@ -228,8 +228,10 @@ mod tests {
             sites,
             &BTreeMap::new(),
             other,
+            false,
             speeds,
             rules,
+            crate::rulebook::RuleSource::Engine,
             &mut Draws::of(&[]),
         )
     }
