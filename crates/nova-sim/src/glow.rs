@@ -81,9 +81,17 @@
 //! bias instead; 8-bit screens' alpha-table blits; the banking glow, shän flag
 //! 0x0002 with banking (at 0x6cef6), which no stock ship has; AI
 //! ships' own rules (`_HandleShip`, 0x33581, and `_LowLevelAIHandler`,
-//! 0x851da); and the hyperspace run-up, during which the glow blazes to
-//! 32 (at 0x6b81b and 0x6d320): here a jump puts the glow out as it
-//! begins.
+//! 0x851da), their warp-out's +3 to 32 among them (@0x349fc-0x34a25),
+//! which rdm:phase/ship-handling-fidelity/phase-10-ship-drawing owns.
+//!
+//! # The jump
+//!
+//! Through a jump the thrust key is not taken, so the base coasts down a
+//! step a tick, and two raises run it up ([`ramp_jump_glow`]): the brake's
+//! thrust raises it by 3 while it is at most 23, so it can reach 26
+//! ([`brake_glow`], @0x6b81b), and the warp's move-off by 4, to at most
+//! 32 ([`move_off_glow`], @0x6d320). With the fall above cruise after
+//! them, the brake holds it about cruise and the move-off at 31.
 
 use crate::blink::{BlinkChance, FULL};
 
@@ -140,6 +148,77 @@ pub fn ramp_inertialess_glow(base: i16, thrusting: bool, follow: Follow, afterbu
         Follow::Disabled => fade(stepped),
     };
     after_move(followed, thrusting, afterburner)
+}
+
+/// The base level the jump brake's thrust raises the glow from: it rises
+/// by 3 while it is at most 23 (`cmpw $0x17`, `jg` @0x6b822-0x6b82b), so
+/// it can reach 26.
+const BRAKE_GLOW_BELOW: i16 = 23;
+
+/// The base level the warp's move-off raises the glow to at most
+/// (@0x6d327-0x6d33c).
+const MOVE_OFF_GLOW: i16 = 32;
+
+/// `base` after the jump brake's thrust (`_HandlePlayer` @0x6b81b-0x6b82b):
+/// 3 higher while it is at most 23.
+#[must_use]
+pub fn brake_glow(base: i16) -> i16 {
+    if base <= BRAKE_GLOW_BELOW {
+        base + 3
+    } else {
+        base
+    }
+}
+
+/// `base` after the warp's move-off (`_HandlePlayer` @0x6d320-0x6d33c): 4
+/// higher, to at most 32, while it is at most 31.
+#[must_use]
+pub fn move_off_glow(base: i16) -> i16 {
+    if base < MOVE_OFF_GLOW {
+        (base + 4).min(MOVE_OFF_GLOW)
+    } else {
+        base
+    }
+}
+
+/// Which of the jump's raises a tick of the jump makes (see
+/// [`ramp_jump_glow`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JumpRaises {
+    /// The brake thrust ([`brake_glow`]).
+    pub brake: bool,
+    /// The move-off ([`move_off_glow`]).
+    pub move_off: bool,
+}
+
+/// The glow base level after one tick of a jump from `base`: the brake's
+/// raise (@0x6b81b) when `raises` says, the coast step, as the thrust key
+/// is not taken in a jump (@0x6cd40), the move-off's raise (@0x6d320)
+/// when `raises` says, an inertialess ship's `follow` step (@0x6d36e),
+/// then the afterburner's step with the thrust `key` held or not, or the
+/// fall above cruise (@0x6fc60, @0x6fd3f): the order `_HandlePlayer` runs
+/// them in.
+#[must_use]
+pub fn ramp_jump_glow(
+    base: i16,
+    raises: JumpRaises,
+    follow: Option<Follow>,
+    afterburner: bool,
+    key: bool,
+) -> i16 {
+    let braked = if raises.brake { brake_glow(base) } else { base };
+    let coasted = fade(braked);
+    let moved = if raises.move_off {
+        move_off_glow(coasted)
+    } else {
+        coasted
+    };
+    let followed = match follow {
+        Some(Follow::Speed { speed, max_speed }) => follow_speed(moved, speed, max_speed),
+        Some(Follow::Disabled) => fade(moved),
+        None => moved,
+    };
+    after_move(followed, key, afterburner)
 }
 
 /// The base an inertialess ship's glow follows at `speed` of a top speed
@@ -594,5 +673,80 @@ mod tests {
         assert!((0..1000).all(|tick| glow_level(0, tick, &rolls).is_none()));
         assert_eq!(glow_level(24, 42, &rolls), glow_level(24, 42, &rolls));
         let _ = glow_level(24, u64::MAX, &rolls);
+    }
+
+    // The jump's glow.
+
+    #[test]
+    fn the_brake_raises_the_base_by_3_while_it_is_at_most_23() {
+        assert_eq!(brake_glow(0), 3);
+        assert_eq!(brake_glow(23), 26, "so it tops out at 26 (cmpw $0x17, jg)");
+        assert_eq!(brake_glow(24), 24);
+        assert_eq!(brake_glow(-1), 2);
+    }
+
+    #[test]
+    fn the_move_off_raises_the_base_by_4_to_at_most_32() {
+        assert_eq!(move_off_glow(0), 4);
+        assert_eq!(move_off_glow(28), 32);
+        assert_eq!(move_off_glow(29), 32, "capped");
+        assert_eq!(move_off_glow(31), 32);
+        assert_eq!(move_off_glow(32), 32);
+        assert_eq!(move_off_glow(40), 40, "above 31 it is left");
+    }
+
+    /// `ticks` jump ticks of `raises` from `base`, coasting, with no
+    /// afterburner.
+    fn jumped(mut base: i16, raises: JumpRaises, ticks: usize) -> Vec<i16> {
+        (0..ticks)
+            .map(|_| {
+                base = ramp_jump_glow(base, raises, None, false, false);
+                base
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_braking_thrust_raises_3_then_coasts_1_and_falls_above_cruise() {
+        let brake = JumpRaises {
+            brake: true,
+            move_off: false,
+        };
+        assert_eq!(jumped(0, brake, 3), [2, 4, 6]);
+        assert_eq!(jumped(22, brake, 4), [24, 23, 24, 23], "around cruise");
+        let none = JumpRaises::default();
+        assert_eq!(jumped(3, none, 4), [2, 1, 0, 0], "the jump coasts");
+    }
+
+    #[test]
+    fn the_move_off_brightens_the_glow_to_31_and_holds_it() {
+        let off = JumpRaises {
+            brake: false,
+            move_off: true,
+        };
+        // -1 (none at 0), +4, then -1 above 24: 3 a tick below cruise.
+        assert_eq!(jumped(0, off, 3), [4, 7, 10]);
+        let held = jumped(20, off, 8);
+        assert_eq!(held, [23, 25, 27, 29, 31, 31, 31, 31]);
+    }
+
+    #[test]
+    fn the_jump_glow_follows_an_inertialess_ships_speed_after_the_move_off() {
+        let off = JumpRaises {
+            brake: false,
+            move_off: true,
+        };
+        let follow = Follow::Speed {
+            speed: 0.0,
+            max_speed: 6.0,
+        };
+        // 10 - 1 + 4 - 1 (target 0) = 12.
+        assert_eq!(ramp_jump_glow(10, off, Some(follow), false, false), 12);
+        assert_eq!(
+            ramp_jump_glow(10, off, Some(Follow::Disabled), false, false),
+            12
+        );
+        // The afterburner's step in place of the fall above cruise.
+        assert_eq!(ramp_jump_glow(28, off, None, true, false), 32);
     }
 }
