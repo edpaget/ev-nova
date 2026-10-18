@@ -71,8 +71,9 @@
 //!   ([`FlightView::camera`]; the original's `_screenCenter` is the play
 //!   area's, filed as
 //!   rdm:phase/display-modes-fidelity/phase-1-ship-at-play-area-centre);
-//! - the status bar against the right edge ([`hud::bar_origin`]), the
-//!   message box across the bottom ([`hud::message_box`]), the Red Alert
+//! - the status bar against the right edge
+//!   ([`bar_origin`](super::hud::bar_origin)), the message box across the
+//!   bottom ([`message_box`](super::hud::message_box)), the Red Alert
 //!   icon at the play area's top right
 //!   ([`alert_origin`](super::alert::alert_origin)) and the floating map
 //!   from the right edge ([`floating::frame`](super::floating::frame));
