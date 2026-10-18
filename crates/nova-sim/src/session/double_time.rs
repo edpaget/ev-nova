@@ -188,7 +188,9 @@ impl Session {
     /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
     /// its hits answered; the traffic's motion; `_HandleShip`'s fire;
     /// `_HandleBeams` and what the pass leaves; then the asteroids and the
-    /// reinforcement clock. Its caller runs it after the advance pass
+    /// reinforcement clock; from the eject check on, the advance pass's own
+    /// routine without its AI ([`Session::pass_after_move`]). Its caller
+    /// runs it after the advance pass
     /// ([`Session::game_work`]) while [`Session::double_time`] is on.
     /// Landed, or once a jump has begun, it does nothing, as the advance
     /// pass stands still; a jump that begins on its move stops it there,
@@ -218,22 +220,8 @@ impl Session {
         if self.jumping().is_some() || self.rescue_due {
             return;
         }
-        self.eject_before_fight(chance);
-        self.collision_passes(pass, rules, chance);
-        self.answer_strikes(behaviour);
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots(fighters, arena, chance);
-        });
-        self.answer_strikes(behaviour);
-        self.move_traffic_again(chance);
-        self.npcs_fire(pass, rules, chance);
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.close_tick(fighters, arena, chance);
-        });
-        self.fight_tail(&start, pass, rules, chance);
-        self.tick_asteroids(chance);
-        self.tick_reinforcements(chance);
+        self.pass_after_move(&start, pass, None, behaviour, rules, chance);
     }
 
     /// The traffic's part of the second pass, drawing on `chance`: the NPCs
@@ -245,7 +233,7 @@ impl Session {
     /// lets go of a target gone and orphans the fighters of a carrier
     /// gone, as it does after any departure, before anything is drawn.
     /// Nothing moves before the system is populated.
-    fn move_traffic_again(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    pub(super) fn move_traffic_again(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if self.traffic_due {
             return;
         }

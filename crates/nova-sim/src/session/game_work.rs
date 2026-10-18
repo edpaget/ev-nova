@@ -31,7 +31,9 @@
 //! Landed, or with the jump under way as the pass begins or once its move
 //! begins it, the pass runs the separate parts instead, as the fight
 //! stands still. Double time's second pass ([`Session::tick_again`]) runs
-//! the same order without the AI.
+//! the same order without the AI: from the eject check on, both passes
+//! run one routine ([`Session::pass_after_move`]), which branches where
+//! `_DoPlayGameWork` branches on its argument (@0x44026-0x4402a).
 //!
 //! **What remains**, none crossing a boundary the player sees, so none
 //! filed:
@@ -142,34 +144,74 @@ impl Session {
         if self.rescue_if_due(catalog, chance) {
             return true;
         }
+        self.pass_after_move(&start, pass, Some(catalog), behaviour, rules, chance);
+        false
+    }
+
+    /// The rest of a pass of the game's work after the player's move, on
+    /// `pass` by `rules`, against the session as the pass `start`ed, the
+    /// NPCs answering its hits as `behaviour` says, drawing on `chance`:
+    /// both passes run it, [`Session::game_work`] and
+    /// [`Session::tick_again`], as the original runs one routine,
+    /// `_DoPlayGameWork(pass)`, for both (see the module docs).
+    ///
+    /// `ai` is the advance pass's AI, its traffic drawn from the catalog
+    /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
+    /// past it (@0x4402a to @0x44350). Where the original branches on its
+    /// argument, this branches on `ai`: with it, the traffic thinks, the
+    /// scans settle and every NPC's point defence fires before the shots,
+    /// and the traffic's motion is its fly half, its reinforcement clock
+    /// included ([`Session::traffic_tail`]), then the assistance; without
+    /// it, the traffic only moves, and the reinforcement clock
+    /// (`_HandleReinforcements` @0x44504) ticks after the asteroids.
+    pub(super) fn pass_after_move(
+        &mut self,
+        start: &PassStart,
+        pass: GamePass,
+        ai: Option<&dyn TrafficCatalog>,
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
         self.eject_before_fight(chance);
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(pass, rules, chance);
         self.answer_strikes(behaviour);
         // The advance pass's AI (@0x44223-0x442ae).
-        let marks = self.traffic_think(catalog, behaviour, chance);
-        self.take_scans(rules.law, chance);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.defend_npcs(fighters, arena, chance);
-        });
+        let thought = if let Some(catalog) = ai {
+            let marks = self.traffic_think(catalog, behaviour, chance);
+            self.take_scans(rules.law, chance);
+            self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+                combat.defend_npcs(fighters, arena, chance);
+            });
+            Some(marks)
+        } else {
+            None
+        };
         // `_HandleShot` (@0x44385).
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fly_shots(fighters, arena, chance);
         });
         self.answer_strikes(behaviour);
         // `_HandleShip` (@0x44483).
-        self.traffic_motion(marks, chance);
-        self.tick_assistance(rules.disable);
+        if let Some(marks) = thought {
+            self.traffic_motion(marks, chance);
+            self.tick_assistance(rules.disable);
+        } else {
+            self.move_traffic_again(chance);
+        }
         self.npcs_fire(pass, rules, chance);
         // `_HandleBeams` (@0x4453d), and what the pass leaves.
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(&start, pass, rules, chance);
+        self.fight_tail(start, pass, rules, chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
         // come after the collision passes (see the `asteroids` module).
         self.tick_asteroids(chance);
-        false
+        if ai.is_none() {
+            self.tick_reinforcements(chance);
+        }
     }
 
     /// `_HandlePlayer`'s fight before its move, on `pass` by `rules`,
