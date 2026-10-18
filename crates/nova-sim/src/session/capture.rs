@@ -503,6 +503,30 @@ mod tests {
         assert_eq!(chance.asked, [350], "the trader's 300 and the tank's 50");
     }
 
+    #[test]
+    fn an_ammunition_take_of_nothing_still_resets_and_an_energy_take_of_nothing_does_not() {
+        use crate::scan::Latches;
+        let catalog = boardable();
+        // The ammunition button resets (@0x93cc9) before it looks for
+        // rounds (@0x93cb8 refuses).
+        let mut session = aboard(&catalog);
+        session.fuel_cap_cached = true;
+        crate::session::precalced::tests::convicted(&mut session);
+        assert_eq!(take(&mut session, Take::Ammo, &[]).0, Taken::Missed);
+        assert!(!session.fuel_cap_cached, "the ammunition reset");
+        assert_eq!(session.scan_latches, Latches::ARMED, "the ammunition reset");
+        // The energy refusal (@0x94231) only beeps.
+        let mut session = aboard(&catalog);
+        take(&mut session, Take::Energy, &[]);
+        take(&mut session, Take::Miss, &[99]);
+        session.fuel_cap_cached = true;
+        crate::session::precalced::tests::convicted(&mut session);
+        let latches = session.scan_latches;
+        assert_eq!(take(&mut session, Take::Energy, &[]).0, Taken::Missed);
+        assert!(session.fuel_cap_cached, "no energy reset");
+        assert_eq!(session.scan_latches, latches, "no energy reset");
+    }
+
     // Use As My Ship.
 
     /// [`captured`] with 4 tons of food and 6 of commodity 3, 5 of `jünk`
