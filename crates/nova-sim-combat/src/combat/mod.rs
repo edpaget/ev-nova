@@ -367,7 +367,7 @@ use asteroid_hit::{AsteroidFuse, AsteroidTarget};
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
-use exits::{Compression, ExitCursors, ExitPoints, drawn_frame, frame_angle};
+use exits::{Compression, ExitCursors, ExitPoints, StrayWord, drawn_frame, frame_angle};
 use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
@@ -1054,6 +1054,9 @@ pub struct Combat {
     events: Vec<CombatEvent>,
     strikes: Vec<Strike>,
     stellar_strikes: Vec<StellarStrike>,
+    /// The words outside the fight that stray beams stepped this tick,
+    /// with their firers ([`Combat::take_stray_steps`]).
+    stray_steps: Vec<(ShipRef, StrayWord)>,
     sorties: Vec<Sortie>,
     shoves: Vec<Shove>,
     /// The ships destroyed this tick, in order, whose shockwaves are yet
@@ -1080,7 +1083,7 @@ pub struct Combat {
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
-    /// Whether a beam of `ExitType` -1 steps its ship's fold set
+    /// Whether a beam of stray `ExitType` steps the word it lands on
     /// ([`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit)).
     stray_beam_exit: RuleSource,
     /// How beams hit ([`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest),
@@ -1743,7 +1746,9 @@ impl Combat {
                 ..Beam::launch(weapon, ship, fleet, &from, aiming)
             };
             beam.disable_only |= plunder::beam_disables(plunderer, aimed_at, targets);
-            self.beam_exit(muzzle, &mut beam, toward, chance);
+            if let Some(word) = self.beam_exit(muzzle, &mut beam, toward, chance) {
+                self.stray_steps.push((ship, word));
+            }
             self.beams.push(beam);
             false
         } else {
@@ -1813,14 +1818,18 @@ impl Combat {
     /// the centre. An `ExitType` of -1 indexes the word before the cursors,
     /// the fold set, and steps it as one by the engine (@0x450fa-0x4523d;
     /// [`exits::step_stray`]), the beam starting at the centre
-    /// (`_HandleBeams` @0x30469-0x3049f).
+    /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 5 lands on
+    /// +0xc908, outside the fight (the crew pods left, or the player's pod
+    /// countdown): by the engine it is returned for the caller to raise
+    /// for the firer ([`Combat::take_stray_steps`]), the beam starting at
+    /// the centre ([`StrayWord`]).
     fn beam_exit(
         &self,
         muzzle: &mut Muzzle,
         beam: &mut Beam,
         toward: Option<Vec2>,
         chance: &mut dyn Chance,
-    ) {
+    ) -> Option<StrayWord> {
         let weapon = &beam.weapon;
         if let Some(kind) = weapon.exit {
             let from = muzzle.from;
@@ -1836,9 +1845,13 @@ impl Combat {
                 beam.kind = Some(kind);
                 beam.exit = Some(exit);
             }
-        } else if weapon.steps_fold && self.stray_beam_exit == RuleSource::Engine {
-            exits::step_stray(muzzle.fold, chance);
+        } else if self.stray_beam_exit == RuleSource::Engine {
+            match weapon.stray {
+                Some(StrayWord::FoldSet) => exits::step_stray(muzzle.fold, chance),
+                other => return other,
+            }
         }
+        None
     }
 
     /// Where a shot of `launch` leaves `muzzle` from, and the side of the
@@ -3142,6 +3155,13 @@ impl Combat {
     /// empties the list.
     pub fn take_strikes(&mut self) -> Vec<Strike> {
         std::mem::take(&mut self.strikes)
+    }
+
+    /// The words outside the fight that beams of stray `ExitType` stepped
+    /// since they were last taken, each with its firer, in order, for the
+    /// session to step ([`StrayWord`]); taking them empties the list.
+    pub fn take_stray_steps(&mut self) -> Vec<(ShipRef, StrayWord)> {
+        std::mem::take(&mut self.stray_steps)
     }
 
     /// The hits on stellars made since they were last taken, in order;
