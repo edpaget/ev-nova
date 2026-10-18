@@ -1187,6 +1187,13 @@ mod tests {
             Goal::Attack(P),
             "nor a 0x0040 word"
         );
+        let mut warping = attacking(n(2));
+        warping.warp.stage = 2.0;
+        assert_eq!(
+            worded(ALWAYS, &[warping, pirate()], INTACT),
+            Goal::Attack(n(2)),
+            "nor one warping out"
+        );
     }
 
     #[test]

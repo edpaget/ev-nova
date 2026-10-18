@@ -1784,6 +1784,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_ship_whose_warp_is_under_way_is_in_hyperspace() {
+        let mut npc = plain(1);
+        npc.warp.stage = 2.0;
+        assert!(npc.in_hyperspace(), "warping out");
+        npc.warp.stage = 0.0;
+        assert!(!npc.in_hyperspace(), "its warp over");
+    }
+
     /// The player's hired escort, NPC `id`.
     fn hired(id: u32) -> Npc {
         Npc {
