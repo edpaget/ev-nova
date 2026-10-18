@@ -169,11 +169,11 @@ mod tests {
     use super::*;
     use crate::ai::pirate::PirateWarship;
     use crate::ai::plunder_contents::{CargoLine, ClassMarines};
-    use crate::catalog::{JunkId, MissionRecord};
+    use crate::catalog::{JunkId, MARINES, MissionRecord, OutfitId, ShipRecord};
     use crate::combat::ShipRef;
     use crate::control::{Bit, Script};
     use crate::session::tests::{armed, facing_an_npc};
-    use crate::testkit::{Draws, FakePilotCatalog, carrying, mission};
+    use crate::testkit::{Draws, FAST, FakePilotCatalog, carrying, mission, outfit, ship};
     use crate::traffic::plunder_dock::{DockSub, Docking};
 
     fn bit(n: u16) -> Bit {
@@ -279,6 +279,58 @@ mod tests {
             );
             assert_eq!(session.take_sounds(), [SimSound::CargoStolen]);
         }
+    }
+
+    /// The cash left after a plunder of [`plundering`]'s player by its
+    /// pirate in a session of `catalog`, the pilot owning `owned`, every
+    /// draw 0 (no jitter).
+    fn cash_after(catalog: &FakePilotCatalog, owned: &[(i16, u16)]) -> i64 {
+        let (mut session, pirate) = plundering(catalog, 0);
+        for &(id, count) in owned {
+            session.pilot.outfits.insert(OutfitId(id), count);
+        }
+        answer(&mut session, pirate, 0);
+        session.pilot.cash
+    }
+
+    #[test]
+    fn the_players_class_strength_lowers_the_odds_and_so_the_credits_taken() {
+        // The pirate's Strength 1 against the player's class's 2: a ratio
+        // of 25, odds of 35. The pirate's own class (129) has none.
+        let mut catalog = catalog_of(vec![]);
+        catalog.ship_records.push(ShipRecord {
+            strength: 2,
+            ..ship(128, FAST)
+        });
+        assert_ne!(credits_taken(10_000, 35), 1800, "not the odds of 60");
+        assert_eq!(
+            cash_after(&catalog, &[]),
+            10_000 - credits_taken(10_000, 35)
+        );
+    }
+
+    #[test]
+    fn the_players_own_marines_crew_lowers_the_odds_and_so_the_credits_taken() {
+        // Three marines of ModVal 1: a crew of 3 beside no Strength, a
+        // ratio of 16, odds of 26.
+        let mut catalog = catalog_of(vec![]);
+        catalog.outfits.push(outfit(260, &[(MARINES, 1)]));
+        assert_eq!(
+            cash_after(&catalog, &[(260, 3)]),
+            10_000 - credits_taken(10_000, 26)
+        );
+    }
+
+    #[test]
+    fn the_players_own_marines_defence_lowers_the_odds_and_so_the_credits_taken() {
+        // Four of ModVal -5: a defence of -20, so a ratio of 50 less 20,
+        // odds of 40.
+        let mut catalog = catalog_of(vec![]);
+        catalog.outfits.push(outfit(261, &[(MARINES, -5)]));
+        assert_eq!(
+            cash_after(&catalog, &[(261, 4)]),
+            10_000 - credits_taken(10_000, 40)
+        );
     }
 
     #[test]
