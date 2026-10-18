@@ -573,6 +573,45 @@ mod tests {
     }
 
     #[test]
+    fn a_warship_class_found_breaking_up_is_dropped_keeping_the_pursuit_with_destroying_weapons() {
+        // The plunder search finds it (`_IsDisabled` counts breaking up),
+        // the destroying weapon passes the disabled-warship drop, and goal
+        // 4's high level drops it in the same frame, its sub kept.
+        let mut armed = pirate();
+        armed.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                mass_dmg: 1,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        let breaking_up = Npc {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..warship_class(2, 300.0)
+        };
+        assert_eq!(
+            decided(&[armed.clone(), breaking_up]),
+            Decision {
+                keeps_pursuit: true,
+                ..dropped()
+            },
+            "goal 4's gone-or-breaking-up drop"
+        );
+        let downed = Npc {
+            condition: Condition::Disabled,
+            ..warship_class(2, 300.0)
+        };
+        assert_eq!(
+            decided(&[armed, downed]),
+            only(Goal::Attack(n(2))),
+            "breaking up drops it, not being disabled"
+        );
+    }
+
+    #[test]
     fn only_a_pick_that_calls_it_turns_the_pirate_on_the_player() {
         let downed = side(0.0, 100.0, Condition::Disabled, 1);
         let plain = decided_by(&govts(0, 0), &[pirate()], Some(&downed));
