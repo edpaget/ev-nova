@@ -51,6 +51,7 @@
 use std::fmt::Debug;
 
 use super::exits::ExitPoints;
+use super::ship_frames::FrameSpec;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{EscortClass, HullRecord, ShipId};
@@ -257,6 +258,11 @@ pub struct HullSpec {
     /// shots and beams leave from its centre (see
     /// [`exits`](super::exits)).
     pub exits: Option<ExitPoints>,
+    /// Its `shän`'s display: what picks the frames it is drawn on and
+    /// whether it unfolds to fire (see
+    /// [`ship_frames`](super::ship_frames)); [`FrameSpec::NONE`] without
+    /// a `shän`.
+    pub frames: FrameSpec,
     /// Its turret miss class (the original's class +0xa10,
     /// [`miss_class`]): the range a turret or point-defence shot it fires
     /// rolls in, and the highest roll that hits it while it is intact (see
@@ -331,6 +337,7 @@ impl Default for HullSpec {
             stock_reach: None,
             hidden: false,
             exits: None,
+            frames: FrameSpec::NONE,
             miss_class: miss_class(EscortClass::Freighter),
             turret_shots_over: false,
             afterburner: 0,
@@ -348,6 +355,7 @@ impl HullSpec {
         let size = record.size.filter(|&size| size > 0).map(f32::from);
         let hit_radius = size.map_or(DEFAULT_HIT_RADIUS, |size| size * HIT_RADIUS_PER_SIZE);
         let board_reach = size.map_or(DEFAULT_BOARD_REACH, |size| size * BOARD_REACH_PER_SIZE);
+        let frames = FrameSpec::new(record.display.as_ref(), record.exits.as_ref());
         Self {
             hit_radius,
             tough: record.flags & TOUGH != 0,
@@ -372,7 +380,12 @@ impl HullSpec {
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
-            exits: record.exits.as_ref().and_then(ExitPoints::new),
+            exits: record
+                .exits
+                .as_ref()
+                .and_then(ExitPoints::new)
+                .map(|exits| exits.with_angle_table(frames.table.is_some())),
+            frames,
             miss_class: miss_class(record.escort_class),
             turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
             afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
@@ -524,7 +537,7 @@ impl DisableRule for NovaDisable {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{BoomId, ShipExits, ShipId};
+    use crate::catalog::{BoomId, ShipDisplay, ShipExits, ShipId};
     use crate::combat::exits::ExitPoints;
     use nova_sim_catalog::fixture::hull;
 
@@ -649,6 +662,46 @@ mod tests {
             None,
             "a placeholder fires from its centre"
         );
+    }
+
+    #[test]
+    fn hull_spec_reads_its_shäns_display_and_turns_its_exits_by_its_table() {
+        let raw = ShipExits {
+            frames: 8,
+            up_compress: (100, 100),
+            down_compress: (100, 50),
+            ..ShipExits::default()
+        };
+        let display = ShipDisplay {
+            flags: 0x01C2,
+            base_sets: 6,
+            anim_delay: 5,
+            ..ShipDisplay::default()
+        };
+        let miner = HullSpec::new(&HullRecord {
+            exits: Some(raw),
+            display: Some(display),
+            ..hull(379)
+        });
+        assert_eq!(miner.frames, FrameSpec::new(Some(&display), Some(&raw)));
+        assert_eq!(miner.frames.unfolds_to_fire(), Some(6));
+        let exits = miner.exits.expect("exits");
+        assert_eq!(exits.drawn_frame(125.0), 3, "by the table");
+        let plain = HullSpec::new(&HullRecord {
+            exits: Some(raw),
+            display: Some(ShipDisplay {
+                flags: 0x00C2,
+                ..display
+            }),
+            ..hull(379)
+        });
+        assert_eq!(
+            plain.exits.expect("exits").drawn_frame(125.0),
+            2,
+            "no table"
+        );
+        assert_eq!(HullSpec::default().frames, FrameSpec::NONE);
+        assert_eq!(HullSpec::new(&hull(128)).frames, FrameSpec::NONE, "no shän");
     }
 
     #[test]

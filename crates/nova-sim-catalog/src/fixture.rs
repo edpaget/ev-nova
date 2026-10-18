@@ -271,6 +271,7 @@ pub fn hull(id: i16) -> HullRecord {
         cost: 0,
         speed: 0,
         exits: None,
+        display: None,
         escort_class: EscortClass::Freighter,
     }
 }

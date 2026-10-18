@@ -42,8 +42,8 @@ use crate::catalog::{
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
+    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
     SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
     WeaponRecord, loaded_mod_val,
 };
@@ -1045,13 +1045,14 @@ impl CombatCatalog for GameData {
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let (size, height, exits) = match self.get::<ShipAnim>(id) {
+                let (size, height, exits, display) = match self.get::<ShipAnim>(id) {
                     Some(Ok(anim)) => (
                         Some(anim.record.base_x_size),
                         Some(anim.record.base_y_size),
                         Some(ship_exits(anim.record)),
+                        Some(ship_display(anim.record)),
                     ),
-                    _ => (None, None, None),
+                    _ => (None, None, None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
@@ -1071,6 +1072,7 @@ impl CombatCatalog for GameData {
                     cost: record.cost,
                     speed: record.speed,
                     exits,
+                    display,
                     escort_class: EscortClass::of(
                         record.escort_type,
                         record.inherent_ai,
@@ -1288,6 +1290,17 @@ fn ship_exits(anim: &ShipAnim) -> ShipExits {
     }
 }
 
+/// A `shän`'s display fields, raw.
+fn ship_display(anim: &ShipAnim) -> ShipDisplay {
+    ShipDisplay {
+        flags: anim.flags.bits(),
+        base_sets: anim.base_set_count,
+        anim_delay: anim.anim_delay,
+        alt_sets: anim.alt_set_count,
+        alt_image: anim.alt_image_id > 0,
+    }
+}
+
 /// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
 fn blink_of(anim: &ShipAnim) -> Blink {
     Blink {
@@ -1432,8 +1445,8 @@ mod tests {
     use super::*;
     use crate::catalog::{
         AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, DisasterId, FrameSize, GateSite,
-        GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipExits, StarSystem, StartDate,
-        StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
+        GovtId, GovtRecord, HullRecord, JunkId, Penalties, ShipDisplay, ShipExits, StarSystem,
+        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::control::{Script, Test, TestExpr};
 
@@ -3916,6 +3929,7 @@ mod tests {
             cost: -1,
             speed: 2,
             exits,
+            display: exits.map(|_| ShipDisplay::default()),
             escort_class: EscortClass::Fighter,
         };
         assert_eq!(
@@ -3957,6 +3971,40 @@ mod tests {
                 frames: 64,
             })
         );
+    }
+
+    #[test]
+    fn a_hull_carries_its_shäns_display_fields() {
+        // shän 379's: `Flags` 0xc2, six base sets, `AnimDelay` 5, no alt.
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x04, &[6]);
+        put_i16s(&mut bytes, 0x0C, &[-1, -1, 0]);
+        bytes[0x2E..0x30].copy_from_slice(&0x00C2_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x30, &[5]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.hulls()[0].display,
+            Some(ShipDisplay {
+                flags: 0x00C2,
+                base_sets: 6,
+                anim_delay: 5,
+                alt_sets: 0,
+                alt_image: false,
+            })
+        );
+        // shän 380's: `Flags` 0x58, one base set, six alt sets of `rlëD`
+        // 1330.
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x04, &[1]);
+        put_i16s(&mut bytes, 0x0C, &[1330, 1331, 6]);
+        bytes[0x2E..0x30].copy_from_slice(&0x0058_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x30, &[5]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        let display = data.hulls()[0].display.expect("a shän");
+        assert_eq!((display.flags, display.base_sets), (0x0058, 1));
+        assert_eq!((display.alt_sets, display.alt_image), (6, true));
+        let data = store(&[(Ship::TYPE, 128, armed())]);
+        assert_eq!(data.hulls()[0].display, None, "no shän");
     }
 
     #[test]

@@ -2228,6 +2228,7 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         cost: 0,
         speed: 0,
         exits: None,
+        display: None,
         escort_class: nova_sim::EscortClass::Freighter,
     }
 }

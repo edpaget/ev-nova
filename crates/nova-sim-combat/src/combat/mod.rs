@@ -311,6 +311,7 @@ pub mod jamming;
 pub mod plunder;
 pub mod projectile;
 pub mod report;
+pub mod ship_frames;
 pub mod shockwave;
 pub mod shot_layer;
 pub mod sides;
@@ -326,7 +327,7 @@ use asteroid_hit::{AsteroidFuse, AsteroidTarget};
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
-use exits::{Compression, ExitCursors, ExitPoints, drawn_frame, frame_angle};
+use exits::{Compression, ExitCursors, ExitPoints};
 use hull::{
     Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
     never_breaks_up,
@@ -1199,6 +1200,9 @@ impl Combat {
         let beams_held = self.beams.len();
         self.fly(fighters, &targets, chance);
         self.move_beams(fighters, &targets, pass, chance);
+        if pass.beams_act() {
+            self.stamp_beam_firers(fighters);
+        }
         let locks: Vec<Landed> = self
             .shots
             .iter()
@@ -1316,6 +1320,21 @@ impl Combat {
                 })
                 .collect();
             self.events.extend(lit);
+        }
+    }
+
+    /// Step 6's stamp: on the advance pass each live beam stamps its
+    /// firer's last shot now, as `_HandleBeams` does (+0xa8 =
+    /// `TickCount` @0x30b62-0x30b67), so a ship that unfolds to fire holds
+    /// off its refold while its beam lasts ([`Armament::stamp_fire`]).
+    fn stamp_beam_firers(&self, fighters: &mut [Fighter]) {
+        for beam in &self.beams {
+            if let Some(firer) = fighters
+                .iter_mut()
+                .find(|fighter| fighter.ship == beam.firer)
+            {
+                firer.armament.stamp_fire();
+            }
         }
     }
 
@@ -3201,6 +3220,7 @@ impl Fighter<'_> {
             npc: matches!(self.ship, ShipRef::Npc(_)),
             cloaked: self.cloaked,
             key_carried: self.hull.key_carried,
+            folds: self.hull.frames.unfolds_to_fire(),
         }
     }
 
@@ -3408,10 +3428,7 @@ impl<'a> Muzzle<'a> {
         (cursors, fold): (&'a mut ExitCursors, &'a mut u16),
     ) -> Self {
         let exits = hull.exits.as_ref();
-        let angle = exits.map_or(0.0, |exits| {
-            let frames = exits.frames();
-            frame_angle(drawn_frame(drawn_heading, frames), frames)
-        });
+        let angle = exits.map_or(0.0, |exits| exits.drawn_angle(drawn_heading));
         Self {
             from,
             exits,
@@ -3668,6 +3685,7 @@ mod tests {
     use nova_sim_catalog::fixture::weapon;
 
     mod exit_steps;
+    mod fold_stamp;
     mod plunder_fire;
     mod strike_terms;
     mod weapon_glow;

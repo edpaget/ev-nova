@@ -49,7 +49,7 @@
 //!
 //! A beam of `ExitType` -1, which `_SpawnBeam` reads signed and lets index
 //! the word before the cursors (@0x450fa), steps its ship's fold set
-//! (+0xc8fc, [`Armament::fold_set`](super::armament::Armament::fold_set);
+//! (+0xc8fc, [`Armament::fold`](super::armament::Armament::fold);
 //! [`step_stray`]) and starts at the centre, as the rulebook's
 //! [`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit) says. Any other
 //! `ExitType` outside 0-3 steps nothing here, though the original steps
@@ -67,6 +67,8 @@ use crate::chance::Chance;
 use crate::flight::normalized;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+
+use super::ship_frames::FrameTable;
 
 /// The frames in a turn of a `shän` whose `FramesPer` is 0
 /// (`_LoadExtendedShipSprites` @0x2274c).
@@ -150,6 +152,26 @@ pub struct ExitPoints {
     down: Vec2,
     /// The frames in a turn.
     frames: NonZeroU16,
+    /// Whether its class has a frame-angle table, `shän` `Flags` 0x0100,
+    /// built from these frames and compressions, which picks the frame it
+    /// is drawn on.
+    angle_table: bool,
+}
+
+/// A `shän`'s up and down compressions, `raw`'s, each its percent over
+/// 100 and any at or below 0 counting as 100
+/// (`_LoadExtendedShipSprites` @0x23d45-0x23e07).
+#[must_use]
+pub fn compression(raw: &ShipExits) -> (Vec2, Vec2) {
+    let factor = |pct: i16| {
+        if pct > 0 {
+            (f64::from(pct) * PERCENT) as f32
+        } else {
+            1.0
+        }
+    };
+    let compress = |(x, y): (i16, i16)| Vec2::new(factor(x), factor(y));
+    (compress(raw.up_compress), compress(raw.down_compress))
 }
 
 impl ExitPoints {
@@ -161,27 +183,46 @@ impl ExitPoints {
             0 => DEFAULT_FRAMES,
             frames => u16::try_from(frames).ok()?,
         };
-        let factor = |pct: i16| {
-            if pct > 0 {
-                (f64::from(pct) * PERCENT) as f32
-            } else {
-                1.0
-            }
-        };
-        let compress = |(x, y): (i16, i16)| Vec2::new(factor(x), factor(y));
+        let (up, down) = compression(raw);
         Some(Self {
             points: raw.points,
             z: raw.z,
-            up: compress(raw.up_compress),
-            down: compress(raw.down_compress),
+            up,
+            down,
             frames: NonZeroU16::new(frames)?,
+            angle_table: false,
         })
+    }
+
+    /// These exit points turning with the frames their class's
+    /// frame-angle table picks, when `angle_table`.
+    #[must_use]
+    pub fn with_angle_table(mut self, angle_table: bool) -> Self {
+        self.angle_table = angle_table;
+        self
     }
 
     /// The frames in a turn: its `FramesPer`, 36 for 0.
     #[must_use]
     pub fn frames(&self) -> NonZeroU16 {
         self.frames
+    }
+
+    /// The rotation frame its ship facing `heading` is drawn on
+    /// ([`drawn_frame`], by its table when it has one).
+    #[must_use]
+    pub fn drawn_frame(&self, heading: f32) -> u16 {
+        let table = self
+            .angle_table
+            .then(|| FrameTable::new(self.frames, self.up, self.down));
+        drawn_frame(heading, self.frames, table.as_ref())
+    }
+
+    /// The angle, in whole degrees, its exit points stand at for its ship
+    /// facing `heading`: its drawn frame's ([`frame_angle`]).
+    #[must_use]
+    pub fn drawn_angle(&self, heading: f32) -> f32 {
+        frame_angle(self.drawn_frame(heading), self.frames)
     }
 
     /// Where exit `index` of `kind` stands off the ship's centre with the
@@ -275,13 +316,17 @@ fn table_trig(angle: f32) -> (f32, f32) {
 /// The rotation frame a ship facing `heading` is drawn on, of `frames` a
 /// turn: `trunc(heading × frames / 360)`, frame 0 facing up and the frames
 /// turning clockwise (`_HandleShipDisplay` @0x2b7a6-0x2b7d0,
-/// @0x2bbee-0x2bbff). The view draws it (nova-view's `rotation_frame`),
-/// and the exit points turn with it.
-///
-/// The `shän` `Flags` 0x0100 table that replaces it (@0x2bba2-0x2bbe5),
-/// which no stock `shän` sets, is ship-handling-fidelity phase 10's.
+/// @0x2bbee-0x2bbff); or, for a class of `shän` `Flags` 0x0100 with its
+/// frame-angle `table`, the frame the table picks (@0x2bba2-0x2bbe5,
+/// [`FrameTable::frame`]). The view draws it (nova-view's
+/// `rotation_frame`), and the exit points turn with it, reading it mod
+/// `FramesPer` (`_ModifyShotStartPosition` @0x73c7-0x73d7): it is the
+/// rotation alone, whatever set the ship is drawn on.
 #[must_use]
-pub fn drawn_frame(heading: f32, frames: NonZeroU16) -> u16 {
+pub fn drawn_frame(heading: f32, frames: NonZeroU16, table: Option<&FrameTable>) -> u16 {
+    if let Some(table) = table {
+        return table.frame(heading);
+    }
     let count = frames.get();
     let per_degree = f32::from(count) / 360.0;
     let frame = (normalized(heading) * per_degree).trunc() as u16;
@@ -433,14 +478,37 @@ mod tests {
 
     #[test]
     fn the_drawn_frame_truncates_the_heading() {
-        let at = |heading| drawn_frame(heading, frames(36));
+        let at = |heading| drawn_frame(heading, frames(36), None);
         assert_eq!(
             [at(0.0), at(9.9), at(10.0), at(15.0), at(359.9)],
             [0, 0, 1, 1, 35]
         );
-        assert_eq!(drawn_frame(-10.0, frames(36)), 35, "wrapped");
-        assert_eq!(drawn_frame(370.0, frames(36)), 1, "wrapped");
-        assert_eq!(drawn_frame(5.7, frames(64)), 1);
+        assert_eq!(drawn_frame(-10.0, frames(36), None), 35, "wrapped");
+        assert_eq!(drawn_frame(370.0, frames(36), None), 1, "wrapped");
+        assert_eq!(drawn_frame(5.7, frames(64), None), 1);
+    }
+
+    #[test]
+    fn a_frame_angle_table_picks_the_drawn_frame_and_the_exits_turn_with_it() {
+        // Squashed vertically below the horizon: frame 3 shows nearer 90
+        // than 135, so a heading of 125 is past it.
+        let table = FrameTable::new(frames(8), Vec2::new(1.0, 1.0), Vec2::new(1.0, 0.5));
+        assert_eq!(drawn_frame(125.0, frames(8), None), 2, "by the heading");
+        assert_eq!(
+            drawn_frame(125.0, frames(8), Some(&table)),
+            3,
+            "by the table"
+        );
+        let gun = exits(&ShipExits {
+            frames: 8,
+            down_compress: (100, 50),
+            ..raw([(0, 10); 4])
+        });
+        assert_eq!(gun.drawn_frame(125.0), 2, "no table");
+        assert_eq!(gun.drawn_angle(125.0), 90.0);
+        let tabled = gun.with_angle_table(true);
+        assert_eq!(tabled.drawn_frame(125.0), 3);
+        assert_eq!(tabled.drawn_angle(125.0), 135.0, "frame 3's own angle");
     }
 
     #[test]

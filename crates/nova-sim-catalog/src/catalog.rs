@@ -1437,6 +1437,27 @@ pub struct ShipExits {
     pub frames: i16,
 }
 
+/// A ship class's display fields, raw from its `shän`: what
+/// `_HandleShipDisplay` picks the frames it draws by (see
+/// `nova_sim::combat::ship_frames`). Its `FramesPer` and compression are
+/// in its [`ShipExits`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShipDisplay {
+    /// Its `Flags`: 0x0001 banking, 0x0002 folding, 0x0004 key-carried,
+    /// 0x0008 animated, 0x0010 animation stopped while disabled, 0x0020
+    /// alt layer hidden while disabled, 0x0040 lights out while disabled,
+    /// 0x0080 unfolding to fire, 0x0100 frame-angle table.
+    pub flags: u16,
+    /// Its `BaseSetCount`.
+    pub base_sets: i16,
+    /// Its `AnimDelay`, in frames.
+    pub anim_delay: i16,
+    /// Its `AltSetCount`.
+    pub alt_sets: i16,
+    /// Whether it names an alt image: `AltImageID` above 0.
+    pub alt_image: bool,
+}
+
 /// An escort's class, which the escort menu groups it by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EscortClass {
@@ -1549,6 +1570,9 @@ pub struct HullRecord {
     /// Its `shän`'s weapon exit points, or `None` when it has no `shän`
     /// that can be read.
     pub exits: Option<ShipExits>,
+    /// Its `shän`'s display fields, or `None` when it has no `shän` that
+    /// can be read.
+    pub display: Option<ShipDisplay>,
     /// Its escort class, from its `EscortType`, `InherentAI` and `Mass`
     /// ([`EscortClass::of`]), which sets which turret shots miss it (see
     /// `nova_sim::combat::hull::HullSpec::miss_class`).

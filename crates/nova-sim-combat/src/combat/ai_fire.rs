@@ -35,13 +35,14 @@
 //! ([`CombatEvent::WeaponGlow`](super::CombatEvent::WeaponGlow)), which
 //! the view draws.
 //!
+//! Every call first stamps the time it fired (+0xa8, @0x8874c) for the
+//! 45-tick refold, and a ship of `shän` `Flags` 0x0002 and 0x0080 of more
+//! than one base set, above fold set 0, turns to unfold and fires nothing
+//! (@0x88757-0x88794): the top of `Armament::fire_pick`, the fold the
+//! ship's display steps ([`ship_frames`](super::ship_frames)).
+//!
 //! # Not modelled
 //!
-//! - Fold before fire: a ship of shän `Flags` 0x0002 and 0x0080 not at its
-//!   firing pose unfolds and fires nothing (@0x88757-0x88794), and every
-//!   call stamps the time it fired (+0xa8, @0x8874c) for the 45-tick
-//!   refold: rdm phase ship-handling-fidelity/phase-10-ship-drawing, which
-//!   models folding. Its hook is the top of `Armament::fire_pick`.
 //! - The frozen game (@0x88799), set only for the priming frame on
 //!   entering the game, which the engine doesn't have; and the nag ship
 //!   (@0x88d40), which the engine doesn't have either.

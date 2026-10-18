@@ -16,7 +16,7 @@ use nova_sim::combat::exits::drawn_frame;
 /// up, any value) is drawn on, of a sheet of `rotations` frames a turn.
 #[must_use]
 pub fn rotation_frame(heading_deg: f32, rotations: NonZeroU16) -> u16 {
-    drawn_frame(heading_deg, rotations)
+    drawn_frame(heading_deg, rotations, None)
 }
 
 #[cfg(test)]
@@ -76,7 +76,7 @@ mod tests {
                 let heading = tenth as f32 / 10.0;
                 assert_eq!(
                     rotation_frame(heading, rotations(n)),
-                    nova_sim::combat::exits::drawn_frame(heading, rotations(n)),
+                    nova_sim::combat::exits::drawn_frame(heading, rotations(n), None),
                     "{heading} of {n}"
                 );
             }

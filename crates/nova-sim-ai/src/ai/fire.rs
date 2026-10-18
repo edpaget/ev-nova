@@ -415,6 +415,7 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
         npc: true,
         cloaked: npc.cloak.is_cloaked(),
         key_carried: npc.hull.key_carried,
+        folds: npc.hull.frames.unfolds_to_fire(),
     };
     npc.armament
         .has_ammo(mount, &npc.rounds, npc.reserves.fuel, shooter)

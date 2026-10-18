@@ -871,6 +871,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         cost: 0,
         speed: 0,
         exits: None,
+        display: None,
         escort_class: nova_sim::EscortClass::Freighter,
     };
     let (_, chance) = scripted(&placed(850, 650, 90));
