@@ -16,14 +16,21 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_ShipTurnRate`'s player floor (`floored_turn`) sets a rate below 1.0
+    # to 1.0; at exactly 1.0, `<=` sets it to 1.0 too.
+    "handling.rs:[0-9]+:[0-9]+: replace < with <= in floored_turn",
+    # The Turn Rate row floors the player's turn (`turn_shown`), whose floor
+    # reads only whether the class turns above none: the class's `Maneuver`
+    # / 10 and * 10 (column 50) have the same sign.
+    "player_info.rs:[0-9]+:50: replace / with \\* in turn_shown",
     # A pirate's docking turns against its velocity gap: the gap's table
     # angle + 180 taken mod 360 (`_LowLevelAIHandler` @0x86b77-0x86ba0);
     # - 180 mod 360 (`rem_euclid`) is the same angle.
-    "nova-sim-ai/src/traffic/plunder_dock\\.rs:283:42: replace \\+ with - in dock$",
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:292:42: replace \\+ with - in dock$",
     # The approach's speed gap is a float widened to a double and tested
     # against the double 0.35 (@0x87538, @0x8755b): no float widens to
     # 0.35 exactly, so `>=` can't be told from `>`.
-    "nova-sim-ai/src/traffic/plunder_dock\\.rs:242:.*replace > with >= in approach$",
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:250:.*replace > with >= in approach$",
     # A class item of count 0 multiplies its marines by 0, so counting it
     # (`>=`) adds nothing, as skipping it (`>`, @0x84129) does.
     "nova-sim-ai/src/ai/plunder_contents\\.rs:156:.*replace > with >= in ClassMarines::of$",
@@ -104,6 +111,20 @@ exclude_re = [
     # `push <= 0.0` (the first operand, column 24) cannot be told apart.
     # The top speed's own test beside it is caught.
     "bay.rs:[0-9]+:24: replace < with <= in launch_velocity",
+    # The same tests where `launch_velocity`'s body now lives, as
+    # `speed_cap::adjusted_accel`: a push of exactly none adds none whichever
+    # branch it takes, so `push > 0.0` / `>=` (column 28) and `push < 0.0` /
+    # `<=` (column 24) can't be told apart.
+    "speed_cap.rs:[0-9]+:28: replace > with >= in adjusted_accel",
+    "speed_cap.rs:[0-9]+:24: replace < with <= in adjusted_accel",
+    # `whole_degree`'s slack test: no f32 heading in 0..360 lies exactly
+    # 0.001 (as an f32) from a whole degree (checked over 1..=360, where
+    # `heading - heading.round()` is exact), so `<` and `<=` agree.
+    "speed_cap.rs:[0-9]+:[0-9]+: replace < with <= in whole_degree",
+    # `RuleValue::index` with the one value there is so far, the thrust
+    # divisor, whose index is 0: replacing it with 0 changes nothing until
+    # a second value is declared, whose tests will catch it.
+    "rule_values.rs:[0-9]+:[0-9]+: replace RuleValue::index -> usize with 0",
     # The galaxy map's star map is built only for its links and places;
     # nothing reads a buoy from it, so the `Message` it gives its systems
     # (-1, none) cannot be observed.
@@ -400,6 +421,19 @@ exclude_re = [
     # 9999-31999 and so gives `None` for every code of 2176-9998, which is
     # nowhere with no draw too. The arm states the original's reading.
     "mission/ships.rs:.*delete match arm 2176\\.\\.= 9998 in select_ship_system",
+    # The afterburner's boundaries where both sides give the same: a heading
+    # share of exactly the snap's slack (1e-6) is none either way to well
+    # within f32; an inertialess speed pushed to exactly the afterburner's
+    # top is the top either way; fuel drained to exactly none is none
+    # either way; a box exactly at the top speed bled by a step is raised
+    # back to it, and one raised to the top speed it already holds is
+    # unchanged. The snap's pattern pins its line and column, so the
+    # axis's `v < b` in the same function, which is not equivalent, still
+    # runs.
+    "nova-sim-base/src/afterburner.rs:102:44: replace < with <= in push_velocity",
+    "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in push_speed",
+    "afterburner.rs:[0-9]+:[0-9]+: replace < with <= in drain",
+    "afterburner.rs:[0-9]+:[0-9]+: replace > with >= in MaxVel::bleed",
     # The lightning rolls' seed joins a high word shifted past 32 bits and
     # a low word below 2^32, and a trail colour joins channels shifted to
     # their own 8 bits: their bits never overlap, so `|` and `^` give the

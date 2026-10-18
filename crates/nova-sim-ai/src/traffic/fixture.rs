@@ -30,6 +30,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         stats,
         reserves: stats.full(),
         state: ShipState::default(),
+        speed: 0.0,
         mode: Mode::Flying,
         goal: Goal::Idle,
         condition: Condition::Intact,
@@ -58,6 +59,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         led_out: false,
         emerges_from: None,
         self_repair: false,
+        immobile: false,
         miner: 0,
         can_scoop: false,
         holds: 0,
@@ -69,5 +71,6 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         ai_wait: 0,
         docking: None,
         marines: ClassMarines::default(),
+        pods_left: 0,
     }
 }

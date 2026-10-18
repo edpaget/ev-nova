@@ -12,9 +12,10 @@ use crate::combat::armament::{Armament, LauncherRounds, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
-use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
-use crate::flight::ShipState;
+use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, KEEP_FORMATION};
+use crate::flight::{Flyer, ShipState};
 use crate::geometry::Vec2;
+use crate::inertialess::{InertialDampener, is_inertialess};
 use crate::market::Good;
 use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
@@ -133,7 +134,10 @@ pub enum Mode {
     /// the velocity the glide or burst left it, with no steering, thrust,
     /// slowing, fire or decisions, but is seen, targeted and fought as a
     /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
-    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`].
+    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`]. A ship
+    /// boarded on a mission's assist path waits so too
+    /// ([`Npc::wait_on_course`]); one not intact drifts instead, its wait
+    /// counting down all the same.
     Coasting {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -147,6 +151,16 @@ pub enum Mode {
     EnteringGate {
         /// The gate it enters.
         gate: StellarId,
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
+    /// An escape pod (class 0x2ff, `ESCAPE_POD_SHIP`) adrift, its AI wait
+    /// +0x4c this many ticks yet: `_AIDispatch` flies it at full thrust
+    /// along its heading and counts the wait down, and frees its slot once
+    /// it is below 0 (@0x8fb62-0x8fbba; see
+    /// [`pod_flight`](crate::traffic::pod_flight)). A pod in any other
+    /// mode has a wait of none, as every spawner leaves +0x4c at 0.
+    Adrift {
         /// The ticks of the wait left.
         ticks_left: u32,
     },
@@ -240,6 +254,14 @@ pub struct Npc {
     pub reserves: Reserves,
     /// Where it is and how it moves.
     pub state: ShipState,
+    /// Its speed along its heading, the original's +0x48, which an
+    /// inertialess ship flies by (see [`Npc::flies_inertialess`]): none as
+    /// it spawns, as every spawn zeroes it with the velocity
+    /// (`_GenericRandomShipSpawn` @0x3c954, `_SpawnPerson` @0x41037,
+    /// `_HyperShipSpawn` @0x42ab1, `_SetupShipsInSystem` @0x42f81, and
+    /// the rest), and a fighter's its carrier's (`_LaunchFighter`
+    /// @0x3d6da-0x3d6e0).
+    pub speed: f32,
     /// Whether it is still jumping in.
     pub mode: Mode,
     /// What it is doing.
@@ -349,6 +371,14 @@ pub struct Npc {
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
     pub self_repair: bool,
+    /// Whether its ship class is immobile, a `Speed` and `Accel` of 0
+    /// ([`ShipKind::immobile`](crate::traffic::table::ShipKind)): each
+    /// tick `_HandleShip` sets its velocity to none and skips its move
+    /// (@0x34209-0x3423b), so a push lasts only until the next tick and
+    /// it never moves (see the [`autopilot`](crate::traffic::autopilot)).
+    /// No stock class is; the player's ship never is (`_HandlePlayer` has
+    /// no such test).
+    pub immobile: bool,
     /// Its ship type's miner bits, `shïp` `Flags3` & 0x0003
     /// ([`ShipKind::miner`](crate::traffic::table::ShipKind)): a leaderless
     /// ship with either goes to the miner's AI (see
@@ -381,6 +411,13 @@ pub struct Npc {
     /// (@0x3c457, @0x3c9f1, @0x3d8aa, @0x6f372). The fight raises it;
     /// ship-handling-fidelity phase 11 lowers it. Never saved.
     pub ion: Ion,
+    /// The crew pods it has left to eject as it dies (the original's
+    /// +0xc908): its class's `PodCount` as it spawns, launches or is left
+    /// as the player's hulk, as `_RandomShipSpawn`,
+    /// `_GenericRandomShipSpawn`, `_MissionDudeSpawn` and `_LaunchFighter`
+    /// set it (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe), one fewer for each
+    /// pod it ejects (see `nova_sim::npc_escape`). Never saved.
+    pub pods_left: u16,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
@@ -596,6 +633,39 @@ impl Npc {
             .or_else(|| self.mission.and_then(|mark| mark.formation))
     }
 
+    /// Whether it keeps close formation with its leader, at `leader`:
+    /// it keeps formation ([`Goal::Formation`]) on a slot
+    /// ([`Npc::formation`]) beside a leader that is there, within
+    /// [`KEEP_FORMATION`] of the slot on each axis, where the autopilot
+    /// moves it with the leader. That is the engine's counterpart of the
+    /// original's substate 0xc, which `_IsShipInCloseForm` tests
+    /// (@0x82f54-0x82f69).
+    #[must_use]
+    pub fn keeps_close_formation(&self, leader: Option<&ShipState>) -> bool {
+        let (Goal::Formation { .. }, Some(leader), Some(place)) =
+            (self.goal, leader, self.formation())
+        else {
+            return false;
+        };
+        let off = place.position(leader) - self.state.position;
+        off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION
+    }
+
+    /// Whether it flies inertialess, its leader at `leader` (see
+    /// [`is_inertialess`]): by its hull, or by an inertial dampener as
+    /// `rule` counts an NPC's; never while it
+    /// [keeps close formation](Npc::keeps_close_formation).
+    #[must_use]
+    pub fn flies_inertialess(&self, leader: Option<&ShipState>, rule: InertialDampener) -> bool {
+        is_inertialess(
+            self.stats.inertialess_hull,
+            self.stats.dampener,
+            Flyer::Npc,
+            self.keeps_close_formation(leader),
+            rule,
+        )
+    }
+
     /// Whether it fights `ship` directly: it is intact, flying, and
     /// attacking, sniping at or fleeing from it.
     ///
@@ -646,6 +716,14 @@ impl Npc {
                 }
                 Some(ShipRef::Player) | None => false,
             }
+    }
+
+    /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`], then
+    /// holds it between none and its capacity, every tick whatever its
+    /// condition, disabled and breaking up included (`_HandleShip`
+    /// @0x35305-0x35374, `_ShipFuelGenRate` @0x2ffb for an NPC).
+    pub fn regenerate_fuel(&mut self) {
+        crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen);
     }
 
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
@@ -838,6 +916,20 @@ impl Npc {
         matches!(self.goal, Goal::CountWait { .. })
     }
 
+    /// Sets its AI wait (+0x4c) to `ticks_left`, as boarding a mission's
+    /// ship on the assist path does (`_HandlePlayerBoardAttempt` @0x65746):
+    /// flying, or already holding its course, it holds its course for that
+    /// long ([`Mode::Coasting`]), with no steering, thrust or fire, its
+    /// wait counting down even while it is disabled. A ship gliding in,
+    /// bursting out, or in or at a gate keeps its own glide or wait, which
+    /// the original's write would overwrite; a disabled ship is boarded
+    /// in flight, so none is. A wait of none leaves it as it is.
+    pub fn wait_on_course(&mut self, ticks_left: u32) {
+        if ticks_left > 0 && matches!(self.mode, Mode::Flying | Mode::Coasting { .. }) {
+            self.mode = Mode::Coasting { ticks_left };
+        }
+    }
+
     /// Whether it is waiting at the gate it comes out of
     /// ([`Mode::Emerging`]): `_AIShipIsEmergingFromHypergate` (@0x7e2e8),
     /// which holds it invisible to every ship (`_ShipVisibleToShip`
@@ -966,6 +1058,57 @@ impl Npc {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// An NPC regenerating `rate` fuel a tick, holding `now` of its 300.
+    fn fuelled(rate: f32, now: f32) -> Npc {
+        let stats = ShipStats {
+            fuel_regen: rate,
+            fuel: 300.0,
+            ..ShipStats::default()
+        };
+        let mut npc = crate::traffic::fixture::npc(1, stats);
+        npc.reserves.fuel.now = now;
+        npc
+    }
+
+    #[test]
+    fn an_npc_regenerates_fuel_at_its_rate_up_to_its_capacity() {
+        let mut npc = fuelled(0.5, 298.0);
+        npc.regenerate_fuel();
+        assert_eq!(npc.reserves.fuel.now, 298.5);
+        for _ in 0..10 {
+            npc.regenerate_fuel();
+        }
+        assert_eq!(npc.reserves.fuel.now, 300.0, "up to its capacity");
+    }
+
+    #[test]
+    fn an_npcs_fuel_is_held_to_its_capacity_and_above_none_every_tick() {
+        let mut npc = fuelled(0.0, 310.0);
+        npc.regenerate_fuel();
+        assert_eq!(npc.reserves.fuel.now, 300.0, "clamped with no rate");
+        let mut npc = fuelled(-0.5, 0.7);
+        npc.regenerate_fuel();
+        assert!((npc.reserves.fuel.now - 0.2).abs() < 1e-6);
+        npc.regenerate_fuel();
+        assert_eq!(npc.reserves.fuel.now, 0.0, "a drain stops at none");
+    }
+
+    #[test]
+    fn a_disabled_or_dying_npc_still_regenerates_fuel() {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
+            let mut npc = fuelled(0.5, 100.0);
+            npc.condition = condition;
+            npc.regenerate_fuel();
+            assert_eq!(npc.reserves.fuel.now, 100.5, "{condition:?}");
+        }
+    }
 
     #[test]
     fn raw_ai_types_1_to_4_are_the_bibles_and_any_other_is_the_fallback() {
@@ -2108,5 +2251,38 @@ mod tests {
             ..bound(landing, 1000.0, -500.0)
         };
         assert!(!disabled.approaches_gate(gate, at, 50.0), "disabled");
+    }
+
+    #[test]
+    fn a_wait_on_course_holds_a_flying_or_coasting_ship_and_leaves_any_other_mode() {
+        for mode in [Mode::Flying, Mode::Coasting { ticks_left: 7 }] {
+            let mut ship = Npc {
+                mode,
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            ship.wait_on_course(100);
+            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 100 }, "{mode:?}");
+            assert!(ship.wait_running(), "{mode:?}");
+        }
+        for mode in [
+            Mode::JumpingIn { tick: 3 },
+            Mode::LeavingGate { tick: 3 },
+            Mode::Emerging { ticks_left: 7 },
+            Mode::HeldAtGate { ticks_left: 7 },
+            Mode::EnteringGate {
+                gate: StellarId(300),
+                ticks_left: 7,
+            },
+        ] {
+            let mut ship = Npc {
+                mode,
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            ship.wait_on_course(100);
+            assert_eq!(ship.mode, mode, "its own glide or wait stands");
+        }
+        let mut idle = crate::traffic::fixture::npc(1, ShipStats::default());
+        idle.wait_on_course(0);
+        assert_eq!(idle.mode, Mode::Flying, "no wait");
     }
 }

@@ -272,6 +272,8 @@ impl Session {
             stats: kind.stats,
             reserves: escort.reserves,
             state: self.player,
+            // `_RespawnEscort` zeroes +0x48 (@0x3d59d).
+            speed: 0.0,
             mode: Mode::Flying,
             goal: Goal::Formation { guard: None },
             condition: Condition::Intact,
@@ -300,6 +302,7 @@ impl Session {
             led_out: false,
             emerges_from: None,
             self_repair: kind.self_repair,
+            immobile: kind.immobile,
             miner: kind.miner,
             can_scoop: kind.can_scoop,
             holds: kind.holds,
@@ -311,6 +314,10 @@ impl Session {
             ai_wait: 0,
             docking: None,
             marines: kind.marines,
+            // A hired escort's slot keeps the `PodCount` its first spawn
+            // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
+            // `_RespawnEscort` leaves +0xc908 alone.
+            pods_left: kind.hull.pod_count,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),
@@ -1188,6 +1195,18 @@ mod tests {
     }
 
     #[test]
+    fn a_hired_escort_placed_carries_its_classs_crew_pods() {
+        let mut catalog = fleeted();
+        catalog.hulls[1].pod_count = 3;
+        let session = flying(&catalog, RuleSource::Engine);
+        let pods: Vec<_> = escort_npcs(&session)
+            .iter()
+            .map(|npc| (npc.ship, npc.pods_left))
+            .collect();
+        assert_eq!(pods, [(WARSHIP, 3), (FREIGHTER, 0)]);
+    }
+
+    #[test]
     fn an_escort_whose_ship_type_has_no_record_is_kept_but_not_placed() {
         let catalog = fleeted();
         let mut pilot = escorted(&catalog);
@@ -1228,6 +1247,7 @@ mod tests {
                 Turn::None
             },
             reverse: false,
+            ..Controls::default()
         }
     }
 

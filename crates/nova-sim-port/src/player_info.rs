@@ -17,13 +17,15 @@
 //! - **Turn, accel and speed** ([`turn_shown`], [`accel_shown`],
 //!   [`speed_shown`]): the original's `trunc(_ShipTurnRate x 30)`,
 //!   `trunc(_ShipAccelRate x 2500)` and its Max Speed come to
-//!   `trunc(maneuver x 3)`, `(Accel + outfits) / 2` and `Speed + outfits`
-//!   on the ship's [`HandlingTotals`], each floored at 0 as the engine
-//!   floors its handling. These equal the original's float path for whole
-//!   totals; it is not replicated beyond that, in the spirit of not
-//!   copying word widths. Its 1.0°/frame turn floor and its 1.5 speed
-//!   bonus outside Strict Play are crons-news-ranks-fidelity phases 30
-//!   and 31.
+//!   `trunc(maneuver / 10 x 30)`, `(Accel + outfits) / 2` and
+//!   `Speed + outfits` on the ship's [`HandlingTotals`], each floored at 0
+//!   as the engine floors its handling; the turn first at 1° a frame, 30,
+//!   unless its class turns none, as `_ShipTurnRate` floors the player's
+//!   (@0x33ba-0x33db, @0x3441-0x3473).
+//!   These equal the original's float path for whole totals; it is not
+//!   replicated beyond that, in the spirit of not copying word widths.
+//!   Its 1.5 speed bonus outside Strict Play is crons-news-ranks-fidelity
+//!   phase 31.
 //! - **Legal Status** ([`legal_status_index`], `_DrawLegalStatusString`
 //!   @0xd43f-0xd66d). With r the player's record in the system and t
 //!   the `CrimeTol` of its government (government slot 0's when it is
@@ -125,6 +127,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
+use crate::flight::Flyer;
+use crate::handling::{MANEUVER_PER_DEGREE_PER_TICK, floored_turn};
 use crate::outfitter::OutfitFlags;
 use crate::rank::PilotInfoRanks;
 use crate::rulebook::RuleSource;
@@ -976,11 +980,19 @@ pub fn accel_shown(totals: &HandlingTotals) -> i64 {
     (totals.accel / 2).max(0)
 }
 
-/// The Turn Rate row, in degrees a second: `trunc(maneuver x 3)`,
-/// floored at 0.
+/// The Turn Rate row, in degrees a second: `trunc(_ShipTurnRate x 30)`
+/// (@0x52cd0), the player's turn, `maneuver` / 10, floored as
+/// `_ShipTurnRate` floors the player's ([`floored_turn`]): at 1° a tick,
+/// 30, unless its class turns none, then at 0.
 #[must_use]
 pub fn turn_shown(totals: &HandlingTotals) -> i64 {
-    ((totals.maneuver * 3.0) as i64).max(0)
+    let class = f32::from(totals.class_maneuver) / MANEUVER_PER_DEGREE_PER_TICK;
+    let rate = floored_turn(
+        class,
+        totals.maneuver / MANEUVER_PER_DEGREE_PER_TICK,
+        Flyer::Player,
+    );
+    (rate * 30.0) as i64
 }
 
 /// How many of the counting stellars are dominated.
@@ -1861,11 +1873,14 @@ mod tests {
         );
     }
 
+    /// The totals of a class of `Maneuver` 10 whose `Speed`, `Accel` and
+    /// `Maneuver` total these.
     fn totals(speed: i64, accel: i64, maneuver: f32) -> HandlingTotals {
         HandlingTotals {
             speed,
             accel,
             maneuver,
+            class_maneuver: 10,
         }
     }
 
@@ -1883,7 +1898,28 @@ mod tests {
             "a TURN_CHANGE of 100 adds 30"
         );
         assert_eq!(turn_shown(&totals(0, 0, 10.5)), 31);
-        assert_eq!(turn_shown(&totals(0, 0, -4.0)), 0);
+        assert_eq!(turn_shown(&totals(0, 0, 25.0)), 75);
+    }
+
+    #[test]
+    fn the_turn_rate_row_shows_the_players_floor() {
+        assert_eq!(turn_shown(&totals(0, 0, -4.0)), 30, "floored at 1° a tick");
+        assert_eq!(turn_shown(&totals(0, 0, 9.8)), 30);
+        let slow = HandlingTotals {
+            class_maneuver: 5,
+            ..totals(0, 0, 5.0)
+        };
+        assert_eq!(turn_shown(&slow), 30, "the player's floor, not an NPC's");
+        let rigid = HandlingTotals {
+            class_maneuver: 0,
+            ..totals(0, 0, -4.0)
+        };
+        assert_eq!(turn_shown(&rigid), 0, "a class of none is not floored");
+        let lifted = HandlingTotals {
+            class_maneuver: 0,
+            ..totals(0, 0, 5.0)
+        };
+        assert_eq!(turn_shown(&lifted), 15);
     }
 
     #[test]

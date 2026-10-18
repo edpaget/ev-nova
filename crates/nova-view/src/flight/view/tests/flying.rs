@@ -158,9 +158,11 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
     let mut view = flight();
     assert_eq!(view.input(&key(Key::Up, true)), ScreenAction::None);
     view.tick(Duration::from_secs(1));
-    let expected = stepped(start(), THRUST, 30);
+    let expected = launched(THRUST, 30);
     assert_eq!(player(&view), expected);
-    assert!(expected.position.y < -40.0, "{expected:?}");
+    // At rest for the first tick, then 0.06 more a tick for 29 ticks:
+    // 0.06 x 435 = 26.1 up.
+    assert!(expected.position.y < -26.0, "{expected:?}");
     assert_eq!(expected.position.x, 0.0);
     assert_eq!(view.camera().center(), view.shown_position());
     let shown = view.shown_position();
@@ -208,6 +210,105 @@ fn left_and_right_together_cancel() {
     assert_eq!(player(&view).heading, 0.0);
 }
 
+/// Whether `view`'s ship has turned to `aim`: within a whole-degree turn
+/// of it, where the player's auto-turn stops.
+fn facing(view: &View, aim: i16) -> bool {
+    let rate = view.session().expect("flying").handling().turn_rate;
+    nova_sim::player_turn::settled(
+        player(view).heading,
+        rate,
+        aim,
+        nova_sim::player_turn::PlayerTurn::WholeDegrees,
+    )
+}
+
+#[test]
+fn z_is_the_afterburner_key_held() {
+    assert_eq!(AFTERBURNER_KEY, Key::Char('z'));
+    let mut view = flight();
+    assert!(!view.controls().afterburner);
+    view.input(&key(AFTERBURNER_KEY, true));
+    assert!(view.controls().afterburner);
+    view.input(&key(AFTERBURNER_KEY, false));
+    assert!(!view.controls().afterburner);
+}
+
+/// [`catalog`] with ship 128 carrying an afterburner, `oütf` 197 of
+/// `ModVal` 30, as a default item.
+fn afterburning() -> FakeCatalog {
+    FakeCatalog {
+        outfits: vec![OutfitRecord {
+            id: OutfitId(197),
+            name: "Afterburner".to_owned(),
+            short_name: "Afterburner".to_owned(),
+            mods: [(15, 30), (0, 0), (0, 0), (0, 0)],
+            lc_name: "afterburner".to_owned(),
+            lc_plural: "afterburners".to_owned(),
+            ..multi_jumping().outfits[0].clone()
+        }],
+        defaults: vec![(OutfitId(197), 1)],
+        ..catalog()
+    }
+}
+
+#[test]
+fn up_and_z_held_with_an_afterburner_pass_the_top_speed_and_burn_fuel() {
+    let mut view = FlightView::new(afterburning());
+    let top = view.session().expect("flying").top_speed();
+    let full = reserves(&view).fuel.now;
+    view.input(&key(Key::Right, true));
+    ticks(&mut view, 30);
+    view.input(&key(Key::Right, false));
+    view.input(&key(Key::Up, true));
+    view.input(&key(AFTERBURNER_KEY, true));
+    ticks(&mut view, 120);
+    let speed = player(&view).velocity.length();
+    assert!(speed > top * 1.5, "{speed} of {top}");
+    assert!(reserves(&view).fuel.now < full);
+    view.input(&key(AFTERBURNER_KEY, false));
+    ticks(&mut view, 400);
+    let speed = player(&view).velocity.length();
+    assert!(
+        speed <= top * std::f32::consts::SQRT_2 + 1e-3,
+        "bled back: {speed}"
+    );
+}
+
+#[test]
+fn a_turns_the_ship_toward_its_target_and_alt_a_toward_the_nav_stellar() {
+    assert_eq!(FACE_TARGET_KEY, Key::Char('a'));
+    let mut view = fighting(armed(2, &[]), &two_npcs());
+    tap(&mut view, Key::Tab);
+    let target = view.session().expect("flying").target().expect("targeted");
+    let toward = nova_sim::trig::intercept_angle(player(&view).position, target.state.position);
+    assert!(!facing(&view, toward), "not yet");
+    view.input(&key(FACE_TARGET_KEY, true));
+    view.input(&key(Key::Left, true));
+    ticks(&mut view, 90);
+    // The target drifts: face where it is now.
+    let target = view.session().expect("flying").target().expect("targeted");
+    let toward = nova_sim::trig::intercept_angle(player(&view).position, target.state.position);
+    assert!(facing(&view, toward), "{:?} toward {toward}", player(&view));
+    view.input(&key(Key::Left, false));
+    // Stellar 129, at (300, -200), selected: Alt-A faces it.
+    tap(&mut view, Key::Char('2'));
+    let stellar = nova_sim::trig::intercept_angle(player(&view).position, Vec2::new(300.0, -200.0));
+    view.input(&key(Key::Alt, true));
+    ticks(&mut view, 90);
+    assert!(
+        facing(&view, stellar),
+        "{:?} toward {stellar}",
+        player(&view)
+    );
+    // Let go of, the turn keys turn the ship again.
+    view.input(&key(FACE_TARGET_KEY, false));
+    view.input(&key(Key::Alt, false));
+    let before = player(&view).heading;
+    view.input(&key(Key::Right, true));
+    ticks(&mut view, 1);
+    assert_ne!(player(&view).heading, before);
+}
+
 #[test]
 fn down_turns_the_ship_against_its_motion() {
     let mut view = flight();
@@ -216,13 +317,24 @@ fn down_turns_the_ship_against_its_motion() {
     view.input(&key(Key::Up, false));
     view.input(&key(Key::Down, true));
     ticks(&mut view, 70);
+    // Within a turn of 180, without snapping onto it.
+    let rate = view.session().expect("flying").handling().turn_rate;
     assert!(
-        (player(&view).heading - 180.0).abs() < 1e-3,
+        nova_sim::player_turn::settled(
+            player(&view).heading,
+            rate,
+            180,
+            nova_sim::player_turn::PlayerTurn::WholeDegrees
+        ),
         "{:?}",
         player(&view)
     );
-    assert_eq!(view.frame(), Some(18));
-    // Left or Right overrides it.
+    let stopped = player(&view).heading;
+    assert_eq!(stopped, 177.0, "a turn short");
+    ticks(&mut view, 5);
+    assert_eq!(player(&view).heading, stopped, "it stays there");
+    assert_eq!(view.frame(), Some(17));
+    // Left is held off while reverse aims: the heading stays put.
     view.input(&key(Key::Left, true));
     ticks(&mut view, 1);
     assert!((player(&view).heading - 177.0).abs() < 1e-3);
@@ -233,7 +345,7 @@ fn repeats_hold_a_key_and_releasing_the_keys_stops_the_thrust() {
     let mut view = flight();
     view.input(&held(Key::Up));
     ticks(&mut view, 5);
-    assert_eq!(player(&view), stepped(start(), THRUST, 5));
+    assert_eq!(player(&view), launched(THRUST, 5));
     view.release_keys();
     let coasting = player(&view);
     ticks(&mut view, 5);
@@ -279,6 +391,8 @@ fn other_input_changes_nothing_and_never_quits() {
 #[test]
 fn the_ship_is_drawn_alpha_of_the_way_from_the_last_step_to_this_one() {
     let mut view = flight();
+    // A tick at rest first, the new session's box of none.
+    view.tick(TICK);
     view.input(&key(Key::Up, true));
     view.tick(TICK);
     let first = stepped(start(), THRUST, 1);
@@ -508,7 +622,7 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
     );
     assert_eq!(
         HELP,
-        "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
+        "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
     );
     assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
 }
@@ -1277,6 +1391,9 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
+    // Coast two ticks, so the arrival falls between the radar's refreshes
+    // and the test shows the arrival's own refresh.
+    ticks(&mut view, 2);
     jump_now(&mut view);
     let leaving = view.session().expect("flying").system();
     for _ in 0..1000 {
@@ -1366,7 +1483,7 @@ fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
     assert_eq!(view.status_bar(), Err("no ïntf 128"));
     view.input(&key(Key::Up, true));
     ticks(&mut view, 5);
-    assert_eq!(player(&view), stepped(start(), THRUST, 5));
+    assert_eq!(player(&view), launched(THRUST, 5));
     let list = drawn(&view);
     let mut reason = DrawList::new();
     hud::draw_unavailable(&mut reason, "no ïntf 128", VIEW_SIZE.0);

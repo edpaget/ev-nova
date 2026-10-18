@@ -146,12 +146,15 @@ pub(crate) fn hideable(catalog: &mut FakePilotCatalog) {
 
 /// Flies the ship out from the centre until it is at least
 /// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
-/// centre (Down faces against its motion), then thrusts.
+/// centre (Down faces against its motion), then thrusts once within a
+/// turn of it.
 pub(crate) fn fly_out(session: &mut Session) {
     const THRUST: Controls = Controls {
         thrust: true,
         turn: Turn::None,
         reverse: false,
+        face: crate::flight::Face::Off,
+        afterburner: false,
     };
     for _ in 0..3000 {
         let player = *session.player();
@@ -164,11 +167,12 @@ pub(crate) fn fly_out(session: &mut Session) {
             0.0
         };
         let off = crate::flight::shortest_turn(player.heading, outward).abs();
-        // Down lands exactly on the heading against the motion, which
-        // is outward while the ship drifts in.
-        let controls = if off < 1e-3 {
+        // Down comes within a turn of the heading against the motion,
+        // which is outward while the ship drifts in, and stops there.
+        let turn = session.handling().turn_rate.trunc().max(1.0);
+        let controls = if off <= turn {
             THRUST
-        } else if player.velocity.length() > crate::flight::AT_REST_SPEED {
+        } else if crate::player_turn::reverse_aim(player.velocity).is_some() {
             Controls {
                 reverse: true,
                 ..Controls::default()
@@ -264,8 +268,9 @@ pub(crate) fn arriving(draws: &[u32]) -> Draws {
     Draws::of(&table.chain(draws.iter().copied()).collect::<Vec<_>>())
 }
 
-/// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
-/// arrives slow enough to land, over planet 140 at 131's edge.
+/// A slow ship, 1 pixel a tick at most, gaining a unit a tick (its
+/// `Flags` 0x0008 letting its hull regenerate): it arrives slow enough to
+/// land, over planet 140 at 131's edge.
 pub(crate) fn edge_lander() -> FakePilotCatalog {
     FakePilotCatalog {
         ships: vec![(
@@ -273,6 +278,7 @@ pub(crate) fn edge_lander() -> FakePilotCatalog {
             Ok(ShipFields {
                 speed: 100,
                 fuel_regen: 1,
+                flags: crate::stats::FUEL_REGEN_HULL,
                 ..FAST
             }),
         )],

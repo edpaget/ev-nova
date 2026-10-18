@@ -219,8 +219,12 @@
 //!
 //! - Up thrusts, Left and Right turn, and Down turns to face against the
 //!   ship's motion, while held: a press (or its key repeats) holds the key
-//!   and its release lets it go. Left and Right together cancel, and
-//!   either overrides Down.
+//!   and its release lets it go. Left and Right together cancel. A
+//!   (`FACE_TARGET_KEY`, the original's `autopilot`) turns to face the
+//!   ship target, or the navigation stellar with no target or with Alt
+//!   (Option) held. While Down or A aims the ship, Left and Right do
+//!   nothing, as the original's turn block holds them off (see
+//!   [`player_turn`](nova_sim::player_turn)).
 //! - L, once a press (its repeats do nothing), requests clearance, then
 //!   lands, as [`landing`](nova_sim::landing) says, in two presses: with
 //!   no navigation target it selects the nearest stellar, and
@@ -658,7 +662,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
 /// The port's own overlays on the flight screen, which the original does
 /// not draw: developer settings, both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -679,11 +683,13 @@ pub struct FlightOverlays {
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
 /// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 15] = [
+const FLIGHT_KEYS: [Key; 17] = [
     Key::Up,
     Key::Left,
     Key::Right,
     Key::Down,
+    FACE_TARGET_KEY,
+    AFTERBURNER_KEY,
     FIRE_KEY,
     SECONDARY_KEY,
     Key::Alt,
@@ -697,6 +703,18 @@ const FLIGHT_KEYS: [Key; 15] = [
     JUMP_KEY,
 ];
 
+/// The face-target key: the original's default A for its `autopilot`
+/// (keyPrefs +0xe, named by `_loadKeys` @0xcd8c5-0xcd935). Held, it turns
+/// the ship to face its target, or with Alt (Option) or no target the
+/// navigation stellar ([`Face`](nova_sim::Face)); a flight key, so it
+/// fades the cursor, as its press sets *0x3b5550 (@0x6aeeb).
+pub const FACE_TARGET_KEY: Key = Key::Char('a');
+/// The afterburner key: the original's default, Mac keycode 6, Z (keyPrefs
+/// +0x30, `_loadKeys` @0xcd899-0xcd8bc). Held, it engages the afterburner
+/// ([`Controls::afterburner`](nova_sim::Controls::afterburner)); a flight
+/// key, so it fades the cursor, as its press sets *0x3b5550 whether or not
+/// the ship carries an afterburner (@0x6cb03).
+pub const AFTERBURNER_KEY: Key = Key::Char('z');
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
 /// @0xcd5f8).
 pub const FIRE_KEY: Key = Key::Space;

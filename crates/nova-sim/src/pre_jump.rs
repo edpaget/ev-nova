@@ -6,12 +6,24 @@
 //! (field 0x6a) is 3:
 //!
 //! 1. **Brake** (@0x6b6a2-0x6b868) while the ship is not [`slow_enough`]:
-//!    its desired heading is the one opposite its velocity, and it thrusts
-//!    only while that heading is within [`BRAKE_THRUST_ARC`] (or its turn
-//!    rate plus one, if wider) of the way it faces.
+//!    its desired heading is the one opposite its velocity
+//!    ([`brake_aim`]), and it thrusts only while that heading is within
+//!    [`BRAKE_THRUST_ARC`] (or its turn rate plus one, if wider) of the
+//!    way it faces.
 //! 2. **Turn** (@0x6b03c-0x6b0d3) to the map bearing of the next system,
-//!    coasting on what drift is left.
+//!    in whole degrees as `_CalcInterceptAngle` gives it, coasting on what
+//!    drift is left.
 //! 3. Then the jump begins.
+//!
+//! Both set the auto-turn local −0x2cd (@0x6b861, @0x6b0d3), so both turn
+//! as the player's turn block does
+//! ([`player_turn`](crate::player_turn)): by the turn rate's whole
+//! degrees, stopping within a turn of the aim without snapping onto it.
+//! The turn is done once the ship is within that turn ([`settled`]). The
+//! warp's own facing test, within max(`_ShipTurnRate`, 30°) of the
+//! bearing (@0x6d16d-0x6d1a1), and the brake's whole-degree arc
+//! (@0x6b765-0x6b7ef) are
+//! rdm:phase/ship-handling-fidelity/phase-8-warp-out's.
 //!
 //! The original's warp stage starts as the brake ends, not after the
 //! turn: on the first frame the ship is slow enough, or at once when it
@@ -33,10 +45,25 @@
 //! of it. A ship that cannot turn skips the turn, and one that cannot turn
 //! or thrust skips the brake, so no hull is held in a stage it can never
 //! finish. `slow_down` false skips the brake, as a fast jump does.
+//!
+//! **An inertialess ship** (@0x6b6ba-0x6b719) brakes its speed along its
+//! heading by a tick's acceleration instead, down to none
+//! ([`REVERSE`]), neither turning (it sets no auto-turn, -0x2cd) nor
+//! aiming (+0x68), and its velocity follows the speed (@0x6d43a, which
+//! both stages reach); so it needs only thrust to brake. Both branches
+//! go on to the same code (@0x6b941 and @0x6babc each join @0x6bad1 with
+//! the same flag), so its brake, too, ends once the ship is slow enough,
+//! usually before its speed is none. It turns as any ship does, its
+//! velocity following its heading.
 
-use crate::flight::{Controls, ShipState, heading_of, shortest_turn, step, turn_toward};
+use crate::flight::{
+    Caps, FlightRules, Flyer, ShipState, Turn, advance, heading_of, inertialess_advance,
+    shortest_turn,
+};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::inertialess::REVERSE;
+use crate::player_turn::{PlayerTurn, brake_aim, settled, step_of, turn};
 
 /// The speed, in pixels a tick, that each component of a ship's velocity
 /// must be under for it to jump: the original's test that
@@ -67,62 +94,80 @@ pub fn slow_enough(velocity: Vec2) -> bool {
     velocity.x.abs() < JUMP_SPEED && velocity.y.abs() < JUMP_SPEED
 }
 
-/// The stage `ship`, flying as `handling` allows, is in on its way to a
-/// jump towards `bearing` (none when there is nothing to turn to), braking
-/// first when `slow_down`.
+/// The stage `ship`, flying as `handling` allows and turning as `rule`
+/// says, is in on its way to a jump towards `bearing`, in whole degrees
+/// (none when there is nothing to turn to), braking first when
+/// `slow_down`. A ship that turns less than a whole degree a tick turns
+/// none ([`step_of`]), so it neither brakes nor turns, unless it is
+/// `inertialess`, whose brake needs no turn (see the module docs).
 #[must_use]
 pub fn stage(
     ship: &ShipState,
     handling: &Handling,
-    bearing: Option<f32>,
+    bearing: Option<i16>,
     slow_down: bool,
+    rule: PlayerTurn,
+    inertialess: bool,
 ) -> PreJump {
-    let can_turn = handling.turn_rate > 0.0;
-    if slow_down && !slow_enough(ship.velocity) && can_turn && handling.accel > 0.0 {
+    let rate = handling.turn_rate;
+    let can_turn = step_of(rate, rule) > 0.0;
+    let can_brake = (can_turn || inertialess) && handling.accel > 0.0;
+    if slow_down && !slow_enough(ship.velocity) && can_brake {
         PreJump::Brake
-    } else if can_turn && bearing.is_some_and(|to| shortest_turn(ship.heading, to).abs() > 0.0) {
+    } else if can_turn && bearing.is_some_and(|to| !settled(ship.heading, rate, to, rule)) {
         PreJump::Turn
     } else {
         PreJump::Ready
     }
 }
 
-/// Flies `ship` one tick of the stage it is in (see [`stage`]), and gives
-/// whether it thrust. A ready ship does not move.
+/// Flies `ship` one tick of the stage it is in (see [`stage`]) under
+/// `flight`, capped by `caps` (the player's box, as the last tick left
+/// it), and gives whether it thrust. A ready ship does not move.
+/// An inertialess ship flies holding `speed` along its heading (see the
+/// module docs), and never thrusts.
 pub fn fly(
     ship: &mut ShipState,
     handling: &Handling,
-    bearing: Option<f32>,
+    bearing: Option<i16>,
     slow_down: bool,
+    caps: Caps,
+    flight: FlightRules,
+    speed: Option<&mut f32>,
 ) -> bool {
-    match stage(ship, handling, bearing, slow_down) {
+    let rule = flight.player_turn;
+    let stage = stage(ship, handling, bearing, slow_down, rule, speed.is_some());
+    if let Some(speed) = speed {
+        let (aim, brake) = match stage {
+            PreJump::Brake => (None, REVERSE),
+            PreJump::Turn => (bearing, 0.0),
+            PreJump::Ready => return false,
+        };
+        (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
+        inertialess_advance(ship, speed, handling, brake, caps, flight, Flyer::Player);
+        return false;
+    }
+    let (aim, thrust) = match stage {
         PreJump::Brake => {
             let behind = heading_of(ship.velocity * -1.0);
             let arc = BRAKE_THRUST_ARC.max(handling.turn_rate + 1.0);
             let thrust = shortest_turn(ship.heading, behind).abs() < arc;
-            let controls = Controls {
-                thrust,
-                reverse: true,
-                ..Controls::default()
-            };
-            step(ship, handling, controls);
-            thrust
+            (Some(brake_aim(ship.velocity)), thrust)
         }
-        PreJump::Turn => {
-            if let Some(bearing) = bearing {
-                ship.heading = turn_toward(ship.heading, bearing, handling.turn_rate);
-            }
-            step(ship, handling, Controls::default());
-            false
-        }
-        PreJump::Ready => false,
-    }
+        PreJump::Turn => (bearing, false),
+        PreJump::Ready => return false,
+    };
+    (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
+    advance(ship, handling, thrust, caps, flight, Flyer::Player);
+    thrust
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    const WHOLE: PlayerTurn = PlayerTurn::WholeDegrees;
 
     /// 6 pixels a tick at most, 0.3 more each tick, 3° a tick.
     const SHIP: Handling = Handling {
@@ -132,7 +177,7 @@ mod tests {
     };
 
     /// East, as the map bears from Sol to Alpha Centauri.
-    const EAST: Option<f32> = Some(90.0);
+    const EAST: Option<i16> = Some(90);
 
     fn ship(velocity: Vec2, heading: f32) -> ShipState {
         ShipState {
@@ -169,37 +214,98 @@ mod tests {
     #[test]
     fn a_ship_at_rest_facing_the_bearing_is_ready() {
         assert_eq!(
-            stage(&ship(Vec2::ZERO, 90.0), &SHIP, EAST, true),
+            stage(&ship(Vec2::ZERO, 90.0), &SHIP, EAST, true, WHOLE, false),
             PreJump::Ready
         );
     }
 
     #[test]
-    fn a_ship_at_rest_facing_away_turns() {
+    fn a_ship_at_rest_more_than_a_turn_off_the_bearing_turns() {
         assert_eq!(
-            stage(&ship(Vec2::ZERO, 0.0), &SHIP, EAST, true),
+            stage(&ship(Vec2::ZERO, 0.0), &SHIP, EAST, true, WHOLE, false),
             PreJump::Turn
         );
         assert_eq!(
-            stage(&ship(Vec2::ZERO, 89.9), &SHIP, EAST, true),
+            stage(&ship(Vec2::ZERO, 86.9), &SHIP, EAST, true, WHOLE, false),
+            PreJump::Turn,
+            "whole degree 86, 4 off"
+        );
+        assert_eq!(
+            stage(&ship(Vec2::ZERO, 87.0), &SHIP, EAST, true, WHOLE, false),
+            PreJump::Ready,
+            "a turn off: within one"
+        );
+        assert_eq!(
+            stage(&ship(Vec2::ZERO, 93.0), &SHIP, EAST, true, WHOLE, false),
+            PreJump::Ready
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_turns_until_it_faces_the_bearing() {
+        let full = PlayerTurn::Full;
+        assert_eq!(
+            stage(&ship(Vec2::ZERO, 89.9), &SHIP, EAST, true, full, false),
             PreJump::Turn
+        );
+        assert_eq!(
+            stage(&ship(Vec2::ZERO, 90.0), &SHIP, EAST, true, full, false),
+            PreJump::Ready
+        );
+        let rules = FlightRules {
+            player_turn: full,
+            ..FlightRules::default()
+        };
+        let mut state = ship(Vec2::ZERO, 88.5);
+        fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            rules,
+            None,
+        );
+        assert_eq!(state.heading, 90.0, "landing on it");
+    }
+
+    #[test]
+    fn a_ship_turning_under_a_whole_degree_a_tick_never_waits_to_turn_or_brake() {
+        let creeping = Handling {
+            turn_rate: 0.9,
+            ..SHIP
+        };
+        let moving_away = ship(Vec2::new(0.0, -3.0), 0.0);
+        assert_eq!(
+            stage(&moving_away, &creeping, EAST, true, WHOLE, false),
+            PreJump::Ready
+        );
+        assert_eq!(
+            stage(&moving_away, &creeping, EAST, true, PlayerTurn::Full, false),
+            PreJump::Brake
         );
     }
 
     #[test]
     fn a_moving_ship_brakes_unless_it_need_not_slow_down() {
         let moving = ship(Vec2::new(0.0, -3.0), 90.0);
-        assert_eq!(stage(&moving, &SHIP, EAST, true), PreJump::Brake);
         assert_eq!(
-            stage(&moving, &SHIP, EAST, false),
+            stage(&moving, &SHIP, EAST, true, WHOLE, false),
+            PreJump::Brake
+        );
+        assert_eq!(
+            stage(&moving, &SHIP, EAST, false, WHOLE, false),
             PreJump::Ready,
             "facing it"
         );
         let away = ship(Vec2::new(0.0, -3.0), 0.0);
-        assert_eq!(stage(&away, &SHIP, EAST, false), PreJump::Turn);
+        assert_eq!(
+            stage(&away, &SHIP, EAST, false, WHOLE, false),
+            PreJump::Turn
+        );
         let slow = ship(Vec2::new(1.9, -1.9), 90.0);
         assert_eq!(
-            stage(&slow, &SHIP, EAST, true),
+            stage(&slow, &SHIP, EAST, true, WHOLE, false),
             PreJump::Ready,
             "slow enough"
         );
@@ -208,11 +314,14 @@ mod tests {
     #[test]
     fn without_a_bearing_a_slow_ship_is_ready_whichever_way_it_faces() {
         assert_eq!(
-            stage(&ship(Vec2::ZERO, 0.0), &SHIP, None, true),
+            stage(&ship(Vec2::ZERO, 0.0), &SHIP, None, true, WHOLE, false),
             PreJump::Ready
         );
         let moving = ship(Vec2::new(0.0, -3.0), 0.0);
-        assert_eq!(stage(&moving, &SHIP, None, true), PreJump::Brake);
+        assert_eq!(
+            stage(&moving, &SHIP, None, true, WHOLE, false),
+            PreJump::Brake
+        );
     }
 
     #[test]
@@ -222,22 +331,46 @@ mod tests {
             ..SHIP
         };
         let moving_away = ship(Vec2::new(0.0, -3.0), 0.0);
-        assert_eq!(stage(&moving_away, &rigid, EAST, true), PreJump::Ready);
+        assert_eq!(
+            stage(&moving_away, &rigid, EAST, true, WHOLE, false),
+            PreJump::Ready
+        );
         let engineless = Handling { accel: 0.0, ..SHIP };
-        assert_eq!(stage(&moving_away, &engineless, EAST, true), PreJump::Turn);
+        assert_eq!(
+            stage(&moving_away, &engineless, EAST, true, WHOLE, false),
+            PreJump::Turn
+        );
         let facing = ship(Vec2::new(0.0, -3.0), 90.0);
-        assert_eq!(stage(&facing, &engineless, EAST, true), PreJump::Ready);
+        assert_eq!(
+            stage(&facing, &engineless, EAST, true, WHOLE, false),
+            PreJump::Ready
+        );
     }
 
     // Flying the stages.
 
     #[test]
-    fn a_turning_ship_reaches_the_bearing_at_its_turn_rate_and_drifts() {
+    fn a_turning_ship_comes_within_a_turn_of_the_bearing_at_its_turn_rate_and_drifts() {
         let mut state = ship(Vec2::new(0.5, 0.0), 0.0);
-        for k in 1..=30 {
-            assert_eq!(stage(&state, &SHIP, EAST, true), PreJump::Turn, "tick {k}");
+        for k in 1..=29 {
+            assert_eq!(
+                stage(&state, &SHIP, EAST, true, WHOLE, false),
+                PreJump::Turn,
+                "tick {k}"
+            );
             let before = state;
-            assert!(!fly(&mut state, &SHIP, EAST, true), "no thrust");
+            assert!(
+                !fly(
+                    &mut state,
+                    &SHIP,
+                    EAST,
+                    true,
+                    Caps::top(SHIP.max_speed),
+                    FlightRules::default(),
+                    None
+                ),
+                "no thrust"
+            );
             assert!(state.heading <= 90.0, "never overshoots: {state:?}");
             assert_eq!(
                 state.heading,
@@ -247,17 +380,36 @@ mod tests {
             assert_eq!(state.velocity, before.velocity, "coasting");
             assert_eq!(state.position, before.position + before.velocity);
         }
-        assert_eq!(state.heading, 90.0);
-        assert_eq!(stage(&state, &SHIP, EAST, true), PreJump::Ready);
+        assert_eq!(state.heading, 87.0, "a turn short");
+        assert_eq!(
+            stage(&state, &SHIP, EAST, true, WHOLE, false),
+            PreJump::Ready
+        );
     }
 
     #[test]
     fn a_turn_goes_the_short_way_round() {
         let mut state = ship(Vec2::ZERO, 180.0);
-        fly(&mut state, &SHIP, EAST, true);
+        fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        );
         assert_eq!(state.heading, 177.0);
         let mut state = ship(Vec2::ZERO, 350.0);
-        fly(&mut state, &SHIP, Some(10.0), true);
+        fly(
+            &mut state,
+            &SHIP,
+            Some(10),
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        );
         assert_eq!(state.heading, 353.0);
     }
 
@@ -265,7 +417,15 @@ mod tests {
     fn a_ready_ship_does_not_move() {
         let ready = ship(Vec2::new(1.0, 1.0), 90.0);
         let mut state = ready;
-        assert!(!fly(&mut state, &SHIP, EAST, true));
+        assert!(!fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None
+        ));
         assert_eq!(state, ready);
     }
 
@@ -274,7 +434,15 @@ mod tests {
     /// motion).
     fn brakes_at(handling: &Handling, off: f32) -> bool {
         let mut state = ship(Vec2::new(0.0, -3.0), 180.0 + off);
-        fly(&mut state, handling, EAST, true)
+        fly(
+            &mut state,
+            handling,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        )
     }
 
     #[test]
@@ -310,12 +478,20 @@ mod tests {
         let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
         let mut thrust_began = None;
         for k in 0..200 {
-            if stage(&state, &SHIP, EAST, true) != PreJump::Brake {
+            if stage(&state, &SHIP, EAST, true, WHOLE, false) != PreJump::Brake {
                 break;
             }
             let off = shortest_turn(state.heading, 180.0).abs();
             let speed = state.velocity.length();
-            let thrust = fly(&mut state, &SHIP, EAST, true);
+            let thrust = fly(
+                &mut state,
+                &SHIP,
+                EAST,
+                true,
+                Caps::top(SHIP.max_speed),
+                FlightRules::default(),
+                None,
+            );
             assert_eq!(thrust, off < BRAKE_THRUST_ARC, "tick {k}: {state:?}");
             if thrust {
                 thrust_began.get_or_insert(k);
@@ -331,14 +507,121 @@ mod tests {
             state.velocity.length() > 1.0,
             "slowed, not stopped: {state:?}"
         );
-        assert_eq!(stage(&state, &SHIP, EAST, true), PreJump::Turn);
+        assert_eq!(
+            stage(&state, &SHIP, EAST, true, WHOLE, false),
+            PreJump::Turn
+        );
     }
 
     #[test]
     fn a_ship_that_need_not_slow_down_turns_while_it_coasts() {
         let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
-        assert!(!fly(&mut state, &SHIP, EAST, false));
+        assert!(!fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            false,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None
+        ));
         assert_eq!(state.heading, 3.0);
         assert_eq!(state.velocity, Vec2::new(0.0, -6.0));
+    }
+
+    // An inertialess ship.
+
+    #[test]
+    fn an_inertialess_ship_that_cannot_turn_still_brakes() {
+        let rigid = Handling {
+            turn_rate: 0.0,
+            ..SHIP
+        };
+        let moving = ship(Vec2::new(0.0, -6.0), 0.0);
+        assert_eq!(
+            stage(&moving, &rigid, EAST, true, WHOLE, true),
+            PreJump::Brake,
+            "its brake needs no turn"
+        );
+        assert_eq!(
+            stage(&moving, &rigid, EAST, true, WHOLE, false),
+            PreJump::Ready,
+            "an inertial one's does"
+        );
+        let engineless = Handling { accel: 0.0, ..SHIP };
+        assert_eq!(
+            stage(&moving, &engineless, EAST, true, WHOLE, true),
+            PreJump::Turn,
+            "nor can it brake with no thrust"
+        );
+    }
+
+    #[test]
+    fn an_inertialess_brake_takes_a_ticks_acceleration_off_the_speed_with_no_turn_or_thrust() {
+        let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
+        let mut speed = 6.0;
+        let thrust = fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            Some(&mut speed),
+        );
+        assert!(!thrust, "no engine thrust");
+        assert_eq!(state.heading, 0.0, "no turn");
+        assert!((speed - 5.7).abs() < 1e-6, "{speed}");
+        assert!(
+            (state.velocity - Vec2::new(0.0, -5.7)).length() < 1e-5,
+            "the velocity follows: {state:?}"
+        );
+    }
+
+    #[test]
+    fn an_inertialess_ship_brakes_until_slow_enough_then_turns_its_velocity_with_it() {
+        let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
+        let mut speed = 6.0;
+        let mut ticks = 0;
+        while stage(&state, &SHIP, EAST, true, WHOLE, true) == PreJump::Brake {
+            fly(
+                &mut state,
+                &SHIP,
+                EAST,
+                true,
+                Caps::top(SHIP.max_speed),
+                FlightRules::default(),
+                Some(&mut speed),
+            );
+            ticks += 1;
+            assert!(ticks < 100, "{state:?}");
+        }
+        // 6 down to under 2 at 0.3 a tick: 14 ticks, at 1.8.
+        assert_eq!(ticks, 14);
+        assert!(
+            (speed - 1.8).abs() < 1e-5,
+            "slow enough, not stopped: {speed}"
+        );
+        assert_eq!(state.heading, 0.0);
+        for _ in 0..40 {
+            fly(
+                &mut state,
+                &SHIP,
+                EAST,
+                true,
+                Caps::top(SHIP.max_speed),
+                FlightRules::default(),
+                Some(&mut speed),
+            );
+        }
+        assert_eq!(
+            stage(&state, &SHIP, EAST, true, WHOLE, true),
+            PreJump::Ready
+        );
+        let along = crate::flight::facing(crate::speed_cap::whole_degree(state.heading)) * speed;
+        assert!(
+            (state.velocity - along).length() < 1e-5,
+            "along its heading: {state:?}"
+        );
     }
 }

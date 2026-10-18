@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use nova_data::GameData;
 use nova_sim::ai::fire::Manoeuvre;
-use nova_sim::ai::pursuit::Kept;
+use nova_sim::ai::pursuit::{Kept, RUSH_THRUST};
 use nova_sim::ai::{Behaviour, Goal, PlayerSide, Surroundings, afterburner};
 use nova_sim::chance::Chance;
 use nova_sim::combat::ShipRef;
@@ -159,6 +159,7 @@ fn a_stock_dragon_approaching_the_player_rushes_in_past_its_top_speed() {
     let mut ship = dragon(&data, Vec2::ZERO, 0.0);
     assert!(ship.afterburner, "Flags 0x0040");
     let top = ship.stats.handling.max_speed;
+    let accel = ship.stats.handling.accel;
     // The player 300 left and 2000 up: its bearing about 351, within 30
     // of the Dragon's heading of 0, and over 82 off on both axes.
     let at = Vec2::new(-300.0, -2000.0);
@@ -182,9 +183,18 @@ fn a_stock_dragon_approaching_the_player_rushes_in_past_its_top_speed() {
         frame.last().map(|body| body.manoeuvre),
         Some(Manoeuvre::Rush)
     );
-    let speed = rushing.state.velocity.length();
+    let velocity = rushing.state.velocity;
+    let speed = velocity.length();
     assert!(speed > top, "{speed} over {top}");
-    assert!(speed <= top * 1.8 + 1e-3, "{speed} within 1.8 × {top}");
+    // Each axis is pushed only while it is short of its share of 1.8 ×
+    // the top speed, and nothing clamps an NPC's (`_AdjustedAccel`, the
+    // per-axis reading of `RuleKey::SpeedCap`), so neither axis runs past
+    // that by more than one rush push.
+    let cap = top * 1.8 + accel * RUSH_THRUST + 1e-3;
+    assert!(
+        velocity.x.abs() <= cap && velocity.y.abs() <= cap,
+        "{velocity:?} within 1.8 × {top} on each axis"
+    );
 }
 
 #[test]

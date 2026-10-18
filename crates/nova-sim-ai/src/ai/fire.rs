@@ -160,12 +160,18 @@
 //!   it is the only launch, and is built: a hopeless plunderer sniping
 //!   launches its fighters after its passes, the bay its pick.
 //! - The escape pod's (class 0x2ff) exemption from the wait gate
-//!   (@0x34a69-0x34a72): the engine has no NPC escape pod (rdm phase
-//!   ship-handling-fidelity/phase-7-npc-escape-pods-and-escape-ships). A
-//!   pirate's count wait (goal 22) is exempt ([`gated`]).
-//! - `_ShipTurnRate`'s own factors, which [`suitable_missile`] reads
-//!   through the target's turn rate: rdm
-//!   system-traffic-fidelity/phase-17-npc-skill-and-speed-factors.
+//!   (@0x34a69-0x34a72): a pod NPC
+//!   ([`pod_flight`](crate::traffic::pod_flight)) counts its wait in its
+//!   mode, which [`Npc::wait_running`] doesn't read, and the gate's own
+//!   test of its class is
+//!   rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate.
+//!   A pirate's count wait (goal 22) is exempt ([`gated`]).
+//! - `_ShipTurnRate`'s own factors but its floor, which
+//!   [`suitable_missile`] reads through the target's turn rate: the
+//!   tractor's hold (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold),
+//!   ionization (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling)
+//!   and an NPC's class rate without its outfits
+//!   (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
@@ -421,11 +427,16 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
 /// ([`AVOIDS_FAST_SHIPS`](crate::combat::weapon::AVOIDS_FAST_SHIPS)) or
 /// turns [`SLOW_MISSILE_TURN`] or less.
 ///
-/// The original asks `_ShipTurnRate` of the target, whose factors (the
-/// tractor's, the nag ship's, the floor and ionization) are rdm
-/// system-traffic-fidelity/phase-17-npc-skill-and-speed-factors's; here
-/// the target's [`Handling::turn_rate`](crate::handling::Handling) stands
-/// in for it.
+/// The original asks `_ShipTurnRate` of the target; here the target's
+/// [`Handling::turn_rate`](crate::handling::Handling) stands in for it,
+/// floored as `_ShipTurnRate` floors it
+/// ([`floored_turn`](crate::handling::floored_turn)). Its other factors
+/// are left out: the tractor's hold
+/// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), ionization
+/// (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling), an
+/// NPC's class rate without its outfits
+/// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves),
+/// and the nag ship's +1, which no ship of ours is.
 #[must_use]
 pub fn suitable_missile(spec: &WeaponSpec, target_turn_rate: f32) -> bool {
     let fast = target_turn_rate.trunc() > FAST_TARGET_TURN;

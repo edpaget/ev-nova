@@ -56,7 +56,7 @@ use crate::ai::{Decision, Goal, Surroundings};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::flight::{self, ShipState};
+use crate::flight::{self, FlightRules, ShipState};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
@@ -165,7 +165,7 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
 }
 
 /// Flies `npc`'s docking one tick at `victim` (none when that ship is gone,
-/// which drops the docking), at `speeds`, its dock's wait rolled on
+/// which drops the docking), at `speeds` under `flight`, its dock's wait rolled on
 /// `chance` ([`plunder_dock::fly`]): what became of it, or none when it has
 /// no docking to fly, is not intact or not flying, for the autopilot to
 /// fly it instead.
@@ -173,6 +173,7 @@ pub fn fly_docking(
     npc: &mut Npc,
     victim: Option<&ShipState>,
     speeds: TopSpeeds,
+    flight: FlightRules,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<DockOutcome> {
     npc.docking?;
@@ -185,9 +186,9 @@ pub fn fly_docking(
     };
     let handling = Handling {
         max_speed: speeds.own,
-        ..npc.stats.handling
+        ..flight.handling(npc.stats.handling)
     };
-    Some(plunder_dock::fly(npc, victim, &handling, chance))
+    Some(plunder_dock::fly(npc, victim, &handling, flight, chance))
 }
 
 /// A tick off each AI wait among `npcs` that has any left (`_HandleShip`
@@ -688,7 +689,9 @@ mod tests {
         let victim = ShipState::default();
         let mut far = pirate(1);
         far.state.position = Vec2::new(0.0, 1000.0);
-        far.state.velocity = Vec2::new(0.0, -0.9);
+        // At its own top speed of 1.0 (not its class's): `_AdjustedAccel`
+        // adds no push to an axis already at its share.
+        far.state.velocity = Vec2::new(0.0, -1.0);
         far.docking = Some(Docking {
             ship: ShipRef::Npc(VICTIM),
             sub: DockSub::Approach,
@@ -699,13 +702,19 @@ mod tests {
         };
         let mut flown = far.clone();
         assert_eq!(
-            fly_docking(&mut flown, Some(&victim), speeds, &mut Draws::of(&[])),
+            fly_docking(
+                &mut flown,
+                Some(&victim),
+                speeds,
+                FlightRules::default(),
+                &mut Draws::of(&[])
+            ),
             Some(DockOutcome::Flying)
         );
         assert_eq!(
             flown.state.velocity.length(),
             1.0,
-            "capped at its own top speed"
+            "held at its own top speed"
         );
         for (condition, mode) in [
             (Condition::Disabled, crate::traffic::npc::Mode::Flying),
@@ -718,14 +727,26 @@ mod tests {
             down.condition = condition;
             down.mode = mode;
             assert_eq!(
-                fly_docking(&mut down, Some(&victim), speeds, &mut Draws::of(&[])),
+                fly_docking(
+                    &mut down,
+                    Some(&victim),
+                    speeds,
+                    FlightRules::default(),
+                    &mut Draws::of(&[])
+                ),
                 None,
                 "{condition:?} {mode:?}"
             );
         }
         let mut lost = far.clone();
         assert_eq!(
-            fly_docking(&mut lost, None, speeds, &mut Draws::of(&[])),
+            fly_docking(
+                &mut lost,
+                None,
+                speeds,
+                FlightRules::default(),
+                &mut Draws::of(&[])
+            ),
             None
         );
         assert_eq!(lost.docking, None, "its victim gone");

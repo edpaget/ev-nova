@@ -1059,6 +1059,7 @@ impl CombatCatalog for GameData {
                     flags2: record.flags2.bits(),
                     flags3: record.flags3.bits(),
                     death_delay: record.death_delay,
+                    pod_count: record.pod_count,
                     explode1: record.explode1,
                     explode2: record.explode2,
                     mass: record.mass,
@@ -1308,7 +1309,7 @@ pub fn ship_blink(data: &GameData, id: i16) -> Blink {
     }
 }
 
-/// A `shïp`'s handling, reserve, cargo and mass fields.
+/// A `shïp`'s handling, reserve, cargo and mass fields, and its flags.
 fn ship_fields(ship: &Ship) -> ShipFields {
     ShipFields {
         speed: ship.speed,
@@ -1324,6 +1325,7 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
         armor_rech: ship.armor_rech,
+        flags: ship.flags.bits(),
         flags2: ship.flags2.bits(),
     }
 }
@@ -1716,6 +1718,14 @@ mod tests {
     }
 
     #[test]
+    fn a_ships_fields_include_its_flags() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x4A, &[0x0018]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags), Ok(0x0018));
+    }
+
+    #[test]
     fn a_ships_fields_include_its_flags2() {
         let mut bytes = ship(1, 2, 3);
         put_i16s(&mut bytes, 0x62, &[0x4021]);
@@ -1830,6 +1840,7 @@ mod tests {
                 free_mass: 12,
                 mass: 30,
                 contribute: 0x10,
+                flags: 0x8012,
                 ..ShipFields::default()
             },
             defaults: vec![(OutfitId(200), 2), (OutfitId(201), 0), (OutfitId(202), 1)],
@@ -3843,6 +3854,7 @@ mod tests {
         put_i16s(&mut bytes, 0x3E, &[120]);
         put_i16s(&mut bytes, 0x46, &[325]);
         bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x4C, &[3]);
         bytes[0x726..0x728].copy_from_slice(&0x0040_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
         put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
@@ -3876,6 +3888,7 @@ mod tests {
             flags2: 0,
             flags3: 0x0040,
             death_delay: 60,
+            pod_count: 3,
             explode1: 4,
             explode2: 1005,
             mass: 120,

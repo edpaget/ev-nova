@@ -1,0 +1,397 @@
+//! The NPCs' escape pods: the decorative sprites a dying ship's crew and
+//! person eject, from the session's
+//! [`CombatEvent::PodEjected`](nova_sim::CombatEvent::PodEjected)s, as
+//! `_SpawnEscapePod` (@0x45547-0x456cc) and `_HandleEscapePods`
+//! (@0x39e48-0x3a063) show them in the `EV Nova` executable.
+//!
+//! - **The spawn** ([`EscapePods::spawn`]): the pod takes the ship's
+//!   position and velocity, then `_Accel(Rand(360), (Rand(10) + 10) x
+//!   0.1)` on top (0.1 at 0xdd110), a push of 1.0 to 1.9 pixels a tick in a
+//!   direction of its own, and lives `Rand(100) + 150` ticks. It faces its
+//!   velocity: frame `trunc(_CalcInterceptAngle(0, v x 100) x frames /
+//!   360)` (100 at 0xdd060, 360 at 0xdd0f8) of shän 895's sheet, the
+//!   escape pod's ([`ESCAPE_POD_SHIP`](nova_sim::ESCAPE_POD_SHIP)), of its
+//!   `FramesPer` rotations, and keeps that frame. It takes its spawn
+//!   frame's step at once, as `_HandleEscapePods` runs after `_HandleShip`
+//!   in the frame (`_DoPlayGameWork` @0x44483, @0x44513).
+//! - **The pool.** Under the original's caps
+//!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
+//!   reading, [`Scene::caps`](super::effects::Scene::caps)) there are
+//!   [`MAX_PODS`] slots, a pod taking the first whose life is below 0
+//!   (@0x45564-0x456bf), and one more is not kept; by default nothing is
+//!   capped. Either way the pod is heard ([`Effects`](super::effects::Effects)
+//!   plays `snd ` 372 for each event), as the sound is `_HandleShip`'s.
+//! - **Each step** ([`EscapePods::step`]): it drifts by its velocity and a
+//!   tick comes off its life. It is held, unseen, at a life of 0, and its
+//!   slot is free once the life is below 0.
+//! - **The fade** ([`EscapePods::draw`]): opaque at a life of 32 or more
+//!   (32.0 at 0xdd654), at alpha life/32 over its last 32 ticks, and not
+//!   drawn at 0 or less. `_HandleEscapePods` sets the sprite's destination
+//!   factor +0xa8 to `trunc(32 - life)`, its channel factors left at 0
+//!   (`_SWCreateSprite` @0xa8d56-0xa8d71), so its draw proc
+//!   (`_BlitPixieRLETranslucentDrawProc`, 0xbb3fc) gives `(src x life) >>
+//!   5 | (dst x (32 - life)) >> 5` per channel: here a normal alpha blend
+//!   at life/32, the OR crossfade being
+//!   rdm:phase/weapons-fidelity/phase-35-left-out-of-phase-24's renderer
+//!   blend.
+//! - **Leaving the system** clears them ([`EscapePods::clear`]), as
+//!   `_killShots` frees them on landing, a gate and the arrival
+//!   (@0x39e75-0x39e84), and the view clears its effects then.
+//!
+//! Left out: the pods' murk (`_HandleSpriteMurkiness` @0x39fbc,
+//! rdm:task/murk-other-sprites); their sprite layer, 0x3b53ec, above the
+//! disabled ships and below the shots and the flying ships (`_InitSprites`
+//! @0x1fcfb): the view draws them after the cargo boxes and before every
+//! beam and ship (rdm:task/shots-drawn-in-their-sprite-layers); and
+//! `_WrapPlayerPosition`'s shift (@0x68232), as the engine has no wrap.
+
+use std::num::NonZeroU16;
+
+use nova_sim::trig::intercept_angle;
+use nova_sim::{Chance, Vec2};
+
+use super::catalog::Looks;
+use crate::system::camera::Camera;
+use crate::{Color, DrawList, ImageKey, Point};
+
+/// The most pods kept at once under the caps: `_podData`'s 32 entries
+/// (`cmpl $0x20` @0x456bc).
+pub const MAX_PODS: usize = 32;
+/// The life, in ticks, from which a pod is drawn opaque (32.0 at 0xdd654).
+pub const POD_FADE: i32 = 32;
+/// A pod's least life (`Rand(100) + 150`, @0x4556e-0x45584).
+pub const POD_LIFE_MIN: u32 = 150;
+/// How many lives a pod can roll above [`POD_LIFE_MIN`].
+pub const POD_LIFE_ROLL: u32 = 100;
+
+/// An escape pod adrift.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pod {
+    /// Where it is, in world units.
+    pub at: Point,
+    /// How far it moves a tick.
+    pub velocity: Point,
+    /// The ticks it has left.
+    pub life: i32,
+    /// The frame of shän 895's sheet it shows.
+    pub frame: u16,
+}
+
+impl Pod {
+    /// How it is drawn: white at its alpha, or none at a life of 0 or less.
+    #[must_use]
+    pub fn tint(&self) -> Option<Color> {
+        match self.life {
+            ..=0 => None,
+            life if life >= POD_FADE => Some(Color::WHITE),
+            life => Some(Color::rgba(
+                255,
+                255,
+                255,
+                ((life * 255 + POD_FADE / 2) / POD_FADE) as u8,
+            )),
+        }
+    }
+
+    /// One step: it drifts by its velocity, and a tick comes off its life.
+    fn step(&mut self) {
+        self.at = Point::new(self.at.x + self.velocity.x, self.at.y + self.velocity.y);
+        self.life -= 1;
+    }
+}
+
+/// The frame of a sheet of `frames` rotations a pod moving at `velocity`
+/// faces: the original's whole-degree heading of its velocity, times the
+/// rotations in integers, then divided by 360 (@0x45676-0x4569d).
+#[must_use]
+pub fn pod_frame(velocity: Point, frames: NonZeroU16) -> u16 {
+    let towards = Vec2::new(velocity.x * 100.0, velocity.y * 100.0);
+    let angle = i32::from(intercept_angle(Vec2::ZERO, towards));
+    let frame = angle * i32::from(frames.get()) / 360;
+    u16::try_from(frame).unwrap_or(0) % frames.get()
+}
+
+/// The escape pods adrift.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EscapePods {
+    pods: Vec<Pod>,
+}
+
+impl EscapePods {
+    /// Sets a pod adrift from a ship at `at` moving at `velocity`, drawing
+    /// on `chance`, unless the `caps` hold the pool full; its sheet's
+    /// rotations from `looks` (one without a sheet faces frame 0). It
+    /// takes its first step at once.
+    pub fn spawn(
+        &mut self,
+        at: Point,
+        velocity: Point,
+        caps: bool,
+        looks: &Looks,
+        chance: &mut dyn Chance,
+    ) {
+        if caps && self.pods.len() >= MAX_PODS {
+            return;
+        }
+        let life = POD_LIFE_MIN + chance.below(POD_LIFE_ROLL);
+        let heading = chance.below(360) as f32;
+        let push = (chance.below(10) + 10) as f32 * 0.1;
+        let (sin, cos) = heading.to_radians().sin_cos();
+        let velocity = Point::new(velocity.x + sin * push, velocity.y - cos * push);
+        let frame = looks
+            .pod_sheet()
+            .map_or(0, |sheet| pod_frame(velocity, sheet.frames));
+        let mut pod = Pod {
+            at,
+            velocity,
+            life: i32::try_from(life).unwrap_or(i32::MAX),
+            frame,
+        };
+        pod.step();
+        self.pods.push(pod);
+    }
+
+    /// Steps every pod, then frees those whose life is below 0.
+    pub fn step(&mut self) {
+        for pod in &mut self.pods {
+            pod.step();
+        }
+        self.pods.retain(|pod| pod.life >= 0);
+    }
+
+    /// Draws each pod shown, as `looks` says, where `camera` shows it.
+    pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
+        let Some(sheet) = looks.pod_sheet() else {
+            return;
+        };
+        for pod in &self.pods {
+            if let Some(tint) = pod.tint() {
+                let frame = ImageKey::sprite(sheet.image_id, pod.frame);
+                list.sprite(frame, camera.world_to_screen(pod.at), tint);
+            }
+        }
+    }
+
+    /// The pods adrift, the unseen ones at a life of 0 too.
+    #[must_use]
+    pub fn pods(&self) -> &[Pod] {
+        &self.pods
+    }
+
+    /// Frees every pod.
+    pub fn clear(&mut self) {
+        self.pods.clear();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+    use crate::DrawCommand;
+    use crate::flight::catalog::EffectSheet;
+
+    /// Draws its script, then the last outcome.
+    #[derive(Default)]
+    struct Script(VecDeque<u32>);
+
+    impl Chance for Script {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            let draw = self.0.pop_front().unwrap_or(n - 1);
+            assert!(draw < n, "drew {draw} below {n}");
+            draw
+        }
+    }
+
+    fn script(draws: &[u32]) -> Script {
+        Script(draws.iter().copied().collect())
+    }
+
+    /// The pod's sheet, `rlëD` 1095, of 36 rotations.
+    fn looks() -> Looks {
+        Looks {
+            pod: Some(Ok(EffectSheet {
+                image_id: 1095,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 0,
+            })),
+            ..Looks::default()
+        }
+    }
+
+    fn spawned(draws: &[u32]) -> EscapePods {
+        let mut pods = EscapePods::default();
+        pods.spawn(
+            Point::new(100.0, 50.0),
+            Point::new(2.0, 0.0),
+            false,
+            &looks(),
+            &mut script(draws),
+        );
+        pods
+    }
+
+    #[test]
+    fn a_pod_leaves_its_ship_pushed_off_and_takes_its_first_step() {
+        // Life 150 + 20, pushed (5 + 10) x 0.1 = 1.5 along 90°.
+        let pods = spawned(&[20, 90, 5]);
+        let [pod] = pods.pods() else {
+            panic!("one pod");
+        };
+        assert_eq!(pod.life, 169, "170 less its first step");
+        assert!((pod.velocity.x - 3.5).abs() < 1e-5, "{:?}", pod.velocity);
+        assert!(pod.velocity.y.abs() < 1e-5);
+        assert!((pod.at.x - 103.5).abs() < 1e-5, "one step on");
+        assert_eq!(pod.frame, 9, "facing 90°: 9 of 36");
+        let least = spawned(&[0, 0, 0]);
+        assert_eq!(least.pods()[0].life, 149);
+        assert!((least.pods()[0].velocity.y + 1.0).abs() < 1e-5, "1.0 up");
+        let most = spawned(&[99, 180, 9]);
+        assert_eq!(most.pods()[0].life, 248);
+        assert!((most.pods()[0].velocity.y - 1.9).abs() < 1e-5, "1.9 down");
+    }
+
+    #[test]
+    fn a_pod_drifts_by_its_velocity_each_step() {
+        let mut pods = spawned(&[20, 90, 5]);
+        let before = pods.pods()[0];
+        pods.step();
+        let after = pods.pods()[0];
+        assert!((after.at.x - before.at.x - 3.5).abs() < 1e-5);
+        assert_eq!(after.at.y, before.at.y);
+        assert_eq!(after.life, before.life - 1);
+        // Pushed straight down: it drifts down too.
+        let mut down = spawned(&[20, 180, 5]);
+        let before = down.pods()[0];
+        down.step();
+        let after = down.pods()[0];
+        assert!((after.at.y - before.at.y - 1.5).abs() < 1e-5, "{after:?}");
+        assert!((after.at.x - before.at.x - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_pod_is_opaque_to_32_fades_over_its_last_32_and_is_hidden_then_freed() {
+        // Life 150: 149 after its first step.
+        let mut pods = spawned(&[0, 90, 0]);
+        let mut alphas = Vec::new();
+        while let Some(pod) = pods.pods().first() {
+            alphas.push((pod.life, pod.tint().map(|tint| tint.a)));
+            pods.step();
+        }
+        assert_eq!(alphas.first(), Some(&(149, Some(255))));
+        let at = |life| alphas.iter().find(|(l, _)| *l == life).map(|(_, a)| *a);
+        assert_eq!(at(32), Some(Some(255)), "opaque at 32");
+        assert_eq!(at(31), Some(Some(247)), "31/32");
+        assert_eq!(at(16), Some(Some(128)));
+        assert_eq!(at(1), Some(Some(8)), "1/32");
+        assert_eq!(at(0), Some(None), "held unseen at 0");
+        assert_eq!(alphas.last(), Some(&(0, None)), "then freed");
+        let fading: Vec<u8> = alphas
+            .iter()
+            .filter_map(|(life, alpha)| alpha.filter(|_| *life < 32))
+            .collect();
+        assert!(
+            fading.windows(2).all(|pair| pair[0] > pair[1]),
+            "{fading:?}"
+        );
+        assert_eq!(fading.len(), 31);
+    }
+
+    #[test]
+    fn a_pod_is_drawn_on_its_frame_at_its_tint() {
+        let pods = spawned(&[20, 90, 5]);
+        let mut list = DrawList::new();
+        pods.draw(&mut list, &Camera::centred_on(Point::default()), &looks());
+        let drawn: Vec<_> = list
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, tint, .. } => Some((*image, *tint)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, [(ImageKey::sprite(1095, 9), Color::WHITE)]);
+        let mut unread = DrawList::new();
+        pods.draw(
+            &mut unread,
+            &Camera::centred_on(Point::default()),
+            &Looks::default(),
+        );
+        assert!(unread.into_iter().next().is_none(), "no sheet, no pod");
+    }
+
+    #[test]
+    fn under_the_caps_a_33rd_pod_is_not_kept() {
+        for (caps, kept) in [(true, MAX_PODS), (false, MAX_PODS + 1)] {
+            let mut pods = EscapePods::default();
+            for _ in 0..=MAX_PODS {
+                pods.spawn(
+                    Point::new(0.0, 0.0),
+                    Point::new(0.0, 0.0),
+                    caps,
+                    &looks(),
+                    &mut script(&[]),
+                );
+            }
+            assert_eq!(pods.pods().len(), kept, "caps {caps}");
+        }
+    }
+
+    #[test]
+    fn a_held_pod_keeps_its_slot_until_its_life_is_below_0() {
+        let mut pods = EscapePods::default();
+        for _ in 0..MAX_PODS {
+            pods.spawn(
+                Point::new(0.0, 0.0),
+                Point::new(0.0, 0.0),
+                true,
+                &looks(),
+                &mut script(&[0]),
+            );
+        }
+        for _ in 0..149 {
+            pods.step();
+        }
+        assert!(pods.pods().iter().all(|pod| pod.life == 0));
+        pods.spawn(
+            Point::new(0.0, 0.0),
+            Point::new(0.0, 0.0),
+            true,
+            &looks(),
+            &mut script(&[]),
+        );
+        assert_eq!(pods.pods().len(), MAX_PODS, "no slot free at 0");
+        pods.step();
+        assert!(pods.pods().is_empty(), "all free below 0");
+    }
+
+    #[test]
+    fn clearing_frees_every_pod() {
+        let mut pods = spawned(&[20, 90, 5]);
+        pods.clear();
+        assert!(pods.pods().is_empty());
+    }
+
+    #[test]
+    fn a_pod_faces_its_velocity_in_whole_degrees_of_its_sheet() {
+        let frames = |n| NonZeroU16::new(n).expect("non-zero");
+        assert_eq!(pod_frame(Point::new(0.0, -1.0), frames(36)), 0, "up");
+        assert_eq!(pod_frame(Point::new(1.0, 0.0), frames(36)), 9, "right");
+        assert_eq!(pod_frame(Point::new(0.0, 1.0), frames(36)), 18, "down");
+        assert_eq!(pod_frame(Point::new(-1.0, 0.0), frames(36)), 27, "left");
+        assert_eq!(pod_frame(Point::new(1.0, 0.0), frames(64)), 16);
+        // The table's heading of (1, 1) is 134°: trunc(134 x 64 / 360) = 23.
+        assert_eq!(intercept_angle(Vec2::ZERO, Vec2::new(100.0, 100.0)), 134);
+        assert_eq!(pod_frame(Point::new(1.0, 1.0), frames(64)), 23);
+        assert_eq!(
+            pod_frame(Point::new(1.0, 1.0), frames(36)),
+            13,
+            "134 x 36 / 360"
+        );
+    }
+}

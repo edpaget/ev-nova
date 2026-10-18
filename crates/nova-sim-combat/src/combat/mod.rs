@@ -250,8 +250,9 @@
 //!    each push as a [`Shove`] ([`Combat::take_shoves`]) and sets the
 //!    ship's velocity. Each intact or disabled ship hit then settles its
 //!    condition as in step 9.
-//! 10. Shields regenerate on an intact or disabled ship, armour only on an
-//!     intact one, each up to what it holds.
+//! 10. Shields and armour regenerate only on an intact ship, each up to
+//!     what it holds: a disabled or breaking-up one regenerates neither
+//!     (`_HandleShip` @0x34424, `_HandlePlayer` @0x6cf86-0x6cff3).
 //!
 //! **Frame to tick.** Tick t is the original's frame t
 //! (`_DoPlayGameWork` @0x43e19-0x4453d, drawn after it returns,
@@ -352,6 +353,7 @@ use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
+use crate::speed_cap::SpeedCap;
 
 /// An NPC's number in its system, unique while the player stays there:
 /// the order it appeared in.
@@ -498,6 +500,23 @@ pub enum CombatEvent {
         /// The explosion's size ([`HullSpec::death_size`]): how far its
         /// extra explosions scatter, and how many there are.
         size: f32,
+    },
+    /// A dying NPC ejected an escape pod, one of its crew's or its
+    /// person's (`_SpawnEscapePod` @0x45547-0x456cc, called from
+    /// `_HandleShip` @0x351c3 and @0x352c9; see `nova_sim::npc_escape`).
+    /// The pod is a sprite, no ship: the view sets it adrift from here and
+    /// plays `_escapePodSnd` from here, `snd ` 372
+    /// ([`ESCAPE_POD_SOUND`](nova_sim_catalog::sound::ESCAPE_POD_SOUND)),
+    /// whether or not it has room for the pod, as `_HandleShip` plays it
+    /// after the spawn at priority 5 (`_PlaySoundDistance` @0x351fa,
+    /// @0x35300), which the view doesn't play by yet.
+    PodEjected {
+        /// The ship it left.
+        ship: ShipRef,
+        /// Where the ship was.
+        at: Vec2,
+        /// How the ship was moving.
+        velocity: Vec2,
     },
 }
 
@@ -748,7 +767,9 @@ pub struct Fighter<'a> {
     pub hull: HullSpec,
     /// The shield points it regenerates a tick.
     pub shield_regen: f32,
-    /// The armour points it regenerates a tick.
+    /// The armour points it regenerates a tick: for the player, none
+    /// while its repair inhibit holds
+    /// ([`RepairInhibit`](crate::self_repair::RepairInhibit)).
     pub armor_regen: f32,
     /// The fire command it holds.
     pub trigger: Trigger,
@@ -819,6 +840,11 @@ pub struct Fighter<'a> {
     /// (`_HandleShipPointDefense` @0x392d6). An NPC's jump out has no
     /// stage in the simulation, so only the player's is.
     pub jumping: bool,
+    /// Whether it is the player with its afterburner on and no gravity
+    /// source present, which widens a push's clamp to 1.8 times its top
+    /// speed ([`Body::afterburner`](impact::Body::afterburner)); never an
+    /// NPC's.
+    pub afterburner: bool,
     /// Its tractor lock, if a tractor beam holds it, or it holds itself
     /// along its own (the original's +0xc8dc and +0xb4): the fight sets
     /// and touches it ([`impact`]); what it does to the ship is the
@@ -1049,6 +1075,10 @@ pub struct Combat {
     /// ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s engine
     /// reading); by default, not.
     capped: bool,
+    /// How a push clamps the speed of the ship it moves
+    /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)): by default on
+    /// each axis, as `_SpeedLimit` does.
+    speed_cap: SpeedCap,
     /// The shots that left the table whose slots the original frees only
     /// at its next `_HandleShot` (see [`Combat::shot_room`]): from the
     /// late part of a tick (step 7) to the next tick's hit pass, the
@@ -1355,7 +1385,10 @@ impl Combat {
                     passes_shields: false,
                     late,
                 });
-                if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None) {
+                let cap = self.speed_cap;
+                if let Some(velocity) =
+                    impact::push(&fighter.body(), at, shockwave::IMPACT, None, cap)
+                {
                     self.shove(fighter, velocity);
                 }
                 let downed = if condition.standing() {
@@ -1507,6 +1540,15 @@ impl Combat {
     /// reading, the default, not.
     pub fn set_combat_caps(&mut self, source: RuleSource) {
         self.capped = source == RuleSource::Engine;
+    }
+
+    /// Has a push, the death shockwave's and a tractor's self-pull clamp
+    /// the speed of the ship it moves as `source` reads
+    /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap), [`SpeedCap`]): by
+    /// the engine, the default, on each axis; by the other reading, to the
+    /// circle of its top speed.
+    pub fn set_speed_cap(&mut self, source: RuleSource) {
+        self.speed_cap = SpeedCap::from(source);
     }
 
     /// Whether a shot `ship` fires now finds a free slot: always uncapped;
@@ -2678,7 +2720,9 @@ impl Combat {
                 passes_shields: landed.hit.passes_shields,
                 late: landed.ship == ShipRef::Player || beam,
             });
-            if let Some(velocity) = impact::push(&fighter.body(), from, impact, source) {
+            if let Some(velocity) =
+                impact::push(&fighter.body(), from, impact, source, self.speed_cap)
+            {
                 self.shove(fighter, velocity);
             }
             let before = taken(fighter.reserves);
@@ -2727,7 +2771,13 @@ impl Combat {
             return 0.0;
         };
         let body = fighters[firer].body();
-        match impact::tractor(&fighters[target].body(), &body, start, impact) {
+        match impact::tractor(
+            &fighters[target].body(),
+            &body,
+            start,
+            impact,
+            self.speed_cap,
+        ) {
             // The original's i = 0 (@0x31450); the push would refuse a
             // massless or planet-type target anyway.
             Tractor::Slips => 0.0,
@@ -3094,6 +3144,13 @@ impl Combat {
         });
     }
 
+    /// Reports an escape pod `ship` ejected at `at`, moving at `velocity`
+    /// ([`CombatEvent::PodEjected`]).
+    pub fn eject_pod(&mut self, ship: ShipRef, at: Vec2, velocity: Vec2) {
+        self.events
+            .push(CombatEvent::PodEjected { ship, at, velocity });
+    }
+
     /// Reports `burst`'s particles: a shot's hit on an asteroid's, or an
     /// asteroid's as it is destroyed.
     pub fn particles(&mut self, burst: ParticleBurst) {
@@ -3175,6 +3232,7 @@ impl Fighter<'_> {
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: self.jumping,
+            afterburner: self.afterburner,
         }
     }
 
@@ -3565,14 +3623,21 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
     )
 }
 
-/// Step 10: `fighter`'s shields regenerate unless it is breaking up or
-/// destroyed, and its armour only while it is intact.
+/// Step 10: `fighter`'s shields and armour regenerate only while it is
+/// intact: a disabled, breaking-up or destroyed ship regenerates neither
+/// (`_HandleShip` @0x34424-0x34677 behind its frame-start `_IsDisabled`;
+/// `_HandlePlayer` @0x6cf86-0x6cff3 for the shield and @0x6d00a-0x6d093
+/// for the armour, which its repair inhibit also holds back through
+/// [`Fighter::armor_regen`]).
+///
+/// *Ordering against the original.* The original tests the condition its
+/// frame started with; the engine tests the one this tick's hits leave.
+/// So a ship disabled on a tick misses that tick's regeneration, and a
+/// player repaired on a tick gains it, one tick's rate either way, which
+/// no frame shows.
 fn regenerate(fighter: &mut Fighter) {
-    let condition = *fighter.condition;
-    if condition.standing() {
+    if *fighter.condition == Condition::Intact {
         recharge(&mut fighter.reserves.shield, fighter.shield_regen);
-    }
-    if condition == Condition::Intact {
         recharge(&mut fighter.reserves.armor, fighter.armor_regen);
     }
 }
@@ -3747,6 +3812,7 @@ mod tests {
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
+                afterburner: false,
                 tractor: &mut self.tractor,
                 ion: &mut self.ion,
                 armament: &mut self.armament,
@@ -4291,6 +4357,21 @@ mod tests {
     }
 
     #[test]
+    fn an_ejected_pod_is_raised_from_where_its_ship_is_at_its_velocity() {
+        let mut combat = Combat::default();
+        let (at, velocity) = (Vec2::new(10.0, -4.0), Vec2::new(1.5, 0.5));
+        combat.eject_pod(ShipRef::Npc(NpcId(3)), at, velocity);
+        assert_eq!(
+            combat.take_events(),
+            [CombatEvent::PodEjected {
+                ship: ShipRef::Npc(NpcId(3)),
+                at,
+                velocity,
+            }]
+        );
+    }
+
+    #[test]
     fn an_npc_with_a_death_delay_of_one_explodes_the_tick_after_by_default() {
         let mut combat = Combat::default();
         let mut ships = [breaking(false, 1)];
@@ -4659,6 +4740,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn under_the_circle_a_shove_is_clamped_to_its_top_speeds_circle() {
+        let mut combat = Combat::default();
+        combat.set_speed_cap(RuleSource::Bible);
+        let mut slow = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+        slow.hull.mass = 100.0;
+        slow.state.velocity = Vec2::new(-9.0, 7.0);
+        slow.class_speed = 4.0;
+        slow.top_speed = 6.0;
+        let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), slow];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        let pushed = Vec2::new(-1.5, 7.0);
+        let expected = pushed * (6.0 / pushed.length());
+        assert!(
+            (shoves[0].velocity - expected).length() < 1e-4,
+            "{shoves:?}"
+        );
+        let mut engine = Combat::default();
+        engine.set_speed_cap(RuleSource::Engine);
+        assert_eq!(engine, Combat::default(), "the engine's is the default");
+    }
+
     /// Says every ship is `disabled`, recording what it was asked.
     #[derive(Debug, Default)]
     struct Recording {
@@ -4714,7 +4819,7 @@ mod tests {
     }
 
     #[test]
-    fn a_held_ship_at_full_armour_is_stored_disabled_with_no_event_and_no_armour_back() {
+    fn a_held_ship_at_full_armour_is_stored_disabled_with_no_event_and_nothing_back() {
         let mut combat = Combat::default();
         let mut held = Ship::at(1, 0.0, 0.0);
         held.held_disabled = true;
@@ -4731,7 +4836,10 @@ mod tests {
         assert_eq!(combat.take_events(), [], "never newly disabled");
         assert_eq!(well.asked.take(), [], "the rule is not asked");
         assert_eq!(ships[0].reserves.armor.now, 20.0, "no armour back");
-        assert_eq!(ships[0].reserves.shield.now, 3.0, "shields still do");
+        assert_eq!(
+            ships[0].reserves.shield.now, 0.0,
+            "nor shields: it is disabled"
+        );
         ships[0].reserves.armor.now = 30.0;
         tick(&mut combat, &mut ships, &well);
         assert_eq!(ships[0].condition, Condition::Disabled, "at full armour");
@@ -4918,7 +5026,7 @@ mod tests {
     }
 
     #[test]
-    fn armour_regenerates_at_its_rate_but_not_while_disabled_and_shields_still_do() {
+    fn armour_and_shields_regenerate_only_while_intact() {
         let mut combat = Combat::default();
         let mut ship = Ship::at(1, 0.0, 0.0);
         ship.reserves.shield.now = -1.0;
@@ -4940,14 +5048,19 @@ mod tests {
         ships[0].reserves.armor.now = 5.0;
         tick(&mut combat, &mut ships, &disabling);
         tick(&mut combat, &mut ships, &disabling);
+        assert_eq!(ships[0].condition, Condition::Disabled);
         assert_eq!(ships[0].reserves.armor.now, 5.0, "not while disabled");
-        assert_eq!(ships[0].reserves.shield.now, 1.0, "shields still do");
+        assert_eq!(ships[0].reserves.shield.now, 0.0, "nor shields");
         ships[0].condition = Condition::Dying {
             ticks_left: 9,
             starting: false,
         };
         tick(&mut combat, &mut ships, &disabling);
-        assert_eq!(ships[0].reserves.shield.now, 1.0, "nor while breaking up");
+        assert_eq!(
+            (ships[0].reserves.shield.now, ships[0].reserves.armor.now),
+            (0.0, 5.0),
+            "nor while breaking up"
+        );
     }
 
     /// A 200-pixel beam lasting 3 ticks, firing every 10, doing 5 energy

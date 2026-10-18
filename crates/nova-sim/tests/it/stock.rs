@@ -154,6 +154,7 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         holds: ship.holds,
         mass: ship.mass,
         free_mass: ship.free_mass,
+        flags: ship.flags.bits(),
         flags2: ship.flags2.bits(),
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
@@ -278,6 +279,38 @@ fn stock_default_outfits_give_their_fuel_regeneration() {
     let fields = data.ship_fields(ShipId(162)).expect("decodes");
     let regen = ShipStats::new(fields, &mods).fuel_regen;
     assert!((regen - (0.1 + 0.25)).abs() < 1e-6, "{regen}");
+}
+
+/// Every stock `shïp` with a `FuelRegen` carries `Flags` 0x0008, so the
+/// player's gate on it (`_ShipFuelGenRate` @0x3043) changes no stock hull,
+/// and a Raven (164) regenerates fuel as an NPC and as the player's ship.
+#[test]
+fn every_stock_fuel_regenerating_hull_carries_flags_0x0008() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let regenerating: Vec<(i16, u16)> = data
+        .ships()
+        .iter()
+        .filter(|record| record.fields.fuel_regen > 0)
+        .map(|record| (record.id.0, record.fields.flags))
+        .collect();
+    let ids: Vec<i16> = regenerating.iter().map(|&(id, _)| id).collect();
+    for id in [162, 164, 173, 174, 175, 378] {
+        assert!(ids.contains(&id), "{id} in {ids:?}");
+    }
+    assert_eq!(regenerating.len(), 21, "{ids:?}");
+    let unflagged: Vec<_> = regenerating
+        .iter()
+        .filter(|&&(_, flags)| flags & nova_sim::stats::FUEL_REGEN_HULL == 0)
+        .collect();
+    assert_eq!(unflagged, Vec::<&(i16, u16)>::new());
+    let raven = data.ship_fields(ShipId(164)).expect("decodes");
+    let npc = ShipStats::new(raven, &[]).fuel_regen;
+    assert!(npc > 0.0, "{npc}");
+    let player = ShipStats::for_player(raven, &[]).fuel_regen;
+    assert!((player - npc).abs() < f32::EPSILON, "{player}");
 }
 
 /// A new stock pilot, resumed over Port Kane (`spöb` 137 in Kania, where
@@ -1390,6 +1423,7 @@ impl Combatant {
             class_speed: self.class_speed,
             top_speed: self.top_speed,
             jumping: false,
+            afterburner: false,
             tractor: &mut self.tractor,
             ion: &mut self.ion,
             armament: &mut self.armament,
@@ -3746,6 +3780,7 @@ fn closing_on(session: &Session, quarry: &nova_sim::Npc) -> (nova_sim::Controls,
             nova_sim::Turn::None
         },
         reverse: false,
+        ..nova_sim::Controls::default()
     };
     let quiet = session
         .shots()
@@ -3962,6 +3997,7 @@ fn boarding(session: &Session, quarry: &nova_sim::Npc) -> nova_sim::Controls {
             thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,
             turn: side,
             reverse: false,
+            ..nova_sim::Controls::default()
         };
     }
     let ahead = toward(quarry.state.heading);

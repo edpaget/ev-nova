@@ -2,11 +2,12 @@ use std::cell::RefCell;
 use std::num::NonZeroU16;
 
 use crate::system::camera::{VIEW_CENTER, VIEW_SIZE};
+use nova_sim::flight::player_step;
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats,
-    SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, FlightRules, GateSite, Handling,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
+    ShipStats, SimDiagnostic, SimSound, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
 };
 
 use super::*;
@@ -266,6 +267,7 @@ const FIELDS: ShipFields = ShipFields {
     contribute: 1,
     shield_rech: 0,
     armor_rech: 0,
+    flags: 0,
     flags2: 0,
 };
 
@@ -899,6 +901,15 @@ impl CombatLooks for FakeCatalog {
         self.cursor_sheet.clone()
     }
 
+    /// The escape pods' sheet: `rlëD` 1095, of 36 rotations.
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        Ok(EffectSheet {
+            image_id: 1095,
+            frames: NonZeroU16::new(36).expect("non-zero"),
+            frame_width: 0,
+        })
+    }
+
     fn smoke_sheet(&self, set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
         (set < 2).then(|| crate::flight::catalog::SmokeSheet {
             first_icon: 1000 + 8 * i16::from(set),
@@ -992,12 +1003,40 @@ fn reserves(view: &View) -> Reserves {
     view.session().expect("flying").reserves()
 }
 
-/// `state` after `ticks` steps under `controls`.
+/// `state` after `ticks` of the player's steps under `controls`.
 fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
     for _ in 0..ticks {
-        step(&mut state, &handling(), controls);
+        player_step(
+            &mut state,
+            &handling(),
+            controls,
+            None,
+            nova_sim::flight::Caps::top(handling().max_speed),
+            FlightRules::default(),
+        );
     }
     state
+}
+
+/// The ship after `ticks` of the player's steps under `controls` from a
+/// new session's start: the first held at rest by the session's box of
+/// none (see `nova_sim::afterburner::MaxVel::START`), the rest as
+/// [`stepped`].
+fn launched(controls: Controls, ticks: u32) -> ShipState {
+    let mut state = start();
+    let rest = nova_sim::flight::Caps {
+        thrust_top: handling().max_speed,
+        max_vel: 0.0,
+    };
+    player_step(
+        &mut state,
+        &handling(),
+        controls,
+        None,
+        rest,
+        FlightRules::default(),
+    );
+    stepped(state, controls, ticks.saturating_sub(1))
 }
 
 /// The second half of a tick: `TICK / 2` rounds down, so this is a
@@ -1008,6 +1047,8 @@ const THRUST: Controls = Controls {
     thrust: true,
     turn: Turn::None,
     reverse: false,
+    face: nova_sim::flight::Face::Off,
+    afterburner: false,
 };
 
 fn ticks(view: &mut View, n: u32) {
@@ -2155,6 +2196,7 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         flags2: 0,
         flags3: 0,
         death_delay: 0,
+        pod_count: 0,
         explode1: -1,
         explode2: 0,
         mass: 0,

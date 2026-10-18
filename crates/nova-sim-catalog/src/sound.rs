@@ -76,6 +76,11 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// The disabled player's Repair Droids repaired it, as it is told
+    /// "Propulsion systems repaired.": `_beepSnd[4]`, `snd ` 154
+    /// (`_HandlePlayer` @0x68c44-0x68c67; see the session's
+    /// `player_repair` module).
+    PropulsionRepaired,
     /// An announced fleet arrived with its `flët`'s `Quote`:
     /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
     /// even when the line is empty.
@@ -231,6 +236,10 @@ pub enum SimSound {
     /// `nova_sim::landing::LandingRefusal::beeps`),
     /// and Closest Target finding no ship (`_HandlePlayer` @0x6aadb; see
     /// `nova_sim::Session::select_target`),
+    /// as does each board refusal said, #131 too far (@0x65f9a), #132 too
+    /// fast (@0x65fcc) and #130 can't board, a refused `PickupMode` 2
+    /// pickup's too (@0x65ffe), all at priority 1, not modelled (see
+    /// `nova_sim::Session::board`),
     /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own. The
     /// audio side plays it at 1, its most common site's priority (rdm task
@@ -255,3 +264,20 @@ pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
 /// 129 (@0x2d8cb), and the warp-out `warpOutSnd`, 130 (@0x2d8ea).
 pub const PLAYER_EXPLOSION_HALTS: [SoundId; 4] =
     [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];
+
+/// `_escapePodSnd`, `snd ` 372 "Eject" (`_LoadSounds` @0x1c240-0x1c252):
+/// the player's eject plays it ([`SimSound::Ejected`]), and so does a dying
+/// NPC's every escape pod, from where the NPC is, at priority 5
+/// (`_HandleShip` @0x351fa, @0x35300), which the view plays for the fight's
+/// `CombatEvent::PodEjected`.
+pub const ESCAPE_POD_SOUND: SoundId = SoundId(372);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_escape_pod_sound_is_snd_372() {
+        assert_eq!(ESCAPE_POD_SOUND, SoundId(372));
+    }
+}

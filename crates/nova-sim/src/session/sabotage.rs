@@ -563,16 +563,19 @@ mod tests {
 
     /// The shield and armour a bomb leaves a player of `catalog` with
     /// `armor` armour before it, disabled or not, the damage drawn
-    /// `draw` above the capacity.
+    /// `draw` above the capacity. A disabled player first draws for its
+    /// self-repair (see the `player_repair` module), which 1 refuses.
     fn bombed(catalog: &FakePilotCatalog, armor: f32, disabled: bool, draw: u32) -> (f32, f32) {
         let mut session = lit(catalog, &[(BOMB, 1)]);
         session.pilot.reserves.armor.now = armor;
-        if disabled {
+        let mut draws = if disabled {
             session.condition = Condition::Disabled;
-        }
-        let mut draws = Draws::of(&[draw]);
+            Draws::of(&[1, draw])
+        } else {
+            Draws::of(&[draw])
+        };
         session.tick_combat(Rules::default(), &mut draws);
-        assert_eq!(draws.asked.first(), Some(&151), "Rand(300 x 0.5 + 1)");
+        assert!(draws.asked.contains(&151), "Rand(300 x 0.5 + 1)");
         let reserves = session.pilot.reserves;
         (reserves.shield.now, reserves.armor.now)
     }

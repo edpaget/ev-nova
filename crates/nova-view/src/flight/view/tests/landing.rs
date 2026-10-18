@@ -299,7 +299,9 @@ fn a_ship_moving_too_fast_is_told_so() {
     ] {
         let mut view = flight_among(vec![big(flags)]);
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 15);
+        // 25 ticks of `Accel` / 5000, the speed 15 of the port's former
+        // 3000 gave.
+        ticks(&mut view, 25);
         land_now(&mut view);
         assert_eq!(view.take_landing(), None);
         assert_eq!(view.message(), Some(expected));
@@ -372,7 +374,9 @@ fn too_fast_at_a_hypergate_or_wormhole_says_so_for_360_ticks() {
             ..site(128, (0.0, 0.0), StellarFlags::CAN_LAND)
         }]);
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 15);
+        // 25 ticks of `Accel` / 5000, the speed 15 of the port's former
+        // 3000 gave.
+        ticks(&mut view, 25);
         land_now(&mut view);
         assert_eq!(view.take_landing(), None);
         assert_lasts(&mut view, text, TOO_FAR_TICKS);

@@ -249,6 +249,15 @@ impl CombatLooks for GameData {
         effect_sheet(self, CURSOR_SPIN)
     }
 
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
+        Ok(EffectSheet {
+            image_id: sheet.image_id,
+            frames: sheet.rotations,
+            frame_width: sheet.frame_width,
+        })
+    }
+
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
         if set >= SMOKE_SETS {
             return None;

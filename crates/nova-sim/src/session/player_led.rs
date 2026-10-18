@@ -379,6 +379,7 @@ mod tests {
             thrust: true,
             turn: crate::flight::Turn::None,
             reverse: false,
+            ..crate::flight::Controls::default()
         };
         let mut player: f32 = 0.0;
         let mut npcs = std::collections::BTreeMap::new();
@@ -423,16 +424,25 @@ mod tests {
                 "{strict_play}: the player at {player}"
             );
             for id in [hired, mission[0], mission[1]] {
-                let top = session.npc(id).expect("there").stats.handling.max_speed;
+                let own = session.npc(id).expect("there").stats.handling;
+                // Within half a tick's thrust of it, where the autopilot
+                // coasts, or past it by under a push, which the per-axis
+                // cap lets through.
+                let top = own.max_speed * factor;
                 assert!(
-                    (npcs[&id] - top * factor).abs() < 0.01,
+                    npcs[&id] <= top + own.accel + 1e-4
+                        && npcs[&id] >= top - own.accel / 2.0 - 1e-4,
                     "{strict_play}: {id:?} at {}",
                     npcs[&id]
                 );
             }
-            let top = session.npc(unled).expect("there").stats.handling.max_speed;
+            let own = session.npc(unled).expect("there").stats.handling;
+            // Its autopilot coasts once within half a tick's thrust of the
+            // speed it wants.
+            let top = own.max_speed;
             assert!(
-                npcs[&unled] <= top + 1e-4 && npcs[&unled] > top - 0.01,
+                npcs[&unled] <= top + own.accel + 1e-4
+                    && npcs[&unled] >= top - own.accel / 2.0 - 1e-4,
                 "{strict_play}: the unled ship, flat out at {}",
                 npcs[&unled]
             );

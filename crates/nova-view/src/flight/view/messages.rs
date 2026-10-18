@@ -130,6 +130,9 @@ pub const ESCORT_REPAIRED: &str = "Escort repaired.";
 /// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
 /// @0x33b3b).
 pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
+/// `STR#` 2002 #37: the disabled player's Repair Droids repaired it
+/// (`_HandlePlayer` @0x68bf0-0x68c3f).
+pub const PROPULSION_REPAIRED: &str = "Propulsion systems repaired.";
 /// `STR#` 2002 #168: a former escort a pirate took (`_AIPlunderShipContents`
 /// @0x8482c).
 pub const ESCORT: &str = "Escort";
@@ -347,6 +350,7 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::NoActiveMissions => NO_ACTIVE_MISSIONS,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::PropulsionRepaired => PROPULSION_REPAIRED,
         SimMessage::CargoStolen { .. } | SimMessage::ShipStolen { .. } => {
             return stolen_text(message, session);
         }
@@ -705,6 +709,7 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NoActiveMissions
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::PropulsionRepaired
         | SimMessage::CargoStolen { .. }
         | SimMessage::ShipStolen { .. }
         | SimMessage::FleetArrivalQuote(_)

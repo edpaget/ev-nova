@@ -24,6 +24,7 @@ use nova_render::{Batch, Frame, QuadInstance, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
+use nova_sim::player_turn::{PlayerTurn, reverse_aim, settled};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
 use nova_view::flight::hud::NAV_OFF;
 use nova_view::flight::radar::radar_offset;
@@ -603,22 +604,23 @@ fn the_hud_is_drawn_while_flying() {
 
     // Flying up moves the ovals down the radar, with the ship as drawn
     // when the radar last refreshed: within the last 8 ticks, 16 frames.
+    // 40 ticks of 0.06 more a tick take it 49 up, past a radar pixel's 32.
     harness.hold(&[Key::Up]);
     let mut shown = Vec::new();
     let mut flown = harness.frame();
-    for _ in 1..60 {
+    for _ in 1..80 {
         shown.push(harness.flight().shown_position());
         flown = harness.frame();
     }
     shown.push(harness.flight().shown_position());
-    assert!(shown[59].y < -40.0, "{shown:?}");
+    assert!(shown[79].y < -40.0, "{shown:?}");
     let moved = hud_solids(&flown);
     let now = ovals(&moved);
     assert!(now[0].y > ovals(&solids)[0].y, "moved down");
-    let refreshed = shown[44..]
+    let refreshed = shown[64..]
         .iter()
         .any(|&at| now == [on_radar(at, STELLARS[0]), on_radar(at, STELLARS[1])].concat());
-    assert!(refreshed, "{now:?} from none of {:?}", &shown[44..]);
+    assert!(refreshed, "{now:?} from none of {:?}", &shown[64..]);
     assert_eq!(moved[8..], solids[8..], "the player's pixel and the bars");
 }
 
@@ -632,10 +634,12 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
     harness.hold(&[Key::Up]);
     let thrust = harness.run(1.0);
     let ship = harness.ship();
-    assert!(ship.position.y < -40.0, "{ship:?}");
+    // The first tick held at rest by the new session's box of none, then
+    // 29 ticks of 0.06 more a tick: 0.06 x 435 = 26.1 up.
+    assert!(ship.position.y < -26.0, "{ship:?}");
     let camera = harness.flight().camera().center();
     assert_eq!(camera, harness.flight().shown_position());
-    assert!(camera.y < -40.0, "{camera:?}");
+    assert!(camera.y < -25.0, "{camera:?}");
     let moved = quads(&thrust);
     for (now, was) in moved.iter().zip(&start).take(2) {
         let (now, was) = (centre(now.dest), centre(was.dest));
@@ -661,13 +665,20 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
     assert!(harness.ship().heading > 40.0, "{:?}", harness.ship());
     assert_ne!(quads(&turned)[2].uv, start[2].uv, "another rotation frame");
 
-    // Down turns the ship to face against its motion.
+    // Down turns the ship to face against its motion, stopping within a
+    // whole-degree turn of the whole-degree aim.
     harness.hold(&[Key::Down]);
     harness.run(2.5);
     let ship = harness.ship();
-    let behind = heading_of(ship.velocity * -1.0);
+    let rate = harness
+        .flight()
+        .session()
+        .expect("flying")
+        .handling()
+        .turn_rate;
+    let behind = reverse_aim(ship.velocity).expect("moving");
     assert!(
-        shortest_turn(ship.heading, behind).abs() < 1e-2,
+        settled(ship.heading, rate, behind, PlayerTurn::WholeDegrees),
         "{ship:?} against {behind}"
     );
 }
@@ -760,8 +771,16 @@ fn fly_to(harness: &mut Harness, target: Point) -> Frame {
             speed > 0.0 && shortest_turn(heading_of(ship.velocity), bearing).abs() > 30.0;
         let braking = speed > handling.accel && (range < stopping || drifting);
         let keys: &[Key] = if braking {
-            let behind = heading_of(ship.velocity * -1.0);
-            if shortest_turn(ship.heading, behind).abs() <= handling.turn_rate {
+            // Down stops within a turn of its aim.
+            let facing_back = reverse_aim(ship.velocity).is_none_or(|behind| {
+                settled(
+                    ship.heading,
+                    handling.turn_rate,
+                    behind,
+                    PlayerTurn::WholeDegrees,
+                )
+            });
+            if facing_back {
                 &[Key::Down, Key::Up]
             } else {
                 &[Key::Down]

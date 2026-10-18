@@ -12,7 +12,10 @@
 //!   "see shïp": the same scale.
 //! - [`TURN_CHANGE`] (9) adds to `Maneuver`, a tenth as much
 //!   ([`TURN_MOD_PER_MANEUVER`]): the Bible gives the outfit's 100 as
-//!   30°/s and the ship's 10 as about 30°/s.
+//!   30°/s and the ship's 10 as about 30°/s. The turn rate is then
+//!   floored as `_ShipTurnRate` floors it ([`floored_turn`]): the
+//!   player's ship's ([`ShipStats::for_player`]) at 1° a tick unless its
+//!   class turns none, any other's only when its class turns 1° or more.
 //! - [`MORE_SHIELD`] (4), [`MORE_ARMOR`] (6) and [`MORE_FUEL`] (12) add
 //!   to the shield, armour and fuel capacity, after the [`crate::reserves`]
 //!   rules read the `shïp`'s own.
@@ -20,7 +23,9 @@
 //!   [`cargo_capacity`] says: the ship's own space, which the fleet's
 //!   ([`fleet_holds`](crate::market::fleet_holds)) builds on.
 //! - [`FUEL_SCOOP`](crate::fuel::FUEL_SCOOP) (18) regenerates fuel, as
-//!   [`fuel_regen_per_tick`] says.
+//!   [`fuel_regen_per_tick`] says. The `shïp`'s own `FuelRegen` counts
+//!   for the player's ship only when its `Flags` hold [`FUEL_REGEN_HULL`]
+//!   ([`ShipStats::for_player`]).
 //! - [`HYPERSPACE_DAYS`] (22) adds days to each jump's
 //!   [`base_jump_days`], from the hull's `Mass`, and the total never goes
 //!   below one (the Bible: "still can't go below 1 day/jump").
@@ -39,15 +44,40 @@
 //!   course. It is the one total that is not `ModVal` x count: each
 //!   outfit carried adds its `ModVal` once, whatever its count, as the
 //!   engine's `_ShipJumpsPerJump` does.
+//! - [`INERTIAL_DAMPENER`] (38), carried at all, whatever its `ModVal`
+//!   (the Bible's "inertial dampener ... makes ship inertialess"), is
+//!   recorded as [`ShipStats::dampener`], and a `shïp` whose `Flags2` has
+//!   [`INERTIALESS_HULL`] (0x0040, class record +0x9ea) set as
+//!   [`ShipStats::inertialess_hull`]. The stats only record them:
+//!   whether the ship flies inertialess is
+//!   [`is_inertialess`](crate::inertialess::is_inertialess)'s to decide,
+//!   as `_ShipIsInertialess` (@0x79c2) counts the outfit for the player
+//!   alone.
+//!
+//! - [`AFTERBURNER`] (15) is recorded as [`ShipStats::afterburner`], the
+//!   fuel it uses a tick: as `_ShipAfterburnerFuelUsage` (@0x7a82-0x7b0f)
+//!   reads it, the last carried outfit in index order that has a slot of
+//!   that `ModType` gives its first such slot's `ModVal` x
+//!   [`FUEL_PER_MOD_VAL`], whatever the count. The original caches it for
+//!   the player (reset in `_ResetPlayerPrecalcedValues` @0xc419), as it
+//!   caches `_HasAfterburner`'s scan (@0xc3ac); the stats are worked out
+//!   afresh whenever the outfits change, so they need no cache.
 //!
 //! Each total is summed wide, and none goes below none, so no mix of
-//! outfits can overflow or turn a figure negative. The inertial dampener
-//! (38) and every other `ModType` change nothing here yet.
+//! outfits can overflow or turn a figure negative. Every other `ModType`
+//! changes nothing here yet.
 
+use nova_sim_base::afterburner::FUEL_PER_MOD_VAL;
+
+use crate::flight::Flyer;
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
-use crate::handling::{Handling, ShipFields};
+use crate::handling::{Handling, ShipFields, floored_turn};
 use crate::market::cargo_capacity;
 use crate::reserves::{Reserves, shield_points};
+
+/// `shïp` `Flags`: the player's hull regenerates fuel by its `FuelRegen`
+/// (`_ShipFuelGenRate` @0x3043). An NPC's does without it.
+pub const FUEL_REGEN_HULL: u16 = 0x0008;
 
 /// How far from the system's centre, in pixels, a ship must be to jump
 /// unless its outfits say otherwise (the Bible: "Jump Distance 1000
@@ -100,6 +130,21 @@ pub const MULTI_JUMP: i16 = 32;
 pub const FAST_JUMP: i16 = 37;
 /// The `shïp` `Flags2` bit for a hull that jumps without slowing down.
 pub const FAST_JUMP_HULL: u16 = 0x0020;
+/// The `oütf` `ModType` of the inertial dampener: carried at all, it may
+/// make the ship inertialess (`_ShipIsInertialess` @0x7a4f, `cmpw $0x26`
+/// over each of an outfit's four `ModType`s).
+pub const INERTIAL_DAMPENER: i16 = 38;
+/// The `oütf` `ModType` of an afterburner, whose `ModVal` is the fuel it
+/// uses a second (`cmpw $0xf` over each of an outfit's four `ModType`s,
+/// `_HasAfterburner` @0x3acc and `_ShipAfterburnerFuelUsage` @0x7ad0).
+pub const AFTERBURNER: i16 = 15;
+/// How many mods each outfit carries: an `oütf`'s four `ModType`s and
+/// `ModVal`s, which `nova_sim_catalog::catalog::outfit_mods` lists in
+/// turn for each outfit, in its records' order.
+pub const MOD_SLOTS: usize = 4;
+/// The `shïp` `Flags2` bit for an inertialess hull (`testb $0x40` on the
+/// class record's `Flags2`, +0x9ea, @0x7a06).
+pub const INERTIALESS_HULL: u16 = 0x0040;
 
 /// A [`TURN_CHANGE`] `ModVal` per unit of `Maneuver`: the Bible's "100 =
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
@@ -133,6 +178,28 @@ pub struct ShipStats {
     /// How many systems a jump passes along the course, as the outfits
     /// give it (see `nova_sim::hyperspace::hops_per_jump`).
     pub multi_jump: u32,
+    /// Whether its hull's `Flags2` holds [`INERTIALESS_HULL`].
+    pub inertialess_hull: bool,
+    /// Whether it carries an [`INERTIAL_DAMPENER`], whatever its `ModVal`.
+    pub dampener: bool,
+    /// The fuel its afterburner uses a tick, if it carries an
+    /// [`AFTERBURNER`] (see the module docs).
+    pub afterburner: Option<f32>,
+}
+
+/// The fuel a tick of the afterburner among `outfits` uses (see the module
+/// docs): `outfits` holds each outfit's [`MOD_SLOTS`] mods in turn, and
+/// the last carried one with an [`AFTERBURNER`] slot gives its first.
+fn afterburner_usage(outfits: &[OutfitMod]) -> Option<f32> {
+    outfits
+        .chunks(MOD_SLOTS)
+        .rev()
+        .find_map(|slots| {
+            slots
+                .iter()
+                .find(|slot| slot.mod_type == AFTERBURNER && slot.count > 0)
+        })
+        .map(|slot| (f64::from(slot.mod_val) * FUEL_PER_MOD_VAL) as f32)
 }
 
 /// `ModVal` x count summed over every one of `outfits` of `ModType`
@@ -158,6 +225,9 @@ pub struct HandlingTotals {
     /// `Maneuver` plus a tenth of the [`TURN_CHANGE`] outfits
     /// ([`TURN_MOD_PER_MANEUVER`]).
     pub maneuver: f32,
+    /// `Maneuver` alone, which the turn's floor reads
+    /// ([`floored_turn`]).
+    pub class_maneuver: i16,
 }
 
 impl HandlingTotals {
@@ -169,19 +239,32 @@ impl HandlingTotals {
             accel: i64::from(fields.accel) + mod_total(outfits, MORE_ACCEL),
             maneuver: f32::from(fields.maneuver)
                 + mod_total(outfits, TURN_CHANGE) as f32 / TURN_MOD_PER_MANEUVER,
+            class_maneuver: fields.maneuver,
         }
     }
 }
 
 impl ShipStats {
-    /// The stats of a ship with `fields`, carrying `outfits`.
+    /// The stats of a ship with `fields`, carrying `outfits`, an NPC's:
+    /// its turn floored as `_ShipTurnRate` floors an NPC's
+    /// ([`floored_turn`]).
     #[must_use]
     pub fn new(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
+        Self::flown_by(fields, outfits, Flyer::Npc)
+    }
+
+    /// The stats of a ship with `fields`, carrying `outfits`, flown by
+    /// `flyer`, whose floor its turn takes.
+    fn flown_by(fields: ShipFields, outfits: &[OutfitMod], flyer: Flyer) -> Self {
         let total = |mod_type: i16| mod_total(outfits, mod_type);
         let totals = HandlingTotals::new(fields, outfits);
         let positive = |total: i64| total.max(0) as f32;
+        let handling = Handling::from_totals(totals.speed, totals.accel, totals.maneuver);
         Self {
-            handling: Handling::from_totals(totals.speed, totals.accel, totals.maneuver),
+            handling: Handling {
+                turn_rate: floored_turn(fields.class_turn(), handling.turn_rate, flyer),
+                ..handling
+            },
             shield: positive(shield_points(fields.shield) + total(MORE_SHIELD)),
             armor: positive(i64::from(fields.armor.max(0)) + total(MORE_ARMOR)),
             fuel: positive(i64::from(fields.fuel.max(0)) + total(MORE_FUEL)),
@@ -210,7 +293,35 @@ impl ShipStats {
                     .max(0),
             )
             .unwrap_or(u32::MAX),
+            inertialess_hull: fields.flags2 & INERTIALESS_HULL != 0,
+            dampener: outfits
+                .iter()
+                .any(|outfit| outfit.mod_type == INERTIAL_DAMPENER && outfit.count > 0),
+            afterburner: afterburner_usage(outfits),
         }
+    }
+
+    /// The stats of the player's ship with `fields`, carrying `outfits`:
+    /// as [`ShipStats::new`], but its hull's `FuelRegen` counts only when
+    /// its `Flags` hold [`FUEL_REGEN_HULL`], while its fuel scoops always
+    /// count (`_ShipFuelGenRate` @0x3043-0x3057, which counts it for any
+    /// other ship whatever its flags), and its turn takes the player's
+    /// floor ([`floored_turn`]).
+    #[must_use]
+    pub fn for_player(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
+        let fuel_regen = if fields.flags & FUEL_REGEN_HULL == 0 {
+            0
+        } else {
+            fields.fuel_regen
+        };
+        Self::flown_by(
+            ShipFields {
+                fuel_regen,
+                ..fields
+            },
+            outfits,
+            Flyer::Player,
+        )
     }
 
     /// A ship's reserves with these stats, full.
@@ -245,6 +356,7 @@ mod tests {
         contribute: 1,
         shield_rech: 10,
         armor_rech: 0,
+        flags: 0,
         flags2: 0,
     };
 
@@ -263,7 +375,7 @@ mod tests {
             stats.handling,
             Handling {
                 max_speed: 3.0,
-                accel: 0.1,
+                accel: 0.06,
                 turn_rate: 1.0,
             }
         );
@@ -301,7 +413,7 @@ mod tests {
             &[outfit(MORE_SPEED, 100, 2), outfit(MORE_ACCEL, 150, 2)],
         );
         assert_eq!(stats.handling.max_speed, 5.0);
-        assert_eq!(stats.handling.accel, 0.2);
+        assert_eq!(stats.handling.accel, 0.12);
         assert_eq!(stats.handling.turn_rate, 1.0);
     }
 
@@ -332,6 +444,39 @@ mod tests {
         );
         assert_eq!(stats.capacity, 20);
         assert_eq!(stats.full().fuel, Gauge::full(400.0));
+    }
+
+    #[test]
+    fn the_players_hull_regenerates_fuel_only_with_flags_0x0008() {
+        let scoops = [outfit(FUEL_SCOOP, 4, 2)];
+        let without = ShipStats::for_player(AVERAGE, &[]);
+        assert_eq!(without.fuel_regen, 0.0, "FuelRegen 8 but no 0x0008");
+        let scooping = ShipStats::for_player(AVERAGE, &scoops);
+        assert_eq!(scooping.fuel_regen, 0.5, "its scoops still count");
+        let flagged = ShipFields {
+            flags: FUEL_REGEN_HULL | 0x0010,
+            ..AVERAGE
+        };
+        assert_eq!(ShipStats::for_player(flagged, &[]).fuel_regen, 0.125);
+        assert_eq!(
+            ShipStats::for_player(flagged, &scoops).fuel_regen,
+            0.125 + 0.5
+        );
+        assert_eq!(FUEL_REGEN_HULL, 0x0008);
+        assert_eq!(
+            ShipStats::for_player(AVERAGE, &scoops),
+            ShipStats {
+                fuel_regen: 0.5,
+                ..ShipStats::new(AVERAGE, &scoops)
+            },
+            "nothing else changes"
+        );
+    }
+
+    #[test]
+    fn any_other_ships_hull_regenerates_fuel_without_flags_0x0008() {
+        assert_eq!(AVERAGE.flags, 0);
+        assert_eq!(ShipStats::new(AVERAGE, &[]).fuel_regen, 0.125);
     }
 
     #[test]
@@ -527,6 +672,87 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_ship_has_neither_an_inertialess_hull_nor_a_dampener() {
+        let stats = ShipStats::new(AVERAGE, &[]);
+        assert!(!stats.inertialess_hull);
+        assert!(!stats.dampener);
+    }
+
+    #[test]
+    fn a_hull_with_flags2_0x0040_is_inertialess() {
+        assert_eq!(INERTIALESS_HULL, 0x0040);
+        let hull = |flags2| ShipFields { flags2, ..AVERAGE };
+        assert!(ShipStats::new(hull(0x0040), &[]).inertialess_hull);
+        assert!(ShipStats::for_player(hull(0x0040), &[]).inertialess_hull);
+        assert!(
+            !ShipStats::new(hull(0xFFBF), &[]).inertialess_hull,
+            "every other bit"
+        );
+    }
+
+    #[test]
+    fn an_inertial_dampener_outfit_is_carried_whatever_its_modval() {
+        assert_eq!(INERTIAL_DAMPENER, 38);
+        assert!(ShipStats::new(AVERAGE, &[outfit(INERTIAL_DAMPENER, 0, 1)]).dampener);
+        assert!(ShipStats::new(AVERAGE, &[outfit(INERTIAL_DAMPENER, -7, 3)]).dampener);
+        assert!(ShipStats::for_player(AVERAGE, &[outfit(INERTIAL_DAMPENER, 1, 1)]).dampener);
+        assert!(
+            !ShipStats::new(AVERAGE, &[outfit(INERTIAL_DAMPENER, 1, 0)]).dampener,
+            "none carried"
+        );
+        assert!(
+            !ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 1, 1)]).dampener,
+            "another ModType"
+        );
+    }
+
+    /// An outfit's four slots, `mods` first and blanks after, `count`
+    /// carried.
+    fn slots(mods: &[(i16, i16)], count: u16) -> Vec<OutfitMod> {
+        (0..MOD_SLOTS)
+            .map(|at| {
+                let (mod_type, mod_val) = mods.get(at).copied().unwrap_or_default();
+                outfit(mod_type, mod_val, count)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_plain_ship_has_no_afterburner() {
+        assert_eq!(ShipStats::new(AVERAGE, &[]).afterburner, None);
+        let speed = slots(&[(MORE_SPEED, 10)], 1);
+        assert_eq!(ShipStats::for_player(AVERAGE, &speed).afterburner, None);
+    }
+
+    #[test]
+    fn an_afterburner_uses_its_mod_val_x_0_0333_fuel_a_tick_whatever_the_count() {
+        let one = slots(&[(MORE_SPEED, 10), (AFTERBURNER, 30)], 1);
+        let usage = ShipStats::for_player(AVERAGE, &one).afterburner;
+        assert_eq!(usage, Some((30.0 * 0.0333_f64) as f32));
+        let three = slots(&[(AFTERBURNER, 30)], 3);
+        assert_eq!(ShipStats::new(AVERAGE, &three).afterburner, usage);
+    }
+
+    #[test]
+    fn the_last_carried_afterburner_gives_its_first_afterburner_slot() {
+        let both = [
+            slots(&[(AFTERBURNER, 30)], 1),
+            slots(&[(MORE_SPEED, 5), (AFTERBURNER, 60), (AFTERBURNER, 90)], 1),
+        ]
+        .concat();
+        let usage = ShipStats::for_player(AVERAGE, &both).afterburner;
+        assert_eq!(usage, Some((60.0 * 0.0333_f64) as f32));
+        let unowned = [both, slots(&[(AFTERBURNER, 120)], 0)].concat();
+        assert_eq!(ShipStats::for_player(AVERAGE, &unowned).afterburner, usage);
+    }
+
+    #[test]
+    fn none_carried_of_an_afterburner_is_no_afterburner() {
+        let none = slots(&[(AFTERBURNER, 30)], 0);
+        assert_eq!(ShipStats::for_player(AVERAGE, &none).afterburner, None);
+    }
+
+    #[test]
     fn a_multi_jump_outfit_gives_its_modval_once_whatever_the_count() {
         assert_eq!(MULTI_JUMP, 32);
         let total = |outfits: &[OutfitMod]| ShipStats::new(AVERAGE, outfits).multi_jump;
@@ -556,7 +782,7 @@ mod tests {
     #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 38, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 17, 39, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,
@@ -589,7 +815,7 @@ mod tests {
             ],
         );
         assert_eq!(stats.handling.max_speed, 2.0);
-        assert_eq!(stats.handling.turn_rate, 0.98);
+        assert_eq!(stats.handling.turn_rate, 1.0, "floored, not 0.98");
         assert_eq!(stats.shield, 20.0);
         let none = ShipStats::new(
             AVERAGE,
@@ -603,9 +829,53 @@ mod tests {
                 outfit(MORE_CARGO, -11, 1),
             ],
         );
-        assert_eq!(none.handling, Handling::default());
+        assert_eq!(
+            none.handling,
+            Handling {
+                turn_rate: 1.0,
+                ..Handling::default()
+            },
+            "the turn floored"
+        );
         assert_eq!((none.shield, none.armor, none.fuel), (0.0, 0.0, 0.0));
         assert_eq!(none.capacity, 0);
+    }
+
+    #[test]
+    fn a_turn_driven_to_none_or_below_by_outfits_is_floored_at_1_for_the_player_and_an_npc() {
+        for mods in [
+            [outfit(TURN_CHANGE, -2, 1)],
+            [outfit(TURN_CHANGE, -101, 1)],
+            [outfit(TURN_CHANGE, i16::MIN, u16::MAX)],
+        ] {
+            assert_eq!(ShipStats::new(AVERAGE, &mods).handling.turn_rate, 1.0);
+            assert_eq!(
+                ShipStats::for_player(AVERAGE, &mods).handling.turn_rate,
+                1.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_turning_under_1_is_floored_for_the_player_alone_and_one_turning_none_for_neither() {
+        let slow = ShipFields {
+            maneuver: 5,
+            ..AVERAGE
+        };
+        assert_eq!(ShipStats::for_player(slow, &[]).handling.turn_rate, 1.0);
+        assert_eq!(ShipStats::new(slow, &[]).handling.turn_rate, 0.5);
+        let rigid = ShipFields {
+            maneuver: 0,
+            ..AVERAGE
+        };
+        assert_eq!(ShipStats::for_player(rigid, &[]).handling.turn_rate, 0.0);
+        assert_eq!(ShipStats::new(rigid, &[]).handling.turn_rate, 0.0);
+        let lifted = [outfit(TURN_CHANGE, 50, 1)];
+        assert_eq!(
+            ShipStats::for_player(rigid, &lifted).handling.turn_rate,
+            0.5,
+            "a class of none keeps what its outfits give"
+        );
     }
 
     #[test]
@@ -648,7 +918,13 @@ mod tests {
             })
             .collect();
         let stats = ShipStats::new(most, &least);
-        assert_eq!(stats.handling, Handling::default());
+        assert_eq!(
+            stats.handling,
+            Handling {
+                turn_rate: 1.0,
+                ..Handling::default()
+            }
+        );
         assert_eq!((stats.shield, stats.armor, stats.fuel), (0.0, 0.0, 0.0));
         assert_eq!((stats.jump_distance, stats.jump_days), (0.0, 1));
     }

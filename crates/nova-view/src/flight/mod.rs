@@ -30,6 +30,8 @@
 //!   system, and the tint that darkens it.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
 //!   `_DrawCenteredText`'s centring.
+//! - [`pods`]: the NPCs' escape pods adrift, from the fight's
+//!   `PodEjected` events: their drift, their fade and their pool.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`shot_fade`]: how a shot fades in and out, and how a translucent
@@ -63,6 +65,7 @@ pub mod jump;
 pub mod lightning;
 pub mod murk;
 pub(crate) mod pen;
+pub mod pods;
 pub mod radar;
 pub mod shot_fade;
 pub mod smoke;

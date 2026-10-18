@@ -420,6 +420,7 @@ impl<
         scene::draw_stellars(list, scene, camera, self.elapsed);
         asteroids::draw_asteroids(list, &self.shown_asteroids(camera), &self.looks);
         boxes::draw_boxes(list, &self.shown_boxes(camera), &self.looks);
+        self.effects.draw_pods(list, camera, &self.looks);
         let beams = self.shown_beams(camera);
         let zig_zag = self.session.as_ref().map_or(RuleSource::Engine, |session| {
             session.rules().source_for(RuleKey::LightningZigZag)

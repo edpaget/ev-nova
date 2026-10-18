@@ -339,6 +339,12 @@ pub trait CombatLooks {
     /// The mouse cursor's sheet, `spïn` 650 (`_InitSprites`
     /// @0x2147c-0x215eb), or why it cannot be read.
     fn cursor_sheet(&self) -> Result<EffectSheet, String>;
+    /// The escape pods' sheet, the escape pod's ship sprite (shän 895,
+    /// `nova_sim::ESCAPE_POD_SHIP`), its frames the rotations of one set,
+    /// as `_InitSprites` clones the pods from class 0x2ff's master
+    /// (@0x1fc90-0x1fc9e; see [`pods`](super::pods)); or why it cannot be
+    /// read.
+    fn pod_sheet(&self) -> Result<EffectSheet, String>;
     /// Smoke set `set`'s sprite ([`SmokeSheet`]): none for a set past 1,
     /// or when any of its eight `cicn`s is missing or does not decode.
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet>;
@@ -372,6 +378,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn cursor_sheet(&self) -> Result<EffectSheet, String> {
         (**self).cursor_sheet()
+    }
+
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        (**self).pod_sheet()
     }
 
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
@@ -409,6 +419,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
         (**self).cursor_sheet()
     }
 
+    fn pod_sheet(&self) -> Result<EffectSheet, String> {
+        (**self).pod_sheet()
+    }
+
     fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
         (**self).smoke_sheet(set)
     }
@@ -441,13 +455,18 @@ pub struct Looks {
     /// The mouse cursor's sheet, or why it cannot be read; `None` when it
     /// was not read.
     pub cursor: Option<Result<EffectSheet, String>>,
+    /// The escape pods' sheet ([`CombatLooks::pod_sheet`]), or why it
+    /// cannot be read; `None` when it was not read. A pod is not drawn
+    /// without it.
+    pub pod: Option<Result<EffectSheet, String>>,
     /// Each smoke set's sprite there is ([`SMOKE_SETS`]).
     pub smokes: BTreeMap<u8, SmokeSheet>,
 }
 
 impl Looks {
     /// The looks of `weapons`, of every explosion type, of the cargo
-    /// boxes and of every asteroid type, read from `catalog`.
+    /// boxes, of every asteroid type, of the cursor and of the escape
+    /// pods, read from `catalog`.
     pub fn read(catalog: &impl CombatLooks, weapons: impl IntoIterator<Item = WeaponId>) -> Self {
         Self {
             weapons: weapons
@@ -465,6 +484,7 @@ impl Looks {
                 .map(|kind| (kind, catalog.asteroid_sheet(kind)))
                 .collect(),
             cursor: Some(catalog.cursor_sheet()),
+            pod: Some(catalog.pod_sheet()),
             smokes: (0..SMOKE_SETS)
                 .filter_map(|set| Some((set, catalog.smoke_sheet(set)?)))
                 .collect(),
@@ -478,6 +498,12 @@ impl Looks {
     pub fn smoke_set(&self, set: i16) -> Option<SmokeSheet> {
         let set = u8::try_from(set).ok()?;
         self.smokes.get(&set).copied()
+    }
+
+    /// The escape pods' sheet, if it was read.
+    #[must_use]
+    pub fn pod_sheet(&self) -> Option<&EffectSheet> {
+        self.pod.as_ref()?.as_ref().ok()
     }
 
     /// Cargo box graphic `graphic`'s sheet, if it was read.
@@ -705,6 +731,14 @@ mod tests {
             })
         }
 
+        fn pod_sheet(&self) -> Result<EffectSheet, String> {
+            Ok(EffectSheet {
+                image_id: 895,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 0,
+            })
+        }
+
         fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
             Some(SmokeSheet {
                 first_icon: FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set),
@@ -790,6 +824,15 @@ mod tests {
             })
         );
         assert_eq!(looks.asteroid_sheet(16), None);
+        assert_eq!(
+            looks.pod_sheet(),
+            Some(&EffectSheet {
+                image_id: 895,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 0,
+            }),
+            "the escape pods'"
+        );
         let smokes: Vec<_> = looks.smokes.keys().copied().collect();
         assert_eq!(smokes, [0, 1], "only sets 0 and 1 are asked for");
         assert_eq!(looks.smoke_set(1), Some(SmokeSheet { first_icon: 1008 }));
@@ -804,6 +847,7 @@ mod tests {
             boxes: BTreeMap::from([(0, Err("no".to_owned()))]),
             asteroids: BTreeMap::from([(0, Err("no".to_owned()))]),
             cursor: Some(Err("no".to_owned())),
+            pod: Some(Err("no".to_owned())),
         };
         assert_eq!(unread.asteroid_sheet(0), None);
         assert_eq!(unread.weapon(WeaponId(1)), None);
@@ -811,6 +855,8 @@ mod tests {
         assert_eq!(unread.box_sheet(0), None);
         assert_eq!(unread.cursor_sheet(), None);
         assert_eq!(Looks::default().cursor_sheet(), None, "not read");
+        assert_eq!(unread.pod_sheet(), None);
+        assert_eq!(Looks::default().pod_sheet(), None, "not read");
     }
 
     #[test]
@@ -871,6 +917,10 @@ mod tests {
 
         fn cursor_sheet(&self) -> Result<EffectSheet, String> {
             Err("no spïn 650".to_owned())
+        }
+
+        fn pod_sheet(&self) -> Result<EffectSheet, String> {
+            Err("no shän 895".to_owned())
         }
 
         fn smoke_sheet(&self, _set: u8) -> Option<SmokeSheet> {

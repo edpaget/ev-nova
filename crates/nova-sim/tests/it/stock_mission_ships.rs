@@ -6,7 +6,9 @@
 //! timer and join the player's formation. Every stock mission's
 //! auxiliary ships name a `düde` in range and an `AuxShipSyst` the engine
 //! reads, and a stock mission's come in on their countdown as ordinary
-//! traffic. Skips, passing, when `NOVA_DATA` is unset.
+//! traffic. mïsn 155's crewless Wraith (Adult) is boarded through
+//! `Session::board` and its goal met. Skips, passing, when `NOVA_DATA`
+//! is unset.
 
 use crate::common;
 
@@ -451,5 +453,102 @@ fn the_zephyrs_of_603_and_604_carry_a_cloak_and_no_stock_outfit_scans_for_one() 
     assert!(
         scanners.is_empty(),
         "the stock player never sees a cloaked ship: {scanners:?}"
+    );
+}
+
+/// `mïsn` 155, "Take Sample; Polaris6a": board (`ShipGoal` 2) the
+/// special ship, picking its cargo up as it is boarded (`PickupMode` 2).
+const TAKE_SAMPLE: i16 = 155;
+/// `shïp` 185, the Wraith (Adult), of `Crew` 0.
+const WRAITH: ShipId = ShipId(185);
+
+/// A new pilot that started mïsn 155 by `S`, in flight in its ships'
+/// system, `rules` read, with the Wraith there disabled under the player,
+/// targeted: the session, and the mission's slot.
+fn over_the_wraith(data: &GameData, rules: nova_sim::Rulebook) -> (Session, u8) {
+    let mut session = docked_new_pilot(data);
+    session.run_set(
+        &SetExpr::parse(&format!("S{TAKE_SAMPLE}")).expect("parses"),
+        &mut NeverFires,
+    );
+    let _ = session.settle_script(data, &mut NeverFires);
+    let slot = *session
+        .pilot()
+        .missions()
+        .holding(MissionId(TAKE_SAMPLE))
+        .first()
+        .expect("started");
+    let ShipSystem::At(system) = session
+        .pilot()
+        .missions()
+        .get(slot)
+        .expect("held")
+        .ships
+        .system
+    else {
+        panic!("mïsn 155's ships come in one system");
+    };
+    let mut session = in_flight(data, session.pilot(), system).with_rules(rules);
+    let wraith = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.mission.is_some_and(|mark| mark.slot == slot))
+        .map(|npc| (npc.id, npc.ship))
+        .expect("its special ship is in the system");
+    assert_eq!(wraith.1, WRAITH, "the Wraith (Adult)");
+    nova_sim::fixture::disable(&mut session, wraith.0);
+    nova_sim::fixture::put_player_over(&mut session, wraith.0);
+    (session, slot)
+}
+
+/// The original tests a ship's `Crew` only when it has no mission mark
+/// (`_HandlePlayerBoardAttempt` @0x652bd → @0x65768-0x65789), so mïsn
+/// 155's Wraith (Adult), of no crew, is boarded and its goal met; under
+/// the other reading of `crewless_mission_ship` it is refused.
+#[test]
+fn the_wraith_of_misn_155_is_boarded_through_session_board_and_its_goal_met() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let crew = data
+        .ships()
+        .into_iter()
+        .find(|record| record.id == WRAITH)
+        .expect("shïp 185")
+        .crew;
+    assert_eq!(crew, 0, "the premise: the Wraith (Adult) has no crew");
+
+    let (mut session, slot) = over_the_wraith(&data, nova_sim::Rulebook::default());
+    let boarded = session.board(
+        &nova_sim::NovaLaw::default(),
+        &nova_sim::NovaBoarding::default(),
+        &mut NeverFires,
+    );
+    assert!(
+        matches!(
+            boarded,
+            Ok(nova_sim::Boarding::MissionShip(Some(
+                nova_sim::MissionBoardLine::Retrieved { .. }
+            )))
+        ),
+        "{boarded:?}"
+    );
+    let _ = session.settle_script(&data, &mut NeverFires);
+    let active = session.pilot().missions().get(slot).expect("held");
+    assert!(active.goals_met, "the Wraith boarded meets the goal");
+
+    let bible = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::CrewlessMissionShip,
+        nova_sim::RuleSource::Bible,
+    );
+    let (mut session, _) = over_the_wraith(&data, bible);
+    assert_eq!(
+        session.board(
+            &nova_sim::NovaLaw::default(),
+            &nova_sim::NovaBoarding::default(),
+            &mut NeverFires,
+        ),
+        Err(nova_sim::BoardRefusal::CantBoard)
     );
 }

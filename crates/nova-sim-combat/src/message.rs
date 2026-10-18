@@ -76,6 +76,10 @@ pub enum SimMessage {
     /// A disabled former fighter repaired itself and rejoined the fleet
     /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128).
     FighterRepaired,
+    /// The disabled player's Repair Droids repaired it: "Propulsion
+    /// systems repaired." (`_HandlePlayer` @0x68bf0-0x68c3f, `STR#` 2002
+    /// #37; see the session's `player_repair` module).
+    PropulsionRepaired,
     /// A scan found illegal `jünk`: the player is caught smuggling it
     /// (`_ScanPlayer` @0x7eba9-0x7eece; see `nova_sim::scan`).
     IllegalJunk {
@@ -255,6 +259,8 @@ impl SimMessage {
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
     ///   @0x33ba1).
+    /// - [`PropulsionRepaired`](Self::PropulsionRepaired): 250
+    ///   (`_HandlePlayer` @0x68c3f, 0xfa pushed @0x68c34).
     /// - [`TookOff`](Self::TookOff): 240 (`_PlayerLandOnStellar`
     ///   @0x63727).
     /// - [`Tutorial`](Self::Tutorial): 512 (0x200, `_HandlePlayer`
@@ -312,6 +318,7 @@ impl SimMessage {
             | Self::ReinforcementsApproaching(_) => 240,
             Self::EscortRepaired
             | Self::FighterRepaired
+            | Self::PropulsionRepaired
             | Self::JumpCollapsed
             | Self::DockRequested { .. }
             | Self::NoResponse
@@ -363,6 +370,7 @@ mod tests {
             (smuggling, 400),
             (SimMessage::EscortRepaired, 250),
             (SimMessage::FighterRepaired, 250),
+            (SimMessage::PropulsionRepaired, 250),
             (SimMessage::JumpCollapsed, 250),
             (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
             (SimMessage::Sabotaged { outfit: None }, 360),

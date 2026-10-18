@@ -83,9 +83,9 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
         [Manoeuvre::Rush]
     );
-    // FAST thrusts 0.3; rushing, 2.75 times that.
+    // FAST thrusts 900 / 5000 = 0.18; rushing, 2.75 times that.
     assert!(
-        (ship.state.velocity.length() - speed - 0.825).abs() < 0.05,
+        (ship.state.velocity.length() - speed - 0.495).abs() < 0.05,
         "{speed} {:?}",
         ship.state
     );

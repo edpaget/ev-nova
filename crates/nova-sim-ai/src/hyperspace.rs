@@ -65,8 +65,6 @@
 //!   same rule, through the same helper as J, for the nav area's colours:
 //!   a [`JumpReadiness`] of blocked, clear, or under way once J is
 //!   accepted (`_DrawStatusNav` @0x49f43-0x4a451).
-//! - [`jump_bearing`] is the heading the ship turns to before it jumps:
-//!   the map's bearing from the system it is in to the next.
 //! - [`arrival`] places the ship in the system it jumps to: its jump
 //!   distance (at least the standard one) plus [`ARRIVAL_MARGIN`] from the
 //!   centre, on the side facing the system it came from, at rest and
@@ -832,16 +830,6 @@ pub fn check_jump(
         return Err(JumpRefusal::TooClose { distance });
     }
     Ok(next)
-}
-
-/// The heading a ship jumping from the system at map position `from` to the
-/// one at `to` turns to before it jumps: the map's bearing from one to the
-/// other, as [`arrival`] reads the map. `None` when they are at the same
-/// position, which gives nothing to turn to.
-#[must_use]
-pub fn jump_bearing(from: Vec2, to: Vec2) -> Option<f32> {
-    let way = to - from;
-    (way != Vec2::ZERO).then(|| heading_of(way))
 }
 
 /// Where a ship that must be `jump_distance` from the centre to jump
@@ -1788,31 +1776,6 @@ mod tests {
         for mass in [200, i16::MAX] {
             assert_eq!(base_jump_days(mass), 3, "{mass}");
         }
-    }
-
-    // The bearing.
-
-    #[test]
-    fn the_jump_bearing_faces_the_next_system_on_the_map() {
-        let sol = Vec2::new(20.0, -30.0);
-        assert_eq!(
-            jump_bearing(sol, Vec2::new(620.0, -30.0)),
-            Some(90.0),
-            "east"
-        );
-        assert_eq!(
-            jump_bearing(sol, Vec2::new(20.0, -500.0)),
-            Some(0.0),
-            "north"
-        );
-        assert_eq!(
-            jump_bearing(sol, Vec2::new(20.0, 70.0)),
-            Some(180.0),
-            "south"
-        );
-        let south_west = jump_bearing(sol, Vec2::new(-80.0, 70.0)).expect("a bearing");
-        assert!((south_west - 225.0).abs() < 1e-3, "{south_west}");
-        assert_eq!(jump_bearing(sol, sol), None, "nowhere to turn to");
     }
 
     // Arriving.

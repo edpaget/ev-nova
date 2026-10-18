@@ -74,6 +74,13 @@ impl StellarMarks {
         }
     }
 
+    /// `stellar`'s raw `xPos` and `yPos`, as its record keeps them, or
+    /// none when it has no mark.
+    #[must_use]
+    pub fn place(&self, stellar: StellarId) -> Option<(i16, i16)> {
+        self.marks.get(&stellar).map(|mark| mark.place)
+    }
+
     /// Whether the stellar docked at, `docked`, is a mission's `stop`.
     ///
     /// By [`StellarIdentityRecord`](RuleKey::StellarIdentityRecord)'s
@@ -201,6 +208,13 @@ mod tests {
         ]);
         assert!(engine(&marks, 227, 448));
         assert!(engine(&marks, 448, 227));
+    }
+
+    #[test]
+    fn a_stellars_place_is_its_marks_and_an_unmarked_stellars_none() {
+        let marks = StellarMarks::new(vec![mark(129, (2000, -5), "Varia")]);
+        assert_eq!(marks.place(StellarId(129)), Some((2000, -5)));
+        assert_eq!(marks.place(StellarId(130)), None);
     }
 
     #[test]

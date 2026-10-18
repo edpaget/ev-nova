@@ -183,12 +183,21 @@ impl<C> FlightView<C> {
     /// Boards the target, or says why not: a boarding that opens is held
     /// for the router ([`FlightView::take_boarding`]), and a mission
     /// offered in its place too ([`FlightView::take_offer`]), each letting
-    /// go of the flight keys.
+    /// go of the flight keys. A failed mission's ship boarded for plunder
+    /// says its pickup or assist line first ([`Session::take_board_line`]).
     pub(super) fn board(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        match session.board(&*self.law, &*self.boarding_rule, &mut self.chance) {
+        let boarded = session.board(&*self.law, &*self.boarding_rule, &mut self.chance);
+        if let Some(line) = session.take_board_line() {
+            let said = mission_board_message(line, session);
+            self.say_for(said, BOARD_LINE_TICKS);
+        }
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match boarded {
             Ok(Boarding::Opened(_)) => {
                 self.pending_boarding = true;
                 self.held.clear();

@@ -680,6 +680,40 @@ fn tab_targets_the_trader_and_the_panel_shows_its_name() {
 }
 
 #[test]
+fn a_turns_the_ship_to_face_its_target_and_holds_the_turn_keys_off() {
+    let mut harness = Harness::flying();
+    harness.key(Key::Tab, true);
+    harness.key(Key::Tab, false);
+    // Turned away from it first.
+    harness.key(Key::Right, true);
+    for _ in 0..40 {
+        harness.frame();
+    }
+    harness.key(Key::Right, false);
+    let away = harness.session().player().heading;
+    assert!(away > 30.0, "{away}");
+    harness.key(Key::Char('a'), true);
+    harness.key(Key::Left, true);
+    for _ in 0..90 {
+        harness.frame();
+    }
+    let session = harness.session();
+    let ship = *session.player();
+    let target = session.target().expect("targeted").state.position;
+    let aim = nova_sim::trig::intercept_angle(ship.position, target);
+    let rate = session.handling().turn_rate;
+    assert!(
+        nova_sim::player_turn::settled(
+            ship.heading,
+            rate,
+            aim,
+            nova_sim::player_turn::PlayerTurn::WholeDegrees
+        ),
+        "{ship:?} toward {aim}"
+    );
+}
+
+#[test]
 fn space_fires_the_blaster_whose_shots_are_drawn_and_heard() {
     let mut harness = Harness::flying();
     harness.key(Key::Space, true);
@@ -1650,6 +1684,7 @@ fn steering(session: &Session, quarry: &Npc) -> nova_sim::Controls {
             thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,
             turn: side,
             reverse: false,
+            ..nova_sim::Controls::default()
         };
     }
     let ahead = toward(quarry.state.heading);

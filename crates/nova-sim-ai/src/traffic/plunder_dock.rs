@@ -62,10 +62,11 @@ use crate::ai::Goal;
 use crate::ai::fire::off_by;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
-use crate::flight::{self, Controls, ShipState};
+use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
-use crate::traffic::autopilot::steer;
+use crate::traffic::autopilot::{self, steer};
+use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
 use nova_sim_base::trig;
 
@@ -193,12 +194,15 @@ pub enum DockOutcome {
 }
 
 /// Flies `npc` one tick of its docking with a victim at `victim`, on
-/// `handling`, the dock's wait rolled on `chance` (see the module docs).
-/// It flies nothing without a docking.
+/// `handling` under `flight` (an inertialess ship as the autopilot flies
+/// one, see [`inertialess`](crate::traffic::inertialess)), the dock's wait
+/// rolled on `chance` (see the module docs). It flies nothing without a
+/// docking.
 pub fn fly(
     npc: &mut Npc,
     victim: &ShipState,
     handling: &Handling,
+    flight: FlightRules,
     chance: &mut (impl Chance + ?Sized),
 ) -> DockOutcome {
     let Some(docking) = npc.docking else {
@@ -214,10 +218,14 @@ pub fn fly(
             (controls, flown, DockOutcome::Flying)
         }
     };
+    let inertia = Inertia::of(npc, Some(victim), flight);
     if npc.ai_wait > 0 {
-        npc.state.position = npc.state.position + npc.state.velocity;
+        match inertia {
+            Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
+            Inertia::Inertialess { .. } => inertialess::drift(npc, &flown),
+        }
     } else {
-        flight::step(&mut npc.state, &flown, controls);
+        autopilot::step(npc, &flown, controls, flight, inertia);
     }
     outcome
 }
@@ -263,6 +271,7 @@ fn approach(
         thrust,
         turn: steer(state.heading, f32::from(wanted), handling),
         reverse: false,
+        ..Controls::default()
     };
     (controls, flown)
 }
@@ -297,6 +306,7 @@ fn dock(
             thrust: off_by(npc.state.heading, wanted) < handling.turn_rate + THRUST_SLACK,
             turn: steer(npc.state.heading, f32::from(wanted), handling),
             reverse: false,
+            ..Controls::default()
         };
         return (controls, DockOutcome::Flying);
     }
@@ -305,6 +315,7 @@ fn dock(
         thrust: false,
         turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
+        ..Controls::default()
     };
     npc.state.velocity = victim.velocity;
     let off = npc.state.position - victim.position;
@@ -412,7 +423,13 @@ mod tests {
 
     /// `ship` flown one tick at `victim`, and what became of it.
     fn flown(mut ship: Npc, victim: &ShipState, rolls: &[u16]) -> (Npc, DockOutcome) {
-        let outcome = fly(&mut ship, victim, &HANDLING, &mut Scripted::rolling(rolls));
+        let outcome = fly(
+            &mut ship,
+            victim,
+            &HANDLING,
+            FlightRules::default(),
+            &mut Scripted::rolling(rolls),
+        );
         (ship, outcome)
     }
 
@@ -480,18 +497,22 @@ mod tests {
 
     #[test]
     fn closing_caps_its_thrust_at_half_its_top_speed_within_100_and_not_outside() {
-        let start = at(0.0, 0.0, 0.0, -1.9, 0.0);
+        // Already at 2, half its top speed: under the cap `_AdjustedAccel`
+        // adds no push to the axis (the per-axis reading of
+        // `RuleKey::SpeedCap`, which clamps nothing, so a push from below
+        // the cap still carries past it).
+        let start = at(0.0, 0.0, 0.0, -2.0, 0.0);
         let near = at(0.0, -100.0, 0.0, 0.0, 0.0);
         let (ship, _) = flown(pirate(start, DockSub::Close), &near, &[]);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, -2.0), "capped at 2");
         let (ship, _) = flown(pirate(start, DockSub::Approach), &near, &[]);
         assert_eq!(
-            ship.state.velocity.y, -2.4,
+            ship.state.velocity.y, -2.5,
             "sub 9 has no cap but its top speed"
         );
         let far = at(0.0, -100.5, 0.0, 0.0, 0.0);
         let (ship, _) = flown(pirate(start, DockSub::Close), &far, &[]);
-        assert_eq!(ship.state.velocity.y, -2.4);
+        assert_eq!(ship.state.velocity.y, -2.5);
     }
 
     #[test]
@@ -591,7 +612,13 @@ mod tests {
         }
         let mut chance = Scripted::rolling(&[0]);
         let mut ship = pirate(at(0.0, 0.0, 0.5, 0.0, 0.0), DockSub::Dock);
-        fly(&mut ship, &victim, &HANDLING, &mut chance);
+        fly(
+            &mut ship,
+            &victim,
+            &HANDLING,
+            FlightRules::default(),
+            &mut chance,
+        );
         assert_eq!(chance.sides_asked, [DOCK_WAIT_SPREAD]);
     }
 
@@ -799,6 +826,7 @@ mod tests {
             &mut ship,
             &at(0.0, 0.0, 0.0, 0.0, 0.0),
             &HANDLING,
+            FlightRules::default(),
             &mut Draws::of(&[]),
         );
         assert_eq!((ship, outcome), (before, DockOutcome::Flying));

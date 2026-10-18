@@ -362,6 +362,8 @@ impl Session {
             stats: kind.stats,
             reserves,
             state: self.player,
+            // The ship left as it was, its speed along its heading too.
+            speed: self.player_speed,
             mode: Mode::Flying,
             goal: Goal::Idle,
             condition,
@@ -390,6 +392,7 @@ impl Session {
             led_out: false,
             emerges_from: None,
             self_repair: kind.self_repair,
+            immobile: kind.immobile,
             miner: kind.miner,
             can_scoop: kind.can_scoop,
             holds: kind.holds,
@@ -401,6 +404,9 @@ impl Session {
             ai_wait: 0,
             docking: None,
             marines: kind.marines,
+            // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
+            // its class's `PodCount` (@0x3ca48).
+            pods_left: kind.hull.pod_count,
         }
     }
 
@@ -722,6 +728,48 @@ mod tests {
     }
 
     #[test]
+    fn the_players_hulk_carries_its_classs_crew_pods() {
+        let mut catalog = ejecting(100);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.pod_count = 3;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert_eq!(hulk(&session).pods_left, 3);
+    }
+
+    #[test]
+    fn a_dying_hulk_of_a_pod_carrying_class_ejects_its_crew_pods() {
+        let mut catalog = ejecting(100);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.pod_count = 3;
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        let left = hulk(&session).id;
+        let mut pods = 0;
+        for _ in 0..400 {
+            let (_, events) = fight(&mut session, false);
+            pods += events
+                .iter()
+                .filter(|event| {
+                    matches!(event, CombatEvent::PodEjected { ship, .. } if *ship == ShipRef::Npc(left))
+                })
+                .count();
+            if session.npc(left).is_none() {
+                break;
+            }
+        }
+        assert!(session.npc(left).is_none(), "the hulk explodes");
+        assert!((1..=3).contains(&pods), "{pods} of its 3 pods");
+    }
+
+    #[test]
     fn an_ejecting_players_turn_of_exits_goes_on_in_the_pod_by_the_engine_alone() {
         use crate::combat::exits::ExitKind;
         use crate::rulebook::Rulebook;
@@ -1015,6 +1063,83 @@ mod tests {
             .map(|mount| (mount.spec.id, mount.count))
             .collect();
         assert_eq!(mounted, [(WeaponId(128), 1)]);
+    }
+
+    #[test]
+    fn the_hulk_of_a_class_of_no_speed_and_no_accel_is_immobile_and_stays_put() {
+        let left = |fields: ShipFields| {
+            let mut catalog = ejecting(100);
+            for record in &mut catalog.ship_records {
+                if record.id == ShipId(128) {
+                    record.fields = ShipFields {
+                        speed: fields.speed,
+                        accel: fields.accel,
+                        ..record.fields
+                    };
+                }
+            }
+            let mut session = flying(&catalog, &[POD]);
+            let at = Vec2::new(10.0, 20.0);
+            session.player = crate::flight::ShipState {
+                position: at,
+                velocity: Vec2::new(3.0, 4.0),
+                heading: 90.0,
+            };
+            session.condition = Condition::Disabled;
+            assert_eq!(fight(&mut session, true).0, EJECTED);
+            let immobile = hulk(&session).immobile;
+            for _ in 0..3 {
+                session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+            }
+            (immobile, at, hulk(&session).state)
+        };
+        let (immobile, at, state) = left(ShipFields {
+            speed: 0,
+            accel: 0,
+            ..FAST
+        });
+        assert!(immobile, "its class's");
+        assert_eq!(state.position, at, "the player's drift moves it not at all");
+        assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+        let (immobile, at, state) = left(FAST);
+        assert!(!immobile);
+        assert_ne!(state.position, at, "it drifts on");
+    }
+
+    #[test]
+    fn the_hulk_of_an_inertialess_class_keeps_the_players_speed_and_flies_on_along_its_heading() {
+        let mut catalog = ejecting(100);
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(128) {
+                record.fields.flags2 = crate::stats::INERTIALESS_HULL;
+            }
+        }
+        let mut session = flying(&catalog, &[POD]);
+        let heading = 90.0;
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(10.0, 20.0),
+            velocity: crate::flight::facing(heading) * 4.0,
+            heading,
+        };
+        session.player_speed = 4.0;
+        session.condition = Condition::Disabled;
+        session.pilot.reserves.armor.now = 1.0;
+        assert_eq!(fight(&mut session, true).0, EJECTED);
+        let id = hulk(&session).id;
+        assert_eq!(hulk(&session).speed, 4.0, "the player's speed");
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+            let hulk = session.npc(id).expect("still here");
+            assert_eq!(hulk.condition, Condition::Disabled, "a derelict");
+            let along = crate::flight::facing(hulk.state.heading) * hulk.speed;
+            assert!(hulk.speed > 3.9, "slowed only by the drag: {}", hulk.speed);
+            assert!(
+                (hulk.state.velocity - along).length() < 1e-4,
+                "along its heading at its speed: {:?} at {}",
+                hulk.state,
+                hulk.speed
+            );
+        }
     }
 
     /// A braking pre-jump to 131.
@@ -1535,6 +1660,7 @@ mod tests {
             thrust: false,
             turn: crate::flight::Turn::Left,
             reverse: true,
+            ..crate::flight::Controls::default()
         };
         let at = session.player.position;
         session.tick(controls);

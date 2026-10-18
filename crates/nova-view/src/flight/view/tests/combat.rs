@@ -859,6 +859,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         flags2: 0,
         flags3: 0,
         death_delay: 0,
+        pod_count: 0,
         explode1: -1,
         explode2: -1,
         mass: 0,
@@ -2250,6 +2251,89 @@ fn arriving_clears_the_effects() {
     arrive_now(&mut view);
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
     assert_eq!(*view.effects(), Effects::default());
+}
+
+/// [`armed`]'s NPC, shïp 129, of `DeathDelay` 4 and one crew pod, which
+/// one hit of the player's blaster breaks up: the pod comes out on its
+/// explosion tick, at a timer of 2.
+fn podding() -> FakeCatalog {
+    let mut catalog = armed(1, &[BLASTER]);
+    catalog.weapons[0].energy_dmg = 200;
+    catalog.weapons[0].mass_dmg = 200;
+    catalog.hulls[1].death_delay = 4;
+    catalog.hulls[1].pod_count = 1;
+    catalog
+}
+
+/// Fires at the targeted NPC until its pod is adrift.
+fn eject_a_pod(view: &mut View) {
+    tap(view, Key::Tab);
+    view.input(&key(FIRE_KEY, true));
+    for _ in 0..40 {
+        view.tick(TICK);
+        if !view.effects().pods().is_empty() {
+            view.input(&key(FIRE_KEY, false));
+            return;
+        }
+    }
+    panic!("no pod came out");
+}
+
+/// How many escape pods `view` draws, from the pods' sheet (`rlëD` 1095).
+fn pods_drawn(view: &View) -> usize {
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    list.into_iter()
+        .filter(|command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 1095))
+        .count()
+}
+
+#[test]
+fn a_dying_npcs_pod_is_drawn_and_heard_until_landing_clears_it() {
+    let mut catalog = podding();
+    catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+    let mut view = fighting(catalog, &placed(750, 650, 180));
+    eject_a_pod(&mut view);
+    assert_eq!(pods_drawn(&view), 1);
+    let heard: Vec<nova_sim::SoundId> = view
+        .take_sounds()
+        .into_iter()
+        .filter_map(|sound| match sound {
+            Sound::Combat(sound) => Some(sound.sound),
+            _ => None,
+        })
+        .collect();
+    assert!(heard.contains(&nova_sim::SoundId(372)), "{heard:?}");
+    land_now(&mut view);
+    assert!(view.take_landing().is_some());
+    assert!(view.effects().pods().is_empty());
+    assert_eq!(pods_drawn(&view), 0);
+}
+
+#[test]
+fn arriving_leaves_no_pod_drawn() {
+    let mut view = fighting(podding(), &placed(750, 650, 180));
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    let ahead = player(&view).position + nova_sim::Vec2::new(0.0, -80.0);
+    let npc = view.session().expect("flying").npcs()[0].id;
+    nova_sim::fixture::place(view.session.as_mut().expect("flying"), npc, ahead);
+    let placed_at = view.session().expect("flying").npcs()[0].state;
+    assert_eq!(
+        (placed_at.position, placed_at.velocity),
+        (ahead, nova_sim::Vec2::ZERO),
+        "placed ahead, at rest"
+    );
+    eject_a_pod(&mut view);
+    jump_now(&mut view);
+    assert!(
+        !view.effects().pods().is_empty(),
+        "still adrift as the jump begins"
+    );
+    arrive_now(&mut view);
+    assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    assert!(view.effects().pods().is_empty());
+    assert_eq!(pods_drawn(&view), 0);
 }
 
 /// [`detonating`] with a blast of radius 100 doing 1 energy damage,

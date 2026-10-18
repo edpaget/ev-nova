@@ -1293,6 +1293,7 @@ mod tests {
             Some(&side.state),
             false,
             TopSpeeds::own_of(npc),
+            crate::flight::FlightRules::default(),
             RuleSource::Engine,
             &mut Ranged::of(&[]),
         );
@@ -1301,14 +1302,14 @@ mod tests {
 
     #[test]
     fn a_ship_breaking_off_thrusts_every_tick_at_1_5_times_its_acceleration() {
-        // FAST thrusts 0.3 a tick; facing 135 off its break heading, it
-        // turns 3 toward it and thrusts at 0.45 all the same.
+        // FAST thrusts 900 / 5000 = 0.18 a tick; facing 135 off its break
+        // heading, it turns 3 toward it and thrusts at 0.27 all the same.
         let mut npc = fighter(AT_PLAYER, 0.0);
         npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
         let ship = flown(&npc, ABOVE);
         assert_eq!(ship.state.heading, 3.0);
         assert!(
-            (ship.state.velocity.length() - 0.45).abs() < 1e-6,
+            (ship.state.velocity.length() - 0.27).abs() < 1e-6,
             "{:?}",
             ship.state
         );
@@ -1322,18 +1323,22 @@ mod tests {
         // 2000 above, so it stays outside the box; a roll of 99 keeps it.
         let off = Vec2::new(0.0, -2000.0);
         let ship = flown(&npc, off);
+        // 2.75 × 0.18 = 0.495 a tick.
         assert!(
-            (ship.state.velocity.length() - 6.825).abs() < 1e-5,
+            (ship.state.velocity.length() - 6.495).abs() < 1e-5,
             "{:?}",
             ship.state
         );
+        // Each push lands while it is short of 1.8 × 6 = 10.8, the tenth
+        // carrying it to 10.95, past it, and then no more: `_AdjustedAccel`
+        // stops adding at the cap but clamps nothing.
         let mut ship = npc;
-        for _ in 0..10 {
+        for _ in 0..12 {
             let relative = off - (ship.state.position - AT);
             ship = flown(&ship, relative);
         }
         assert!(
-            (ship.state.velocity.length() - 10.8).abs() < 1e-4,
+            (ship.state.velocity.length() - 10.95).abs() < 1e-4,
             "{:?}",
             ship.state
         );
@@ -1342,12 +1347,12 @@ mod tests {
     #[test]
     fn a_fleeing_ship_that_rushes_flies_the_rush_at_its_attacker() {
         // The frame's last body wins: it turns toward its attacker, not
-        // away, and thrusts at the rush's 0.825.
+        // away, and thrusts at the rush's 2.75 × 0.18 = 0.495.
         let npc = burning(fighter(Goal::Flee(ShipRef::Player), 10.0));
         let ship = flown(&npc, ABOVE);
         assert_eq!(ship.state.heading, 7.0, "toward the bearing of 0");
         assert!(
-            (ship.state.velocity.length() - 0.825).abs() < 1e-6,
+            (ship.state.velocity.length() - 0.495).abs() < 1e-6,
             "{:?}",
             ship.state
         );

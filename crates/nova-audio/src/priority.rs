@@ -62,6 +62,9 @@ pub const NO_ESCORTS: Priority = Priority::new(1);
 pub const ENTER_REFUSED: Priority = Priority::new(10);
 /// An escort repaired, `_beepSnd[4]`: `_HandleShip` @0x33bd4.
 pub const ESCORT_REPAIRED: Priority = Priority::new(8);
+/// The player's propulsion repaired, `_beepSnd[4]`: `_HandlePlayer`'s
+/// `PlaySound(.., 1, ..)` @0x68c4c, played @0x68c67.
+pub const PROPULSION_REPAIRED: Priority = Priority::new(1);
 /// The Red Alert, `_redAlertSnd`: `_HandlePlayer` @0x68cff.
 pub const RED_ALERT: Priority = Priority::new(5);
 /// Cargo jettisoned, `_beepSnd[4]`: `_JettisonCargo` @0x3e33d.
@@ -196,6 +199,7 @@ mod tests {
             (NO_ESCORTS, 1, "no escorts"),
             (ENTER_REFUSED, 10, "enter refused"),
             (ESCORT_REPAIRED, 8, "escort repaired"),
+            (PROPULSION_REPAIRED, 1, "propulsion repaired"),
             (RED_ALERT, 5, "red alert"),
             (JETTISON, 1, "jettison"),
             (SCAN_FAILED, 1, "scan failed"),

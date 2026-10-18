@@ -3,14 +3,22 @@
 //!
 //! The simulation measures space in pixels, as Nova does (the Bible:
 //! "Jump Distance 1000 pixels"; a `spöb`'s position is in pixels from the
-//! system's centre), and time in ticks of 1/30 s (see [`crate::clock`]).
-//! Every conversion from the record's numbers is a named constant here.
-//! They are chosen so flight feels like Nova, not to match the original
-//! number for number.
+//! system's centre), and time in ticks of 1/30 s (see [`crate::clock`]),
+//! the original's frame at a `_gSpeedMult` of 1.0 (`_HandleTimeAdjustment`
+//! @0x333e1). Every conversion from the record's numbers is a named
+//! constant here. The thrust is the original's, `Accel` /
+//! [`ORIGINAL_THRUST_DIVISOR`], and a setting can change it
+//! ([`Handling::thrust_under`],
+//! [`RuleValue::ThrustDivisor`]).
+
+use core::num::NonZeroU32;
+
+use crate::flight::Flyer;
+use crate::rule_values::RuleValue;
 
 /// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel`,
 /// `FuelRegen`, `Holds`, `Mass`, `FreeMass`, `Contribute`, `ShieldRech`,
-/// `ArmorRech` and `Flags2`, raw from the record.
+/// `ArmorRech`, `Flags` and `Flags2`, raw from the record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipFields {
     /// `Speed`: top speed; 300 is average.
@@ -46,6 +54,9 @@ pub struct ShipFields {
     pub shield_rech: i16,
     /// `ArmorRech`: armour points x1000 regenerated a tick.
     pub armor_rech: i16,
+    /// `Flags`: the raw flag word, of which `nova_sim::stats::ShipStats`
+    /// reads 0x0008, the player's hull regenerating fuel.
+    pub flags: u16,
     /// `Flags2`: the raw flag word, decoded in `nova_sim::stats::ShipStats`.
     pub flags2: u16,
 }
@@ -58,6 +69,51 @@ impl ShipFields {
     pub fn class_speed(&self) -> f32 {
         f32::from(self.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK
     }
+
+    /// The class's turn rate, in degrees a tick: its `Maneuver` alone,
+    /// none of its outfits', a tenth (the original's class +0x38,
+    /// `_LoadObjectData` @0x7a0fb-0x7a10b), not floored. What
+    /// [`floored_turn`] reads.
+    #[must_use]
+    pub fn class_turn(&self) -> f32 {
+        f32::from(self.maneuver) / MANEUVER_PER_DEGREE_PER_TICK
+    }
+}
+
+/// The turn rate, in degrees a tick, `_ShipTurnRate` floors a ship's at
+/// (1.0, 0xdd068).
+pub const MIN_TURN_RATE: f32 = 1.0;
+
+/// `rate`, a ship's turn in degrees a tick with its outfits, floored as
+/// `_ShipTurnRate` (@0x32f7-0x34e0) floors it for `flyer`, whose class
+/// turns `class_rate` ([`ShipFields::class_turn`]):
+///
+/// 1. The player's alone (@0x33ba-0x33db): below [`MIN_TURN_RATE`], it
+///    becomes that when its class turns above none, and is kept when
+///    its class turns none or less.
+/// 2. Every ship's (@0x3441-0x3473): when its class turns
+///    [`MIN_TURN_RATE`] or more, at least that.
+/// 3. None below none (@0x34cd).
+///
+/// So the player turns at least 1° a tick unless its class turns none,
+/// and an NPC unless its class turns under 1°. Left out: between the
+/// floors, a tractor's hold on an NPC, × 0.333
+/// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), and the nag
+/// ship's +1, which no ship of ours is; after them, ionization
+/// (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling). The
+/// original's NPC rate is its class's alone, with no outfits, where ours
+/// counts them
+/// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
+#[must_use]
+pub fn floored_turn(class_rate: f32, rate: f32, flyer: Flyer) -> f32 {
+    let mut rate = rate;
+    if flyer == Flyer::Player && rate < MIN_TURN_RATE && class_rate > 0.0 {
+        rate = MIN_TURN_RATE;
+    }
+    if class_rate >= MIN_TURN_RATE {
+        rate = rate.max(MIN_TURN_RATE);
+    }
+    rate.max(0.0)
 }
 
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels
@@ -65,10 +121,13 @@ impl ShipFields {
 /// average ship (300) tops out at 3 pixels a tick, 90 a second.
 pub const SPEED_PER_PIXEL_PER_TICK: f32 = 100.0;
 
-/// `Accel` per pixel a tick, per tick: the speed scale over a second's
-/// ticks, so a ship whose `Accel` equals its `Speed` reaches top speed from
-/// rest in about a second.
-pub const ACCEL_PER_PIXEL_PER_TICK_SQUARED: f32 = SPEED_PER_PIXEL_PER_TICK * 30.0;
+/// `Accel` per pixel a tick, per tick, as the original thrusts:
+/// `_ShipAccelRate` (@0x353b) takes `Accel` / 10000 (`_LoadObjectData`
+/// @0x7a0b3-0x7a0c7) and doubles it (@0x35f8, @0x3667), so a ship whose
+/// `Accel` equals its `Speed` reaches top speed from rest in 50 ticks,
+/// about 5/3 of a second. The settings may set another divisor
+/// ([`Handling::thrust_under`]).
+pub const ORIGINAL_THRUST_DIVISOR: f32 = 5000.0;
 
 /// `Maneuver` per degree a tick. The Bible: "10 is about 30°/s", which is
 /// 1° a tick at 30 ticks a second.
@@ -95,8 +154,24 @@ impl Handling {
         let positive = |total: i64| total.max(0) as f32;
         Self {
             max_speed: positive(speed) / SPEED_PER_PIXEL_PER_TICK,
-            accel: positive(accel) / ACCEL_PER_PIXEL_PER_TICK_SQUARED,
+            accel: positive(accel) / ORIGINAL_THRUST_DIVISOR,
             turn_rate: maneuver.max(0.0) / MANEUVER_PER_DEGREE_PER_TICK,
+        }
+    }
+
+    /// This handling with its thrust worked out under `divisor` in place of
+    /// [`ORIGINAL_THRUST_DIVISOR`]: `Accel` / `divisor`. At the original's
+    /// divisor it is this handling, bit for bit.
+    #[must_use]
+    pub fn thrust_under(self, divisor: NonZeroU32) -> Self {
+        if divisor == RuleValue::ThrustDivisor.default_value() {
+            return self;
+        }
+        let rescaled =
+            f64::from(self.accel) * f64::from(ORIGINAL_THRUST_DIVISOR) / f64::from(divisor.get());
+        Self {
+            accel: rescaled as f32,
+            ..self
         }
     }
 }
@@ -110,29 +185,71 @@ mod tests {
         Handling::from_totals(speed.into(), accel.into(), maneuver.into())
     }
 
+    fn divisor(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).unwrap()
+    }
+
     #[test]
-    fn an_average_ship_tops_out_at_3_pixels_a_tick_in_a_second() {
+    fn an_average_ship_tops_out_at_3_pixels_a_tick_in_50_ticks() {
         let average = handling(300, 300, 10);
         assert_eq!(average.max_speed, 3.0);
-        assert_eq!(average.accel, 0.1);
+        assert_eq!(average.accel, 0.06);
         assert_eq!(average.turn_rate, 1.0);
-        assert!((average.max_speed / average.accel - 30.0).abs() < 1e-4);
+        assert!((average.max_speed / average.accel - 50.0).abs() < 1e-4);
     }
 
     #[test]
     fn each_field_converts_on_its_own_scale() {
         let fast = handling(1000, 600, 30);
         assert_eq!(fast.max_speed, 10.0);
-        assert_eq!(fast.accel, 0.2);
+        assert_eq!(fast.accel, 0.12);
         assert_eq!(fast.turn_rate, 3.0);
         assert_eq!(
             (
                 SPEED_PER_PIXEL_PER_TICK,
-                ACCEL_PER_PIXEL_PER_TICK_SQUARED,
+                ORIGINAL_THRUST_DIVISOR,
                 MANEUVER_PER_DEGREE_PER_TICK
             ),
-            (100.0, 3000.0, 10.0)
+            (100.0, 5000.0, 10.0)
         );
+    }
+
+    #[test]
+    fn the_original_thrust_divisor_is_the_rulebooks_default() {
+        assert_eq!(
+            f64::from(RuleValue::ThrustDivisor.default_value().get()),
+            f64::from(ORIGINAL_THRUST_DIVISOR)
+        );
+    }
+
+    #[test]
+    fn thrust_under_the_default_divisor_is_unchanged() {
+        for accel in [1, 7, 300, 600, 1234, i16::MAX] {
+            let own = handling(300, accel, 10);
+            let under = own.thrust_under(RuleValue::ThrustDivisor.default_value());
+            assert_eq!(under, own, "{accel}");
+            assert_eq!(under.accel.to_bits(), own.accel.to_bits(), "{accel}");
+        }
+    }
+
+    #[test]
+    fn thrust_under_a_divisor_is_the_accel_total_over_it() {
+        for accel in [1_i16, 7, 300, 600, 1234, i16::MAX] {
+            let own = handling(300, accel, 10);
+            for by in [1, 3000, 7919, 5001, u32::MAX] {
+                let under = own.thrust_under(divisor(by));
+                let expected = f64::from(accel) / f64::from(by);
+                let off = (f64::from(under.accel) - expected).abs() / expected;
+                assert!(off < 1e-6, "{accel} / {by}: {under:?}");
+                assert_eq!(
+                    (under.max_speed, under.turn_rate),
+                    (own.max_speed, own.turn_rate),
+                    "only the thrust"
+                );
+            }
+        }
+        let stuck = handling(300, -5, 10).thrust_under(divisor(3000));
+        assert_eq!(stuck.accel, 0.0, "none stays none");
     }
 
     #[test]
@@ -144,6 +261,61 @@ mod tests {
             (stuck.max_speed, stuck.accel, stuck.turn_rate),
             (3.0, 0.0, 1.0)
         );
+    }
+
+    #[test]
+    fn the_players_turn_is_floored_at_1_unless_its_class_turns_none() {
+        for (class, rate, floored) in [
+            (0.5, 0.5, 1.0),
+            (2.5, 0.98, 1.0),
+            (2.5, -3.0, 1.0),
+            (0.1, 0.0, 1.0),
+            (2.5, 2.5, 2.5),
+            (0.5, 1.5, 1.5),
+            (0.0, 0.5, 0.5),
+            (0.0, -1.0, 0.0),
+            (-0.5, 0.25, 0.25),
+        ] {
+            assert_eq!(
+                floored_turn(class, rate, Flyer::Player),
+                floored,
+                "{class} {rate}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_npcs_turn_is_floored_at_1_only_when_its_class_turns_1_or_more() {
+        for (class, rate, floored) in [
+            (1.0, 0.2, 1.0),
+            (2.5, 0.98, 1.0),
+            (2.5, -3.0, 1.0),
+            (2.5, 2.5, 2.5),
+            (0.9, 0.9, 0.9),
+            (0.9, 0.2, 0.2),
+            (0.5, 1.5, 1.5),
+            (0.0, 0.5, 0.5),
+            (0.9, -1.0, 0.0),
+        ] {
+            assert_eq!(
+                floored_turn(class, rate, Flyer::Npc),
+                floored,
+                "{class} {rate}"
+            );
+        }
+        assert_eq!(MIN_TURN_RATE, 1.0);
+    }
+
+    #[test]
+    fn a_class_turn_is_its_maneuver_alone_a_tenth() {
+        let fields = |maneuver| ShipFields {
+            maneuver,
+            ..ShipFields::default()
+        };
+        assert_eq!(fields(25).class_turn(), 2.5);
+        assert_eq!(fields(9).class_turn(), 0.9);
+        assert_eq!(fields(0).class_turn(), 0.0);
+        assert_eq!(fields(-10).class_turn(), -1.0, "as the record says");
     }
 
     #[test]

@@ -22,6 +22,8 @@
 //!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
+//! - [`pod_flight`]: an escape pod NPC, flown at full thrust along its
+//!   heading until its wait runs out and its slot is freed.
 //! - [`snipe`]: how a sniper flies, braking or at rest.
 //! - [`board_wait`]: a pirate's wait while another ship boards the ship it
 //!   would plunder.
@@ -63,7 +65,8 @@
 //!    flight answers the fight's strikes in the hit's own step instead
 //!    ([`Traffic::answer`]), so this step answers only those left;
 //! 3. an NPC not intact loses its provocation;
-//! 4. the decisions due on the AI timer, never for a ship still jumping
+//! 4. the decisions due on the AI timer, never for an escape pod
+//!    ([`pod_flight`]), nor for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
 //!    gate to leave, one that is not intact, or one assisting the player
@@ -89,7 +92,10 @@
 //! 5. every NPC's cloak ([`cloak`]): a flying NPC's think
 //!    cloaks or uncloaks it, one cloaked that can no longer cloak
 //!    uncloaks, and its fade steps;
-//! 6. the autopilot and a flight step for every NPC, each flying towards
+//! 6. on the advance pass alone, each escape pod's wait counted down, a
+//!    pod whose wait ran out freed ([`pod_flight::count_down`], `Outcome::Freed`); then the
+//!    autopilot and a flight step for every NPC, a pod at full thrust
+//!    along its heading, each other ship flying towards
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier,
 //!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
@@ -98,9 +104,12 @@
 //!    ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
-//! 7. and the removal of those that landed, jumped out, entered a gate or
+//! 7. the removal of those that landed, jumped out, entered a gate or
 //!    docked, each in [`Traffic::departed`] with how it left, for its
-//!    session to take a fighter docked aboard.
+//!    session to take a fighter docked aboard;
+//! 8. and every NPC left, held still, disabled or breaking up included,
+//!    regenerates its fuel up to its capacity ([`Npc::regenerate_fuel`],
+//!    `_HandleShip` @0x35305-0x35374), on both passes.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
@@ -111,7 +120,7 @@
 //! ([`Leave`]), their berths and their persons' names still taken; those
 //! held in the system it goes on into come back as they were.
 //! Double time's second pass moves the traffic again
-//! ([`Traffic::move_in`]): steps 5 to 7 alone, with no cloak thinks.
+//! ([`Traffic::move_in`]): steps 5 to 8 alone, with no cloak thinks.
 //!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
@@ -134,10 +143,12 @@ pub mod fixture;
 pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
+pub mod inertialess;
 pub mod npc;
 pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
+pub mod pod_flight;
 #[cfg(test)]
 mod pursuit_tests;
 pub mod quote;
@@ -405,6 +416,10 @@ pub struct World<'a> {
     /// leads: 1.5 for a pilot without Strict Play by the engine (see
     /// `nova_sim::top_speed`).
     pub led_speed: f32,
+    /// The flight rules every NPC flies by: the thrust's divisor, read
+    /// from the rules at each use as the led speed is (see
+    /// [`FlightRules`](crate::flight::FlightRules)).
+    pub flight: crate::flight::FlightRules,
     /// The damage the shots in flight aim at each ship
     /// ([`Surroundings::targeted`]).
     pub targeted: &'a BTreeMap<ShipRef, i32>,
@@ -480,7 +495,8 @@ pub static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
-    /// factor on the led ships' top speed, no damage aimed, no gate's
+    /// factor on the led ships' top speed, the original's flight rules,
+    /// no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
     /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
     /// no government marked by an IFF scrambler and Nova's disable rule.
@@ -496,6 +512,7 @@ impl<'a> World<'a> {
             persons: PersonWorld::NONE,
             escort_tons: 0,
             led_speed: 1.0,
+            flight: crate::flight::FlightRules::default(),
             targeted: bare.targeted,
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
@@ -881,17 +898,14 @@ impl Traffic {
     ) {
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
-        for npc in &mut self.npcs {
-            if npc.condition != Condition::Intact {
-                npc.provoked = 0.0;
-            }
-        }
+        self.forget_provocations();
         let due: Vec<bool> = self
             .npcs
             .iter()
             .map(|npc| {
                 matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
                     && npc.condition == Condition::Intact
+                    && !pod_flight::is_pod(npc)
                     && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
                     && decision_due(self.ticks, npc.id, self.interval)
             })
@@ -978,7 +992,9 @@ impl Traffic {
                 }
             }
         }
+        let freed = pod_flight::count_down(&mut self.npcs);
         self.fly(&world, true, still, chance);
+        self.departed.extend(freed);
         // The display pass (`_DoPlayGameWork` @0x444ad) follows the
         // frame's arrivals pass (step 1) and frees each ship left behind
         // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them
@@ -989,6 +1005,15 @@ impl Traffic {
         // crossing no boundary, as a ship left behind is never drawn.
         self.left_behind.clear();
         self.ticks += 1;
+    }
+
+    /// Every NPC that is not intact forgets what provoked it.
+    fn forget_provocations(&mut self) {
+        for npc in &mut self.npcs {
+            if npc.condition != Condition::Intact {
+                npc.provoked = 0.0;
+            }
+        }
     }
 
     /// Each NPC whose decision is `due` takes its high level and pursuit in
@@ -1047,7 +1072,7 @@ impl Traffic {
 
     /// Moves the traffic again in `world`, rolling on `chance`, as double
     /// time's second pass does (`_DoPlayGameWork(0)`; see the session's
-    /// `double_time` module): steps 5 to 7 of a tick (see the module
+    /// `double_time` module): steps 5 to 8 of a tick (see the module
     /// docs), but no cloak thinks, as `_AIHandleCloaking` is the AI's.
     /// Nothing else runs, as the arrivals (`_EnterMoreShips`), the
     /// escort-strength timer, the answers to strikes, the decisions
@@ -1060,11 +1085,12 @@ impl Traffic {
         self.fly(&world, false, &BTreeSet::new(), chance);
     }
 
-    /// Steps 5 to 7 of a tick in `world` (see the module docs), rolling on
+    /// Steps 5 to 8 of a tick in `world` (see the module docs), rolling on
     /// `chance`: every NPC's cloak, thinking when `think`, then the
     /// autopilot, a flight step, the followers of a ship that reached its
-    /// gate released ([`Traffic::release_followers`]) and the departures,
-    /// but for the NPCs in `still`, which keep their place.
+    /// gate released ([`Traffic::release_followers`]), the departures, but
+    /// for the NPCs in `still`, which keep their place, and every NPC's
+    /// fuel regeneration.
     fn fly(
         &mut self,
         world: &World,
@@ -1090,6 +1116,7 @@ impl Traffic {
             .collect();
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
+        self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
     }
 
     /// The traffic's part of one `_EnterMoreShips` pass in `world`,
@@ -1179,7 +1206,8 @@ impl Traffic {
                 if still.contains(&npc.id) {
                     return Outcome::Flying;
                 }
-                match plunder::fly_docking(npc, other.as_ref(), speeds, &mut *chance) {
+                match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance)
+                {
                     Some(DockOutcome::Started { victim, .. }) => {
                         docked.push((npc.id, victim));
                         return Outcome::Flying;
@@ -1194,6 +1222,7 @@ impl Traffic {
                     other.as_ref(),
                     other_disabled,
                     speeds,
+                    world.flight,
                     world.snipe_brake_lead,
                     &mut *chance,
                 )
@@ -2058,6 +2087,10 @@ impl Traffic {
                 stats: kind.stats,
                 reserves,
                 state: ship.state,
+                // Every spawn zeroes +0x48 with the velocity, and a fleet's
+                // escort copies its lead's (`_HyperSpawnFleet` @0x423dd-0x423e7),
+                // as freshly zeroed.
+                speed: 0.0,
                 mode: match ship.entry {
                     Entry::Placed => Mode::Flying,
                     Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
@@ -2101,6 +2134,7 @@ impl Traffic {
                     Entry::Placed | Entry::JumpingIn => None,
                 },
                 self_repair: kind.self_repair,
+                immobile: kind.immobile,
                 miner: kind.miner,
                 can_scoop: kind.can_scoop,
                 holds: kind.holds,
@@ -2112,6 +2146,7 @@ impl Traffic {
                 ai_wait: 0,
                 docking: None,
                 marines: kind.marines,
+                pods_left: kind.hull.pod_count,
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -2244,6 +2279,7 @@ mod tests {
                     can_scoop: false,
                     holds: 0,
                     base_armor: 45.0,
+                    immobile: false,
                 },
             )]),
             ..SpawnTable::default()
@@ -2354,6 +2390,50 @@ mod tests {
         traffic.enter(SpawnTable::default(), &mut Draws::of(&[]));
         assert_eq!(traffic.npcs(), []);
         assert_eq!(traffic.ship_types(), []);
+    }
+
+    #[test]
+    fn a_ship_of_a_class_of_no_speed_and_no_accel_comes_immobile_and_stays_put() {
+        let shoved = |fields| {
+            let mut kinds = table(1);
+            let record = nova_sim_catalog::fixture::ship(200, fields);
+            let arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
+            kinds
+                .ships
+                .insert(ShipId(200), table::kind(&record, &[], &arsenal));
+            let mut traffic = Traffic::new();
+            traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
+            let immobile = traffic.npcs[0].immobile;
+            traffic.npcs[0].state.velocity = Vec2::new(3.0, -1.0);
+            ticked(&mut traffic, &World::new(&[]), 3);
+            (immobile, traffic.npcs()[0].state)
+        };
+        let still = crate::handling::ShipFields {
+            speed: 0,
+            accel: 0,
+            ..FAST
+        };
+        let (immobile, state) = shoved(still);
+        assert!(immobile, "its class's");
+        assert_eq!(state.position, Vec2::ZERO, "a push moves it not at all");
+        assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+        let (immobile, state) = shoved(crate::handling::ShipFields { speed: 0, ..FAST });
+        assert!(!immobile, "it can thrust");
+        assert_ne!(state.position, Vec2::ZERO, "a push moves it");
+    }
+
+    #[test]
+    fn a_spawned_ship_carries_its_classs_crew_pods() {
+        let mut kinds = table(1);
+        if let Some(kind) = kinds.ships.get_mut(&ShipId(200)) {
+            kind.hull.pod_count = 10;
+        }
+        let mut traffic = Traffic::new();
+        traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
+        assert_eq!(traffic.npcs()[0].pods_left, 10);
+        let mut traffic = Traffic::new();
+        traffic.enter(table(1), &mut Draws::of(&placed(750, 750)));
+        assert_eq!(traffic.npcs()[0].pods_left, 0, "a class of none");
     }
 
     #[test]
@@ -3436,8 +3516,10 @@ mod tests {
         for _ in 0..60 {
             traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
         }
+        // A quarter turn at 3 degrees a tick, then 30 ticks of FAST's 0.18
+        // thrust: about 80 closer.
         assert!(
-            traffic.npcs()[0].state.position.x > -500.0,
+            traffic.npcs()[0].state.position.x > -530.0,
             "{:?}",
             traffic.npcs()[0].state
         );
@@ -4735,6 +4817,51 @@ mod tests {
         assert_eq!(traffic.npcs()[5].trigger, PRIMARY, "its own, flying");
     }
 
+    /// [`populated`] with `count` NPCs, each regenerating half a unit of
+    /// fuel a tick and holding 290 of 300.
+    fn refuelling(count: u32) -> Traffic {
+        let mut traffic = populated(count, 1);
+        for npc in &mut traffic.npcs {
+            npc.stats.fuel_regen = 0.5;
+            npc.reserves.fuel = crate::reserves::Gauge {
+                now: 290.0,
+                max: 300.0,
+            };
+        }
+        traffic
+    }
+
+    #[test]
+    fn every_npc_regenerates_fuel_each_tick_held_still_or_disabled_up_to_capacity() {
+        let mut traffic = refuelling(3);
+        traffic.npcs[1].condition = Condition::Disabled;
+        let still = BTreeSet::from([NpcId(2)]);
+        let idle = Fighting::deciding(Goal::Idle);
+        let tick = |traffic: &mut Traffic| {
+            traffic.tick_holding(&idle, World::new(&[]), &[], &still, &mut Draws::of(&[]));
+        };
+        tick(&mut traffic);
+        let fuel = |traffic: &Traffic| -> Vec<f32> {
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| npc.reserves.fuel.now)
+                .collect()
+        };
+        assert_eq!(fuel(&traffic), [290.5; 3]);
+        for _ in 0..30 {
+            tick(&mut traffic);
+        }
+        assert_eq!(fuel(&traffic), [300.0; 3], "up to capacity");
+    }
+
+    #[test]
+    fn the_second_pass_regenerates_fuel_too() {
+        let mut traffic = refuelling(1);
+        traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].reserves.fuel.now, 290.5);
+    }
+
     #[test]
     fn a_disabled_npc_drags_once_per_traffic_tick() {
         let mut traffic = populated(2, 1);
@@ -4941,7 +5068,16 @@ mod tests {
         }
         assert!((fastest[&hired] - 4.5).abs() < 1e-3, "{fastest:?}");
         assert!((fastest[&mission] - 4.5).abs() < 1e-3, "{fastest:?}");
-        assert!(fastest[&unled] <= 3.0 + 1e-4, "{fastest:?}");
+        // The per-axis cap lets its last push carry it past its own 3.
+        let push = traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == unled)
+            .expect("there")
+            .stats
+            .handling
+            .accel;
+        assert!(fastest[&unled] <= 3.0 + push + 1e-4, "{fastest:?}");
         assert!(fastest[&unled] > 2.9, "it flew flat out: {fastest:?}");
     }
 

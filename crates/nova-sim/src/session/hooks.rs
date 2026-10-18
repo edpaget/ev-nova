@@ -170,6 +170,7 @@ impl Session {
         self.player.position = Vec2::new(50.0, 50.0);
         self.player.velocity = Vec2::ZERO;
         self.player.heading = 0.0;
+        self.player_speed = 0.0;
         self.touchdown = self.player.position;
         // A new pilot starts the first-flight tutorial (`_DoNewPilot`
         // @0x19254; see the `tutorial` module).

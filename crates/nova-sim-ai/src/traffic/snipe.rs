@@ -30,9 +30,11 @@
 //! the whole-degree headings and `_AngularDifference` the original tests
 //! by (@0x871ef-0x87255, @0x872aa-0x872fe), and the whole-degree modulo
 //! of its retro heading. An inertialess ship's brake (thrust reversed,
-//! @0x8710f-0x8713a) waits for inertialess flight
-//! (rdm phase ship-handling-fidelity/phase-5-inertialess-flight). The
-//! block calls no `PlaySound` or `_beepSnd`.
+//! @0x8710f-0x8713a): a moving inertialess sniper brakes as substate 1
+//! does instead ([`inertialess::brake`](crate::traffic::inertialess::brake),
+//! see the autopilot), until
+//! rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit.
+//! The block calls no `PlaySound` or `_beepSnd`.
 
 use crate::ai::fire::{self, GUN_FACING};
 use crate::combat::aim::{angle_off, bearing};
@@ -108,6 +110,7 @@ pub fn fly(
         thrust: handling.turn_rate + THRUST_SLACK > shortest_turn(state.heading, wanted).abs(),
         turn: steer(state.heading, wanted, handling),
         reverse: false,
+        ..Controls::default()
     }
 }
 

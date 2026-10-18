@@ -23,6 +23,9 @@
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
+//! - [`npc_escape`]: what a dying NPC leaves behind: when its crew's
+//!   escape pods and its person's pod come out, and when it rolls for an
+//!   escape ship.
 //! - [`gate_sprite`]: which frame a hypergate's sprite shows, opening
 //!   while a ship comes out of it and closing once none does.
 //! - [`grant`]: boarding grants: what a person's record grants
@@ -102,6 +105,7 @@ pub mod grant;
 pub mod hire;
 pub mod iff;
 pub mod murk;
+pub mod npc_escape;
 pub mod order_loop;
 pub mod outfitter;
 pub mod player_info;

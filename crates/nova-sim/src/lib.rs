@@ -102,6 +102,8 @@
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
+//! - [`npc_escape`]: what a dying NPC leaves behind: its crew's escape
+//!   pods, its person's pod, and its one roll for an escape ship.
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -157,6 +159,10 @@
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
+//! - [`inertialess`]: inertialess flight: who flies it
+//!   ([`is_inertialess`](inertialess::is_inertialess)), the speed along
+//!   the heading thrust and brakes move, and the velocity pulled toward
+//!   it.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
 //!   clearance, then, once the dock approach has cleared the request,
 //!   land (or, over a hypergate or wormhole, enter it);
@@ -231,6 +237,9 @@
 //! - [`player_fate`]: the player's lifecycle, a [`PlayerFate`] read off
 //!   its [`Condition`], and each fate's [`FateRow`]: how much of the ship
 //!   is [`Drawn`].
+//! - [`player_turn`]: the player's turn block: the whole-degree turn,
+//!   the auto-turn toward an aim that holds the turn keys off, and the
+//!   aims reverse and the jump's brake take.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -246,6 +255,8 @@
 //!   blink ([`AlertIcon`]).
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
+//! - [`rule_values`]: the rules whose setting is a number, each a
+//!   [`RuleValue`] the [`Rulebook`] holds, the original's by default.
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
 //!   disagree: each follows a [`RuleSource`], the engine's by default, as
 //!   the [`Rulebook`] says, by its [`RuleKey`].
@@ -327,6 +338,7 @@
 pub use nova_sim_ai::ai;
 pub use nova_sim_ai::brackets;
 pub use nova_sim_ai::cargo_box;
+pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;
 pub use nova_sim_base::clock;
@@ -344,6 +356,7 @@ pub mod course;
 pub use nova_sim_ai::escort;
 pub use nova_sim_catalog::data;
 pub use nova_sim_port::escape;
+pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
 pub use nova_sim_story::exploration;
@@ -366,6 +379,8 @@ pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
 pub use nova_sim_ai::navigation;
 pub use nova_sim_base::handling;
+pub use nova_sim_base::inertialess;
+pub use nova_sim_base::player_turn;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::grant;
@@ -391,8 +406,10 @@ pub mod rating;
 pub use nova_sim_port::recharge;
 pub mod red_alert;
 pub use nova_sim_base::reserves;
+pub use nova_sim_base::rule_values;
 pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
+pub use nova_sim_base::speed_cap;
 pub use nova_sim_combat::sabotage;
 pub mod save;
 pub mod saves;
@@ -460,12 +477,12 @@ pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
 };
-pub use flight::{Controls, ShipState, Turn, step};
+pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use galaxy_map::{MARKS_DESTINATION, MapMarks};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
-pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
+pub use glow::{GLOW_AFTERBURNER, GLOW_CRUISE, glow_level, ramp_afterburner_glow, ramp_glow};
 pub use govt::Governments;
 pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{
@@ -512,7 +529,7 @@ pub use red_alert::{
     alert_check_due, alert_step_due,
 };
 pub use reserves::{Gauge, Reserve, Reserves};
-pub use rulebook::{RuleKey, RuleSource, Rulebook};
+pub use rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};

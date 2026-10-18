@@ -572,6 +572,18 @@ fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
 }
 
 #[test]
+fn the_players_repair_droids_say_propulsion_systems_repaired() {
+    let view = flight();
+    let session = view.session().expect("flying");
+    assert_eq!(
+        sim_message_text(&SimMessage::PropulsionRepaired, session).as_deref(),
+        Some("Propulsion systems repaired.")
+    );
+    assert_eq!(PROPULSION_REPAIRED, "Propulsion systems repaired.");
+    assert_eq!(arrival_lead(&SimMessage::PropulsionRepaired), None);
+}
+
+#[test]
 fn the_escape_ship_says_escaping_in_its_long_name() {
     assert_eq!(ESCAPING_IN, "Escaping in");
     let mut catalog = shipbuying();
@@ -1270,6 +1282,20 @@ fn b_on_a_pickup_ship_says_the_cargo_retrieved_for_250_frames() {
     assert_eq!(view.message(), Some(said));
     assert_eq!(view.take_boarding(), None, "no plunder");
     assert_eq!(view.take_mission_texts(), [], "no dialog");
+    assert_lasts(&mut view, said, BOARD_LINE_TICKS);
+}
+
+/// The pickup path never tests whether the mission failed (@0x652ee),
+/// so a failed mission's ship picks up, says its line, then goes on to
+/// the plunder (@0x657e3 → @0x65f27).
+#[test]
+fn b_on_a_failed_missions_pickup_ship_says_the_cargo_retrieved_and_opens_the_plunder() {
+    let mut view = rescuing(false);
+    run_set(&mut view, "F140");
+    tap(&mut view, BOARD_KEY);
+    let said = "You retrieved  the Food from this ship.";
+    assert_eq!(view.message(), Some(said));
+    assert!(view.take_boarding().is_some(), "plundered");
     assert_lasts(&mut view, said, BOARD_LINE_TICKS);
 }
 

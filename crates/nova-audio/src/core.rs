@@ -192,24 +192,12 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.scan_failed, at::SCAN_FAILED);
             }
             SimSound::Smuggling => self.play(self.table.smuggling, at::SMUGGLING),
-            SimSound::Script {
-                sound,
-                exclusive: false,
-            } => self.play(Some(sound), at::SCRIPT),
-            SimSound::Script {
-                sound,
-                exclusive: true,
-            } => {
-                if self.settings.sound {
-                    self.audio.run(AudioCommand::PlayExclusive {
-                        sound,
-                        volume: self.settings.effects_volume,
-                        priority: at::SCRIPT,
-                    });
-                }
-            }
+            SimSound::Script { sound, exclusive } => self.play_script(sound, exclusive),
             SimSound::EscortsCommanded => {
                 self.play(self.table.escorts_commanded, at::ESCORTS_COMMANDED);
+            }
+            SimSound::PropulsionRepaired => {
+                self.play(self.table.propulsion_repaired, at::PROPULSION_REPAIRED);
             }
             SimSound::EscortRepaired => {
                 self.play(self.table.escort_repaired, at::ESCORT_REPAIRED);
@@ -269,6 +257,21 @@ impl<A: Audio> AudioCore<A> {
             }
             SimSound::Refused => self.play(self.table.refused, at::REFUSED),
             SimSound::Halt(sounds) => self.halt(sounds),
+        }
+    }
+
+    /// Plays a `P` set operator's `sound` at its priority, at once over
+    /// the rest when `exclusive`, while sound is on.
+    fn play_script(&mut self, sound: SoundId, exclusive: bool) {
+        use crate::priority as at;
+        if !exclusive {
+            self.play(Some(sound), at::SCRIPT);
+        } else if self.settings.sound {
+            self.audio.run(AudioCommand::PlayExclusive {
+                sound,
+                volume: self.settings.effects_volume,
+                priority: at::SCRIPT,
+            });
         }
     }
 
@@ -1184,6 +1187,16 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_players_repair_droids_repairing_it_beeps() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::PropulsionRepaired)],
+        );
+        assert_eq!(drain(&log), [play(154, EFFECTS)]);
     }
 
     #[test]

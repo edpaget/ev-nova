@@ -64,7 +64,7 @@ impl Session {
     /// back into its bay. Each rolls its afterburner on `chance`.
     pub(super) fn launch_fighters(&mut self, sorties: &[Sortie], chance: &mut dyn Chance) {
         for sortie in sorties {
-            if !self.launch_fighter(sortie, chance) {
+            if self.launch_fighter(sortie, chance).is_none() {
                 self.put_back(sortie);
             }
         }
@@ -72,18 +72,16 @@ impl Session {
 
     /// Puts the fighter of `sortie` in the system, its afterburner rolled
     /// on `chance` as `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736,
-    /// see [`afterburner`]), and says whether it did.
-    fn launch_fighter(&mut self, sortie: &Sortie, chance: &mut dyn Chance) -> bool {
-        if self
-            .traffic
-            .free_berth(self.spawn_reserve(SPAWN_RESERVE))
-            .is_none()
-        {
-            return false;
-        }
-        let Some(record) = self.ship_record(sortie.ship).cloned() else {
-            return false;
-        };
+    /// see [`afterburner`]): its number, or none when it found no room or
+    /// no record of its ship type. A dying NPC's last launch comes this way
+    /// too (see the `npc_escape` module).
+    pub(super) fn launch_fighter(
+        &mut self,
+        sortie: &Sortie,
+        chance: &mut dyn Chance,
+    ) -> Option<NpcId> {
+        self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
+        let record = self.ship_record(sortie.ship).cloned()?;
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
         let kind = table::kind(&record, &self.outfits, &self.arsenal);
         // `_LaunchFighter` sets the fighter's leader before it reads its
@@ -103,7 +101,13 @@ impl Session {
             window: dock_window(record.fields.maneuver),
             reach: self.reach_of(sortie.carrier),
         };
-        let mut npc = fighter(&kind, sortie.ship, state, carrier);
+        // It takes its carrier's speed along the heading
+        // (`_LaunchFighter` @0x3d6d5-0x3d6e0).
+        let speed = match sortie.carrier {
+            ShipRef::Player => self.player_speed,
+            ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
+        };
+        let mut npc = fighter(&kind, sortie.ship, state, speed, carrier);
         let side = self.player_side();
         // A class's `Strength` is none below none, so in 16 bits.
         #[allow(clippy::cast_possible_truncation)]
@@ -115,10 +119,9 @@ impl Session {
         );
         npc.afterburner = afterburner::has_afterburner(&kind.hull, side.rating, yardstick, chance);
         match sortie.carrier {
-            ShipRef::Player => self.join_as_fighter(npc, sortie.target),
+            ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
         }
-        true
     }
 
     /// The reach of a fighter docking with `carrier`: its sprite's width,
@@ -132,8 +135,8 @@ impl Session {
     }
 
     /// The player's fighter `npc` joins the fleet, launched while the
-    /// player targets `target` (see the module docs).
-    fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) {
+    /// player targets `target` (see the module docs): its number.
+    fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
         let target = target
             .filter(|_| self.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
@@ -164,14 +167,14 @@ impl Session {
         self.fleet.resize(self.pilot.escorts.len() - 1, None);
         self.fleet.push(Some(id));
         self.reform();
+        id
     }
 
     /// NPC `carrier`'s fighter `npc` joins its fleet, of its government,
-    /// attacking its target unless that is the carrier or of its fleet.
-    fn join_carrier(&mut self, mut npc: Npc, carrier: NpcId) {
-        let Some(launcher) = self.npc(carrier).cloned() else {
-            return;
-        };
+    /// attacking its target unless that is the carrier or of its fleet:
+    /// its number, or none with its carrier gone.
+    fn join_carrier(&mut self, mut npc: Npc, carrier: NpcId) -> Option<NpcId> {
+        let launcher = self.npc(carrier).cloned()?;
         let fleet = launcher.fleet();
         let target = launcher
             .target
@@ -181,7 +184,7 @@ impl Session {
         npc.aggression = launcher.aggression;
         npc.target = target;
         npc.goal = target.map_or(Goal::Idle, Goal::Attack);
-        self.traffic.add_npc(npc);
+        Some(self.traffic.add_npc(npc))
     }
 
     /// `ship`'s fleet, if it is in the system.
@@ -446,13 +449,15 @@ impl Session {
     }
 }
 
-/// A fighter of ship type `ship`, as `kind` gives it, at `state`,
-/// launched by `carrier`: its shield and armour full, carrying its
-/// class's stock weapons and rounds, its AI type its `InherentAI`, idle.
+/// A fighter of ship type `ship`, as `kind` gives it, at `state` and
+/// `speed` along its heading, launched by `carrier`: its shield and armour
+/// full, carrying its class's stock weapons and rounds, its AI type its
+/// `InherentAI`, idle.
 fn fighter(
     kind: &ShipKind,
     ship: crate::catalog::ShipId,
     state: ShipState,
+    speed: f32,
     carrier: Carrier,
 ) -> Npc {
     Npc {
@@ -467,6 +472,7 @@ fn fighter(
         stats: kind.stats,
         reserves: kind.stats.full(),
         state,
+        speed,
         mode: Mode::Flying,
         goal: Goal::Idle,
         condition: Condition::Intact,
@@ -496,6 +502,7 @@ fn fighter(
         led_out: false,
         emerges_from: None,
         self_repair: kind.self_repair,
+        immobile: kind.immobile,
         miner: kind.miner,
         can_scoop: kind.can_scoop,
         holds: kind.holds,
@@ -507,6 +514,8 @@ fn fighter(
         ai_wait: 0,
         docking: None,
         marines: kind.marines,
+        // `_LaunchFighter` @0x3d8fe.
+        pods_left: kind.hull.pod_count,
     }
 }
 
@@ -750,8 +759,44 @@ mod tests {
             window: 0.0,
             reach: 0.0,
         };
-        let npc = fighter(&kind, ShipId(204), ShipState::default(), carrier);
+        let npc = fighter(&kind, ShipId(204), ShipState::default(), 0.0, carrier);
         assert_eq!(npc.cloak_gear, gear);
+    }
+
+    #[test]
+    fn a_fighter_of_a_class_of_no_speed_and_no_accel_launches_immobile_and_stays_put() {
+        let launched = |fields| {
+            let mut catalog = carrying();
+            let viper = catalog
+                .ship_records
+                .iter_mut()
+                .find(|record| record.id == VIPER)
+                .expect("the Viper's");
+            viper.fields = fields;
+            let mut session = flying(&catalog, pilot(&catalog, 1, Vec::new()), RuleSource::Engine);
+            launch(&mut session);
+            let fighter = fleet_npcs(&session)[0].clone();
+            assert_ne!(fighter.state.velocity, Vec2::ZERO, "pushed out by the bay");
+            let npc = session.npc_mut(fighter.id).expect("there");
+            // Held, so the push alone could move it.
+            npc.goal = Goal::Hold;
+            for _ in 0..3 {
+                session.tick_traffic(&catalog, &Sitting, &mut NeverFires);
+            }
+            let state = session.npc(fighter.id).expect("there").state;
+            (fighter.immobile, fighter.state.position, state)
+        };
+        let (immobile, at, state) = launched(ShipFields {
+            speed: 0,
+            accel: 0,
+            ..VIPER_FIELDS
+        });
+        assert!(immobile, "its class's");
+        assert_eq!(state.position, at, "the bay's push moves it not at all");
+        assert_eq!(state.velocity, Vec2::ZERO, "and lasts only until its tick");
+        let (immobile, at, state) = launched(VIPER_FIELDS);
+        assert!(!immobile);
+        assert_ne!(state.position, at, "the bay's push moves it");
     }
 
     #[test]
@@ -1484,7 +1529,11 @@ mod tests {
             target: None,
         };
         let launched = |session: &mut Session, carrier| {
-            assert!(session.launch_fighter(&sortie(carrier), &mut NeverFires));
+            assert!(
+                session
+                    .launch_fighter(&sortie(carrier), &mut NeverFires)
+                    .is_some()
+            );
             session.npcs().last().expect("launched").state.velocity
         };
         assert_eq!(
@@ -1498,6 +1547,43 @@ mod tests {
             from.velocity,
             "at or past its own top speed: no gain"
         );
+    }
+
+    #[test]
+    fn a_fighter_launched_carries_its_classs_crew_pods() {
+        let mut catalog = carrying();
+        catalog.hulls[1].pod_count = 2;
+        let (mut session, raider, _) = raided(&catalog);
+        let sortie = Sortie {
+            carrier: ShipRef::Npc(raider),
+            bay: BAY,
+            ship: VIPER,
+            from: ShipState::default(),
+            heading: 0.0,
+            target: None,
+        };
+        assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+        assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
+    }
+
+    #[test]
+    fn a_fighter_takes_its_carriers_speed_along_its_heading() {
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        session.player_speed = 2.5;
+        session.npc_mut(raider).expect("there").speed = 1.5;
+        for (carrier, speed) in [(ShipRef::Player, 2.5), (ShipRef::Npc(raider), 1.5)] {
+            let sortie = Sortie {
+                carrier,
+                bay: BAY,
+                ship: VIPER,
+                from: ShipState::default(),
+                heading: 0.0,
+                target: None,
+            };
+            assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+            assert_eq!(session.npcs().last().expect("launched").speed, speed);
+        }
     }
 
     #[test]

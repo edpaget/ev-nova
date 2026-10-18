@@ -35,7 +35,13 @@ fn each_key_asks_the_session_for_its_command() {
     for (k, command) in commands {
         assert_eq!(view.command_of(k), Some(command), "{k:?}");
     }
-    for k in [FIRE_KEY, Key::Up, Key::Char('z'), Key::Other] {
+    for k in [
+        FIRE_KEY,
+        Key::Up,
+        AFTERBURNER_KEY,
+        Key::Char('q'),
+        Key::Other,
+    ] {
         assert_eq!(view.command_of(k), None, "{k:?}");
     }
     assert!(!view.escort_menu().is_open());
@@ -45,7 +51,7 @@ fn each_key_asks_the_session_for_its_command() {
     assert!(view.escort_menu().is_open());
     assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Escort));
     assert_eq!(view.command_of(GROUP_KEYS[4]), Some(PlayerCommand::Escort));
-    assert_eq!(view.command_of(Key::Char('z')), None);
+    assert_eq!(view.command_of(Key::Char('q')), None);
 }
 
 #[test]
