@@ -13,7 +13,7 @@
 //!    (@0x6bb0f-0x6bb21);
 //! 3. unless it can expedite its jumps (`_ShipCanExpiditeJumps`), its
 //!    velocity is multiplied by [`WARP_DRAG`], 0.98 (@0x6bb32-0x6bb59;
-//!    [`drag`]);
+//!    [`drag_by`]);
 //! 4. the warp end ([`warp::warp_end`], @0x6bb5e-0x6c70b): its natural
 //!    end marks the jump's end due ([`Session::warp_end_due`]); its
 //!    fallback end halts the warp-ups and plays the warp-out, which
@@ -63,11 +63,10 @@
 
 use super::{Jump, Session};
 use crate::catalog::SystemId;
-use crate::flight::{Controls, Flyer, Turn, advance, inertialess_advance};
+use crate::flight::{Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
 use crate::glow::{Follow, JumpRaises, ramp_jump_glow};
 use crate::player_turn::brake_aim;
 use crate::player_turn::turn;
-use crate::pre_jump::drag;
 use crate::pre_jump::{self, PreJump};
 use crate::traffic::npc::NpcId;
 use crate::traffic::warp_out::{LeaderWarp, WarpWorld};
@@ -223,7 +222,7 @@ impl Session {
             self.make_escorts_hyper();
             self.warp.stage = grown(self.warp.stage);
             if !self.stats.fast_jump {
-                self.player.velocity = drag(self.player.velocity, WARP_DRAG);
+                self.player.velocity = drag_by(self.player.velocity, WARP_DRAG);
             }
             self.warp_end_tick();
         }
@@ -522,9 +521,9 @@ mod tests {
         let velocity = Vec2::new(0.5, -0.25);
         session.player.velocity = velocity;
         tick(&mut session);
-        assert_eq!(session.player.velocity, drag(velocity, 0.98));
+        assert_eq!(session.player.velocity, drag_by(velocity, 0.98));
         assert_eq!(session.player.velocity.x.to_bits(), 0.49_f32.to_bits());
-        assert_eq!(session.player.position, OUT + drag(velocity, 0.98));
+        assert_eq!(session.player.position, OUT + drag_by(velocity, 0.98));
         let mut fast = jumping(&catalog());
         fast.stats.fast_jump = true;
         fast.player.velocity = velocity;
@@ -561,7 +560,7 @@ mod tests {
         let caps = session.player_caps();
         let flight = session.flight_rules();
         let mut dragged = session.player;
-        dragged.velocity = drag(dragged.velocity, WARP_DRAG);
+        dragged.velocity = drag_by(dragged.velocity, WARP_DRAG);
         let mut inertialess = dragged;
         let mut followed = speed;
         inertialess_advance(

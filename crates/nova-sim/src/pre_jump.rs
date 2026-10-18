@@ -45,7 +45,7 @@
 //! heading, in whole degrees ([`brake_thrusts`]). It thrusts before it
 //! turns, by `_Accel` along its unturned whole-degree heading, not
 //! through the per-axis cap of `_AdjustedAccel`. Then, thrust or not, its
-//! velocity is multiplied by [`BRAKE_DRAG`], 0.992 ([`drag`]). The
+//! velocity is multiplied by [`BRAKE_DRAG`], 0.992 ([`drag_by`]). The
 //! thrusting tick also raises its glow
 //! ([`brake_glow`](crate::glow::brake_glow)), which the session ramps.
 //!
@@ -65,7 +65,7 @@
 //! velocity following its heading.
 
 use crate::flight::{
-    Caps, FlightRules, Flyer, ShipState, Turn, advance, facing, inertialess_advance,
+    Caps, FlightRules, Flyer, ShipState, Turn, advance, drag_by, facing, inertialess_advance,
 };
 use crate::geometry::Vec2;
 use crate::handling::Handling;
@@ -163,7 +163,7 @@ pub fn fly(
             if thrust {
                 ship.velocity = ship.velocity + brake_push(ship.heading, handling.accel, flight);
             }
-            ship.velocity = drag(ship.velocity, BRAKE_DRAG);
+            ship.velocity = drag_by(ship.velocity, BRAKE_DRAG);
             (Some(aim), thrust)
         }
         PreJump::Turn => (bearing, false),
@@ -198,16 +198,6 @@ fn brake_push(heading: f32, accel: f32, flight: FlightRules) -> Vec2 {
         SpeedCap::PerAxis => trig::accel(whole(heading), accel),
         SpeedCap::Circle => facing(heading) * accel,
     }
-}
-
-/// `velocity` × `by` a component, each product worked in f64 and stored
-/// as an f32, as `_HandlePlayer`'s drags are (@0x6b832-0x6b85c,
-/// @0x6bb32-0x6bb59).
-#[must_use]
-#[allow(clippy::cast_possible_truncation)]
-pub fn drag(velocity: Vec2, by: f64) -> Vec2 {
-    let scale = |component: f32| (f64::from(component) * by) as f32;
-    Vec2::new(scale(velocity.x), scale(velocity.y))
 }
 
 #[cfg(test)]

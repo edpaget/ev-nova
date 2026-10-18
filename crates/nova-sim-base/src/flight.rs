@@ -149,6 +149,19 @@ pub fn drag(state: &mut ShipState) {
     state.velocity = state.velocity * DISABLED_DRAG;
 }
 
+/// `velocity` × `by` a component, each product worked in f64 and stored
+/// as an f32, as the jump's drags are: the player's brake
+/// (`_HandlePlayer` @0x6b832-0x6b85c) and warp stage (@0x6bb32-0x6bb59),
+/// and an NPC's warp-out (`_HandleShip` @0x34762-0x3478c) and a follow's
+/// stage start (`_LowLevelAIHandler` @0x85c10-0x85c42). Each caller
+/// passes its own factor.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn drag_by(velocity: Vec2, by: f64) -> Vec2 {
+    let scale = |component: f32| (f64::from(component) * by) as f32;
+    Vec2::new(scale(velocity.x), scale(velocity.y))
+}
+
 /// What a tick caps a ship's motion at: the top speed its thrust pushes
 /// toward, and the box (or circle) its velocity is held to. An NPC's are
 /// both its top speed ([`Caps::top`]). The player's come from its
@@ -731,6 +744,18 @@ mod tests {
         assert_eq!(state.velocity, Vec2::new(0.995, -1.99));
         assert_eq!(state.position, Vec2::new(10.0, 20.0));
         assert_eq!(state.heading, 45.0);
+    }
+
+    #[test]
+    fn drag_by_works_each_component_in_f64_and_stores_it_as_an_f32() {
+        // 0.03 × 0.95 in f64 stores 0.0285; worked in f32 it is a bit
+        // short.
+        let dragged = drag_by(Vec2::new(0.03, -0.03), 0.95);
+        assert_eq!(dragged.x.to_bits(), 0.0285_f32.to_bits());
+        assert_eq!(dragged.y.to_bits(), (-0.0285_f32).to_bits());
+        assert_ne!(0.03_f32 * 0.95_f32, 0.0285_f32);
+        let dragged = drag_by(Vec2::new(0.5, -0.25), 0.98);
+        assert_eq!(dragged, Vec2::new(0.49, -0.245));
     }
 
     #[test]

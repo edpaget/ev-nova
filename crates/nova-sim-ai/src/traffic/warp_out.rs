@@ -110,7 +110,7 @@ use std::collections::BTreeMap;
 use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::flight::{Controls, FlightRules, turned};
+use crate::flight::{Controls, FlightRules, drag_by, turned};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::Outcome;
@@ -366,17 +366,9 @@ pub fn follow_jump(npc: &mut Npc, leader: LeaderWarp, player: bool) -> FollowSte
         npc.warp.stage = 1.0;
         npc.warp.stamp();
     }
-    npc.state.velocity = drag(npc.state.velocity);
+    npc.state.velocity = drag_by(npc.state.velocity, WARP_OUT_DRAG);
     npc.warp.stage += 1.0;
     FollowStep::Warping
-}
-
-/// `velocity` × [`WARP_OUT_DRAG`] a component, worked in f64 and stored
-/// as an f32 (@0x34762-0x3478c, @0x85c10-0x85c42).
-#[allow(clippy::cast_possible_truncation)]
-fn drag(velocity: Vec2) -> Vec2 {
-    let scale = |component: f32| (f64::from(component) * WARP_OUT_DRAG) as f32;
-    Vec2::new(scale(velocity.x), scale(velocity.y))
 }
 
 /// Whose clock and desired heading a ship's warp-out reads (see
@@ -408,7 +400,7 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld) {
         npc.warp.stage = 0.0;
         return;
     }
-    npc.state.velocity = drag(npc.state.velocity);
+    npc.state.velocity = drag_by(npc.state.velocity, WARP_OUT_DRAG);
     let duration = world.duration();
     let v = match led {
         Led::ByPlayer => {
