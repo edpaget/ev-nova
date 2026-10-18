@@ -1243,6 +1243,22 @@ mod tests {
     }
 
     #[test]
+    fn an_inertialess_npc_turns_by_its_keys_either_way() {
+        for (turn, turned) in [(Turn::Left, 87.0), (Turn::Right, 93.0), (Turn::None, 90.0)] {
+            let mut state = heading(90.0);
+            let mut speed = 0.0;
+            inertialess_step(
+                &mut state,
+                &mut speed,
+                &SHIP,
+                turning(turn),
+                FlightRules::default(),
+            );
+            assert_eq!(state.heading, turned, "{turn:?}");
+        }
+    }
+
+    #[test]
     fn the_velocity_moves_by_the_rate_a_tick_until_it_reaches_the_heading() {
         let mut state = moving(Vec2::new(3.0, 0.0), 0.0);
         let mut speed = 3.0;

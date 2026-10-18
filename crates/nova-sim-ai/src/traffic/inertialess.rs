@@ -562,6 +562,37 @@ mod tests {
     }
 
     #[test]
+    fn matching_a_velocity_holds_within_half_a_ticks_thrust_inclusive() {
+        // Half of 0.25 is 0.125: every bound below is exact.
+        let handling = Handling {
+            max_speed: 6.0,
+            accel: 0.25,
+            turn_rate: 3.0,
+        };
+        let east = Vec2::new(4.0, 0.0);
+        let facing_east = at(0.0, 0.0, 0.0, 0.0, 90.0);
+        let controls = |speed: f32| match_speed(&facing_east, speed, &handling, east);
+        assert!(!controls(3.875).thrust, "exactly half a thrust short");
+        assert!(controls(3.874).thrust);
+        assert!(!controls(4.125).reverse, "exactly half a thrust past");
+        assert!(controls(4.126).reverse);
+        assert!(
+            !controls(4.2).thrust && controls(4.2).reverse,
+            "past by more than half"
+        );
+        let still = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        assert!(!match_speed(&still, 0.125, &handling, Vec2::ZERO).reverse);
+        assert!(match_speed(&still, 0.126, &handling, Vec2::ZERO).reverse);
+        // A quarter turn off is not yet facing away; more is.
+        let facing_north = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(shortest_turn(0.0, heading_of(east)), 90.0);
+        assert!(!match_speed(&facing_north, 1.0, &handling, east).reverse);
+        let facing_west = at(0.0, 0.0, 0.0, 0.0, 270.0);
+        assert!(!match_speed(&facing_west, 0.125, &handling, east).reverse);
+        assert!(match_speed(&facing_west, 0.126, &handling, east).reverse);
+    }
+
+    #[test]
     fn matching_a_velocity_faces_it_and_thrusts_or_brakes_the_speed_toward_its_length() {
         let handling = Handling {
             max_speed: 6.0,
