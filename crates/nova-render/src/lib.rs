@@ -92,7 +92,7 @@ pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
-pub use enlarge::{Enlarger, NativeDetail};
+pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};

@@ -11,6 +11,7 @@ use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
+use crate::scaling::Scaling;
 use crate::upscaler::Upscaler;
 use crate::video_mode::FullscreenKind;
 
@@ -82,6 +83,13 @@ impl PickerEntry for FullscreenKind {
     /// "Borderless", or the mode's size and rate.
     fn label(&self) -> String {
         FullscreenKind::label(self)
+    }
+}
+
+impl PickerEntry for Scaling {
+    /// "Scaling: " and the scaling's name.
+    fn label(&self) -> String {
+        Scaling::label(*self).to_owned()
     }
 }
 
@@ -325,6 +333,10 @@ mod tests {
     #[test]
     fn each_entry_is_labelled_by_its_own_label() {
         assert_eq!(PickerEntry::label(&SHARP), "Scaling: Sharp-bilinear");
+        for scaling in Scaling::ALL {
+            assert_eq!(PickerEntry::label(&scaling), scaling.label());
+        }
+        assert_eq!(PickerEntry::label(&Scaling::SuperXbr), "Scaling: Super-xBR");
         assert_eq!(
             PickerEntry::label(&FullscreenKind::Borderless),
             "Borderless"

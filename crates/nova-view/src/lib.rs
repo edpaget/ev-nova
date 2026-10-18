@@ -58,8 +58,9 @@
 //! fight's, heard from where they happen. The audio side decides what each plays. The
 //! player's preferences, sound and hyperspace effects alike, are reported
 //! as a [`Prefs`] ([`preferences`]), the display modes it offers for
-//! exclusive fullscreen are [`VideoMode`]s ([`video_mode`]), and the frame
-//! upscalers it lists are [`Upscaler`]s ([`upscaler`]).
+//! exclusive fullscreen are [`VideoMode`]s ([`video_mode`]), and the
+//! Scaling it lists is a [`Scaling`] ([`scaling`]): one choice, a per-frame
+//! [`Upscaler`] ([`upscaler`]) or a load-time [`Enlargement`].
 //!
 //! # Display shapes
 //!
@@ -86,6 +87,7 @@ pub mod movie;
 pub mod navigator;
 pub mod oval;
 pub mod preferences;
+pub mod scaling;
 pub mod screen;
 pub mod ships;
 pub mod sound;
@@ -106,6 +108,7 @@ pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
 pub use preferences::Prefs;
+pub use scaling::{Enlargement, Scaling};
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};
 pub use upscaler::Upscaler;

@@ -692,9 +692,10 @@ mod tests {
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
-    use crate::enlarge::{Enlarger, NativeDetail};
+    use crate::enlarge::{Enlarger, NativeDetail, enlarger_for};
     use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
     use crate::recording::{GpuCall, RecordingGpu};
+    use crate::super_xbr::SuperXbr;
     use crate::upscale::WorldResolution;
     use crate::viewport::{LogicalSize, PixelRect, Viewport};
     use crate::{PackError, PageId, Uv};
@@ -2794,5 +2795,39 @@ mod tests {
             }],
             "the picture placed after the sheet's three 10x12 frames"
         );
+    }
+
+    #[test]
+    fn with_super_xbr_a_sprites_atlas_entry_is_its_super_xbr_image_at_its_native_place() {
+        let frame = solid(5, 6, [0, 0, 255, 255]);
+        let images = FakeImages::default().with(ImageKind::Rled, 200, vec![frame.clone()]);
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 0), at(30.5, 40.25), Color::WHITE);
+        let native = quads_of(
+            renderer(FakeImages::default().with(ImageKind::Rled, 200, vec![frame.clone()])),
+            &list,
+        );
+        let mut renderer = renderer(images);
+        renderer.set_enlarger(enlarger_for(nova_view::Enlargement::SuperXbr));
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        let enlarged = SuperXbr.enlarge(ImageKind::Rled, &frame);
+        assert_eq!(
+            gpu.calls[..2],
+            [
+                GpuCall::CreatePage {
+                    page: PageId(0),
+                    size: 64
+                },
+                GpuCall::upload(PageId(0), rect(0, 0, 10, 12), &enlarged),
+            ]
+        );
+        let quads = all_quads(gpu.submits()[0]);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].dest, native[0].dest);
+        assert_eq!(quads[0].uv, uv(0, 0, 10, 12));
     }
 }

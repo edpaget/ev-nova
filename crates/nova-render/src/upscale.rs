@@ -159,7 +159,7 @@ pub fn world_space(resolution: WorldResolution, viewport: &Viewport) -> WorldSpa
 
 #[cfg(test)]
 mod tests {
-    use nova_view::ViewShape;
+    use nova_view::{Scaling, ViewShape};
 
     use super::*;
     use crate::viewport::LOGICAL;
@@ -214,6 +214,22 @@ mod tests {
         assert_eq!(
             effective(Upscaler::MetalFxSpatial, WITH_METAL_FX),
             Upscaler::MetalFxSpatial
+        );
+    }
+
+    #[test]
+    fn every_scaling_listed_is_drawn_as_itself_and_super_xbr_draws_the_world_natively() {
+        for abilities in [WITHOUT, WITH_METAL_FX] {
+            let list = Scaling::list(&offered(abilities));
+            assert_eq!(list.last(), Some(&Scaling::SuperXbr));
+            for entry in list {
+                let upscaler = entry.sites().0;
+                assert_eq!(effective(upscaler, abilities), upscaler, "{entry:?}");
+            }
+        }
+        assert_eq!(
+            resolution_of(Scaling::SuperXbr.sites().0),
+            WorldResolution::Native
         );
     }
 

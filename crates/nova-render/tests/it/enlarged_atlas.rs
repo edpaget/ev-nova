@@ -11,10 +11,11 @@ use std::rc::Rc;
 use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
 use nova_render::{
-    Enlarger, ImageError, ImageSource, NativeDetail, Renderer, Viewport, wgpu::OffscreenGpu,
+    Enlarger, ImageError, ImageSource, NativeDetail, Renderer, Viewport, enlarger_for,
+    wgpu::OffscreenGpu,
 };
 use nova_view::geometry::Bounds;
-use nova_view::{Blend, Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
+use nova_view::{Blend, Color, DrawCommand, DrawList, Enlargement, ImageKey, ImageKind, Point};
 
 use super::flight_frame::{LOGICAL, Sprites, flight};
 use super::wgpu_offscreen::gpu_with;
@@ -128,6 +129,34 @@ impl Enlarger for Replicated {
             .flat_map(|y| (0..w * 2).flat_map(move |x| image.pixel(x / 2, y / 2).expect("inside")))
             .collect();
         Cow::Owned(Image::from_rgba(w * 2, h * 2, pixels).expect("doubled"))
+    }
+}
+
+#[test]
+fn with_super_xbr_flat_images_cover_the_pixels_they_cover_at_native_in_their_colour() {
+    // A white 4x4 sprite (`rlëD` 2) and a teal 4x4 picture (`PICT` 10):
+    // Super-xBR keeps a flat image flat, so only a quad of another size or
+    // place could change a pixel.
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), at(9.5, 7.25), Color::WHITE)
+        .picture(ImageKey::picture(10), at(20.0, 12.0));
+    for scale in [2.0, 1.875] {
+        let viewport = Viewport::new(LOGICAL, (SIZE, SIZE), scale);
+        let draw = |enlargement: Enlargement| {
+            let mut gpu = gpu()?;
+            let mut renderer = Renderer::new(Scene);
+            renderer.set_enlarger(enlarger_for(enlargement));
+            let report = renderer.render(&list, &viewport, &mut gpu);
+            assert_eq!(report.new_failures, vec![]);
+            Some(gpu.read_pixels().expect("read back"))
+        };
+        let (Some(native), Some(enlarged)) =
+            (draw(Enlargement::Native), draw(Enlargement::SuperXbr))
+        else {
+            return;
+        };
+        assert!(anything_drawn(&native));
+        assert!(native == enlarged, "at scale {scale}");
     }
 }
 

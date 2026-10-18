@@ -11,7 +11,9 @@
 use std::borrow::Cow;
 
 use nova_data::graphics::Image;
-use nova_view::ImageKind;
+use nova_view::{Enlargement, ImageKind};
+
+use crate::super_xbr::SuperXbr;
 
 /// Turns a decoded frame into the image the atlas holds.
 pub trait Enlarger: std::fmt::Debug {
@@ -34,12 +36,22 @@ impl Enlarger for NativeDetail {
     }
 }
 
+/// The enlarger that does `enlargement`: the load-time half of the
+/// player's Scaling (`nova_view::Scaling::sites`).
+#[must_use]
+pub fn enlarger_for(enlargement: Enlargement) -> Box<dyn Enlarger> {
+    match enlargement {
+        Enlargement::Native => Box::new(NativeDetail),
+        Enlargement::SuperXbr => Box::new(SuperXbr),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
 
     use nova_data::graphics::Image;
-    use nova_view::ImageKind;
+    use nova_view::{Enlargement, ImageKind};
 
     use super::*;
 
@@ -51,6 +63,26 @@ mod tests {
         ImageKind::Pattern,
         ImageKind::Icon,
     ];
+
+    #[test]
+    fn each_enlargement_has_its_enlarger() {
+        let image = Image::from_rgba(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]).expect("2x1");
+        for kind in KINDS {
+            let native = enlarger_for(Enlargement::Native);
+            assert!(matches!(native.enlarge(kind, &image), Cow::Borrowed(_)));
+            assert_eq!(
+                enlarger_for(Enlargement::SuperXbr).enlarge(kind, &image),
+                SuperXbr.enlarge(kind, &image),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            enlarger_for(Enlargement::SuperXbr)
+                .enlarge(ImageKind::Rled, &image)
+                .width(),
+            4
+        );
+    }
 
     #[test]
     fn native_hands_every_kind_back_unchanged_and_borrowed() {
