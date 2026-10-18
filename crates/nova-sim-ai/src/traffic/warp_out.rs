@@ -452,12 +452,6 @@ pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Ine
     }
 }
 
-/// Whether `outcome` is the departure of an own jump.
-#[must_use]
-pub fn departed(gone: bool) -> Option<Outcome> {
-    gone.then_some(Outcome::JumpedOut)
-}
-
 /// What each of `npcs` shows its followers of its warp, as the tick's
 /// passes begin.
 #[must_use]
@@ -699,8 +693,6 @@ mod tests {
         ship.warp.since = 140;
         assert!(own_jump(&mut ship, 364), "280");
         assert_eq!(ship.warp, Warp::default(), "+0x50 = 0");
-        assert_eq!(departed(true), Some(Outcome::JumpedOut));
-        assert_eq!(departed(false), None);
     }
 
     // Goal 0xb.
