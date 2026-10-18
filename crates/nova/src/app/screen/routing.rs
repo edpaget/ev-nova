@@ -373,7 +373,8 @@ impl AppScreen {
     /// [`AppScreen::overlay_offset`], as it is drawn moved on by it.
     fn overlay_input(&mut self, input: &Input) -> Option<ScreenAction> {
         let offset = self.overlay_offset();
-        let moved = &input.translated(Point::new(-offset.x, -offset.y));
+        // The frame moves only across.
+        let moved = &input.translated(Point::new(-offset.x, 0.0));
         if self.about.is_some() {
             return Some(self.about_input(moved));
         }

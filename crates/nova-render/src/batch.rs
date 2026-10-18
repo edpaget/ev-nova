@@ -893,7 +893,8 @@ mod tests {
         let mut at_home = DrawList::new();
         at_home.tiled_picture(ImageKey::pattern(130), area(10.0, 5.0, 50.0, 45.0));
         let mut moved = DrawList::new();
-        moved.extend_translated(&at_home, at(170.0, 3.0));
+        // Far enough down that the tiling's first row moves with it.
+        moved.extend_translated(&at_home, at(170.0, 40.0));
         let quads = |list: &DrawList| match &render_one_with(tiles(), list).batches[..] {
             [Batch::Sprites { quads, .. }] => quads.clone(),
             other => panic!("{other:?}"),
@@ -903,7 +904,7 @@ mod tests {
             .map(|quad| QuadInstance {
                 dest: Rect {
                     x: quad.dest.x + 170.0,
-                    y: quad.dest.y + 3.0,
+                    y: quad.dest.y + 40.0,
                     ..quad.dest
                 },
                 ..quad

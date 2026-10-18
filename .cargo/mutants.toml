@@ -46,6 +46,11 @@ exclude_re = [
     # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
     # which is `StringPatch::default()`: the same value.
     "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # `Screen::view_shape`'s default is `ViewShape::Classic`, which is
+    # `ViewShape::default()`; `Screen::set_widened_size`'s default ignores
+    # its size, which `()` does too.
+    "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
+    "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
     # `+ 360` in place of `mod 360` lands on the same heading.

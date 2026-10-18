@@ -293,9 +293,9 @@ impl<
     pub(super) fn map_input(&mut self, input: &Input) {
         let selected = self.map.selected();
         // The map takes the pointer in its own 1024 x 768 frame, which a
-        // widened view over flight draws centred.
+        // widened view over flight draws centred, moved only across.
         let offset = self.map_offset();
-        let input = input.translated(Point::new(-offset.x, -offset.y));
+        let input = input.translated(Point::new(-offset.x, 0.0));
         self.map_input_taken(&input);
         // A click, a Tab cycle or a gate pick that changed the selection
         // takes the panels again, as the original's next
