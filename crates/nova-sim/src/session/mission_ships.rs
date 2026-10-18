@@ -1264,7 +1264,7 @@ impl Session {
     /// original's waits at the stellar; one that entered a gate left, as
     /// the original frees its slot, but counts only under
     /// [`RuleKey::GateExitCounts`]'s other reading; a docked fighter never
-    /// left.
+    /// left, nor did an escape pod freed (see `nova_sim::traffic::pod_flight`).
     pub(super) fn mission_ships_left(&mut self, marks: &[(NpcId, MissionMark)]) {
         let landed_leaves = self.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
         let gate_exit_counts = self.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
@@ -1277,7 +1277,12 @@ impl Session {
                     Outcome::JumpedOut => true,
                     Outcome::Landed(_) if landed_leaves => true,
                     Outcome::EnteredGate(_) => gate_exit_counts,
-                    Outcome::Landed(_) | Outcome::Docked { .. } | Outcome::Flying => {
+                    // An escape pod's slot freed silently (+0xb8 = 0
+                    // @0x8fbb3) raises no fate.
+                    Outcome::Landed(_)
+                    | Outcome::Docked { .. }
+                    | Outcome::Flying
+                    | Outcome::Freed => {
                         return None;
                     }
                 };

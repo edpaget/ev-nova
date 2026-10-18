@@ -161,6 +161,7 @@ use crate::traffic::emerge::exit_speed;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::{Mode, Npc};
+use crate::traffic::pod_flight;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
 
@@ -210,6 +211,9 @@ pub enum Outcome {
         /// Its ship type.
         ship: ShipId,
     },
+    /// An escape pod's wait ran out, and its slot was freed silently
+    /// (see [`pod_flight`](crate::traffic::pod_flight)).
+    Freed,
 }
 
 /// The top speeds a ship flies by this tick: its own `_ShipMaxSpeed`
@@ -292,6 +296,11 @@ fn fly_mobile(
         ..flight.handling(npc.stats.handling)
     };
     let inertia = Inertia::of(npc, other, flight);
+    if pod_flight::is_pod(npc) {
+        let controls = pod_flight::controls(npc, &handling);
+        step(npc, &handling, controls, flight, inertia);
+        return Outcome::Flying;
+    }
     if let Some(outcome) = unsteered(npc, &handling, speeds, flight, inertia, chance) {
         return outcome;
     }
@@ -672,7 +681,7 @@ fn unsteered(
         (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, flown, chance),
         (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, flown, chance),
         (Mode::Coasting { ticks_left }, true) => coast(npc, ticks_left, flown),
-        (Mode::Flying, true) => return None,
+        (Mode::Flying | Mode::Adrift { .. }, true) => return None,
     }
     Some(Outcome::Flying)
 }

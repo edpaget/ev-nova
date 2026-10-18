@@ -22,6 +22,8 @@
 //!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
+//! - [`pod_flight`]: an escape pod NPC, flown at full thrust along its
+//!   heading until its wait runs out and its slot is freed.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter_in`]) replaces them with its initial population, its
@@ -58,7 +60,8 @@
 //!    flight answers the fight's strikes in the hit's own step instead
 //!    ([`Traffic::answer`]), so this step answers only those left;
 //! 3. an NPC not intact loses its provocation;
-//! 4. the decisions due on the AI timer, never for a ship still jumping
+//! 4. the decisions due on the AI timer, never for an escape pod
+//!    ([`pod_flight`]), nor for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
 //!    gate to leave, one that is not intact, or one assisting the player
@@ -77,7 +80,10 @@
 //! 5. every NPC's cloak ([`cloak`]): a flying NPC's think
 //!    cloaks or uncloaks it, one cloaked that can no longer cloak
 //!    uncloaks, and its fade steps;
-//! 6. the autopilot and a flight step for every NPC, each flying towards
+//! 6. on the advance pass alone, each escape pod's wait counted down, a
+//!    pod whose wait ran out freed ([`pod_flight::count_down`], `Outcome::Freed`); then the
+//!    autopilot and a flight step for every NPC, a pod at full thrust
+//!    along its heading, each other ship flying towards
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier;
 //!    then each NPC that reached its gate's box this tick releases the
@@ -115,6 +121,7 @@ pub mod gate_entry;
 pub mod inertialess;
 pub mod npc;
 pub mod persons;
+pub mod pod_flight;
 pub mod quote;
 pub mod spawn;
 pub mod strength;
@@ -742,6 +749,7 @@ impl Traffic {
             .map(|npc| {
                 matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
                     && npc.condition == Condition::Intact
+                    && !pod_flight::is_pod(npc)
                     && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
                     && decision_due(self.ticks, npc.id, self.interval)
             })
@@ -814,7 +822,9 @@ impl Traffic {
                 }
             }
         }
+        let freed = pod_flight::count_down(&mut self.npcs);
         self.fly(&world, true, still, chance);
+        self.departed.extend(freed);
         // The display pass (`_DoPlayGameWork` @0x444ad) follows the
         // frame's arrivals pass (step 1) and frees each ship left behind
         // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them

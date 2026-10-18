@@ -151,6 +151,16 @@ pub enum Mode {
         /// The ticks of the wait left.
         ticks_left: u32,
     },
+    /// An escape pod (class 0x2ff, `ESCAPE_POD_SHIP`) adrift, its AI wait
+    /// +0x4c this many ticks yet: `_AIDispatch` flies it at full thrust
+    /// along its heading and counts the wait down, and frees its slot once
+    /// it is below 0 (@0x8fb62-0x8fbba; see
+    /// [`pod_flight`](crate::traffic::pod_flight)). A pod in any other
+    /// mode has a wait of none, as every spawner leaves +0x4c at 0.
+    Adrift {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
     /// Flying under its own controls.
     Flying,
 }
