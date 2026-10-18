@@ -160,13 +160,10 @@ fn away_from_the_main_menu_alone_a_close_quits_at_once() {
     let mut screen = asking_menu(&store);
     screen.close_requested();
     assert!(screen.close_requested(), "a second close");
-    // While Quit's delay runs, or a keyed click is held.
+    // While Quit's delay runs.
     let mut screen = asking_menu(&store);
     choose(&mut screen, MenuChoice::Quit);
     assert!(screen.close_requested(), "quitting already");
-    let mut screen = asking_menu(&store);
-    screen.input(&Input::Text('n'));
-    assert!(screen.close_requested(), "a keyed click held");
     // In flight, and on the developer's sides.
     let mut screen = asking_menu(&store);
     create(&mut screen, "Ada");
@@ -176,6 +173,96 @@ fn away_from_the_main_menu_alone_a_close_quits_at_once() {
     screen.input(&key(Key::Tab, true));
     assert_eq!(screen.showing(), Showing::ShipBrowser);
     assert!(screen.close_requested(), "on the ship browser");
+}
+
+#[test]
+fn a_close_while_a_keyed_click_plays_asks_once_the_click_ends() {
+    let store = MemoryPilots::new();
+    let mut screen = asking_menu(&store);
+    // E, refused, leaves the main screen as it was.
+    screen.input(&Input::Text('e'));
+    assert!(!screen.close_requested(), "kept open while the click plays");
+    assert_eq!(screen.showing(), Showing::MainMenu, "nothing asked yet");
+    screen.keyed_click_ended();
+    assert_eq!(screen.showing(), Showing::Question);
+    assert!(!screen.take_quit());
+    assert_eq!(
+        screen.take_sounds(),
+        [
+            Sound::Ui(UiSound::ButtonKeyed),
+            Sound::Ui(UiSound::EnterRefused)
+        ],
+        "the question itself is silent"
+    );
+    answer(&mut screen, YES_ITEM);
+    assert!(screen.take_quit());
+}
+
+#[test]
+fn a_close_held_behind_a_click_waits_in_its_place_among_the_inputs() {
+    let store = MemoryPilots::new();
+    let mut screen = asking_menu(&store);
+    // E, then A typed during its click: the close after A waits for A's
+    // click too, and then lands on the About dialog A opened.
+    screen.input(&Input::Text('e'));
+    screen.input(&key(Key::Char('a'), true));
+    assert!(!screen.close_requested());
+    screen.keyed_click_ended();
+    assert_eq!(screen.showing(), Showing::MainMenu, "A's click plays");
+    screen.keyed_click_ended();
+    assert!(screen.about().is_some(), "A's choice ran");
+    assert!(screen.question().is_none(), "dropped under the dialog");
+    assert!(!screen.take_quit());
+}
+
+#[test]
+fn a_close_held_behind_a_click_that_opens_a_dialog_is_dropped() {
+    let store = MemoryPilots::new();
+    let mut screen = asking_menu(&store);
+    screen.input(&Input::Text('n'));
+    assert!(!screen.close_requested());
+    screen.keyed_click_ended();
+    assert!(screen.new_pilot().is_some(), "N's choice ran");
+    assert!(screen.question().is_none(), "nothing asked");
+    assert!(!screen.take_quit(), "and no quit");
+    // A close under the dialog now quits at once, as before.
+    assert!(screen.close_requested());
+}
+
+#[test]
+fn a_close_held_behind_quits_click_leaves_the_quit_to_its_delay() {
+    let store = MemoryPilots::new();
+    let mut screen = asking_menu(&store);
+    screen.input(&Input::Text('q'));
+    assert!(!screen.close_requested());
+    screen.keyed_click_ended();
+    assert!(screen.question().is_none());
+    assert!(!screen.take_quit(), "not at once");
+    screen.tick(QUIT_DELAY);
+    assert!(screen.take_quit(), "after the delay");
+}
+
+#[test]
+fn two_closes_held_behind_a_click_ask_once() {
+    let store = MemoryPilots::new();
+    let mut screen = asking_menu(&store);
+    screen.input(&Input::Text('e'));
+    assert!(!screen.close_requested());
+    assert!(!screen.close_requested());
+    screen.keyed_click_ended();
+    assert_eq!(screen.showing(), Showing::Question);
+    assert!(!screen.take_quit(), "the question drops the second");
+}
+
+#[test]
+fn without_the_yes_no_dialog_a_close_held_behind_a_click_quits_once_it_ends() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    screen.input(&Input::Text('e'));
+    assert!(!screen.close_requested());
+    assert!(!screen.take_quit());
+    screen.keyed_click_ended();
+    assert!(screen.take_quit());
 }
 
 #[test]

@@ -367,7 +367,8 @@ enum MenuAction {
 /// The original reads no event during the spin: what arrives meanwhile
 /// stays in the OS queue for whatever the choice opens. So while the
 /// menu waits, the router queues every input (and each letting go of the
-/// pointer or the keys, in its place) and replays them in order once
+/// pointer or the keys, and each close of the window, in its place) and
+/// replays them in order once
 /// the choice has run. The engine notices the click's end at its next
 /// audio feed, an input or a frame, not in a spin; the choice still runs
 /// in the pass that plays 601, before the next frame is drawn, so no
@@ -390,6 +391,9 @@ enum Held {
     Input(Input),
     CancelPointer,
     ReleaseKeys,
+    /// The window's close: the original's close-box click waits in the
+    /// queue for what the choice leaves showing (see `quit_question`).
+    Close,
 }
 
 /// Every screen the app can show, and which side it is showing. The router

@@ -267,6 +267,7 @@ impl Screen for AppScreen {
                 }
                 Held::CancelPointer => self.cancel_pointer(),
                 Held::ReleaseKeys => self.release_keys(),
+                Held::Close => self.replay_close(),
             }
         }
     }
@@ -279,7 +280,9 @@ impl Screen for AppScreen {
 
     /// On the main menu with nothing over it, the window's close asks
     /// `STR#` 140 #10 in the Yes/No dialog and keeps the window open;
-    /// anywhere else it quits at once (see `quit_question`).
+    /// while the main menu waits on a keyed click, it waits too, keeping
+    /// the window open; anywhere else it quits at once (see
+    /// `quit_question`).
     fn close_requested(&mut self) -> bool {
         self.close_asked()
     }

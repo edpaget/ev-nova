@@ -592,7 +592,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// time since the last redraw, renders its draw list through `gpu` and
     /// asks the window for the next redraw. Closing the window asks the
     /// screen first ([`Screen::close_requested`]): it exits at once unless
-    /// the screen keeps it open, to quit later if it asks to. A screen
+    /// the screen keeps it open, to quit later if it asks to, or at once
+    /// if the feed after the close asks ([`Screen::take_quit`]). A screen
     /// asking to quit exits.
     ///
     /// The original's `_MyModalDialog` also redraws the whole status bar
@@ -682,6 +683,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 }
                 self.feed_audio();
                 self.take_screen_warnings();
+                // A close held behind a keyed click that ended in this
+                // feed can quit at once.
+                if self.screen.take_quit() {
+                    self.quit();
+                    return game(Control::Exit);
+                }
                 game(Control::Continue)
             }
             WindowEvent::FocusLost => {
@@ -1431,6 +1438,28 @@ mod tests {
             "the answer quits"
         );
         assert_eq!(app.screen().quits, 1);
+    }
+
+    #[test]
+    fn a_close_the_screen_keeps_open_but_then_quits_on_exits_at_once() {
+        // As a close held behind a keyed click that ends in the same feed,
+        // with no question to ask in.
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = App::new(
+            &window,
+            NoImages,
+            RecordingScreen {
+                keeps_open: true,
+                asks_quit: true,
+                ..RecordingScreen::default()
+            },
+        );
+        assert_eq!(
+            handle(&mut app, &mut window, WindowEvent::CloseRequested),
+            Control::Exit
+        );
+        assert_eq!(app.screen().quits, 1);
+        assert_eq!(app.take_warnings(), ["close 1", "quit 1"]);
     }
 
     #[test]
