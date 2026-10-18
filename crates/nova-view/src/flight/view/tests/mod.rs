@@ -60,6 +60,7 @@ use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
 mod combat;
+mod comm_line;
 mod controls;
 mod dialog_map;
 mod docked;
@@ -1702,6 +1703,8 @@ fn shipbuying() -> FakeCatalog {
                 ..FIELDS
             },
             defaults: vec![(OutfitId(200), 1)],
+            default_slots: [None; 8],
+            strength: 0,
             cost: 900,
             tech_level: 1,
             buy_random: 100,
@@ -1953,6 +1956,8 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
             ..FIELDS
         },
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 1,
         tech_level: 1,
         buy_random: 100,
@@ -2420,6 +2425,8 @@ fn ship_class(id: i16) -> ShipRecord {
         long_name: String::new(),
         fields: FIELDS,
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 900,
         tech_level: 1,
         buy_random: 100,
@@ -3228,6 +3235,7 @@ fn granting(count: i16) -> FakeCatalog {
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: String::new(),
+        medium_name: String::new(),
         scan_mask: 0,
         scan_fine: 0,
         news_pic: -1,

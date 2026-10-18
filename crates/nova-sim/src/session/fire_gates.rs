@@ -3,7 +3,9 @@
 //! its fire block while its AI wait +0x4c runs (@0x34a54-0x34a72; see
 //! [`fire::gated`](crate::ai::fire::gated)), and the traffic flies its
 //! snipers by the rulebook's reading (see
-//! [`snipe`](crate::traffic::snipe)).
+//! [`snipe`](crate::traffic::snipe)), and its approaches and spawned
+//! afterburners by its readings (see [`pursuit`](crate::ai::pursuit) and
+//! [`afterburner`](crate::ai::afterburner)).
 
 use super::tests::{
     Attacking, Missileer, armed, facing_an_npc, kept_missile_catalog, missiles_fired,
@@ -93,6 +95,27 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_snipe_brake_lead() {
         let mut flown = None;
         session.step_traffic(|_, world| flown = Some(world.snipe_brake_lead));
         assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_approach_lead_and_afterburner_yardstick() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default()
+            .with_override(RuleKey::ApproachLead, source)
+            .with_override(RuleKey::AfterburnerYardstick, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        let world = session.world();
+        assert_eq!(
+            (world.approach_lead, world.afterburner_yardstick),
+            (source, source)
+        );
+        let mut flown = None;
+        session.step_traffic(|_, world| {
+            flown = Some((world.approach_lead, world.afterburner_yardstick));
+        });
+        assert_eq!(flown, Some((source, source)));
     }
 }
 

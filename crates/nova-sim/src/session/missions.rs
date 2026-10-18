@@ -984,7 +984,12 @@ impl Session {
     /// `OnAbort` run. A mission failed by its deadline ran `OnFailure`
     /// already: by [`RuleKey::RepeatMissionFailure`]'s engine reading it
     /// runs again; by the other, not.
-    fn mission_failure_at(&mut self, slot: u8, failed: FailedBy, chance: &mut dyn Chance) {
+    pub(super) fn mission_failure_at(
+        &mut self,
+        slot: u8,
+        failed: FailedBy,
+        chance: &mut dyn Chance,
+    ) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
@@ -1096,7 +1101,7 @@ impl Session {
         // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
         if record.flags & HIDDEN == 0 {
             self.sounds.push(crate::SimSound::Refused);
-            self.messages.push(SimMessage::DeadlineMissed);
+            self.say(SimMessage::DeadlineMissed);
         }
         self.quick_failure(slot, &record, chance);
     }

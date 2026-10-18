@@ -23,6 +23,10 @@
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //! - [`snipe`]: how a sniper flies, braking or at rest.
+//! - [`board_wait`]: a pirate's wait while another ship boards the ship it
+//!   would plunder.
+//! - [`plunder_dock`] and [`plunder`]: a pirate docking with its disabled
+//!   victim, the plunder and the drift that follows it.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter_in`]) replaces them with its initial population, its
@@ -64,9 +68,16 @@
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
 //!    gate to leave, one that is not intact, or one assisting the player
 //!    while
-//!    unprovoked (until it is done, or provoked): first every goal (each
-//!    decision that turns on the player asking its person's quote gate,
-//!    [`Traffic::turn_with_quote`], before any goal is taken), then, each NPC
+//!    unprovoked (until it is done, or provoked): first every goal (a
+//!    pirate's wait on a boarded victim settled in berth order,
+//!    [`board_wait::resolve`]; each decision that turns on the player
+//!    asking its person's quote gate, [`Traffic::turn_with_quote`], before
+//!    any goal is taken; a pirate's count wait ending at none left,
+//!    [`board_wait::lapse`]; then each plunder decided, in berth order,
+//!    [`plunder::resolve`], queued for the session
+//!    [`Traffic::take_pirate_events`]; then each NPC's high level, a
+//!    docking or its fight, none while its AI wait runs, and each drift's
+//!    step, [`plunder::drift`]), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
@@ -80,7 +91,11 @@
 //!    uncloaks, and its fade steps;
 //! 6. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
-//!    assists, or escorts in formation), a fighter docking its carrier;
+//!    assists, or escorts in formation), a fighter docking its carrier,
+//!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
+//!    started boarding the victim, and a tick off each pirate's count wait
+//!    ([`board_wait::count_down`]) and each flying ship's AI wait
+//!    ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
 //! 7. and the removal of those that landed, jumped out, entered a gate or
@@ -104,18 +119,29 @@
 //! grows when frames run slow; the simulation's is always
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
+mod afterburners;
 pub mod autopilot;
 pub mod berth_exits;
 pub mod berth_kept;
 pub mod berth_picks;
+pub mod board_wait;
+#[cfg(test)]
+mod comm_call_tests;
 pub mod destination;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod gate_entry;
+#[cfg(test)]
+mod hit_goal_tests;
 pub mod npc;
 pub mod persons;
+pub mod plunder;
+pub mod plunder_dock;
+#[cfg(test)]
+mod pursuit_tests;
 pub mod quote;
+mod reinforcing;
 pub mod snipe;
 pub mod spawn;
 pub mod strength;
@@ -123,15 +149,20 @@ pub mod table;
 pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
-use crate::ai::{Behaviour, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings};
+use crate::ai::pursuit::{self, Pursuit, PursuitRules};
+use crate::ai::{
+    Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
+    reinforcements,
+};
 use crate::combat::ion::Ion;
+use afterburners::AfterburnerRoll;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
+use crate::catalog::{FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
 use crate::combat::armament::{Arsenal, Trigger};
-use crate::combat::hull::Condition;
+use crate::combat::hull::{Condition, DisableRule, NovaDisable};
 use crate::combat::{ShipRef, Strike};
 use crate::control::Gate;
 use crate::flight::ShipState;
@@ -142,8 +173,11 @@ use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
+use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
+use plunder::{HighLevel, PirateEvent};
+use plunder_dock::DockOutcome;
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
@@ -323,6 +357,29 @@ fn player_dying(world: &World) -> bool {
     })
 }
 
+/// The goal a new ship starts with ([`Traffic::add`]): the player, for a
+/// mission ship that `hunts` it; holding, for one set up `held`
+/// ([`NewShip::held`]); else idle.
+fn starting_goal(hunts: bool, held: bool) -> Goal {
+    if hunts {
+        Goal::Attack(ShipRef::Player)
+    } else if held {
+        Goal::Hold
+    } else {
+        Goal::Idle
+    }
+}
+
+/// The cloak a new ship starts with ([`Traffic::add`]): fading in when
+/// set up `cloaked` ([`NewShip::cloaked`]), else none.
+fn starting_cloak(cloaked: bool) -> Cloak {
+    let mut cloak = Cloak::default();
+    if cloaked {
+        cloak.cloak();
+    }
+    cloak
+}
+
 /// What the traffic flies among besides itself: the system's stellars,
 /// the player, the governments, and the player's legal record there.
 #[derive(Clone, Copy, Debug)]
@@ -375,6 +432,15 @@ pub struct World<'a> {
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
     /// ship (see [`cloak::visible`]).
     pub cloak_scanner: bool,
+    /// The asteroid in slot 0 of the system's field, if any
+    /// ([`Surroundings::mining_rock`]).
+    pub mining_rock: Option<Asteroid>,
+    /// The system's reinforcement fleet while one called is on its way
+    /// ([`Surroundings::reinforcements`]).
+    pub reinforcements: Option<reinforcements::Coming>,
+    /// The governments an IFF scrambler has marked
+    /// ([`Surroundings::iff_marked`]).
+    pub iff_marked: &'a BTreeSet<GovtId>,
     /// Whether a `ShootPenalty` above 0 holds back the roll that forgives
     /// the player's stray hit
     /// ([`RuleKey::StrayShootPenalty`](crate::RuleKey::StrayShootPenalty),
@@ -384,7 +450,29 @@ pub struct World<'a> {
     /// ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin), see
     /// [`answer_flag`](crate::ai::answer_flag)).
     pub independent_kin: RuleSource,
+    /// Which weapon an approaching attacker with a last gun leads with: its
+    /// pick by the engine, its last gun by the other reading
+    /// ([`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead), see
+    /// [`pursuit`](crate::ai::pursuit)).
+    pub approach_lead: RuleSource,
+    /// What a spawned ship's afterburner roll measures the player's combat
+    /// rating by: `shïp` 128's `Strength` by the engine, its own class's
+    /// by the other reading
+    /// ([`RuleKey::AfterburnerYardstick`](crate::RuleKey::AfterburnerYardstick),
+    /// see [`afterburner`](crate::ai::afterburner)).
+    pub afterburner_yardstick: RuleSource,
+    /// Whether a ship's armour leaves it disabled, which a ship a pirate
+    /// takes into its fleet is read by ([`plunder`]): Nova's rule by
+    /// default ([`NovaDisable`]).
+    pub disable: &'a dyn DisableRule,
+    /// How a pirate's plunder counts a class's marines
+    /// ([`RuleKey::PlunderMarines`](crate::RuleKey::PlunderMarines), see
+    /// [`plunder_contents`](crate::ai::plunder_contents)).
+    pub plunder_marines: RuleSource,
 }
+
+/// Nova's disable rule, a world's default.
+static NOVA_DISABLE: NovaDisable = NovaDisable;
 
 /// No gate's width known: each reads as a loaded master does.
 pub static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
@@ -394,7 +482,8 @@ impl<'a> World<'a> {
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
-    /// and no cloak scanner.
+    /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
+    /// no government marked by an IFF scrambler and Nova's disable rule.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -413,8 +502,15 @@ impl<'a> World<'a> {
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
             cloak_scanner: false,
+            mining_rock: None,
+            reinforcements: None,
+            iff_marked: bare.iff_marked,
             stray_shoot_penalty: RuleSource::Engine,
             independent_kin: RuleSource::Engine,
+            approach_lead: RuleSource::Engine,
+            afterburner_yardstick: RuleSource::Engine,
+            disable: &NOVA_DISABLE,
+            plunder_marines: RuleSource::Engine,
         }
     }
 
@@ -457,6 +553,10 @@ impl<'a> World<'a> {
             system_govt: self.system_govt,
             record: self.record,
             targeted: self.targeted,
+            mining_rock: self.mining_rock,
+            reinforcements: self.reinforcements,
+            cloak_scanner: self.cloak_scanner,
+            iff_marked: self.iff_marked,
         }
     }
 }
@@ -489,6 +589,12 @@ pub struct Traffic {
     /// at once, since they were last taken, in order
     /// ([`Traffic::take_attack_quotes`]).
     attack_quotes: Vec<NpcId>,
+    /// The calls the decisions made on the message line since they were
+    /// last taken, in NPC order ([`Traffic::take_comm_calls`]).
+    comm_calls: Vec<(NpcId, CommCall)>,
+    /// What the pirates did since it was last taken, for the session to
+    /// answer, in order ([`Traffic::take_pirate_events`]).
+    pirate_events: Vec<PirateEvent>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
     /// The name of the person of the ship last brought in at each berth,
@@ -568,6 +674,8 @@ impl Traffic {
             scans: Vec::new(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
+            comm_calls: Vec::new(),
+            pirate_events: Vec::new(),
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
@@ -634,7 +742,14 @@ impl Traffic {
         self.scans.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
-        self.add(missions, world.persons.grudges, Some(world.spawn_reserve));
+        self.comm_calls.clear();
+        self.pirate_events.clear();
+        self.add(
+            missions,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            None,
+        );
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
         let ships = spawn::initial(
@@ -644,7 +759,12 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(ships, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            ships,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
+        );
     }
 
     /// Brings `ships` into the system as they are, numbered after every
@@ -655,7 +775,9 @@ impl Traffic {
     /// and the mission ships' whose appear timer ran out or that a hail
     /// swaps in (`_MissionDudeSpawn`, reserve 8 @0x3cd50).
     pub fn bring_in_within(&mut self, ships: Vec<NewShip>, reserve: u32) -> usize {
-        self.add(ships, &BTreeSet::new(), Some(reserve))
+        // Neither `_SpecificDudeSpawn` nor `_MissionDudeSpawn` rolls an
+        // afterburner.
+        self.add(ships, &BTreeSet::new(), Some(reserve), None)
     }
 
     /// What the system's traffic is drawn from.
@@ -717,6 +839,8 @@ impl Traffic {
         self.scans.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
+        self.comm_calls.clear();
+        self.pirate_events.clear();
     }
 
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
@@ -773,11 +897,16 @@ impl Traffic {
             })
             .collect();
         let around = world.around(&self.npcs);
-        let decisions: Vec<Option<Decision>> = self
+        let mut decisions: Vec<Option<Decision>> = self
             .npcs
             .iter()
             .zip(&due)
             .map(|(npc, &due)| due.then(|| behaviour.decision(npc, &around, &mut &mut *chance)))
+            .collect();
+        board_wait::resolve(&self.npcs, &mut decisions);
+        let keeps: Vec<bool> = decisions
+            .iter()
+            .map(|decision| decision.is_some_and(|decision| decision.keeps_pursuit))
             .collect();
         let turning: Vec<(NpcId, bool)> = self
             .npcs
@@ -789,15 +918,17 @@ impl Traffic {
                     .map(|decision| (npc.id, decision.dropped_target))
             })
             .collect();
+        self.queue_comm_calls(&decisions);
         let view = world.gate_view();
         for (id, dropped_target) in turning {
             self.ask_quote_gate(id, dropped_target, view);
         }
-        let goals = decisions
-            .into_iter()
-            .map(|decision| decision.map(|decision| decision.goal))
-            .collect();
-        self.take_goals(goals, world.player.map(|player| player.state.position));
+        let plunders = plunder::plunders(&decisions);
+        self.take_goals(decisions, world.player.map(|player| player.state.position));
+        board_wait::lapse(&mut self.npcs, &due);
+        self.plunder(plunders, &world, chance);
+        self.pursue(&world, &due, &keeps, chance);
+        plunder::drift(&mut self.npcs, &due);
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
             .npcs
@@ -860,6 +991,60 @@ impl Traffic {
         self.ticks += 1;
     }
 
+    /// Each NPC whose decision is `due` takes its high level and pursuit in
+    /// `world`, rolling on `chance`: none while its AI wait runs, its
+    /// docking with a disabled victim it plunders ([`plunder::high_level`]),
+    /// or its fight ([`pursuit::step`]). `_LowLevelAIHandler` runs
+    /// in the same frame as the think (`_AIDispatch` @0x901e5-0x901f4),
+    /// after the goal and before the passes and the flight read its frame.
+    /// One whose decision `keeps` its pursuit ([`Decision::keeps_pursuit`])
+    /// holds on to the substate it kept.
+    fn pursue(
+        &mut self,
+        world: &World,
+        due: &[bool],
+        keeps: &[bool],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let around = world.around(&self.npcs);
+        let rules = PursuitRules {
+            approach_lead: world.approach_lead,
+        };
+        let steps: Vec<Option<(HighLevel, Pursuit)>> = self
+            .npcs
+            .iter()
+            .zip(due)
+            .map(|(npc, &due)| {
+                due.then(|| {
+                    let high = plunder::high_level(npc, &around);
+                    let pursuit = if high == HighLevel::Fights {
+                        pursuit::step(npc, &around, rules, &mut *chance)
+                    } else {
+                        Pursuit::default()
+                    };
+                    (high, pursuit)
+                })
+            })
+            .collect();
+        for ((npc, step), &keep) in self.npcs.iter_mut().zip(steps).zip(keeps) {
+            let Some((high, pursuit)) = step else {
+                continue;
+            };
+            if high == HighLevel::Skipped {
+                continue;
+            }
+            plunder::take_high_level(npc, high);
+            npc.pursuit = if keep {
+                Pursuit {
+                    kept: npc.pursuit.kept,
+                    ..pursuit
+                }
+            } else {
+                pursuit
+            };
+        }
+    }
+
     /// Moves the traffic again in `world`, rolling on `chance`, as double
     /// time's second pass does (`_DoPlayGameWork(0)`; see the session's
     /// `double_time` module): steps 5 to 7 of a tick (see the module
@@ -893,6 +1078,8 @@ impl Traffic {
         self.cloaks(player, &states, think);
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
         let outcomes = self.fly_all(world, player, &states, still, chance);
+        board_wait::count_down(&mut self.npcs);
+        plunder::count_down(&mut self.npcs);
         self.release_followers(&entering);
         self.departed = self
             .npcs
@@ -935,7 +1122,12 @@ impl Traffic {
             world.stellars(),
             chance,
         );
-        self.add(arrivals, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            arrivals,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
+        );
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
@@ -952,16 +1144,31 @@ impl Traffic {
         chance: &mut (impl Chance + ?Sized),
     ) -> Vec<Outcome> {
         let speeds = self.top_speeds(world);
-        self.npcs
+        let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
+        let disabled: BTreeSet<NpcId> = self
+            .npcs
+            .iter()
+            .filter(|npc| npc.condition == Condition::Disabled)
+            .map(|npc| npc.id)
+            .collect();
+        let outcomes = self
+            .npcs
             .iter_mut()
             .zip(speeds)
             .map(|(npc, speeds)| {
                 let other = match npc.goal {
+                    _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
                     Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
                     Goal::Dock(carrier) => Some(carrier),
                     goal => goal.quarry().or(goal.inspecting()),
                 };
+                let other_disabled = other.is_some_and(|ship| match ship {
+                    ShipRef::Player => world
+                        .player
+                        .is_some_and(|player| player.condition == Condition::Disabled),
+                    ShipRef::Npc(id) => disabled.contains(&id),
+                });
                 let other = other.and_then(|ship| match ship {
                     ShipRef::Player => player,
                     ShipRef::Npc(id) => states
@@ -972,17 +1179,85 @@ impl Traffic {
                 if still.contains(&npc.id) {
                     return Outcome::Flying;
                 }
+                match plunder::fly_docking(npc, other.as_ref(), speeds, &mut *chance) {
+                    Some(DockOutcome::Started { victim, .. }) => {
+                        docked.push((npc.id, victim));
+                        return Outcome::Flying;
+                    }
+                    Some(_) => return Outcome::Flying,
+                    None => {}
+                }
                 autopilot::fly(
                     npc,
                     world.sites,
                     world.type_widths,
                     other.as_ref(),
+                    other_disabled,
                     speeds,
                     world.snipe_brake_lead,
                     &mut *chance,
                 )
             })
-            .collect()
+            .collect();
+        self.dock_starts(&docked);
+        outcomes
+    }
+
+    /// Each dock a pirate started this tick, `docked` as (pirate, victim):
+    /// the victim is boarded (+0xb9 = 1, `_LowLevelAIHandler` @0x86fc7), the
+    /// player too, which its session holds ([`PirateEvent::PlayerDockedWith`]).
+    fn dock_starts(&mut self, docked: &[(NpcId, ShipRef)]) {
+        for &(pirate, victim) in docked {
+            match victim {
+                ShipRef::Player => self
+                    .pirate_events
+                    .push(PirateEvent::PlayerDockedWith { pirate }),
+                ShipRef::Npc(id) => {
+                    if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
+                        npc.boarded = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Runs the `plunders` the decisions made, in berth order, in `world`,
+    /// rolling on `chance` ([`plunder::resolve`]), queueing what happened
+    /// for the session ([`Traffic::take_pirate_events`]); a captured ship's
+    /// berth forgets its person's name, as its slot's +0xc8d0 is cleared
+    /// (@0x84953).
+    fn plunder(
+        &mut self,
+        plunders: Vec<(usize, ShipRef)>,
+        world: &World,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let events = plunder::resolve(&mut self.npcs, plunders, world, &mut *chance);
+        for event in &events {
+            if let PirateEvent::Plundered {
+                victim,
+                taken: Some(_),
+                ..
+            } = *event
+                && let Some(berth) = self
+                    .npcs
+                    .iter()
+                    .find(|npc| npc.id == victim)
+                    .map(|npc| npc.berth)
+            {
+                self.forget_berth_person(berth);
+            }
+        }
+        self.pirate_events.extend(events);
+    }
+
+    /// What the pirates did since this was last called, in order: a dock
+    /// started with the player, a plunder of the player for the session to
+    /// carry out, and each NPC plundered, with its line and capture (see
+    /// [`plunder`]). Taking them empties the list; entering or going on
+    /// into another system drops them.
+    pub fn take_pirate_events(&mut self) -> Vec<PirateEvent> {
+        std::mem::take(&mut self.pirate_events)
     }
 
     /// Releases the followers of each NPC that reached its gate's box this
@@ -1098,20 +1373,45 @@ impl Traffic {
         let Some(id) = strength::fleet_for(world.escort_tons) else {
             return;
         };
+        self.bring_fleet(
+            id,
+            spawn::FleetCall::ANNOUNCED_INTERCEPTOR,
+            world,
+            gate,
+            chance,
+        );
+    }
+
+    /// Fleet `id` comes among `world`'s stellars as `call` says, its
+    /// `AppearOn` asked by `gate`, rolled on `chance` ([`spawn::fleet`]),
+    /// each ship taking a slot below `world`'s reserve ([`Traffic::add`]'s
+    /// cap): the one spawn path of the escort-strength fleet and the
+    /// system's reinforcement fleet, as both are `_HyperSpawnFleet(sys,
+    /// fleet, 4, 1)` (@0x43d90-0x43dcf, @0x390c2-0x390e0).
+    fn bring_fleet(
+        &mut self,
+        id: FleetId,
+        call: spawn::FleetCall,
+        world: &World,
+        gate: Gate,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let mut fleet = Vec::new();
         spawn::fleet(
             &self.table,
             id,
             gate,
             world.stellars(),
-            spawn::FleetCall {
-                lead_ai: Some(AiType::Interceptor),
-                announced: true,
-            },
+            call,
             chance,
             &mut fleet,
         );
-        self.add(fleet, world.persons.grudges, Some(world.spawn_reserve));
+        self.add(
+            fleet,
+            world.persons.grudges,
+            Some(world.spawn_reserve),
+            Some(&mut AfterburnerRoll::of(world, &mut &mut *chance)),
+        );
     }
 
     /// Each intact NPC answers each of `strikes` in `world` that was
@@ -1437,6 +1737,13 @@ impl Traffic {
         self.berth_persons.get(&berth).map(String::as_str)
     }
 
+    /// Queues `event` as if a pirate made it this tick, for the session's
+    /// tests of its answer ([`Traffic::take_pirate_events`]).
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn queue_pirate_event(&mut self, event: PirateEvent) {
+        self.pirate_events.push(event);
+    }
+
     /// Writes `name` as the person of the ship last brought in at `berth`,
     /// for the session's tests of a slot no ship holds.
     #[cfg(any(test, feature = "fixture"))]
@@ -1517,13 +1824,23 @@ impl Traffic {
         &self.departed
     }
 
-    /// Gives each NPC its goal decided, if any, the player at `player_at`
-    /// if there is one: one that stops inspecting a ship remembers it,
-    /// and has scanned the player when it was inspecting the player
-    /// within its reach; one that does not fight loses its provocation.
-    fn take_goals(&mut self, goals: Vec<Option<Goal>>, player_at: Option<Vec2>) {
-        for (npc, goal) in self.npcs.iter_mut().zip(goals) {
-            let Some(goal) = goal else {
+    /// Gives each NPC the goal of its decision, if any, the player at
+    /// `player_at` if there is one: one that stops inspecting a ship
+    /// remembers it, and has scanned the player when it was inspecting the
+    /// player within its reach; one whose decision provokes it
+    /// ([`Decision::provokes`]) has a provocation of 1, the word's +0x96
+    /// (@0x8b7e5, @0x8cb9d); one that does not fight loses its
+    /// provocation; and one whose decision clears its target
+    /// ([`Decision::clears_target`]) loses it.
+    fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
+        for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
+            let Some(Decision {
+                goal,
+                provokes,
+                clears_target,
+                ..
+            }) = decision
+            else {
                 continue;
             };
             if let Goal::Inspect(ship) = npc.goal
@@ -1536,8 +1853,20 @@ impl Traffic {
                     self.scans.push(npc.id);
                 }
             }
+            if provokes {
+                npc.provoked = 1.0;
+            }
             if !goal.fights() {
                 npc.provoked = 0.0;
+            }
+            if clears_target {
+                npc.target = None;
+            }
+            if !matches!(
+                goal,
+                Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. }
+            ) {
+                npc.docking = None;
             }
             npc.goal = goal;
         }
@@ -1567,6 +1896,38 @@ impl Traffic {
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)
+    }
+
+    /// The calls the decisions made on the message line since this was
+    /// last called, in NPC order within a tick ([`Decision::comm_call`]),
+    /// each think's call for reinforcements after its own call
+    /// ([`Decision::calls_reinforcements`], [`CommCall::Reinforcements`]),
+    /// for the session to answer. Taking them empties the list; entering
+    /// or going on into another system drops them.
+    pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall)> {
+        std::mem::take(&mut self.comm_calls)
+    }
+
+    /// Queues the calls `decisions`, one for each NPC in order, made on
+    /// the message line ([`Traffic::take_comm_calls`]): each think's own
+    /// call, then its call for reinforcements.
+    fn queue_comm_calls(&mut self, decisions: &[Option<Decision>]) {
+        self.comm_calls.extend(
+            self.npcs
+                .iter()
+                .zip(decisions)
+                .filter_map(|(npc, decision)| decision.map(|decision| (npc.id, decision)))
+                .flat_map(|(id, decision)| {
+                    let reinforcements = decision
+                        .calls_reinforcements
+                        .then_some(CommCall::Reinforcements);
+                    decision
+                        .comm_call
+                        .into_iter()
+                        .chain(reinforcements)
+                        .map(move |call| (id, call))
+                }),
+        );
     }
 
     /// The ship types the system's traffic can spawn, by ascending ID.
@@ -1632,7 +1993,9 @@ impl Traffic {
     /// grudge when `grudges` say; a ship set up derelict
     /// ([`NewShip::derelict`]) starts disabled, its shield gone and its
     /// armour cut ([`derelict_armor`]); a ship set up held
-    /// ([`NewShip::held`]) starts holding ([`Goal::Hold`]).
+    /// ([`NewShip::held`]) starts holding ([`Goal::Hold`]). Each rolls its
+    /// afterburner on `afterburners` as its spawn asks (see
+    /// [`afterburners`]); with none, no ship has one.
     ///
     /// A ship whose ship type has no record does not come, and neither
     /// does an escort whose lead did not come. With a `reserve`, each ship
@@ -1649,6 +2012,7 @@ impl Traffic {
         ships: Vec<NewShip>,
         grudges: &BTreeSet<PersonId>,
         reserve: Option<u32>,
+        mut afterburners: Option<&mut AfterburnerRoll>,
     ) -> usize {
         let mut placed: Vec<Option<NpcId>> = Vec::with_capacity(ships.len());
         for ship in ships {
@@ -1678,6 +2042,8 @@ impl Traffic {
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             let name = person.map(|person| person.record.name.clone());
+            let afterburner =
+                AfterburnerRoll::has(afterburners.as_deref_mut(), &ship, kind, person);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             let npc = Npc {
@@ -1697,13 +2063,7 @@ impl Traffic {
                     Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
                     Entry::Emerging { ticks_left, .. } => Mode::Emerging { ticks_left },
                 },
-                goal: if hunts {
-                    Goal::Attack(ShipRef::Player)
-                } else if ship.held {
-                    Goal::Hold
-                } else {
-                    Goal::Idle
-                },
+                goal: starting_goal(hunts, ship.held),
                 condition,
                 hull: kind.hull,
                 // No spawn writes the exit cursors (+0xc8fe-+0xc905): they
@@ -1733,13 +2093,7 @@ impl Traffic {
                 person: traits,
                 mission: ship.mission,
                 aux: ship.aux,
-                cloak: if ship.cloaked {
-                    let mut cloak = Cloak::default();
-                    cloak.cloak();
-                    cloak
-                } else {
-                    Cloak::default()
-                },
+                cloak: starting_cloak(ship.cloaked),
                 cloak_gear: kind.cloak,
                 led_out: false,
                 emerges_from: match ship.entry {
@@ -1747,9 +2101,17 @@ impl Traffic {
                     Entry::Placed | Entry::JumpingIn => None,
                 },
                 self_repair: kind.self_repair,
+                miner: kind.miner,
+                can_scoop: kind.can_scoop,
+                holds: kind.holds,
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
+                afterburner,
+                pursuit: Pursuit::default(),
+                ai_wait: 0,
+                docking: None,
+                marines: kind.marines,
             };
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
@@ -1875,8 +2237,11 @@ mod tests {
                     )]),
                     rounds: LauncherRounds::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
+                    marines: crate::ai::plunder_contents::ClassMarines::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
+                    miner: 0,
+                    can_scoop: false,
                     holds: 0,
                     base_armor: 45.0,
                 },
@@ -3058,8 +3423,11 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         };
         let world = World {
             player: Some(player),
@@ -3119,8 +3487,11 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         };
         let world = World {
             player: Some(player),
@@ -3363,6 +3734,58 @@ mod tests {
         );
     }
 
+    /// Whether a stand-off ship (a beam 1000 long: a band of 850, 425
+    /// against a disabled target), at rest and facing its target 600
+    /// above, moves in a tick of attacking it: NPC 1 or, with `player`,
+    /// the player, each of `condition`.
+    fn stand_off_closes(player: bool, condition: Condition) -> bool {
+        use crate::catalog::WeaponRecord;
+        use crate::combat::armament::Armament;
+        use crate::combat::weapon::WeaponSpec;
+        let mut traffic = populated(2, 1);
+        let target = traffic.npcs[1].id;
+        let shooter = &mut traffic.npcs[0];
+        shooter.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 0,
+                beam_length: 1000,
+                ..nova_sim_catalog::fixture::weapon(128)
+            }),
+            1,
+        )]);
+        shooter.hull.stands_off = true;
+        shooter.state = ShipState::default();
+        shooter.goal = Goal::Attack(if player {
+            ShipRef::Player
+        } else {
+            ShipRef::Npc(target)
+        });
+        let quarry = &mut traffic.npcs[1];
+        quarry.state = ShipState {
+            position: Vec2::new(0.0, -600.0),
+            ..ShipState::default()
+        };
+        quarry.goal = Goal::Hold;
+        quarry.condition = if player { Condition::Intact } else { condition };
+        let world = World {
+            player: Some(PlayerSide {
+                condition: if player { condition } else { Condition::Intact },
+                ..player_at(0.0, -600.0)
+            }),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        traffic.npcs()[0].state.velocity != Vec2::ZERO
+    }
+
+    #[test]
+    fn a_stand_off_ship_flies_its_band_halved_against_a_disabled_target() {
+        assert!(!stand_off_closes(false, Condition::Intact), "an NPC");
+        assert!(stand_off_closes(false, Condition::Disabled), "an NPC");
+        assert!(!stand_off_closes(true, Condition::Intact), "the player");
+        assert!(stand_off_closes(true, Condition::Disabled), "the player");
+    }
+
     #[test]
     fn a_reaction_may_set_a_goal_at_once() {
         /// Attacks the player as soon as anything is hit.
@@ -3532,8 +3955,38 @@ mod tests {
         Decides(crate::ai::Decision {
             goal,
             turns_on_player: turns,
-            dropped_target: false,
+            ..crate::ai::Decision::default()
         })
+    }
+
+    #[test]
+    fn a_decision_that_provokes_sets_provocation_to_1() {
+        let attacks = Goal::Attack(ShipRef::Player);
+        let provoking = |provokes| {
+            Decides(crate::ai::Decision {
+                goal: attacks,
+                provokes,
+                ..crate::ai::Decision::default()
+            })
+        };
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.npcs[0].provoked = 5.0;
+        traffic.tick_in(&provoking(true), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs[0].provoked, 1.0,
+            "the word's +0x96 = 1 (@0x8b7e5)"
+        );
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.npcs[0].provoked = 5.0;
+        traffic.tick_in(&provoking(false), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].provoked, 5.0, "kept");
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 1;
+        traffic.npcs[0].provoked = 5.0;
+        traffic.tick_in(&provoking(true), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].provoked, 5.0, "no think due");
     }
 
     #[test]
@@ -3584,6 +4037,13 @@ mod tests {
             goal: attacks,
             turns_on_player: true,
             dropped_target: true,
+            provokes: false,
+            comm_call: None,
+            calls_reinforcements: false,
+            board_wait: None,
+            clears_target: false,
+            keeps_pursuit: false,
+            plunders: None,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
@@ -4400,8 +4860,11 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: crate::ai::Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         }
     }
 
@@ -4964,6 +5427,41 @@ mod tests {
         let plain = with_mission_ship(CloakGear::default(), false, 0.0);
         assert_eq!(plain.npcs()[0].cloak, Cloak::default());
         assert_eq!(plain.npcs()[0].cloak_gear, CloakGear::default());
+    }
+
+    #[test]
+    fn the_world_shows_its_npcs_asteroid_slot_0() {
+        let rock = Asteroid {
+            position: Vec2::new(40.0, -20.0),
+            velocity: Vec2::ZERO,
+            frame: 0.0,
+            spin: 0.0,
+            strength: 30,
+            kind: 2,
+        };
+        assert_eq!(World::new(&[]).around(&[]).mining_rock, None);
+        let world = World {
+            mining_rock: Some(rock),
+            ..World::new(&[])
+        };
+        assert_eq!(world.around(&[]).mining_rock, Some(rock));
+    }
+
+    #[test]
+    fn a_ship_spawns_with_its_ship_types_miner_bits_scoop_and_holds() {
+        let mut mining = table(1);
+        let kind = mining.ships.get_mut(&ShipId(200)).expect("ship 200");
+        kind.miner = 0x0003;
+        kind.can_scoop = true;
+        kind.holds = 12;
+        let mut traffic = Traffic::new();
+        traffic.enter(mining, &mut Draws::of(&placed(0, 0)));
+        let npc = &traffic.npcs()[0];
+        assert_eq!((npc.miner, npc.can_scoop, npc.holds), (0x0003, true, 12));
+        let mut plain = Traffic::new();
+        plain.enter(table(1), &mut Draws::of(&placed(0, 0)));
+        let npc = &plain.npcs()[0];
+        assert_eq!((npc.miner, npc.can_scoop, npc.holds), (0, false, 0));
     }
 
     #[test]
@@ -5700,7 +6198,7 @@ mod tests {
     #[test]
     fn a_fleet_with_no_slot_for_its_lead_brings_nothing_and_no_quote() {
         let mut traffic = at_berths(1..=55);
-        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE));
+        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE), None);
         assert_eq!(traffic.npcs().len(), 55);
         assert!(traffic.take_quotes().is_empty(), "no line, no beep");
     }
@@ -5708,7 +6206,7 @@ mod tests {
     #[test]
     fn an_escort_with_no_slot_is_skipped_and_the_lead_keeps_its_quote() {
         let mut traffic = at_berths(1..=53);
-        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE));
+        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE), None);
         let npcs = &traffic.npcs()[53..];
         assert_eq!(npcs.len(), 2, "the lead and one escort");
         assert_eq!((npcs[0].berth, npcs[1].berth), (54, 55));
@@ -5727,7 +6225,7 @@ mod tests {
             lead: ship.lead.map(|_| 1),
             ..ship
         }));
-        traffic.add(ships, &BTreeSet::new(), None);
+        traffic.add(ships, &BTreeSet::new(), None, None);
         let npcs = traffic.npcs();
         assert_eq!(npcs.len(), 2, "ship 999 has no record");
         assert_eq!(npcs[1].leader, Some(npcs[0].id));
@@ -5738,7 +6236,7 @@ mod tests {
         let mut traffic = at_berths([]);
         let mut fleet = quoted_fleet(1);
         fleet[0].ship = ShipId(999);
-        traffic.add(fleet, &BTreeSet::new(), None);
+        traffic.add(fleet, &BTreeSet::new(), None, None);
         assert_eq!(traffic.npcs(), [], "no lead, no escort");
         assert!(traffic.take_quotes().is_empty());
     }

@@ -144,6 +144,7 @@ use super::hooks::ShipHook;
 use super::player_led::slot_of;
 use super::ship_change::ClassChange;
 use crate::ai::Goal;
+use crate::ai::pursuit::Pursuit;
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::combat::ion::Ion;
@@ -271,7 +272,7 @@ impl Session {
         let record = self.ship_record(escape.unwrap_or(ESCAPE_POD_SHIP)).cloned();
         if let Some(ship) = escape {
             self.pod = None;
-            self.messages.push(SimMessage::EscapingIn { ship });
+            self.say(SimMessage::EscapingIn { ship });
         } else {
             self.pod = Some(POD_TICKS);
             self.drop_the_player();
@@ -389,9 +390,17 @@ impl Session {
             led_out: false,
             emerges_from: None,
             self_repair: kind.self_repair,
+            miner: kind.miner,
+            can_scoop: kind.can_scoop,
+            holds: kind.holds,
             former: None,
             tractor: None,
             ion: Ion::default(),
+            afterburner: false,
+            pursuit: Pursuit::default(),
+            ai_wait: 0,
+            docking: None,
+            marines: kind.marines,
         }
     }
 
@@ -518,6 +527,10 @@ fn retargeted(goal: Goal, to: ShipRef) -> Goal {
         Goal::Attack(ShipRef::Player) => Goal::Attack(to),
         Goal::Snipe(ShipRef::Player) => Goal::Snipe(to),
         Goal::Flee(ShipRef::Player) => Goal::Flee(to),
+        Goal::Plunder {
+            ship: ShipRef::Player,
+            hopeless,
+        } => Goal::Plunder { ship: to, hopeless },
         other => other,
     }
 }
@@ -1430,9 +1443,14 @@ mod tests {
             let sniper = aimed(session, Goal::Snipe(ShipRef::Player), Some(ShipRef::Player));
             let fleeing = aimed(session, Goal::Flee(ShipRef::Player), None);
             let hired = escort(session);
-            ids = Some((attacker, sniper, fleeing, hired));
+            let plundering = Goal::Plunder {
+                ship: ShipRef::Player,
+                hopeless: true,
+            };
+            let pirate = aimed(session, plundering, Some(ShipRef::Player));
+            ids = Some((attacker, sniper, fleeing, hired, pirate));
         });
-        let (attacker, sniper, fleeing, hired) = ids.expect("set up");
+        let (attacker, sniper, fleeing, hired, pirate) = ids.expect("set up");
         let hulk = ShipRef::Npc(hulk(&session).id);
         let npc = |id| session.npc(id).expect("here");
         assert_eq!(
@@ -1446,6 +1464,17 @@ mod tests {
         assert_eq!(
             (npc(fleeing).target, npc(fleeing).goal),
             (None, Goal::Flee(hulk))
+        );
+        assert_eq!(
+            (npc(pirate).target, npc(pirate).goal),
+            (
+                Some(hulk),
+                Goal::Plunder {
+                    ship: hulk,
+                    hopeless: true
+                }
+            ),
+            "goal 0xd kept, +0x70 the hulk"
         );
         assert!(session.npc(hired).expect("here").escorts_player(), "kept");
         assert_eq!(session.fleet, [Some(hired)]);

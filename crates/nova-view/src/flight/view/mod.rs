@@ -534,7 +534,8 @@
 //!   say its hail quote ([`Session::tick_quotes`], right after the
 //!   fight and the answer to its hits, [`Session::answer_strikes`]),
 //!   shown in the message line for
-//!   [`HAIL_QUOTE_TICKS`], the last one said winning.
+//!   the session's count ([`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)),
+//!   the last one said winning.
 //! - Each step's fight starts with the asteroid field's work
 //!   ([`Session::tick_asteroids`], which [`Session::tick_combat`] runs
 //!   first): a spawn at the field's edge and the field stepped, on the
@@ -563,7 +564,8 @@
 //! starfield and under everything else, as the original draws it on the
 //! sprite world's background. Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the
-//! constants after it, [`SimMessage::ticks`]). The dialogs drawn over
+//! constants after it, [`SimMessage::ticks`], [`CommNote::ticks`](nova_sim::CommNote::ticks),
+//! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
 //! flight (the comm, offer and plunder dialogs, the map) leave it as it
 //! is, and it shows again afterwards for the ticks it had left, as
 //! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only

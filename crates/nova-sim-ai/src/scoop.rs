@@ -39,6 +39,12 @@
 //!   (@0x37199) and `_ResetPlayerPrecalcedValues` runs (@0x371ac).
 //! - **No sound and no message.** The player sees only the cargo readout
 //!   change.
+//! - **An NPC's scoop flag** (ship +0xc3): `_ShipCanScoop`
+//!   (@0x75c7-0x766b), the same `ModType` 31 test against its `shïp`'s
+//!   default outfits, which the NPC spawners call and only `_MinerAI`
+//!   reads ([`ShipKind::can_scoop`](crate::traffic::table::ShipKind),
+//!   [`Npc::can_scoop`], see [`miner`](crate::ai::miner)). The scoop
+//!   branch doesn't read it.
 //!
 //! **Left out.**
 //!
@@ -46,10 +52,6 @@
 //!   player wrap.
 //! - The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181): the view
 //!   murks shots alone so far (rdm:task/murk-other-sprites).
-//! - `_ShipCanScoop` (@0x75c7-0x766b), the same `ModType` 31 test for an
-//!   NPC against its `shïp`'s default outfits, which only the NPC
-//!   spawners call and only `_MinerAI` reads: it is
-//!   rdm:phase/asteroids/phase-5-ai-mining's.
 
 use std::collections::BTreeMap;
 

@@ -179,6 +179,42 @@ pub enum SimMessage {
         /// Whether the player owned exactly one.
         one: bool,
     },
+    /// A ship called for help (`_AICallForHelp` @0x82ffb-0x83257; see
+    /// `nova_sim::ai::call_for_help`): the text ready to show, its name
+    /// (a mission's drawn ship name when not empty, else its class's),
+    /// a colon, two spaces and one of `STR#` 5003's twenty lines.
+    CallForHelp(String),
+    /// An interceptor about to inspect the player hailed it, the player
+    /// carrying mission cargo its government scans for (`_InterceptorAI`
+    /// @0x8ce4b-0x8cff5): the text ready to show, "<class>:  <ship
+    /// name>, <`STR#` 2002 #381-383>.".
+    ScanHail(String),
+    /// A pirate plundered the player, or a former hired or captured escort
+    /// of the player's, of these tons of cargo and credits
+    /// (`_AIPlunderShipContents` @0x84593-0x84791, `STR#` 2002 #373, #374,
+    /// #391, #392): "12 tons of cargo and 1,500 credits stolen!". It names
+    /// no pirate.
+    CargoStolen {
+        /// The tons of cargo stolen.
+        tons: u32,
+        /// The credits stolen.
+        credits: i64,
+    },
+    /// A pirate took a disabled former escort of the player's into its
+    /// fleet (`_AIPlunderShipContents` @0x84815-0x84941, `STR#` 2002 #168
+    /// or #169, then #374): "Escort stolen!", or "Fighter stolen!" for a
+    /// former fighter.
+    ShipStolen {
+        /// Whether it was a fighter.
+        fighter: bool,
+    },
+    /// The sensors detect the system's reinforcement fleet three quarters
+    /// of its way in (`_HandleReinforcements` @0x3916d-0x3928a): the text
+    /// ready to show, `STR#` 2002 #306, a space, the fleet government's
+    /// `MediumName`, a space and #307 ("Sensors detect Federation
+    /// reinforcement fleet approaching."; see
+    /// `nova_sim::ai::reinforcements`).
+    ReinforcementsApproaching(String),
     /// A disabled or dying player's pre-jump collapsed: "Ship disabled -
     /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
     /// `_GetIndString` @0x68a04).
@@ -236,6 +272,15 @@ impl SimMessage {
     ///   @0x698b0).
     /// - [`JumpCollapsed`](Self::JumpCollapsed): 250 (`_HandlePlayer`
     ///   @0x68a3d, 0xfa pushed @0x68a32).
+    /// - [`CallForHelp`](Self::CallForHelp): 240 (`_AICallForHelp`
+    ///   @0x83248, 0xf0 pushed @0x8323d).
+    /// - [`ScanHail`](Self::ScanHail): 400 (`_InterceptorAI` @0x8cff5,
+    ///   0x190 pushed @0x8cfea).
+    /// - [`CargoStolen`](Self::CargoStolen) and
+    ///   [`ShipStolen`](Self::ShipStolen): 400 (`_AIPlunderShipContents`
+    ///   @0x84791, @0x84941, 0x190 pushed @0x84786, @0x84936).
+    /// - [`ReinforcementsApproaching`](Self::ReinforcementsApproaching):
+    ///   240 (`_HandleReinforcements` @0x3928a, 0xf0 pushed @0x3927f).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -247,7 +292,10 @@ impl SimMessage {
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
             | Self::IllegalOutfit { .. }
-            | Self::BombExploded { .. } => 400,
+            | Self::BombExploded { .. }
+            | Self::ScanHail(_)
+            | Self::CargoStolen { .. }
+            | Self::ShipStolen { .. } => 400,
             Self::Arrived(_)
             | Self::PassedWormhole(_)
             | Self::MissionFailed
@@ -259,7 +307,9 @@ impl SimMessage {
             | Self::DownedMissionFailed
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned
-            | Self::TookOff { .. } => 240,
+            | Self::TookOff { .. }
+            | Self::CallForHelp(_)
+            | Self::ReinforcementsApproaching(_) => 240,
             Self::EscortRepaired
             | Self::FighterRepaired
             | Self::JumpCollapsed
@@ -275,6 +325,17 @@ impl SimMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plunders_lines_last_400_ticks() {
+        let stolen = SimMessage::CargoStolen {
+            tons: 12,
+            credits: 0,
+        };
+        assert_eq!(stolen.ticks(), 400);
+        assert_eq!(SimMessage::ShipStolen { fighter: true }.ticks(), 400);
+        assert_eq!(SimMessage::ShipStolen { fighter: false }.ticks(), 400);
+    }
 
     #[test]
     fn each_sim_message_lasts_its_callers_ticks() {
@@ -336,6 +397,17 @@ mod tests {
                 250,
             ),
             (SimMessage::NoResponse, 250),
+            (SimMessage::CallForHelp("Ship 128:  Help!".to_owned()), 240),
+            (
+                SimMessage::ReinforcementsApproaching(
+                    "Sensors detect Federation reinforcement fleet approaching.".to_owned(),
+                ),
+                240,
+            ),
+            (
+                SimMessage::ScanHail("Ship 128:  Kestrel, halt.".to_owned()),
+                400,
+            ),
             (
                 SimMessage::DockCleared {
                     stellar: StellarId(128),

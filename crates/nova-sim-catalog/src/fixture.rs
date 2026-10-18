@@ -172,6 +172,8 @@ pub fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         long_name: format!("The Ship {id}"),
         fields,
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 10_000,
         tech_level: 1,
         buy_random: 100,
@@ -307,8 +309,8 @@ pub fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
-/// "Govt `id`", scanning for nothing, fining nothing, requiring nothing
-/// and jamming nothing.
+/// "Govt `id`" and named so on the reinforcement line, scanning for
+/// nothing, fining nothing, requiring nothing and jamming nothing.
 #[must_use]
 pub fn govt(id: i16) -> GovtRecord {
     GovtRecord {
@@ -324,6 +326,7 @@ pub fn govt(id: i16) -> GovtRecord {
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: format!("Govt {id}"),
+        medium_name: format!("Govt {id}"),
         scan_mask: 0,
         scan_fine: 0,
         news_pic: -1,

@@ -75,10 +75,12 @@
 //!   its departures, fighters docking and targets lost, then
 //!   `_HandlePlayer`'s sabotage clock and eject check (see the `sabotage`
 //!   and `eject` modules), then the fight ([`GamePass::Again`]) with all
-//!   that follows from its hits. A due frame therefore steps the junk and
+//!   that follows from its hits, then the reinforcement clock
+//!   (`_HandleReinforcements` @0x44504; see the `reinforcements`
+//!   module). A due frame therefore steps the junk and
 //!   the hints twice, as the original does, and the sabotage clock, the
 //!   escape pod's countdown, the breakup's countdown and its klaxon run
-//!   on both passes too.
+//!   on both passes too, and a called fleet comes twice as fast.
 //! - On the advance pass alone (`arg == 0` jumps from @0x4402a to
 //!   @0x44350): `_HandleStatus`, `_MissionHandler`, `_HandleVoiceSound`,
 //!   `_HandleComm`, `_CalculateTargetedDamage`, `_EnterMoreShips` (the
@@ -103,8 +105,9 @@
 //! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
 //!   test, so each eligible person draws `Rand(140)` on both passes
 //!   ([`Session::tick_quotes_again`], after the attack quotes). The
-//!   display timer (0x3b5020) is counted down only by `_HandleComm`
-//!   (@0x301ce-0x301de), on the advance pass, so after any quote on the
+//!   display timer (`_commCount`, the session's
+//!   [`CommLine`](crate::CommLine)) is counted down only by `_HandleComm`
+//!   (@0x301ce-0x301de), on the advance pass, so after any line on the
 //!   advance pass only a quote due now (forced, @0x33f65-0x33f6c) can
 //!   follow on the second; otherwise each frame's odds of a random quote
 //!   double. The quote clock moves once a frame, on the advance pass.
@@ -197,7 +200,8 @@ impl Session {
         self.move_traffic_again(&mut *chance);
         self.before_fight(rules, &mut &mut *chance);
         self.fight(GamePass::Again, rules, &mut *chance);
-        self.tick_asteroids(chance);
+        self.tick_asteroids(&mut *chance);
+        self.tick_reinforcements(chance);
     }
 
     /// The traffic's part of the second pass, drawing on `chance`: the NPCs

@@ -689,6 +689,7 @@ fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: String::new(),
+        medium_name: String::new(),
         scan_mask: 0,
         scan_fine: 0,
         news_pic: -1,

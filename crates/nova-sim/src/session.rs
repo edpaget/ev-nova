@@ -360,6 +360,7 @@ mod buoys;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
+mod comm_calls;
 mod control;
 mod course;
 mod crons;
@@ -382,6 +383,7 @@ mod hail;
 mod hire;
 mod hooks;
 mod hover;
+mod iff_scramblers;
 mod jump_collapse;
 mod map;
 mod map_borders;
@@ -401,6 +403,7 @@ mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod pirate_plunder;
 mod player_downed;
 mod player_info;
 mod player_led;
@@ -408,6 +411,7 @@ mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
+mod reinforcements;
 mod rescue;
 mod sabotage;
 mod script_effects;
@@ -480,6 +484,7 @@ use crate::combat::{
     Combat, CombatEvent, Downed, Field, Fighter, GamePass, Nominal, Rules, Scenery, ShipRef, Shove,
     Strike,
 };
+use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
@@ -573,6 +578,12 @@ impl FightTerms {
         let fleet = npc.fleet();
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
+        let plundering = npc.goal.plundering().is_some();
+        // Goal 4 with sub 0xf (`_AIShipIsPlunderingShip` @0x83f6e).
+        let docked = npc.goal.attacking().is_some()
+            && npc
+                .docking
+                .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
         let emerging = npc.emerging();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;
         let cloak_device = npc.cloak_gear.device;
@@ -616,6 +627,8 @@ impl FightTerms {
             cloaked: cloak.is_cloaked(),
             attacking,
             threatens_player: self.threatens_player,
+            plundering,
+            docked,
             emerging,
             cloak_scanner,
             has_cloak: cloak_device,
@@ -793,6 +806,16 @@ pub struct Session {
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
     messages: Vec<SimMessage>,
+    /// The message line's countdown, `_commCount`: set by every line
+    /// shown, counted down each frame (see the `comm_calls` module).
+    comm_line: CommLine,
+    /// Each system's reinforcement timer and the inhibitors (see the
+    /// `reinforcements` module); never saved, as the original saves
+    /// neither.
+    reinforcements: reinforcements::Reinforcements,
+    /// The governments an IFF scrambler has marked (see the
+    /// `iff_scramblers` module); never saved, as the original saves none.
+    iff_marked: BTreeSet<GovtId>,
     /// The events told since they were last taken.
     events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
@@ -1049,6 +1072,9 @@ pub struct Session {
     /// When the player's ship is disabled after a change of ship (see
     /// [`Session::with_disable_rule`]).
     disable_rule: hire::Shared<dyn DisableRule>,
+    /// Whether a pirate has docked with the player's disabled ship (its
+    /// slot's +0xb9; see the `pirate_plunder` module): never saved.
+    player_boarded: bool,
     /// The string lists `T` names the ship from (see
     /// [`Session::with_strings`]).
     strings: ship_change::Strings,
@@ -1571,8 +1597,12 @@ impl Session {
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
+            comm_line: CommLine::default(),
+            reinforcements: reinforcements::Reinforcements::default(),
+            iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
+            player_boarded: false,
             strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
             next_sites: None,
@@ -2294,7 +2324,9 @@ impl Session {
     /// system raises [`Fate::Departed`] and is counted (see the
     /// `mission_ships` module). Then, unless the ship is docked, each
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
-    /// while a jump plays too. The traffic ticks in the same [`World`] the
+    /// while a jump plays too; before that, in flight or jumping, the
+    /// player's system's reinforcement clock ticks, after the frame's
+    /// calls (see the `reinforcements` module). The traffic ticks in the same [`World`] the
     /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
@@ -2320,6 +2352,8 @@ impl Session {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });
                 self.announce_fleets(chance);
+                self.answer_comm_calls(chance);
+                self.answer_pirates(&mut &mut *chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2327,6 +2361,7 @@ impl Session {
                 self.observe_watched();
             }
         }
+        self.tick_reinforcements(chance);
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
@@ -2357,7 +2392,7 @@ impl Session {
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
     /// world, the escorts' tons, the led ships' speed factor, the damage
-    /// the fight's shots aim and the gates' widths. The tick
+    /// the fight's shots aim, the gates' widths and asteroid slot 0. The tick
     /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
     /// ([`Session::gate_exit_pass`]) and double time's second pass (see
     /// the `double_time` module) step the traffic in it.
@@ -2392,8 +2427,15 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
+            mining_rock: self.asteroids.get(0).copied(),
+            reinforcements: self.reinforcements_coming(),
+            iff_marked: &self.iff_marked,
             stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
             independent_kin: self.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.disable_rule.0,
+            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         };
         f(&mut self.traffic, world);
     }
@@ -2423,7 +2465,7 @@ impl Session {
                 .random_string(list, &mut &mut *chance)
                 .unwrap_or_default();
             let text = crate::traffic::quote::fill_digits(&line, chance);
-            self.messages.push(SimMessage::FleetArrivalQuote(text));
+            self.say(SimMessage::FleetArrivalQuote(text));
             self.sounds.push(SimSound::FleetArrivalQuote);
         }
     }
@@ -2432,7 +2474,8 @@ impl Session {
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges. No damage is aimed in it, and no
+    /// pilot's persons gone and grudges, and asteroid slot 0. No damage is
+    /// aimed in it, and no
     /// gate's width is known: only the traffic's tick fires and flies, and
     /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
@@ -2459,8 +2502,15 @@ impl Session {
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             cloak_scanner: self.scanner().on_screen,
+            mining_rock: self.asteroids.get(0).copied(),
+            reinforcements: self.reinforcements_coming(),
+            iff_marked: &self.iff_marked,
             stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
             independent_kin: self.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.disable_rule.0,
+            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         }
     }
 
@@ -2473,17 +2523,25 @@ impl Session {
             state: self.player,
             condition: self.condition,
             reserves: self.pilot.reserves,
-            hull: self.hull,
+            // Its class's `Crew`, which a pirate's plunder tests read
+            // (`_AIFindShipToPlunder` @0x7fe04, `_PirateWarshipAI` @0x8c667).
+            hull: HullSpec {
+                crew: record.map_or(0, |record| record.crew),
+                ..self.hull
+            },
             handling: self.stats.handling,
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
             untargetable: record
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
             blessing: self.blessing(),
+            ship: self.pilot.ship,
+            combat_govt: record.and_then(|record| record.combat_govt),
             target: self.target.map(ShipRef::Npc),
             class: record.map_or(EscortClass::Freighter, |record| {
                 EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
             }),
+            boarded: self.player_boarded,
         }
     }
 
@@ -2672,6 +2730,7 @@ impl Session {
             cloaked: false,
             attacking: None,
             threatens_player: false,
+            plundering: false,
             emerging: false,
             cloak_scanner: scanner.on_screen,
             has_cloak: false,
@@ -2684,6 +2743,7 @@ impl Session {
             armament: &mut self.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
+            docked: false,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -2725,7 +2785,7 @@ impl Session {
         self.raise_disabled(&was, &mut &mut *chance);
         self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
         let sorties = self.combat.take_sorties();
-        self.launch_fighters(&sorties);
+        self.launch_fighters(&sorties, &mut &mut *chance);
         self.sync_fleet();
         self.lose_escorts();
         self.lose_dying_mission_escorts();
@@ -4060,7 +4120,7 @@ impl Session {
         let entered = exit.map(|(system, exit)| {
             self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
-            self.messages.push(SimMessage::ExitedHypergate(system));
+            self.say(SimMessage::ExitedHypergate(system));
             system
         });
         self.set_nav(NavMode::Off);
@@ -4126,7 +4186,7 @@ impl Session {
         let (site, system) = (*exit.site, exit.system);
         self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
-        self.messages.push(SimMessage::PassedWormhole(system));
+        self.say(SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
@@ -4195,6 +4255,7 @@ impl Session {
         }
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
+        self.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
         self.warp_ups.clear();
@@ -4316,7 +4377,7 @@ impl Session {
     pub(super) fn greet(&mut self, stellar: StellarId, chance: &mut (impl Chance + ?Sized)) {
         if self.tutorial.take_off() {
             let lead = chance.roll(5);
-            self.messages.push(SimMessage::TookOff { stellar, lead });
+            self.say(SimMessage::TookOff { stellar, lead });
         }
     }
 
@@ -17842,14 +17903,17 @@ pub(super) mod tests {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-        session.launch_fighters(&[crate::combat::Sortie {
-            carrier: ShipRef::Player,
-            bay: WeaponId(149),
-            ship: ShipId(130),
-            from: *session.player(),
-            heading: 0.0,
-            target: None,
-        }]);
+        session.launch_fighters(
+            &[crate::combat::Sortie {
+                carrier: ShipRef::Player,
+                bay: WeaponId(149),
+                ship: ShipId(130),
+                from: *session.player(),
+                heading: 0.0,
+                target: None,
+            }],
+            &mut crate::chance::NeverFires,
+        );
         let fighter = session
             .npcs()
             .iter()
@@ -22151,20 +22215,50 @@ pub(super) mod tests {
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;
-        for (goal, attacking) in [
-            (Goal::Attack(player), Some(player)),
-            (Goal::Snipe(player), Some(player)),
-            (Goal::Flee(player), None),
-            (Goal::Inspect(player), None),
-            (Goal::Idle, None),
+        let plunder = |hopeless| Goal::Plunder {
+            ship: player,
+            hopeless,
+        };
+        for (goal, attacking, plundering) in [
+            (Goal::Attack(player), Some(player), false),
+            (Goal::Snipe(player), Some(player), false),
+            (Goal::Flee(player), None, false),
+            (Goal::Inspect(player), None, false),
+            (Goal::Idle, None, false),
+            (plunder(false), None, true),
+            (plunder(true), None, true),
+            (Goal::CountWait { ticks_left: 3 }, None, false),
         ] {
             npc.goal = goal;
+            let fighter = terms(false).fighter(&mut npc);
             assert_eq!(
-                terms(false).fighter(&mut npc).attacking,
-                attacking,
-                "{goal:?}"
+                (fighter.attacking, fighter.plundering),
+                (attacking, plundering),
+                "{goal:?}: point defence reads goal 4 alone"
             );
         }
+        npc.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: player,
+            sub: crate::traffic::plunder_dock::DockSub::Dock,
+        });
+        for (goal, docked) in [
+            (Goal::Attack(player), true),
+            (Goal::Snipe(player), true),
+            (plunder(false), false),
+            (Goal::Idle, false),
+        ] {
+            npc.goal = goal;
+            let fighter = terms(false).fighter(&mut npc);
+            assert_eq!(fighter.docked, docked, "{goal:?}: goal 4 with sub 0xf");
+        }
+        npc.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: player,
+            sub: crate::traffic::plunder_dock::DockSub::Close,
+        });
+        npc.goal = Goal::Attack(player);
+        assert!(!terms(false).fighter(&mut npc).docked, "sub 0xb");
+        npc.docking = None;
+        npc.goal = Goal::Idle;
         assert!(terms(true).fighter(&mut npc).threatens_player);
         assert!(!terms(false).fighter(&mut npc).threatens_player);
         let fighter = terms(false).fighter(&mut npc);

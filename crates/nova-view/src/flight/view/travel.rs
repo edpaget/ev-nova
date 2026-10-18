@@ -26,11 +26,11 @@ use crate::{DrawList, Input, Key, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{
-    EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HAIL_QUOTE_TICKS,
-    HYPER_SELECT_KEY, HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
-    MESSAGE_TICKS, MapSeen, NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS,
-    SECONDARY_KEY, Said, TOO_CLOSE, Then, arrival_lead, arrival_message_with, assigned_message,
-    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
+    EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
+    HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
+    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, Said,
+    TOO_CLOSE, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks,
+    comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
     jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
     point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
     stellar_name,
@@ -622,11 +622,14 @@ impl<
                 show_gate_frames(scene, session);
             }
         }
+        // The session set its line as it raised each of these, and the
+        // steps have counted it down since: relayed, not set again.
         for note in &notes {
-            self.say_for(comm_message(note), MESSAGE_TICKS);
+            self.relay(comm_message(note), note.ticks());
         }
         for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_TICKS);
+            let ticks = quote.ticks();
+            self.relay(quote.text, ticks);
         }
         if rescued {
             // Laid out in the system the rescue took the pod to, from where
@@ -635,7 +638,7 @@ impl<
             self.catch_up();
             self.map.recentre();
         }
-        self.say_messages();
+        self.relay_messages();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
     }
@@ -769,7 +772,7 @@ impl<
                 ))
             })
             .collect();
-        self.message = None;
+        self.blank_message();
         let Some(scene) = &self.scene else {
             return;
         };
@@ -1092,7 +1095,7 @@ impl<
         let system = self.catch_up().system;
         self.place_ship();
         self.read_npc_sheets();
-        self.message = None;
+        self.blank_message();
         self.redraw_status();
         if let Some(held) = held
             && self.hud_waits()
@@ -1221,7 +1224,7 @@ impl<
             Ok(LandPress::Outcome(LandOutcome::Requested { .. })) => {}
             Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.pending_landing = Some(stellar);
-                self.message = None;
+                self.blank_message();
                 self.effects.clear();
                 self.flashes.clear();
                 self.glows.clear();

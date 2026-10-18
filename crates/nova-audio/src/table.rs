@@ -67,6 +67,12 @@ pub struct SoundTable {
     pub floating_map_zoom: Option<SoundId>,
     /// Plays as an announced fleet arrives with its arrival quote.
     pub fleet_quote: Option<SoundId>,
+    /// Plays as a ship calls for help.
+    pub call_for_help: Option<SoundId>,
+    /// Plays as an interceptor hails the player before its scan.
+    pub scan_hail: Option<SoundId>,
+    /// Plays as the sensors detect a reinforcement fleet approaching.
+    pub reinforcements: Option<SoundId>,
     /// Plays as a person offers its mission on its hail.
     pub hail_offer: Option<SoundId>,
     /// Plays as a person says its hail quote in flight.
@@ -88,6 +94,12 @@ pub struct SoundTable {
     pub ship_downed: Option<SoundId>,
     /// Plays as the player's ship being downed fails a mission.
     pub downed_mission_failed: Option<SoundId>,
+    /// Plays with a pirate's cargo line, said as it steals from the player
+    /// or a former escort.
+    pub cargo_stolen: Option<SoundId>,
+    /// Plays with the line said as a pirate takes a former escort into its
+    /// fleet.
+    pub ship_stolen: Option<SoundId>,
     /// Plays as a mission's special ship lost fails a mission that isn't
     /// hidden.
     pub mission_ship_lost: Option<SoundId>,
@@ -210,6 +222,13 @@ impl SoundTable {
     /// - `fleet_quote`: 154, `_beepSnd[4]`, which `_HyperSpawnFleet` plays
     ///   as an announced fleet with a `Quote` arrives, even when its line
     ///   is empty (@0x42698-0x426bb).
+    /// - `call_for_help`: 154, `_beepSnd[4]`, which `_AICallForHelp`
+    ///   plays with a ship's distress call (@0x830e0-0x83109).
+    /// - `scan_hail`: 154, `_beepSnd[4]`, which `_InterceptorAI` plays
+    ///   with its pre-scan hail (@0x8cf9d-0x8cfbc).
+    /// - `reinforcements`: 154, `_beepSnd[4]`, which
+    ///   `_HandleReinforcements` plays with "Sensors detect …
+    ///   reinforcement fleet approaching." (@0x3924b).
     /// - `hail_offer`: 154, `_beepSnd[4]`, which
     ///   `_HandlePlayerCommunication` plays as a person offers its mission
     ///   on its hail (@0x62232-0x6223d).
@@ -237,6 +256,9 @@ impl SoundTable {
     /// - `downed_mission_failed`: 151, `_beepSnd[1]`, which `_DamageShip`
     ///   plays as either fails the player's first `Flags2` 0x0004 mission
     ///   (@0x3b04e, @0x3b2f1).
+    /// - `cargo_stolen` and `ship_stolen`: 151, `_beepSnd[1]`, which
+    ///   `_AIPlunderShipContents` plays with its cargo line (@0x84758) and
+    ///   with its stolen-escort line (@0x84908).
     /// - `mission_ship_lost`: 151, `_beepSnd[1]`, which
     ///   `_HandleShipDisplay` plays as a mission's special ship destroyed
     ///   (@0x2db5a) and `_DamageShip` as one disabled (@0x3af11) fails a
@@ -329,6 +351,9 @@ impl SoundTable {
         news_close: Some(SoundId(152)),
         floating_map_zoom: Some(SoundId(150)),
         fleet_quote: Some(SoundId(154)),
+        call_for_help: Some(SoundId(154)),
+        scan_hail: Some(SoundId(154)),
+        reinforcements: Some(SoundId(154)),
         hail_offer: Some(SoundId(154)),
         hail_quote: Some(SoundId(154)),
         nav_selected: Some(SoundId(150)),
@@ -338,6 +363,8 @@ impl SoundTable {
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
         downed_mission_failed: Some(SoundId(151)),
+        cargo_stolen: Some(SoundId(151)),
+        ship_stolen: Some(SoundId(151)),
         mission_ship_lost: Some(SoundId(151)),
         mission_ship_boarded: Some(SoundId(154)),
         traffic_control: Some(SoundId(151)),
@@ -404,6 +431,9 @@ mod tests {
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.floating_map_zoom, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.call_for_help, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.scan_hail, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.reinforcements, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_offer, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
@@ -412,6 +442,8 @@ mod tests {
         assert_eq!(table.target_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.ship_stolen, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(
             table.downed_mission_failed,
             Some(SoundId(151)),

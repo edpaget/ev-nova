@@ -196,7 +196,7 @@ mod tests {
         // below the bearing of 90.
         let target = at(300.0, 0.0, 0.0, 5.0, 0.0);
         let mut npc = sniper(at(0.0, 0.0, 0.2, -0.3, 80.0));
-        let lead = fire::wanted_heading(&npc, &target);
+        let lead = fire::lead_with(&npc, &target, Some(&npc.armament.mounts()[0].spec));
         assert!(lead > 95.0, "{lead}");
         let controls = fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine);
         assert_eq!(npc.state.velocity, Vec2::new(0.2 * 0.95, -0.3 * 0.95));

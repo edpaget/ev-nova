@@ -43,8 +43,9 @@ use crate::catalog::{
     MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
     ShipExits, ShipId, ShipRecord, SiteAnimation, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemReinforcements,
+    SystemTraffic, SystemVisibility, TextGraphics, TextMovies, TrafficCatalog, WeaponId,
+    WeaponRecord, loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -147,6 +148,8 @@ impl PilotCatalog for GameData {
                     long_name: record.long_name.as_str().to_owned(),
                     fields: ship_fields(record),
                     defaults: default_items(record),
+                    default_slots: default_slots(record),
+                    strength: record.strength,
                     cost: record.cost,
                     tech_level: record.tech_level,
                     buy_random: record.buy_random,
@@ -803,6 +806,16 @@ impl TrafficCatalog for GameData {
         })
     }
 
+    fn system_reinforcements(&self, id: SystemId) -> Option<SystemReinforcements> {
+        let system = self.get::<System>(id.0)?.ok()?.record;
+        // A `ReinfFleet` of -1 names none, as any of 127 or less does.
+        SystemReinforcements::normalised(
+            system.reinf_fleet.map_or(0, |fleet| fleet.0),
+            system.reinf_time,
+            system.reinf_intrval,
+        )
+    }
+
     fn dude(&self, id: DudeId) -> Option<DudeRecord> {
         let dude = self.get::<Dude>(id.0)?.ok()?.record;
         Some(DudeRecord {
@@ -1091,6 +1104,7 @@ impl CombatCatalog for GameData {
                     allies: record.ally,
                     enemies: record.enemy,
                     comm_name: record.comm_name.as_str().to_owned(),
+                    medium_name: record.medium_name.as_str().to_owned(),
                     scan_mask: record.scan_mask.bits(),
                     scan_fine: record.scan_fine,
                     news_pic: record.news_pic,
@@ -1315,6 +1329,21 @@ fn ship_fields(ship: &Ship) -> ShipFields {
 }
 
 /// A `shïp`'s `DefaultItems`, each item with its count in slot order.
+/// `ship`'s `DefaultItems` slot by slot, 1-8, each with its raw count;
+/// none where a slot names no item.
+fn default_slots(ship: &Ship) -> [Option<(OutfitId, i16)>; 8] {
+    let items = ship
+        .default_items1_4
+        .into_iter()
+        .chain(ship.default_items5_8);
+    let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
+    let mut slots = [None; 8];
+    for (slot, (item, count)) in slots.iter_mut().zip(items.zip(counts)) {
+        *slot = item.map(|item| (item, count));
+    }
+    slots
+}
+
 fn default_items(ship: &Ship) -> Vec<(OutfitId, u16)> {
     let items = ship
         .default_items1_4
@@ -1770,6 +1799,7 @@ mod tests {
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x46, &[-7]);
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
@@ -1803,6 +1833,17 @@ mod tests {
                 ..ShipFields::default()
             },
             defaults: vec![(OutfitId(200), 2), (OutfitId(201), 0), (OutfitId(202), 1)],
+            default_slots: [
+                Some((OutfitId(200), 2)),
+                Some((OutfitId(201), -1)),
+                None,
+                None,
+                Some((OutfitId(202), 1)),
+                None,
+                None,
+                None,
+            ],
+            strength: -7,
             cost: 17_500,
             tech_level: 6,
             buy_random: 45,
@@ -3974,6 +4015,7 @@ mod tests {
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
+        bytes[0x64..0x73].copy_from_slice(b"the Federation\0");
         put_i16s(&mut bytes, 0xAE, &[9001]);
         bytes[0x54..0x5C].copy_from_slice(&0x8000_0000_0000_0021_u64.to_be_bytes());
         put_i16s(&mut bytes, 0x5C, &[25, 0, -3, 0]);
@@ -4047,6 +4089,7 @@ mod tests {
             allies: [0, 1, 12, 13],
             enemies: [2, 10, 16, 9],
             comm_name: "Federation".to_owned(),
+            medium_name: "the Federation".to_owned(),
             scan_mask: 0x8004,
             scan_fine: -5,
             news_pic: 9001,
@@ -5149,6 +5192,58 @@ mod tests {
             ],
             "-1 and 127 name none"
         );
+    }
+
+    /// A `sÿst` with this `ReinfFleet`, `ReinfTime` and `ReinfIntrval`.
+    fn reinforced(fleet: i16, time: i16, interval: i16) -> Vec<u8> {
+        let mut bytes = system();
+        put_i16s(&mut bytes, 0x196, &[fleet, time, interval]);
+        bytes
+    }
+
+    #[test]
+    fn a_systems_reinforcements_are_its_fleet_above_127_its_time_and_an_interval_of_at_least_1() {
+        let data = store(&[
+            (System::TYPE, 128, reinforced(129, 900, 2)),
+            (System::TYPE, 129, reinforced(128, -5, 0)),
+            (System::TYPE, 130, reinforced(127, 900, 2)),
+            (System::TYPE, 131, reinforced(0, 900, 2)),
+            (System::TYPE, 132, reinforced(-1, 900, 2)),
+            (System::TYPE, 133, reinforced(140, 30, -3)),
+            (System::TYPE, 134, short(reinforced(129, 900, 2))),
+        ]);
+        let reinforcements = |id| data.system_reinforcements(SystemId(id));
+        assert_eq!(
+            reinforcements(128),
+            Some(SystemReinforcements {
+                fleet: FleetId(129),
+                time: 900,
+                interval: 2,
+            })
+        );
+        assert_eq!(
+            reinforcements(129),
+            Some(SystemReinforcements {
+                fleet: FleetId(128),
+                time: -5,
+                interval: 1,
+            }),
+            "the time raw, an interval of 0 read as 1 (@0x782df-0x782e9)"
+        );
+        assert_eq!(
+            reinforcements(133).map(|it| it.interval),
+            Some(1),
+            "a negative interval read as 1"
+        );
+        for none in [130, 131, 132] {
+            assert_eq!(
+                reinforcements(none),
+                None,
+                "127 or below names none (@0x782cb)"
+            );
+        }
+        assert_eq!(reinforcements(134), None, "undecodable");
+        assert_eq!(reinforcements(135), None, "missing");
     }
 
     #[test]

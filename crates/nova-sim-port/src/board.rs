@@ -567,8 +567,9 @@ pub const ESCORT_SHARE: f64 = 0.1;
 /// (3) and interceptors (4).
 pub const ESCORT_AI_ABOVE: i16 = 2;
 /// The `ModType` of marines: a positive `ModVal` adds crew, a negative one
-/// adds its size in points to the odds.
-pub const MARINES: i16 = 25;
+/// adds its size in points to the odds. It lives in the catalog, where the
+/// plunder of the AI below this crate reads it too.
+pub use crate::catalog::MARINES;
 /// The odds per crew ratio: crew / (target crew x 10) x 100 (the doubles
 /// @0xdd0b0 and @0xdd0e0).
 pub const CREW_RATIO_DIVISOR: f64 = 10.0;

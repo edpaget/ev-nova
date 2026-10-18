@@ -1376,7 +1376,7 @@ impl Session {
         };
         if fails {
             if record.flags & HIDDEN == 0 {
-                self.messages.push(SimMessage::MissionShipLost);
+                self.say(SimMessage::MissionShipLost);
                 self.sounds.push(SimSound::MissionShipLost);
             }
             self.quick_failure(mark.slot, &record, chance);

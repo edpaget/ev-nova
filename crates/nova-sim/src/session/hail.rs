@@ -69,8 +69,8 @@
 //!   it attacks the threat to the player picked
 //!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f), and calls for
 //!   reinforcements, forced past their strength test
-//!   (`_AICallForReinforcements(ship, 1)` @0x9636d). Reinforcements
-//!   aren't built, so the call is an empty hook until they are.
+//!   (`_AICallForReinforcements(ship, 1)` @0x9636d; see the
+//!   `reinforcements` module).
 
 use super::Session;
 use super::missions::TextSource;
@@ -598,7 +598,7 @@ impl Session {
             Deed::Defend(threat) => {
                 npc.goal = Goal::Attack(ShipRef::Npc(threat));
                 npc.target = Some(ShipRef::Npc(threat));
-                self.call_for_reinforcements(id);
+                self.call_for_battle_help_reinforcements(id);
             }
             Deed::Help(help) => {
                 npc.goal = Goal::Assist(help);
@@ -612,27 +612,11 @@ impl Session {
 
     /// NPC `id` calls for reinforcements, forced past its strength test:
     /// `_AICallForReinforcements(ship, 1)`, which battle help makes
-    /// (`_DoCommDialog` @0x9636d). Reinforcements aren't built (the daily
-    /// step's countdown in `story/day.rs` is an empty slot, "once
-    /// reinforcements are built"), so this is empty until then. The gates
-    /// the call will need (`_AICallForReinforcements` @0x7f5a1):
-    ///
-    /// - the ship has a government (@0x7f5b7);
-    /// - its system has a reinforcement fleet (`+0xbe`, @0x7f5da);
-    /// - the system's timer `+0xc8` is at most 0 (@0x7f5eb) and its
-    ///   countdown `+0xc4` is at most 0 (@0x7f5ff);
-    /// - the ship's `c914` is above 0 (@0x7f60d);
-    /// - the fleet's government is allied with the ship's (@0x7f63d);
-    /// - `c914 > 0.5 * govt+0x60`, or the force this call passes
-    ///   (@0x7f699-0x7f6b0);
-    /// - then `+0x82` of either government, or a global flag, sets the
-    ///   countdown to 1 (@0x7f6b2-0x7f6ef); otherwise it sets `+0xc8` from
-    ///   `+0xc0` (@0x7f6fc-0x7f70c).
-    #[expect(
-        clippy::unused_self,
-        reason = "an empty hook until reinforcements are built"
-    )]
-    fn call_for_reinforcements(&self, _id: NpcId) {}
+    /// (`_DoCommDialog` @0x9636d), after its goal is set (see the
+    /// `reinforcements` module).
+    fn call_for_battle_help_reinforcements(&mut self, id: NpcId) {
+        self.call_for_reinforcements(id, true);
+    }
 
     /// Gives a tick of the help each NPC assisting the player gives (see
     /// [`assist`](crate::hail::assist)), a repair raising the armour until
@@ -683,14 +667,16 @@ impl Session {
             }
         }
         for (from, ship, help) in done {
-            self.comm.push(CommNote {
+            let note = CommNote {
                 from,
                 comm_name: self
                     .ship_record(ship)
                     .map(|record| record.comm_name.clone())
                     .unwrap_or_default(),
                 done: help,
-            });
+            };
+            self.comm_line.show(note.ticks());
+            self.comm.push(note);
         }
     }
 
@@ -1943,6 +1929,56 @@ mod tests {
     }
 
     #[test]
+    fn battle_help_calls_the_systems_reinforcements_past_their_strength_test() {
+        let mut catalog = hailable();
+        catalog.govts[2].enemies = [1, -1, -1, -1];
+        catalog.ranks = vec![RankRecord {
+            affil_govt: Some(FED),
+            flags: crate::rank::HELPS_IN_BATTLE,
+            ..crate::testkit::rank(128)
+        }];
+        catalog.reinforcements = vec![(
+            SystemId(130),
+            crate::catalog::SystemReinforcements {
+                fleet: crate::catalog::FleetId(140),
+                time: 900,
+                interval: 2,
+            },
+        )];
+        catalog.fleets = vec![crate::catalog::FleetRecord {
+            id: crate::catalog::FleetId(140),
+            lead: Some(ShipId(129)),
+            escorts: Vec::new(),
+            govt: Some(FED),
+            link_syst: 133,
+            appear_on: crate::control::Test::default(),
+            quote: None,
+            flags: 0,
+        }];
+        let mut session = targeting(&catalog);
+        session.pilot.ranks.insert(RankId(128));
+        npc(&mut session).hull.strength = 100.0;
+        let pirate = Npc {
+            govt: Some(PIRATES),
+            goal: Goal::Attack(ShipRef::Player),
+            hull: HullSpec {
+                strength: 20.0,
+                ..HullSpec::default()
+            },
+            ..session.npcs()[0].clone()
+        };
+        session.traffic.add_npc(pirate);
+        assert_eq!(session.reinforcements_coming(), None);
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 0);
+        assert_eq!(
+            session.reinforcements_coming(),
+            Some(crate::ai::reinforcements::Coming { govt: Some(FED) }),
+            "odds of 0.2, below half of 1, yet called (@0x9636d)"
+        );
+    }
+
+    #[test]
     fn free_help_says_its_price_first_then_is_on_its_way_and_takes_no_cash() {
         let mut catalog = hailable();
         catalog.govts[0].flags2 = crate::hail::FREE_HELP;
@@ -2211,6 +2247,22 @@ mod tests {
         session.tick_assistance(&NovaDisable);
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert!(session.take_comm().is_empty());
+    }
+
+    #[test]
+    fn a_finished_help_holds_the_message_line_for_its_note() {
+        let catalog = hailable();
+        let mut session = helped(&catalog, Help::Refuel, 0.0);
+        session.pilot.reserves.fuel.now = 150.0;
+        assert!(session.comm_line().free_for_calls(), "free before");
+        session.tick_assistance(&NovaDisable);
+        let [note] = session.take_comm().try_into().expect("one note");
+        for tick in 1..note.ticks() {
+            session.count_down_comm_line();
+            assert!(!session.comm_line().free_for_calls(), "{tick} counted");
+        }
+        session.count_down_comm_line();
+        assert!(session.comm_line().free_for_calls(), "the note counted");
     }
 
     #[test]

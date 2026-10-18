@@ -382,6 +382,13 @@ impl Asteroids {
             .filter_map(|(slot, asteroid)| Some((slot, asteroid.as_ref()?)))
     }
 
+    /// The asteroid in `slot`, if any, to read: slot 0's is the one every
+    /// miner works.
+    #[must_use]
+    pub fn get(&self, slot: usize) -> Option<&Asteroid> {
+        self.slots.get(slot)?.as_ref()
+    }
+
     /// The asteroid in `slot`, if any.
     pub fn get_mut(&mut self, slot: usize) -> Option<&mut Asteroid> {
         self.slots.get_mut(slot)?.as_mut()
@@ -1491,6 +1498,14 @@ mod tests {
         assert_eq!(field.slots[2].map(|r| r.strength), Some(7));
         assert!(field.get_mut(0).is_none(), "free");
         assert!(field.get_mut(SLOTS).is_none(), "past the field");
+    }
+
+    #[test]
+    fn an_asteroid_is_read_by_its_slot_and_a_free_or_missing_slot_gives_none() {
+        let field = holding(2, rock(1, PLAYER));
+        assert_eq!(field.get(2).map(|r| r.kind), Some(1));
+        assert!(field.get(0).is_none(), "free");
+        assert!(field.get(SLOTS).is_none(), "past the field");
     }
 
     #[test]

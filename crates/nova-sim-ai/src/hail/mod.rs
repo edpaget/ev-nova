@@ -242,8 +242,10 @@ impl<'a> Hail<'a> {
     /// The hail of `npc` among `around`, of `dispositions`, in
     /// conversation `talk`, the player needing `need`, of `mission` when
     /// it is a mission ship ([`Hail::mission`]). It is busy while
-    /// it attacks, snipes at, flees from or assists a ship, keeps
-    /// formation (goals 10 and 12), or an NPC attacks or snipes at it
+    /// it attacks, snipes at, flees from, plunders or assists a ship, keeps
+    /// formation (goals 10 and 12), waits or drifts as a pirate (goals 0x16
+    /// and 0xe), or an
+    /// NPC attacks or snipes at it
     /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
     /// player is threatened while any NPC threatens it.
     ///
@@ -287,7 +289,10 @@ impl<'a> Hail<'a> {
             dispositions,
             busy: npc.goal.fights()
                 || assisting_player
-                || matches!(npc.goal, Goal::Formation { .. } | Goal::Hold)
+                || matches!(
+                    npc.goal,
+                    Goal::Formation { .. } | Goal::Hold | Goal::CountWait { .. } | Goal::Drift
+                )
                 || attacked,
             assisting_player,
             player_threatened: around
@@ -448,6 +453,11 @@ pub struct EscortStatus {
     pub wage: Option<i64>,
 }
 
+/// How long an assisting ship's comm note shows: 240 (`_HighLevelAIHandler`
+/// @0x8f6a1, `_LowLevelAIHandler` @0x86ef4), the one count the session
+/// sets the message line to and the flight shows it for.
+pub const NOTE_TICKS: u16 = 240;
+
 /// What an NPC assisting the player has done, for the flight's message
 /// line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -458,6 +468,14 @@ pub struct CommNote {
     pub comm_name: String,
     /// The help it gave.
     pub done: Help,
+}
+
+impl CommNote {
+    /// How long the note shows: [`NOTE_TICKS`], whatever the help.
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        NOTE_TICKS
+    }
 }
 
 /// One of the comm dialog's options, a button with its hotkey: an open
@@ -598,6 +616,18 @@ mod tests {
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_catalog::fixture::govt;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_comm_note_shows_for_240_ticks_whatever_the_help() {
+        for done in [Help::Refuel, Help::Repair] {
+            let note = CommNote {
+                from: NpcId(0),
+                comm_name: String::new(),
+                done,
+            };
+            assert_eq!(note.ticks(), 240, "{done:?}");
+        }
+    }
 
     const G: GovtId = GovtId(140);
     const INHERENT: GovtId = GovtId(141);
@@ -894,6 +924,12 @@ mod tests {
             Goal::Formation {
                 guard: Some(ShipRef::Npc(NpcId(5))),
             },
+            Goal::Plunder {
+                ship: ShipRef::Npc(NpcId(5)),
+                hopeless: false,
+            },
+            Goal::CountWait { ticks_left: 3 },
+            Goal::Drift,
         ] {
             let npcs = [flying(1, goal)];
             assert!(hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");

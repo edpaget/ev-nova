@@ -80,6 +80,16 @@ pub enum SimSound {
     /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
     /// even when the line is empty.
     FleetArrivalQuote,
+    /// A ship called for help: `_beepSnd[4]`, `snd ` 154 (`_AICallForHelp`
+    /// `_PlaySound` @0x830e0-0x83109).
+    CallForHelp,
+    /// An interceptor hailed the player before its scan: `_beepSnd[4]`,
+    /// `snd ` 154 (`_InterceptorAI` `ST_PlaySound` @0x8cf9d-0x8cfbc).
+    ScanHail,
+    /// The sensors detect a reinforcement fleet approaching, three
+    /// quarters of its way in: `_beepSnd[4]`, `snd ` 154
+    /// (`_HandleReinforcements` `_PlaySound` @0x3924b, before its line).
+    ReinforcementsApproaching,
     /// A person's mission was offered on its hail, in place of the comm
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).
@@ -90,6 +100,14 @@ pub enum SimSound {
     /// (`_ShowPersonHailQuote` @0x44586-0x445ad), for every hail quote
     /// said, even when its line is empty.
     HailQuote,
+    /// A pirate's plunder took cargo or credits from the player or a former
+    /// hired or captured escort, said on the message line: `_beepSnd[1]`,
+    /// `snd ` 151 (`_AIPlunderShipContents` @0x84739-0x84758).
+    CargoStolen,
+    /// A pirate took a former escort of the player's into its fleet, said
+    /// on the message line: `_beepSnd[1]`, `snd ` 151
+    /// (`_AIPlunderShipContents` @0x848e9-0x84908).
+    ShipStolen,
     /// The player's ship was newly disabled or newly started to break up:
     /// `_beepSnd[1]`, `snd ` 151 (`_DamageShip` @0x3b11e, @0x3b221; see
     /// the session's `player_downed` module).

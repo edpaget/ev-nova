@@ -2807,17 +2807,23 @@ fn a_missile_shot_down_is_drawn_exploding_and_unheard() {
     );
 }
 
-/// [`armed`] with a blaster doing 10 energy and 10 mass damage, and
-/// govt 140 that costs 3 to disable a ship of.
+/// [`armed`] with a blaster doing 10 energy and 10 mass damage, the
+/// warship armed with a harmless gun of unlimited ammunition (an unarmed
+/// warship is fully dry, and drops its attack at once, `_WarshipAI`
+/// @0x8c0e7-0x8c117), and govt 140 that costs 3 to disable a ship of.
 fn damaging() -> FakeCatalog {
     let catalog = armed(1, &[BLASTER]);
     FakeCatalog {
-        weapons: vec![nova_sim::WeaponRecord {
-            reload: 5,
-            mass_dmg: 10,
-            energy_dmg: 10,
-            ..gun(BLASTER, 0, -1, -1)
-        }],
+        weapons: vec![
+            nova_sim::WeaponRecord {
+                reload: 5,
+                mass_dmg: 10,
+                energy_dmg: 10,
+                ..gun(BLASTER, 0, -1, -1)
+            },
+            gun(UNSEEN, 0, -1, -1),
+        ],
+        hulls: vec![hull_of(128, &[BLASTER]), hull_of(129, &[UNSEEN])],
         govts: vec![nova_sim::GovtRecord {
             id: GovtId(140),
             name: String::new(),
@@ -2834,6 +2840,7 @@ fn damaging() -> FakeCatalog {
             allies: [-1; 4],
             enemies: [-1; 4],
             comm_name: String::new(),
+            medium_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
             news_pic: -1,

@@ -480,14 +480,20 @@ pub fn hold(cloak: &mut Cloak, can_cloak: bool) {
 }
 
 /// `cloak` after a weapon's hit on a ship of `gear` that `can_cloak`,
-/// `attacking` the ship that hit it or not (see the module docs).
-pub fn hit(cloak: &mut Cloak, gear: CloakGear, can_cloak: bool, attacking: bool) {
-    if gear.has(CLOAK_WHEN_HIT) && can_cloak && !attacking {
+/// `attacking` the ship that hit it or not (see the module docs); and
+/// whether cloak-when-hit's conditions held, whether or not the ship was
+/// cloaked already. `_DamageShip` forces the ship's burst reload on those
+/// conditions alone (`_AIForceBurstReload` @0x3bbd5), before it cloaks
+/// (@0x3bbdd).
+pub fn hit(cloak: &mut Cloak, gear: CloakGear, can_cloak: bool, attacking: bool) -> bool {
+    let cloaks = gear.has(CLOAK_WHEN_HIT) && can_cloak && !attacking;
+    if cloaks {
         cloak.cloak();
     }
     if gear.decloaks_when_hit && (cloak.full() || cloak.direction > 0) {
         cloak.uncloak();
     }
+    cloaks
 }
 
 /// A rectangle in world space: x grows right and y down.
@@ -1052,6 +1058,33 @@ mod tests {
         let other = CloakGear { flags2: 0, ..plain };
         hit(&mut no_bit, other, true, false);
         assert_eq!(no_bit, Cloak::default());
+    }
+
+    #[test]
+    fn a_hit_says_whether_cloak_when_hit_held_cloaked_already_or_not() {
+        // `_DamageShip` calls `_AIForceBurstReload` on these conditions
+        // alone (@0x3bb95-0x3bbd5), before `_DoShipCloak`, which leaves a
+        // ship already cloaked as it is.
+        let plain = CloakGear {
+            decloaks_when_hit: false,
+            ..ZEPHYR
+        };
+        for start in [Cloak::default(), CLOAKED, at(20.0, 1), at(20.0, -1)] {
+            let mut cloak = start;
+            assert!(hit(&mut cloak, plain, true, false), "{start:?}");
+            let mut cloak = start;
+            assert!(!hit(&mut cloak, plain, true, true), "{start:?}: attacking");
+            let mut cloak = start;
+            assert!(!hit(&mut cloak, plain, false, false), "{start:?}: unable");
+            let mut cloak = start;
+            let other = CloakGear { flags2: 0, ..plain };
+            assert!(!hit(&mut cloak, other, true, false), "{start:?}: no bit");
+        }
+        let mut cloak = Cloak::default();
+        assert!(
+            hit(&mut cloak, ZEPHYR, true, false),
+            "a decloaking cloak too"
+        );
     }
 
     #[test]

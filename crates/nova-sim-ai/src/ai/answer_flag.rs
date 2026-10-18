@@ -29,7 +29,7 @@
 //! | Same leader | @0x3b94e-0x3b978 | cleared for a ship of the same leader |
 //! | Blessing | @0x3b9a9-0x3ba08 | for a stray hit still set: cleared for a governed ship allied with the player (`_AlliedWithPlayer` @0x6985: led by it, or by a ship it leads) whose government blesses it with peace ([`Surroundings::blessed`]) |
 //! | Grand fleet | @0x3ba14-0x3baa1 | cleared when the ship's leader's leader is an NPC attacker's leader's leader, the player included |
-//! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here one repairing the player ([`Goal::Assist`] with [`Help::Repair`]) within its reach ([`assist::within`]), is not answered |
+//! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders ([`Npc::docking`] in [`DockSub::Dock`]) or one repairing the player ([`Goal::Assist`] with [`Help::Repair`]) within its reach ([`assist::within`]), is not answered |
 //! | Entry test | @0x3bb20-0x3bb74 | a fighter-class attacker (ship class +0xe, [`EscortClass::Fighter`]), the player's ship included, on a ship that isn't one, has a target and attacks (`_IsShipAttacking` @0x82f6a, goal 4: [`Goal::attacking`]), is not answered |
 //!
 //! Left out, for want of what they read (see
@@ -43,8 +43,6 @@
 //!   victim whose leader jumps out (@0x3bab7-0x3bae4).
 //! - **A victim of AI type -1** (+0x88 at or below 0, @0x3b459): the
 //!   ejected hulk, which is never intact.
-//! - **Plunder docking** (substate 0xf under goal 0xd, @0x8e990): the
-//!   engine has no plunder goal.
 //! - **The nag ship**'s damage rewrite (@0x3a8bb-0x3a954) and its test in
 //!   `_IsShipMyEnemy` (@0x819a4).
 //!
@@ -60,6 +58,7 @@ use crate::hail::assist;
 use crate::legal::Crime;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
+use crate::traffic::plunder_dock::DockSub;
 
 /// The stray provocation below which the player's stray hit is forgiven
 /// (50.0 @0xdd064, read @0x3b85a).
@@ -330,16 +329,20 @@ fn grand_fleet(victim: &Npc, attacker: Attacker, around: &Surroundings) -> bool 
 }
 
 /// Docking (@0x3bab7-0x3bb1a): whether an NPC hit `victim` while it docks
-/// with the player among `around` to repair it, within its reach
-/// (`_AIShipIsDocking` @0x83f95; see [`assist`]).
+/// (`_AIShipIsDocking` @0x83f95, sub-goal 0xf whatever the goal): with a
+/// ship it plunders, in sub 0xf under goal 0xd or 4 ([`Npc::docking`], see
+/// [`plunder_dock`](crate::traffic::plunder_dock)), or with the player
+/// among `around` to repair it, within its reach (see [`assist`]).
 fn docking(victim: &Npc, attacker: Attacker, around: &Surroundings) -> bool {
-    let Some(player) = around.player else {
-        return false;
-    };
-    let reach = assist::reach(Help::Repair, victim.stats.handling.turn_rate);
-    matches!(attacker, Attacker::Npc(_))
-        && victim.goal == Goal::Assist(Help::Repair)
-        && assist::within(&victim.state, &player.state, reach)
+    let plunder_dock = victim
+        .docking
+        .is_some_and(|docking| docking.sub == DockSub::Dock);
+    let repair_dock = victim.goal == Goal::Assist(Help::Repair)
+        && around.player.is_some_and(|player| {
+            let reach = assist::reach(Help::Repair, victim.stats.handling.turn_rate);
+            assist::within(&victim.state, &player.state, reach)
+        });
+    matches!(attacker, Attacker::Npc(_)) && (plunder_dock || repair_dock)
 }
 
 /// The reaction block's entry test (@0x3bb20-0x3bb74): whether a
@@ -961,6 +964,15 @@ mod tests {
             aiming(of(3, Some(POLICE))),
             aiming(led(of(4, Some(POLICE)), 2)),
             aiming(escorting(of(5, None))),
+            aiming(Npc {
+                mission: Some(crate::traffic::npc::MissionMark {
+                    slot: 0,
+                    behav: crate::traffic::ShipBehav::EscortPlayer,
+                    formation: Some(FormationSlot::default()),
+                    order: None,
+                }),
+                ..of(6, Some(POLICE))
+            }),
         ];
         let mut scene = Scene::new(&npcs, &govts);
         assert!(scene.answers(&astray(strike(n(1), n(2)))), "unblessed");
@@ -975,6 +987,10 @@ mod tests {
         assert!(
             scene.answers(&astray(strike(n(1), n(5)))),
             "an independent escort"
+        );
+        assert!(
+            !scene.answers(&astray(strike(n(1), n(6)))),
+            "a mission escort of a blessing government"
         );
     }
 
@@ -1032,6 +1048,38 @@ mod tests {
                 !Scene::new(&moved, &govts).answers(&strike(n(1), n(2))),
                 inside,
                 "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pirate_docking_to_plunder_ignores_an_npcs_hit_but_not_the_players() {
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let govts = govts(0, 0);
+        let docking = |goal: Goal, sub: DockSub| {
+            let mut pirate = at(1, Some(TRADERS), 40.0, 0.0);
+            pirate.goal = goal;
+            pirate.docking = Some(Docking { ship: n(5), sub });
+            [pirate, of(2, Some(PIRATES)), of(5, Some(TRADERS))]
+        };
+        let plunder = Goal::Plunder {
+            ship: n(5),
+            hopeless: false,
+        };
+        for goal in [plunder, Goal::Attack(n(5))] {
+            let npcs = docking(goal, DockSub::Dock);
+            let scene = Scene::new(&npcs, &govts);
+            assert!(!scene.answers(&strike(n(1), n(2))), "{goal:?}: sub 0xf");
+            assert!(
+                scene.answers(&strike(n(1), P)),
+                "{goal:?}: the player's hit"
+            );
+        }
+        for sub in [DockSub::Approach, DockSub::Close] {
+            let npcs = docking(plunder, sub);
+            assert!(
+                Scene::new(&npcs, &govts).answers(&strike(n(1), n(2))),
+                "{sub:?}"
             );
         }
     }

@@ -83,6 +83,15 @@ pub const NEWS_CLOSE: Priority = Priority::new(1);
 pub const FLOATING_MAP_ZOOM: Priority = Priority::new(1);
 /// A fleet's arrival quote, `_beepSnd[4]`: `_HyperSpawnFleet` @0x426bb.
 pub const FLEET_QUOTE: Priority = Priority::new(1);
+/// A ship's distress call, `_beepSnd[4]`: `_AICallForHelp`'s
+/// `PlaySound(.., 1, ..)` @0x83109.
+pub const CALL_FOR_HELP: Priority = Priority::new(1);
+/// An interceptor's pre-scan hail, `_beepSnd[4]`: `_InterceptorAI`'s
+/// `ST_PlaySound(.., 1, ..)` @0x8cfbc.
+pub const SCAN_HAIL: Priority = Priority::new(1);
+/// A reinforcement fleet approaching, `_beepSnd[4]`:
+/// `_HandleReinforcements`' `PlaySound(.., 1, ..)` @0x3924b.
+pub const REINFORCEMENTS: Priority = Priority::new(1);
 /// A person's offer on its hail, `_beepSnd[4]`:
 /// `_HandlePlayerCommunication` @0x6223d.
 pub const HAIL_OFFER: Priority = Priority::new(1);
@@ -110,6 +119,12 @@ pub const SHIP_DOWNED: Priority = Priority::new(1);
 /// A mission failed by the player's ship downed, `_beepSnd[1]`:
 /// `_DamageShip` @0x3b04e, @0x3b2f1.
 pub const DOWNED_MISSION_FAILED: Priority = Priority::new(1);
+/// A pirate's cargo line, `_beepSnd[1]`: `_AIPlunderShipContents`
+/// @0x84758.
+pub const CARGO_STOLEN: Priority = Priority::new(1);
+/// A pirate's stolen-escort line, `_beepSnd[1]`: `_AIPlunderShipContents`
+/// @0x84908.
+pub const SHIP_STOLEN: Priority = Priority::new(1);
 /// A mission's special ship lost, `_beepSnd[1]`: `_HandleShipDisplay`
 /// @0x2db5a, `_DamageShip` @0x3af11.
 pub const MISSION_SHIP_LOST: Priority = Priority::new(1);
@@ -189,6 +204,9 @@ mod tests {
             (NEWS_CLOSE, 1, "news close"),
             (FLOATING_MAP_ZOOM, 1, "floating map zoom"),
             (FLEET_QUOTE, 1, "fleet quote"),
+            (CALL_FOR_HELP, 1, "call for help"),
+            (SCAN_HAIL, 1, "scan hail"),
+            (REINFORCEMENTS, 1, "reinforcements"),
             (HAIL_OFFER, 1, "hail offer"),
             (HAIL_QUOTE, 1, "hail quote"),
             (NAV_SELECTED, 1, "nav selected"),
@@ -198,6 +216,8 @@ mod tests {
             (TUTORIAL_HINT, 1, "tutorial hint"),
             (SHIP_DOWNED, 1, "ship downed"),
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),
+            (CARGO_STOLEN, 1, "cargo stolen"),
+            (SHIP_STOLEN, 1, "ship stolen"),
             (MISSION_SHIP_LOST, 1, "mission ship lost"),
             (MISSION_SHIP_BOARDED, 8, "mission ship boarded"),
             (TRAFFIC_CONTROL, 1, "traffic control"),

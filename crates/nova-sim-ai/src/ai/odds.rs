@@ -6,15 +6,34 @@
 //! @0x80eaa in the `EV Nova` executable). A ship's strength is its
 //! `shïp`'s `Strength` ([`HullSpec::strength`](crate::combat::hull::HullSpec)).
 //!
-//! - **Friend strength** ([`friend_strength`]): a ship's strength times
-//!   its shield factor ([`shield_factor`]: its shield over its most,
-//!   held between [`WEAKEST`] and 1; the raw shield, so the weakest, for a
-//!   ship that holds none), plus the same for each other ship not
-//!   breaking up that escorts it or whose government is allied with its
-//!   own. The player counts only itself: it has no escorts and no
-//!   government yet, and no NPC counts the player as a friend. The
-//!   original's doubling for an ally threatened by the ship's enemy is
-//!   left out (a placeholder).
+//! - **Friend strength** ([`friend_strength`], `_AIShipFriendStrength`
+//!   @0x825a8-0x827f9): a ship's strength times its shield factor
+//!   ([`shield_factor`]: its shield over its most, held between
+//!   [`WEAKEST`] and 1; the raw shield, held so, for a ship that holds
+//!   none), truncated, plus a weight for every other ship in the system
+//!   not breaking up (a disabled one counts, @0x82675), the player first
+//!   and then the NPCs in slot order ([`Surroundings::by_slot`]):
+//!   - a ship it leads counts its `Strength` (@0x82696); otherwise
+//!   - for the player, a ship allied with the government its ship type
+//!     fights as ([`PlayerSide::combat_govt`](crate::ai::PlayerSide::combat_govt),
+//!     class +0x9f4, @0x826d5), and with none that is every independent,
+//!     as `_GovtAllies(-1, -1)` holds (@0x4e4e);
+//!   - for an NPC, a ship whose government is allied with its own
+//!     (@0x82715). The player's government is none (`_ResetPlayer`
+//!     @0x1d46f), so only an independent counts the player;
+//!   - and nothing for any other.
+//!
+//!   A weight is doubled when the ship's enemy threatens that friend
+//!   ([`threatened_by_enemy_of`], @0x827b1), and counts times that
+//!   friend's shield factor, the sum truncated to a whole number at each
+//!   addition (@0x827d6). The factor is worked out afresh for every ship
+//!   counted or not, but only for one with a shield capacity (@0x8273c);
+//!   one with none counts at the factor of the ship before it, held between
+//!   [`WEAKEST`] and 1 (@0x82767-0x82796), by the engine's reading of
+//!   [`RuleKey::FriendShieldCarry`](crate::rulebook::RuleKey::FriendShieldCarry),
+//!   and at its own raw shield by the other. In stock only the escape pod
+//!   holds no shield. The original sums in 16 bits; here the sum isn't
+//!   wrapped.
 //! - **Odds against** a ship ([`odds_against`]): its enemies' strength
 //!   over its friends' (no less than 1), in raw strength. Its friends are
 //!   itself and every other intact ship allied with it; its enemies every
@@ -66,12 +85,14 @@
 
 use crate::ai::Surroundings;
 use crate::ai::fire::{has_ammo, suitable_missile};
+use crate::ai::threatened::threatened_by_enemy_of;
 use crate::combat::ShipRef;
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::hull::Condition;
 use crate::combat::weapon::Guidance;
 use crate::flight::heading_of;
 use crate::reserves::Reserves;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// The least a ship's shield factor counts for (0.25 @0xdd684).
@@ -119,30 +140,87 @@ pub fn rating_factor(rating: i64, yardstick: i16) -> f32 {
     quotient.clamp(1, 2) as f32
 }
 
-/// The strength of `ship` and its friends among `around` (see the
-/// module docs).
+/// The strength of `ship` and its friends among `around`, a friend of no
+/// shield capacity counting as `carry` reads
+/// [`RuleKey::FriendShieldCarry`](crate::rulebook::RuleKey::FriendShieldCarry)
+/// (see the module docs): none for a ship not in the system.
 #[must_use]
-pub fn friend_strength(ship: ShipRef, around: &Surroundings) -> f32 {
-    let weighed = |strength: f32, reserves: &Reserves| strength * shield_factor(reserves);
+pub fn friend_strength(ship: ShipRef, around: &Surroundings, carry: RuleSource) -> f32 {
+    let Some((strength, reserves)) = side_of(ship, around) else {
+        return 0.0;
+    };
+    let mut factor = shield_factor(reserves);
+    let mut sum = (strength * factor).trunc();
+    let player = around.player.as_ref().map(|player| {
+        (
+            ShipRef::Player,
+            player.hull.strength,
+            &player.reserves,
+            player.condition,
+        )
+    });
+    let npcs = around.by_slot().into_iter().map(|npc| {
+        (
+            ShipRef::Npc(npc.id),
+            npc.hull.strength,
+            &npc.reserves,
+            npc.condition,
+        )
+    });
+    for (other, weight, reserves, condition) in player.into_iter().chain(npcs) {
+        if other == ship || !condition.standing() {
+            continue;
+        }
+        let mut weight = if friend_of(ship, other, around) {
+            weight
+        } else {
+            0.0
+        };
+        factor = if reserves.shield.max > 0.0 || carry == RuleSource::Bible {
+            shield_factor(reserves)
+        } else {
+            factor
+        };
+        if weight > 0.0 && threatened_by_enemy_of(other, ship, around) {
+            weight *= 2.0;
+        }
+        sum = (sum + weight * factor).trunc();
+    }
+    sum
+}
+
+/// `ship`'s `Strength` and reserves among `around`, if it is there.
+fn side_of<'a>(ship: ShipRef, around: &'a Surroundings) -> Option<(f32, &'a Reserves)> {
     match ship {
-        ShipRef::Player => around.player.map_or(0.0, |player| {
-            weighed(player.hull.strength, &player.reserves)
+        ShipRef::Player => around
+            .player
+            .as_ref()
+            .map(|player| (player.hull.strength, &player.reserves)),
+        ShipRef::Npc(id) => around.npc(id).map(|npc| (npc.hull.strength, &npc.reserves)),
+    }
+}
+
+/// Whether `other` counts as `ship`'s friend among `around`: a ship it
+/// leads, or one allied with it (see the module docs).
+fn friend_of(ship: ShipRef, other: ShipRef, around: &Surroundings) -> bool {
+    let other_npc = match other {
+        ShipRef::Npc(id) => around.npc(id),
+        ShipRef::Player => None,
+    };
+    match ship {
+        ShipRef::Player => other_npc.is_some_and(|other| {
+            other.escorts_player()
+                || around.govts.allies(
+                    around.player.and_then(|player| player.combat_govt),
+                    other.govt,
+                )
         }),
         ShipRef::Npc(id) => {
-            let Some(npc) = around.npc(id) else {
-                return 0.0;
-            };
-            let friends: f32 = around
-                .npcs
-                .iter()
-                .filter(|other| {
-                    other.id != id
-                        && other.condition.standing()
-                        && (other.leader == Some(id) || around.govts.allies(npc.govt, other.govt))
-                })
-                .map(|other| weighed(other.hull.strength, &other.reserves))
-                .sum();
-            weighed(npc.hull.strength, &npc.reserves) + friends
+            let own = around.npc(id).and_then(|npc| npc.govt);
+            match other_npc {
+                Some(other) => other.leader == Some(id) || around.govts.allies(own, other.govt),
+                None => around.govts.allies(own, None),
+            }
         }
     }
 }
@@ -295,8 +373,11 @@ mod tests {
             yardstick: 0,
             untargetable: false,
             blessing: Blessing::NONE,
+            ship: crate::catalog::ShipId(128),
+            combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         }
     }
 
@@ -319,6 +400,11 @@ mod tests {
         assert_eq!(WEAKEST, 0.25);
     }
 
+    /// [`friend_strength`] by the engine's reading.
+    fn strength(ship: ShipRef, around: &Surroundings) -> f32 {
+        friend_strength(ship, around, RuleSource::Engine)
+    }
+
     #[test]
     fn friend_strength_adds_escorts_and_allies_each_by_its_shields() {
         let govts = govts();
@@ -335,7 +421,7 @@ mod tests {
             ticks_left: 3,
             starting: false,
         };
-        let mut disabled = ship(8, 141, 5.0);
+        let mut disabled = ship(8, 141, 8.0);
         disabled.condition = Condition::Disabled;
         disabled.reserves.shield.now = 0.0;
         let npcs = [me, escort, ally, kin, enemy, neutral, dying, disabled];
@@ -345,19 +431,166 @@ mod tests {
             ..Surroundings::new(&[], &npcs)
         };
         assert_eq!(
-            friend_strength(n(1), &around),
-            100.0 * 0.5 + 40.0 + 20.0 + 10.0 + 5.0 * 0.25,
-            "the player, enemies, neutrals and the dying are not friends"
+            strength(n(1), &around),
+            100.0 * 0.5 + 40.0 + 20.0 + 10.0 + 8.0 * 0.25,
+            "the player, enemies, neutrals and the dying are not friends; a disabled ally is"
+        );
+        assert_eq!(strength(n(6), &around), 1000.0 + 40.0, "its own kind");
+        assert_eq!(strength(ShipRef::Player, &around), 500.0, "alone");
+        assert_eq!(strength(n(9), &around), 0.0, "not there");
+        let alone = Surroundings::new(&[], &npcs);
+        assert_eq!(strength(ShipRef::Player, &alone), 0.0, "no player");
+    }
+
+    #[test]
+    fn friend_strength_is_truncated_at_each_addition() {
+        let govts = govts();
+        let mut me = ship(1, 140, 3.0);
+        me.reserves.shield.now = 15.0;
+        let mut kin = ship(2, 140, 1.0);
+        kin.reserves.shield.now = 15.0;
+        let npcs = [me, kin.clone(), kin.clone(), kin];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        // 1.5 → 1, then 1.5 → 1 three times, not 3.0.
+        assert_eq!(strength(n(1), &around), 1.0);
+    }
+
+    #[test]
+    fn a_friend_threatened_by_the_ships_enemy_counts_twice() {
+        let govts = govts();
+        let mut ally = ship(2, 141, 20.0);
+        ally.goal = Goal::Attack(n(3));
+        let enemy = ship(3, 142, 1000.0);
+        let npcs = [ship(1, 140, 100.0), ally.clone(), enemy];
+        let around = Surroundings {
+            govts: &govts,
+            player: Some(player(0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(strength(n(1), &around), 100.0 + 2.0 * 20.0);
+        let mut calm = npcs.clone();
+        calm[1].goal = Goal::Idle;
+        let around = Surroundings {
+            npcs: &calm,
+            ..around
+        };
+        assert_eq!(strength(n(1), &around), 100.0 + 20.0, "unthreatened");
+    }
+
+    #[test]
+    fn the_players_friend_strength_counts_its_escorts_and_its_combat_governments_allies() {
+        let govts = govts();
+        let mut escort = ship(1, 143, 40.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let mut independent = ship(2, 140, 7.0);
+        independent.govt = None;
+        let ally = ship(3, 141, 20.0);
+        let trader = ship(4, 140, 10.0);
+        let npcs = [escort, independent, ally, trader];
+        let around = |combat_govt| Surroundings {
+            govts: &govts,
+            player: Some(PlayerSide {
+                combat_govt,
+                ..player(500.0)
+            }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            strength(ShipRef::Player, &around(None)),
+            500.0 + 40.0 + 7.0,
+            "no combat government: its escort and every independent"
         );
         assert_eq!(
-            friend_strength(n(6), &around),
-            1000.0 + 40.0,
-            "its own kind"
+            strength(ShipRef::Player, &around(Some(GovtId(140)))),
+            500.0 + 40.0 + 20.0 + 10.0,
+            "the allies of the government it fights as, not the independents"
         );
-        assert_eq!(friend_strength(ShipRef::Player, &around), 500.0, "alone");
-        assert_eq!(friend_strength(n(9), &around), 0.0, "not there");
-        let alone = Surroundings::new(&[], &npcs);
-        assert_eq!(friend_strength(ShipRef::Player, &alone), 0.0, "no player");
+    }
+
+    #[test]
+    fn only_an_independent_npc_counts_the_player() {
+        let govts = govts();
+        let mut independent = ship(1, 140, 100.0);
+        independent.govt = None;
+        let npcs = [independent, ship(2, 140, 100.0)];
+        let around = Surroundings {
+            govts: &govts,
+            player: Some(player(500.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(strength(n(1), &around), 100.0 + 500.0);
+        assert_eq!(strength(n(2), &around), 100.0);
+        let mut dying = around;
+        let player = PlayerSide {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..player(500.0)
+        };
+        dying.player = Some(player);
+        assert_eq!(strength(n(1), &dying), 100.0, "not breaking up");
+    }
+
+    #[test]
+    fn a_friend_with_no_shield_capacity_carries_the_factor_of_the_ship_before_it_by_the_engine() {
+        let govts = govts();
+        let mut me = ship(1, 140, 100.0);
+        me.reserves.shield.now = 15.0;
+        let mut enemy = ship(2, 142, 1000.0);
+        enemy.reserves.shield.now = 30.0;
+        let mut shieldless = ship(3, 141, 40.0);
+        shieldless.reserves.shield = crate::reserves::Gauge { now: 0.0, max: 0.0 };
+        let npcs = [me.clone(), enemy, shieldless.clone()];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            strength(n(1), &around),
+            50.0 + 40.0,
+            "the enemy's 1, worked out though it counts for nothing"
+        );
+        assert_eq!(
+            friend_strength(n(1), &around, RuleSource::Bible),
+            50.0 + 10.0,
+            "its raw shield, held to 0.25"
+        );
+        let first = [me, shieldless];
+        let around = Surroundings {
+            npcs: &first,
+            ..around
+        };
+        assert_eq!(strength(n(1), &around), 50.0 + 20.0, "the ship's own 0.5");
+    }
+
+    #[test]
+    fn friends_are_met_in_slot_order() {
+        let govts = govts();
+        let mut me = ship(1, 140, 100.0);
+        me.reserves.shield.now = 15.0;
+        me.berth = 1;
+        let mut enemy = ship(2, 142, 1000.0);
+        enemy.berth = 3;
+        let mut shieldless = ship(3, 141, 40.0);
+        shieldless.reserves.shield = crate::reserves::Gauge { now: 0.0, max: 0.0 };
+        shieldless.berth = 2;
+        let npcs = [me, enemy, shieldless];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            strength(n(1), &around),
+            50.0 + 20.0,
+            "the shieldless ally's slot comes before the enemy's"
+        );
     }
 
     #[test]
@@ -479,7 +712,7 @@ mod tests {
         };
         assert_eq!(odds_against(&calm, &around), 0.0, "not threatening");
         assert_eq!(
-            friend_strength(ShipRef::Player, &around),
+            strength(ShipRef::Player, &around),
             100.0,
             "the rating weighs only in the odds"
         );

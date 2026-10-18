@@ -563,6 +563,33 @@ mod tests {
     }
 
     #[test]
+    fn a_miner_in_the_traffic_mines_while_slot_0_holds_an_asteroid_and_stops_without() {
+        use crate::ai::miner::MINES;
+        use crate::ai::{Goal, NovaAi};
+        let catalog = rocky(catalog());
+        let mut session = flying(&catalog);
+        // The first pass populates the system.
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        let mut zephyr = crate::traffic::fixture::npc(
+            1,
+            crate::stats::ShipStats::new(nova_sim_base::fixture::FAST, &[]),
+        );
+        zephyr.miner = MINES;
+        zephyr.state.position = Vec2::new(600.0, 600.0);
+        let id = session.traffic.add_npc(zephyr);
+        let think = |session: &mut Session| {
+            for _ in 0..4 {
+                session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            }
+            session.npc(id).expect("here").goal
+        };
+        assert_eq!(think(&mut session), Goal::Idle, "state 6");
+        grown(&mut session, 1);
+        assert!(session.asteroids.get(0).is_some(), "slot 0");
+        assert_eq!(think(&mut session), Goal::Mine, "state 16");
+    }
+
+    #[test]
     fn the_escape_pods_rescue_keeps_the_field() {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);

@@ -248,10 +248,11 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             Participant::MissionDays => session.pilot.missions.count_down(),
             // The active ranks' salaries (see the `ranks` module).
             Participant::Ranks => session.ranks_day(),
-            // Each slot is filled by its own phase: the tribute by rdm
-            // task planet-domination, and the reinforcements once they
-            // are built.
-            Participant::Tribute | Participant::Reinforcements => {}
+            // Each visible system's reinforcement countdown (see the
+            // `reinforcements` module).
+            Participant::Reinforcements => session.reinforcements_day(),
+            // Filled by its own phase: rdm task planet-domination.
+            Participant::Tribute => {}
         }
     }
 }

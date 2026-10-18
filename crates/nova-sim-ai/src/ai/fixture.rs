@@ -1,9 +1,10 @@
 //! Ships and governments the AI types' tests share.
 
+use crate::ai::fire::AmmoLeft;
 use crate::ai::{Blessed, Blessing, PlayerSide, Surroundings};
-use crate::catalog::{EscortClass, GovtId, GovtRecord, LandingSite};
+use crate::catalog::{EscortClass, GovtId, GovtRecord, LandingSite, WeaponId, WeaponRecord};
 use crate::combat::ShipRef;
-use crate::combat::armament::Armament;
+use crate::combat::armament::{Armament, LauncherRounds};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::weapon::WeaponSpec;
 use crate::flight::ShipState;
@@ -65,6 +66,29 @@ pub(crate) fn ship(id: u32, govt: GovtId, ai_type: AiType, x: f32, y: f32) -> Np
     npc
 }
 
+/// `npc` armed so it has `left` of its ammunition, its hull retreating
+/// when out of it (`shïp` `Flags2` 0x0080) as `retreats` says: a
+/// launcher (128, of `AmmoType` 10) holding a round ([`AmmoLeft::Armed`]),
+/// or none; beside the harmless gun of unlimited ammunition (127) for
+/// [`AmmoLeft::OnlyUnlimited`], alone for [`AmmoLeft::Dry`].
+pub(crate) fn short_of_ammo(mut npc: Npc, left: AmmoLeft, retreats: bool) -> Npc {
+    let launcher = WeaponSpec::new(&WeaponRecord {
+        ammo_type: 10,
+        ..weapon(128)
+    });
+    let gun = WeaponSpec::new(&weapon(127));
+    npc.armament = match left {
+        AmmoLeft::Dry => Armament::new([(launcher, 1)]),
+        AmmoLeft::Armed | AmmoLeft::OnlyUnlimited => Armament::new([(gun, 1), (launcher, 1)]),
+    };
+    npc.rounds = match left {
+        AmmoLeft::Armed => LauncherRounds::from([(WeaponId(128), 1)]),
+        AmmoLeft::OnlyUnlimited | AmmoLeft::Dry => LauncherRounds::default(),
+    };
+    npc.hull.retreats_dry = retreats;
+    npc
+}
+
 /// The player at (`x`, `y`), at rest, of strength 100.
 pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
     PlayerSide {
@@ -83,8 +107,11 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         yardstick: 0,
         untargetable: false,
         blessing: Blessing::NONE,
+        ship: crate::catalog::ShipId(128),
+        combat_govt: None,
         target: None,
         class: EscortClass::Freighter,
+        boarded: false,
     }
 }
 

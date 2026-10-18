@@ -217,6 +217,13 @@ impl<A: Audio> AudioCore<A> {
             SimSound::FleetArrivalQuote => {
                 self.play(self.table.fleet_quote, at::FLEET_QUOTE);
             }
+            SimSound::CallForHelp => {
+                self.play(self.table.call_for_help, at::CALL_FOR_HELP);
+            }
+            SimSound::ScanHail => self.play(self.table.scan_hail, at::SCAN_HAIL),
+            SimSound::ReinforcementsApproaching => {
+                self.play(self.table.reinforcements, at::REINFORCEMENTS);
+            }
             SimSound::HailOffer => self.play(self.table.hail_offer, at::HAIL_OFFER),
             SimSound::HailQuote => self.play(self.table.hail_quote, at::HAIL_QUOTE),
             SimSound::PersonOfferBoarded | SimSound::Boarded => {
@@ -238,6 +245,8 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.tutorial_hint, at::TUTORIAL_HINT);
             }
             SimSound::ShipDowned => self.play(self.table.ship_downed, at::SHIP_DOWNED),
+            SimSound::CargoStolen => self.play(self.table.cargo_stolen, at::CARGO_STOLEN),
+            SimSound::ShipStolen => self.play(self.table.ship_stolen, at::SHIP_STOLEN),
             SimSound::DownedMissionFailed => {
                 self.play(self.table.downed_mission_failed, at::DOWNED_MISSION_FAILED);
             }
@@ -823,6 +832,8 @@ mod tests {
                 at::DOWNED_MISSION_FAILED,
             ),
             (Sound::Sim(SimSound::MissionShipLost), at::MISSION_SHIP_LOST),
+            (Sound::Sim(SimSound::CargoStolen), at::CARGO_STOLEN),
+            (Sound::Sim(SimSound::ShipStolen), at::SHIP_STOLEN),
             (
                 Sound::Sim(SimSound::MissionShipBoarded),
                 at::MISSION_SHIP_BOARDED,
@@ -856,6 +867,11 @@ mod tests {
             let played = drain_prioritised(&log);
             assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
         }
+    }
+
+    #[test]
+    fn the_take_off_and_alert_play_at_their_priorities_once_mapped() {
+        use crate::priority as at;
         let table = SoundTable {
             take_off: Some(SoundId(201)),
             alert: Some(SoundId(202)),
@@ -1188,6 +1204,19 @@ mod tests {
             &[Sound::Sim(SimSound::FleetArrivalQuote)],
         );
         assert_eq!(drain(&log), [play(154, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_distress_call_a_pre_scan_hail_and_reinforcements_approaching_beep_154() {
+        for sound in [
+            SimSound::CallForHelp,
+            SimSound::ScanHail,
+            SimSound::ReinforcementsApproaching,
+        ] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[Sound::Sim(sound)]);
+            assert_eq!(drain(&log), [play(154, EFFECTS)], "{sound:?}");
+        }
     }
 
     #[test]

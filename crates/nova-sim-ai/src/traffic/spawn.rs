@@ -414,9 +414,20 @@ pub struct FleetCall {
     /// @0x42607-0x42629). Setup's fleets come silently
     /// (`_SetupShipsInSystem` @0x4327c-0x4328d); every arriving one is
     /// announced: a `LinkSyst` fleet (`_HyperShipSpawn` @0x42973), a
-    /// `DudeTypes` fleet (`_EnterMoreShips` @0x43bbc-0x43bd3) and the
-    /// escort-strength timer's (@0x43d90-0x43dcf).
+    /// `DudeTypes` fleet (`_EnterMoreShips` @0x43bbc-0x43bd3), the
+    /// escort-strength timer's (@0x43d90-0x43dcf) and the system's
+    /// reinforcement fleet (`_HandleReinforcements` @0x390c2-0x390e0).
     pub announced: bool,
+}
+
+impl FleetCall {
+    /// `_HyperSpawnFleet(sys, fleet, 4, 1)`: the lead an interceptor, the
+    /// arrival announced, as the escort-strength timer (@0x43d90-0x43dcf)
+    /// and the reinforcement clock (@0x390c2-0x390e0) call it.
+    pub const ANNOUNCED_INTERCEPTOR: Self = Self {
+        lead_ai: Some(AiType::Interceptor),
+        announced: true,
+    };
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -1482,6 +1493,7 @@ mod tests {
                 (ShipId(202), kind(4, FAST)),
                 (ShipId(203), kind(1, no_fuel)),
             ]),
+            reinforcements: None,
             persons: BTreeMap::new(),
             person_slots: Vec::new(),
         }

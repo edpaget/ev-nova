@@ -43,16 +43,16 @@
 //! through `_EscortAI` as AI type 6, and the player's commands reach it
 //! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
-//! An escort answers threats to the player, not the hits it takes: it has
-//! no reaction. It never launches the fighters it carries
-//! ([`Trigger::bays`]).
+//! An escort hit takes its attacker as its target, as any ship does
+//! ([`react::victim`]), but never comes to another ship's help. It never
+//! launches the fighters it carries ([`Trigger::bays`]).
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, GateWait, Goal, Surroundings, fire};
+use crate::ai::{Behaviour, GateWait, Goal, Reaction, Surroundings, fire, react};
 use crate::chance::Chance;
-use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
+use crate::combat::{ShipRef, Strike};
 use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, threats};
 use crate::flight::ShipState;
 use crate::rulebook::RuleSource;
@@ -164,6 +164,20 @@ impl Behaviour for EscortAi {
     /// [`fire_unprovoked`], whatever its standing order.
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
         fire_unprovoked(npc, around, self.fire)
+    }
+
+    /// [`react::victim`]: `_DamageShip`'s reaction block reads no AI
+    /// type, so an escort (AI 5 or 6) takes its attacker as its target, as
+    /// any ship does. It is never a Good Samaritan (AI 3 and 4 alone,
+    /// @0x8289f-0x828bb).
+    ///
+    /// Its next think may set another target, as its standing order
+    /// reads its target ([`EscortAi::decide`]). Keeping the hit's attacker
+    /// by order is rdm:phase/escort-fleet-fidelity/phase-9-escorts-answer-hits-and-run-dry's.
+    /// Until then the target can hold for as little as one tick, until
+    /// that think. Nothing the player sees reads it in that time.
+    fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+        react::victim(npc, strike, around)
     }
 }
 
@@ -929,22 +943,79 @@ mod tests {
         );
     }
 
+    /// How the escort, `npcs[0]`, answers `strike` among `npcs`, the
+    /// player at the centre.
+    fn reacts(npcs: &[Npc], strike: &crate::combat::Strike) -> crate::ai::Reaction {
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], npcs)
+        };
+        ENGINE.react(&npcs[0], strike, &around)
+    }
+
     #[test]
-    fn an_escort_answers_no_hit() {
+    fn an_escort_hit_by_a_pirate_takes_it_as_its_target() {
+        // `_DamageShip`'s reaction block reads no AI type (@0x3bb7a-0x3bed2):
+        // an escort (AI 5 or 6) takes its attacker as its target.
         let npcs = [escort(None), pirate(2, 100.0, 0.0)];
+        let strike = crate::combat::Strike {
+            damage: 10.0,
+            ..crate::combat::fixture::strike(n(1), n(2))
+        };
+        assert_eq!(
+            reacts(&npcs, &strike),
+            crate::ai::Reaction {
+                target: Some(n(2)),
+                provoked: 10.0,
+                goal: None,
+            }
+        );
+    }
+
+    #[test]
+    fn an_escort_is_no_good_samaritan() {
+        // `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
+        let mut trader = bystander(2, 3000.0, 0.0);
+        trader.ai_type = AiType::WimpyTrader;
+        let npcs = [escort(None), trader];
+        let strike = crate::combat::fixture::strike(n(2), ShipRef::Player);
         let govts = govts(0, 0);
         let around = Surroundings {
             player: Some(player(0.0, 0.0)),
             govts: &govts,
             ..Surroundings::new(&[], &npcs)
         };
-        let strike = crate::combat::Strike {
-            damage: 10.0,
-            ..crate::combat::fixture::strike(n(1), n(2))
-        };
+        assert!(
+            crate::ai::react::answer(&npcs[0], &strike, &around, RuleSource::Engine)
+                .goal
+                .is_some(),
+            "a warship would answer"
+        );
+        assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
+    }
+
+    #[test]
+    fn an_escort_attacking_a_nearer_target_ahead_of_it_lets_a_hit_be() {
+        // The focus skip (@0x3bc25-0x3bcac), under the engine's reading
+        // (rdm:phase/weapons-fidelity/phase-37-left-out-of-phase-26 owns
+        // the original's).
+        let mut fighting = having(
+            escort(Some(EscortOrder::Attack)),
+            Goal::Attack(n(3)),
+            Some(n(3)),
+        );
+        fighting.state.heading = 0.0;
+        let npcs = [fighting, pirate(2, 100.0, 0.0), pirate(3, 0.0, -10.0)];
+        let strike = crate::combat::fixture::strike(n(1), n(2));
+        assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
+        let mut far = npcs.clone();
+        far[2].state.position = crate::geometry::Vec2::new(0.0, -60.0);
         assert_eq!(
-            ENGINE.react(&npcs[0], &strike, &around),
-            crate::ai::Reaction::default()
+            reacts(&far, &strike).target,
+            Some(n(2)),
+            "its target too far"
         );
     }
 
