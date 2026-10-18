@@ -2147,6 +2147,34 @@ mod tests {
     }
 
     #[test]
+    fn the_enemy_class_roll_skips_a_dying_player_for_a_live_npc_enemy() {
+        // The live test follows the draw (@0x8a9a2): a 0 still makes no
+        // candidate of a player breaking up, and a farther enemy is taken.
+        // The enemy is of govt 145, not the player's combat government, so
+        // it adds nothing to the player's friend strength.
+        let govts = govts(0);
+        let npcs = [me(), ship(2, RIVAL, 0.0, 6000.0)];
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                combat_govt: Some(ENEMY),
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+                ..player(0.0, -5000.0)
+            }),
+            govts: &govts,
+            system_govt: Some(ME),
+            record: 30,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut chance = Draws::of(&[0]);
+        let pick = select_target(&npcs[0], None, &around, TargetRules::default(), &mut chance);
+        assert_eq!(chance.asked, vec![50]);
+        assert_eq!(pick, Some(n(2)));
+    }
+
+    #[test]
     fn the_enemy_class_roll_isnt_asked_without_each_of_its_gates() {
         let led = |npc: &mut Npc| {
             npc.escort = Some(crate::escort::EscortDuty {
