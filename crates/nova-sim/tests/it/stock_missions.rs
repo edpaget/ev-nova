@@ -9,8 +9,10 @@
 //! The new pilot is offered the tutorial at the spaceport. Every finale's
 //! `M472` leaves the port after it, and each system's first stellar is
 //! the first of its landing sites. The one mission `dësc` naming a movie
-//! is mission 906's offer, "\x01", after the dialog. Skips, passing,
-//! when `NOVA_DATA` is unset.
+//! is mission 906's offer, "\x01", after the dialog. Mission 128 marks
+//! its destination green on its dialogs' maps (`Flags` 0x0100), and each
+//! offer so flagged marks its destination stellar's holder. Skips,
+//! passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -25,8 +27,8 @@ use nova_sim::mission::{Offer, Stop, Venue, VenueOffer};
 use nova_sim::story::listers_of;
 use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames, TagRules};
 use nova_sim::{
-    Bit, CommCatalog, DateAffixes, GameDate, GovtId, MissionId, NeverFires, Pilot, PilotCatalog,
-    RuleSource, Session, StellarId, SystemId, is_landable,
+    Bit, CommCatalog, DateAffixes, GameDate, GovtId, MARKS_DESTINATION, MissionId, NeverFires,
+    Pilot, PilotCatalog, RuleSource, Session, StellarId, SystemId, is_landable,
 };
 
 /// A new stock pilot resumed over the first landable stellar of its
@@ -261,6 +263,57 @@ fn a_new_stock_pilots_mission_computer_lists_its_offers_named_and_filled() {
         computer.rows.iter().any(|row| !row.text.is_empty()),
         "the offers have texts"
     );
+}
+
+#[test]
+fn a_stock_offer_of_flag_0x0100_marks_its_destinations_holder_on_its_map() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    let delivery = missions
+        .iter()
+        .find(|record| record.id == MissionId(128))
+        .expect("mïsn 128");
+    assert_ne!(
+        delivery.flags & MARKS_DESTINATION,
+        0,
+        "Delivery to Earth; Vellos1"
+    );
+    let session = docked_new_pilot(&data);
+    let listed = data.listed_stellars();
+    let mut marked = 0;
+    for offer in session.mission_offers(Venue::Computer) {
+        let record = missions
+            .iter()
+            .find(|record| record.id == offer.mission)
+            .expect("a mïsn");
+        let marks = session.offer_map_marks(offer.mission);
+        assert!(marks.multi_arrows, "{:?}", offer.mission);
+        assert_eq!(
+            session.computer_map_marks(Some(offer.mission)),
+            marks,
+            "{:?}: the computer's are the offer's",
+            offer.mission
+        );
+        let stellar = offer
+            .destination
+            .or(offer.return_to)
+            .map(|stop: Stop| stop.stellar);
+        let holder = stellar.and_then(|stellar| {
+            session
+                .galaxy()
+                .holder(listers_of(&listed, stellar), session.pilot().system())
+        });
+        if record.flags & MARKS_DESTINATION == 0 {
+            assert_eq!(marks.green, None, "{:?}", offer.mission);
+        } else {
+            assert_eq!(marks.green, holder, "{:?}", offer.mission);
+            marked += usize::from(holder.is_some());
+        }
+    }
+    assert!(marked > 0, "an offer here marks a system green");
 }
 
 /// The first bit `record`'s `OnSuccess` sets that nothing after it in the
