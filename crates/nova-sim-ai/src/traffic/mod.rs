@@ -107,7 +107,7 @@
 //! 7. the removal of those that landed, jumped out, entered a gate or
 //!    docked, each in [`Traffic::departed`] with how it left, for its
 //!    session to take a fighter docked aboard;
-//! 8. and every NPC left, held still, disabled or breaking up included,
+//! 8. and every NPC left, disabled or breaking up included,
 //!    regenerates its fuel up to its capacity ([`Npc::regenerate_fuel`],
 //!    `_HandleShip` @0x35305-0x35374), on both passes.
 //!
@@ -888,20 +888,6 @@ impl Traffic {
         strikes: &[Strike],
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.tick_holding(behaviour, world, strikes, &BTreeSet::new(), chance);
-    }
-
-    /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
-    /// the NPCs in `still`, which decide, aim and cloak as the others do
-    /// and keep their place: none of them moves, lands or jumps out.
-    pub fn tick_holding(
-        &mut self,
-        behaviour: &(impl Behaviour + ?Sized),
-        world: World,
-        strikes: &[Strike],
-        still: &BTreeSet<NpcId>,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         self.forget_provocations();
@@ -999,7 +985,7 @@ impl Traffic {
             }
         }
         let freed = pod_flight::count_down(&mut self.npcs);
-        self.fly(&world, true, still, chance);
+        self.fly(&world, true, chance);
         self.departed.extend(freed);
         // The display pass (`_DoPlayGameWork` @0x444ad) follows the
         // frame's arrivals pass (step 1) and frees each ship left behind
@@ -1083,27 +1069,19 @@ impl Traffic {
     /// Nothing else runs, as the arrivals (`_EnterMoreShips`), the
     /// escort-strength timer, the answers to strikes, the decisions
     /// (`_AIDispatch`) and the gate waits' fire are the advance pass's
-    /// alone, and the AI timer does not move. No NPC is held still, as
-    /// the second pass stands still once the jump that holds them has
-    /// begun. The ships an in-flight move left behind stay until the next
-    /// advance pass frees them, as none of them is drawn.
+    /// alone, and the AI timer does not move. The ships an in-flight move
+    /// left behind stay until the next advance pass frees them, as none of
+    /// them is drawn.
     pub fn move_in(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
-        self.fly(&world, false, &BTreeSet::new(), chance);
+        self.fly(&world, false, chance);
     }
 
     /// Steps 5 to 8 of a tick in `world` (see the module docs), rolling on
     /// `chance`: every NPC's cloak, thinking when `think`, then the
     /// autopilot, a flight step, the followers of a ship that reached its
-    /// gate released ([`Traffic::release_followers`]), the departures, but
-    /// for the NPCs in `still`, which keep their place, and every NPC's
-    /// fuel regeneration.
-    fn fly(
-        &mut self,
-        world: &World,
-        think: bool,
-        still: &BTreeSet<NpcId>,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
+    /// gate released ([`Traffic::release_followers`]), the departures, and
+    /// every NPC's fuel regeneration.
+    fn fly(&mut self, world: &World, think: bool, chance: &mut (impl Chance + ?Sized)) {
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
@@ -1120,7 +1098,7 @@ impl Traffic {
             }
         }
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
-        let outcomes = self.fly_all(world, player, &states, still, think, chance);
+        let outcomes = self.fly_all(world, player, &states, think, chance);
         board_wait::count_down(&mut self.npcs);
         plunder::count_down(&mut self.npcs);
         self.release_followers(&entering);
@@ -1177,14 +1155,12 @@ impl Traffic {
 
     /// Flies every NPC a tick in `world` ([`autopilot::fly`]), each towards
     /// the ship its goal is about among the `player` and `states`, at its
-    /// top speeds, rolling on `chance`, but for the NPCs in `still`, which
-    /// keep their place: what became of each, in order.
+    /// top speeds, rolling on `chance`: what became of each, in order.
     fn fly_all(
         &mut self,
         world: &World,
         player: Option<ShipState>,
         states: &[(NpcId, ShipState)],
-        still: &BTreeSet<NpcId>,
         think: bool,
         chance: &mut (impl Chance + ?Sized),
     ) -> Vec<Outcome> {
@@ -1225,9 +1201,6 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
-                if still.contains(&npc.id) {
-                    return Outcome::Flying;
-                }
                 if let Some(outcome) = warp_out::fly_jump(npc, &leaders, world, think) {
                     return outcome;
                 }
@@ -2557,44 +2530,6 @@ mod tests {
             traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
             assert_eq!(behaviour.take(), [NpcId(0), NpcId(1), NpcId(2)]);
         }
-    }
-
-    #[test]
-    fn the_npcs_held_still_decide_and_keep_their_place_while_the_rest_fly() {
-        let mut traffic = populated(3, 1);
-        for npc in &mut traffic.npcs {
-            npc.state.velocity = Vec2::new(1.0, 0.0);
-            npc.goal = Goal::JumpOut;
-        }
-        let before: Vec<ShipState> = traffic.npcs().iter().map(|npc| npc.state).collect();
-        let behaviour = Recording::deciding(Goal::JumpOut);
-        let still = BTreeSet::from([NpcId(0), NpcId(2)]);
-        let sites = [];
-        for _ in 0..3 {
-            traffic.tick_holding(
-                &behaviour,
-                World::new(&sites),
-                &[],
-                &still,
-                &mut Draws::of(&[]),
-            );
-            assert_eq!(
-                behaviour.take(),
-                [NpcId(0), NpcId(1), NpcId(2)],
-                "all decide"
-            );
-        }
-        let after: Vec<ShipState> = traffic.npcs().iter().map(|npc| npc.state).collect();
-        assert_eq!((after[0], after[2]), (before[0], before[2]), "held still");
-        assert_ne!(after[1], before[1], "flies");
-        traffic.tick_holding(
-            &behaviour,
-            World::new(&sites),
-            &[],
-            &BTreeSet::new(),
-            &mut Draws::of(&[]),
-        );
-        assert_ne!(traffic.npcs()[0].state, before[0], "let go");
     }
 
     #[test]
@@ -4921,13 +4856,12 @@ mod tests {
     }
 
     #[test]
-    fn every_npc_regenerates_fuel_each_tick_held_still_or_disabled_up_to_capacity() {
+    fn every_npc_regenerates_fuel_each_tick_disabled_or_not_up_to_capacity() {
         let mut traffic = refuelling(3);
         traffic.npcs[1].condition = Condition::Disabled;
-        let still = BTreeSet::from([NpcId(2)]);
         let idle = Fighting::deciding(Goal::Idle);
         let tick = |traffic: &mut Traffic| {
-            traffic.tick_holding(&idle, World::new(&[]), &[], &still, &mut Draws::of(&[]));
+            traffic.tick_in(&idle, World::new(&[]), &[], &mut Draws::of(&[]));
         };
         tick(&mut traffic);
         let fuel = |traffic: &Traffic| -> Vec<f32> {

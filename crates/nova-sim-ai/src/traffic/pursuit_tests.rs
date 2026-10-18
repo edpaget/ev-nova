@@ -3,8 +3,6 @@
 //! the fire commands, for each NPC whose decision is due, its frame then
 //! flown.
 
-use std::collections::BTreeSet;
-
 use super::{Traffic, World};
 use crate::ai::fire::Manoeuvre;
 use crate::ai::pursuit::{Kept, frame_of};
@@ -55,13 +53,7 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         ..World::new(&[])
     };
     // The bearing up and a little left, within 30 of its heading of 0.
-    traffic.tick_holding(
-        &Attacking,
-        world,
-        &[],
-        &BTreeSet::new(),
-        &mut Ranged::of(&[]),
-    );
+    traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.pursuit.kept, Some(Kept::Rush));
     let frame = frame_of(ship, &player.state, false).expect("a fight");
@@ -70,13 +62,7 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         [Manoeuvre::Approach]
     );
     let speed = ship.state.velocity.length();
-    traffic.tick_holding(
-        &Attacking,
-        world,
-        &[],
-        &BTreeSet::new(),
-        &mut Ranged::of(&[]),
-    );
+    traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
     let ship = &traffic.npcs()[0];
     let frame = frame_of(ship, &player.state, false).expect("a fight");
     assert_eq!(
@@ -133,13 +119,7 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
             approach_lead: reading,
             ..World::new(&[])
         };
-        traffic.tick_holding(
-            &Attacking,
-            world,
-            &[],
-            &BTreeSet::new(),
-            &mut Ranged::of(&[]),
-        );
+        traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
         traffic.npcs()[0]
             .pursuit
             .frame
