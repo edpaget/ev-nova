@@ -426,6 +426,96 @@ mod tests {
         assert!(jumping.player_max_vel.get() < afterburner_top(top));
     }
 
+    /// Widens `session`'s box to 1.8 times its top speed, as an afterburn
+    /// leaves it: the box's width.
+    fn widened(session: &mut Session) -> f32 {
+        session.player_max_vel.burn(session.top_speed(), false);
+        let box_ = session.player_max_vel.get();
+        assert!(near(box_, afterburner_top(session.top_speed())));
+        box_
+    }
+
+    #[test]
+    fn in_hyperspace_the_box_bleeds_by_accel_x_0_4_a_tick() {
+        let mut session = flying(&burner(), 90.0);
+        let box_ = widened(&mut session);
+        session.jump = Some(super::super::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 1,
+        });
+        session.tick(Controls::default());
+        assert!(
+            matches!(session.jump, Some(super::super::Jump::Hyperspace { .. })),
+            "still in the warp's run"
+        );
+        let bleed = session.flying_handling().accel * 0.4;
+        assert!(
+            near(session.player_max_vel.get(), box_ - bleed),
+            "{box_} to {}",
+            session.player_max_vel.get()
+        );
+    }
+
+    #[test]
+    fn a_destroyed_players_tick_leaves_the_box_alone() {
+        let mut session = flying(&burner(), 90.0);
+        let box_ = widened(&mut session);
+        session.condition = Condition::Destroyed;
+        session.tick(Controls::default());
+        assert_eq!(session.player_max_vel.get(), box_);
+    }
+
+    #[test]
+    fn the_escape_pods_tick_leaves_the_box_alone() {
+        let mut session = flying(&burner(), 90.0);
+        let box_ = widened(&mut session);
+        session.pod = Some(100);
+        session.tick(Controls::default());
+        assert_eq!(session.pod, Some(99), "the pod flew");
+        assert_eq!(session.player_max_vel.get(), box_);
+    }
+
+    #[test]
+    fn the_first_pre_jump_tick_after_an_afterburn_is_held_to_the_box_not_top_speed() {
+        let mut session = super::super::tests::bound_for_131(
+            &burner(),
+            super::super::tests::OUT,
+            Vec2::ZERO,
+            90.0,
+        );
+        run(&mut session, held(true, true), 100);
+        let top = session.top_speed();
+        let box_ = session.player_max_vel.get();
+        assert!(near(box_, afterburner_top(top)), "{box_}");
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        session.tick(Controls::default());
+        assert!(session.preparing_jump().is_some(), "in the pre-jump");
+        let speed = session.player.velocity.length();
+        assert!(speed > top + 1.0, "held to the box: {speed}");
+        assert!(speed <= box_ + 1e-4, "{speed}");
+    }
+
+    #[test]
+    fn a_disabled_inertialess_player_keeps_a_speed_past_top_speed_in_a_widened_box() {
+        let mut session = flying(&inertialess(), 90.0);
+        let box_ = widened(&mut session);
+        let top = session.top_speed();
+        let speed = box_ - 0.5;
+        assert!(speed > top + 1.0);
+        session.player_speed = speed;
+        session.player.velocity = Vec2::new(speed, 0.0);
+        session.condition = Condition::Disabled;
+        session.tick(Controls::default());
+        assert!(
+            near(
+                session.player_speed(),
+                speed * crate::inertialess::PLAYER_DISABLED_DECAY
+            ),
+            "{}",
+            session.player_speed()
+        );
+    }
+
     #[test]
     fn a_new_sessions_box_of_none_holds_the_first_tick_at_rest() {
         let mut session = Session::start(&burner()).expect("starts");
