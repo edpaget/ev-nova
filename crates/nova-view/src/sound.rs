@@ -2,7 +2,8 @@
 //! The audio side decides which `snd ` each one plays, if any.
 //!
 //! - [`UiSound`]: the interface's own, a main-menu button pressed and
-//!   released, the main screen's rows sliding in, the alert as something is refused, the news dialog's
+//!   released, the main screen's rows sliding in, its sounds halted as
+//!   play is entered, an intro picture's sound, the alert as something is refused, the news dialog's
 //!   beeps, the course map's beeps (opening, closing, Space and Find),
 //!   and the beep of the player info
 //!   refused.
@@ -156,6 +157,19 @@ pub enum UiSound {
     /// halts `_planetSnd` as the port closes (`ST_HaltSound`
     /// @0x601d2-0x601eb), whatever closed it.
     PortAmbientHalted(SoundId),
+    /// A picture of the intro screen started showing, and the data has
+    /// its `snd `: `_ShowIntroScreen` cancels the music, then plays snd
+    /// 30003 at priority 10 (`_CancelMusicThread` @0x16eae, `_PlaySound`
+    /// @0x16eb3-0x16ed1). See `menu::intro`.
+    IntroPicture(SoundId),
+    /// An intro picture ended: its `snd ` is halted (@0x17064), whatever
+    /// the sound setting.
+    IntroPictureHalted(SoundId),
+    /// Play is being entered: the main screen's four sounds, its button
+    /// clicks and row slides, are halted, as `_DisposeMainScreenSounds`
+    /// @0x16cae (called @0x19e91) halts and frees snd 600-603, cutting
+    /// off Enter Ship's own button-up click. Whatever the sound setting.
+    MainScreenSoundsHalted,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

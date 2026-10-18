@@ -176,6 +176,9 @@ pub const MAP_NOT_FOUND: Priority = Priority::new(1);
 /// landscape's press (@0x5fe59). `_PlanetSoundCallback`'s replay of a
 /// looped one as that voice ends plays at 10 (@0x55f9c).
 pub const PORT_AMBIENT: Priority = Priority::new(32_000);
+/// An intro picture's sound, snd 30003: `_ShowIntroScreen`'s
+/// `_PlaySound(.., 0xa, ..)` @0x16ebb.
+pub const INTRO_PICTURE: Priority = Priority::new(10);
 
 #[cfg(test)]
 mod tests {
@@ -237,6 +240,7 @@ mod tests {
             (MAP_FOUND, 1, "map found"),
             (MAP_NOT_FOUND, 1, "map not found"),
             (PORT_AMBIENT, 32_000, "port ambient"),
+            (INTRO_PICTURE, 10, "intro picture"),
         ];
         for (priority, number, what) in pinned {
             assert_eq!(priority.get(), number, "{what}");

@@ -37,6 +37,11 @@ use crate::table::SoundTable;
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - The intro screen's pictures keep the music; a picture's own `snd `
+///   ([`UiSound::IntroPicture`]) spends it, then plays like any event, and
+///   the intro's text spends it.
+/// - Entering play halts the main screen's four sounds
+///   ([`UiSound::MainScreenSoundsHalted`]), whatever the sound setting.
 /// - The spaceport's ambient sound plays its own `snd ` the same way: over
 ///   anything, or unless still playing for a looped one
 ///   ([`UiSound::PortAmbient`]); the spaceport's close halts it
@@ -120,10 +125,14 @@ impl<A: Audio> AudioCore<A> {
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
-        // Entering the game (`_EnterGameFromMainScreen` @0x19ec6) and the
-        // About box (`_DoAboutBox` @0x15fbf) cancel the music for good.
+        // Entering the game (`_EnterGameFromMainScreen` @0x19ec6, and
+        // `_ShowIntroScreen` @0x170ad before its text) and the About box
+        // (`_DoAboutBox` @0x15fbf) cancel the music for good; the intro's
+        // pictures keep it.
         if showing == Some(Showing::About)
-            || self.scene.is_some_and(|scene| scene != Showing::MainMenu)
+            || self
+                .scene
+                .is_some_and(|scene| !matches!(scene, Showing::MainMenu | Showing::Intro))
         {
             self.spend_music();
         }
@@ -319,7 +328,23 @@ impl<A: Audio> AudioCore<A> {
                 sound,
                 until_stopped: true,
             } => self.play_unless_playing(Some(sound), at::PORT_AMBIENT),
-            UiSound::PortAmbientHalted(sound) => self.halt(&[sound]),
+            UiSound::PortAmbientHalted(sound) | UiSound::IntroPictureHalted(sound) => {
+                self.halt(&[sound]);
+            }
+            UiSound::IntroPicture(sound) => {
+                self.spend_music();
+                self.play(Some(sound), at::INTRO_PICTURE);
+            }
+            UiSound::MainScreenSoundsHalted => {
+                let table = self.table;
+                let sounds = [
+                    table.button_down,
+                    table.button_up,
+                    table.row_slide_start,
+                    table.row_slide_end,
+                ];
+                self.halt(&sounds.into_iter().flatten().collect::<Vec<_>>());
+            }
         }
     }
 
@@ -626,7 +651,9 @@ pub fn music_fade(volume: Volume) -> Duration {
 /// before the music is spent restarts it from the top.
 fn has_music(scene: Showing) -> bool {
     match scene {
-        Showing::MainMenu => true,
+        // The intro's pictures follow the main screen's fade out with the
+        // music playing on, until a picture's sound or the text cancels it.
+        Showing::MainMenu | Showing::Intro => true,
         // The game's screens never play it; the overlays are never the
         // scene, as they keep the one below.
         Showing::GalaxyMap
@@ -649,7 +676,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::MissionText
         | Showing::MissionInfo
         | Showing::PlayerInfo
-        | Showing::Movie => false,
+        | Showing::Movie
+        | Showing::IntroText => false,
     }
 }
 
@@ -1550,6 +1578,89 @@ mod tests {
         assert_eq!(drain(&log), [halt], "sound off halts too");
     }
 
+    const INTRO_PICTURE: Sound = Sound::Ui(UiSound::IntroPicture(SoundId(30_003)));
+
+    #[test]
+    fn an_intro_pictures_sound_spends_the_music_then_plays_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Intro), &[INTRO_PICTURE]);
+        let played = drain_prioritised(&log);
+        assert_eq!(
+            played,
+            [
+                fade_out(MUSIC),
+                AudioCommand::Play {
+                    sound: SoundId(30_003),
+                    volume: Volume::new(0.5),
+                    priority: crate::priority::INTRO_PICTURE,
+                }
+            ]
+        );
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), [], "spent for good, even on the main menu");
+    }
+
+    #[test]
+    fn with_sound_off_an_intro_pictures_sound_plays_nothing_but_still_spends_the_music() {
+        let (mut core, log) = original();
+        core.set_sound(false);
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Intro), &[INTRO_PICTURE]);
+        assert_eq!(drain(&log), [fade_out(MUSIC)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [], "spent");
+    }
+
+    #[test]
+    fn the_intro_and_main_screen_halts_halt_whatever_the_sound_setting() {
+        let picture_halted = Sound::Ui(UiSound::IntroPictureHalted(SoundId(30_003)));
+        let main_halted = Sound::Ui(UiSound::MainScreenSoundsHalted);
+        let halt = |id| AudioCommand::Halt { sound: SoundId(id) };
+        for sound_on in [true, false] {
+            let (mut core, log) = original();
+            core.set_sound(sound_on);
+            drain(&log);
+            core.update(Some(Showing::ShipBrowser), &[picture_halted]);
+            assert_eq!(drain(&log), [halt(30_003)], "sound {sound_on}");
+            core.update(Some(Showing::ShipBrowser), &[main_halted]);
+            assert_eq!(
+                drain(&log),
+                [halt(600), halt(601), halt(602), halt(603)],
+                "sound {sound_on}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_main_screen_halt_halts_only_the_tables_main_screen_sounds() {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            button_down: None,
+            row_slide_end: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(None, &[Sound::Ui(UiSound::MainScreenSoundsHalted)]);
+        assert_eq!(
+            drain(&log),
+            [
+                AudioCommand::Halt {
+                    sound: SoundId(601)
+                },
+                AudioCommand::Halt {
+                    sound: SoundId(602)
+                }
+            ]
+        );
+    }
+
     #[test]
     fn a_halt_halts_each_named_sound_in_order() {
         const HALTS: [SoundId; 4] = [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];
@@ -2218,6 +2329,32 @@ mod tests {
             core.update(Some(Showing::MainMenu), &[]);
             core.set_music(true);
             assert_eq!(drain(&log), [], "{leave:?}: spent, nothing starts");
+        }
+    }
+
+    #[test]
+    fn the_intro_keeps_the_music_and_starts_it_like_the_main_menu() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Intro), &[]);
+        assert_eq!(drain(&log), [], "plays on");
+        let (mut core, log) = original();
+        core.update(Some(Showing::Intro), &[]);
+        assert_eq!(drain(&log), [start_music(MUSIC)], "unspent, it starts");
+    }
+
+    #[test]
+    fn the_intro_text_and_flight_spend_the_music() {
+        for scene in [Showing::IntroText, Showing::Flight] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::MainMenu), &[]);
+            core.update(Some(Showing::Intro), &[]);
+            drain(&log);
+            core.update(Some(scene), &[]);
+            assert_eq!(drain(&log), [fade_out(MUSIC)], "{scene:?}");
+            core.update(Some(Showing::MainMenu), &[]);
+            assert_eq!(drain(&log), [], "{scene:?}: spent");
         }
     }
 
