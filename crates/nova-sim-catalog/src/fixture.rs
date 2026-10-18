@@ -172,6 +172,8 @@ pub fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         long_name: format!("The Ship {id}"),
         fields,
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 10_000,
         tech_level: 1,
         buy_random: 100,

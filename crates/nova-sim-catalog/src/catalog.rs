@@ -426,6 +426,13 @@ pub struct ShipRecord {
     /// slot order, a negative count as none (as
     /// [`PilotCatalog::default_outfits`] gives them).
     pub defaults: Vec<(OutfitId, u16)>,
+    /// Its `DefaultItems` slot by slot, 1-8: each slot's `oütf` ID and
+    /// raw count, none where the slot names no item. A pirate's plunder
+    /// reads an item's place (see `nova_sim::ai::plunder_contents`).
+    pub default_slots: [Option<(OutfitId, i16)>; 8],
+    /// Its `Strength`, raw: a pirate's plunder reads it signed (see
+    /// `nova_sim::ai::plunder_contents`).
+    pub strength: i16,
     /// Its `Cost`.
     pub cost: i32,
     /// Its `TechLevel`.

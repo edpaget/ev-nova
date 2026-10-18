@@ -1701,6 +1701,8 @@ fn shipbuying() -> FakeCatalog {
                 ..FIELDS
             },
             defaults: vec![(OutfitId(200), 1)],
+            default_slots: [None; 8],
+            strength: 0,
             cost: 900,
             tech_level: 1,
             buy_random: 100,
@@ -1952,6 +1954,8 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
             ..FIELDS
         },
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 1,
         tech_level: 1,
         buy_random: 100,
@@ -2419,6 +2423,8 @@ fn ship_class(id: i16) -> ShipRecord {
         long_name: String::new(),
         fields: FIELDS,
         defaults: Vec::new(),
+        default_slots: [None; 8],
+        strength: 0,
         cost: 900,
         tech_level: 1,
         buy_random: 100,

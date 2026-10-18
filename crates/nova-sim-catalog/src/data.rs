@@ -148,6 +148,8 @@ impl PilotCatalog for GameData {
                     long_name: record.long_name.as_str().to_owned(),
                     fields: ship_fields(record),
                     defaults: default_items(record),
+                    default_slots: default_slots(record),
+                    strength: record.strength,
                     cost: record.cost,
                     tech_level: record.tech_level,
                     buy_random: record.buy_random,
@@ -1327,6 +1329,21 @@ fn ship_fields(ship: &Ship) -> ShipFields {
 }
 
 /// A `shïp`'s `DefaultItems`, each item with its count in slot order.
+/// `ship`'s `DefaultItems` slot by slot, 1-8, each with its raw count;
+/// none where a slot names no item.
+fn default_slots(ship: &Ship) -> [Option<(OutfitId, i16)>; 8] {
+    let items = ship
+        .default_items1_4
+        .into_iter()
+        .chain(ship.default_items5_8);
+    let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
+    let mut slots = [None; 8];
+    for (slot, (item, count)) in slots.iter_mut().zip(items.zip(counts)) {
+        *slot = item.map(|item| (item, count));
+    }
+    slots
+}
+
 fn default_items(ship: &Ship) -> Vec<(OutfitId, u16)> {
     let items = ship
         .default_items1_4
@@ -1782,6 +1799,7 @@ mod tests {
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x46, &[-7]);
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x4A..0x4C].copy_from_slice(&0x8012_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
@@ -1815,6 +1833,17 @@ mod tests {
                 ..ShipFields::default()
             },
             defaults: vec![(OutfitId(200), 2), (OutfitId(201), 0), (OutfitId(202), 1)],
+            default_slots: [
+                Some((OutfitId(200), 2)),
+                Some((OutfitId(201), -1)),
+                None,
+                None,
+                Some((OutfitId(202), 1)),
+                None,
+                None,
+                None,
+            ],
+            strength: -7,
             cost: 17_500,
             tech_level: 6,
             buy_random: 45,
