@@ -24,6 +24,7 @@ mod stock_inertialess;
 mod stock_mission_ships;
 mod stock_missions;
 mod stock_news;
+mod stock_npc_escape;
 mod stock_ranks;
 mod stock_scan;
 mod stock_ship_goal_walk;
