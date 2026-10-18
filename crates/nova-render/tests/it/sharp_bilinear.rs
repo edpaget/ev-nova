@@ -404,10 +404,9 @@ fn the_probe_offers_native_and_sharp_bilinear() {
     let Some(gpu) = gpu_with(8, 8, &FontFaces::bundled()) else {
         return;
     };
-    assert_eq!(
-        UpscalerProbe::upscalers(&gpu),
-        [Upscaler::Native, Upscaler::SharpBilinear]
-    );
+    // MetalFX may follow, on a device that has it (`metal_fx.rs`).
+    let offered = UpscalerProbe::upscalers(&gpu);
+    assert_eq!(offered[..2], [Upscaler::Native, Upscaler::SharpBilinear]);
 }
 
 #[test]

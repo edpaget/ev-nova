@@ -7,6 +7,7 @@
 mod common;
 
 mod frame_cost;
+mod metal_fx;
 mod sharp_bilinear;
 mod stock_fonts;
 mod stock_render;

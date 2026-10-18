@@ -4,7 +4,7 @@
 
 use super::frame_commands::WgpuCommands;
 use super::sharp_bilinear::SharpBilinear;
-use crate::upscale::{Upscaler, WorldResolution, resolution_of};
+use crate::upscale::{Abilities, Upscaler, WorldResolution, resolution_of};
 use crate::viewport::PixelRect;
 
 /// Draws flight's world layer onto the target for the
@@ -56,6 +56,27 @@ impl Upscale for Native {
         _warnings: &mut Vec<String>,
     ) {
     }
+}
+
+/// What `device` can draw the world with beyond what every device can:
+/// MetalFX on macOS when MetalFX supports its GPU (which also means it is
+/// on Metal), and nothing more anywhere else.
+pub(super) fn abilities(device: &wgpu::Device) -> Abilities {
+    Abilities {
+        metal_fx_spatial: metal_fx_spatial(device),
+    }
+}
+
+/// Whether MetalFX's spatial scaler runs on `device`.
+#[cfg(target_os = "macos")]
+fn metal_fx_spatial(device: &wgpu::Device) -> bool {
+    nova_metalfx::supported(device)
+}
+
+/// Never: MetalFX exists only on macOS.
+#[cfg(not(target_os = "macos"))]
+fn metal_fx_spatial(_device: &wgpu::Device) -> bool {
+    false
 }
 
 /// The upscaler `choice` names, made on `device` and writing through

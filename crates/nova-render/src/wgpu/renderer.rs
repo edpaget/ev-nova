@@ -15,10 +15,10 @@ use nova_view::{Blend, Color, DrawLayer};
 
 use super::fonts::{Families, font_system};
 use super::frame_commands::{DeviceEncoders, WgpuCommands};
-use super::upscale::{Upscale, upscale_for};
+use super::upscale::{Upscale, abilities, upscale_for};
 use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun, WorldSpace};
-use crate::upscale::{Upscaler, WorldResolution};
+use crate::upscale::{Abilities, Upscaler, WorldResolution, offered};
 use crate::viewport::PixelRect;
 
 /// The format every frame is drawn in, whatever the target's: the scene
@@ -135,6 +135,8 @@ pub struct WgpuRenderer {
     text_viewport: glyphon::Viewport,
     text_renderers: Vec<TextRenderer>,
     upscale: Box<dyn Upscale>,
+    /// What its device can draw the world with, found once.
+    abilities: Abilities,
     /// What its frames raised, for [`Self::take_warnings`].
     warnings: Vec<String>,
 }
@@ -247,6 +249,7 @@ impl WgpuRenderer {
             text_viewport,
             text_renderers: Vec::new(),
             upscale: upscale_for(upscaler, device, queue),
+            abilities: abilities(device),
             warnings: Vec::new(),
         }
     }
@@ -270,10 +273,11 @@ impl WgpuRenderer {
 
     /// The upscalers it can draw the world with on its device: native and
     /// sharp-bilinear, which needs only a filtering sampler on RGBA8
-    /// textures, as every wgpu backend has.
+    /// textures, as every wgpu backend has, then MetalFX on a device that
+    /// has it ([`offered`]).
     #[must_use]
     pub fn upscalers(&self) -> Vec<Upscaler> {
-        vec![Upscaler::Native, Upscaler::SharpBilinear]
+        offered(self.abilities)
     }
 
     /// How many font faces loaded.
