@@ -90,6 +90,12 @@ pub struct SoundTable {
     pub ship_downed: Option<SoundId>,
     /// Plays as the player's ship being downed fails a mission.
     pub downed_mission_failed: Option<SoundId>,
+    /// Plays with a pirate's cargo line, said as it steals from the player
+    /// or a former escort.
+    pub cargo_stolen: Option<SoundId>,
+    /// Plays with the line said as a pirate takes a former escort into its
+    /// fleet.
+    pub ship_stolen: Option<SoundId>,
     /// Plays as a mission's special ship lost fails a mission that isn't
     /// hidden.
     pub mission_ship_lost: Option<SoundId>,
@@ -241,6 +247,9 @@ impl SoundTable {
     /// - `downed_mission_failed`: 151, `_beepSnd[1]`, which `_DamageShip`
     ///   plays as either fails the player's first `Flags2` 0x0004 mission
     ///   (@0x3b04e, @0x3b2f1).
+    /// - `cargo_stolen` and `ship_stolen`: 151, `_beepSnd[1]`, which
+    ///   `_AIPlunderShipContents` plays with its cargo line (@0x84758) and
+    ///   with its stolen-escort line (@0x84908).
     /// - `mission_ship_lost`: 151, `_beepSnd[1]`, which
     ///   `_HandleShipDisplay` plays as a mission's special ship destroyed
     ///   (@0x2db5a) and `_DamageShip` as one disabled (@0x3af11) fails a
@@ -343,6 +352,8 @@ impl SoundTable {
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
         downed_mission_failed: Some(SoundId(151)),
+        cargo_stolen: Some(SoundId(151)),
+        ship_stolen: Some(SoundId(151)),
         mission_ship_lost: Some(SoundId(151)),
         mission_ship_boarded: Some(SoundId(154)),
         traffic_control: Some(SoundId(151)),
@@ -414,6 +425,8 @@ mod tests {
         assert_eq!(table.target_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.ship_downed, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.cargo_stolen, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.ship_stolen, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(
             table.downed_mission_failed,
             Some(SoundId(151)),

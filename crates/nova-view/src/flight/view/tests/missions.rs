@@ -2091,3 +2091,24 @@ fn an_offer_accepted_at_once_shows_nothing() {
         [MissionId(130)]
     );
 }
+
+/// A plunder's lines read as `_AIPlunderShipContents` builds them, the
+/// numbers' millions by the session's rules, and lead no arrival.
+#[test]
+fn a_plunders_lines_are_its_cargo_and_its_stolen_ship() {
+    let view = flight();
+    let session = view.session().expect("flying");
+    let stolen = SimMessage::CargoStolen {
+        tons: 2,
+        credits: 1_234_567,
+    };
+    assert_eq!(
+        sim_message_text(&stolen, session),
+        Some("2 tons of cargo and 1.23M credits stolen!".to_owned())
+    );
+    assert_eq!(
+        sim_message_text(&SimMessage::ShipStolen { fighter: true }, session),
+        Some("Fighter stolen!".to_owned())
+    );
+    assert_eq!(arrival_lead(&stolen), None);
+}

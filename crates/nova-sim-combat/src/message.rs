@@ -189,6 +189,25 @@ pub enum SimMessage {
     /// @0x8ce4b-0x8cff5): the text ready to show, "<class>:  <ship
     /// name>, <`STR#` 2002 #381-383>.".
     ScanHail(String),
+    /// A pirate plundered the player, or a former hired or captured escort
+    /// of the player's, of these tons of cargo and credits
+    /// (`_AIPlunderShipContents` @0x84593-0x84791, `STR#` 2002 #373, #374,
+    /// #391, #392): "12 tons of cargo and 1,500 credits stolen!". It names
+    /// no pirate.
+    CargoStolen {
+        /// The tons of cargo stolen.
+        tons: u32,
+        /// The credits stolen.
+        credits: i64,
+    },
+    /// A pirate took a disabled former escort of the player's into its
+    /// fleet (`_AIPlunderShipContents` @0x84815-0x84941, `STR#` 2002 #168
+    /// or #169, then #374): "Escort stolen!", or "Fighter stolen!" for a
+    /// former fighter.
+    ShipStolen {
+        /// Whether it was a fighter.
+        fighter: bool,
+    },
     /// The sensors detect the system's reinforcement fleet three quarters
     /// of its way in (`_HandleReinforcements` @0x3916d-0x3928a): the text
     /// ready to show, `STR#` 2002 #306, a space, the fleet government's
@@ -257,6 +276,9 @@ impl SimMessage {
     ///   @0x83248, 0xf0 pushed @0x8323d).
     /// - [`ScanHail`](Self::ScanHail): 400 (`_InterceptorAI` @0x8cff5,
     ///   0x190 pushed @0x8cfea).
+    /// - [`CargoStolen`](Self::CargoStolen) and
+    ///   [`ShipStolen`](Self::ShipStolen): 400 (`_AIPlunderShipContents`
+    ///   @0x84791, @0x84941, 0x190 pushed @0x84786, @0x84936).
     /// - [`ReinforcementsApproaching`](Self::ReinforcementsApproaching):
     ///   240 (`_HandleReinforcements` @0x3928a, 0xf0 pushed @0x3927f).
     #[must_use]
@@ -271,7 +293,9 @@ impl SimMessage {
             | Self::IllegalJunk { .. }
             | Self::IllegalOutfit { .. }
             | Self::BombExploded { .. }
-            | Self::ScanHail(_) => 400,
+            | Self::ScanHail(_)
+            | Self::CargoStolen { .. }
+            | Self::ShipStolen { .. } => 400,
             Self::Arrived(_)
             | Self::PassedWormhole(_)
             | Self::MissionFailed
@@ -301,6 +325,17 @@ impl SimMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plunders_lines_last_400_ticks() {
+        let stolen = SimMessage::CargoStolen {
+            tons: 12,
+            credits: 0,
+        };
+        assert_eq!(stolen.ticks(), 400);
+        assert_eq!(SimMessage::ShipStolen { fighter: true }.ticks(), 400);
+        assert_eq!(SimMessage::ShipStolen { fighter: false }.ticks(), 400);
+    }
 
     #[test]
     fn each_sim_message_lasts_its_callers_ticks() {

@@ -2,14 +2,16 @@
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
+use nova_sim::text_tags::comma_number;
 use nova_sim::{
     Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, Good, HailRefusal, Help,
     JumpRefusal, LandingRefusal, OutfitId, Session, ShipId, SimMessage, StellarId, Taken,
 };
-use nova_sim::{MissionBoardLine, PayNote, TagNames, TutorialHint};
+use nova_sim::{MissionBoardLine, PayNote, RuleSource, TagNames, TutorialHint};
 
 use crate::Key;
 use crate::flight::escorts::NUMBER_WORDS;
+use crate::spaceport::credits::{TON, TONS};
 use crate::system::scene::SystemScene;
 use crate::ui::comm::grouped;
 
@@ -128,6 +130,67 @@ pub const ESCORT_REPAIRED: &str = "Escort repaired.";
 /// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
 /// @0x33b3b).
 pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
+/// `STR#` 2002 #168: a former escort a pirate took (`_AIPlunderShipContents`
+/// @0x8482c).
+pub const ESCORT: &str = "Escort";
+/// `STR#` 2002 #169: a former fighter a pirate took (@0x84822).
+pub const FIGHTER: &str = "Fighter";
+/// `STR#` 2002 #373: what a pirate stole (@0x84665).
+pub const CARGO: &str = "cargo";
+/// `STR#` 2002 #374: how a plunder's lines end (@0x84719, @0x848c9).
+pub const STOLEN: &str = "stolen!";
+/// `STR#` 2002 #391: between the tons and the cargo (@0x8463f).
+pub const OF: &str = "of";
+/// `STR#` 2002 #392: between the cargo and the credits (@0x84698).
+pub const AND: &str = "and";
+
+/// What the message line says as a pirate steals `tons` of cargo and
+/// `credits`, as `_AIPlunderShipContents` builds it (@0x84593-0x84731):
+/// the tons, "ton" at exactly 1 and "tons" otherwise, "of cargo", then
+/// with credits too "and", the credits, "credit" at 1 and "credits"
+/// otherwise, then "stolen!"; each number as `_StrcatCommaNumber` writes
+/// it, from a million as `millions` reads
+/// ([`RuleKey::PayMillions`](nova_sim::RuleKey::PayMillions)).
+#[must_use]
+pub fn cargo_stolen_message(tons: u32, credits: i64, millions: RuleSource) -> String {
+    let mut words = Vec::new();
+    if tons > 0 {
+        let unit = if tons == 1 { TON } else { TONS };
+        words.extend([comma_number(i64::from(tons), millions), unit.to_owned()]);
+        words.extend([OF, CARGO].map(str::to_owned));
+        if credits > 0 {
+            words.push(AND.to_owned());
+        }
+    }
+    if credits > 0 {
+        let unit = if credits > 1 { "credits" } else { "credit" };
+        words.extend([comma_number(credits, millions), unit.to_owned()]);
+    }
+    words.push(STOLEN.to_owned());
+    words.join(" ")
+}
+
+/// What the message line says of a plunder's `message`, the numbers'
+/// millions as `session`'s rules read them; none for any other message.
+fn stolen_text(message: &SimMessage, session: &Session) -> Option<String> {
+    let millions = session.rules().source_for(nova_sim::RuleKey::PayMillions);
+    match message {
+        SimMessage::CargoStolen { tons, credits } => {
+            Some(cargo_stolen_message(*tons, *credits, millions))
+        }
+        SimMessage::ShipStolen { fighter } => Some(ship_stolen_message(*fighter)),
+        _ => None,
+    }
+}
+
+/// What the message line says as a pirate takes a former escort, or one
+/// the player leads, into its fleet (@0x84815-0x848dc): "Escort stolen!",
+/// or "Fighter stolen!" for a former fighter.
+#[must_use]
+pub fn ship_stolen_message(fighter: bool) -> String {
+    let ship = if fighter { FIGHTER } else { ESCORT };
+    format!("{ship} {STOLEN}")
+}
 /// `STR#` 2002 #52: the player ejected into an escape ship, whose long
 /// name follows (`_HandlePlayer` @0x6f595-0x6f5a8).
 pub const ESCAPING_IN: &str = "Escaping in";
@@ -284,6 +347,9 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::NoActiveMissions => NO_ACTIVE_MISSIONS,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::CargoStolen { .. } | SimMessage::ShipStolen { .. } => {
+            return stolen_text(message, session);
+        }
         SimMessage::FleetArrivalQuote(text)
         | SimMessage::CallForHelp(text)
         | SimMessage::ScanHail(text)
@@ -639,6 +705,8 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NoActiveMissions
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::CargoStolen { .. }
+        | SimMessage::ShipStolen { .. }
         | SimMessage::FleetArrivalQuote(_)
         | SimMessage::CallForHelp(_)
         | SimMessage::ScanHail(_)
@@ -1147,6 +1215,41 @@ mod tests {
     use nova_sim::NpcId;
 
     use super::*;
+
+    #[test]
+    fn a_plunders_cargo_line_reads_as_the_original() {
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            cargo_stolen_message(12, 0, engine),
+            "12 tons of cargo stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(1, 1, engine),
+            "1 ton of cargo and 1 credit stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(0, 1500, engine),
+            "1,500 credits stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(2, 1_234_567, engine),
+            "2 tons of cargo and 1.23M credits stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(0, 1_234_567, RuleSource::Bible),
+            "1,234,567 credits stolen!"
+        );
+        assert_eq!(
+            cargo_stolen_message(1200, 0, engine),
+            "1,200 tons of cargo stolen!"
+        );
+    }
+
+    #[test]
+    fn a_stolen_ships_line_names_an_escort_or_a_fighter() {
+        assert_eq!(ship_stolen_message(false), "Escort stolen!");
+        assert_eq!(ship_stolen_message(true), "Fighter stolen!");
+    }
 
     #[test]
     fn every_pick_of_the_request_line_reads_as_the_original() {

@@ -1737,6 +1737,13 @@ impl Traffic {
         self.berth_persons.get(&berth).map(String::as_str)
     }
 
+    /// Queues `event` as if a pirate made it this tick, for the session's
+    /// tests of its answer ([`Traffic::take_pirate_events`]).
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn queue_pirate_event(&mut self, event: PirateEvent) {
+        self.pirate_events.push(event);
+    }
+
     /// Writes `name` as the person of the ship last brought in at `berth`,
     /// for the session's tests of a slot no ship holds.
     #[cfg(any(test, feature = "fixture"))]

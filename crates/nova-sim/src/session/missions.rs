@@ -984,7 +984,12 @@ impl Session {
     /// `OnAbort` run. A mission failed by its deadline ran `OnFailure`
     /// already: by [`RuleKey::RepeatMissionFailure`]'s engine reading it
     /// runs again; by the other, not.
-    fn mission_failure_at(&mut self, slot: u8, failed: FailedBy, chance: &mut dyn Chance) {
+    pub(super) fn mission_failure_at(
+        &mut self,
+        slot: u8,
+        failed: FailedBy,
+        chance: &mut dyn Chance,
+    ) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };

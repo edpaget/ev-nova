@@ -115,6 +115,12 @@ pub const SHIP_DOWNED: Priority = Priority::new(1);
 /// A mission failed by the player's ship downed, `_beepSnd[1]`:
 /// `_DamageShip` @0x3b04e, @0x3b2f1.
 pub const DOWNED_MISSION_FAILED: Priority = Priority::new(1);
+/// A pirate's cargo line, `_beepSnd[1]`: `_AIPlunderShipContents`
+/// @0x84758.
+pub const CARGO_STOLEN: Priority = Priority::new(1);
+/// A pirate's stolen-escort line, `_beepSnd[1]`: `_AIPlunderShipContents`
+/// @0x84908.
+pub const SHIP_STOLEN: Priority = Priority::new(1);
 /// A mission's special ship lost, `_beepSnd[1]`: `_HandleShipDisplay`
 /// @0x2db5a, `_DamageShip` @0x3af11.
 pub const MISSION_SHIP_LOST: Priority = Priority::new(1);
@@ -205,6 +211,8 @@ mod tests {
             (TUTORIAL_HINT, 1, "tutorial hint"),
             (SHIP_DOWNED, 1, "ship downed"),
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),
+            (CARGO_STOLEN, 1, "cargo stolen"),
+            (SHIP_STOLEN, 1, "ship stolen"),
             (MISSION_SHIP_LOST, 1, "mission ship lost"),
             (MISSION_SHIP_BOARDED, 8, "mission ship boarded"),
             (TRAFFIC_CONTROL, 1, "traffic control"),

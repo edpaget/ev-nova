@@ -403,6 +403,7 @@ mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod pirate_plunder;
 mod player_downed;
 mod player_info;
 mod player_led;
@@ -1071,6 +1072,9 @@ pub struct Session {
     /// When the player's ship is disabled after a change of ship (see
     /// [`Session::with_disable_rule`]).
     disable_rule: hire::Shared<dyn DisableRule>,
+    /// Whether a pirate has docked with the player's disabled ship (its
+    /// slot's +0xb9; see the `pirate_plunder` module): never saved.
+    player_boarded: bool,
     /// The string lists `T` names the ship from (see
     /// [`Session::with_strings`]).
     strings: ship_change::Strings,
@@ -1598,6 +1602,7 @@ impl Session {
             iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
+            player_boarded: false,
             strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
             next_sites: None,
@@ -2348,6 +2353,7 @@ impl Session {
                 });
                 self.announce_fleets(chance);
                 self.answer_comm_calls(chance);
+                self.answer_pirates(&mut &mut *chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2535,7 +2541,7 @@ impl Session {
             class: record.map_or(EscortClass::Freighter, |record| {
                 EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
             }),
-            boarded: false,
+            boarded: self.player_boarded,
         }
     }
 

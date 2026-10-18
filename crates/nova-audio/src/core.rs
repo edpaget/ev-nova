@@ -245,6 +245,8 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.tutorial_hint, at::TUTORIAL_HINT);
             }
             SimSound::ShipDowned => self.play(self.table.ship_downed, at::SHIP_DOWNED),
+            SimSound::CargoStolen => self.play(self.table.cargo_stolen, at::CARGO_STOLEN),
+            SimSound::ShipStolen => self.play(self.table.ship_stolen, at::SHIP_STOLEN),
             SimSound::DownedMissionFailed => {
                 self.play(self.table.downed_mission_failed, at::DOWNED_MISSION_FAILED);
             }
@@ -823,6 +825,8 @@ mod tests {
                 at::DOWNED_MISSION_FAILED,
             ),
             (Sound::Sim(SimSound::MissionShipLost), at::MISSION_SHIP_LOST),
+            (Sound::Sim(SimSound::CargoStolen), at::CARGO_STOLEN),
+            (Sound::Sim(SimSound::ShipStolen), at::SHIP_STOLEN),
             (
                 Sound::Sim(SimSound::MissionShipBoarded),
                 at::MISSION_SHIP_BOARDED,
