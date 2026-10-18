@@ -32,8 +32,16 @@
 //!   whatever its condition and goal, its wait counting down, and leaves
 //!   the system ([`Outcome::EnteredGate`]) as it runs out: on the 16th
 //!   tick, counting the one it reached the box.
-//! - [`Goal::JumpOut`]: it heads straight out from the centre at full
-//!   speed, and jumps once it is its stats' jump distance out.
+//! - [`Goal::JumpOut`]: it leaves by the leg
+//!   [`leave::leg`](crate::ai::leave::leg) gives, as
+//!   [`leave_flight`] flies it: within 1000 of the centre (dist² ≤ 1e6),
+//!   it turns out from the centre and thrusts within its turn rate and 3
+//!   whole degrees of that bearing (sub 3); beyond, an expediting ship
+//!   jumps at once, and any other brakes until it moves below 0.35 on
+//!   both axes, then jumps (`_HighLevelAIHandler` state 2,
+//!   @0x8dd99-0x8de57). The 1000 is every NPC's: its outfits' hyperspace
+//!   distance is the player's alone ([`Npc::stats`]' `jump_distance` is
+//!   not read).
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
 //!   matching its lead's velocity there.
 //! - [`Goal::Assist`]: outside its reach of the player (see
@@ -92,8 +100,11 @@
 //!   ([`Goal::Drift`]) so too, its 0.7 a tick along its heading being the
 //!   high level's (see [`plunder`](crate::traffic::plunder)).
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
-//!   either axis, truncated (its frame has no body): it runs out from the
-//!   centre and jumps once past its jump distance with the fuel.
+//!   either axis, truncated (its frame has no body): beyond 1000 and able
+//!   to jump ([`leave::can_jump`](crate::ai::leave::can_jump), by
+//!   [`Readings::jump_fuel`]) it leaves as a leaving ship does; otherwise
+//!   it runs out (state 3's far branch, @0x8e0e1-0x8e21a;
+//!   [`leave::flee_leg`](crate::ai::leave::flee_leg)).
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, unclamped (under
@@ -237,7 +248,7 @@ pub struct Readings {
     /// [`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
     pub snipe_lead: RuleSource,
     /// Who needs a jump's fuel now to jump out, which a ship fleeing beyond
-    /// its attacker's reach reads ([`leave::can_jump`],
+    /// its attacker's reach reads ([`leave::can_jump`](crate::ai::leave::can_jump),
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
     pub jump_fuel: RuleSource,
 }

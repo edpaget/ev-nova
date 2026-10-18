@@ -243,7 +243,9 @@ pub enum Goal {
     /// the original's goal 0x14 (`_HighLevelAIHandler` state 20, see
     /// [`gate_entry`](crate::traffic::gate_entry)).
     EnterGate(StellarId),
-    /// Fly out past its jump distance and jump out.
+    /// Leave by hyperspace (the original's goal 2): fly out past 1000 of
+    /// the centre, brake unless it expedites, and jump out (see
+    /// [`leave`]).
     JumpOut,
     /// Keep with this NPC, its fleet's lead.
     Follow(NpcId),

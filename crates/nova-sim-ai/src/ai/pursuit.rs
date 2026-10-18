@@ -27,8 +27,10 @@
 //!   [`plunder_dock`](crate::traffic::plunder_dock)).
 //!   Fleeing, within [`FLEE_REACH`] of its attacker on both axes, the
 //!   offsets truncated, it flees close (5, @0x8e017-0x8e06b); beyond, it
-//!   runs out (substates 1, 3 and 4), which run no pass (no
-//!   `_AIFireTurret`, so no point defence either). Nothing else clears a
+//!   runs out (substates 1, 3 and 4: past 1000 of the centre and able to
+//!   jump it brakes unless it expedites, then jumps, as
+//!   [`leave::flee_leg`](crate::ai::leave::flee_leg) says), which run no
+//!   pass (no `_AIFireTurret`, so no point defence either). Nothing else clears a
 //!   kept pursuit: not a new target, nor a goal change in itself, as
 //!   nothing but these rewrites touches +0xc8ca in state 4.
 //! - **Flee close** (5, [`Manoeuvre::Flee`]): it wants the table bearing
