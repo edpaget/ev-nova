@@ -14,7 +14,8 @@ use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
-use nova_view::menu::{MainMenu, PilotList};
+use nova_view::menu::appear::Appear;
+use nova_view::menu::{MainMenu, MainScreenSource, PilotList};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
@@ -27,12 +28,14 @@ use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
-    HaggleDialog, PlunderDialog, PrefsDialog,
+    HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
 };
 use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::refresh_spaceport;
-use super::{ABOUT_TEXT, AppScreen, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side};
+use super::{
+    ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side,
+};
 
 impl AppScreen {
     /// Every screen over `data`, showing the ship browser.
@@ -56,10 +59,13 @@ impl AppScreen {
             prefs: Prefs::default(),
             preferences: None,
             prefs_change: None,
+            display_choice: None,
+            scaling: nova_view::Scaling::list(&[nova_view::Upscaler::Native]),
             menu: None,
             new_pilot: None,
             open_pilot: None,
             load_note: None,
+            question: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
             effects_chance: SharedChance::default(),
@@ -85,6 +91,8 @@ impl AppScreen {
                 Prefs::default().quicktime_movies,
             ),
             fade_in: None,
+            appear: None,
+            button_down: false,
             player_info: None,
             command_held: false,
             keys_held: MenuKeys::default(),
@@ -93,6 +101,8 @@ impl AppScreen {
             quit_in: None,
             quit_due: false,
             double_time: false,
+            widened: CLASSIC_VIEW,
+            pointer: None,
         }
     }
 
@@ -104,9 +114,13 @@ impl AppScreen {
     }
 
     /// The router with each flight's explosions and debris rolled on
-    /// `chance`, apart from the simulation's.
+    /// `chance`, apart from the simulation's, and the main menu's logo
+    /// picked on it, whether the menu was given before or after.
     #[must_use]
-    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+    pub fn with_effects_chance(mut self, effects_chance: SharedChance) -> Self {
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_chance(effects_chance.clone());
+        }
         Self {
             effects_chance,
             ..self
@@ -288,9 +302,21 @@ impl AppScreen {
     /// chance, its effects on the router's effects chance, deciding as its
     /// behaviour says, disabling ships, engaging missiles and judging
     /// crimes as its rules say, naming its ship from the game data's
-    /// string lists, and laying out its HUD's text with the router's
-    /// metrics, if it has any.
+    /// string lists, laying out its HUD's text with the router's
+    /// metrics, if it has any, and in the widened size the router was last
+    /// told ([`Screen::set_widened_size`]), so its first tick already
+    /// uses it.
     pub(super) fn flight(
+        &self,
+        new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
+    ) -> FlightView<Rc<GameData>> {
+        let mut flight = self.configured_flight(new);
+        flight.set_view_size(self.widened);
+        flight
+    }
+
+    /// [`AppScreen::flight`]'s flight, before it is sized.
+    fn configured_flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
     ) -> FlightView<Rc<GameData>> {
@@ -345,15 +371,35 @@ impl AppScreen {
     /// screens lay out their text with `metrics` when there are no
     /// dialogs. With no `pilots` (nowhere to keep them), New Pilot still
     /// flies, saving nothing, and Open Pilot lists nothing.
+    ///
+    /// The menu is drawn from the game data's main-screen art; without
+    /// it (plug-in data that lacks it, say) it draws the stand-in, with a
+    /// warning saying why. Its logo picks on the router's effects chance
+    /// ([`AppScreen::with_effects_chance`]), drawing nothing the
+    /// simulation rolls.
+    ///
+    /// The game opens on the menu as it appears: the second's fade from
+    /// black over it, and its slides after (see the module docs).
     #[must_use]
     pub fn with_pilots(
-        self,
+        mut self,
         pilots: Option<PilotKeeper<Box<dyn PilotStore>>>,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        let screen = MainMenu::new(self.data.button_style(), Rc::clone(&metrics));
+        let art = match self.data.main_screen_art() {
+            Ok(art) => Some(art),
+            Err(reason) => {
+                self.warnings
+                    .push(format!("nova: drawing the stand-in main menu: {reason}"));
+                None
+            }
+        };
+        let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
+            .with_chance(self.effects_chance.clone());
+        screen.appear();
         Self {
             side: Side::MainMenu,
+            appear: Some(Appear::start_up()),
             menu: Some(Menu {
                 screen,
                 metrics,
@@ -386,6 +432,13 @@ impl AppScreen {
     #[must_use]
     pub fn load_note(&self) -> Option<&NoteDialog> {
         self.load_note.as_ref()
+    }
+
+    /// The quit question the window's close asked over the main menu,
+    /// while it is open.
+    #[must_use]
+    pub fn question(&self) -> Option<&YesNoDialog> {
+        self.question.as_ref()
     }
 
     /// Changes the pilot with `change` while the ship is landed, as a
@@ -558,6 +611,9 @@ impl AppScreen {
         }
         if self.load_note.is_some() {
             return Showing::Note;
+        }
+        if self.question.is_some() {
+            return Showing::Question;
         }
         match self.side {
             Side::MainMenu => Showing::MainMenu,

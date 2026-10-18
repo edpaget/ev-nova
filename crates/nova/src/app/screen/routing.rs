@@ -4,12 +4,14 @@
 use nova_sim::VenueOffer;
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
-use nova_view::{Input, Key, Screen, ScreenAction, Showing};
+use nova_view::{Input, Key, MouseButton, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
     open_port_dialogs, open_port_map, refresh_spaceport, refresh_status_bar,
 };
+use nova_view::menu::MenuChoice;
+
 use super::{AppScreen, ENTERED, LANDED, MenuAction, PREFERENCES_KEY, Side};
 
 impl AppScreen {
@@ -327,7 +329,7 @@ impl AppScreen {
             // goes to the original's menus (`MenuKey`), which do not.
             // It opens once the click has played.
             if self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held {
-                self.click_then(MenuAction::Preferences);
+                self.click_then(MenuAction::Choice(MenuChoice::Preferences));
             } else {
                 self.open_preferences();
             }
@@ -368,60 +370,77 @@ impl AppScreen {
 
     /// The input to the overlay open in front, if any: what it did, or
     /// `None` with none open. A mission dialog's map over flight is in
-    /// front of the dialogs it opened from.
+    /// front of the dialogs it opened from, and places itself; every other
+    /// overlay takes the pointer moved back by
+    /// [`AppScreen::overlay_offset`], as it is drawn moved on by it.
     fn overlay_input(&mut self, input: &Input) -> Option<ScreenAction> {
+        let offset = self.overlay_offset();
+        // The frame moves only across.
+        let moved = &input.translated(Point::new(-offset.x, 0.0));
         if self.about.is_some() {
-            return Some(self.about_input(input));
+            return Some(self.about_input(moved));
         }
         if self.preferences.is_some() {
-            return Some(self.preferences_input(input));
+            return Some(self.preferences_input(moved));
         }
         if self.player_info.is_some() {
-            return Some(self.player_info_input(input));
+            return Some(self.player_info_input(moved));
         }
         if self.haggle.is_some() {
-            return Some(self.haggle_input(input));
+            return Some(self.haggle_input(moved));
         }
         if self.comm.is_some() {
-            return Some(self.comm_input(input));
+            return Some(self.comm_input(moved));
         }
         if self.flight_dialog_map_open() {
             return Some(self.flight_dialog_map_input(input));
         }
         if self.missions.is_some() {
-            return Some(self.missions_input(input));
+            return Some(self.missions_input(moved));
         }
         if self.offer.is_some() {
-            return Some(self.offer_input(input));
+            return Some(self.offer_input(moved));
         }
         if self.plunder.is_some() {
-            return Some(self.plunder_input(input));
+            return Some(self.plunder_input(moved));
         }
         if self.assignment.is_some() {
-            return Some(self.assignment_input(input));
+            return Some(self.assignment_input(moved));
         }
         if self.new_pilot.is_some() {
-            return Some(self.new_pilot_input(input));
+            return Some(self.new_pilot_input(moved));
         }
         if self.open_pilot.is_some() {
-            return Some(self.open_pilot_input(input));
+            return Some(self.open_pilot_input(moved));
         }
         if self.load_note.is_some() {
-            return Some(self.load_note_input(input));
+            return Some(self.load_note_input(moved));
+        }
+        if self.question.is_some() {
+            return Some(self.question_input(moved));
         }
         None
     }
 
-    /// Routes one input, as [`Screen::input`] describes.
+    /// Routes one input, as [`Screen::input`] describes, first noting
+    /// where a pointer input puts the pointer.
     pub(super) fn route(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key { key, pressed, .. } = *input {
-            match key {
-                Key::Command => self.command_held = pressed,
-                Key::Char('s') => self.keys_held.s = pressed,
-                Key::Char('l') => self.keys_held.l = pressed,
-                Key::Char('e') => self.keys_held.e = pressed,
-                _ => {}
-            }
+        self.note_pointer(input);
+        self.note_keys(input);
+        // Command-Q quits at once, silently, wherever it is pressed (the
+        // main menu's appear holds it first, for when the appear ends), as
+        // `_HandleQuitEvent` @0xcc958 does on the main screen (`_gPause`
+        // set, @0xcc97e). In play the original asks first (@0xcc9f5),
+        // which the engine doesn't yet
+        // (rdm:phase/main-screen-fidelity/phase-1-ask-before-quitting-play).
+        if let Input::Key {
+            key: Key::Char('q'),
+            pressed: true,
+            ..
+        } = *input
+            && self.command_held
+        {
+            return ScreenAction::Quit;
         }
         if let Some(action) = self.overlay_input(input) {
             return action;
@@ -481,5 +500,41 @@ impl AppScreen {
             return ScreenAction::None;
         }
         self.shown_mut().input(input)
+    }
+
+    /// Keeps whether Command and the physical S, L and E keys are held.
+    pub(super) fn note_keys(&mut self, input: &Input) {
+        if let Input::Key { key, pressed, .. } = *input {
+            match key {
+                Key::Command => self.command_held = pressed,
+                Key::Char('s') => self.keys_held.s = pressed,
+                Key::Char('l') => self.keys_held.l = pressed,
+                Key::Char('e') => self.keys_held.e = pressed,
+                _ => {}
+            }
+        }
+    }
+
+    /// Keeps where a pointer input puts the pointer, moved back into the
+    /// classic frame from a widened flight by [`AppScreen::overlay_offset`]
+    /// (as a dialog over it takes it), so it is the point the same pixel
+    /// shows on the classic sides; and whether the primary button is down.
+    pub(super) fn note_pointer(&mut self, input: &Input) {
+        if let Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            ..
+        } = *input
+        {
+            self.button_down = pressed;
+        }
+        let offset = self.overlay_offset();
+        self.pointer = match *input {
+            Input::PointerMoved(at) | Input::PointerButton { at, .. } => {
+                Some(Point::new(at.x - offset.x, at.y))
+            }
+            Input::PointerLeft => None,
+            Input::Key { .. } | Input::Text(_) => return,
+        };
     }
 }

@@ -185,3 +185,39 @@ fn the_map_arrow_icons_decode_as_16_pixel_squares() {
         assert_eq!(sizes, [(16, 16)], "cicn {id}");
     }
 }
+
+/// The stock main screen renders whole: `PICT` 8000, the logo's
+/// 654 x 1463 strip of frames cut by its clip, the six buttons and the
+/// rollover each decode and pack.
+#[test]
+fn the_stock_main_screen_renders_with_every_image_packed() {
+    use std::rc::Rc;
+
+    use nova_view::Screen;
+    use nova_view::menu::{MainMenu, MainScreenSource};
+    use nova_view::text::fixture::MonoMetrics;
+    use nova_view::ui::DescriptionSource;
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let art = data.main_screen_art().expect("the stock art");
+    let logo = data
+        .frames(ImageKind::Pict, art.logo.picture)
+        .expect("the logo decodes");
+    assert_eq!((logo[0].width(), logo[0].height()), (654, 1463));
+    let mut menu = MainMenu::new(Some(art), data.button_style(), Rc::new(MonoMetrics));
+    // The rollover shown over New Pilot.
+    menu.input(&nova_view::Input::PointerMoved(
+        menu.press_point(nova_view::menu::MenuChoice::NewPilot),
+    ));
+    menu.tick(std::time::Duration::from_secs(1));
+    let mut list = DrawList::new();
+    menu.draw(&mut list);
+    let mut renderer = Renderer::new(&data);
+    let mut gpu = RecordingGpu::new();
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (1024, 768), 1.0), &mut gpu);
+    assert_eq!(report.new_failures, vec![]);
+    assert!(matches!(gpu.calls.last(), Some(GpuCall::Submit(_))));
+}

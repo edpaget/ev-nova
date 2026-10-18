@@ -8,7 +8,10 @@ use nova_sim::SimDiagnostic;
 use crate::draw::DrawList;
 use crate::input::Input;
 use crate::preferences::Prefs;
+use crate::scaling::Scaling;
 use crate::sound::Sound;
+use crate::video_mode::{FullscreenKind, VideoMode};
+use crate::view_shape::ViewShape;
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +41,8 @@ pub enum Showing {
     About,
     /// The Preferences dialog, over another screen.
     Preferences,
-    /// The main menu: New Pilot, Open Pilot and Quit.
+    /// The main menu: New Pilot, Open Pilot, Quit, Enter Ship,
+    /// Preferences and About.
     MainMenu,
     /// The new pilot's name entry, over the main menu.
     NewPilot,
@@ -47,6 +51,9 @@ pub enum Showing {
     /// A note over the main menu, such as the warning that an opened
     /// pilot's load had to fall back, before its flight shows.
     Note,
+    /// A question in the Yes/No dialog over the main menu, such as
+    /// whether to quit, asked as the window's close is.
+    Question,
     /// The plunder dialog, over flight, which it pauses.
     Plunder,
     /// The captured-ship assignment dialog, over flight, which it pauses.
@@ -106,8 +113,10 @@ pub trait Screen {
     /// Abandons any pointer gesture in progress (a held button, a drag)
     /// without completing it: what follows is not a click or a drop. Called
     /// when the screen stops receiving input, such as when the app hides it,
-    /// since the button's release will then go elsewhere. Does nothing by
-    /// default.
+    /// since the button's release will then go elsewhere, and when the
+    /// primary button is let go of outside the game (in a letterbox bar or
+    /// off the window), where the release has no point to reach the screen
+    /// at. Does nothing by default.
     fn cancel_pointer(&mut self) {}
     /// Forgets every key it holds as down, as if each had been released.
     /// Called when the screen stops receiving input (the app hides it, or
@@ -141,6 +150,37 @@ pub trait Screen {
     fn take_prefs(&mut self) -> Option<Prefs> {
         None
     }
+    /// The display modes the current monitor offers for exclusive
+    /// fullscreen, as listed
+    /// ([`listed_modes`](crate::video_mode::listed_modes)), the kind the
+    /// game runs fullscreen in now, `current`, and the kind the player
+    /// chose, `chosen`, for the Preferences dialog's picker. The two kinds
+    /// differ when the game could not enter `chosen` and fell back to
+    /// borderless. The app offers them each time the Preferences dialog
+    /// opens. Does nothing by default.
+    fn offer_display(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        let _ = (modes, current, chosen);
+    }
+    /// The Scaling list for the Preferences dialog (`listed`: native, the
+    /// per-frame upscalers the running device can use, then Super-xBR, as
+    /// [`Scaling::list`] builds it), and the one running now, `running`.
+    /// The app offers it once, at startup, once it has the device; a pick
+    /// comes back through [`Screen::take_prefs`] as [`Prefs::scaling`].
+    /// Does nothing by default.
+    fn offer_scaling(&mut self, listed: &[Scaling], running: Scaling) {
+        let _ = (listed, running);
+    }
+    /// The fullscreen kind the player picked in the Preferences dialog
+    /// since this was last taken, for the app to enter and save: each pick
+    /// is reported once. None by default.
+    fn take_display_choice(&mut self) -> Option<FullscreenKind> {
+        None
+    }
     /// The galaxy map's borders setting to save since this was last taken,
     /// if a map's close changed it, as the original's map saves
     /// `ShowMapBorders` (`_SaveMapBordersState` @0xcf110): each change is
@@ -152,6 +192,13 @@ pub trait Screen {
     /// `None` by default.
     fn now_showing(&self) -> Option<Showing> {
         None
+    }
+    /// The user asked to close the window: whether the app quits now
+    /// (`true`, by default). A screen that answers `false` stays open, and
+    /// quits later, if it does, through [`Screen::take_quit`] or an
+    /// input's [`ScreenAction::Quit`], such as after asking whether to.
+    fn close_requested(&mut self) -> bool {
+        true
     }
     /// The app is about to quit, whichever way: the screen's last chance
     /// to keep what should outlive it, such as saving the pilot. Does
@@ -176,13 +223,27 @@ pub trait Screen {
     fn hides_pointer(&self) -> bool {
         false
     }
+    /// The logical shape the screen draws in now, for the app to fit into
+    /// the window: [`ViewShape::Classic`], 1024x768, by default.
+    fn view_shape(&self) -> ViewShape {
+        ViewShape::Classic
+    }
+    /// The size a [`ViewShape::Widened`] screen draws at in the window as
+    /// it is now ([`widened_size`](crate::view_shape::widened_size)),
+    /// in logical units. The app tells the screen when it is built and on
+    /// every resize, whatever shape it shows, so a screen that widens
+    /// later already knows its width. Ignored by default.
+    fn set_widened_size(&mut self, size: (f32, f32)) {
+        let _ = size;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::input::Key;
-    use crate::{Color, Point};
+    use crate::video_mode::{FullscreenKind, VideoMode};
+    use crate::{Color, Point, Scaling};
 
     /// Counts ticks and quits on Escape.
     #[derive(Default)]
@@ -266,6 +327,14 @@ mod tests {
     }
 
     #[test]
+    fn a_close_quits_at_once_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        assert!(screen.close_requested());
+        assert!(!screen.take_quit());
+    }
+
+    #[test]
     fn quitting_does_nothing_and_there_are_no_warnings_or_diagnostics_by_default() {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
@@ -298,6 +367,50 @@ mod tests {
         assert!(!screen.take_quit());
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_ignores_an_offer_of_display_modes_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        let mode = VideoMode {
+            width: 1920,
+            height: 1080,
+            refresh_millihertz: 60_000,
+        };
+        let exclusive = FullscreenKind::Exclusive(mode);
+        screen.offer_display(&[mode], FullscreenKind::Borderless, exclusive);
+        assert_eq!(screen.take_prefs(), None);
+        assert_eq!(screen.take_display_choice(), None);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_ignores_an_offer_of_scaling_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        let all = [Scaling::Native, Scaling::SharpBilinear, Scaling::SuperXbr];
+        screen.offer_scaling(&all, Scaling::SuperXbr);
+        assert_eq!(screen.take_prefs(), None);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_is_classic_and_ignores_the_widened_size_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        assert_eq!(screen.view_shape(), ViewShape::Classic);
+        screen.set_widened_size((1365.0, 768.0));
+        assert_eq!(screen.view_shape(), ViewShape::Classic);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
     }
 
     #[test]

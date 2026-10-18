@@ -130,7 +130,7 @@ fn a_cloaked_ship_is_on_the_radar_only_when_the_session_says() {
 
 #[test]
 fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
-    let area = play_area();
+    let area = play_area(VIEW_SIZE);
     assert_eq!(
         area,
         nova_sim::cloak::Area {
@@ -2330,7 +2330,7 @@ fn the_target_is_bracketed_and_its_panel_shows_it() {
     target::draw_target_panel(
         &mut panel,
         &bar.layout,
-        hud::bar_origin(bar),
+        hud::bar_origin(bar, VIEW_SIZE.0),
         Some(&TargetPanel {
             name: "Ship 129".to_owned(),
             subtitle: "Light Transport".to_owned(),

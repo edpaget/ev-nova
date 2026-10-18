@@ -414,7 +414,7 @@ impl Game {
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
             .with_chance(SharedChance::new(chance));
         let mut game = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
             dial,
@@ -424,9 +424,7 @@ impl Game {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(MenuChoice::OpenPilot)
-            .rect
-            .center();
+            .press_point(MenuChoice::OpenPilot);
         game.click(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);

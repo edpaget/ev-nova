@@ -16,6 +16,10 @@ pollster.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 
+# The MetalFX world upscaler's FFI, macOS only: no other build links it.
+[target.'cfg(target_os = "macos")'.dependencies]
+nova-metalfx.workspace = true
+
 [dev-dependencies]
 # Synthetic pictures and sprites for the GameData source tests, and the
 # block font for the text tests.

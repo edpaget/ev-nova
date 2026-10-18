@@ -2,7 +2,7 @@
 //! The audio side decides which `snd ` each one plays, if any.
 //!
 //! - [`UiSound`]: the interface's own, a main-menu button pressed and
-//!   released, the alert as something is refused, the news dialog's
+//!   released, the main screen's rows sliding in, the alert as something is refused, the news dialog's
 //!   beeps, the course map's beeps (opening, closing, Space and Find),
 //!   and the beep of the player info
 //!   refused.
@@ -58,14 +58,18 @@ pub use nova_sim::{SimSound, SoundId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSound {
     /// A main-menu button was pressed: the pointer went down on it
-    /// (`_TrackMainScreenButtons` @0x195b9). Only the main menu's buttons
+    /// (@0x19687), or onto it with the press held, from off every button
+    /// or straight from another (@0x19974), in
+    /// `_TrackMainScreenButtons` @0x195b9. Only the main menu's buttons
     /// raise it; a key that activates a button never does (see the module
     /// docs).
     ButtonDown,
-    /// A pressed main-menu button popped back up: the pointer was let go,
-    /// on the button or off it (`_TrackMainScreenButtons` @0x195b9). Only
-    /// the main menu's buttons raise it; a key that activates a button
-    /// never does (see the module docs).
+    /// A pressed main-menu button popped back up: the held press was
+    /// dragged off every button (@0x19ac4), or let go of over a button,
+    /// choosing it (@0x19c38), in `_TrackMainScreenButtons` @0x195b9; a
+    /// press let go of off every button is silent. Only the main menu's
+    /// buttons raise it; a key that activates a button never does (see
+    /// the module docs).
     ButtonUp,
     /// A key activated a main-menu button: `_PlayMainScreenClickSound`
     /// @0x177af, which plays snd 600, then 601 once 600 has ended. The
@@ -74,6 +78,15 @@ pub enum UiSound {
     /// ([`Screen::keyed_click_ended`](crate::Screen::keyed_click_ended)).
     /// E clicks on its release, not its press.
     ButtonKeyed,
+    /// A main-screen slide stepped from its first frame, a row of buttons
+    /// starting to slide in: `_MainScreenAnimIdle` plays snd 602, "Menu
+    /// button start", at priority 50 (@0x188e6-0x188fc).
+    RowSlideStart,
+    /// A main-screen slide reached its count, its row of buttons shown:
+    /// `_MainScreenAnimIdle` plays snd 603, "Menu button end", at
+    /// priority 50 (@0x1891c-0x18932). A click that finishes the slides
+    /// at once plays none (`_MainScreenMouse` @0x1ae3a-0x1ae99).
+    RowSlideEnd,
     /// Enter Ship was chosen on the main screen with no pilot loaded, or
     /// a dying one: `_MainScreenChoice(3)` @0x1aa89-0x1aaac plays
     /// `_beepSnd[3]`. E raises it after its click.

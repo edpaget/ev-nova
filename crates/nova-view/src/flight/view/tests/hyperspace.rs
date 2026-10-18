@@ -684,6 +684,7 @@ fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
             disabled: false,
         },
         None,
+        VIEW_SIZE.0,
     );
     assert!(
         list.iter()

@@ -221,7 +221,7 @@ fn board(screen: &mut AppScreen) {
 
 /// The router over [`boarding_data`] with dialogs, in the developer's
 /// flight, boarded, its sounds taken.
-fn boarded() -> AppScreen {
+pub(super) fn boarded() -> AppScreen {
     let mut screen = boardable(with_dialogs(boarding_data()));
     fly(&mut screen);
     let _ = screen.take_sounds();
@@ -412,7 +412,9 @@ fn without_any_metrics_a_boarding_is_let_go() {
 /// captured.
 fn captured(store: &MemoryPilots) -> AppScreen {
     let mut screen = boardable(
-        with_dialogs(boarding_data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)),
+        with_dialogs(boarding_data())
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+            .appeared(),
     )
     .with_chance(under_a_new_pilot())
     .with_boarding_rule(Rc::new(Sure));
@@ -555,7 +557,7 @@ fn hailable(screen: AppScreen) -> AppScreen {
 
 /// The router over [`boarding_data`] with dialogs, in the developer's
 /// flight, hailing the trader.
-fn hailing() -> AppScreen {
+pub(super) fn hailing() -> AppScreen {
     let mut screen = hailable(with_dialogs(boarding_data()));
     fly(&mut screen);
     hail(&mut screen);

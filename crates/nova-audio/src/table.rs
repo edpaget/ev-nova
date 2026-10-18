@@ -29,6 +29,10 @@ pub struct SoundTable {
     pub button_down: Option<SoundId>,
     /// Plays as a pressed interface button comes back up.
     pub button_up: Option<SoundId>,
+    /// Plays as a main-screen row starts to slide in.
+    pub row_slide_start: Option<SoundId>,
+    /// Plays as a main-screen row has slid in.
+    pub row_slide_end: Option<SoundId>,
     /// Plays as the interface refuses what was asked of it.
     pub alert: Option<SoundId>,
     /// Plays as a `Q` set operator's message is shown in flight.
@@ -163,6 +167,11 @@ impl SoundTable {
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).
     /// - `button_up`: 601, "Menu button up" (likewise).
+    /// - `row_slide_start`: 602, "Menu button start" (the stock
+    ///   resource's name), which `_MainScreenAnimIdle` plays as a slide
+    ///   steps from its first frame (@0x188fc).
+    /// - `row_slide_end`: 603, "Menu button end", which it plays as a
+    ///   slide reaches its count (@0x18932).
     /// - `alert`: none. The original calls `SysBeep`, the system's alert
     ///   (as the Text Input dialog refuses a name too long,
     ///   `_EVTextInputDialog` @0x554a9-0x554e7), which no stock `snd `
@@ -324,6 +333,8 @@ impl SoundTable {
         arrival: Some(SoundId(130)),
         button_down: Some(SoundId(600)),
         button_up: Some(SoundId(601)),
+        row_slide_start: Some(SoundId(602)),
+        row_slide_end: Some(SoundId(603)),
         alert: None,
         script_message: Some(SoundId(154)),
         escort_menu: Some(SoundId(150)),
@@ -398,6 +409,12 @@ mod tests {
         );
         assert_eq!(table.button_down, Some(SoundId(600)), "Menu button down");
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
+        assert_eq!(
+            table.row_slide_start,
+            Some(SoundId(602)),
+            "Menu button start"
+        );
+        assert_eq!(table.row_slide_end, Some(SoundId(603)), "Menu button end");
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.escort_menu, Some(SoundId(150)), "_beepSnd[0]");

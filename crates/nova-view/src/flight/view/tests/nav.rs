@@ -1027,6 +1027,7 @@ fn interference_shows_static_at_the_next_refresh() {
         == DrawCommand::TiledPicture {
             image: ImageKey::pattern(131),
             area: STOCK_RADAR.to_bounds(),
+            origin: Point::new(0.0, 0.0),
         }));
 }
 

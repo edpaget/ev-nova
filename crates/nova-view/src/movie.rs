@@ -389,18 +389,22 @@ impl MovieStage {
     /// What it shows over what is beneath: the fade out over it; the
     /// black window, and the frame in it, while the movie runs or stops;
     /// the fades over them, and the last fade over what is beneath again.
+    /// All of it in Nova's 1024 x 768 main window: over a widened flight
+    /// view it is drawn centred, the view's sides uncovered (filed as
+    /// rdm:phase/display-modes-fidelity/phase-3-cinematic-movie-widened).
     pub fn draw(&self, list: &mut DrawList) {
+        let window = (MAIN_WINDOW.0 as f32, MAIN_WINDOW.1 as f32);
         match self.phase {
             Phase::Waiting | Phase::Ended => {}
-            Phase::FadingOut(fade) | Phase::ClosingIn(fade) => fade.draw(list),
+            Phase::FadingOut(fade) | Phase::ClosingIn(fade) => fade.draw(list, window),
             Phase::FadingIn(fade) => {
                 fill_rect(list, screen(), Color::BLACK);
-                fade.draw(list);
+                fade.draw(list, window);
             }
             Phase::Playing => self.draw_movie(list),
             Phase::ClosingOut(fade) => {
                 self.draw_movie(list);
-                fade.draw(list);
+                fade.draw(list, window);
             }
         }
     }

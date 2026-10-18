@@ -14,6 +14,10 @@ deny = [
     { crate = "egui", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-wgpu", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-winit", reason = "only nova's dev-tools feature may pull in egui" },
+    # MetalFX is reached only through nova-metalfx's safe API, and that
+    # only from the renderer (a macOS-only dependency of each).
+    { crate = "nova-metalfx", wrappers = ["nova-render"], reason = "only the renderer draws the world with MetalFX" },
+    { crate = "objc2-metal-fx", wrappers = ["nova-metalfx"], reason = "MetalFX's unsafe bindings are reached only through nova-metalfx's safe API" },
     # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
     # entry's `wrappers` lists the only crates allowed to depend on it
     # directly: the nova-sim crates above it (and, for the nova-sim facade,

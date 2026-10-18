@@ -268,7 +268,8 @@ fn without_the_trade_dialog_the_trade_center_says_why() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(trading_data())
         .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 7);
@@ -431,7 +432,8 @@ fn landed_outfitter_by(store: &MemoryPilots, rulebook: &Rulebook) -> AppScreen {
     let mut screen = AppScreen::new(outfitting_data())
         .with_rulebook(rulebook)
         .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);
@@ -523,7 +525,8 @@ fn twelve_tons_in_ten(store: &MemoryPilots) -> AppScreen {
     let mut screen = AppScreen::new(cargo_pod_data())
         .with_rulebook(&rulebook)
         .with_dialogs(Rc::new(ShopDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
@@ -598,7 +601,8 @@ fn past_the_holds(store: &MemoryPilots) -> AppScreen {
     let mut screen = AppScreen::new(past_the_holds_data())
         .with_rulebook(&rulebook)
         .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
@@ -691,7 +695,7 @@ fn in_the_bar() -> AppScreen {
 }
 
 /// [`in_the_bar`], its rules read as `rules` says.
-fn in_the_bar_by(rules: Rulebook) -> AppScreen {
+pub(super) fn in_the_bar_by(rules: Rulebook) -> AppScreen {
     let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
     let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
     built.put_u16(alpha + 0x04, 129);
@@ -748,7 +752,7 @@ fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
 /// Where `system` is on flight's open map, scrolled well into item 3 with
 /// the arrows first: the map opens at 0.5625 and shows little of the
 /// galaxy.
-fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
+pub(super) fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view::Point {
     let shown = nova_view::galaxy::dialog::map_area().grown(-12.0);
     for _ in 0..200 {
         let map = flight(screen).course_map();
@@ -1131,7 +1135,8 @@ fn a_sound_by_a_purchase_hook_plays_after_the_take_off() {
 fn a_new_pilot_moved_by_its_on_start_flies_there_and_is_saved_there() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(starting_data(b"M129"))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(pilot(&screen).system(), nova_sim::SystemId(129));
@@ -1147,7 +1152,8 @@ fn without_the_outfit_dialog_the_outfitter_says_why() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(outfitting_data())
         .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
@@ -1169,7 +1175,8 @@ fn an_order_in_one_refreshes_the_other_for_when_it_opens() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(outfitting_data())
         .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
@@ -1431,6 +1438,7 @@ fn rolling_shipyard(store: &MemoryPilots, script: &[bool]) -> (AppScreen, Rc<Ref
     let mut screen = AppScreen::new(game_data_selling(true, true, true, i16::from(ROLLED)))
         .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
         .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+        .appeared()
         .with_chance(SharedChance::new(shared));
     create(&mut screen, "Ada");
     land_twice(&mut screen);
@@ -1497,7 +1505,8 @@ fn without_the_shipyard_dialog_the_shipyard_says_why() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(shipbuying_data())
         .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     click_port_item(&mut screen, 9);
@@ -1582,7 +1591,8 @@ fn in_port_the_status_bar_shows_beside_the_spaceport_with_a_blank_radar() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(barred_outfitting_data())
         .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     assert!(
         radar_dots(&drawn(&screen)).len() > 1,
@@ -1930,7 +1940,8 @@ fn mission_info_closing_over_the_outfitter_redraws_the_bar_held_under_it() {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(barred_briefing_data())
         .with_dialogs(Rc::new(InfoDialogs), Rc::new(MonoMetrics))
-        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
     screen.input(&key(Key::Enter, true));
@@ -2069,7 +2080,8 @@ fn mission_info_closing_over_each_opener_shows_the_nav_its_abort_wrote() {
         let store = MemoryPilots::new();
         let mut screen = AppScreen::new(aborting_to_beta_data())
             .with_dialogs(Rc::new(InfoOverEveryOpener), Rc::new(MonoMetrics))
-            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .appeared();
         create(&mut screen, "Ada");
         land_twice(&mut screen);
         screen.input(&key(Key::Enter, true));

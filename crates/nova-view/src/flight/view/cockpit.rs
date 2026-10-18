@@ -36,6 +36,7 @@ use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::{sixtieths, ticks};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
+use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, UiSound};
 
 use super::{
@@ -240,10 +241,44 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// The camera, on the ship as drawn.
+    /// The camera, on the ship as drawn, in the view's size.
     #[must_use]
     pub fn camera(&self) -> Camera {
-        Camera::centred_on(self.shown_position())
+        Camera::centred_on_in(self.shown_position(), self.view)
+    }
+
+    /// The view's size in logical units: Nova's 1024 x 768 until
+    /// [`FlightView::set_view_size`] widens it.
+    #[must_use]
+    pub fn view_size(&self) -> (f32, f32) {
+        self.view
+    }
+
+    /// Sets the view's size, `view` logical units: the app's widened size
+    /// ([`Screen::set_widened_size`](crate::Screen::set_widened_size)).
+    /// The camera, the HUD's places, the play area the session is told
+    /// at the next steps, the starfield and the fades all take it from
+    /// the next frame on (see the module docs). Nova's own 1024 x 768
+    /// draws as flight always has.
+    pub fn set_view_size(&mut self, view: (f32, f32)) {
+        self.view = view;
+    }
+
+    /// How far right the course map's 1024 x 768 frame is drawn, and its
+    /// clicks taken: centred in the widened view over flight
+    /// ([`classic_offset`]), and at 0 over the spaceport, which is
+    /// classic, where the bar and the docked mission dialogs open it.
+    pub(super) fn map_offset(&self) -> Point {
+        let in_port = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
+        let x = if in_port {
+            0.0
+        } else {
+            classic_offset(self.view.0)
+        };
+        Point::new(x, 0.0)
     }
 
     /// The frame of the ship's sheet drawn, or `None` without a sheet.
@@ -490,7 +525,8 @@ impl<C> FlightView<C> {
 
     /// A click at screen point `at`, as the original's in space
     /// (`_HandlePlayer` @0x6a000-0x6a764): one in the status panel, the
-    /// right [`STATUS_BAR_WIDTH`] (0xc2) of the screen, radar included, is
+    /// right [`STATUS_BAR_WIDTH`] (0xc2) of the view at any width, x ≥
+    /// width − 194 (@0x6a046-0x6a065), radar included, is
     /// no click in space and does nothing (@0x6a065, @0x6a36d); nor does
     /// one in the open escort menu's frame, which the original's menu
     /// branch takes and ends (@0x6a060-0x6a12b; its row selection is left
@@ -499,7 +535,7 @@ impl<C> FlightView<C> {
     /// ([`ViewShips`]): a ship under it is targeted, during a jump too, and
     /// otherwise the stellar under it selected.
     pub(super) fn click_in_space(&mut self, at: Point) {
-        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
+        if at.x >= self.view.0 - STATUS_BAR_WIDTH || self.escort_menu.holds_click(at) {
             return;
         }
         let world = self.camera().screen_to_world(at);
@@ -588,7 +624,7 @@ impl<C> FlightView<C> {
     /// click in space selects nothing either; here the session refuses the
     /// hit, so the click does nothing and the map isn't shown again.
     pub(super) fn click_floating_map(&mut self, at: Point) -> bool {
-        let frame = floating::frame(VIEW_SIZE);
+        let frame = floating::frame(self.view);
         if !self.floating.is_up() || !floating::contains(frame, at) {
             return false;
         }
@@ -660,7 +696,7 @@ impl<C> FlightView<C> {
             .galaxy()
             .position(current)
             .map_or_else(Point::default, |at| Point::new(at.x, at.y));
-        let frame = floating::frame(VIEW_SIZE);
+        let frame = floating::frame(self.view);
         let transform = floating::transform(frame, at, self.floating.zoom());
         let Some(picture) = &self.floating_picture else {
             return;
@@ -990,7 +1026,7 @@ impl<C> FlightView<C> {
     pub(super) fn draw_red_alert(&self, list: &mut DrawList) {
         let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
         if let (Some(icon), Some(width)) = (icon, self.alert_width) {
-            alert::draw_red_alert(list, icon, width);
+            alert::draw_red_alert(list, icon, width, self.view.0);
         }
     }
 
@@ -998,11 +1034,11 @@ impl<C> FlightView<C> {
     /// and secondary weapon line. The weapon line follows every frame: the
     /// original redraws it (`_statusRedraw[3]`) on every event that
     /// changes it, so drawing it each frame shows the same.
-    fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar) {
+    fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
         let Ok(session) = &self.session else {
             return;
         };
-        let origin = hud::bar_origin(bar);
+        let origin = hud::bar_origin(bar, view_width);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let shown = self.target_shown();
         target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
@@ -1068,18 +1104,21 @@ impl<C> FlightView<C> {
     /// the bar and its shops cover the bar's left edge (`_DoPortDialog`
     /// @0x5fbca draws the radar blank, as ours does while landed).
     /// Without a status bar it draws nothing: flight says why, and the
-    /// spaceport stays clean.
+    /// spaceport stays clean. The spaceport is Nova's 1024 x 768, however
+    /// wide flight's view is, so the bar is drawn at that width's right
+    /// edge.
     pub fn draw_status_bar(&self, list: &mut DrawList) {
         if let Ok(bar) = &self.status_bar {
-            self.draw_bar(list, bar);
+            self.draw_bar(list, bar, VIEW_SIZE.0);
         }
     }
 
-    /// Draws `bar` showing the HUD: the radar, gauges and nav area as
+    /// Draws `bar` showing the HUD against the right edge of a view
+    /// `view_width` wide: the radar, gauges and nav area as
     /// shown ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
     /// [`FlightView::nav_shown`]), the cargo area, then the target panel
     /// and the secondary weapon's line.
-    pub(super) fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar) {
+    pub(super) fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar, view_width: f32) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let radar = self.radar_shown();
         let cargo = self.session.as_ref().ok().map(Session::status_cargo);
@@ -1094,8 +1133,8 @@ impl<C> FlightView<C> {
                 .as_ref()
                 .is_ok_and(|session| session.player_condition() == Condition::Disabled),
         };
-        hud::draw(list, bar, &state, metrics);
-        self.draw_combat_hud(list, bar);
+        hud::draw(list, bar, &state, metrics, view_width);
+        self.draw_combat_hud(list, bar, view_width);
     }
 
     /// Draws the [`HELP`] line when its overlay is on.

@@ -504,7 +504,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     keeper.save(&saved).expect("saved");
     let screen = start_screen(Rc::clone(&data)).with_pilots(Some(keeper), Rc::new(MonoMetrics));
     let mut driver = Driver {
-        app: App::new(&Window, data, screen),
+        app: App::new(&Window, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         clock: Duration::ZERO,
     };
@@ -513,9 +513,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
@@ -590,7 +588,7 @@ fn x_shows_the_stock_desc_32766_over_the_main_menu() {
     let screen = start_screen(Rc::clone(&data))
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
-    let mut app: App<_> = App::new(&Window, data, screen);
+    let mut app: App<_> = App::new(&Window, data, crate::common::appeared(screen));
     let mut gpu = RecordingGpu::new();
     let mut press = |app: &mut App<Rc<GameData>>, key| {
         let event = WindowEvent::Key {
@@ -650,7 +648,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
     let mut driver = Driver {
-        app: App::new(&Window, data, screen),
+        app: App::new(&Window, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         clock: Duration::ZERO,
     };
@@ -659,9 +657,7 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     assert_eq!(driver.showing(), Showing::OpenPilot);
     driver.press(Key::Enter);
@@ -746,7 +742,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
     let mut driver = Driver {
-        app: App::new(&Window, data, screen),
+        app: App::new(&Window, data, crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
         clock: Duration::ZERO,
     };
@@ -755,9 +751,7 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
         .screen()
         .main_menu()
         .expect("the main menu")
-        .button(MenuChoice::OpenPilot)
-        .rect
-        .center();
+        .press_point(MenuChoice::OpenPilot);
     driver.click(open);
     driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");

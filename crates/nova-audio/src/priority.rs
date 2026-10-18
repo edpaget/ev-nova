@@ -33,6 +33,10 @@ pub const ARRIVAL: Priority = Priority::new(50);
 /// @0x177d9, @0x17812, and `_TrackMainScreenButtons` @0x19687, @0x19974,
 /// @0x19ac4, @0x19c38.
 pub const BUTTON: Priority = Priority::new(10);
+/// A main-screen slide's start or end, 602 and 603: `_MainScreenAnimIdle`
+/// @0x188e6, @0x1891c. Above the buttons' 10, so a click's 600 doesn't
+/// cut them off.
+pub const ROW_SLIDE: Priority = Priority::new(50);
 /// The alert. The original's is `SysBeep`, outside the voice list, so no
 /// site gives one: the lowest.
 pub const ALERT: Priority = Priority::new(1);
@@ -182,6 +186,7 @@ mod tests {
             (JUMP, 32_000, "warp-up"),
             (ARRIVAL, 50, "warp-out"),
             (BUTTON, 10, "button"),
+            (ROW_SLIDE, 50, "row slide"),
             (ALERT, 1, "alert"),
             (SCRIPT_MESSAGE, 1, "Q message"),
             (SCRIPT, 50, "P sound"),

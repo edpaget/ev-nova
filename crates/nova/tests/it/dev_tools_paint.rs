@@ -5,7 +5,7 @@
 use egui::{Color32, ColorImage, Context, Pos2, RawInput, Rect, TextureOptions, pos2, vec2};
 use nova::devtools::EguiLayer;
 use nova_render::wgpu::{InitError, OffscreenGpu, WithOverlay};
-use nova_render::{FontFaces, Frame, Gpu, LogicalSize, PixelRect};
+use nova_render::{FontFaces, Frame, Gpu, LogicalSize, PixelRect, WorldSpace};
 use nova_view::Color;
 
 const SIZE: u32 = 64;
@@ -34,7 +34,9 @@ fn black_frame() -> Frame {
         },
         logical: LogicalSize { w: 32, h: 32 },
         clear: Color::rgba(0, 0, 0, 255),
+        world_space: WorldSpace::Target,
         batches: Vec::new(),
+        world: Vec::new(),
     }
 }
 

@@ -410,7 +410,7 @@ impl Harness {
             .with_behaviour(behaviour)
             .with_pilots(Some(keeper), Rc::new(MonoMetrics));
         let mut harness = Self {
-            app: App::new(&FakeWindow, data, screen),
+            app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
             frames: 0,
         };
@@ -419,9 +419,7 @@ impl Harness {
             .screen()
             .main_menu()
             .expect("a main menu")
-            .button(MenuChoice::NewPilot)
-            .rect
-            .center();
+            .press_point(MenuChoice::NewPilot);
         harness.click(at);
         for c in "Trader".chars() {
             harness.send(WindowEvent::Text(c));

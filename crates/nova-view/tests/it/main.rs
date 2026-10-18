@@ -11,6 +11,7 @@ mod stock_combat_effects;
 mod stock_dialogs;
 mod stock_flight_hud;
 mod stock_galaxy_map;
+mod stock_main_screen;
 mod stock_map_borders;
 mod stock_resource_browser;
 mod stock_ship_browser;

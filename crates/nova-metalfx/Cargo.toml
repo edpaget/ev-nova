@@ -1,0 +1,42 @@
+[package]
+name = "nova-metalfx"
+description = "A safe MetalFX spatial scaler over wgpu's Metal backend, for macOS only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Every dependency is macOS-only: on any other target the crate is empty.
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu.workspace = true
+# The Metal types wgpu-hal hands out (objc2-metal 0.3.2 on objc2 0.6, the
+# versions wgpu-hal 30 locks), so they are the same types MetalFX takes.
+objc2 = "0.6"
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLCommandBuffer", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture"] }
+# The spatial scaler alone. It links MetalFX strongly, which needs
+# macOS 13 (`.cargo/config.toml`).
+objc2-metal-fx = { version = "0.3.2", default-features = false, features = ["std", "MTLFXSpatialScaler"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+pollster.workspace = true
+
+# Not `workspace = true`: this crate is the one place unsafe code is
+# allowed, so it denies it (each FFI module allows it) where the workspace
+# forbids it. The clippy table is the workspace's.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"

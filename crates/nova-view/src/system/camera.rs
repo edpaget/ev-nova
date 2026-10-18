@@ -7,10 +7,19 @@
 //! one logical unit ([`WORLD_SCALE`]): distances and speeds read from the
 //! data need no conversion. y grows downwards, as on screen.
 //!
-//! The camera keeps the world point drawn at the screen's centre:
+//! The camera keeps the world point drawn at its view's centre, its
+//! anchor: (floor(view width / 2), view height / 2), [`VIEW_CENTER`] in
+//! Nova's own 1024 x 768 ([`VIEW_SIZE`]), and (682, 384) in flight widened
+//! to 1365 x 768 ([`Camera::centred_on_in`]):
 //!
-//! - `world_to_screen(p) = VIEW_CENTER + (p - center) x WORLD_SCALE`
-//! - `screen_to_world(s) = center + (s - VIEW_CENTER) / WORLD_SCALE`
+//! - `world_to_screen(p) = anchor + (p - center) x WORLD_SCALE`
+//! - `screen_to_world(s) = center + (s - anchor) / WORLD_SCALE`
+//!
+//! The original draws flight's world from `_screenCenter`, the centre of
+//! the play area left of the status bar (`_SetupWind` @0x1b720); ours
+//! keeps the view's centre, filed as
+//! rdm:phase/display-modes-fidelity/phase-1-ship-at-play-area-centre,
+//! which changes [`Camera::anchor`] alone.
 
 use crate::Point;
 use crate::geometry::Bounds;
@@ -31,48 +40,74 @@ pub const CAMERA_MARGIN: f32 = 1024.0;
 /// What the system view shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
-    /// The world point drawn at [`VIEW_CENTER`].
+    /// The world point drawn at the view's [`anchor`](Camera::anchor).
     center: Point,
     /// Where `center` may go.
     limits: Bounds,
+    /// The view's size, in logical units.
+    view: (f32, f32),
 }
 
 impl Camera {
     /// A camera on the system's centre, (0, 0), kept within `limits`,
-    /// which must include (0, 0).
+    /// which must include (0, 0), in Nova's own view ([`VIEW_SIZE`]).
     #[must_use]
     pub fn new(limits: Bounds) -> Self {
         Self {
             center: Point::default(),
             limits,
+            view: VIEW_SIZE,
         }
     }
 
-    /// A camera on world point `center`, held there: what the flight screen
-    /// shows, following the player's ship.
+    /// A camera on world point `center`, held there, in Nova's own view
+    /// ([`VIEW_SIZE`]).
     #[must_use]
     pub fn centred_on(center: Point) -> Self {
+        Self::centred_on_in(center, VIEW_SIZE)
+    }
+
+    /// A camera on world point `center`, held there, in a view `view`
+    /// logical units in size: what the flight screen shows, following the
+    /// player's ship, widened or not.
+    #[must_use]
+    pub fn centred_on_in(center: Point, view: (f32, f32)) -> Self {
         Self {
             center,
             limits: Bounds {
                 min: center,
                 max: center,
             },
+            view,
         }
     }
 
-    /// The world point at the screen's centre.
+    /// The world point at the view's centre.
     #[must_use]
     pub fn center(&self) -> Point {
         self.center
     }
 
+    /// The view's size, in logical units.
+    #[must_use]
+    pub fn view_size(&self) -> (f32, f32) {
+        self.view
+    }
+
+    /// The screen point [`Camera::center`] is drawn at: (floor(width / 2),
+    /// height / 2), [`VIEW_CENTER`] in Nova's own view.
+    #[must_use]
+    pub fn anchor(&self) -> Point {
+        Point::new((self.view.0 / 2.0).floor(), self.view.1 / 2.0)
+    }
+
     /// Where the world point `p` is drawn.
     #[must_use]
     pub fn world_to_screen(&self, p: Point) -> Point {
+        let anchor = self.anchor();
         Point::new(
-            (p.x - self.center.x).mul_add(WORLD_SCALE, VIEW_CENTER.x),
-            (p.y - self.center.y).mul_add(WORLD_SCALE, VIEW_CENTER.y),
+            (p.x - self.center.x).mul_add(WORLD_SCALE, anchor.x),
+            (p.y - self.center.y).mul_add(WORLD_SCALE, anchor.y),
         )
     }
 
@@ -80,9 +115,10 @@ impl Camera {
     #[must_use]
     pub fn screen_to_world(&self, s: Point) -> Point {
         let per_logical_unit = WORLD_SCALE.recip();
+        let anchor = self.anchor();
         Point::new(
-            (s.x - VIEW_CENTER.x).mul_add(per_logical_unit, self.center.x),
-            (s.y - VIEW_CENTER.y).mul_add(per_logical_unit, self.center.y),
+            (s.x - anchor.x).mul_add(per_logical_unit, self.center.x),
+            (s.y - anchor.y).mul_add(per_logical_unit, self.center.y),
         )
     }
 
@@ -198,6 +234,36 @@ mod tests {
         assert_eq!(camera.world_to_screen(at(0.0, 0.0)), at(762.5, -816.25));
         camera.move_by(100.0, -100.0);
         assert_eq!(camera.center(), at(-250.5, 1200.25), "held there");
+    }
+
+    #[test]
+    fn a_camera_in_a_widened_view_draws_its_centre_at_the_views_centre() {
+        let p = at(-250.5, 1200.25);
+        let camera = Camera::centred_on_in(p, (1365.0, 768.0));
+        assert_eq!(camera.view_size(), (1365.0, 768.0));
+        assert_eq!(camera.anchor(), at(682.0, 384.0));
+        assert_eq!(camera.world_to_screen(p), at(682.0, 384.0));
+        assert_eq!(
+            camera.world_to_screen(at(p.x - 600.0, p.y)),
+            at(82.0, 384.0),
+            "600 left of the ship, inside the widened view"
+        );
+        assert_eq!(camera.screen_to_world(at(682.0, 384.0)), p);
+        for s in [at(0.0, 0.0), at(1365.0, 768.0), at(1100.5, 700.25)] {
+            let back = camera.world_to_screen(camera.screen_to_world(s));
+            assert!(close(back, s), "{s:?} came back as {back:?}");
+        }
+        let even = Camera::centred_on_in(p, (1366.0, 768.0));
+        assert_eq!(even.world_to_screen(p), at(683.0, 384.0));
+    }
+
+    #[test]
+    fn the_classic_cameras_keep_nova_s_screen() {
+        let p = at(10.0, 20.0);
+        assert_eq!(Camera::centred_on(p).view_size(), VIEW_SIZE);
+        assert_eq!(Camera::centred_on(p).anchor(), VIEW_CENTER);
+        assert_eq!(Camera::centred_on(p), Camera::centred_on_in(p, VIEW_SIZE));
+        assert_eq!(sol().view_size(), VIEW_SIZE);
     }
 
     #[test]

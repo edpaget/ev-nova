@@ -23,8 +23,8 @@ Running
 
 On Windows the programs are `nova.exe` and `nova-dump.exe`.
 
-macOS: the binaries are unsigned, so Gatekeeper blocks them. In the
-extracted folder, run
+macOS: the binaries need macOS 13 (Ventura) or later. They are unsigned,
+so Gatekeeper blocks them. In the extracted folder, run
 
   xattr -d com.apple.quarantine nova nova-dump
 

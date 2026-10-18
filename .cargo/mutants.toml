@@ -77,6 +77,14 @@ exclude_re = [
     # `CommCatalog::plugin_string`'s default is `StringPatch::Absent`,
     # which is `StringPatch::default()`: the same value.
     "catalog.rs:.*replace CommCatalog::plugin_string -> StringPatch with Default::default\\(\\)",
+    # `Screen::view_shape`'s default is `ViewShape::Classic`, which is
+    # `ViewShape::default()`; `Screen::set_widened_size`'s default ignores
+    # its size, which `()` does too.
+    "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
+    "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
+    # The native upscaler draws the world at `WorldResolution::Native`,
+    # which is `WorldResolution::default()`: the same value.
+    "nova-render/src/wgpu/upscale\\.rs:.*replace <impl Upscale for Native>::resolution -> WorldResolution with Default::default\\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
     # `+ 360` in place of `mod 360` lands on the same heading.
@@ -162,29 +170,57 @@ exclude_re = [
     # forwards to tested parts: the panel (`DevPanel`), the painter
     # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
     "DevTools::(new|on_window_event|run_frame|layer_mut)",
-    # The window port over a real winit window: one-line reads of its size
-    # and scale factor, a redraw request and showing or hiding the system
-    # pointer, observable only with a window.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible)",
-    # The port's default for a window with no pointer of its own does
-    # nothing already.
-    "replace WindowPort::set_pointer_visible with \\(\\)",
+    # The window port over a real winit window: one-line reads of its size,
+    # scale factor and fullscreen state, a redraw request, showing or hiding
+    # the system pointer, the fullscreen and size requests, and its
+    # monitor's modes and name, observable only with a window. The
+    # decisions in them are the tested `deepest` and `offers_exclusive`.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name)",
+    # The port's defaults for a window with no pointer of its own, that
+    # cannot go fullscreen or be sized, do nothing already.
+    "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",
+    # Its default `video_modes` is `Vec::new()`; replacing it with `vec![]`
+    # builds the same empty list, so it cannot be observed.
+    "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
     # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
     "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
-    # The surface adapter's raw calls, as whole bodies only: pages and
-    # uploads delegate to `WgpuRenderer` (tested offscreen), and `submit`
+    # The surface adapter's raw calls, as whole bodies only: pages,
+    # uploads and clearing the pages delegate to `WgpuRenderer` (tested
+    # offscreen), and `submit`
     # is the raw configure / get_current_texture / present calls on a
     # window surface, which needs a display. Its decisions are the tested
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
-    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|submit) with \\(\\)$",
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|clear_pages|submit) with \\(\\)$",
     # The same raw surface calls, now in `SurfaceGpu::present`, which
     # `submit` and the overlay's `submit_with` call (with a painter or
     # without): replacing either body is observable only on a window
     # surface. `OffscreenGpu`'s twin of each is mutated and tested.
     "replace (SurfaceGpu::present|<impl OverlayGpu for SurfaceGpu>::submit_with) with \\(\\)$",
+    # The surface adapter's upscaler bodies delegate to `WgpuRenderer` as
+    # `OffscreenGpu`'s twins do (mutated and tested offscreen): how it
+    # draws the world, setting the upscaler, and which upscalers its
+    # device can use, each observable only with a window.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::set_upscaler with \\(\\)$",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl UpscalerProbe for SurfaceGpu>::upscalers -> Vec<Upscaler> with ",
+    # So does handing out the warnings its frames raised.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::take_warnings -> Vec<String> with ",
+    # Whether MetalFX runs on a device: `true` on every GPU the macOS
+    # development host has (Apple silicon on Metal), so answering `true`
+    # can't be told apart there. Only a non-Metal device or a GPU MetalFX
+    # doesn't support (a CI VM's paravirtual Metal) says no, and neither
+    # can be opened here; the probe test checks the two agree wherever it
+    # runs.
+    "nova-metalfx/src/scaler\\.rs:.*replace supported -> bool with true$",
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx_spatial -> bool with true$",
+    # The off-macOS twins of `metal_fx_spatial` and `metal_fx` are
+    # compiled only on other targets, so on the macOS development host a
+    # mutated body is never built into the tests. One answers `false`, the
+    # other is never reached (`effective` maps MetalFX away first).
+    "nova-render/src/wgpu/upscale\\.rs:.*replace metal_fx -> Box<dyn Upscale> with ",
     # The one-line edge that opens the default audio device through cpal
     # and hands it to `KiraAudio::with_manager`. Running it needs a real
     # output device, which no gating test may open; everything it hands
@@ -195,6 +231,10 @@ exclude_re = [
     # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
     "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
+    # The trait's default `offer_display` ignores its arguments already:
+    # replacing it with `()` changes nothing. So does `offer_upscalers`.
+    "replace Screen::offer_display with \\(\\)",
+    "replace Screen::offer_upscalers with \\(\\)",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.
@@ -228,8 +268,20 @@ exclude_re = [
     "replace > with >= in close_on",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour. `ensure_scene`
-    # combines the scene's and the backdrop's texture usages.
-    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene))",
+    # combines the scene's and the backdrop's texture usages; `canvas`
+    # (which it now calls) the canvas's. MetalFX's output texture's wgpu
+    # usage (`COPY_SRC | TEXTURE_BINDING | RENDER_ATTACHMENT`, the `|`s at
+    # column 25) is disjoint bits too.
+    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::(create_page|ensure_scene|canvas))",
+    "nova-metalfx/src/scaler\\.rs:\\d+:25: replace \\| with \\^ in SpatialScaler::output_texture$",
+    # Its Metal usage is MetalFX's ask `| ShaderRead | RenderTarget`, and
+    # MetalFX asks for both bits itself on every GPU the macOS host has
+    # (the phase 7 spike), so dropping either added bit (`&` for the first
+    # `|`, column 35; `^` or `&` for the second, column 65, which binds
+    # `ShaderRead ^ RenderTarget` first) leaves the same usage. `^` at
+    # column 35 clears `ShaderRead` and is caught.
+    "nova-metalfx/src/scaler\\.rs:\\d+:35: replace \\| with & in SpatialScaler::output_texture$",
+    "nova-metalfx/src/scaler\\.rs:\\d+:65: replace \\| with (\\^|&) in SpatialScaler::output_texture$",
     # The glow ramp's thrust step raises the base only below cruise (24).
     # With `<=` a thrusting base of 24 steps to 25, and the next step, the
     # decay above cruise, takes it straight back to 24: the same result for
@@ -359,4 +411,20 @@ exclude_re = [
     # `rem_euclid(360)` itself (`table_radians`), so `+ 360` draws the
     # same tail.
     "nova-view/src/flight/trails\\.rs:101:46: replace % with \\+ in trail_start$",
+    # Super-xBR computes every texel the same way whichever thread computes
+    # it, so how its work is split changes how fast it runs, never a byte
+    # (pinned by `any_number_of_threads_enlarges_to_the_same_bytes`): the
+    # threads the machine has (1 or 0, which `max(1)` makes 1), each
+    # frame's share of them, a band's length (any length tiles the plane,
+    # as each texel's index is `band * band_len + n`), and whether one band
+    # is computed on the calling thread.
+    "nova-render/src/super_xbr\\.rs:.*replace threads -> usize with (0|1)$",
+    "nova-render/src/super_xbr\\.rs:.*replace / with (%|\\*) in enlarge_all$",
+    "nova-render/src/super_xbr\\.rs:189:30: replace \\* with (\\+|/) in Plane::from_fn$",
+    "nova-render/src/super_xbr\\.rs:196:25: replace <= with > in Plane::from_fn$",
+    # The shaders add 0.000001 to the edge strength only so a strength of
+    # 0 divides by something; the preset's is 3, where 3.000001 and
+    # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
+    # texel shows.
+    "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
 ]

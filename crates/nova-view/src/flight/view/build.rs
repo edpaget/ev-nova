@@ -27,6 +27,7 @@ use crate::flight::escorts::{EscortMenu, EscortMenuLooks};
 use crate::flight::floating::FloatingMap;
 use crate::flight::hud::{self};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
+use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
@@ -177,6 +178,7 @@ impl<
             hyperspace_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
+            view: VIEW_SIZE,
             double_time: false,
             session,
             scene,

@@ -20,7 +20,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, HaggleDialog,
     PlunderDialog, PlunderShown, PrefsDialog,
 };
-use nova_view::{Input, Key, Screen, ScreenAction};
+use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, desc_dialog, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
@@ -85,7 +85,8 @@ impl AppScreen {
     }
 
     /// Opens the Preferences dialog over the side shown, on the player's
-    /// preferences, first cancelling the side's pointer gesture and
+    /// preferences, listing the Scaling offered (native and Super-xBR
+    /// before an offer), first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -102,7 +103,8 @@ impl AppScreen {
                     self.data.button_style(),
                     Rc::clone(&dialogs.metrics),
                 )
-            });
+            })
+            .map(|dialog| dialog.with_scaling(&self.scaling));
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -138,8 +140,25 @@ impl AppScreen {
         }
     }
 
-    /// The Preferences dialog's input: each change is kept, to be taken
-    /// once, and the dialog closes once OK is activated.
+    /// Offers the open Preferences dialog `modes` for its display picker,
+    /// on `current`, which the player's preferences take as the kind the
+    /// game runs fullscreen in, the player having chosen `chosen`. With no
+    /// dialog open, nothing changes.
+    pub(super) fn offer_display_to_preferences(
+        &mut self,
+        modes: &[VideoMode],
+        current: FullscreenKind,
+        chosen: FullscreenKind,
+    ) {
+        if let Some(dialog) = &mut self.preferences {
+            dialog.set_display_modes(modes, current, chosen);
+            self.prefs.fullscreen = current;
+        }
+    }
+
+    /// The Preferences dialog's input: each change, and the fullscreen
+    /// kind picked as it closes, is kept, to be taken once, and the dialog
+    /// closes once OK is activated.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
         if let Some(dialog) = &mut self.preferences {
             dialog.input(input);
@@ -152,6 +171,9 @@ impl AppScreen {
                     flight.set_sound_prefs(prefs.sound);
                 }
             }
+            if let Some(kind) = dialog.take_display_choice() {
+                self.display_choice = Some(kind);
+            }
             if dialog.closed() {
                 self.sounds.extend(dialog.take_sounds());
                 self.preferences = None;
@@ -161,8 +183,8 @@ impl AppScreen {
     }
 
     /// The overlay open over the side shown, if any: the About dialog, the
-    /// Preferences dialog, the New Pilot dialog, the saved pilots' list or
-    /// the load's note.
+    /// Preferences dialog, the New Pilot dialog, the saved pilots' list,
+    /// the load's note or the quit question, or one of flight's.
     pub(super) fn overlay_mut(&mut self) -> Option<&mut dyn Screen> {
         if let Some(about) = &mut self.about {
             return Some(about);
@@ -197,7 +219,12 @@ impl AppScreen {
         if let Some(list) = &mut self.open_pilot {
             return Some(list);
         }
-        self.load_note.as_mut().map(|note| note as &mut dyn Screen)
+        if let Some(note) = &mut self.load_note {
+            return Some(note);
+        }
+        self.question
+            .as_mut()
+            .map(|question| question as &mut dyn Screen)
     }
 
     /// The About dialog's input; it closes once Done is activated.
@@ -236,8 +263,9 @@ impl AppScreen {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {
                     // The pilot is put away: saved, and flight dropped, so
-                    // the developer's F flies a fresh, unnamed pilot.
-                    self.end_flight(Side::MainMenu);
+                    // the developer's F flies a fresh, unnamed pilot; the
+                    // main screen appears as on any return from play.
+                    self.return_to_main_screen();
                 } else {
                     self.switch_to(self.return_to);
                 }
