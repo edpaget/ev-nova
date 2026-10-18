@@ -118,13 +118,26 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 const CASH: i32 = 25_000;
 
 /// The `chär`: 25,000 credits, ship 128 in system 128 on 23 June 1177,
-/// and no legal records.
+/// and no legal records; no intro picture, and the intro text `dësc` 0,
+/// which there is no "Desc Dialog" to show.
 fn character() -> Vec<u8> {
     let mut bytes = vec![0; Character::SIZE.expect("fixed")];
     bytes[0x00..0x04].copy_from_slice(&CASH.to_be_bytes());
     put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
     put_i16s(&mut bytes, 0x0E, &[-1; 4]);
     put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
+    bytes
+}
+
+/// The intro picture of [`intro_game_data`]'s `chär`.
+pub(crate) const INTRO_PICT: i16 = 8200;
+
+/// [`character`] whose intro is [`INTRO_PICT`] for 2 s, and no text.
+fn intro_character() -> Vec<u8> {
+    let mut bytes = character();
+    put_i16s(&mut bytes, 0x20, &[INTRO_PICT, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x28, &[2, 0, 0, 0]);
+    put_i16s(&mut bytes, 0x30, &[-1]);
     bytes
 }
 
@@ -182,8 +195,22 @@ fn spin() -> Vec<u8> {
 }
 
 fn game_data() -> Rc<GameData> {
+    game_data_of(character(), Vec::new())
+}
+
+/// [`game_data`], its `chär` showing an intro picture ([`INTRO_PICT`])
+/// to a pilot entering play for the first time.
+pub(crate) fn intro_game_data() -> Rc<GameData> {
+    game_data_of(
+        intro_character(),
+        vec![(PICT, INTRO_PICT, pict(8, 4, [0, 0, 90]))],
+    )
+}
+
+/// The game data, its `chär` `character`, with `extra` too.
+fn game_data_of(character: Vec<u8>, extra: Vec<(ResType, i16, Vec<u8>)>) -> Rc<GameData> {
     let mut resources = vec![
-        (Character::TYPE, 128, character()),
+        (Character::TYPE, 128, character),
         (Ship::TYPE, 128, ship()),
         (ShipAnim::TYPE, 128, ship_anim()),
         (RLED, 2000, sheet(36, 1)),
@@ -203,6 +230,7 @@ fn game_data() -> Rc<GameData> {
     }
     // The main menu's art, so the menu draws the original's screen.
     resources.extend(main_screen_resources());
+    resources.extend(extra);
     let file = fork(&resources);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -299,8 +327,8 @@ fn interface() -> InterfaceData {
     InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-struct Harness {
-    app: App<Rc<GameData>>,
+pub(crate) struct Harness {
+    pub(crate) app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     frames: u64,
     /// What the app's audio was asked to play.
@@ -312,7 +340,7 @@ struct Harness {
 impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
-    fn opening(store: &MemoryPilots) -> Self {
+    pub(crate) fn opening(store: &MemoryPilots) -> Self {
         Self::opening_with(store, AudioSettings::default())
     }
 
@@ -330,7 +358,16 @@ impl Harness {
     /// The app on the main menu, keeping pilots in `store`, its audio on
     /// `settings`, opening the last pilot at launch when `launch`.
     fn built(store: &MemoryPilots, settings: AudioSettings, launch: bool) -> Self {
-        let data = game_data();
+        Self::built_on(game_data(), store, settings, launch)
+    }
+
+    /// [`Harness::built`] over `data`.
+    pub(crate) fn built_on(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        settings: AudioSettings,
+        launch: bool,
+    ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let mut screen = start_screen(Rc::clone(&data))
@@ -352,7 +389,7 @@ impl Harness {
         }
     }
 
-    fn handle(&mut self, event: WindowEvent) -> Control {
+    pub(crate) fn handle(&mut self, event: WindowEvent) -> Control {
         self.app.handle(event, &mut FakeWindow, &mut self.gpu)
     }
 
@@ -373,7 +410,7 @@ impl Harness {
     }
 
     /// Types `name`, each letter on its own key.
-    fn type_name(&mut self, name: &str) {
+    pub(crate) fn type_name(&mut self, name: &str) {
         for c in name.chars() {
             let code = match c.to_ascii_lowercase() {
                 'a' => KeyCode::KeyA,
@@ -388,19 +425,19 @@ impl Harness {
         }
     }
 
-    fn press(&mut self, code: KeyCode) {
+    pub(crate) fn press(&mut self, code: KeyCode) {
         self.type_key(code, None);
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
     /// a few frames let the dock approach clear it, and the second lands.
-    fn land(&mut self) {
+    pub(crate) fn land(&mut self) {
         self.press(KeyCode::KeyL);
         self.approach();
         self.press(KeyCode::KeyL);
     }
 
-    fn click(&mut self, at: Point) {
+    pub(crate) fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
         });
@@ -413,7 +450,7 @@ impl Harness {
     }
 
     /// Where the main menu's `choice` button is.
-    fn menu_button(&self, choice: MenuChoice) -> Point {
+    pub(crate) fn menu_button(&self, choice: MenuChoice) -> Point {
         self.app
             .screen()
             .main_menu()
@@ -422,7 +459,7 @@ impl Harness {
     }
 
     /// The music commands since the last call; the effects let go.
-    fn music(&self) -> Vec<AudioCommand> {
+    pub(crate) fn music(&self) -> Vec<AudioCommand> {
         std::mem::take(&mut *self.log.borrow_mut())
             .into_iter()
             .filter(|command| {
@@ -465,7 +502,7 @@ impl Harness {
         panic!("the app never exits");
     }
 
-    fn showing(&self) -> Showing {
+    pub(crate) fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
@@ -490,7 +527,7 @@ impl Harness {
             .clone()
     }
 
-    fn frame(&mut self) -> Frame {
+    pub(crate) fn frame(&mut self) -> Frame {
         self.frames += 1;
         self.send(WindowEvent::Redraw {
             elapsed: Duration::from_millis(16 * self.frames),
@@ -550,7 +587,7 @@ fn assert_menu_drawn(game: &mut Harness) {
     }
 }
 
-fn saved(store: &MemoryPilots, key: &str) -> Pilot {
+pub(crate) fn saved(store: &MemoryPilots, key: &str) -> Pilot {
     nova_sim::save::decode(&store.text(key).expect("saved")).expect("a pilot")
 }
 
