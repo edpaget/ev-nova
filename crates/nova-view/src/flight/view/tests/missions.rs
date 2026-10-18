@@ -643,14 +643,19 @@ fn a_fleets_arrival_quote_says_its_line() {
 }
 
 #[test]
-fn a_distress_call_and_a_pre_scan_hail_say_their_text_as_given() {
+fn a_distress_call_a_pre_scan_hail_and_reinforcements_say_their_text_as_given() {
     let view = flight();
     let session = view.session().expect("flying");
     let help = "Ship 129:  Help!";
     let hail = "Ship 129:  Kestrel, halt.";
+    let coming = "Sensors detect Federation reinforcement fleet approaching.";
     for (message, text) in [
         (SimMessage::CallForHelp(help.to_owned()), help),
         (SimMessage::ScanHail(hail.to_owned()), hail),
+        (
+            SimMessage::ReinforcementsApproaching(coming.to_owned()),
+            coming,
+        ),
     ] {
         assert_eq!(sim_message_text(&message, session).as_deref(), Some(text));
         assert_eq!(arrival_lead(&message), None);

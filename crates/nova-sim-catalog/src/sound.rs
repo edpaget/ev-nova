@@ -86,6 +86,10 @@ pub enum SimSound {
     /// An interceptor hailed the player before its scan: `_beepSnd[4]`,
     /// `snd ` 154 (`_InterceptorAI` `ST_PlaySound` @0x8cf9d-0x8cfbc).
     ScanHail,
+    /// The sensors detect a reinforcement fleet approaching, three
+    /// quarters of its way in: `_beepSnd[4]`, `snd ` 154
+    /// (`_HandleReinforcements` `_PlaySound` @0x3924b, before its line).
+    ReinforcementsApproaching,
     /// A person's mission was offered on its hail, in place of the comm
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).

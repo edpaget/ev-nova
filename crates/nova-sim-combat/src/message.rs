@@ -189,6 +189,13 @@ pub enum SimMessage {
     /// @0x8ce4b-0x8cff5): the text ready to show, "<class>:  <ship
     /// name>, <`STR#` 2002 #381-383>.".
     ScanHail(String),
+    /// The sensors detect the system's reinforcement fleet three quarters
+    /// of its way in (`_HandleReinforcements` @0x3916d-0x3928a): the text
+    /// ready to show, `STR#` 2002 #306, a space, the fleet government's
+    /// `MediumName`, a space and #307 ("Sensors detect Federation
+    /// reinforcement fleet approaching."; see
+    /// `nova_sim::ai::reinforcements`).
+    ReinforcementsApproaching(String),
     /// A disabled or dying player's pre-jump collapsed: "Ship disabled -
     /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
     /// `_GetIndString` @0x68a04).
@@ -250,6 +257,8 @@ impl SimMessage {
     ///   @0x83248, 0xf0 pushed @0x8323d).
     /// - [`ScanHail`](Self::ScanHail): 400 (`_InterceptorAI` @0x8cff5,
     ///   0x190 pushed @0x8cfea).
+    /// - [`ReinforcementsApproaching`](Self::ReinforcementsApproaching):
+    ///   240 (`_HandleReinforcements` @0x3928a, 0xf0 pushed @0x3927f).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -275,7 +284,8 @@ impl SimMessage {
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned
             | Self::TookOff { .. }
-            | Self::CallForHelp(_) => 240,
+            | Self::CallForHelp(_)
+            | Self::ReinforcementsApproaching(_) => 240,
             Self::EscortRepaired
             | Self::FighterRepaired
             | Self::JumpCollapsed
@@ -353,6 +363,12 @@ mod tests {
             ),
             (SimMessage::NoResponse, 250),
             (SimMessage::CallForHelp("Ship 128:  Help!".to_owned()), 240),
+            (
+                SimMessage::ReinforcementsApproaching(
+                    "Sensors detect Federation reinforcement fleet approaching.".to_owned(),
+                ),
+                240,
+            ),
             (
                 SimMessage::ScanHail("Ship 128:  Kestrel, halt.".to_owned()),
                 400,
