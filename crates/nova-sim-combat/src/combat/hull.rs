@@ -275,6 +275,23 @@ pub struct HullSpec {
     /// [`inherent_ai`](Self::inherent_ai), the spawn table sets it from
     /// the `shïp`, and the session for the player's ship; none otherwise.
     pub crew: i16,
+    /// Its class's turn, the original's class +0x38: its `Maneuver` × the
+    /// double 0.1 as a float (`_LoadObjectData` @0x7a0db-0x7a10b, see
+    /// [`class_turn`]). A pirate's docking box reads it (see
+    /// `nova_sim::traffic::plunder_dock`). Like [`crew`](Self::crew), the
+    /// spawn table sets it; none otherwise.
+    pub class_turn: f32,
+}
+
+/// A class's turn, the original's class +0x38, from its `Maneuver`: the
+/// whole `Maneuver` × the double 0.1 (0xdd110), stored as a float
+/// (`_LoadObjectData` @0x7a0db-0x7a10b).
+#[must_use]
+pub fn class_turn(maneuver: i16) -> f32 {
+    // A float, as the original stores it.
+    #[allow(clippy::cast_possible_truncation)]
+    let turn = (f64::from(maneuver) * 0.1) as f32;
+    turn
 }
 
 impl Default for HullSpec {
@@ -309,6 +326,7 @@ impl Default for HullSpec {
             afterburner: 0,
             inherent_ai: 0,
             crew: 0,
+            class_turn: 0.0,
         }
     }
 }
@@ -348,6 +366,7 @@ impl HullSpec {
             afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
             inherent_ai: 0,
             crew: 0,
+            class_turn: 0.0,
         }
     }
 
@@ -886,6 +905,16 @@ mod tests {
         assert!(!HullSpec::default().shows_armor);
         assert!(!HullSpec::default().hides_status);
         assert_eq!((SHOWS_ARMOR, HIDES_STATUS), (0x0100, 0x0200));
+    }
+
+    #[test]
+    fn a_class_turn_is_its_maneuver_times_a_tenth_stored_as_a_float() {
+        assert_eq!(class_turn(30), 3.0);
+        assert_eq!(class_turn(80), 8.0);
+        // 3.3000000000000003 in doubles, stored as the float nearest.
+        assert_eq!(class_turn(33), 3.3_f32);
+        assert_eq!(class_turn(-5), -0.5);
+        assert_eq!(HullSpec::default().class_turn, 0.0);
     }
 
     #[test]

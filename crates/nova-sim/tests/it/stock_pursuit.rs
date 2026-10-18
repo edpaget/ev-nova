@@ -147,6 +147,7 @@ fn player(at: Vec2) -> PlayerSide {
         combat_govt: None,
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
+        boarded: false,
     }
 }
 

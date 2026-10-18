@@ -111,6 +111,7 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         combat_govt: None,
         target: None,
         class: EscortClass::Freighter,
+        boarded: false,
     }
 }
 

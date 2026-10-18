@@ -44,8 +44,20 @@
 //!   @0x8ea49-0x8eacb, [`hopeless_chase`]); it has no ally drop, no
 //!   stand-off band, no fighter launch but the snipe's and no call for
 //!   reinforcements (see [`pursuit`](super::pursuit)). A plunder of a
-//!   disabled ship docks with it (@0x8e873-0x8ea44):
-//!   rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder.
+//!   disabled ship docks with it (@0x8e873-0x8ea44, see
+//!   [`plunder_dock`](crate::traffic::plunder_dock)), and is never a
+//!   hopeless chase.
+//! - **The plunder** (@0x8c74c-0x8c7ae), after the wait loop and before the
+//!   drops: whatever goal 4 the classification gave (an attack or snipe,
+//!   of the victim or another ship), a pirate docked in sub 0xf
+//!   ([`Npc::docking`]) whose AI wait is out plunders the ship it docked
+//!   with ([`Decision::plunders`], which the traffic runs:
+//!   [`plunder`](crate::traffic::plunder)) and drifts ([`Goal::Drift`]).
+//!   So a dry pirate still plunders, and one whose wait loop makes it wait
+//!   doesn't.
+//! - **The drift** (goal 0xe): with no target the search is skipped
+//!   (@0x8c353 → @0x8c74c), and with one the goal and target are kept
+//!   (@0x8c5e8-0x8c5f8), so the drift runs on until the traffic ends it.
 //! - **The disabled-warship drop** (@0x8c7b4-0x8c842): attacking a disabled
 //!   NPC of a class whose `InherentAI` is above 2, not a former escort,
 //!   with no destroying weapon ([`fire::destroys`]) or fully dry, it drops
@@ -69,12 +81,12 @@
 //! ([`Decision::turns_on_player`]); a plunder pick of the player makes no
 //! such call (`_AIFindShipToPlunder` @0x7fd10-0x7feb5).
 //!
-//! **Left out**, each owned elsewhere (see the phase body of
+//! **Left out**, owned elsewhere (see the phase body of
 //! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board): the
 //! idle block (@0x8c410-0x8c5d2) is
 //! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols's, and
-//! [`idle`] stands in; the plunder and state 14 (@0x8c74c-0x8c7ae) and the
-//! goal-0xe search skip (@0x8c353) are phase 10's.
+//! [`idle`] stands in. The plunder's +0x8c write (-1, @0x8c791) is the
+//! defence ships', which rdm:task/planet-domination owns.
 
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::hopeless_chase;
@@ -90,6 +102,7 @@ use crate::combat::{ShipRef, Strike};
 use crate::govt::PLUNDERS;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
+use crate::traffic::plunder_dock::DockSub;
 
 /// Nova's pirate warship (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -111,17 +124,25 @@ impl Behaviour for PirateWarship {
         think(npc, around, self.target, chance)
     }
 
+    /// Its weapon pick, but nothing while it docks (subs 9 and 0xb end in
+    /// `_AIEscortFireUnprovoked`, which fires nothing for its AI type, and
+    /// 0xf fires nothing; its high level, skipped while it waits, launches
+    /// no fighters) or drifts (sub 0).
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+        if npc.docking.is_some() || npc.goal == Goal::Drift {
+            return Trigger::default();
+        }
         fire::trigger(npc, around, self.fire)
     }
 
-    /// The ship its fight is about; none in its count wait, which
-    /// `_HighLevelAIHandler` clears every frame (@0x8d480); and for any
+    /// The ship its fight is about; none in its count wait or its drift,
+    /// which `_HighLevelAIHandler` clears every frame (@0x8d480,
+    /// @0x8eb85); and for any
     /// other goal the target it holds, which its think keeps with a goal it
     /// keeps (see the module docs).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
-            Goal::CountWait { .. } => None,
+            Goal::CountWait { .. } | Goal::Drift => None,
             goal => goal.quarry().or(npc.target),
         }
     }
@@ -154,6 +175,9 @@ pub fn think(
             return of(npc.goal);
         }
         (ship, false)
+    } else if goal == Goal::Drift {
+        // The goal-0xe search skip (@0x8c353 → @0x8c74c).
+        return of(goal);
     } else if let Some(found) = search(npc, around, rules, chance) {
         found
     } else {
@@ -197,11 +221,27 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
         clears_target: true,
         ..of(Goal::Idle)
     };
-    match classify(target, around) {
+    let class = classify(target, around);
+    if class != Class::Plunder
+        && let Some(victim) = docked_victim(npc)
+    {
+        // Goal 4 with sub 0xf, its wait out: the plunder (@0x8c74c-0x8c7ae),
+        // after the wait loop and before the drops. Its target is cleared
+        // after the plunder, which reads it (@0x8c7a8).
+        return Decision {
+            goal: Goal::Drift,
+            plunders: Some(victim),
+            board_wait: (class == Class::Boarded).then_some(target),
+            ..Decision::default()
+        };
+    }
+    match class {
         Class::Plunder if dry => dropped,
         Class::Plunder => of(Goal::Plunder {
             ship: target,
-            hopeless: outside_box(npc, target, around) && hopeless_chase(npc, target, around),
+            hopeless: !disabled(target, around)
+                && outside_box(npc, target, around)
+                && hopeless_chase(npc, target, around),
         }),
         Class::Boarded => Decision {
             board_wait: Some(target),
@@ -234,6 +274,21 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
     }
 }
 
+/// The ship `npc` is docked with, its wait out, to plunder: its docking in
+/// sub 0xf ([`DockSub::Dock`]) with no AI wait left
+/// (`cmpl $0xf0004` @0x8c74c, nav @0x8c758, +0x4c @0x8c75f).
+fn docked_victim(npc: &Npc) -> Option<ShipRef> {
+    npc.docking
+        .filter(|docking| docking.sub == DockSub::Dock && npc.ai_wait == 0)
+        .map(|docking| docking.ship)
+}
+
+/// Whether `ship` is disabled among `around` (`_IsDisabled`): a plunder of
+/// it docks, so it is never a hopeless chase (@0x8e866-0x8e86d).
+fn disabled(ship: ShipRef, around: &Surroundings) -> bool {
+    around.condition_of(ship).is_some_and(Condition::disabled)
+}
+
 /// How `_PirateWarshipAI`'s second classification (@0x8c5e1-0x8c743) takes
 /// a ship.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,11 +307,9 @@ enum Class {
 /// above none, is plundered unless boarded.
 fn classify(target: ShipRef, around: &Surroundings) -> Class {
     let (trader, crew, boarded) = match target {
-        ShipRef::Player => (
-            true,
-            around.player.map_or(0, |player| player.hull.crew),
-            false,
-        ),
+        ShipRef::Player => around.player.map_or((true, 0, false), |player| {
+            (true, player.hull.crew, player.boarded)
+        }),
         ShipRef::Npc(id) => around.npc(id).map_or((false, 0, false), |other| {
             (
                 other.former.is_some() || other.hull.inherent_ai <= 2,
@@ -983,6 +1036,204 @@ mod tests {
         );
         assert_eq!(hopeless(100.0), plunder(P), "inside, from the pirate");
         assert_eq!(hopeless(165.0), plunder(P), "165 is inside");
+    }
+
+    /// `npc` docked with `ship` (sub 0xf), `wait` left.
+    fn docked(npc: Npc, ship: ShipRef, wait: u32) -> Npc {
+        Npc {
+            docking: Some(crate::traffic::plunder_dock::Docking {
+                ship,
+                sub: DockSub::Dock,
+            }),
+            ai_wait: wait,
+            ..npc
+        }
+    }
+
+    /// The victim, NPC 2, disabled and boarded.
+    fn boarded_wreck() -> Npc {
+        Npc {
+            boarded: true,
+            ..wreck(2, 3.0)
+        }
+    }
+
+    /// The plunder of `victim`, a drift.
+    fn plundering(victim: ShipRef, board_wait: Option<ShipRef>) -> Decision {
+        Decision {
+            goal: Goal::Drift,
+            plunders: Some(victim),
+            board_wait,
+            ..Decision::default()
+        }
+    }
+
+    #[test]
+    fn docked_with_its_wait_out_it_plunders_and_drifts() {
+        let pirate = docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 0);
+        assert_eq!(
+            decided(&[pirate, boarded_wreck()]),
+            plundering(n(2), Some(n(2))),
+            "after the wait loop, which it is left to run"
+        );
+    }
+
+    #[test]
+    fn docked_with_its_wait_running_it_doesnt_plunder() {
+        let pirate = docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 1);
+        assert_eq!(
+            decided(&[pirate, boarded_wreck()]),
+            Decision {
+                board_wait: Some(n(2)),
+                ..only(Goal::Attack(n(2)))
+            }
+        );
+        let closing = Npc {
+            docking: Some(crate::traffic::plunder_dock::Docking {
+                ship: n(2),
+                sub: DockSub::Close,
+            }),
+            ..holding(Goal::Attack(n(2)), Some(n(2)))
+        };
+        assert_eq!(
+            decided(&[closing, boarded_wreck()]).plunders,
+            None,
+            "sub 0xb is no dock"
+        );
+    }
+
+    #[test]
+    fn docked_and_dry_it_still_plunders_before_the_dry_drop() {
+        let pirate = short_of_ammo(
+            docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 0),
+            AmmoLeft::Dry,
+            true,
+        );
+        assert_eq!(
+            decided(&[pirate, boarded_wreck()]),
+            plundering(n(2), Some(n(2)))
+        );
+    }
+
+    #[test]
+    fn docked_it_plunders_its_nav_whatever_ship_it_targets_now() {
+        let pirate = docked(holding(Goal::Attack(n(3)), Some(n(3))), n(2), 0);
+        assert_eq!(
+            decided(&[pirate, boarded_wreck(), warship_class(3, 300.0)]),
+            plundering(n(2), None),
+            "goal 4 at another ship"
+        );
+        let pirate = docked(holding(plunder(n(3)), Some(n(3))), n(2), 0);
+        assert_eq!(
+            decided(&[pirate, boarded_wreck(), trader(3, 300.0)]),
+            only(plunder(n(3))),
+            "goal 0xd plunders nothing"
+        );
+    }
+
+    #[test]
+    fn drifting_it_skips_the_search_and_keeps_drifting() {
+        assert_eq!(
+            decided(&[holding(Goal::Drift, None), wreck(2, 300.0)]),
+            only(Goal::Drift)
+        );
+        let hitter = ship(3, NEUTRAL, AiType::Warship, 0.0, 200.0);
+        assert_eq!(
+            decided(&[holding(Goal::Drift, Some(n(3))), hitter, wreck(2, 300.0)]),
+            only(Goal::Drift),
+            "a hit's target kept"
+        );
+        let mut dying = wreck(3, 200.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert_eq!(
+            decided(&[holding(Goal::Drift, Some(n(3))), dying, wreck(2, 300.0)]),
+            only(plunder(n(3))),
+            "the head drop sets goal 0 and the search takes it again"
+        );
+    }
+
+    #[test]
+    fn a_plunder_of_a_disabled_ship_is_never_hopeless() {
+        let mut heavy = holding(plunder(P), Some(P));
+        heavy.hull.mass = 100.0;
+        let mut downed = side(0.0, -400.0, Condition::Disabled, 1);
+        downed.state.velocity = Vec2::new(0.0, -1.0);
+        assert_eq!(
+            decided_by(&govts(0, 0), &[heavy], Some(&downed)),
+            only(plunder(P))
+        );
+    }
+
+    #[test]
+    fn a_boarded_player_is_waited_on_or_attacked() {
+        let mut downed = side(0.0, 100.0, Condition::Disabled, 1);
+        downed.boarded = true;
+        let govts = govts(0, 0);
+        assert_eq!(
+            decided_by(&govts, &[holding(plunder(P), Some(P))], Some(&downed)),
+            Decision {
+                board_wait: Some(P),
+                ..only(Goal::Attack(P))
+            }
+        );
+        assert_eq!(
+            decided_by(&govts, &[pirate()], Some(&downed)),
+            dropped().goal_of(IDLE),
+            "the search passes it over"
+        );
+    }
+
+    #[test]
+    fn docked_or_drifting_it_fires_and_targets_nothing() {
+        let gun = WeaponSpec::new(&WeaponRecord {
+            speed: 1000,
+            count: 30,
+            energy_dmg: 5,
+            ..weapon(141)
+        });
+        let ai = PirateWarship::default();
+        let sites = sites();
+        for npc in [
+            docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 50),
+            Npc {
+                docking: Some(crate::traffic::plunder_dock::Docking {
+                    ship: n(2),
+                    sub: DockSub::Approach,
+                }),
+                ..holding(plunder(n(2)), Some(n(2)))
+            },
+            holding(Goal::Drift, Some(n(2))),
+        ] {
+            let npc = Npc {
+                armament: Armament::new([(gun, 1)]),
+                ..npc
+            };
+            let npcs = [npc, trader(2, -100.0)];
+            let around = Surroundings::new(&sites, &npcs);
+            assert_eq!(
+                ai.trigger(&npcs[0], &around),
+                Trigger::default(),
+                "{:?}",
+                npcs[0].goal
+            );
+        }
+        let npcs = [holding(Goal::Drift, Some(n(2)))];
+        let around = Surroundings::new(&sites, &npcs);
+        assert_eq!(ai.target(&npcs[0], &around), None);
+        let attacking = Npc {
+            armament: Armament::new([(gun, 1)]),
+            ..holding(Goal::Attack(n(2)), Some(n(2)))
+        };
+        let npcs = [attacking, trader(2, -100.0)];
+        let around = Surroundings::new(&sites, &npcs);
+        assert_ne!(
+            ai.trigger(&npcs[0], &around),
+            Trigger::default(),
+            "undocked it fires"
+        );
     }
 
     impl Decision {

@@ -308,6 +308,9 @@ impl Session {
             ion: Ion::default(),
             afterburner: false,
             pursuit: Pursuit::default(),
+            ai_wait: 0,
+            docking: None,
+            marines: kind.marines,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

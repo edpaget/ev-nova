@@ -115,6 +115,7 @@ fn stock_player(
             record.inherent_ai,
             record.fields.mass,
         ),
+        boarded: false,
     }
 }
 

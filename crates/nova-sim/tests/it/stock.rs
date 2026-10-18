@@ -5613,6 +5613,7 @@ fn stock_pick_made(
         combat_govt: None,
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
+        boarded: false,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

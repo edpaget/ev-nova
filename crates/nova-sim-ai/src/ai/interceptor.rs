@@ -577,6 +577,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -590,13 +591,8 @@ mod tests {
         let turned = |goal| Decision {
             goal,
             turns_on_player: true,
-            dropped_target: false,
             provokes: true,
-            comm_call: None,
-            calls_reinforcements: false,
-            board_wait: None,
-            clears_target: false,
-            keeps_pursuit: false,
+            ..Decision::default()
         };
         let picked = |goal| Decision {
             goal,
@@ -681,6 +677,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );

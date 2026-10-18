@@ -326,6 +326,7 @@ impl Hunt {
             board_wait: None,
             clears_target: false,
             keeps_pursuit: false,
+            plunders: None,
         }
     }
 }
@@ -1150,6 +1151,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             }
         );
         assert!(
@@ -1609,6 +1611,7 @@ mod tests {
             board_wait: None,
             clears_target: false,
             keeps_pursuit: false,
+            plunders: None,
         }
     }
 
@@ -1688,6 +1691,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             }
         );
         let mut calm = grudger;
@@ -1707,6 +1711,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             },
             "no grudge: dropped, and nothing picked"
         );

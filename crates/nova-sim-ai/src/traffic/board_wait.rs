@@ -11,7 +11,9 @@
 //!   of its own) or sniping (sub-goal 0xe, whatever its goal: a hopeless
 //!   attack or plunder, or a stand-off ship keeping its band at 0xe). The
 //!   first found makes it wait: goal 0x16, sub 0, target, nav and
-//!   provocation cleared, its +0x4c [`BOARD_WAIT`] (@0x8c6f5-0x8c71c). With
+//!   provocation cleared, its +0x4c [`BOARD_WAIT`] (@0x8c6f5-0x8c71c), and
+//!   a plunder its think decided is dropped, as the loop runs before the
+//!   plunder (@0x8c74c, see [`plunder`](crate::traffic::plunder)). With
 //!   none it attacks the victim, or drops it fully dry (the think's goal).
 //!   The original's loop runs inside each pirate's think, slot by slot,
 //!   so it reads the ships of lower slots as their thinks this frame left
@@ -81,6 +83,7 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
                 calls_reinforcements: false,
                 clears_target: true,
                 keeps_pursuit: false,
+                plunders: None,
                 ..*decision
             };
         }
@@ -298,6 +301,40 @@ mod tests {
             ..frame
         });
         assert!(!counts(band), "a frame of another goal is stale");
+    }
+
+    #[test]
+    fn a_docked_pirate_whose_victim_another_boards_waits_and_drops_its_plunder() {
+        let npcs = [ship(1, 1, Goal::Idle), ship(2, 2, plunder(n(9))), victim()];
+        let docked = Decision {
+            goal: Goal::Drift,
+            plunders: Some(n(9)),
+            ..waiting_on(n(9))
+        };
+        let mut decisions = vec![Some(docked), None, None];
+        resolve(&npcs, &mut decisions);
+        let waited = decisions[0].expect("decided");
+        assert_eq!((waited.goal, waited.plunders), (WAIT, None));
+        let lone = [ship(1, 1, Goal::Idle), victim()];
+        let mut decisions = vec![Some(docked), None];
+        resolve(&lone, &mut decisions);
+        assert_eq!(decisions[0], Some(docked), "no boarder: it plunders");
+    }
+
+    #[test]
+    fn a_pirate_docked_with_the_victim_is_no_boarder() {
+        // Goal 4 with sub 0xf: neither goal 0xd nor sub-goal 0xe.
+        let mut docked = ship(2, 2, Goal::Attack(n(9)));
+        docked.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: n(9),
+            sub: crate::traffic::plunder_dock::DockSub::Dock,
+        });
+        docked.ai_wait = 50;
+        let npcs = [ship(1, 1, Goal::Idle), docked, victim()];
+        assert_eq!(
+            resolved(&npcs, vec![Some(waiting_on(n(9))), None, None])[0],
+            Some(Goal::Attack(n(9)))
+        );
     }
 
     #[test]

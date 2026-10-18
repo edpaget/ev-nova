@@ -8,8 +8,9 @@
 //! - not the pirate itself (@0x7fd3d), nor a ship it leads (+0x9a is the
 //!   pirate, @0x7fd50), a fighter it launched among them;
 //! - in the system (+0xb8, @0x7fd5d), with no visibility test;
-//! - **not boarded** (+0xb9, @0x7fd6a, [`Npc::boarded`]): the player is
-//!   never boarded;
+//! - **not boarded** (+0xb9, @0x7fd6a, [`Npc::boarded`]): the player too,
+//!   once a pirate has docked with it
+//!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded));
 //! - **disabled or breaking up** (`_IsDisabled` @0x7fd7a holds of both);
 //! - not a mission's special ship (+0xc8d2, @0x7fd90);
 //! - one a pirate takes on: the player (@0x7fd9e), whatever its class; a
@@ -48,7 +49,7 @@ pub fn find(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
     let destroys = fire::destroys(npc);
     let player = around
         .player
-        .filter(|player| player.condition.disabled() && player.hull.crew > 0)
+        .filter(|player| !player.boarded && player.condition.disabled() && player.hull.crew > 0)
         .map(|player| (ShipRef::Player, player.state.position));
     let npcs = around
         .by_slot()
@@ -284,6 +285,20 @@ mod tests {
         assert_eq!(pick(Condition::Intact, 1), None);
         assert_eq!(pick(Condition::Disabled, 0), None, "the escape pod's crew");
         assert_eq!(pick(Condition::Disabled, -1), None);
+        let sites = sites();
+        let govts = govts(0, 0);
+        let npcs = [pirate(), wreck(2, 300.0)];
+        let mut around = around(&sites, &npcs, &govts, (0.0, 0.0), 0);
+        let mut boarded = player(at.0, at.1);
+        boarded.condition = Condition::Disabled;
+        boarded.hull.crew = 1;
+        boarded.boarded = true;
+        around.player = Some(boarded);
+        assert_eq!(
+            find(&npcs[0], &around),
+            Some(n(2)),
+            "a pirate docked with it"
+        );
     }
 
     #[test]

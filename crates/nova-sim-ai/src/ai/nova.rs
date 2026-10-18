@@ -23,10 +23,12 @@
 //! `ShipBehav` 0 still hunts the player, miner or not.
 //! A leaderless warship of a government with `Flags` 0x1000 goes to the
 //! pirate's AI ([`PirateWarship`], `_PirateWarshipAI`, `_AIDispatch`
-//! @0x8ffc8-0x8fff0), which disables and plunders; its docking and the
-//! plunder itself, with the mission failure it brings
-//! (`_AIPlunderShipContents` @0x84a0f, `mïsn` `Flags` 0x8000), are
-//! rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder's.
+//! @0x8ffc8-0x8fff0), which disables, docks with and plunders its victim
+//! (see [`plunder`](crate::traffic::plunder)). A ship a pirate takes into
+//! its fleet (AI type 6, its leader the pirate) is routed by its own AI
+//! type as any fleet escort is, following its lead, until
+//! rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts flies the
+//! original's AI type 6 under an NPC.
 //!
 //! Each decision ([`Behaviour::decision`]) carries whether the think
 //! turned the ship on the player through `_AIMakeShipAttackPlayer`: the
@@ -285,6 +287,7 @@ impl Behaviour for NovaAi {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             }
         } else {
             self.thinker(npc, around).decision(npc, around, chance)
@@ -1629,6 +1632,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             }
         }
     }
@@ -1653,6 +1657,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                plunders: None,
             },
             "the mission hunt (@0x8d6b7)"
         );

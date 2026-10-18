@@ -1158,6 +1158,7 @@ mod tests {
             combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         }
     }
 
@@ -2339,7 +2340,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plunderer_fires_nothing_at_a_disabled_victim_until_phase_10_docks_it() {
+    fn a_plunderer_docking_with_a_disabled_victim_fires_nothing_and_launches_nothing() {
         let mut npc = shooter(
             &[gun(128, 1, 1), bay(150)],
             Goal::Plunder {
@@ -3195,6 +3196,26 @@ mod tests {
         assert_eq!(gated(&npc), FULL);
         npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 5 };
         assert_eq!(gated(&npc), FULL, "its wait is one, its goal exempts it");
+    }
+
+    #[test]
+    fn a_flying_ships_ai_wait_holds_all_but_its_bays_and_point_defence() {
+        // A pirate docked (goal 4, sub 0xf) or holding after a plunder:
+        // unlike goal 0x16, no exemption (@0x34a54-0x34a72).
+        let mut npc = shooter(&[gun(128, 1, 1)], Goal::Attack(ShipRef::Player));
+        npc.trigger = FULL;
+        npc.ai_wait = 1;
+        assert_eq!(
+            gated(&npc),
+            Trigger {
+                bays: true,
+                point_defence: true,
+                keep: Some(WeaponId(128)),
+                ..Trigger::default()
+            }
+        );
+        npc.ai_wait = 0;
+        assert_eq!(gated(&npc), FULL);
     }
 
     // The snipe.

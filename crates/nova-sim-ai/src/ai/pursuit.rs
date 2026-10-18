@@ -23,8 +23,8 @@
 //!   snipes when the chase is hopeless, else approaches unless rushing;
 //!   inside it dogfights unless breaking off or **rushing**, both kept
 //!   (`sub - 0x10 <= 1` @0x8eb28). Plundering a disabled ship it flies no
-//!   fight: it docks (@0x8e873-0x8ea44), which
-//!   rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder builds.
+//!   fight: it docks (@0x8e873-0x8ea44, see
+//!   [`plunder_dock`](crate::traffic::plunder_dock)).
 //!   Fleeing, within [`FLEE_REACH`] of its attacker on both axes, the
 //!   offsets truncated, it flees close (5, @0x8e017-0x8e06b); beyond, it
 //!   runs out (substates 1, 3 and 4), which run no pass (no
@@ -251,7 +251,7 @@ pub fn high_level(npc: &Npc, at: &ShipState, disabled: bool) -> Option<Start> {
         }
         Goal::Snipe(_) => Some(Start::Sub(Manoeuvre::Snipe)),
         // Goal 0xd against an intact ship (@0x8ea49-0x8eb3a); against a
-        // disabled one it docks (@0x8e873-0x8ea44), phase 10's.
+        // disabled one it docks (@0x8e873-0x8ea44, `plunder_dock`).
         Goal::Plunder { .. } if disabled => None,
         Goal::Plunder { hopeless, .. } => {
             let outside = off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX;
@@ -1147,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plunderer_of_a_disabled_ship_flies_no_fight_until_phase_10_docks_it() {
+    fn a_plunderer_of_a_disabled_ship_flies_no_fight_as_it_docks() {
         for goal in [PLUNDER, HOPELESS] {
             let npc = burning(fighter(goal, 0.0));
             assert_eq!(start_at(&npc, Vec2::new(0.0, -100.0), true), None);

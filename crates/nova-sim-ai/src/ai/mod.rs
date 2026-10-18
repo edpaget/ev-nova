@@ -295,8 +295,8 @@ pub enum Goal {
     /// `hopeless`, but it is no attack to the readers of goal 4
     /// ([`Goal::attacking`]); its shots disable and never destroy (see
     /// `nova_sim_combat::combat::plunder`). Against the ship disabled it
-    /// closes on it, firing nothing, until
-    /// rdm:phase/combat-ai-fidelity/phase-10-pirates-plunder docks it.
+    /// docks with it, firing nothing (see
+    /// [`plunder_dock`](crate::traffic::plunder_dock)), never hopeless.
     Plunder {
         /// The ship it disables.
         ship: ShipRef,
@@ -312,6 +312,13 @@ pub enum Goal {
         /// The ticks of the wait left.
         ticks_left: u32,
     },
+    /// Drift off from the ship it plundered: a pirate's goal 0xe
+    /// (`_HighLevelAIHandler` @0x8eb6b-0x8ebd4), its ticks the AI wait
+    /// [`Npc::ai_wait`] its plunder set (see
+    /// [`plunder`](crate::traffic::plunder)). It targets and fights
+    /// nothing, fires nothing, and moves on at its velocity 0.7 pixels a
+    /// tick further along its heading, until its wait reads none.
+    Drift,
 }
 
 impl Goal {
@@ -388,7 +395,8 @@ impl Goal {
             | Self::Hold
             | Self::Mine
             | Self::Plunder { .. }
-            | Self::CountWait { .. } => false,
+            | Self::CountWait { .. }
+            | Self::Drift => false,
         }
     }
 
@@ -409,7 +417,8 @@ impl Goal {
     /// | 0xc (a `ShipBehav` 1 mission ship with no target) | @0x89fe0, `_LowLevelAIHandler` @0x886f9 | none |
     /// | 0x12 | `_DeathStarAI` @0x8c26f | none |
     ///
-    /// A plunder (goal 0xd) and a count wait (0x16) are none of them.
+    /// A plunder (goal 0xd), a drift (0xe) and a count wait (0x16) are
+    /// none of them.
     #[must_use]
     pub fn spares_player_threat(self) -> bool {
         match self {
@@ -428,7 +437,8 @@ impl Goal {
             | Self::Flee(_)
             | Self::Mine
             | Self::Plunder { .. }
-            | Self::CountWait { .. } => false,
+            | Self::CountWait { .. }
+            | Self::Drift => false,
         }
     }
 }
@@ -486,6 +496,12 @@ pub struct PlayerSide {
     /// ([`EscortClass::of`]): the reaction's entry test reads whether it is
     /// a fighter ([`answer_flag`]).
     pub class: EscortClass,
+    /// Whether a pirate has docked with it (+0xb9): set as a pirate starts
+    /// its dock (`_LowLevelAIHandler` @0x86fc7), cleared at landing and on
+    /// each frame it is not disabled (`_HandlePlayer` @0x68b02). A pirate
+    /// passes a boarded player over ([`plunder_target`]) and waits or
+    /// attacks one ([`pirate`]).
+    pub boarded: bool,
 }
 
 /// No governments at all.
@@ -755,6 +771,13 @@ pub struct Decision {
     /// target alone (@0x8c839-0x8c842), so a kept rush or break-off
     /// ([`Npc::pursuit`]) carries over to its next fight.
     pub keeps_pursuit: bool,
+    /// The ship it plunders now: `_PirateWarshipAI`'s plunder
+    /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
+    /// out, its [`goal`](Self::goal) the drift that follows
+    /// ([`Goal::Drift`]). The traffic runs it after the goals, in berth
+    /// order ([`plunder::resolve`](crate::traffic::plunder::resolve)), and
+    /// the wait loop drops it when it makes the pirate wait instead.
+    pub plunders: Option<ShipRef>,
 }
 
 /// How NPCs decide what to do.
@@ -1453,6 +1476,16 @@ mod tests {
     }
 
     #[test]
+    fn a_drift_fights_nothing_and_is_not_spared_as_a_threat() {
+        let drift = Goal::Drift;
+        assert_eq!((drift.quarry(), drift.attacking()), (None, None));
+        assert!(!drift.fights());
+        assert_eq!((drift.plundering(), drift.inspecting()), (None, None));
+        assert!(!drift.scooping());
+        assert!(!drift.spares_player_threat(), "0xe isn't in the list");
+    }
+
+    #[test]
     fn surroundings_find_each_ship_and_the_player() {
         let mut jumping = npc(2, AiType::Warship);
         jumping.mode = Mode::JumpingIn { tick: 0 };
@@ -1512,6 +1545,7 @@ mod tests {
             combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         };
         around.player = Some(player);
         assert!(around.live(P));

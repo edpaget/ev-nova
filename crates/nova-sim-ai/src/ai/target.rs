@@ -678,6 +678,7 @@ mod tests {
             combat_govt: None,
             target: None,
             class: crate::catalog::EscortClass::Freighter,
+            boarded: false,
         }
     }
 

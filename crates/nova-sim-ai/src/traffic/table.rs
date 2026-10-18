@@ -23,6 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::persons::{self, PersonLink, PersonRules};
+use crate::ai::plunder_contents::ClassMarines;
 use crate::catalog::outfit_mods;
 use crate::catalog::{
     DudeId, DudeRecord, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId,
@@ -31,6 +32,7 @@ use crate::catalog::{
 use crate::chance::Chance;
 use crate::cloak::CloakGear;
 use crate::combat::armament::{Armament, Arsenal, LauncherRounds};
+use crate::combat::hull::class_turn;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::control::{Gate, Test};
 use crate::escort::EscortClass;
@@ -280,6 +282,9 @@ pub struct ShipKind {
     /// A person's fitted ship keeps its ship type's, unscaled by its
     /// `ShieldMod` (+0x76 → +0x60).
     pub base_armor: f32,
+    /// Its `Strength` and the marines its default items give a pirate's
+    /// plunder ([`ClassMarines::of`]).
+    pub marines: ClassMarines,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -573,6 +578,7 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         hull: HullSpec {
             inherent_ai: record.inherent_ai,
             crew: record.crew,
+            class_turn: class_turn(record.fields.maneuver),
             ..arsenal.hull(record.id)
         },
         armament,
@@ -584,6 +590,7 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         can_scoop: scoop::has_asteroid_scoop(&defaults, outfits),
         holds: crate::market::hold_tons(record.fields.holds),
         base_armor: f32::from(record.fields.armor.max(0)),
+        marines: ClassMarines::of(record.strength, &record.default_slots, outfits),
     }
 }
 
@@ -1339,6 +1346,25 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_type_carries_its_strength_and_its_default_items_marines_by_slot() {
+        let outfits = [
+            outfit(128, &[(1, 5)]),
+            outfit(227, &[(crate::catalog::MARINES, 25)]),
+        ];
+        let mut record = ship(204, FAST);
+        record.strength = -3;
+        record.default_slots[0] = Some((OutfitId(227), 2));
+        let kind = kind(&record, &outfits, &arsenal());
+        assert_eq!(
+            kind.marines,
+            crate::ai::plunder_contents::ClassMarines::of(-3, &record.default_slots, &outfits)
+        );
+        assert_eq!(kind.marines.strength, -3);
+        assert_eq!(kind.marines.by_outfit.crew, 50);
+        assert_eq!(kind.marines.by_place.crew, 10, "outfit 128's 5 × 2");
+    }
+
+    #[test]
     fn a_ship_type_carries_its_holds_size() {
         let holding = |holds| {
             let record = ship(204, ShipFields { holds, ..FAST });
@@ -1468,9 +1494,10 @@ mod tests {
             HullSpec {
                 inherent_ai: 1,
                 crew: 3,
+                class_turn: 3.0,
                 ..arsenal().hull(ShipId(200))
             },
-            "the fixture's crew of 3"
+            "the fixture's crew of 3 and its Maneuver of 30's turn"
         );
         assert!(
             (armed.hull.hit_radius - 9.9).abs() < 1e-5,
@@ -1498,6 +1525,7 @@ mod tests {
             HullSpec {
                 inherent_ai: 2,
                 crew: 3,
+                class_turn: 3.0,
                 ..HullSpec::default()
             }
         );

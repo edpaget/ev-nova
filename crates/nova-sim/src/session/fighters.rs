@@ -504,6 +504,9 @@ fn fighter(
         ion: Ion::default(),
         afterburner: false,
         pursuit: Pursuit::default(),
+        ai_wait: 0,
+        docking: None,
+        marines: kind.marines,
     }
 }
 

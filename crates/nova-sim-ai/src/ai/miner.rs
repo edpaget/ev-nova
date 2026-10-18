@@ -372,6 +372,14 @@ mod tests {
         held.goal = Goal::Land(StellarId(128));
         held.mode = Mode::HeldAtGate { ticks_left: 5 };
         assert_eq!(deciding(&held, &stellars(), None), Goal::Idle, "state 0");
+        let mut waiting = miner(SCOOPS, false);
+        waiting.goal = Goal::Land(StellarId(128));
+        waiting.ai_wait = 5;
+        assert_eq!(
+            deciding(&waiting, &stellars(), None),
+            Goal::Idle,
+            "a flying ship's AI wait too"
+        );
     }
 
     #[test]

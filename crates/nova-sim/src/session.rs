@@ -2422,6 +2422,8 @@ impl Session {
             independent_kin: self.rules.source_for(RuleKey::IndependentKin),
             approach_lead: self.rules.source_for(RuleKey::ApproachLead),
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.disable_rule.0,
+            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         };
         f(&mut self.traffic, world);
     }
@@ -2495,6 +2497,8 @@ impl Session {
             independent_kin: self.rules.source_for(RuleKey::IndependentKin),
             approach_lead: self.rules.source_for(RuleKey::ApproachLead),
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.disable_rule.0,
+            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         }
     }
 
@@ -2525,6 +2529,7 @@ impl Session {
             class: record.map_or(EscortClass::Freighter, |record| {
                 EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
             }),
+            boarded: false,
         }
     }
 

@@ -2,6 +2,7 @@
 //! doing, and what it fights with.
 
 use crate::ai::Goal;
+use crate::ai::plunder_contents::ClassMarines;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::Carrier;
 use crate::catalog::{GovtId, PersonId, PersonRecord, ShipId, StellarId, WeaponId};
@@ -19,6 +20,7 @@ use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
+use crate::traffic::plunder_dock::Docking;
 
 pub use crate::combat::NpcId;
 
@@ -387,6 +389,26 @@ pub struct Npc {
     /// this tick's frame (see [`pursuit`](crate::ai::pursuit)): none as it
     /// spawns. Never saved.
     pub pursuit: Pursuit,
+    /// Its AI wait (the original's +0x4c) for the waits it takes while it
+    /// flies, outside its [`Mode`] and a pirate's count wait: a pirate's
+    /// dock with its victim (`Rand(80)` + 100), its hold after a plunder
+    /// (100) and a ship a pirate took into its fleet (150) (see
+    /// [`plunder`](crate::traffic::plunder)). While it runs it counts in
+    /// [`Npc::wait_running`], the traffic counts it down as the ship
+    /// flies, its high level is skipped but for a drift or a hold, and the
+    /// ship moves on at its velocity with no turn or thrust. A hit's answer
+    /// cuts it to 20. None as it spawns. Never saved.
+    pub ai_wait: u32,
+    /// The docking it flies with a disabled ship it plunders, its sub-goal
+    /// and nav kept from tick to tick (see
+    /// [`plunder_dock`](crate::traffic::plunder_dock)): none as it spawns,
+    /// once its plunder runs, and with any goal but an attack or a plunder.
+    /// Never saved.
+    pub docking: Option<Docking>,
+    /// Its class's `Strength` and the marines its default items give its
+    /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
+    /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
+    pub marines: ClassMarines,
 }
 
 /// The commodities 0-5 the original's ship records count.
@@ -412,6 +434,12 @@ impl NpcHold {
             hold.add(commodity, tons);
         }
         hold
+    }
+
+    /// The hold of `words`, the tons of commodities 0-5 in order.
+    #[must_use]
+    pub fn from_words(words: [u32; NPC_COMMODITIES]) -> Self {
+        Self { tons: words }
     }
 
     /// The tons of `commodity` it holds: none past commodity 5.
@@ -657,20 +685,24 @@ impl Npc {
     /// and its target is the player (@0x7f56d) or a ship in slots 1-63
     /// whose leader (+0x9a) is the player (@0x7f572-0x7f590). Here
     /// [`Condition::Intact`] stands for the active and disabled tests,
-    /// [`Mode::Flying`] for the wait (a flying ship keeps none; a ship
-    /// coming out of a gate or jumping in has one), and
+    /// [`Mode::Flying`] with no [`Npc::ai_wait`] for the wait (a ship
+    /// coming out of a gate or jumping in has one, and so does a flying
+    /// pirate docked or holding after a plunder, or a ship it took into
+    /// its fleet), and
     /// [`Goal::quarry`]'s attack, snipe and flee for the AI states.
     ///
     /// `_FindNearestThreatToPlayer` (@0x9529-0x956b) also takes a ship
     /// that fails this test but targets an active ship the player leads
     /// and is fighting it (`_IsShipFightingMe` @0x827fa: its target, in
     /// AI state 4, attack). That adds only a state-4 ship whose AI wait
-    /// is still running, which the engine never has on a flying ship, so
+    /// is still running: a pirate docked with a ship the player leads,
+    /// which a disabled escort no longer is (`_DamageShip` @0x3afdd), so
     /// this one test stands for both branches.
     #[must_use]
     pub fn threatens_player_or_led(&self, led: impl Fn(NpcId) -> bool) -> bool {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
+            && self.ai_wait == 0
             && match self.goal.quarry() {
                 Some(ShipRef::Player) => true,
                 Some(ShipRef::Npc(id)) => led(id),
@@ -773,11 +805,12 @@ impl Npc {
     /// out and flying, it has none. While it runs, `_HandleShip` skips the
     /// ship's thrust and fire (@0x34a54-0x34a72): the fight fires only its
     /// fighter bays and point defence, its pick kept
-    /// ([`fire::gated`](crate::ai::fire::gated)). The waits the engine
-    /// doesn't fly yet (a landed ship's stay, the pirates' holds after a
-    /// plunder, a launched fighter's, a plundered escort's, the warp out
-    /// after a leader) will count here once built (rdm weapons-fidelity
-    /// phase 17's findings).
+    /// ([`fire::gated`](crate::ai::fire::gated)). So does its AI wait
+    /// while it flies ([`Npc::ai_wait`]): a pirate's dock and hold after a
+    /// plunder, and a ship a pirate took into its fleet. The waits the
+    /// engine doesn't fly yet (a landed ship's stay, a launched fighter's,
+    /// the warp out after a leader) will count here once built (rdm
+    /// weapons-fidelity phase 17's findings).
     ///
     /// A pirate's count wait ([`Goal::CountWait`]) runs it while ticks are
     /// left: it is the original's +0x4c too, read so by
@@ -793,6 +826,7 @@ impl Npc {
                 | Mode::Coasting { .. }
                 | Mode::EnteringGate { .. }
         ) || matches!(self.goal, Goal::CountWait { ticks_left } if ticks_left > 0)
+            || self.ai_wait > 0
     }
 
     /// Whether it is in its count wait, goal 0x16 ([`Goal::CountWait`]):
@@ -1783,6 +1817,37 @@ mod tests {
             ..plain(1)
         };
         assert!(coasting.wait_running() && !coasting.count_wait());
+    }
+
+    #[test]
+    fn a_flying_ships_ai_wait_runs_its_wait_while_any_is_left() {
+        for (ai_wait, running) in [(0, false), (1, true), (150, true)] {
+            let waiting = Npc {
+                ai_wait,
+                ..plain(1)
+            };
+            assert_eq!(waiting.wait_running(), running, "{ai_wait}");
+            assert!(!waiting.count_wait());
+        }
+    }
+
+    #[test]
+    fn a_ship_whose_ai_wait_runs_is_no_threat_by_its_quarry() {
+        let attacking = Npc {
+            goal: Goal::Attack(ShipRef::Player),
+            ..plain(1)
+        };
+        assert!(attacking.threatens_player_or_led(|_| false));
+        let waiting = Npc {
+            ai_wait: 1,
+            ..attacking
+        };
+        assert!(!waiting.threatens_player_or_led(|_| false), "@0x7f518");
+        assert!(!waiting.threatens_player_among(&[]));
+        assert!(
+            !waiting.threatens_player_extended(&[], true),
+            "nor by its target while its wait runs"
+        );
     }
 
     #[test]
