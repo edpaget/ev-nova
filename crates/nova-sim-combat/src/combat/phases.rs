@@ -50,7 +50,10 @@ impl Combat {
 
     /// Step 1's trigger: the player fires the weapons its trigger holds
     /// that are ready, as `_HandlePlayer` calls `_FirePlayerWeapon`
-    /// (@0x6ab55, @0x6abc7), drawing on `chance` (see `Combat::fire`).
+    /// (@0x6ab55, @0x6abc7), drawing on `chance` (see `Combat::fire`);
+    /// then its reloads count down a tick, as `_HandlePlayer` counts them
+    /// (@0x6ae25-0x6ae61) after its trigger and before `_HandleShot` holds
+    /// them (`Combat::hold_reloads`).
     pub fn fire_player(
         &mut self,
         fighters: &mut [Fighter],
@@ -62,6 +65,7 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire(fighters, &targets, chance, Firers::Player);
+        count_down(fighters, Firers::Player);
     }
 
     /// Steps 2 and 3, the collision passes (`_SWCollideSpriteLayer`
@@ -100,9 +104,11 @@ impl Combat {
         self.defend(fighters, &targets, defence, chance, Firers::Npcs);
     }
 
-    /// Step 4's picks: each NPC fires the weapons its trigger holds that
-    /// are ready, as `_HandleShip` fires its pick (@0x44483), drawing on
-    /// `chance`; then every reload counts down a tick (step 5).
+    /// Step 4's picks, `_HandleShip`'s (@0x44483): each NPC's reloads
+    /// count down a tick (@0x33896-0x338ce), after `_HandleShot` has held
+    /// them (`Combat::hold_reloads`), then it fires the weapons its trigger
+    /// holds that are ready (`_FireAIShipWeapon` @0x34ffd, @0x3500a),
+    /// drawing on `chance`.
     pub fn fire_npcs(
         &mut self,
         fighters: &mut [Fighter],
@@ -112,11 +118,9 @@ impl Combat {
         self.field = arena.field;
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
+        count_down(fighters, Firers::Npcs);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire(fighters, &targets, chance, Firers::Npcs);
-        for fighter in fighters.iter_mut() {
-            fighter.armament.reload();
-        }
     }
 
     /// Step 6's shots, `_HandleShot` (@0x44385): the shots fly among
@@ -209,5 +213,16 @@ impl Combat {
             .iter()
             .map(|fighter| (fighter.ship, fighter.state.position))
             .collect();
+    }
+}
+
+/// Counts the reloads of each of the `firers` among `fighters` down a
+/// tick.
+fn count_down(fighters: &mut [Fighter], firers: Firers) {
+    for fighter in fighters
+        .iter_mut()
+        .filter(|fighter| firers.take(fighter.ship))
+    {
+        fighter.armament.reload();
     }
 }

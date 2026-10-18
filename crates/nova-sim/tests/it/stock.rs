@@ -2321,7 +2321,7 @@ fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_
         secondary: torpedo.secondary().then_some(torpedo.id),
         ..Trigger::default()
     };
-    let (strikes, events) = defended_by(&data, &arsenal, (133, 134), vec![launcher], 4);
+    let (strikes, events) = defended_by(&data, &arsenal, (133, 134), vec![launcher], 5);
     let downed: Vec<Vec2> = events
         .iter()
         .filter_map(|event| match *event {
@@ -2330,12 +2330,13 @@ fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_
         })
         .collect();
     // The Quad fires the tick after the missiles, as the player's point
-    // defence runs before the NPCs fire. After the third tick the
-    // torpedo, 13 pixels a tick, is at -61 and the Quad's shot, 20 a
-    // tick, at -40: the next tick's hit pass finds their 32- and 35-pixel
-    // sprites overlapping.
+    // defence runs before the NPCs fire, on the tick they first move, as
+    // `_HandleShot` comes before `_HandleShip`'s picks. After the fourth
+    // tick the torpedo, 13 pixels a tick, is at -61 and the Quad's shot,
+    // 20 a tick, at -60: the next tick's hit pass finds their 32- and
+    // 35-pixel sprites overlapping.
     assert_eq!(downed.len(), 1, "{events:?}");
-    assert!(close(downed[0], Vec2::new(0.0, -40.0)), "{downed:?}");
+    assert!(close(downed[0], Vec2::new(0.0, -60.0)), "{downed:?}");
     assert!(
         !strikes.iter().any(|strike| strike.ship == ShipRef::Player),
         "the torpedo never reached the player: {strikes:?}"
@@ -6596,6 +6597,12 @@ fn a_stock_raven_rocket_leaves_an_npc_at_its_speed_and_the_player_at_its_ships()
         let mut ships = [ship];
         let mut combat = Combat::default();
         fight_with(&mut combat, &mut ships, &arsenal);
+        if id != ShipRef::Player {
+            // An NPC's shot first moves the tick after its pick
+            // (`_HandleShot` @0x44385 before `_HandleShip` @0x44483).
+            ships[0].trigger = Trigger::default();
+            fight_with(&mut combat, &mut ships, &arsenal);
+        }
         combat
             .shots()
             .iter()

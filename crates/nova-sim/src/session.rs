@@ -16780,7 +16780,8 @@ pub(super) mod tests {
             .iter()
             .rfind(|shot| shot.firer == ship)
             .expect("a shot");
-        shot.position - shot.velocity - centre
+        // An NPC's shot waits where it left on the tick it is fired.
+        shot.moved_from.unwrap_or(shot.position) - centre
     }
 
     #[test]
@@ -17020,11 +17021,20 @@ pub(super) mod tests {
         rules: Rules,
         chance: &mut dyn Chance,
     ) -> f32 {
-        for _ in 0..ticks {
+        // `ticks` moves: the player's shot moves on the tick it is fired,
+        // an NPC's from the next.
+        let mut left = ticks;
+        let mut first = true;
+        while left > 0 {
             session.tick_combat(rules, chance);
             session.hold_trigger(Trigger::default());
             if let Some(npc) = session.traffic.npcs_mut().first_mut() {
                 npc.trigger = Trigger::default();
+            }
+            let waits = first && session.shots()[0].moved_from.is_none();
+            first = false;
+            if !waits {
+                left -= 1;
             }
         }
         session.shots()[0].heading

@@ -56,7 +56,8 @@ fn newest_exit(session: &Session, ship: ShipRef, centre: Vec2) -> usize {
         .iter()
         .rfind(|shot| shot.firer == ship)
         .expect("a shot");
-    let start = shot.position - shot.velocity - centre;
+    // An NPC's shot waits where it left on the tick it is fired.
+    let start = shot.moved_from.unwrap_or(shot.position) - centre;
     assert!((start.y + 10.0).abs() < 1e-3, "10 ahead: {start:?}");
     (start.x.round() as usize) - 1
 }
