@@ -1294,7 +1294,7 @@ mod tests {
             false,
             TopSpeeds::own_of(npc),
             crate::flight::FlightRules::default(),
-            RuleSource::Engine,
+            crate::traffic::autopilot::Readings::default(),
             &mut Ranged::of(&[]),
         );
         ship

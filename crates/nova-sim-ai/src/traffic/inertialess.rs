@@ -231,7 +231,7 @@ mod tests {
             false,
             speeds,
             rules,
-            crate::rulebook::RuleSource::Engine,
+            crate::traffic::autopilot::Readings::default(),
             &mut Draws::of(&[]),
         )
     }

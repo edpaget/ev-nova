@@ -15,7 +15,7 @@ use crate::stats::ShipStats;
 
 /// NPC `id`, a wimpy trader of ship type 128 performing as `stats`, its
 /// reserves full, at rest at the centre facing up, flying and idle,
-/// intact and unarmed.
+/// intact and unarmed, its class's `Fuel` its `stats`' tank.
 #[must_use]
 pub fn npc(id: u32, stats: ShipStats) -> Npc {
     Npc {
@@ -63,6 +63,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         miner: 0,
         can_scoop: false,
         holds: 0,
+        class_fuel: class_fuel(&stats),
         former: None,
         tractor: None,
         ion: Ion::default(),
@@ -73,4 +74,10 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         marines: ClassMarines::default(),
         pods_left: 0,
     }
+}
+
+/// A class `Fuel` holding the tank of `stats`, saturating at the word.
+#[allow(clippy::cast_possible_truncation)]
+fn class_fuel(stats: &ShipStats) -> i16 {
+    stats.fuel as i16
 }

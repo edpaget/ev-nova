@@ -1502,6 +1502,7 @@ mod tests {
             grudge,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
         let npcs = [grudger, ship(2, ENEMY, 0.0, 50.0)];
         let around = Surroundings {
@@ -1587,6 +1588,7 @@ mod tests {
             grudge: true,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
         let npcs = [grudger];
         let around = Surroundings {

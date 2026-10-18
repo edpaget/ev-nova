@@ -198,6 +198,11 @@ pub struct NpcPerson {
     pub quoted: bool,
     /// The quote tick it last said its hail quote, if it has.
     pub quoted_at: Option<u64>,
+    /// Whether it starts with zero fuel (`përs` `Flags2`
+    /// [`ZERO_FUEL`](crate::traffic::persons::ZERO_FUEL), person +0x16 & 1):
+    /// the one ship that needs a jump's fuel now to jump out
+    /// ([`can_jump`](crate::ai::leave::can_jump)).
+    pub zero_fuel: bool,
 }
 
 impl NpcPerson {
@@ -217,6 +222,7 @@ impl NpcPerson {
             grudge,
             quoted: false,
             quoted_at: None,
+            zero_fuel: record.flags2 & crate::traffic::persons::ZERO_FUEL != 0,
         }
     }
 }
@@ -393,6 +399,10 @@ pub struct Npc {
     /// [`ShipKind::holds`](crate::traffic::table::ShipKind)): a scooping
     /// miner leaves once its own hold ([`NpcHold::total`]) reaches it.
     pub holds: u16,
+    /// Its class's `shïp` `Fuel`, raw ([`ShipKind::class_fuel`](crate::traffic::table::ShipKind::class_fuel)):
+    /// above 99, it can jump out whatever fuel it holds, but for a person
+    /// that starts with zero fuel ([`can_jump`](crate::ai::leave::can_jump)).
+    pub class_fuel: i16,
     /// What it was, while it is a former escort of the player's: disabled
     /// or breaking up as one, it left the fleet with this record (the
     /// original's +0xc8de). It forgets once intact, boarded or taken into
@@ -2153,6 +2163,18 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_person_starts_with_zero_fuel_by_its_flags2_0x0001_alone() {
+        let record = |flags2| PersonRecord {
+            flags2,
+            ..nova_sim_catalog::fixture::person(151, 128)
+        };
+        assert!(NpcPerson::of(&record(0x0001), false).zero_fuel);
+        assert!(NpcPerson::of(&record(0xFFFF), false).zero_fuel);
+        assert!(!NpcPerson::of(&record(0xFFFE), false).zero_fuel);
+        assert!(!NpcPerson::of(&record(0), false).zero_fuel);
+    }
+
+    #[test]
     fn an_npc_person_carries_its_records_fields_and_is_invincible_below_zero() {
         let record = PersonRecord {
             flags: 0x0030,
@@ -2178,6 +2200,7 @@ mod tests {
                 grudge: true,
                 quoted: false,
                 quoted_at: None,
+                zero_fuel: false,
             }
         );
         for shield_mod in [0, 100] {

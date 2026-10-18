@@ -50,6 +50,7 @@ pub mod fire;
 pub(crate) mod fixture;
 pub mod flee_drop;
 pub mod interceptor;
+pub mod leave;
 pub mod miner;
 pub mod nova;
 pub mod odds;
@@ -548,6 +549,9 @@ pub struct Surroundings<'a> {
     /// warship of one takes no player candidate from its hunt (see
     /// [`target`]).
     pub iff_marked: &'a BTreeSet<GovtId>,
+    /// Who needs a jump's fuel now to jump out ([`leave::can_jump`]), by
+    /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel).
+    pub jump_fuel: RuleSource,
 }
 
 /// No government marked by an IFF scrambler.
@@ -556,7 +560,8 @@ pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
-    /// cloak scanner and no government marked by an IFF scrambler.
+    /// cloak scanner, no government marked by an IFF scrambler and the
+    /// engine's jump fuel.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -571,6 +576,7 @@ impl<'a> Surroundings<'a> {
             reinforcements: None,
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
+            jump_fuel: RuleSource::Engine,
         }
     }
 

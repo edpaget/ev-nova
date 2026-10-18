@@ -664,6 +664,7 @@ mod tests {
             grudge: true,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
         assert_eq!(
             decision_by(NEVER, &[grudger], intact, 0, &[]),

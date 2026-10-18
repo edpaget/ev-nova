@@ -144,6 +144,7 @@ pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
 pub mod inertialess;
+pub mod leave_flight;
 pub mod npc;
 pub mod persons;
 pub mod plunder;
@@ -442,6 +443,11 @@ pub struct World<'a> {
     /// by the other reading
     /// ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
     pub snipe_brake_lead: RuleSource,
+    /// Who needs a jump's fuel now to jump out
+    /// ([`leave::can_jump`](crate::ai::leave::can_jump)): only a person
+    /// that starts with zero fuel by the engine, every NPC by the other
+    /// reading ([`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
+    pub npc_jump_fuel: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -518,6 +524,7 @@ impl<'a> World<'a> {
             spawn_reserve: SPAWN_RESERVE,
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
+            npc_jump_fuel: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
@@ -574,6 +581,7 @@ impl<'a> World<'a> {
             reinforcements: self.reinforcements,
             cloak_scanner: self.cloak_scanner,
             iff_marked: self.iff_marked,
+            jump_fuel: self.npc_jump_fuel,
         }
     }
 }
@@ -1223,7 +1231,10 @@ impl Traffic {
                     other_disabled,
                     speeds,
                     world.flight,
-                    world.snipe_brake_lead,
+                    autopilot::Readings {
+                        snipe_lead: world.snipe_brake_lead,
+                        jump_fuel: world.npc_jump_fuel,
+                    },
                     &mut *chance,
                 )
             })
@@ -2138,6 +2149,7 @@ impl Traffic {
                 miner: kind.miner,
                 can_scoop: kind.can_scoop,
                 holds: kind.holds,
+                class_fuel: kind.class_fuel,
                 former: None,
                 tractor: None,
                 ion: Ion::default(),
@@ -2278,6 +2290,7 @@ mod tests {
                     miner: 0,
                     can_scoop: false,
                     holds: 0,
+                    class_fuel: FAST.fuel,
                     base_armor: 45.0,
                     immobile: false,
                 },
@@ -2823,9 +2836,9 @@ mod tests {
 
     #[test]
     fn a_ship_that_lands_or_jumps_out_leaves() {
-        // NPC 0 over planet 140, at rest; NPC 1 out at its jump distance.
+        // NPC 0 over planet 140, at rest; NPC 1 at rest just past 1000.
         let mut traffic = populated(2, 1);
-        traffic.npcs[1].state.position = Vec2::new(0.0, -1000.0);
+        traffic.npcs[1].state.position = Vec2::new(0.0, -1000.5);
         traffic.npcs[0].goal = Goal::Land(StellarId(140));
         traffic.npcs[1].goal = Goal::JumpOut;
         let sites = [planet(140, 0.0, 0.0)];
@@ -3918,6 +3931,7 @@ mod tests {
             grudge: false,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
         traffic
     }
@@ -5297,6 +5311,7 @@ mod tests {
                 grudge: false,
                 quoted: false,
                 quoted_at: None,
+                zero_fuel: false,
             })
         );
         assert_eq!(traffic.person(PersonId(600)), None);
@@ -5590,10 +5605,12 @@ mod tests {
         kind.miner = 0x0003;
         kind.can_scoop = true;
         kind.holds = 12;
+        kind.class_fuel = 99;
         let mut traffic = Traffic::new();
         traffic.enter(mining, &mut Draws::of(&placed(0, 0)));
         let npc = &traffic.npcs()[0];
         assert_eq!((npc.miner, npc.can_scoop, npc.holds), (0x0003, true, 12));
+        assert_eq!(npc.class_fuel, 99, "its class's Fuel");
         let mut plain = Traffic::new();
         plain.enter(table(1), &mut Draws::of(&placed(0, 0)));
         let npc = &plain.npcs()[0];

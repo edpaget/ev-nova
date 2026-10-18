@@ -396,6 +396,7 @@ impl Session {
             miner: kind.miner,
             can_scoop: kind.can_scoop,
             holds: kind.holds,
+            class_fuel: kind.class_fuel,
             former: None,
             tractor: None,
             ion: Ion::default(),

@@ -2512,6 +2512,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2588,6 +2589,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -16236,6 +16238,7 @@ pub(super) mod tests {
             grudge: false,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
     }
 
@@ -25222,6 +25225,7 @@ pub(super) mod tests {
             grudge: false,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         }
     }
 
