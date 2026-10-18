@@ -1155,6 +1155,18 @@ mod tests {
     }
 
     #[test]
+    fn a_hired_escort_placed_carries_its_classs_crew_pods() {
+        let mut catalog = fleeted();
+        catalog.hulls[1].pod_count = 3;
+        let session = flying(&catalog, RuleSource::Engine);
+        let pods: Vec<_> = escort_npcs(&session)
+            .iter()
+            .map(|npc| (npc.ship, npc.pods_left))
+            .collect();
+        assert_eq!(pods, [(WARSHIP, 3), (FREIGHTER, 0)]);
+    }
+
+    #[test]
     fn an_escort_whose_ship_type_has_no_record_is_kept_but_not_placed() {
         let catalog = fleeted();
         let mut pilot = escorted(&catalog);
