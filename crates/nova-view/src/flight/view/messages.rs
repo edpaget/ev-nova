@@ -284,7 +284,9 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         SimMessage::NoActiveMissions => NO_ACTIVE_MISSIONS,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
-        SimMessage::FleetArrivalQuote(text) => return Some(text.clone()),
+        SimMessage::FleetArrivalQuote(text)
+        | SimMessage::CallForHelp(text)
+        | SimMessage::ScanHail(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
         SimMessage::EscapingIn { ship } => {
             // "Escaping in", a space, the long name and a full stop
@@ -637,6 +639,8 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
         | SimMessage::FleetArrivalQuote(_)
+        | SimMessage::CallForHelp(_)
+        | SimMessage::ScanHail(_)
         | SimMessage::JumpCollapsed
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }

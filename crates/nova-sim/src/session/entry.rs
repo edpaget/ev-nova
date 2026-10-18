@@ -1010,7 +1010,7 @@ impl Session {
             if matches!(message, SimMessage::Buoy(_)) {
                 self.fighter_notes.truncate(notes);
             }
-            self.messages.push(message);
+            self.say(message);
             // The hyperspace arrival leaves the pilot past the tutorial
             // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
             self.tutorial.jumped();

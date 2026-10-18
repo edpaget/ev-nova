@@ -139,7 +139,7 @@ impl Session {
             self.top_speed(),
         );
         self.jump = None;
-        self.messages.push(SimMessage::JumpCollapsed);
+        self.say(SimMessage::JumpCollapsed);
         self.halt_sounds(&WARP_UP_HALTS);
         self.sounds.push(SimSound::JumpCollapsed);
     }

@@ -108,7 +108,7 @@ impl Session {
     /// disabled, each bomb's damage drawn on `chance`.
     fn sabotage_bombs(&mut self, rule: &dyn DisableRule, chance: &mut dyn Chance) {
         for bomb in bombs(&self.pilot.outfits, &self.outfits) {
-            self.messages.push(SimMessage::BombExploded {
+            self.say(SimMessage::BombExploded {
                 outfit: bomb.outfit,
                 one: bomb.one,
             });
@@ -148,7 +148,7 @@ impl Session {
         let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
         self.halt_sounds(&WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
-        self.messages.push(if outfit.is_none() && self.leet {
+        self.say(if outfit.is_none() && self.leet {
             SimMessage::BombSetUp
         } else {
             SimMessage::Sabotaged { outfit }

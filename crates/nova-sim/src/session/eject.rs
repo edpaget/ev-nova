@@ -271,7 +271,7 @@ impl Session {
         let record = self.ship_record(escape.unwrap_or(ESCAPE_POD_SHIP)).cloned();
         if let Some(ship) = escape {
             self.pod = None;
-            self.messages.push(SimMessage::EscapingIn { ship });
+            self.say(SimMessage::EscapingIn { ship });
         } else {
             self.pod = Some(POD_TICKS);
             self.drop_the_player();

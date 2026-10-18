@@ -80,6 +80,12 @@ pub enum SimSound {
     /// `_beepSnd[4]`, `snd ` 154 (`_HyperSpawnFleet` @0x42698-0x426bb),
     /// even when the line is empty.
     FleetArrivalQuote,
+    /// A ship called for help: `_beepSnd[4]`, `snd ` 154 (`_AICallForHelp`
+    /// `_PlaySound` @0x830e0-0x83109).
+    CallForHelp,
+    /// An interceptor hailed the player before its scan: `_beepSnd[4]`,
+    /// `snd ` 154 (`_InterceptorAI` `ST_PlaySound` @0x8cf9d-0x8cfbc).
+    ScanHail,
     /// A person's mission was offered on its hail, in place of the comm
     /// dialog: `_beepSnd[4]`, `snd ` 154 (`_HandlePlayerCommunication`
     /// @0x62232-0x6223d).

@@ -427,7 +427,7 @@ pub use self::active::{
 };
 pub use self::cargo::{
     JettisonMessage, Jettisoned, PickupFacts, PickupRefusal, Room, ScanOutcome, drops_off,
-    jettison, picks_up_at_destination, pickup_checks, scan,
+    hail_finds, jettison, picks_up_at_destination, pickup_checks, scan,
 };
 pub use self::goals::{
     AssistLine, Departure, GoalCheck, GoalFacts, LossFacts, ShipGoal, assists, check_goals,

@@ -93,7 +93,7 @@ impl Session {
         self.select_pressed(press.selected);
         self.dock = press.dock;
         match press.said {
-            Some(DockSaid::NoResponse) => self.messages.push(SimMessage::NoResponse),
+            Some(DockSaid::NoResponse) => self.say(SimMessage::NoResponse),
             Some(DockSaid::Requested) => {
                 if let Ok(LandOutcome::Requested { stellar, .. }) = press.outcome {
                     let kind = self.dock_kind(stellar);
@@ -146,7 +146,7 @@ impl Session {
                     self.dock = (!done.expired).then_some(request);
                     if done.greet {
                         self.sounds.push(SimSound::TrafficControl);
-                        self.messages.push(SimMessage::DockCleared {
+                        self.say(SimMessage::DockCleared {
                             stellar: request.stellar,
                             kind,
                         });

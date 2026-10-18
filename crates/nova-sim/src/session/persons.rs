@@ -34,10 +34,13 @@
 //! `AvailBits` by the engine the verdict cached at the last refresh or
 //! check of it ([`RuleKey::CachedAvailBits`](crate::RuleKey::CachedAvailBits)).
 //! A quote said, and that check of a linked person, leave `<OSN>` naming
-//! nobody (see the `person_offers` module). "No quote showing" counts
-//! only the hail quotes, the last said
-//! [`QUOTE_SHOWN_TICKS`] or more ago. A person's quote state is never
-//! saved, and "once" is once for its stay.
+//! nobody (see the `person_offers` module). "No quote showing" is the
+//! message line free, whatever shows on it (`_HandleShip`
+//! @0x33f42-0x33f4b reads `_commCount`, the session's
+//! [`CommLine`](crate::CommLine); see the `comm_calls` module): a hail
+//! quote holds it for [`QUOTE_SHOWN_TICKS`], and any other line for its
+//! own time. A person's quote state is never saved, and "once" is once
+//! for its stay.
 //!
 //! A person of `Flags` 0x0010 turning on the player as
 //! `_AIMakeShipAttackPlayer` has it, while it is no threat to the player
@@ -115,12 +118,12 @@ pub struct PersonQuote {
     pub text: String,
 }
 
-/// The hail quotes' clock: the quote ticks so far, and the tick until
-/// which a quote shows, keeping any other from being said at random.
+/// The hail quotes' clock: the quote ticks so far, in place of the
+/// original's `TickCount`, which the personal gap ([`QUOTE_GAP_TICKS`])
+/// reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct QuoteClock {
     pub(super) ticks: u64,
-    quiet_until: u64,
 }
 
 impl Session {
@@ -177,10 +180,13 @@ impl Session {
     /// A tick of the persons' hail quotes in flight, each drawn on
     /// `chance` and read from `catalog`, its `'STR '` patch before
     /// `STR#` 7101 (@0x445b8-0x445e1; see the module docs and
-    /// [`person`](crate::person)): first each attack quote queued, said
+    /// [`person`](crate::person)), at whose head the message line counts
+    /// down a frame, as `_HandleComm` does on the advance pass (see the
+    /// `comm_calls` module): first each attack quote queued, said
     /// with no draw; then, in order, each person NPC whose quote
     /// may be said draws `Rand(140)`, and says it when it is due now, or
-    /// on a draw of 0 when no quote has shown for [`QUOTE_SHOWN_TICKS`]
+    /// on a draw of 0 when the message line is free
+    /// ([`CommLine::free_for_calls`](crate::CommLine::free_for_calls))
     /// and its own last is more than [`QUOTE_GAP_TICKS`] back. While the
     /// ship is landed nothing happens. Then the quote clock moves on a
     /// tick: ours moves it once a frame in place of `TickCount`, and
@@ -190,6 +196,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        self.count_down_comm_line();
         self.roll_quotes(catalog, chance);
         self.quote_clock.ticks += 1;
     }
@@ -271,7 +278,9 @@ impl Session {
             let Some(person) = npc.person.as_mut() else {
                 continue;
             };
-            let quiet = ticks >= self.quote_clock.quiet_until;
+            // No quote showing: the message line free, whatever shows on
+            // it (`_HandleShip` @0x33f42-0x33f4b reads `_commCount`).
+            let quiet = self.comm_line.free_for_calls();
             let rested = person
                 .quoted_at
                 .is_none_or(|at| ticks > at + QUOTE_GAP_TICKS);
@@ -323,7 +332,6 @@ impl Session {
         lines: &[String],
         chance: &mut dyn Chance,
     ) {
-        let ticks = self.quote_clock.ticks;
         let Some(person) = self
             .traffic
             .npcs_mut()
@@ -335,7 +343,7 @@ impl Session {
         };
         person.quoted = true;
         let (person, hail_quote) = (person.id, person.hail_quote);
-        self.quote_clock.quiet_until = ticks + QUOTE_SHOWN_TICKS;
+        self.comm_line.show(QUOTE_SHOWN_TICKS);
         let patch = hail_quote_patch_id(hail_quote)
             .map_or(StringPatch::Absent, |patch| catalog.plugin_string(patch));
         let line = hail_quote_text(hail_quote, patch, lines);
@@ -1618,6 +1626,21 @@ mod tests {
         // Tick 1351: more.
         let (said, _) = quote_tick(&catalog, &mut session, &[0, 1]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+    }
+
+    #[test]
+    fn a_random_quote_waits_while_any_line_shows_and_is_said_once_it_is_free() {
+        // `_HandleShip`'s roll reads `_commCount` (@0x33f42-0x33f4b), set
+        // by every `_DisplayComm`, not only the quotes'.
+        let (catalog, mut session) = quoting([0, 0]);
+        session.say(crate::SimMessage::NoResponse);
+        let _ = session.take_messages();
+        for tick in 0..249 {
+            let (said, _) = quote_tick(&catalog, &mut session, &[0, 0]);
+            assert_eq!(said, Vec::<String>::new(), "tick {tick}");
+        }
+        let (said, _) = quote_tick(&catalog, &mut session, &[0, 0]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"], "the 250th, at 0");
     }
 
     #[test]

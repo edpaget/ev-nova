@@ -197,6 +197,8 @@ impl<A: Audio> AudioCore<A> {
             Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
             Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
             Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
+            Sound::Sim(SimSound::CallForHelp) => self.play(self.table.call_for_help),
+            Sound::Sim(SimSound::ScanHail) => self.play(self.table.scan_hail),
             Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
             Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
             Sound::Sim(SimSound::PersonOfferBoarded | SimSound::Boarded) => {
@@ -899,6 +901,15 @@ mod tests {
             &[Sound::Sim(SimSound::FleetArrivalQuote)],
         );
         assert_eq!(drain(&log), [play(154, EFFECTS)]);
+    }
+
+    #[test]
+    fn a_distress_call_and_a_pre_scan_hail_beep_154() {
+        for sound in [SimSound::CallForHelp, SimSound::ScanHail] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[Sound::Sim(sound)]);
+            assert_eq!(drain(&log), [play(154, EFFECTS)], "{sound:?}");
+        }
     }
 
     #[test]

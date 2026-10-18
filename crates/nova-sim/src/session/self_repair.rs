@@ -100,7 +100,7 @@ impl Session {
         npc.reserves.shield.now = 0.0;
         let record = former.rejoined(npc.reserves);
         self.enlist(id, record);
-        self.messages.push(rejoin_message(former.kind()));
+        self.say(rejoin_message(former.kind()));
         self.sounds.push(SimSound::EscortRepaired);
     }
 }

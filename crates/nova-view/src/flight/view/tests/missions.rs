@@ -643,6 +643,21 @@ fn a_fleets_arrival_quote_says_its_line() {
 }
 
 #[test]
+fn a_distress_call_and_a_pre_scan_hail_say_their_text_as_given() {
+    let view = flight();
+    let session = view.session().expect("flying");
+    let help = "Ship 129:  Help!";
+    let hail = "Ship 129:  Kestrel, halt.";
+    for (message, text) in [
+        (SimMessage::CallForHelp(help.to_owned()), help),
+        (SimMessage::ScanHail(hail.to_owned()), hail),
+    ] {
+        assert_eq!(sim_message_text(&message, session).as_deref(), Some(text));
+        assert_eq!(arrival_lead(&message), None);
+    }
+}
+
+#[test]
 fn the_players_downed_lines_are_str_2002_287_288_and_284() {
     let view = flight();
     let session = view.session().expect("flying");

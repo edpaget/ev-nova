@@ -103,8 +103,9 @@
 //! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
 //!   test, so each eligible person draws `Rand(140)` on both passes
 //!   ([`Session::tick_quotes_again`], after the attack quotes). The
-//!   display timer (0x3b5020) is counted down only by `_HandleComm`
-//!   (@0x301ce-0x301de), on the advance pass, so after any quote on the
+//!   display timer (`_commCount`, the session's
+//!   [`CommLine`](crate::CommLine)) is counted down only by `_HandleComm`
+//!   (@0x301ce-0x301de), on the advance pass, so after any line on the
 //!   advance pass only a quote due now (forced, @0x33f65-0x33f6c) can
 //!   follow on the second; otherwise each frame's odds of a random quote
 //!   double. The quote clock moves once a frame, on the advance pass.

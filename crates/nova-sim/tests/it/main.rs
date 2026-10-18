@@ -14,6 +14,7 @@ mod missions;
 mod plugin_strings;
 mod stock;
 mod stock_asteroids;
+mod stock_comm_calls;
 mod stock_conditional_text;
 mod stock_crons;
 mod stock_escape_pod;

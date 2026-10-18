@@ -359,6 +359,7 @@ mod buoys;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
+mod comm_calls;
 mod control;
 mod course;
 mod crons;
@@ -473,6 +474,7 @@ use crate::combat::sides::PassThrough;
 use crate::combat::{
     Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
 };
+use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
@@ -784,6 +786,9 @@ pub struct Session {
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
     messages: Vec<SimMessage>,
+    /// The message line's countdown, `_commCount`: set by every line
+    /// shown, counted down each frame (see the `comm_calls` module).
+    comm_line: CommLine,
     /// The events told since they were last taken.
     events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
@@ -1562,6 +1567,7 @@ impl Session {
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
+            comm_line: CommLine::default(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
@@ -2291,6 +2297,7 @@ impl Session {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });
                 self.announce_fleets(chance);
+                self.answer_comm_calls(chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2392,7 +2399,7 @@ impl Session {
                 .random_string(list, &mut &mut *chance)
                 .unwrap_or_default();
             let text = crate::traffic::quote::fill_digits(&line, chance);
-            self.messages.push(SimMessage::FleetArrivalQuote(text));
+            self.say(SimMessage::FleetArrivalQuote(text));
             self.sounds.push(SimSound::FleetArrivalQuote);
         }
     }
@@ -4010,7 +4017,7 @@ impl Session {
         let entered = exit.map(|(system, exit)| {
             self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
-            self.messages.push(SimMessage::ExitedHypergate(system));
+            self.say(SimMessage::ExitedHypergate(system));
             system
         });
         self.set_nav(NavMode::Off);
@@ -4076,7 +4083,7 @@ impl Session {
         let (site, system) = (*exit.site, exit.system);
         self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
-        self.messages.push(SimMessage::PassedWormhole(system));
+        self.say(SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
@@ -4145,6 +4152,7 @@ impl Session {
         }
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
+        self.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
         self.warp_ups.clear();
@@ -4266,7 +4274,7 @@ impl Session {
     pub(super) fn greet(&mut self, stellar: StellarId, chance: &mut (impl Chance + ?Sized)) {
         if self.tutorial.take_off() {
             let lead = chance.roll(5);
-            self.messages.push(SimMessage::TookOff { stellar, lead });
+            self.say(SimMessage::TookOff { stellar, lead });
         }
     }
 

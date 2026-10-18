@@ -683,6 +683,7 @@ impl Session {
             }
         }
         for (from, ship, help) in done {
+            self.comm_line.show(super::comm_calls::NOTE_TICKS);
             self.comm.push(CommNote {
                 from,
                 comm_name: self

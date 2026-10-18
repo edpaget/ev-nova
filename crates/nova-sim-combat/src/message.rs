@@ -179,6 +179,16 @@ pub enum SimMessage {
         /// Whether the player owned exactly one.
         one: bool,
     },
+    /// A ship called for help (`_AICallForHelp` @0x82ffb-0x83257; see
+    /// `nova_sim::ai::call_for_help`): the text ready to show, its name
+    /// (a mission's drawn ship name when not empty, else its class's),
+    /// a colon, two spaces and one of `STR#` 5003's twenty lines.
+    CallForHelp(String),
+    /// An interceptor about to inspect the player hailed it, the player
+    /// carrying mission cargo its government scans for (`_InterceptorAI`
+    /// @0x8ce4b-0x8cff5): the text ready to show, "<class>:  <ship
+    /// name>, <`STR#` 2002 #381-383>.".
+    ScanHail(String),
     /// A disabled or dying player's pre-jump collapsed: "Ship disabled -
     /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
     /// `_GetIndString` @0x68a04).
@@ -236,6 +246,10 @@ impl SimMessage {
     ///   @0x698b0).
     /// - [`JumpCollapsed`](Self::JumpCollapsed): 250 (`_HandlePlayer`
     ///   @0x68a3d, 0xfa pushed @0x68a32).
+    /// - [`CallForHelp`](Self::CallForHelp): 240 (`_AICallForHelp`
+    ///   @0x83248, 0xf0 pushed @0x8323d).
+    /// - [`ScanHail`](Self::ScanHail): 400 (`_InterceptorAI` @0x8cff5,
+    ///   0x190 pushed @0x8cfea).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -247,7 +261,8 @@ impl SimMessage {
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
             | Self::IllegalOutfit { .. }
-            | Self::BombExploded { .. } => 400,
+            | Self::BombExploded { .. }
+            | Self::ScanHail(_) => 400,
             Self::Arrived(_)
             | Self::PassedWormhole(_)
             | Self::MissionFailed
@@ -259,7 +274,8 @@ impl SimMessage {
             | Self::DownedMissionFailed
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned
-            | Self::TookOff { .. } => 240,
+            | Self::TookOff { .. }
+            | Self::CallForHelp(_) => 240,
             Self::EscortRepaired
             | Self::FighterRepaired
             | Self::JumpCollapsed
@@ -336,6 +352,11 @@ mod tests {
                 250,
             ),
             (SimMessage::NoResponse, 250),
+            (SimMessage::CallForHelp("Ship 128:  Help!".to_owned()), 240),
+            (
+                SimMessage::ScanHail("Ship 128:  Kestrel, halt.".to_owned()),
+                400,
+            ),
             (
                 SimMessage::DockCleared {
                     stellar: StellarId(128),
