@@ -757,11 +757,7 @@ impl Traffic {
         for (id, dropped_target) in turning {
             self.ask_quote_gate(id, dropped_target, view);
         }
-        let goals = decisions
-            .into_iter()
-            .map(|decision| decision.map(|decision| decision.goal))
-            .collect();
-        self.take_goals(goals, world.player.map(|player| player.state.position));
+        self.take_goals(decisions, world.player.map(|player| player.state.position));
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
             .npcs
@@ -1435,13 +1431,16 @@ impl Traffic {
         &self.departed
     }
 
-    /// Gives each NPC its goal decided, if any, the player at `player_at`
-    /// if there is one: one that stops inspecting a ship remembers it,
-    /// and has scanned the player when it was inspecting the player
-    /// within its reach; one that does not fight loses its provocation.
-    fn take_goals(&mut self, goals: Vec<Option<Goal>>, player_at: Option<Vec2>) {
-        for (npc, goal) in self.npcs.iter_mut().zip(goals) {
-            let Some(goal) = goal else {
+    /// Gives each NPC the goal of its decision, if any, the player at
+    /// `player_at` if there is one: one that stops inspecting a ship
+    /// remembers it, and has scanned the player when it was inspecting the
+    /// player within its reach; one whose decision provokes it
+    /// ([`Decision::provokes`]) has a provocation of 1, the word's +0x96
+    /// (@0x8b7e5, @0x8cb9d); and one that does not fight loses its
+    /// provocation.
+    fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
+        for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
+            let Some(Decision { goal, provokes, .. }) = decision else {
                 continue;
             };
             if let Goal::Inspect(ship) = npc.goal
@@ -1453,6 +1452,9 @@ impl Traffic {
                 if scans {
                     self.scans.push(npc.id);
                 }
+            }
+            if provokes {
+                npc.provoked = 1.0;
             }
             if !goal.fights() {
                 npc.provoked = 0.0;
@@ -3368,8 +3370,38 @@ mod tests {
         Decides(crate::ai::Decision {
             goal,
             turns_on_player: turns,
-            dropped_target: false,
+            ..crate::ai::Decision::default()
         })
+    }
+
+    #[test]
+    fn a_decision_that_provokes_sets_provocation_to_1() {
+        let attacks = Goal::Attack(ShipRef::Player);
+        let provoking = |provokes| {
+            Decides(crate::ai::Decision {
+                goal: attacks,
+                provokes,
+                ..crate::ai::Decision::default()
+            })
+        };
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.npcs[0].provoked = 5.0;
+        traffic.tick_in(&provoking(true), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs[0].provoked, 1.0,
+            "the word's +0x96 = 1 (@0x8b7e5)"
+        );
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 0;
+        traffic.npcs[0].provoked = 5.0;
+        traffic.tick_in(&provoking(false), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].provoked, 5.0, "kept");
+        let mut traffic = quoting_traffic(1);
+        traffic.ticks = 1;
+        traffic.npcs[0].provoked = 5.0;
+        traffic.tick_in(&provoking(true), World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[0].provoked, 5.0, "no think due");
     }
 
     #[test]
@@ -3420,6 +3452,7 @@ mod tests {
             goal: attacks,
             turns_on_player: true,
             dropped_target: true,
+            provokes: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

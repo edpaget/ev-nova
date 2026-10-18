@@ -195,6 +195,7 @@ impl Behaviour for NovaAi {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
                 dropped_target: false,
+                provokes: false,
             };
         }
         self.of(npc).decision(npc, around, chance)
@@ -1071,6 +1072,7 @@ mod tests {
                 goal: Goal::Idle,
                 turns_on_player: true,
                 dropped_target: true,
+                provokes: false,
             }
         }
     }
@@ -1089,6 +1091,7 @@ mod tests {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
                 dropped_target: false,
+                provokes: false,
             },
             "the mission hunt (@0x8d6b7)"
         );

@@ -5,13 +5,18 @@
 //!
 //! - **The government's word on the player** (`_WarshipAI`
 //!   @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3, identical),
-//!   before anything else, for a ship with a government that is not
-//!   provoked, while the player is in the system, by its government's
-//!   `Flags`, 0x0004 first:
+//!   before anything else, for a ship with a government that is not in
+//!   hyperspace, while the player is in the system, by its government's
+//!   `Flags`, 0x0004 first. Its gate is the jump state +0x50 in
+//!   (-900, 0] (0xdda4c, 0xdd054; [`Npc::in_hyperspace`]), not
+//!   provocation (+0x96), so a provoked ship takes it too. A plunderer's
+//!   government ([`PLUNDERS`]) gives none: `_AIDispatch` sends its
+//!   warships to `_PirateWarshipAI` (@0x8ffc8-0x8fff0), which has no word.
 //!   - **0x0004**: unless it already threatens the player or a ship the
 //!     player leads ([`Npc::threatens_player_among`], the original's
 //!     `_IsThreatToPlayer` @0x8b7b7, @0x8cb66), it turns on the player
-//!     (`_AIMakeShipAttackPlayer`). When [`dropped`] would let the player
+//!     (`_AIMakeShipAttackPlayer`) and its provocation is set to 1
+//!     (@0x8b7e5, @0x8cb9d; [`Hunt::provokes`]). When [`dropped`] would let the player
 //!     go (disabled while the ship has no destroying weapons, or breaking
 //!     up: `_WarshipAI` drops such a target later in the same think,
 //!     @0x8bc58-0x8bca9), it has no target instead. The retreat and the
@@ -31,14 +36,12 @@
 //!   gives it no player either.
 //!
 //!   So a 0x0004 ship attacking a ship the player leads goes on fighting
-//!   it, and a 0x0040 ship attacking one drops it. The original also sets
-//!   +0x96 = 1, which keeps a ship with a target in state 4
-//!   (@0x8bb0c-0x8bb44); here a hunt always attacks the target it holds.
-//!   Its provocation gate is (-900, 0] (0xdda4c, 0xdd054), the -900 bound
-//!   marking a ship still jumping in (@0x8fcf5); the engine's
-//!   provocation is never below 0, so the gate here is 0 or less. The
-//!   player is always visible to NPCs here (its cloak is
-//!   cloaking-fidelity's).
+//!   it, and a 0x0040 ship attacking one drops it. The provocation of 1
+//!   keeps a ship with a target in state 4 (@0x8bb0c-0x8bb44); here a
+//!   hunt always attacks the target it holds. The -900 bound of the gate
+//!   marks a ship still jumping in (@0x8fcf5), the 0 bound one warping
+//!   out, which the engine has no stage for. The player is always visible
+//!   to NPCs here (its cloak is cloaking-fidelity's).
 //!
 //!   The 0x0004 word turns the ship on the player through
 //!   `_AIMakeShipAttackPlayer` (@0x8b7da, @0x8cb8f), whose gate says a
@@ -165,10 +168,12 @@ pub fn hunt(
 ) -> Hunt {
     let word = government_word(npc, around, always_attacks);
     let dropped_target = word == Some(Word::DropTarget);
+    let word_provokes = word == Some(Word::TakePlayer);
     let nothing = |turns_on_player| Hunt {
         goal: None,
         turns_on_player,
         dropped_target,
+        provokes: word_provokes,
     };
     let (target, turns_on_player) = match word {
         Some(Word::TakePlayer) => {
@@ -218,6 +223,7 @@ pub fn hunt(
         goal: Some(goal),
         turns_on_player,
         dropped_target,
+        provokes: word_provokes,
     }
 }
 
@@ -232,6 +238,9 @@ pub struct Hunt {
     /// Whether the government's 0x0040 word dropped its target and goal
     /// first ([`Decision::dropped_target`](crate::ai::Decision::dropped_target)).
     pub dropped_target: bool,
+    /// Whether the government's 0x0004 word set its provocation to 1
+    /// ([`Decision::provokes`](crate::ai::Decision::provokes)).
+    pub provokes: bool,
 }
 
 impl Hunt {
@@ -250,6 +259,7 @@ impl Hunt {
             goal: self.goal.unwrap_or_else(otherwise),
             turns_on_player: self.turns_on_player,
             dropped_target: self.dropped_target,
+            provokes: self.provokes,
         }
     }
 }
@@ -279,14 +289,19 @@ enum Word {
 
 /// The word `npc`'s government has on the player among `around`, if any
 /// (`_WarshipAI` @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3; see
-/// the module docs): none without a government, provoked, or with no
-/// player in the system; and by the Bible's `always_attacks`, no 0x0004
-/// word for a blessed player.
+/// the module docs): none without a government, in hyperspace
+/// ([`Npc::in_hyperspace`]), with no player in the system, or for a
+/// plunderer ([`PLUNDERS`], which thinks as `_PirateWarshipAI`); and by
+/// the Bible's `always_attacks`, no 0x0004 word for a blessed player.
 fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource) -> Option<Word> {
-    if npc.govt.is_none() || npc.provoked > 0.0 || around.player.is_none() {
+    let govts = around.govts;
+    if npc.govt.is_none()
+        || npc.in_hyperspace()
+        || around.player.is_none()
+        || govts.flag(npc.govt, PLUNDERS)
+    {
         return None;
     }
-    let govts = around.govts;
     let threat = npc.threatens_player_among(around.npcs);
     if govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER) {
         let held = always_attacks == RuleSource::Bible && around.blessed(npc.govt);
@@ -401,7 +416,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::govt::Governments;
     use crate::rulebook::RuleSource;
-    use crate::traffic::npc::{AiType, NpcId};
+    use crate::traffic::npc::{AiType, Mode, NpcId};
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -987,20 +1002,73 @@ mod tests {
     }
 
     #[test]
-    fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_but_not_when_provoked()
-     {
+    fn a_government_that_always_attacks_the_player_turns_a_provoked_warship_on_it_and_provokes_it()
+    {
+        // The word's gate is the jump state +0x50 (@0x8b77d-0x8b798), not
+        // provocation; the word sets provocation +0x96 to 1 (@0x8b7e5).
         let mut provoked = attacking(n(2));
         provoked.provoked = 5.0;
         provoked.target = Some(n(2));
         assert_eq!(
-            worded(ALWAYS, &[provoked.clone(), pirate()], INTACT),
-            Goal::Attack(n(2))
+            worded_decision(
+                ALWAYS,
+                &[provoked.clone(), pirate()],
+                Condition::Intact,
+                0.0
+            ),
+            Decision {
+                goal: Goal::Attack(P),
+                turns_on_player: true,
+                dropped_target: false,
+                provokes: true,
+            }
         );
-        provoked.provoked = 0.0;
+        assert!(
+            !worded_decision(0, &[provoked, pirate()], Condition::Intact, 0.0).provokes,
+            "no word"
+        );
+    }
+
+    #[test]
+    fn a_warship_in_hyperspace_takes_no_word() {
+        for (mode, goal) in [
+            (Mode::JumpingIn { tick: 2 }, Goal::Attack(n(2))),
+            (Mode::LeavingGate { tick: 2 }, Goal::Attack(n(2))),
+            (Mode::HeldAtGate { ticks_left: 5 }, Goal::Attack(P)),
+            (Mode::Flying, Goal::Attack(P)),
+        ] {
+            let hunter = Npc {
+                mode,
+                ..attacking(n(2))
+            };
+            assert_eq!(
+                worded(ALWAYS, &[hunter, pirate()], INTACT),
+                goal,
+                "{mode:?}"
+            );
+        }
+        let hunting = Npc {
+            mode: Mode::JumpingIn { tick: 2 },
+            ..attacking(P)
+        };
         assert_eq!(
-            worded(ALWAYS, &[provoked, pirate()], INTACT),
+            worded(NEVER, &[hunting, pirate()], INTACT),
             Goal::Attack(P),
-            "provocation at 0 is none"
+            "nor a 0x0040 word"
+        );
+    }
+
+    #[test]
+    fn a_plundering_warship_takes_no_word() {
+        // `_AIDispatch` sends it to `_PirateWarshipAI` (@0x8ffc8-0x8fff0),
+        // which has none; rdm combat-ai-fidelity phase 9 reroutes it.
+        let npcs = [attacking(n(2)), pirate()];
+        assert_eq!(worded(ALWAYS | PLUNDERS, &npcs, INTACT), Goal::Attack(n(2)));
+        let hunting = [attacking(n(3)), hired()];
+        assert_eq!(
+            worded(NEVER | PLUNDERS, &hunting, INTACT),
+            Goal::Attack(n(3)),
+            "nor a 0x0040 word"
         );
     }
 
@@ -1104,8 +1172,8 @@ mod tests {
         provoked.target = Some(n(3));
         assert_eq!(
             worded(NEVER, &[provoked, hired()], INTACT),
-            Goal::Attack(n(3)),
-            "provoked"
+            IDLE,
+            "provoked, it drops it too"
         );
         let unled = [
             attacking(n(3)),
@@ -1321,13 +1389,15 @@ mod tests {
         Warship::default().decision(&npcs[0], &seen, &mut Draws::of(&[0]))
     }
 
-    /// A decision of `goal` that turns on the player or not as `turns`
-    /// says, dropping no target first.
+    /// A decision of `goal` that turns on the player by the 0x0004 word,
+    /// provoking the ship, or not, as `turns` says, dropping no target
+    /// first.
     fn turning(goal: Goal, turns: bool) -> Decision {
         Decision {
             goal,
             turns_on_player: turns,
             dropped_target: false,
+            provokes: turns,
         }
     }
 
@@ -1368,7 +1438,7 @@ mod tests {
         provoked.target = Some(n(2));
         assert_eq!(
             worded_decision(ALWAYS, &[provoked, pirate()], intact, 0.0),
-            turning(Goal::Attack(n(2)), false),
+            turning(Goal::Attack(P), true),
             "provoked"
         );
         let mut stateless = attacking(n(2));
@@ -1401,6 +1471,7 @@ mod tests {
                 goal: Goal::Attack(P),
                 turns_on_player: true,
                 dropped_target: true,
+                provokes: false,
             }
         );
         let mut calm = grudger;
@@ -1414,6 +1485,7 @@ mod tests {
                 goal: IDLE,
                 turns_on_player: false,
                 dropped_target: true,
+                provokes: false,
             },
             "no grudge: dropped, and nothing picked"
         );

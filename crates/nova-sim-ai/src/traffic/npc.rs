@@ -259,8 +259,11 @@ pub struct Npc {
     pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
-    /// The shield and armour damage it has taken while it fights: none
-    /// once it goes back to an idle goal or is disabled.
+    /// Its provocation (the original's +0x96): the shield and armour
+    /// damage it has taken while it fights, or 1 once its government's
+    /// 0x0004 word turns it on the player (@0x8b7e5, @0x8cb9d,
+    /// [`Decision::provokes`](crate::ai::Decision::provokes)); none once it
+    /// goes back to an idle goal or is disabled.
     pub provoked: f32,
     /// How aggressive it is: 0, 2 or 3 for traffic; 1, 2 or 4 for a
     /// person.
@@ -765,6 +768,27 @@ impl Npc {
         self.emerges_from = Some(gate);
         self.target = None;
         self.trigger = Trigger::default();
+    }
+
+    /// Whether it is in hyperspace: its jump state +0x50 outside
+    /// (-900, 0], the gate of its government's word (`_WarshipAI`
+    /// @0x8b77d-0x8b798, `_InterceptorAI` @0x8cb21-0x8cb40). Gliding in
+    /// ([`Mode::JumpingIn`]) it is -999.0: `_AIDispatch` sends a ship below
+    /// -900 to goal 8 (@0x8fcf5), whose handler sets -999.0 (@0x8f3d2).
+    /// Bursting out of its gate ([`Mode::LeavingGate`]) it has goal 8
+    /// from its first moving tick (@0x8dd8a), so -999.0 too; on tick 0 its
+    /// goal is still 0x15. Waiting in its gate or held there
+    /// ([`Mode::Emerging`], [`Mode::HeldAtGate`]) it is -1.0 (@0x89555);
+    /// entering a gate, coasting or flying, 0. The engine has no NPC
+    /// warp-out stage (+0x50 above 0, rdm:phase/ship-handling-fidelity/phase-8-warp-out);
+    /// a ship warping out is in hyperspace too once it has one.
+    #[must_use]
+    pub fn in_hyperspace(&self) -> bool {
+        match self.mode {
+            Mode::JumpingIn { .. } => true,
+            Mode::LeavingGate { tick } => tick > 0,
+            _ => false,
+        }
     }
 
     /// Whether it holds `gate`'s sprite open (`_HandleStellarSprites`
@@ -1482,6 +1506,32 @@ mod tests {
     /// NPC `id` at rest, flying, intact and idle.
     fn plain(id: u32) -> Npc {
         crate::traffic::fixture::npc(id, ShipStats::default())
+    }
+
+    #[test]
+    fn a_ship_is_in_hyperspace_gliding_in_or_bursting_out_of_its_gate() {
+        let gate = StellarId(129);
+        for (mode, jumping) in [
+            (Mode::JumpingIn { tick: 0 }, true),
+            (Mode::JumpingIn { tick: 7 }, true),
+            (Mode::LeavingGate { tick: 1 }, true),
+            (Mode::LeavingGate { tick: 9 }, true),
+            (Mode::LeavingGate { tick: 0 }, false),
+            (Mode::Emerging { ticks_left: 5 }, false),
+            (Mode::HeldAtGate { ticks_left: 5 }, false),
+            (
+                Mode::EnteringGate {
+                    gate,
+                    ticks_left: 5,
+                },
+                false,
+            ),
+            (Mode::Coasting { ticks_left: 5 }, false),
+            (Mode::Flying, false),
+        ] {
+            let npc = Npc { mode, ..plain(1) };
+            assert_eq!(npc.in_hyperspace(), jumping, "{mode:?}");
+        }
     }
 
     /// The player's hired escort, NPC `id`.

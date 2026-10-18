@@ -533,6 +533,11 @@ pub struct Decision {
     /// (`_WarshipAI` @0x8b800, `_InterceptorAI` @0x8cbc0). The quote's gate
     /// then sees the ship with neither, and finds it no threat.
     pub dropped_target: bool,
+    /// Whether the think sets its provocation to 1: the government's
+    /// 0x0004 word writes +0x96 = 1 as it turns the ship on the player
+    /// (`_WarshipAI` @0x8b7e5, `_InterceptorAI` @0x8cb9d). The traffic sets
+    /// [`Npc::provoked`] so as it takes the goal.
+    pub provokes: bool,
 }
 
 /// How NPCs decide what to do.
