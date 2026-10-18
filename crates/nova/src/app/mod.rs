@@ -744,6 +744,15 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                         pressed,
                         at,
                     }),
+                    // The primary button let go of outside the game, in a
+                    // bar or off the window, ends the screen's press there,
+                    // as `_TrackMainScreenButtons` ends on `Button()` going
+                    // false wherever the pointer is: on no button, so it is
+                    // abandoned.
+                    None if button == MouseButton::Left && !pressed => {
+                        self.screen.cancel_pointer();
+                        Control::Continue
+                    }
                     None => Control::Continue,
                 })
             }
@@ -1185,6 +1194,7 @@ mod tests {
     type TestApp = App<NoImages, RecordingScreen>;
 
     mod display_shapes;
+    mod pointer_release;
 
     /// Bytes written, kept where the test can read them.
     #[derive(Clone, Default)]
