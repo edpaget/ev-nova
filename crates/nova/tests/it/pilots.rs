@@ -317,12 +317,27 @@ impl Harness {
 
     /// [`Harness::opening`], its audio on `settings`.
     fn opening_with(store: &MemoryPilots, settings: AudioSettings) -> Self {
+        Self::built(store, settings, false)
+    }
+
+    /// The app on the main menu as `main` builds it, keeping pilots in
+    /// `store` and opening the last pilot at launch, before any frame.
+    fn launching(store: &MemoryPilots) -> Self {
+        Self::built(store, AudioSettings::default(), true)
+    }
+
+    /// The app on the main menu, keeping pilots in `store`, its audio on
+    /// `settings`, opening the last pilot at launch when `launch`.
+    fn built(store: &MemoryPilots, settings: AudioSettings, launch: bool) -> Self {
         let data = game_data();
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
-        let screen = start_screen(Rc::clone(&data))
+        let mut screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
+        if launch {
+            screen = screen.open_last_pilot();
+        }
         let audio = RecordingAudio::new();
         let log = audio.log();
         let handle = audio.clone();
@@ -662,6 +677,28 @@ fn frames_to(delay: Duration) -> u64 {
 
 const DOWN: SoundId = SoundId(600);
 const UP: SoundId = SoundId(601);
+
+#[test]
+fn a_new_app_opens_holding_the_last_pilot_saved_and_enter_ship_flies_it() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
+    assert_eq!(store.keys(), ["Ada"]);
+
+    let mut game = Harness::launching(&store);
+    assert_eq!(game.showing(), Showing::MainMenu);
+    let held = game.app.screen().game_in_progress().expect("a game held");
+    assert_eq!(held.pilot().expect("a pilot").name(), "Ada");
+    assert_menu_drawn(&mut game);
+    game.click(crate::common::enter_ship_at(game.app.screen()));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.pilot().name(), "Ada");
+    assert_eq!(game.ship().position, ALPHA_PRIME_AT, "over Alpha Prime");
+}
 
 #[test]
 fn a_keyed_new_pilot_opens_only_once_its_click_has_played() {

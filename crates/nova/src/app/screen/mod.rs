@@ -326,6 +326,7 @@ mod appear;
 mod build;
 mod flight;
 mod game;
+mod launch;
 mod menu;
 mod overlays;
 mod port_dialogs;

@@ -765,6 +765,24 @@ fn a_strict_pilot_destroyed_is_deleted_before_the_main_menu_shows() {
 }
 
 #[test]
+fn a_strict_pilot_deleted_leaves_the_last_pilot_record_and_the_next_launch_holds_nothing() {
+    // `_DeletePilotFile` (@0x72e6b-0x72ef6) never touches "Last Pilot";
+    // the next launch's load fails resolving it (@0x750f4, -43) and
+    // `_OpenLastPilotFile` returns silently (@0x7658a).
+    let store = MemoryPilots::new();
+    let mut screen = strict_landed_and_took_off(&store);
+    until_exploded(&mut screen);
+    until_the_main_menu(&mut screen);
+    assert_eq!(store.deleted(), ["Ada"]);
+    assert_eq!(store.last().as_deref(), Some("Ada"), "the record is left");
+    let mut relaunched = super::launch::launched(&store);
+    assert_eq!(relaunched.showing(), Showing::MainMenu);
+    assert!(relaunched.game_in_progress().is_none(), "no pilot held");
+    assert!(relaunched.load_note().is_none(), "no note");
+    assert_eq!(relaunched.take_warnings(), Vec::<String>::new());
+}
+
+#[test]
 fn escape_while_a_strict_pilot_breaks_up_deletes_it() {
     let store = MemoryPilots::new();
     let mut screen = strict_landed_and_took_off(&store);

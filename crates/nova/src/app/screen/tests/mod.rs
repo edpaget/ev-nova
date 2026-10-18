@@ -94,6 +94,7 @@ mod dialog_maps;
 mod encounters;
 mod flight;
 mod game;
+mod launch;
 mod map_find;
 mod menu;
 mod missions;

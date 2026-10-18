@@ -17,16 +17,16 @@ fn holding_menu(store: &MemoryPilots) -> AppScreen {
 }
 
 /// The game held, which must be there.
-fn game(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
+pub(super) fn game(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
     screen.game_in_progress().expect("a game held")
 }
 
 /// The held game's pilot's name.
-fn held_name(screen: &AppScreen) -> String {
+pub(super) fn held_name(screen: &AppScreen) -> String {
     game(screen).pilot().expect("a pilot").name().to_owned()
 }
 
-fn bit(n: u16) -> nova_sim::Bit {
+pub(super) fn bit(n: u16) -> nova_sim::Bit {
     nova_sim::Bit::new(n).expect("a bit")
 }
 
@@ -90,7 +90,7 @@ fn a_new_pilots_failed_save_is_one_warning_and_the_menu_still_holds_it() {
 /// [`data`], with nebula 128 covering system 128 (at (0, 0)), its
 /// `OnExplore` `^b10`, and mission 130 of two auxiliary ships of `düde`
 /// 200 into any system.
-fn nebula_data() -> Rc<GameData> {
+pub(super) fn nebula_data() -> Rc<GameData> {
     let mut nebula = vec![0; Nebula::SIZE.expect("fixed")];
     put_i16s(&mut nebula, 0, &[-20, -20, 60, 60]);
     nebula[0x107..0x10B].copy_from_slice(b"^b10");
@@ -113,7 +113,7 @@ fn nebula_menu(store: &MemoryPilots) -> AppScreen {
 /// Ada over [`nebula_data`], saved having explored system 128 and holding
 /// mission 130, its auxiliary ships counting down from 5 with 2 arrived
 /// and 1 left to come.
-fn save_explorer(store: &MemoryPilots) {
+pub(super) fn save_explorer(store: &MemoryPilots) {
     let mut screen = nebula_menu(store);
     create_held(&mut screen, "Ada");
     assert!(
@@ -147,7 +147,7 @@ fn save_explorer(store: &MemoryPilots) {
 }
 
 /// The held game's mission 130's auxiliary ships.
-fn held_aux(screen: &AppScreen) -> AuxShips {
+pub(super) fn held_aux(screen: &AppScreen) -> AuxShips {
     game(screen)
         .pilot()
         .expect("a pilot")
@@ -157,7 +157,7 @@ fn held_aux(screen: &AppScreen) -> AuxShips {
         .aux
 }
 
-fn nebula_explored(flight: &FlightView<Rc<GameData>>) -> bool {
+pub(super) fn nebula_explored(flight: &FlightView<Rc<GameData>>) -> bool {
     flight
         .session()
         .expect("a session")
