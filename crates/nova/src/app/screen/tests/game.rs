@@ -53,6 +53,7 @@ fn a_new_pilot_returns_to_the_main_menu_loaded_and_not_flying() {
     assert!(screen.flight_view().is_none(), "not flying");
     assert_eq!(held_name(&screen), "Ada");
     assert_eq!(store.keys(), ["Ada"], "saved at once");
+    assert_eq!(store.writes(), 1, "once: settling made no save due");
     assert_eq!(
         saved(&store, "Ada"),
         *game(&screen).pilot().expect("a pilot")
@@ -66,6 +67,22 @@ fn a_new_pilot_returns_to_the_main_menu_loaded_and_not_flying() {
         "never ticked: a tick would show the land hint"
     );
     assert_eq!(screen.take_warnings(), Vec::<String>::new());
+}
+
+#[test]
+fn a_new_pilots_failed_save_is_one_warning_and_the_menu_still_holds_it() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    store.fail_writes(true);
+    create_held(&mut screen, "Ada");
+    assert_eq!(
+        screen.take_warnings(),
+        ["nova: cannot save the pilot Ada in memory (the disk is full)"],
+        "one save, its failure warned"
+    );
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    assert_eq!(held_name(&screen), "Ada");
+    assert!(store.keys().is_empty(), "nothing saved");
 }
 
 // Open Pilot.
