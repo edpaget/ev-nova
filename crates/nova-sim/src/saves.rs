@@ -12,7 +12,30 @@
 use std::io;
 
 use crate::pilot::Pilot;
-use crate::save::{decode, encode};
+use crate::save::{SaveError, decode, encode};
+
+/// Why a pilot could not be opened ([`PilotKeeper::open`]), each with a
+/// message naming the pilot and where the pilots are, which `Display`
+/// shows. The original's `_OpenPilotFile` (@0x76644) tells only the
+/// wrong version apart: `_LoadPilotData`'s -42 shows `STR#` 140 #34
+/// (@0x766c8-0x766ef), and every other error (-43, -45) shows nothing
+/// (@0x766fb-0x76701).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenError {
+    /// A save from a newer version ([`SaveError::Newer`]): the -42.
+    WrongVersion(String),
+    /// Nothing saved under the key, a save that cannot be read, or text
+    /// that is no save ([`SaveError::Unusable`]): the -43 and -45.
+    Unreadable(String),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WrongVersion(message) | Self::Unreadable(message) => f.write_str(message),
+        }
+    }
+}
 
 /// Where pilots are saved: text in and out under a key, a pilot's
 /// [`pilot_key`]. The format is the keeper's.
@@ -150,17 +173,30 @@ impl<S: PilotStore> PilotKeeper<S> {
     ///
     /// # Errors
     ///
-    /// A message naming the pilot and where the pilots are, when nothing
-    /// is saved under `key`, it cannot be read, or it is not a pilot this
-    /// version can use.
-    pub fn open(&self, key: &str) -> Result<Pilot, String> {
+    /// [`OpenError::WrongVersion`] for a save from a newer version, and
+    /// [`OpenError::Unreadable`] when nothing is saved under `key`, it
+    /// cannot be read, or it is no pilot; each with a message naming the
+    /// pilot and where the pilots are.
+    pub fn open(&self, key: &str) -> Result<Pilot, OpenError> {
         let location = self.store.location();
         let text = self
             .store
             .read(key)
-            .map_err(|error| format!("nova: cannot read the pilot {key} in {location} ({error})"))?
-            .ok_or_else(|| format!("nova: there is no pilot {key} in {location}"))?;
-        decode(&text).map_err(|error| format!("nova: the pilot {key} in {location}: {error}"))
+            .map_err(|error| {
+                OpenError::Unreadable(format!(
+                    "nova: cannot read the pilot {key} in {location} ({error})"
+                ))
+            })?
+            .ok_or_else(|| {
+                OpenError::Unreadable(format!("nova: there is no pilot {key} in {location}"))
+            })?;
+        decode(&text).map_err(|error| {
+            let message = format!("nova: the pilot {key} in {location}: {error}");
+            match error {
+                SaveError::Newer { .. } => OpenError::WrongVersion(message),
+                SaveError::Unusable(_) => OpenError::Unreadable(message),
+            }
+        })
     }
 
     /// Saves `pilot` under its key, replacing any pilot saved there.
@@ -363,7 +399,9 @@ mod tests {
         store.fail_reads(true);
         assert_eq!(
             keeper.open("Ada"),
-            Err("nova: cannot read the pilot Ada in memory (the disk is unreadable)".to_owned())
+            Err(OpenError::Unreadable(
+                "nova: cannot read the pilot Ada in memory (the disk is unreadable)".to_owned()
+            ))
         );
         assert_eq!(
             keeper.list(),
@@ -378,10 +416,12 @@ mod tests {
         let keeper = keeper(&store);
         assert_eq!(
             keeper.open("Ada"),
-            Err("nova: there is no pilot Ada in memory".to_owned())
+            Err(OpenError::Unreadable(
+                "nova: there is no pilot Ada in memory".to_owned()
+            ))
         );
         store.put("Ada", "not a save");
-        let message = keeper.open("Ada").expect_err("unusable");
+        let message = keeper.open("Ada").expect_err("unusable").to_string();
         assert!(
             message.starts_with("nova: the pilot Ada in memory: This pilot file can't be used: "),
             "{message}"
@@ -390,11 +430,43 @@ mod tests {
         store.put("Ada", &format!(r#"{{"version": {newer}}}"#));
         assert_eq!(
             keeper.open("Ada"),
-            Err(format!(
+            Err(OpenError::WrongVersion(format!(
                 "nova: the pilot Ada in memory: {}",
                 crate::save::SaveError::Newer { version: newer }
-            ))
+            )))
         );
+    }
+
+    #[test]
+    fn a_newer_save_is_the_wrong_version_and_anything_else_unreadable() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        let newer = crate::save::CURRENT + 1;
+        store.put("Ada", &format!(r#"{{"version": {newer}}}"#));
+        assert!(
+            matches!(keeper.open("Ada"), Err(OpenError::WrongVersion(_))),
+            "-42's note"
+        );
+        assert!(matches!(keeper.open("Bea"), Err(OpenError::Unreadable(_))));
+        store.put("Bea", "not a save");
+        assert!(matches!(keeper.open("Bea"), Err(OpenError::Unreadable(_))));
+        store.fail_reads(true);
+        assert!(matches!(keeper.open("Ada"), Err(OpenError::Unreadable(_))));
+    }
+
+    #[test]
+    fn an_open_error_shows_its_message() {
+        for error in [
+            OpenError::WrongVersion("newer".to_owned()),
+            OpenError::Unreadable("gone".to_owned()),
+        ] {
+            let message = match &error {
+                OpenError::WrongVersion(message) | OpenError::Unreadable(message) => {
+                    message.clone()
+                }
+            };
+            assert_eq!(error.to_string(), message);
+        }
     }
 
     #[test]

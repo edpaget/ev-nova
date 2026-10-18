@@ -313,7 +313,7 @@ impl AppScreen {
             Some(PilotListOutcome::Cancel) => self.close_pilot_list(),
             Some(PilotListOutcome::Open(key)) => {
                 let opened = match self.keeper() {
-                    Some(keeper) => keeper.open(&key),
+                    Some(keeper) => keeper.open(&key).map_err(|error| error.to_string()),
                     None => Err(format!(
                         "nova: there is nowhere to open the pilot {key} from"
                     )),
