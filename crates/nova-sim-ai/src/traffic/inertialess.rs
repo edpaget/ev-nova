@@ -444,6 +444,68 @@ mod tests {
         }
     }
 
+    /// An inertialess fighter returning from `start` at `speed` to the
+    /// player, its dock window 100 and the player's sprite 40 across.
+    fn docking(start: ShipState, speed: f32) -> Npc {
+        Npc {
+            ship: crate::catalog::ShipId(144),
+            carrier: Some(crate::bay::Carrier {
+                ship: crate::combat::ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..npc(
+                RAVEN,
+                Goal::Dock(crate::combat::ShipRef::Player),
+                start,
+                speed,
+            )
+        }
+    }
+
+    #[test]
+    fn inside_its_dock_window_an_inertialess_fighter_thrusts_its_speed() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // 60 above the carrier, at rest and facing it.
+        let mut ship = docking(at(0.0, -60.0, 0.0, 0.0, 180.0), 0.0);
+        assert_eq!(fly(&mut ship, &[], Some(&carrier)), Outcome::Flying);
+        assert!((ship.speed - 0.18).abs() < 1e-6, "{}", ship.speed);
+        assert!(near(ship.state.velocity, Vec2::new(0.0, 0.18)), "{ship:?}");
+    }
+
+    #[test]
+    fn an_inertialess_fighter_docks_with_its_carrier() {
+        for (carrier, heading) in [
+            (at(0.0, 0.0, 0.0, 0.0, 0.0), 0.0),
+            (at(0.0, 0.0, 0.0, 0.0, 0.0), 90.0),
+            (at(0.0, 0.0, 0.0, 0.0, 0.0), 225.0),
+            (at(0.0, 0.0, 1.0, -0.5, 30.0), 0.0),
+            (at(0.0, 0.0, 1.0, -0.5, 30.0), 270.0),
+        ] {
+            let mut carrier = carrier;
+            let mut ship = docking(at(300.0, -400.0, 0.0, 0.0, heading), 0.0);
+            let mut docked = None;
+            for tick in 0..2000 {
+                let outcome = fly(&mut ship, &[], Some(&carrier));
+                if outcome != Outcome::Flying {
+                    docked = Some((outcome, tick));
+                    break;
+                }
+                carrier.position = carrier.position + carrier.velocity;
+            }
+            let (outcome, ticks) = docked.expect("docks");
+            assert_eq!(
+                outcome,
+                Outcome::Docked {
+                    carrier: crate::combat::ShipRef::Player,
+                    ship: crate::catalog::ShipId(144),
+                },
+                "{heading}"
+            );
+            assert!(ticks < 600, "{heading}: {ticks} ticks");
+        }
+    }
+
     #[test]
     fn a_sniper_braked_below_0_35_on_each_axis_turns_to_its_target() {
         let target = at(500.0, 0.0, 0.0, 0.0, 0.0);

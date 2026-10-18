@@ -1014,6 +1014,42 @@ mod tests {
         assert_ne!(state.position, at, "it drifts on");
     }
 
+    #[test]
+    fn the_hulk_of_an_inertialess_class_keeps_the_players_speed_and_flies_on_along_its_heading() {
+        let mut catalog = ejecting(100);
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(128) {
+                record.fields.flags2 = crate::stats::INERTIALESS_HULL;
+            }
+        }
+        let mut session = flying(&catalog, &[POD]);
+        let heading = 90.0;
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(10.0, 20.0),
+            velocity: crate::flight::facing(heading) * 4.0,
+            heading,
+        };
+        session.player_speed = 4.0;
+        session.condition = Condition::Disabled;
+        session.pilot.reserves.armor.now = 1.0;
+        assert_eq!(fight(&mut session, true).0, EJECTED);
+        let id = hulk(&session).id;
+        assert_eq!(hulk(&session).speed, 4.0, "the player's speed");
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &crate::ai::Peaceful, &mut NeverFires);
+            let hulk = session.npc(id).expect("still here");
+            assert_eq!(hulk.condition, Condition::Disabled, "a derelict");
+            let along = crate::flight::facing(hulk.state.heading) * hulk.speed;
+            assert!(hulk.speed > 3.9, "slowed only by the drag: {}", hulk.speed);
+            assert!(
+                (hulk.state.velocity - along).length() < 1e-4,
+                "along its heading at its speed: {:?} at {}",
+                hulk.state,
+                hulk.speed
+            );
+        }
+    }
+
     /// A braking pre-jump to 131.
     const BRAKING: crate::session::Jump = crate::session::Jump::PreJump {
         to: crate::catalog::SystemId(131),
