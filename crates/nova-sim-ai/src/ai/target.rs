@@ -156,6 +156,16 @@
 //! later, and then take it up again. Here they never do. The engine's
 //! own-fleet sparing is also wider than the original's fleet drops
 //! (@0x8e2e9-0x8e399), which need the attacker to have a leader.
+//!
+//! **Left out.** `_ShipVisibleToShip` for an NPC's cloak in steps 5-8
+//! (@0x8a0d2, @0x8a140, @0x8a538, @0x8a6df, @0x8a748, @0x8a9ba, @0x8aa7b,
+//! @0x8ad92) is rdm:phase/cloaking-fidelity/phase-4-npc-cloak-visibility's:
+//! here an NPC is seen once it has arrived. Stellar defenders (+0x8c,
+//! @0x8a21e) are rdm:task/planet-domination's, and the nag ship
+//! (+0xc8d0 = 0x3ff, @0x8a228) has no engine counterpart. The same-system
+//! test (@0x8a214) and the +0x88 ≤ 4 gate of step 6 (@0x8a41e) always
+//! hold here. The original's 16-bit strengths and 32-bit distances are
+//! not replicated.
 
 use crate::ai::candidates::{has_escorts, nearest, within_odds};
 use crate::ai::fire::AmmoLeft;
