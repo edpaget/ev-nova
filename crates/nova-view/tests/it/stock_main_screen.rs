@@ -13,7 +13,8 @@ use nova_data::{GameData, InterfaceData, Record};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::menu::{MainMenu, MainScreenArt, MainScreenSource, MenuChoice};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::yes_no::{QUESTION_ITEM, QUIT_QUESTION, YES_NO_DIALOG};
+use nova_view::ui::note::VERSION_NOTE;
+use nova_view::ui::yes_no::{NEW_PILOT_QUESTION, QUESTION_ITEM, QUIT_QUESTION, YES_NO_DIALOG};
 use nova_view::ui::{DescriptionSource, DialogResources, YesNoDialog};
 use nova_view::{
     DrawCommand, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Screen, Sound, UiSound,
@@ -224,17 +225,40 @@ fn the_stock_main_menu_draws_pict_8000_and_the_six_buttons_frame_0() {
 
 #[test]
 fn str_140_10_is_the_quit_question() {
-    let Some(ui) = interface() else {
+    let Some(list) = str_140() else {
         return;
     };
+    assert_eq!(list.strings[9].as_str(), QUIT_QUESTION);
+}
+
+/// `STR#` 140 from the interface file, if the stock data is there.
+fn str_140() -> Option<StrList> {
+    let ui = interface()?;
     let res = ui
         .resources()
         .get(StrList::TYPE, 140)
         .expect("STR# 140 is in the interface file");
-    let list = nova_data::decode_bytes::<StrList>(res.data())
-        .expect("decodes")
-        .record;
-    assert_eq!(list.strings[9].as_str(), QUIT_QUESTION);
+    Some(
+        nova_data::decode_bytes::<StrList>(res.data())
+            .expect("decodes")
+            .record,
+    )
+}
+
+#[test]
+fn str_140_8_is_the_new_pilot_question() {
+    let Some(list) = str_140() else {
+        return;
+    };
+    assert_eq!(list.strings[7].as_str(), NEW_PILOT_QUESTION);
+}
+
+#[test]
+fn str_140_34_is_the_version_note() {
+    let Some(list) = str_140() else {
+        return;
+    };
+    assert_eq!(list.strings[33].as_str(), VERSION_NOTE);
 }
 
 #[test]
