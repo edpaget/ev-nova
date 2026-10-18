@@ -147,7 +147,9 @@ fn open(
         .create_window(attributes)
         .map_err(|error| OpenFailure::Window(error.to_string()))?;
     let window = Arc::new(window);
-    // Flight's world drawn natively: the window's own resolution.
+    // Flight's world drawn natively until the app restores the upscaler
+    // the settings choose (`App::restore_upscaler`), which needs this
+    // device to say what it can use.
     let gpu = SurfaceGpu::new(
         Box::new(event_loop.owned_display_handle()),
         window.clone(),
@@ -164,7 +166,7 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
             return;
         };
         match open(event_loop, &fonts) {
-            Ok((mut window, gpu)) => {
+            Ok((mut window, mut gpu)) => {
                 let app = App::new(&window, images, screen);
                 let app = match self.diagnostics.take() {
                     Some(out) => app.with_diagnostics(out),
@@ -179,8 +181,10 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                     None => app,
                 };
                 // Fullscreen if the player quit fullscreen; a saved mode
-                // this monitor lacks says so at startup.
+                // this monitor lacks says so at startup. So does a saved
+                // frame upscaler this device cannot use.
                 app.restore_window(&mut window);
+                app.restore_upscaler(&mut gpu);
                 for warning in app.take_warnings() {
                     eprintln!("{warning}");
                 }
@@ -399,6 +403,7 @@ mod tests {
             fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            frame_upscaler: crate::settings::UpscalerSetting::default(),
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);

@@ -75,6 +75,25 @@
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
 //!   display gets its own mode back. Nothing is saved on the way out.
 //!
+//! # Frame upscaler
+//!
+//! Flight's world is drawn by a frame upscaler the player picks
+//! (`nova_render`'s port, [`Upscaler`](nova_view::Upscaler)).
+//!
+//! - **Restore.** Once the GPU exists, [`App::restore_upscaler`] asks it
+//!   which upscalers the device can use, sets it drawing with the one the
+//!   settings keep ([`GameSettings::frame_upscaler`]), and offers the
+//!   screen the list, native first, and the one running
+//!   ([`Screen::offer_upscalers`]), for the Preferences dialog.
+//! - **Fallback.** A stored choice this game does not have, or one the
+//!   device cannot use, starts native with one warning naming it. The
+//!   stored choice is never changed by that, nor by a later change of
+//!   another preference, so it comes back on a device that has it.
+//! - **The pick.** The dialog reports its pick as the preferences'
+//!   upscaler ([`Screen::take_prefs`]); one that is not the upscaler
+//!   running is a switch, made on the GPU just before the next frame is
+//!   drawn and saved with the other preferences.
+//!
 //! # Display shapes
 //!
 //! The screen says which shape it draws in ([`Screen::view_shape`]):
@@ -117,12 +136,14 @@ use nova_view::{
 
 mod fullscreen;
 pub mod screen;
+mod upscaler;
 
 pub use screen::{AppScreen, Showing, start_screen};
 
 use crate::config::Os;
-use crate::settings::{FullscreenSetting, GameKeeper, GameSettings};
+use crate::settings::{FullscreenSetting, GameKeeper, GameSettings, UpscalerSetting};
 use fullscreen::{Fullscreen, Shortcut};
+use upscaler::FrameUpscaler;
 
 /// The widened view's size, in logical units, for a window `window_px`
 /// in size ([`widened_size`]).
@@ -287,6 +308,8 @@ pub struct App<S, C = AppScreen> {
     /// Whether the open Preferences dialog has been offered the display
     /// modes.
     display_offered: bool,
+    /// The frame upscaler drawing flight's world, and a switch to make.
+    upscaler: FrameUpscaler,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -314,6 +337,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             fullscreen: Fullscreen::new(Os::current(), window.size_px()),
             chosen_fullscreen: None,
             display_offered: false,
+            upscaler: FrameUpscaler::default(),
         }
     }
 
@@ -444,7 +468,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// First, a change of the preferences the screen reports is applied to
     /// the core (the sound ones) and saved through the keeper (all of
-    /// them but the fullscreen kind), each when there is one. A fullscreen
+    /// them but the fullscreen kind), each when there is one. Its frame
+    /// upscaler is a switch when it is not the one running: it is made on
+    /// the GPU before the next frame is drawn, and saved with the rest;
+    /// otherwise the stored choice is kept as it is. A fullscreen
     /// kind the player picked ([`Screen::take_display_choice`]) is held, to
     /// be entered and saved once the event is handled, which has the
     /// window; then a galaxy map borders setting
@@ -470,7 +497,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 },
                 (None, None) => GameSettings::default(),
             };
-            let settings = current.with_prefs(prefs);
+            let mut settings = current.with_prefs(prefs);
+            if self.upscaler.pick(prefs.upscaler) {
+                settings.frame_upscaler = UpscalerSetting::from(prefs.upscaler);
+            }
             if let Some(core) = &mut self.audio {
                 core.apply(settings.audio);
             }
@@ -743,6 +773,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.offer_display(window);
         let mut list = DrawList::new();
         self.screen.draw(&mut list);
+        // An upscaler picked since the last frame draws this one.
+        self.switch_upscaler(gpu);
         let report = self.renderer.render(&list, &self.viewport, gpu);
         self.failures.extend(report.new_failures);
         self.show_pointer(window);
@@ -2422,6 +2454,7 @@ mod tests {
         hyperspace_effects: true,
         quicktime_movies: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
+        upscaler: nova_view::Upscaler::Native,
     };
 
     /// `MUSIC_OFF` with the sound effects at `level`.
@@ -2497,6 +2530,7 @@ mod tests {
                 fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                frame_upscaler: crate::settings::UpscalerSetting::default(),
             }
         );
         let saved: serde_json::Value =

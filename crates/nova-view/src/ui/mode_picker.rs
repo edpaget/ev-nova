@@ -1,233 +1,85 @@
-//! A display mode picker: one row holding two arrows, stacked, and the
-//! chosen entry's label, stepping through "Borderless" and then a
-//! monitor's exclusive modes.
-//!
-//! Its arrows are drawn and tracked as the volume control's are
-//! ([`draw_arrow`], [`ButtonTracker`]), and its label is set as the
-//! volume's number is.
+//! A display mode picker: a row [`Picker`] stepping through "Borderless"
+//! and then a monitor's exclusive modes.
 
 use crate::draw::DrawList;
-use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
 use crate::video_mode::{FullscreenKind, VideoMode};
 
-use super::button::ButtonTracker;
-use super::dialog::outline;
-use super::volume::{Arrow, COLOR, TEXT_SIZE, draw_arrow};
-
-/// Each arrow's width.
-pub const ARROW_WIDTH: f32 = 11.0;
-
-/// Each arrow's height: the two stack in an 18-unit row.
-pub const ARROW_HEIGHT: f32 = 9.0;
-
-/// How far right of the row's left edge the arrows start, as the volume's
-/// do of its label.
-pub const ARROW_INSET: f32 = 1.0;
-
-/// How far right of the row's left edge the label starts, as the volume's
-/// number does.
-pub const LABEL_INSET: f32 = 18.0;
-
-/// Where a picker's parts are on the screen.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PickerRects {
-    /// The chosen entry's label.
-    pub value: Bounds,
-    /// The arrow that steps toward the list's start.
-    pub up: Bounds,
-    /// The arrow that steps toward the list's end.
-    pub down: Bounds,
-}
-
-impl PickerRects {
-    /// The parts of a picker in `row`: the arrows [`ARROW_INSET`] in from
-    /// its left, the up one on top, and the label from [`LABEL_INSET`] to
-    /// its right edge.
-    #[must_use]
-    pub fn in_row(row: Bounds) -> Self {
-        let left = row.min.x + ARROW_INSET;
-        let arrow = |top: f32| Bounds {
-            min: Point::new(left, top),
-            max: Point::new(left + ARROW_WIDTH, top + ARROW_HEIGHT),
-        };
-        Self {
-            value: Bounds {
-                min: Point::new(row.min.x + LABEL_INSET, row.min.y),
-                max: row.max,
-            },
-            up: arrow(row.min.y),
-            down: arrow(row.min.y + ARROW_HEIGHT),
-        }
-    }
-
-    /// The smallest rectangle round every part.
-    #[must_use]
-    pub fn bounds(&self) -> Bounds {
-        let parts = [self.value, self.up, self.down];
-        Bounds::around(parts.iter().flat_map(|part| [part.min, part.max])).expect("three parts")
-    }
-}
+use super::picker::Picker;
+pub use super::picker::{ARROW_HEIGHT, ARROW_INSET, ARROW_WIDTH, LABEL_INSET, PickerRects};
+use super::volume::Arrow;
 
 /// A choice of how the game runs fullscreen: "Borderless" first, then
 /// each exclusive mode offered, stepped by its arrows or the Up and Down
 /// keys without wrapping.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ModePicker {
-    rects: PickerRects,
-    entries: Vec<FullscreenKind>,
-    selected: usize,
-    /// The arrow a press is held on, and its tracking.
-    tracked: Option<Arrow>,
-    tracker: ButtonTracker,
-}
+pub struct ModePicker(Picker<FullscreenKind>);
 
 impl ModePicker {
     /// A picker in `row` offering only "Borderless", until its entries are
     /// set.
     #[must_use]
     pub fn new(row: Bounds) -> Self {
-        Self {
-            rects: PickerRects::in_row(row),
-            entries: vec![FullscreenKind::Borderless],
-            selected: 0,
-            tracked: None,
-            tracker: ButtonTracker::default(),
-        }
+        let borderless = FullscreenKind::Borderless;
+        Self(Picker::new(row, vec![borderless], borderless))
     }
 
     /// Offers "Borderless" and then `modes`, selecting `current`, or
     /// "Borderless" when `current` is a mode not among them.
     pub fn set_entries(&mut self, modes: &[VideoMode], current: FullscreenKind) {
-        self.entries = std::iter::once(FullscreenKind::Borderless)
+        let entries = std::iter::once(FullscreenKind::Borderless)
             .chain(modes.iter().copied().map(FullscreenKind::Exclusive))
             .collect();
-        self.selected = self
-            .entries
-            .iter()
-            .position(|&entry| entry == current)
-            .unwrap_or(0);
+        self.0.set_entries(entries, current);
     }
 
     /// Where its parts are.
     #[must_use]
     pub fn rects(&self) -> PickerRects {
-        self.rects
+        self.0.rects()
     }
 
     /// What it offers, in order.
     #[must_use]
     pub fn entries(&self) -> &[FullscreenKind] {
-        &self.entries
+        self.0.entries()
     }
 
     /// The entry chosen.
     #[must_use]
     pub fn selected(&self) -> FullscreenKind {
-        self.entries[self.selected]
+        self.0.selected()
     }
 
     /// The arrow at `at`, if any: only the arrows take clicks.
     #[must_use]
     pub fn arrow_at(&self, at: Point) -> Option<Arrow> {
-        [Arrow::Up, Arrow::Down]
-            .into_iter()
-            .find(|&arrow| self.arrow_rect(arrow).contains(at))
-    }
-
-    fn arrow_rect(&self, arrow: Arrow) -> Bounds {
-        match arrow {
-            Arrow::Up => self.rects.up,
-            Arrow::Down => self.rects.down,
-        }
+        self.0.arrow_at(at)
     }
 
     /// Whether `arrow` shows pressed: a press held on it, with the pointer
     /// still on it.
     #[must_use]
     pub fn pressed(&self, arrow: Arrow) -> bool {
-        self.tracked == Some(arrow) && self.tracker.pressed()
+        self.0.pressed(arrow)
     }
 
-    /// Handles one input event; `true` when the selection changes.
-    ///
-    /// - A click on an arrow (a press and a release on it, tracked as a
-    ///   button tracks it) steps the selection: up toward the list's
-    ///   start, down toward its end, stopping at either.
-    /// - Up and Down step it the same way, key repeats included. The
-    ///   owner sends keys only while the picker has the focus.
+    /// Handles one input event; `true` when the selection changes
+    /// ([`Picker::input`]).
     pub fn input(&mut self, input: &Input) -> bool {
-        let step = match *input {
-            Input::Key {
-                key: Key::Up,
-                pressed: true,
-                ..
-            } => Some(Arrow::Up),
-            Input::Key {
-                key: Key::Down,
-                pressed: true,
-                ..
-            } => Some(Arrow::Down),
-            Input::Key { .. } | Input::Text(_) | Input::PointerLeft => None,
-            Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
-        };
-        step.is_some_and(|arrow| self.step(arrow))
-    }
-
-    /// The arrow a click on it activates, if this input completes one.
-    fn pointer(&mut self, input: &Input) -> Option<Arrow> {
-        if let Input::PointerButton {
-            pressed: true, at, ..
-        } = *input
-        {
-            self.cancel_pointer();
-            self.tracked = self.arrow_at(at);
-        }
-        let arrow = self.tracked?;
-        let clicked = self.tracker.track(self.arrow_rect(arrow), true, input);
-        if !self.tracker.armed() {
-            self.tracked = None;
-        }
-        clicked.then_some(arrow)
-    }
-
-    /// Steps the selection one way; `true` when it changes.
-    fn step(&mut self, arrow: Arrow) -> bool {
-        let selected = match arrow {
-            Arrow::Up => self.selected.saturating_sub(1),
-            Arrow::Down => (self.selected + 1).min(self.entries.len() - 1),
-        };
-        let changed = selected != self.selected;
-        self.selected = selected;
-        changed
+        self.0.input(input)
     }
 
     /// Abandons a click in progress without stepping.
     pub fn cancel_pointer(&mut self) {
-        self.tracker.cancel_pointer();
-        self.tracked = None;
+        self.0.cancel_pointer();
     }
 
-    /// Draws the chosen entry's label in Geneva at its rectangle's corner,
-    /// then the two arrows (each filled while pressed), and, when
-    /// `focused`, an outline round every part.
+    /// Draws the chosen entry's label, the two arrows and, when
+    /// `focused`, an outline round them ([`Picker::draw`]).
     pub fn draw(&self, focused: bool, list: &mut DrawList) {
-        list.text_in(
-            Font::Geneva,
-            self.selected().label(),
-            self.rects.value.min,
-            TEXT_SIZE,
-            None,
-            COLOR,
-        );
-        for arrow in [Arrow::Up, Arrow::Down] {
-            let filled = self.pressed(arrow);
-            draw_arrow(list, self.arrow_rect(arrow), arrow, filled, COLOR);
-        }
-        if focused {
-            outline(list, self.rects.bounds(), COLOR);
-        }
+        self.0.draw(focused, list);
     }
 }
 
@@ -236,7 +88,10 @@ impl ModePicker {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::font::Font;
+    use crate::input::{Key, MouseButton};
+    use crate::ui::dialog::outline;
+    use crate::ui::volume::{COLOR, TEXT_SIZE, draw_arrow};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)

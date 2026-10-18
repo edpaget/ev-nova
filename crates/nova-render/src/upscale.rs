@@ -1,25 +1,45 @@
-//! The frame upscaler: which one draws the world, and what that makes of
-//! the world layer.
+//! The frame upscaler: which one draws the world, which ones the device
+//! can use, and what that makes of the world layer.
 //!
-//! An upscaler is chosen as a plain value ([`Upscaler`]) where the GPU
-//! adapter is made. The adapter says how it draws the world layer
+//! An upscaler is chosen as a plain value ([`Upscaler`], `nova_view`'s,
+//! which the Preferences dialog lists and the settings keep) and handed to
+//! the GPU adapter ([`Gpu::set_upscaler`](crate::Gpu::set_upscaler)). The
+//! adapter says how it draws the world layer
 //! ([`Gpu::world_resolution`](crate::Gpu::world_resolution)), and the
 //! core states each frame's [`WorldSpace`] from that ([`world_space`]).
 //!
-//! The only upscaler so far is [`Upscaler::Native`]: the world is drawn
-//! straight into the target at its own resolution, which changes nothing
-//! on screen.
+//! [`Upscaler::Native`] draws the world straight into the target at its
+//! own resolution, which changes nothing on screen.
+//! [`Upscaler::SharpBilinear`] draws it into a texture of the logical
+//! size and enlarges that onto the viewport.
+//!
+//! Which upscalers the running device can use is the [`UpscalerProbe`]
+//! port's answer; [`listed`] turns it into the list the player picks
+//! from, native first and always.
 
 use crate::gpu::WorldSpace;
 use crate::viewport::Viewport;
 
-/// Which upscaler draws flight's world layer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Upscaler {
-    /// No upscaler: the world is drawn at the window's resolution, as the
-    /// overlay is ([`WorldResolution::Native`]).
-    #[default]
-    Native,
+pub use nova_view::Upscaler;
+
+/// Says which per-frame upscalers the running device can use.
+pub trait UpscalerProbe {
+    /// The upscalers it can use, in the order to list them. Native may be
+    /// left out: it is always available ([`listed`]).
+    fn upscalers(&self) -> Vec<Upscaler>;
+}
+
+/// The upscalers to list from a probe's `answer`: native first, whatever
+/// the answer says, then the answer's others in its order, each once.
+#[must_use]
+pub fn listed(answer: &[Upscaler]) -> Vec<Upscaler> {
+    let mut list = vec![Upscaler::Native];
+    for &upscaler in answer {
+        if !list.contains(&upscaler) {
+            list.push(upscaler);
+        }
+    }
+    list
 }
 
 /// The resolution a GPU draws the world layer at.
@@ -81,5 +101,35 @@ mod tests {
             world_space(WorldResolution::Logical, &widened),
             WorldSpace::Texture { size: (1365, 768) }
         );
+    }
+
+    /// Answers what it is given.
+    struct Probe(Vec<Upscaler>);
+
+    impl UpscalerProbe for Probe {
+        fn upscalers(&self) -> Vec<Upscaler> {
+            self.0.clone()
+        }
+    }
+
+    fn listed_from(answer: &[Upscaler]) -> Vec<Upscaler> {
+        listed(&Probe(answer.to_vec()).upscalers())
+    }
+
+    const NATIVE: Upscaler = Upscaler::Native;
+    const SHARP: Upscaler = Upscaler::SharpBilinear;
+
+    #[test]
+    fn native_is_listed_first_whatever_the_probe_says() {
+        assert_eq!(listed_from(&[SHARP]), [NATIVE, SHARP]);
+        assert_eq!(listed_from(&[SHARP, NATIVE]), [NATIVE, SHARP]);
+        assert_eq!(listed_from(&[NATIVE, SHARP]), [NATIVE, SHARP]);
+        assert_eq!(listed_from(&[]), [NATIVE]);
+    }
+
+    #[test]
+    fn an_upscaler_answered_twice_is_listed_once() {
+        assert_eq!(listed_from(&[SHARP, SHARP]), [NATIVE, SHARP]);
+        assert_eq!(listed_from(&[NATIVE, NATIVE]), [NATIVE]);
     }
 }

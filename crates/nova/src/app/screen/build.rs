@@ -59,6 +59,7 @@ impl AppScreen {
             preferences: None,
             prefs_change: None,
             display_choice: None,
+            upscalers: vec![nova_view::Upscaler::Native],
             menu: None,
             new_pilot: None,
             open_pilot: None,

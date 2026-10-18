@@ -11,7 +11,7 @@ use nova_data::graphics::Image;
 use nova_view::{Blend, Color, DrawLayer, Font, Point};
 
 pub use crate::atlas::{PageId, Uv};
-use crate::upscale::WorldResolution;
+use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::{LogicalSize, PixelRect};
 
 /// What the core needs from a GPU.
@@ -25,6 +25,9 @@ pub trait Gpu {
     /// The resolution it draws the world layer at, which decides each
     /// frame's [`WorldSpace`] ([`world_space`](crate::world_space)).
     fn world_resolution(&self) -> WorldResolution;
+    /// Draws the world layer with `upscaler` from the next frame it
+    /// submits on, and answers [`Gpu::world_resolution`] for it.
+    fn set_upscaler(&mut self, upscaler: Upscaler);
 }
 
 /// An axis-aligned rectangle in logical units.

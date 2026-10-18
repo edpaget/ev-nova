@@ -1,6 +1,8 @@
 //! The upscaler port in the renderer's terms: enlarge a world texture onto
-//! the target.
+//! the target. [`Native`] never has one to enlarge;
+//! [`SharpBilinear`] does.
 
+use super::sharp_bilinear::SharpBilinear;
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
@@ -48,10 +50,16 @@ impl Upscale for Native {
     }
 }
 
-/// The upscaler `choice` names.
-pub(super) fn upscale_for(choice: Upscaler) -> Box<dyn Upscale> {
+/// The upscaler `choice` names, made on `device` and writing through
+/// `queue`.
+pub(super) fn upscale_for(
+    choice: Upscaler,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Box<dyn Upscale> {
     match choice {
         Upscaler::Native => Box::new(Native),
+        Upscaler::SharpBilinear => Box::new(SharpBilinear::new(device, queue)),
     }
 }
 
@@ -62,9 +70,5 @@ mod tests {
     #[test]
     fn the_native_upscaler_draws_the_world_at_the_native_resolution() {
         assert_eq!(Native.resolution(), WorldResolution::Native);
-        assert_eq!(
-            upscale_for(Upscaler::Native).resolution(),
-            WorldResolution::Native
-        );
     }
 }

@@ -6,7 +6,7 @@
 use nova_data::graphics::Image;
 
 use crate::gpu::{Frame, Gpu, PageId};
-use crate::upscale::WorldResolution;
+use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// wgpu's default maximum 2D texture side, which the adapters request.
@@ -65,6 +65,10 @@ impl<G: OverlayGpu + ?Sized> Gpu for WithOverlay<'_, G> {
     fn world_resolution(&self) -> WorldResolution {
         self.gpu.world_resolution()
     }
+
+    fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.gpu.set_upscaler(upscaler);
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +87,7 @@ mod tests {
         Upload(PageId, PixelRect, Image),
         Submit(Frame),
         SubmitWith(Frame, *const ()),
+        SetUpscaler(Upscaler),
     }
 
     /// Records every call, and the painter's address for `submit_with`;
@@ -108,6 +113,10 @@ mod tests {
 
         fn world_resolution(&self) -> WorldResolution {
             self.resolution
+        }
+
+        fn set_upscaler(&mut self, upscaler: Upscaler) {
+            self.calls.push(Call::SetUpscaler(upscaler));
         }
     }
 
@@ -156,6 +165,20 @@ mod tests {
             };
             assert_eq!(with.world_resolution(), resolution);
         }
+    }
+
+    #[test]
+    fn with_overlay_sets_its_gpus_upscaler() {
+        let mut gpu = FakeGpu::default();
+        let mut painter = NoPainter;
+        {
+            let mut with = WithOverlay {
+                gpu: &mut gpu,
+                painter: &mut painter,
+            };
+            with.set_upscaler(Upscaler::SharpBilinear);
+        }
+        assert_eq!(gpu.calls, [Call::SetUpscaler(Upscaler::SharpBilinear)]);
     }
 
     #[test]

@@ -85,7 +85,8 @@ impl AppScreen {
     }
 
     /// Opens the Preferences dialog over the side shown, on the player's
-    /// preferences, first cancelling the side's pointer gesture and
+    /// preferences, listing the upscalers offered (native alone before an
+    /// offer), first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -102,7 +103,8 @@ impl AppScreen {
                     self.data.button_style(),
                     Rc::clone(&dialogs.metrics),
                 )
-            });
+            })
+            .map(|dialog| dialog.with_upscalers(&self.upscalers));
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();

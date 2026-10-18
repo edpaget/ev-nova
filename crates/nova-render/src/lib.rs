@@ -18,8 +18,10 @@
 //!   and turns a draw list into batches in draw order, keeping flight's
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
 //!   batch holds both.
-//! - [`upscale`]: the [`Upscaler`] the adapter is made with, and the
-//!   [`WorldSpace`] a frame's world layer is drawn in, from the
+//! - [`upscale`]: the [`Upscaler`] the adapter draws the world with
+//!   ([`Gpu::set_upscaler`]), the [`UpscalerProbe`] port that says which
+//!   the device can use and the list the player picks from ([`listed`]),
+//!   and the [`WorldSpace`] a frame's world layer is drawn in, from the
 //!   [`WorldResolution`] the [`Gpu`] draws it at ([`world_space`]).
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
 //!   adapter over the picture and sprite decoders (and the mask that gives
@@ -33,9 +35,11 @@
 //! offscreen scene and blits it to the target; an OR batch reads a backdrop
 //! copy of the rectangle the core says it covers, in its layer's pixels
 //! ([`Frame::pixels_covered`]). The renderer draws the world with an
-//! upscaler ([`wgpu::Upscale`]); the only one so far, native, draws it
-//! straight into the scene in the frame's order, as before there were
-//! layers. The core turns each OR tint into exact
+//! upscaler ([`wgpu::Upscale`]): native draws it straight into the scene
+//! in the frame's order, as before there were layers, and
+//! [`wgpu::SharpBilinear`] draws it into a texture of the logical size
+//! and enlarges that onto the viewport, the overlay over it. The core
+//! turns each OR tint into exact
 //! levels and keeps overlapping OR quads in separate batches. [`wgpu::GlyphonMetrics`] is
 //! `nova_view`'s text-metrics port over the same glyphon font system, with
 //! no GPU: the widgets lay text out by the widths it is drawn at, and the
@@ -75,5 +79,5 @@ pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
-pub use upscale::{Upscaler, WorldResolution, world_space};
+pub use upscale::{Upscaler, UpscalerProbe, WorldResolution, listed, world_space};
 pub use viewport::{LOGICAL, Letterbox, LogicalSize, PixelRect, Viewport};

@@ -2,7 +2,8 @@
 //!
 //! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
 //!   hyperspace jumps play their white fades, whether `dësc` movies play,
-//!   whether the game runs fullscreen, and how ([`FullscreenSetting`]).
+//!   whether the game runs fullscreen, and how ([`FullscreenSetting`]),
+//!   and the frame upscaler chosen ([`UpscalerSetting`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -12,10 +13,16 @@
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
-//! `show_map_borders`, `fullscreen` and `fullscreen_kind`; files saved
-//! before the last five existed load unchanged, with the hyperspace
-//! effects, the movies and the map's borders on, and the game windowed
-//! and, when fullscreen, borderless.
+//! `show_map_borders`, `fullscreen`, `fullscreen_kind` and
+//! `frame_upscaler`; files saved before the last six existed load
+//! unchanged, with the hyperspace effects, the movies and the map's
+//! borders on, the game windowed and, when fullscreen, borderless, and
+//! the world drawn natively.
+//!
+//! `frame_upscaler` is the name of the upscaler drawing flight's world:
+//! `"native"` or `"sharp_bilinear"`. A name this game does not have is
+//! kept as it is and saved back unchanged; the app draws natively and
+//! says so once at startup.
 //!
 //! `fullscreen_kind` is `"borderless"`, or an exclusive mode with the
 //! monitor it was chosen on: `{"exclusive": {"width": 1920, "height":
@@ -30,8 +37,58 @@
 //! (`nova_view::flight::FlightView::take_map_borders_save`).
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
-use nova_view::{FullscreenKind, Prefs, VideoMode};
+use nova_view::{FullscreenKind, Prefs, Upscaler, VideoMode};
 use serde::{Deserialize, Serialize};
+
+/// The frame upscaler chosen, as saved: its name, kept as it was read
+/// even when this game has no upscaler of that name, so a choice made by
+/// another build, or on a device that has it, is never overwritten by
+/// loading it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpscalerSetting(String);
+
+impl UpscalerSetting {
+    /// The name saved.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
+    /// The upscaler the name names, if this game has it.
+    #[must_use]
+    pub fn known(&self) -> Option<Upscaler> {
+        match self.0.as_str() {
+            "native" => Some(Upscaler::Native),
+            "sharp_bilinear" => Some(Upscaler::SharpBilinear),
+            _ => None,
+        }
+    }
+}
+
+impl Default for UpscalerSetting {
+    /// Native.
+    fn default() -> Self {
+        Self::from(Upscaler::Native)
+    }
+}
+
+impl From<Upscaler> for UpscalerSetting {
+    /// The upscaler's name: a stable key of the settings file.
+    fn from(upscaler: Upscaler) -> Self {
+        let name = match upscaler {
+            Upscaler::Native => "native",
+            Upscaler::SharpBilinear => "sharp_bilinear",
+        };
+        Self(name.to_owned())
+    }
+}
+
+impl From<String> for UpscalerSetting {
+    /// The setting `name` is saved as, known or not.
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
 
 /// How the game runs fullscreen, as saved.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -80,11 +137,14 @@ pub struct GameSettings {
     /// Whether the galaxy map shades government borders: the original's
     /// `ShowMapBorders`.
     pub map_borders: bool,
+    /// The frame upscaler the player chose, as saved.
+    pub frame_upscaler: UpscalerSetting,
 }
 
 impl Default for GameSettings {
     /// The default sound settings, with the hyperspace effects, the
-    /// movies and the map's borders on, in a window.
+    /// movies and the map's borders on, in a window, the world drawn
+    /// natively.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
@@ -93,13 +153,15 @@ impl Default for GameSettings {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            frame_upscaler: UpscalerSetting::default(),
         }
     }
 }
 
 impl GameSettings {
     /// The settings as the Preferences dialog shows them, the fullscreen
-    /// kind without its monitor.
+    /// kind without its monitor, and the frame upscaler stored, or native
+    /// when this game has none of its name.
     #[must_use]
     pub fn prefs(&self) -> Prefs {
         Prefs {
@@ -107,14 +169,17 @@ impl GameSettings {
             hyperspace_effects: self.hyperspace_effects,
             quicktime_movies: self.quicktime_movies,
             fullscreen: self.fullscreen_kind.kind(),
+            upscaler: self.frame_upscaler.known().unwrap_or_default(),
         }
     }
 
     /// The settings `prefs` choose, from these, keeping a volume already
     /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
-    /// settings the prefs don't set: the map's borders and fullscreen,
-    /// both whether and how. A fullscreen kind the dialog chooses is the
-    /// app's to apply and save, as it applies it.
+    /// settings the prefs don't set: the map's borders, fullscreen, both
+    /// whether and how, and the frame upscaler. A fullscreen kind or an
+    /// upscaler the dialog chooses is the app's to apply and save, as it
+    /// applies it, so a change of another preference never overwrites a
+    /// stored upscaler this device could not use.
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         Self {
@@ -142,6 +207,7 @@ struct Saved {
     fullscreen_kind: SavedKind,
     quicktime_movies: bool,
     show_map_borders: bool,
+    frame_upscaler: String,
     #[serde(flatten)]
     others: Others,
 }
@@ -217,6 +283,7 @@ impl From<GameSettings> for Saved {
             fullscreen_kind: settings.fullscreen_kind.into(),
             quicktime_movies: settings.quicktime_movies,
             show_map_borders: settings.map_borders,
+            frame_upscaler: settings.frame_upscaler.0,
             others: Others::new(),
         }
     }
@@ -240,6 +307,7 @@ impl From<Saved> for GameSettings {
             fullscreen_kind: saved.fullscreen_kind.into(),
             quicktime_movies: saved.quicktime_movies,
             map_borders: saved.show_map_borders,
+            frame_upscaler: UpscalerSetting(saved.frame_upscaler),
         }
     }
 }
@@ -366,7 +434,7 @@ mod tests {
     use nova_audio::recording::MemorySettings;
     use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
-    use nova_view::{FullscreenKind, SoundPrefs, VideoMode};
+    use nova_view::{FullscreenKind, SoundPrefs, Upscaler, VideoMode};
 
     use super::*;
 
@@ -387,6 +455,7 @@ mod tests {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            frame_upscaler: UpscalerSetting::default(),
         }
     }
 
@@ -405,6 +474,7 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                frame_upscaler: UpscalerSetting::default(),
             }
         );
     }
@@ -473,6 +543,7 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                frame_upscaler: UpscalerSetting::default(),
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -496,6 +567,7 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                frame_upscaler: UpscalerSetting::default(),
             }
         );
     }
@@ -741,6 +813,116 @@ mod tests {
         assert!(!changed.hyperspace_effects);
     }
 
+    fn upscaler_named(name: &str) -> UpscalerSetting {
+        UpscalerSetting::from(name.to_owned())
+    }
+
+    #[test]
+    fn each_known_frame_upscaler_is_saved_by_its_name_and_read_back() {
+        for (upscaler, name) in [
+            (Upscaler::Native, "native"),
+            (Upscaler::SharpBilinear, "sharp_bilinear"),
+        ] {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            let settings = GameSettings {
+                frame_upscaler: UpscalerSetting::from(upscaler),
+                hyperspace_effects: false,
+                ..GameSettings::default()
+            };
+            keeper.change(settings.clone()).expect("saves");
+            assert_eq!(json(&store)["frame_upscaler"], name);
+            let (restarted, warning) = SettingsKeeper::open(store);
+            assert_eq!((restarted.settings(), warning), (settings, None));
+            assert_eq!(restarted.settings().frame_upscaler.known(), Some(upscaler));
+            assert_eq!(restarted.settings().frame_upscaler.name(), name);
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_frame_upscaler_draws_natively() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().frame_upscaler.name(), "native");
+        assert_eq!(
+            keeper.settings().frame_upscaler.known(),
+            Some(Upscaler::Native)
+        );
+        assert_eq!(
+            GameSettings::default().frame_upscaler,
+            upscaler_named("native")
+        );
+        assert_eq!(UpscalerSetting::default(), upscaler_named("native"));
+    }
+
+    #[test]
+    fn an_unknown_frame_upscaler_loads_and_is_saved_back_as_it_was() {
+        let store = MemorySettings::holding(r#"{"frame_upscaler": "warp_drive"}"#);
+        let (mut keeper, warning) = SettingsKeeper::open(store.clone());
+        assert_eq!(warning, None, "the app warns, not the keeper");
+        let settings = keeper.settings();
+        assert_eq!(settings.frame_upscaler, upscaler_named("warp_drive"));
+        assert_eq!(settings.frame_upscaler.known(), None);
+        assert_eq!(settings.prefs().upscaler, Upscaler::Native);
+        keeper
+            .change(settings.with_prefs(Prefs {
+                sound: SoundPrefs {
+                    music: false,
+                    ..Prefs::default().sound
+                },
+                ..Prefs::default()
+            }))
+            .expect("saves");
+        assert_eq!(json(&store)["music"], false);
+        assert_eq!(json(&store)["frame_upscaler"], "warp_drive");
+    }
+
+    #[test]
+    fn a_frame_upscaler_of_the_wrong_type_is_not_usable() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"frame_upscaler": 2}"#));
+        assert_eq!(keeper.settings(), GameSettings::default());
+        assert!(warning.is_some_and(|warning| warning.contains("are not usable")));
+    }
+
+    #[test]
+    fn the_prefs_never_set_the_stored_frame_upscaler() {
+        for stored in ["native", "sharp_bilinear", "warp_drive"] {
+            let settings = GameSettings {
+                frame_upscaler: upscaler_named(stored),
+                ..GameSettings::default()
+            };
+            for upscaler in [Upscaler::Native, Upscaler::SharpBilinear] {
+                let chosen = settings.clone().with_prefs(Prefs {
+                    upscaler,
+                    ..Prefs::default()
+                });
+                assert_eq!(
+                    chosen.frame_upscaler,
+                    upscaler_named(stored),
+                    "{upscaler:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_prefs_show_the_stored_frame_upscaler_when_known_and_native_otherwise() {
+        let shown = |name: &str| {
+            GameSettings {
+                frame_upscaler: upscaler_named(name),
+                ..GameSettings::default()
+            }
+            .prefs()
+            .upscaler
+        };
+        assert_eq!(shown("sharp_bilinear"), Upscaler::SharpBilinear);
+        assert_eq!(shown("native"), Upscaler::Native);
+        assert_eq!(shown("warp_drive"), Upscaler::Native);
+        assert_eq!(shown(""), Upscaler::Native);
+    }
+
     #[test]
     fn volumes_out_of_range_are_clamped() {
         let text = r#"{"effects_volume": 3.5, "music_volume": -1}"#;
@@ -781,6 +963,7 @@ mod tests {
                 "fullscreen_kind": "borderless",
                 "quicktime_movies": true,
                 "show_map_borders": true,
+                "frame_upscaler": "native",
             })
         );
     }
@@ -836,6 +1019,7 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                frame_upscaler: UpscalerSetting::default(),
             })
             .expect("saves");
         keeper
@@ -886,6 +1070,7 @@ mod tests {
                 hyperspace_effects: false,
                 quicktime_movies: true,
                 fullscreen: FullscreenKind::Borderless,
+                upscaler: Upscaler::Native,
             }
         );
         assert_eq!(
@@ -955,6 +1140,7 @@ mod tests {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            frame_upscaler: UpscalerSetting::default(),
         };
         assert_eq!((settings, warning), (expected.clone(), None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");

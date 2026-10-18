@@ -10,7 +10,7 @@ use crate::gpu::{Frame, Gpu, PageId};
 use crate::present::{
     AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
 };
-use crate::upscale::{Upscaler, WorldResolution};
+use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// Draws frames into a window. Before each frame it asks
@@ -86,6 +86,16 @@ impl Gpu for SurfaceGpu {
 
     fn world_resolution(&self) -> WorldResolution {
         self.renderer.world_resolution()
+    }
+
+    fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.renderer.set_upscaler(upscaler);
+    }
+}
+
+impl UpscalerProbe for SurfaceGpu {
+    fn upscalers(&self) -> Vec<Upscaler> {
+        self.renderer.upscalers()
     }
 }
 

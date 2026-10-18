@@ -1,6 +1,7 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
 //! and music on or off, each one's volume, Hyperspace Effects, QuickTime
-//! Movies and how the game runs fullscreen.
+//! Movies, how the game runs fullscreen and which frame upscaler draws
+//! flight's world.
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -26,6 +27,17 @@
 //!   margin, as nothing else shares the row. Unlike every other setting,
 //!   which applies at once, the picker's choice is held until the dialog
 //!   closes, so stepping through the modes never switches the display.
+//! - Check box 2 ("Share Processor Time"), the greyed option least likely
+//!   ever to work (it is the classic Mac's cooperative multitasking),
+//!   holds the frame upscaler list ([`Picker`]): the upscalers the
+//!   running device can use, native first ([`PrefsDialog::with_upscalers`]),
+//!   each labelled "Scaling: " and its name, as the row has no caption of
+//!   its own. It sits directly above the display picker, in the same
+//!   column, so it is laid out the same way, running on to the same
+//!   margin; and it leaves "Check For Updates" free for a later list.
+//!   Its choice is held until the dialog closes, as the display picker's
+//!   is, and reported as [`Prefs::upscaler`] only when the player stepped
+//!   it to another upscaler than the one running.
 //! - Every other check box is drawn greyed and unchecked, and Key
 //!   Settings is a greyed button: those options do not work yet.
 //! - Every other item is hidden.
@@ -44,11 +56,13 @@ use crate::preferences::Prefs;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::SoundPrefs;
 use crate::text::TextMetrics;
+use crate::upscaler::Upscaler;
 use crate::video_mode::{FullscreenKind, VideoMode};
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, Role, outline};
 use super::mode_picker::ModePicker;
+use super::picker::Picker;
 use super::toggle::Toggle;
 use super::volume::{VolumeControl, VolumeRects};
 
@@ -77,8 +91,12 @@ pub const QUICKTIME_MOVIES_ITEM: usize = 9;
 pub const DISPLAY_ITEM: usize = 11;
 
 /// How far in from the dialog's right edge the display picker's label
-/// stops: the left column's margin, mirrored.
+/// stops, and the upscaler list's: the left column's margin, mirrored.
 pub const DISPLAY_RIGHT_MARGIN: f32 = 11.0;
+
+/// The frame upscaler list's item ("Share Processor Time" in the stock
+/// dialog).
+pub const UPSCALER_ITEM: usize = 2;
 
 /// The sound effects volume's label item.
 pub const VOLUME_LABEL_ITEM: usize = 4;
@@ -139,6 +157,8 @@ pub enum Focus {
     QuickTimeMovies,
     /// The display picker.
     Display,
+    /// The frame upscaler list.
+    Upscaler,
     /// The sound effects volume.
     EffectsVolume,
     /// The music volume.
@@ -154,7 +174,8 @@ impl Focus {
             Self::Sound => Self::HyperspaceEffects,
             Self::HyperspaceEffects => Self::QuickTimeMovies,
             Self::QuickTimeMovies => Self::Display,
-            Self::Display => Self::EffectsVolume,
+            Self::Display => Self::Upscaler,
+            Self::Upscaler => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
             Self::MusicVolume => Self::Ok,
             Self::Ok => Self::Music,
@@ -170,9 +191,71 @@ enum Target {
     HyperspaceEffects,
     QuickTimeMovies,
     Display,
+    Upscaler,
     EffectsVolume,
     MusicVolume,
     Dialog,
+}
+
+/// `row`, an item's area, run on to the dialog's right margin
+/// ([`DISPLAY_RIGHT_MARGIN`]): a picker's row, as nothing else shares it.
+fn picker_row(dialog: &Dialog, row: Bounds) -> Bounds {
+    Bounds {
+        min: row.min,
+        max: Point::new(dialog.bounds().max.x - DISPLAY_RIGHT_MARGIN, row.max.y),
+    }
+}
+
+/// The check boxes of `template` inside the dialog that hold no working
+/// control, greyed with their own titles, in item order.
+fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
+    let size = (template.bounds.width(), template.bounds.height());
+    let working = [
+        MUSIC_ITEM,
+        SOUND_ITEM,
+        HYPERSPACE_EFFECTS_ITEM,
+        QUICKTIME_MOVIES_ITEM,
+        DISPLAY_ITEM,
+        UPSCALER_ITEM,
+    ];
+    template
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match &item.kind {
+            ItemSpec::CheckBox(title)
+                if !working.contains(&(index + 1)) && inside(item.bounds, size) =>
+            {
+                Some(Toggle::greyed(
+                    dialog.item_bounds(index + 1)?,
+                    title.as_str(),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The frame upscaler list, its choice held until the dialog closes.
+#[derive(Clone, Debug)]
+struct UpscalerList {
+    picker: Picker<Upscaler>,
+    /// Whether the player has stepped it.
+    stepped: bool,
+}
+
+impl UpscalerList {
+    /// Sends `input` to the list, noting a step.
+    fn input(&mut self, input: &Input) {
+        self.stepped |= self.picker.input(input);
+    }
+
+    /// The upscaler picked: the one chosen, when the player stepped the
+    /// list and it is not `running`.
+    fn picked(&self, running: Upscaler) -> Option<Upscaler> {
+        let chosen = self.picker.selected();
+        (self.stepped && chosen != running).then_some(chosen)
+    }
 }
 
 /// "new prefs dialog": the preferences, changed with the mouse or
@@ -197,6 +280,11 @@ pub struct PrefsDialog {
     stepped: bool,
     /// The kind picked, once the dialog closed on a pick, until taken.
     choice: Option<FullscreenKind>,
+    /// The frame upscaler list.
+    upscalers: UpscalerList,
+    /// The frame upscaler, as reported: the one running, which the dialog
+    /// opened on, until it closes on a pick.
+    upscaler: Upscaler,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -267,45 +355,19 @@ impl PrefsDialog {
             QUICKTIME_MOVIES_LABEL,
             prefs.quicktime_movies,
         );
-        let display_row = place(DISPLAY_ITEM)?;
-        let display_row = Bounds {
-            min: display_row.min,
-            max: Point::new(
-                dialog.bounds().max.x - DISPLAY_RIGHT_MARGIN,
-                display_row.max.y,
-            ),
-        };
-        let mut display = ModePicker::new(display_row);
+        let mut display = ModePicker::new(picker_row(&dialog, place(DISPLAY_ITEM)?));
         display.set_entries(&[], prefs.fullscreen);
+        let upscaler_row = picker_row(&dialog, place(UPSCALER_ITEM)?);
+        let upscalers = UpscalerList {
+            picker: Picker::new(upscaler_row, vec![Upscaler::Native], prefs.upscaler),
+            stepped: false,
+        };
         let fullscreen = prefs.fullscreen;
+        let upscaler = prefs.upscaler;
         let prefs = prefs.sound;
         let music = Toggle::new(place(MUSIC_ITEM)?, MUSIC_LABEL, prefs.music);
         let sound = Toggle::new(place(SOUND_ITEM)?, SOUND_LABEL, prefs.sound);
-        let size = (template.bounds.width(), template.bounds.height());
-        let inert = template
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| match &item.kind {
-                ItemSpec::CheckBox(title)
-                    if ![
-                        MUSIC_ITEM,
-                        SOUND_ITEM,
-                        HYPERSPACE_EFFECTS_ITEM,
-                        QUICKTIME_MOVIES_ITEM,
-                        DISPLAY_ITEM,
-                    ]
-                    .contains(&(index + 1))
-                        && inside(item.bounds, size) =>
-                {
-                    Some(Toggle::greyed(
-                        dialog.item_bounds(index + 1)?,
-                        title.as_str(),
-                    ))
-                }
-                _ => None,
-            })
-            .collect();
+        let inert = inert_boxes(template, &dialog);
         Ok(Self {
             music,
             sound,
@@ -318,6 +380,8 @@ impl PrefsDialog {
             chosen: fullscreen,
             stepped: false,
             choice: None,
+            upscalers,
+            upscaler,
             inert,
             dialog,
             style,
@@ -342,6 +406,7 @@ impl PrefsDialog {
             hyperspace_effects: self.hyperspace.on(),
             quicktime_movies: self.movies.on(),
             fullscreen: self.fullscreen,
+            upscaler: self.upscaler,
         }
     }
 
@@ -360,6 +425,17 @@ impl PrefsDialog {
         self.fullscreen = current;
         self.chosen = chosen;
         self.stepped = false;
+    }
+
+    /// The dialog listing `listed` in its upscaler list, in order, on the
+    /// one its preferences say runs, or the first listed when that one is
+    /// not listed. Without a list it lists native alone.
+    #[must_use]
+    pub fn with_upscalers(mut self, listed: &[Upscaler]) -> Self {
+        self.upscalers
+            .picker
+            .set_entries(listed.to_vec(), self.upscaler);
+        self
     }
 
     /// The kind the player picked, once after the dialog closed on a pick
@@ -392,6 +468,7 @@ impl PrefsDialog {
             (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
             (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.input(input),
             (_, Some(Focus::Display)) => self.stepped |= self.display.input(input),
+            (_, Some(Focus::Upscaler)) => self.upscalers.input(input),
             (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.input(input),
             (_, Some(Focus::MusicVolume)) => self.changed |= self.music_volume.input(input),
             _ => {}
@@ -416,6 +493,8 @@ impl PrefsDialog {
                 Target::QuickTimeMovies
             } else if self.display.arrow_at(at).is_some() {
                 Target::Display
+            } else if self.upscalers.picker.arrow_at(at).is_some() {
+                Target::Upscaler
             } else if self.effects_volume.arrow_at(at).is_some() {
                 Target::EffectsVolume
             } else if self.music_volume.arrow_at(at).is_some() {
@@ -430,6 +509,7 @@ impl PrefsDialog {
             Some(Target::HyperspaceEffects) => self.changed |= self.hyperspace.input(input),
             Some(Target::QuickTimeMovies) => self.changed |= self.movies.input(input),
             Some(Target::Display) => self.stepped |= self.display.input(input),
+            Some(Target::Upscaler) => self.upscalers.input(input),
             Some(Target::EffectsVolume) => self.changed |= self.effects_volume.input(input),
             Some(Target::MusicVolume) => self.changed |= self.music_volume.input(input),
             Some(Target::Dialog) => self.dialog_input(input),
@@ -446,7 +526,9 @@ impl PrefsDialog {
     /// Closes the dialog, committing the display picker's choice as a
     /// pick when the player stepped it and it differs from the kind the
     /// game runs in or from the kind chosen: after a fallback, picking
-    /// either counts.
+    /// either counts. The upscaler list's choice is committed, as a
+    /// change of the preferences, when the player stepped it and it
+    /// differs from the one the dialog opened on.
     fn close(&mut self) {
         self.closed = true;
         let picked = self.display.selected();
@@ -455,6 +537,10 @@ impl PrefsDialog {
             self.fullscreen = picked;
             self.chosen = picked;
             self.choice = Some(picked);
+        }
+        if let Some(upscaler) = self.upscalers.picked(self.upscaler) {
+            self.upscaler = upscaler;
+            self.changed = true;
         }
     }
 
@@ -506,6 +592,12 @@ impl PrefsDialog {
         &self.display
     }
 
+    /// The frame upscaler list.
+    #[must_use]
+    pub fn upscalers(&self) -> &Picker<Upscaler> {
+        &self.upscalers.picker
+    }
+
     /// The sound effects volume.
     #[must_use]
     pub fn effects_volume(&self) -> &VolumeControl {
@@ -529,14 +621,15 @@ impl Screen for PrefsDialog {
     /// - A click on a toggle flips it, and a click on a volume's arrow
     ///   steps it. A click on OK closes the dialog; the greyed check boxes
     ///   and Key Settings do nothing.
-    /// - A click on the display picker's arrows steps it.
+    /// - A click on the display picker's or the upscaler list's arrows
+    ///   steps it.
     /// - Tab moves the focus (music, sound, Hyperspace Effects, QuickTime
-    ///   Movies, the display picker, the sound volume, the music volume,
-    ///   OK, and round). Space flips a focused toggle or activates OK; the
-    ///   arrow keys step a focused volume, and Up and Down the focused
-    ///   picker, repeats included.
-    /// - Return and Escape close it. Closing, whichever way, reports the
-    ///   picker's choice if it differs from the kind the dialog opened on.
+    ///   Movies, the display picker, the upscaler list, the sound volume,
+    ///   the music volume, OK, and round). Space flips a focused toggle or
+    ///   activates OK; the arrow keys step a focused volume, and Up and
+    ///   Down the focused picker, repeats included.
+    /// - Return and Escape close it. Closing, whichever way, reports each
+    ///   picker's choice if it differs from the one the dialog opened on.
     ///
     /// It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -556,7 +649,8 @@ impl Screen for PrefsDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The backdrop and its outline, OK and Key Settings, the greyed check
-    /// boxes, the four toggles, the display picker, then the two volumes.
+    /// boxes, the four toggles, the display picker, the upscaler list,
+    /// then the two volumes.
     /// The focused part is outlined.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
@@ -574,6 +668,7 @@ impl Screen for PrefsDialog {
         self.movies
             .draw(focused(Focus::QuickTimeMovies), &self.metrics, list);
         self.display.draw(focused(Focus::Display), list);
+        self.upscalers.picker.draw(focused(Focus::Upscaler), list);
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
@@ -589,6 +684,7 @@ impl Screen for PrefsDialog {
         self.hyperspace.cancel_pointer();
         self.movies.cancel_pointer();
         self.display.cancel_pointer();
+        self.upscalers.picker.cancel_pointer();
         self.effects_volume.cancel_pointer();
         self.music_volume.cancel_pointer();
         self.target = None;
@@ -614,6 +710,7 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemTemplate, Placement};
     use crate::ui::mode_picker::PickerRects;
+    use crate::ui::toggle::Toggle;
     use crate::ui::volume::{Arrow, draw_arrow};
     use crate::video_mode::{FullscreenKind, VideoMode};
 
@@ -705,7 +802,7 @@ mod tests {
             },
             hyperspace_effects: true,
             quicktime_movies: true,
-            fullscreen: FullscreenKind::Borderless,
+            ..Prefs::default()
         }
     }
 
@@ -817,7 +914,6 @@ mod tests {
         assert_eq!(
             titles,
             [
-                "Share Processor Time",
                 "Smoke Trails",
                 "Ship Animations",
                 "Engine Glows",
@@ -828,7 +924,7 @@ mod tests {
             ]
         );
         assert!(inert.iter().all(|(_, enabled, on)| !enabled && !on));
-        assert_eq!(dialog.inert()[1].rect(), placed(11.0, 121.0, 172.0, 139.0));
+        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 121.0, 172.0, 139.0));
     }
 
     #[test]
@@ -1122,7 +1218,7 @@ mod tests {
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..9 {
+        for _ in 0..10 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -1134,6 +1230,7 @@ mod tests {
                 Focus::HyperspaceEffects,
                 Focus::QuickTimeMovies,
                 Focus::Display,
+                Focus::Upscaler,
                 Focus::EffectsVolume,
                 Focus::MusicVolume,
                 Focus::Ok,
@@ -1166,7 +1263,7 @@ mod tests {
         let mut dialog = prefs();
         dialog.input(&key(Key::Up));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
-        for _ in 0..6 {
+        for _ in 0..7 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&key(Key::Up));
@@ -1202,7 +1299,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..8 {
+        for _ in 0..9 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -1236,7 +1333,7 @@ mod tests {
         assert_eq!(dialog.take_prefs(), Some(changed));
         assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
-        for _ in 0..6 {
+        for _ in 0..7 {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
@@ -1265,9 +1362,9 @@ mod tests {
         assert!(!hyperspace.hyperspace_effects);
         let movies = focused(4, key(Key::Space)).expect("Space on QuickTime Movies");
         assert!(!movies.quicktime_movies);
-        let effects = focused(6, key(Key::Up)).expect("Up on the sound volume");
+        let effects = focused(7, key(Key::Up)).expect("Up on the sound volume");
         assert_eq!(effects.sound.effects_level, 5);
-        let volume = focused(7, key(Key::Down)).expect("Down on the music volume");
+        let volume = focused(8, key(Key::Down)).expect("Down on the music volume");
         assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
@@ -1369,7 +1466,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..8 {
+        for _ in 0..9 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.take_sounds(), [], "Tab to OK");
@@ -1409,6 +1506,7 @@ mod tests {
             .quicktime_movies()
             .draw(false, &MonoMetrics, &mut expected);
         dialog.display().draw(false, &mut expected);
+        dialog.upscalers().draw(false, &mut expected);
         dialog.effects_volume().draw(false, &mut expected);
         dialog.music_volume().draw(false, &mut expected);
         assert_eq!(commands, expected.iter().cloned().collect::<Vec<_>>());
@@ -1446,7 +1544,7 @@ mod tests {
         assert_eq!(commands.len(), unfocused.len() + 4);
         let music: Vec<DrawCommand> = music.iter().cloned().collect();
         assert!(commands.windows(music.len()).any(|window| window == music));
-        for _ in 0..5 {
+        for _ in 0..6 {
             dialog.input(&key(Key::Tab));
         }
         let mut effects = DrawList::new();
@@ -1642,7 +1740,7 @@ mod tests {
         let mut dialog = offered();
         focus_display(&mut dialog);
         dialog.input(&key(Key::Down));
-        for _ in 0..3 {
+        for _ in 0..4 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Ok));
@@ -1818,6 +1916,235 @@ mod tests {
         dialog.display().draw(true, &mut ring);
         let ring: Vec<DrawCommand> = ring.iter().cloned().collect();
         assert!(drawn(&dialog).windows(ring.len()).any(|w| w == ring));
+    }
+
+    const NATIVE: Upscaler = Upscaler::Native;
+    const SHARP: Upscaler = Upscaler::SharpBilinear;
+
+    /// The dialog on `start`, drawn natively, listing `listed`.
+    fn listing(listed: &[Upscaler]) -> PrefsDialog {
+        prefs().with_upscalers(listed)
+    }
+
+    /// Tabs to the upscaler list.
+    fn focus_upscaler(dialog: &mut PrefsDialog) {
+        for _ in 0..6 {
+            dialog.input(&key(Key::Tab));
+        }
+        assert_eq!(dialog.focus(), Some(Focus::Upscaler));
+    }
+
+    #[test]
+    fn the_upscaler_list_takes_share_processor_times_area() {
+        let dialog = listing(&[NATIVE, SHARP]);
+        assert_eq!(UPSCALER_ITEM, 2);
+        assert_eq!(
+            dialog.upscalers().rects(),
+            PickerRects::in_row(placed(171.0, 55.0, 325.0, 73.0)),
+            "on to the dialog's right margin"
+        );
+        assert!(
+            dialog
+                .inert()
+                .iter()
+                .all(|toggle| toggle.label() != "Share Processor Time")
+        );
+        assert_eq!(prefs().upscalers().entries(), [NATIVE], "native alone");
+    }
+
+    #[test]
+    fn the_upscaler_list_is_clear_of_every_other_part() {
+        let dialog = listing(&[NATIVE, SHARP]);
+        let list = dialog.upscalers().rects().bounds();
+        let ok = dialog.dialog().item_bounds(OK_ITEM).expect("OK");
+        let keys = dialog
+            .dialog()
+            .item_bounds(KEY_SETTINGS_ITEM)
+            .expect("Key Settings");
+        let parts = dialog
+            .inert()
+            .iter()
+            .chain([
+                dialog.music(),
+                dialog.sound(),
+                dialog.hyperspace_effects(),
+                dialog.quicktime_movies(),
+            ])
+            .map(Toggle::rect)
+            .chain([
+                dialog.display().rects().bounds(),
+                dialog.effects_volume().rects().bounds(),
+                dialog.music_volume().rects().bounds(),
+                ok,
+                keys,
+            ]);
+        for rect in parts {
+            let apart = rect.max.x <= list.min.x
+                || rect.min.x >= list.max.x
+                || rect.max.y <= list.min.y
+                || rect.min.y >= list.max.y;
+            assert!(apart, "{rect:?} under the list {list:?}");
+        }
+        let bounds = dialog.dialog().bounds();
+        assert!(bounds.contains(list.min) && bounds.contains(list.max));
+    }
+
+    #[test]
+    fn it_lists_exactly_the_upscalers_it_is_given_on_the_one_running() {
+        assert_eq!(listing(&[NATIVE]).upscalers().entries(), [NATIVE]);
+        let both = listing(&[NATIVE, SHARP]);
+        assert_eq!(both.upscalers().entries(), [NATIVE, SHARP]);
+        assert_eq!(both.upscalers().selected(), NATIVE);
+        let sharp = PrefsDialog::new(
+            &template(),
+            Prefs {
+                upscaler: SHARP,
+                ..start()
+            },
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert_eq!(
+            sharp
+                .clone()
+                .with_upscalers(&[NATIVE, SHARP])
+                .upscalers()
+                .selected(),
+            SHARP
+        );
+        assert_eq!(
+            sharp.with_upscalers(&[NATIVE]).upscalers().selected(),
+            NATIVE,
+            "the first, when the one running is not listed"
+        );
+    }
+
+    #[test]
+    fn an_upscaler_step_is_reported_once_when_the_dialog_closes() {
+        for close in [key(Key::Enter), key(Key::Escape)] {
+            let mut dialog = listing(&[NATIVE, SHARP]);
+            focus_upscaler(&mut dialog);
+            dialog.input(&key(Key::Down));
+            assert_eq!(dialog.upscalers().selected(), SHARP);
+            assert_eq!(dialog.take_change(), None, "held while open");
+            assert_eq!(dialog.prefs().upscaler, NATIVE);
+            dialog.input(&close);
+            assert!(dialog.closed());
+            assert_eq!(
+                dialog.take_change(),
+                Some(Prefs {
+                    upscaler: SHARP,
+                    ..start()
+                }),
+                "{close:?}"
+            );
+            assert_eq!(dialog.take_change(), None, "once");
+        }
+        let mut dialog = listing(&[NATIVE, SHARP]);
+        let down = dialog.upscalers().rects().down.center();
+        click(&mut dialog, down);
+        assert_eq!(dialog.upscalers().selected(), SHARP, "a click steps it");
+        assert_eq!(dialog.take_change(), None, "held while open");
+        let ok = ok(&dialog);
+        click(&mut dialog, ok);
+        assert_eq!(
+            dialog.take_change().map(|prefs| prefs.upscaler),
+            Some(SHARP)
+        );
+    }
+
+    #[test]
+    fn stepping_the_upscaler_away_and_back_or_not_at_all_reports_nothing() {
+        let mut dialog = listing(&[NATIVE, SHARP]);
+        focus_upscaler(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_change(), None, "stepped away and back");
+        let mut dialog = listing(&[NATIVE]);
+        focus_upscaler(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_change(), None, "nothing to step to");
+        let mut dialog = listing(&[NATIVE, SHARP]);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_change(), None, "untouched");
+    }
+
+    #[test]
+    fn an_audio_change_with_an_upscaler_step_pending_reports_the_one_running() {
+        let mut dialog = listing(&[NATIVE, SHARP]);
+        focus_upscaler(&mut dialog);
+        dialog.input(&key(Key::Down));
+        let point = dialog.music().rect().center();
+        click(&mut dialog, point);
+        assert_eq!(
+            dialog.take_change().map(|prefs| prefs.upscaler),
+            Some(NATIVE)
+        );
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_change().map(|prefs| prefs.upscaler),
+            Some(SHARP)
+        );
+    }
+
+    #[test]
+    fn the_upscaler_and_display_steps_are_held_apart() {
+        let mut dialog = offered().with_upscalers(&[NATIVE, SHARP]);
+        focus_display(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(Focus::Upscaler));
+        dialog.input(&key(Key::Enter));
+        let reported = dialog.take_change().expect("the display pick");
+        assert_eq!(reported.upscaler, NATIVE, "never stepped");
+        assert_eq!(
+            reported.fullscreen,
+            FullscreenKind::Exclusive(modes()[0]),
+            "the display stepped"
+        );
+        let mut dialog = offered().with_upscalers(&[NATIVE, SHARP]);
+        focus_upscaler(&mut dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_display_choice(), None, "no display pick");
+        assert_eq!(
+            dialog
+                .take_change()
+                .map(|prefs| (prefs.upscaler, prefs.fullscreen)),
+            Some((SHARP, FullscreenKind::Borderless))
+        );
+    }
+
+    #[test]
+    fn the_focused_upscaler_list_is_outlined_and_drawn_after_the_display_picker() {
+        let mut dialog = listing(&[NATIVE, SHARP]);
+        let mut expected = DrawList::new();
+        dialog.display().draw(false, &mut expected);
+        dialog.upscalers().draw(false, &mut expected);
+        let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+        assert!(
+            drawn(&dialog)
+                .windows(expected.len())
+                .any(|w| w == expected)
+        );
+        focus_upscaler(&mut dialog);
+        let mut ring = DrawList::new();
+        dialog.upscalers().draw(true, &mut ring);
+        let ring: Vec<DrawCommand> = ring.iter().cloned().collect();
+        assert!(drawn(&dialog).windows(ring.len()).any(|w| w == ring));
+    }
+
+    #[test]
+    fn a_cancelled_click_on_the_upscaler_list_steps_nothing() {
+        let mut dialog = listing(&[NATIVE, SHARP]);
+        let down = dialog.upscalers().rects().down.center();
+        dialog.input(&button(true, down));
+        dialog.cancel_pointer();
+        dialog.input(&button(false, down));
+        assert_eq!(dialog.upscalers().selected(), NATIVE);
     }
 
     #[test]

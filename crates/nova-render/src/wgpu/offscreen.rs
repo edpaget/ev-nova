@@ -10,7 +10,7 @@ use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
-use crate::upscale::{Upscaler, WorldResolution};
+use crate::upscale::{Upscaler, UpscalerProbe, WorldResolution};
 use crate::viewport::PixelRect;
 
 /// The offscreen target's format: plain RGBA8, not sRGB.
@@ -161,6 +161,16 @@ impl Gpu for OffscreenGpu {
 
     fn world_resolution(&self) -> WorldResolution {
         self.renderer.world_resolution()
+    }
+
+    fn set_upscaler(&mut self, upscaler: Upscaler) {
+        self.renderer.set_upscaler(upscaler);
+    }
+}
+
+impl UpscalerProbe for OffscreenGpu {
+    fn upscalers(&self) -> Vec<Upscaler> {
+        self.renderer.upscalers()
     }
 }
 

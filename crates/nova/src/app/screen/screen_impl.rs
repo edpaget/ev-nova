@@ -5,7 +5,7 @@ use std::time::Duration;
 use nova_view::view_shape::classic_offset;
 use nova_view::{
     Diagnostic, DrawList, FullscreenKind, Input, Point, Prefs, Screen, ScreenAction, Showing,
-    Sound, VideoMode, ViewShape,
+    Sound, Upscaler, VideoMode, ViewShape,
 };
 
 use super::{
@@ -323,6 +323,14 @@ impl Screen for AppScreen {
         chosen: FullscreenKind,
     ) {
         self.offer_display_to_preferences(modes, current, chosen);
+    }
+
+    /// Keeps the upscalers the device can use for every Preferences
+    /// dialog's list, and takes `running` as the player's preferences' one,
+    /// which each dialog opens on.
+    fn offer_upscalers(&mut self, listed: &[Upscaler], running: Upscaler) {
+        self.upscalers = listed.to_vec();
+        self.prefs.upscaler = running;
     }
 
     /// The fullscreen kind picked in the Preferences dialog, once after it

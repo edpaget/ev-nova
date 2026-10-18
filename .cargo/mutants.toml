@@ -51,12 +51,8 @@ exclude_re = [
     # its size, which `()` does too.
     "nova-view/src/screen\\.rs:.*replace Screen::view_shape -> ViewShape with Default::default\\(\\)",
     "nova-view/src/screen\\.rs:.*replace Screen::set_widened_size with \\(\\)",
-    # The wgpu adapter's only upscaler is native, so every answer to how
-    # it draws the world is `WorldResolution::Native`, which is
-    # `WorldResolution::default()`: the same value. Remove these once a
-    # second upscaler (display-modes phase 6) can answer otherwise.
-    "nova-render/src/wgpu/(offscreen|surface)\\.rs:.*replace <impl Gpu for (OffscreenGpu|SurfaceGpu)>::world_resolution -> WorldResolution with Default::default\\(\\)",
-    "nova-render/src/wgpu/renderer\\.rs:.*replace WgpuRenderer::world_resolution -> WorldResolution with Default::default\\(\\)",
+    # The native upscaler draws the world at `WorldResolution::Native`,
+    # which is `WorldResolution::default()`: the same value.
     "nova-render/src/wgpu/upscale\\.rs:.*replace <impl Upscale for Native>::resolution -> WorldResolution with Default::default\\(\\)",
     # The hypergate arrow's second stroke heads `(heading + 315) mod 360`,
     # as `_DrawMap` takes it (@0xf3f9-0xf41a); `facing` reads any angle, so
@@ -171,6 +167,13 @@ exclude_re = [
     # without): replacing either body is observable only on a window
     # surface. `OffscreenGpu`'s twin of each is mutated and tested.
     "replace (SurfaceGpu::present|<impl OverlayGpu for SurfaceGpu>::submit_with) with \\(\\)$",
+    # The surface adapter's upscaler bodies delegate to `WgpuRenderer` as
+    # `OffscreenGpu`'s twins do (mutated and tested offscreen): how it
+    # draws the world, setting the upscaler, and which upscalers its
+    # device can use, each observable only with a window.
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::world_resolution -> WorldResolution with Default::default\\(\\)",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl Gpu for SurfaceGpu>::set_upscaler with \\(\\)$",
+    "nova-render/src/wgpu/surface\\.rs:.*replace <impl UpscalerProbe for SurfaceGpu>::upscalers -> Vec<Upscaler> with ",
     # The one-line edge that opens the default audio device through cpal
     # and hands it to `KiraAudio::with_manager`. Running it needs a real
     # output device, which no gating test may open; everything it hands
@@ -182,8 +185,9 @@ exclude_re = [
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
     "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
     # The trait's default `offer_display` ignores its arguments already:
-    # replacing it with `()` changes nothing.
+    # replacing it with `()` changes nothing. So does `offer_upscalers`.
     "replace Screen::offer_display with \\(\\)",
+    "replace Screen::offer_upscalers with \\(\\)",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.

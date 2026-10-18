@@ -9,6 +9,7 @@ use crate::draw::DrawList;
 use crate::input::Input;
 use crate::preferences::Prefs;
 use crate::sound::Sound;
+use crate::upscaler::Upscaler;
 use crate::video_mode::{FullscreenKind, VideoMode};
 use crate::view_shape::ViewShape;
 
@@ -159,6 +160,15 @@ pub trait Screen {
     ) {
         let _ = (modes, current, chosen);
     }
+    /// The frame upscalers the running device can use, native first
+    /// (`listed`, for the Preferences dialog's list), and the one drawing
+    /// flight's world now, `running`. The app offers them once, at
+    /// startup, once it has the device; a pick comes back through
+    /// [`Screen::take_prefs`] as [`Prefs::upscaler`]. Does nothing by
+    /// default.
+    fn offer_upscalers(&mut self, listed: &[Upscaler], running: Upscaler) {
+        let _ = (listed, running);
+    }
     /// The fullscreen kind the player picked in the Preferences dialog
     /// since this was last taken, for the app to enter and save: each pick
     /// is reported once. None by default.
@@ -220,7 +230,7 @@ mod tests {
     use super::*;
     use crate::input::Key;
     use crate::video_mode::{FullscreenKind, VideoMode};
-    use crate::{Color, Point};
+    use crate::{Color, Point, Upscaler};
 
     /// Counts ticks and quits on Escape.
     #[derive(Default)]
@@ -351,6 +361,19 @@ mod tests {
         screen.offer_display(&[mode], FullscreenKind::Borderless, exclusive);
         assert_eq!(screen.take_prefs(), None);
         assert_eq!(screen.take_display_choice(), None);
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_ignores_an_offer_of_upscalers_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        let both = [Upscaler::Native, Upscaler::SharpBilinear];
+        screen.offer_upscalers(&both, Upscaler::SharpBilinear);
+        assert_eq!(screen.take_prefs(), None);
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);

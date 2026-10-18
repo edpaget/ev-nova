@@ -17,17 +17,21 @@
 //! ([`Frame::pixels_covered`](crate::Frame::pixels_covered)), taken just
 //! before it.
 //!
-//! The renderer is made with an [`Upscaler`](crate::Upscaler), which it
-//! turns into an [`Upscale`] and asks how it draws flight's world layer
-//! ([`Gpu::world_resolution`](crate::Gpu::world_resolution)). The only
-//! one so far is [`Native`]: the world
-//! ([`WorldSpace::Target`](crate::WorldSpace::Target)) is drawn straight
-//! into the scene, every batch in the frame's order whatever its layer,
-//! so nothing changes on screen. An upscaler drawing the world into a
-//! texture of its own ([`WorldSpace::Texture`](crate::WorldSpace::Texture))
-//! will have the world drawn first, enlarged onto the viewport
-//! ([`Upscale::enlarge`]), and the overlay drawn over it; until one
-//! exists, such a frame's world is left out.
+//! The renderer is given an [`Upscaler`](crate::Upscaler) (when it is
+//! made, and again on [`Gpu::set_upscaler`](crate::Gpu::set_upscaler)),
+//! which it turns into an [`Upscale`] and asks how it draws flight's world
+//! layer ([`Gpu::world_resolution`](crate::Gpu::world_resolution)).
+//! [`Native`] draws the world
+//! ([`WorldSpace::Target`](crate::WorldSpace::Target)) straight into the
+//! scene, every batch in the frame's order whatever its layer, so nothing
+//! changes on screen. [`SharpBilinear`] has the world drawn into a texture
+//! of its own ([`WorldSpace::Texture`](crate::WorldSpace::Texture)) first,
+//! enlarges it onto the viewport ([`Upscale::enlarge`]), and the whole
+//! overlay is drawn over it, in the frame's order: an overlay drawn before
+//! the world in the frame lands over it, unlike natively (the renderer's
+//! layout says why). Both GPU adapters are the
+//! [`UpscalerProbe`](crate::UpscalerProbe) for their device: every wgpu
+//! device can use both.
 //!
 //! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
 //! font system the renderer draws with, so the widgets lay text out by the
@@ -44,6 +48,7 @@ mod metrics;
 mod offscreen;
 mod overlay;
 mod renderer;
+mod sharp_bilinear;
 mod surface;
 mod upscale;
 
@@ -51,6 +56,7 @@ pub use metrics::GlyphonMetrics;
 pub use offscreen::{OffscreenGpu, ReadError};
 pub use overlay::{MAX_TEXTURE_SIDE, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay};
 pub use renderer::WgpuRenderer;
+pub use sharp_bilinear::SharpBilinear;
 pub use surface::SurfaceGpu;
 pub use upscale::{Native, Upscale};
 

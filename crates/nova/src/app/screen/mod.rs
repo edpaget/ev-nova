@@ -268,7 +268,6 @@ use nova_sim::{
     Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HireTerms, LegalCode,
     PersonRules, PilotKeeper, PilotStore, PointDefenceRule, Rulebook,
 };
-use nova_view::FullscreenKind;
 pub use nova_view::Showing;
 use nova_view::fade::ScreenFade;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
@@ -287,6 +286,7 @@ use nova_view::ui::{
     PrefsDialog,
 };
 use nova_view::{Color, Input, Key, Navigator, Point, Prefs, Sound};
+use nova_view::{FullscreenKind, Upscaler};
 
 mod build;
 mod flight;
@@ -440,6 +440,9 @@ pub struct AppScreen {
     /// The fullscreen kind picked in the Preferences dialog since it was
     /// last taken.
     display_choice: Option<FullscreenKind>,
+    /// The frame upscalers the device can use, native first, as offered
+    /// at startup, for every Preferences dialog's list.
+    upscalers: Vec<Upscaler>,
     /// The main menu and where pilots are kept, once given.
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.
