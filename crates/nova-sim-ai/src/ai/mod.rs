@@ -68,6 +68,7 @@ pub mod stand_off;
 pub mod swarm;
 pub mod target;
 pub mod threatened;
+pub mod travel;
 pub mod wait;
 pub mod warship;
 pub mod wimpy;
@@ -831,6 +832,10 @@ pub struct Decision {
     /// timer, when it ran ([`lost_sight::after_think`]); none otherwise,
     /// which leaves [`Npc::lost_sight`] as it was.
     pub lost_sight: Option<lost_sight::LostSight>,
+    /// How the think writes its travel stellar, the original's +0x6c (see
+    /// [`travel`]): the traffic [`take`](travel::take)s it into
+    /// [`Npc::travel_set`] as it takes the goal.
+    pub travel: travel::TravelWrite,
 }
 
 /// How NPCs decide what to do.

@@ -308,6 +308,7 @@ impl Behaviour for NovaAi {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             },
             Some(false) => Decision {
                 goal: Goal::JumpOut,
@@ -1709,6 +1710,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             }
         }
     }
@@ -1735,6 +1737,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: Some(crate::ai::lost_sight::LostSight::Seen),
+                travel: crate::ai::travel::TravelWrite::Keep,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );

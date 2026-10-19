@@ -62,6 +62,7 @@
 //! Nothing here plays a sound.
 
 use crate::ai::fire::Manoeuvre;
+use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
@@ -74,7 +75,8 @@ pub const BOARD_WAIT: u32 = 120;
 /// The wait loop over `decisions`, one for each of `npcs` in order (see
 /// the module docs): each pirate whose decision waits on a boarded ship
 /// ([`Decision::board_wait`]) and finds a ship boarding it, in berth order,
-/// waits ([`Goal::CountWait`]), calling for no reinforcements, as
+/// waits ([`Goal::CountWait`]), its travel stellar cleared (@0x8c70d),
+/// calling for no reinforcements, as
 /// `_HighLevelAIHandler` returns while its wait runs (@0x8d4b9-0x8d4d2).
 pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
     let mut order: Vec<usize> = (0..npcs.len()).collect();
@@ -101,6 +103,8 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
                 clears_target: true,
                 keeps_pursuit: false,
                 plunders: None,
+                // +0x6c -1 (@0x8c70d).
+                travel: TravelWrite::Clear,
                 ..*decision
             };
         }
@@ -267,6 +271,7 @@ mod tests {
             waited.clears_target && !waited.keeps_pursuit,
             "target -1, sub 0"
         );
+        assert_eq!(waited.travel, TravelWrite::Clear, "+0x6c -1, @0x8c70d");
         let lone = [ship(1, 1, Goal::Idle), victim()];
         let mut decisions = vec![Some(waiting_on(n(9))), None];
         resolve(&lone, &mut decisions);

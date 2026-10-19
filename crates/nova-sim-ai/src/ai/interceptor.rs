@@ -705,6 +705,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -807,6 +808,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );

@@ -711,10 +711,13 @@ pub(super) fn make_leave(npc: &mut Npc) {
     npc.provoked = 0.0;
 }
 
-/// `npc` stops assisting, and decides again.
+/// `npc` stops assisting, and decides again, its travel stellar
+/// cleared.
 fn stop(npc: &mut Npc) {
     npc.goal = Goal::Idle;
     npc.target = None;
+    // +0x6c -1 (@0x8f6ce): the travel stellar a pirate reads.
+    npc.travel_set = false;
 }
 
 #[cfg(test)]
@@ -2257,6 +2260,8 @@ mod tests {
         helper.goal = Goal::Assist(help);
         helper.target = Some(ShipRef::Player);
         helper.state.position = Vec2::new(x, 0.0);
+        // Bound for a stellar before it was asked: its travel stellar set.
+        helper.travel_set = true;
         session
     }
 
@@ -2316,6 +2321,7 @@ mod tests {
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Idle, "it decides again");
         assert_eq!(helper.target, None);
+        assert!(!helper.travel_set, "+0x6c -1, @0x8f6ce");
         session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert!(session.take_comm().is_empty());

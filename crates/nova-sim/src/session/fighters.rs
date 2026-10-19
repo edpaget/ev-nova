@@ -512,6 +512,7 @@ fn fighter(
         led_out: false,
         emerges_from: None,
         visited: None,
+        travel_set: false,
         self_repair: kind.self_repair,
         immobile: kind.immobile,
         miner: kind.miner,

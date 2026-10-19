@@ -59,6 +59,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         led_out: false,
         emerges_from: None,
         visited: None,
+        travel_set: false,
         self_repair: false,
         immobile: false,
         miner: 0,

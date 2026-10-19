@@ -384,6 +384,15 @@ pub struct Npc {
     /// miner's (@0x8b3ae) is left out (see
     /// [`idle_block`](crate::ai::idle_block)).
     pub visited: Option<StellarId>,
+    /// Whether its travel stellar, the original's +0x6c, is set: what a
+    /// pirate's idle block reads to skip its pick (@0x8c472-0x8c477, read
+    /// through [`travel::is_set`](crate::ai::travel::is_set), which adds the
+    /// stellar goals and the emerge's gate). Its writers are the decisions'
+    /// ([`Decision::travel`](crate::ai::Decision::travel), taken by
+    /// [`travel::take`](crate::ai::travel::take)) and the drops that write
+    /// -1 (see [`travel`](crate::ai::travel)). Every spawn clears it
+    /// (@0x1c3c1, @0x3c444, @0x3c9e2).
+    pub travel_set: bool,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).

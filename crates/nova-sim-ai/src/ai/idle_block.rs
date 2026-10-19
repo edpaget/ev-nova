@@ -35,10 +35,13 @@
 //!   whenever its search finds nothing (@0x8c385), in any goal but 0xe
 //!   (@0x8c339-0x8c357). Once visited it leaves or waits (@0x8c52d,
 //!   @0x8c5c9). Not visited, it picks only while its travel stellar (+0x6c)
-//!   is -1 (@0x8c472-0x8c477), heading there (@0x8c49d-0x8c4a3); a failed
-//!   pick, or a travel stellar already set, leaves or waits (@0x8c4b1,
-//!   @0x8c51f). So a pirate with nothing to fight never lands: on the think
-//!   after its pick it leaves or stops.
+//!   is -1 (@0x8c472-0x8c477, [`travel::is_set`]), heading there
+//!   (@0x8c49d-0x8c4a3); a failed pick, or a travel stellar already set,
+//!   leaves or waits (@0x8c4b1, @0x8c51f). So a pirate with nothing to
+//!   fight never lands: on the think after its pick it leaves or stops. It
+//!   keeps the stellar through a fight and the drops that leave it (see
+//!   [`travel`]), and a waiting or leaving pirate whose pick failed picks
+//!   again once a stellar it may pick appears.
 //! - **+0x92's writers**: every spawn starts it at -2 (@0x1c3d6, @0x3d4dc,
 //!   @0x3d7ef, @0x41ed4, @0x423ed, @0x42565, @0x42a85, @0x43108, @0x436bd,
 //!   @0x43a38, @0x7f3fa), [`Npc::visited`]'s `None`. A ship with a fuel tank
@@ -69,14 +72,10 @@
 //! - The interceptor's +0x92 = -2 (@0x8d01e): no reader for AI type 4.
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 //! - Owned by rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12:
-//!   the pirate's travel stellar kept through goal 0 (the engine's
-//!   [`Goal::Idle`] carries none, so it picks first and leaves a think
-//!   later), and a waiting pirate whose pick failed picking again (the
-//!   engine's [`Goal::Wait`] reads as bound and never re-picks); the
-//!   miner's +0x92 (@0x8b373, @0x8b3ae); and state 6 written outside the
-//!   idle block.
+//!   the miner's +0x92 (@0x8b373, @0x8b3ae); and state 6 written outside
+//!   the idle block.
 
-use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar};
+use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, travel};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::traffic::npc::Npc;
@@ -133,21 +132,10 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
     {
         return Goal::Follow(lead);
     }
-    if visited_here(npc, around) || bound(npc.goal) {
+    if visited_here(npc, around) || travel::is_set(npc) {
         return leave_or_wait(npc, around);
     }
     random_stellar(npc, around, chance, Admit::All).unwrap_or_else(|| leave_or_wait(npc, around))
-}
-
-/// Whether a pirate in `goal` has its travel stellar (+0x6c) set, so its
-/// idle block picks none (@0x8c472-0x8c477): bound for a stellar or a gate,
-/// leaving, or waiting. The engine's leave and wait carry no stellar, so
-/// they read as set.
-fn bound(goal: Goal) -> bool {
-    matches!(
-        goal,
-        Goal::Land(_) | Goal::EnterGate(_) | Goal::JumpOut | Goal::Wait
-    )
 }
 
 /// Whether `stellar` among `around` is destroyed (`_StellarIsDestroyed`).
@@ -346,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pirate_picks_only_while_it_has_no_travel_stellar() {
+    fn a_pirate_with_its_travel_stellar_set_leaves_or_waits_without_a_pick() {
         let sites = sites();
         let around = Surroundings::new(&sites, &[]);
         let mut chance = Draws::of(&[1]);
@@ -355,25 +343,66 @@ mod tests {
             Goal::Land(StellarId(129))
         );
         assert_eq!(chance.asked, [2]);
-        for goal in [
-            Goal::Land(StellarId(128)),
-            Goal::EnterGate(StellarId(128)),
-            Goal::JumpOut,
-            Goal::Wait,
+        let dropped = Npc {
+            travel_set: true,
+            ..ship()
+        };
+        let emerging = Npc {
+            emerges_from: Some(StellarId(128)),
+            ..ship()
+        };
+        for set in [
+            dropped,
+            emerging,
+            Npc {
+                goal: Goal::Land(StellarId(128)),
+                ..ship()
+            },
+            Npc {
+                goal: Goal::EnterGate(StellarId(128)),
+                ..ship()
+            },
         ] {
             let mut chance = Draws::of(&[]);
-            let bound = Npc { goal, ..ship() };
             assert_eq!(
-                pirate_idle(&bound, &around, &mut chance),
+                pirate_idle(&set, &around, &mut chance),
                 Goal::JumpOut,
-                "{goal:?}"
+                "{set:?}"
             );
             assert_eq!(
-                pirate_idle(&stranded(bound), &around, &mut chance),
+                pirate_idle(&stranded(set.clone()), &around, &mut chance),
                 Goal::Wait,
+                "{set:?}"
+            );
+            assert!(chance.asked.is_empty(), "{set:?}");
+        }
+    }
+
+    #[test]
+    fn a_waiting_or_leaving_pirate_whose_pick_failed_picks_once_a_candidate_appears() {
+        let unlandable = [LandingSite {
+            flags: 0,
+            ..planet(128, 0.0, 0.0)
+        }];
+        let sites = sites();
+        for goal in [Goal::Wait, Goal::JumpOut] {
+            let failed = stranded(Npc { goal, ..ship() });
+            let none = Surroundings::new(&unlandable, &[]);
+            let mut chance = Draws::of(&[]);
+            assert_eq!(pirate_idle(&failed, &none, &mut chance), Goal::Wait);
+            assert_eq!(
+                pirate_idle(&Npc { goal, ..ship() }, &none, &mut chance),
+                Goal::JumpOut
+            );
+            assert!(chance.asked.is_empty());
+            let around = Surroundings::new(&sites, &[]);
+            let mut chance = Draws::of(&[0]);
+            assert_eq!(
+                pirate_idle(&failed, &around, &mut chance),
+                Goal::Land(StellarId(128)),
                 "{goal:?}"
             );
-            assert!(chance.asked.is_empty(), "{goal:?}");
+            assert_eq!(chance.asked, [2]);
         }
     }
 

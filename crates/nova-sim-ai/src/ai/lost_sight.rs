@@ -23,7 +23,9 @@
 //!   (rdm:phase/ship-handling-fidelity/phase-8-warp-out), as the mission
 //!   hunt's give-up's are.
 //! - Unseen by any other ship (@0x8d814), it stops (sub 1, +0x50 0) and
-//!   searches: an unset timer is set to `Rand(100)+100` (@0x8d83b-0x8d852),
+//!   searches, its travel stellar cleared on each frame (+0x6c -1,
+//!   @0x8d833, [`TravelWrite::Clear`]; see [`travel`](crate::ai::travel)):
+//!   an unset timer is set to `Rand(100)+100` (@0x8d83b-0x8d852),
 //!   a set one counts down a tick (@0x8d85f-0x8d876), and one run out drops
 //!   the target (target -1, state and sub 0, timer -1, @0x8d884-0x8d8a6).
 //!   Each path ends the handler for the frame (the jump to @0x8fb47,
@@ -53,7 +55,6 @@
 //!   (@0x8d404-0x8d43a), which needs a government and inspects its pick
 //!   rather than attacking it. All in
 //!   rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
-//! - The nav -1 (+0x6c): the engine's fight goals carry no nav.
 //! - The warp-stage writes of the trader's leave (+0x50, +0xa4), the
 //!   warp stage's (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
 //! - The NPC target picks' own sight of a cloaked ship
@@ -62,6 +63,7 @@
 //!   its next think and searches again.
 
 use crate::ai::plunder_target::reads_above_trader;
+use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal, Surroundings, leave};
 use crate::chance::Chance;
 use crate::traffic::npc::Npc;
@@ -122,21 +124,25 @@ pub fn after_think(
             }
         };
     }
+    // Each frame of the search writes +0x6c = -1 (@0x8d833).
     match npc.lost_sight {
         None => Decision {
             lost_sight: Some(LostSight::Searching(
                 SEARCH_TICKS + chance.below(SEARCH_TICKS),
             )),
+            travel: TravelWrite::Clear,
             ..decision
         },
         Some(left) if left > 1 => Decision {
             lost_sight: Some(LostSight::Searching(left - 1)),
+            travel: TravelWrite::Clear,
             ..decision
         },
         Some(_) => Decision {
             goal: Goal::Idle,
             clears_target: true,
             lost_sight: Some(LostSight::GaveUp),
+            travel: TravelWrite::Clear,
             ..decision
         },
     }
@@ -246,6 +252,7 @@ mod tests {
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)));
         assert_eq!(decision.goal, Goal::Attack(n(2)), "it holds its attack");
         assert!(!decision.clears_target);
+        assert_eq!(decision.travel, TravelWrite::Clear, "+0x6c -1, @0x8d833");
         assert_eq!(low.asked, [100]);
         let mut high = Draws::of(&[99]);
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut high);
@@ -259,6 +266,7 @@ mod tests {
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(4)));
         assert_eq!(decision.goal, Goal::Attack(n(2)));
+        assert_eq!(decision.travel, TravelWrite::Clear);
         assert!(chance.asked.is_empty());
         let warship = hunter(AiType::Warship, Some(2));
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
@@ -274,6 +282,7 @@ mod tests {
             assert_eq!(decision.goal, Goal::Idle, "timer {timer}");
             assert!(decision.clears_target);
             assert_eq!(decision.lost_sight, Some(LostSight::GaveUp));
+            assert_eq!(decision.travel, TravelWrite::Clear);
             assert!(chance.asked.is_empty());
         }
     }
@@ -346,6 +355,7 @@ mod tests {
             searched,
             Decision {
                 lost_sight: Some(LostSight::Searching(4)),
+                travel: TravelWrite::Clear,
                 ..decision
             }
         );
@@ -361,12 +371,14 @@ mod tests {
             assert_eq!(decision.goal, Goal::JumpOut, "{ai_type:?}");
             assert!(decision.clears_target);
             assert_eq!(decision.lost_sight, None, "the timer is untouched");
+            assert_eq!(decision.travel, TravelWrite::Keep, "no +0x6c write");
             assert!(chance.asked.is_empty());
             trader.class_fuel = 99;
             let decision = lost(&trader, of(Goal::Attack(n(2))), &mut chance);
             assert_eq!(decision.goal, Goal::Wait, "{ai_type:?} at the floor");
             assert!(!decision.clears_target, "state 6 keeps its target");
             assert_eq!(decision.lost_sight, None);
+            assert_eq!(decision.travel, TravelWrite::Keep);
             trader.class_fuel = 100;
             trader.reserves.fuel.now = 0.0;
             let bible = through(

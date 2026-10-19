@@ -1985,7 +1985,9 @@ impl Traffic {
     /// ([`Decision::clears_target`]) loses it. Its search timer takes the
     /// lost-sight block's write ([`Decision::lost_sight`]), and stays as
     /// it was when the block did not run. One that starts a count wait
-    /// takes its AI wait ([`board_wait::enter`]). Each decision's calls,
+    /// takes its AI wait ([`board_wait::enter`]). Its travel stellar takes
+    /// the decision's write ([`Decision::travel`],
+    /// [`travel::take`](crate::ai::travel::take)). Each decision's calls,
     /// then its scan, are queued on the line in slot order ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
@@ -2002,6 +2004,7 @@ impl Traffic {
                 provokes,
                 clears_target,
                 lost_sight,
+                travel,
                 ..
             } = decision;
             if let Some(write) = lost_sight {
@@ -2039,6 +2042,7 @@ impl Traffic {
                 npc.docking = None;
             }
             board_wait::enter(npc, goal);
+            crate::ai::travel::take(npc, travel, goal);
             npc.goal = goal;
         }
     }
@@ -2262,6 +2266,7 @@ impl Traffic {
                 led_out: false,
                 emerges_from: ship.entry.gate(),
                 visited: ship.entry.visited(reserves.fuel.max),
+                travel_set: false,
                 self_repair: kind.self_repair,
                 immobile: kind.immobile,
                 miner: kind.miner,
@@ -4268,6 +4273,7 @@ mod tests {
             keeps_pursuit: false,
             plunders: None,
             lost_sight: None,
+            travel: crate::ai::travel::TravelWrite::Keep,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

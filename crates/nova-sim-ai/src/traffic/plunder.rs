@@ -173,8 +173,9 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
 }
 
 /// Applies `high`, `npc`'s high level this think: nothing while its wait
-/// runs, a docking set or given up (goal 0, sub 0, target and nav -1), or
-/// any docking dropped as it flies its fight.
+/// runs, a docking set or given up (goal 0, sub 0, target and nav -1, its
+/// travel stellar cleared: @0x8e8b3, @0x8f732), or any docking dropped as
+/// it flies its fight.
 pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
     match high {
         HighLevel::Skipped => {}
@@ -185,6 +186,7 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
             npc.goal = Goal::Idle;
             npc.target = None;
             npc.docking = None;
+            npc.travel_set = false;
         }
         HighLevel::Docks {
             ship,
@@ -358,6 +360,7 @@ fn plunder_npc(
         for other in npcs.iter_mut() {
             if other.target == Some(ShipRef::Npc(victim)) && other.condition.active() {
                 other.target = None;
+                other.travel_set = false;
                 other.docking = None;
                 other.goal = Goal::Idle;
                 other.pursuit = crate::ai::pursuit::Pursuit::default();
@@ -487,6 +490,31 @@ mod tests {
     }
 
     #[test]
+    fn a_docking_given_up_clears_the_travel_stellar_and_one_kept_keeps_it() {
+        // The plunder's give-up (@0x8e8b3) and the repair's (@0x8f732)
+        // write +0x6c -1; a docking set writes the victim's slot.
+        let mut docking = pirate(1000);
+        docking.travel_set = true;
+        let mut kept = docking.clone();
+        take_high_level(
+            &mut docking,
+            HighLevel::Docks {
+                ship: ShipRef::Npc(VICTIM),
+                step: DockStep::GiveUp,
+            },
+        );
+        assert!(!docking.travel_set);
+        take_high_level(
+            &mut kept,
+            HighLevel::Docks {
+                ship: ShipRef::Npc(VICTIM),
+                step: DockStep::Sub(DockSub::Close),
+            },
+        );
+        assert!(kept.travel_set);
+    }
+
+    #[test]
     fn a_pirate_docks_with_its_disabled_victim_boarding_it_and_waiting_its_dock() {
         let mut traffic = traffic_of(vec![pirate(100), victim()]);
         tick(&mut traffic, 0);
@@ -601,6 +629,12 @@ mod tests {
         onlooker.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         onlooker.target = Some(ShipRef::Npc(VICTIM));
         onlooker.provoked = 3.0;
+        // Disabled, so it doesn't think: only the drop writes its +0x6c.
+        let mut wrecked = npc(6, ShipStats::new(FAST, &[]));
+        wrecked.berth = 6;
+        wrecked.condition = Condition::Disabled;
+        wrecked.target = Some(ShipRef::Npc(VICTIM));
+        wrecked.travel_set = true;
         let mut docked = pirate(1000);
         docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         docked.target = Some(ShipRef::Npc(VICTIM));
@@ -610,7 +644,7 @@ mod tests {
         });
         let mut boarded = former();
         boarded.boarded = true;
-        let mut traffic = traffic_of(vec![docked, boarded, onlooker]);
+        let mut traffic = traffic_of(vec![docked, boarded, onlooker, wrecked]);
         traffic.set_berth_person(9, "Someone");
         tick(&mut traffic, 0);
         let taken = ship(&traffic, VICTIM);
@@ -632,6 +666,9 @@ mod tests {
         let onlooker = ship(&traffic, NpcId(5));
         assert_eq!((onlooker.goal, onlooker.target), (Goal::Idle, None));
         assert_eq!(onlooker.provoked, 0.0);
+        let wrecked = ship(&traffic, NpcId(6));
+        assert_eq!(wrecked.target, None);
+        assert!(!wrecked.travel_set, "+0x6c -1, @0x8487a");
         assert!(matches!(
             traffic.take_pirate_events()[..],
             [PirateEvent::Plundered {

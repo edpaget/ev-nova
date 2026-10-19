@@ -5766,6 +5766,8 @@ impl Session {
             ship: id,
             fate: Fate::Boarded,
         });
+        // +0x6c -1 for each ship it drops (@0x89806).
+        self.clear_quarry_travel(id);
         self.drop_quarry(id);
     }
 
@@ -5820,14 +5822,24 @@ impl Session {
     /// Every NPC other than `id` that targets it, or fights it, lets it go
     /// and decides again, its provocation gone.
     fn drop_quarry(&mut self, id: NpcId) {
-        let quarry = ShipRef::Npc(id);
         for other in self.traffic.npcs_mut() {
-            if other.id != id
-                && (other.target == Some(quarry) || other.goal.quarry() == Some(quarry))
-            {
+            if holds_quarry(other, id) {
                 other.target = None;
                 other.goal = Goal::Idle;
                 other.provoked = 0.0;
+            }
+        }
+    }
+
+    /// Every NPC [`Session::drop_quarry`] would drop for `id` loses its
+    /// travel stellar (see `nova_sim_ai::ai::travel`), as the player's
+    /// boarding and capture write +0x6c -1 for each ship they drop
+    /// (`_AIShipBoardedByPlayer` @0x89806, `_AIShipCapturedByPlayer`
+    /// @0x896e5).
+    fn clear_quarry_travel(&mut self, id: NpcId) {
+        for other in self.traffic.npcs_mut() {
+            if holds_quarry(other, id) {
+                other.travel_set = false;
             }
         }
     }
@@ -6112,6 +6124,7 @@ impl Session {
     /// [`Session::fleet_up`] says.
     fn join_fleet(&mut self, id: NpcId) {
         self.lose_captured(id);
+        self.clear_quarry_travel(id);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
@@ -6610,6 +6623,12 @@ fn player_trigger(held: Trigger, jumping: bool) -> Trigger {
         point_defence: true,
         ..held
     }
+}
+
+/// Whether `other`, an NPC other than `id`, targets it or fights it.
+fn holds_quarry(other: &Npc, id: NpcId) -> bool {
+    let quarry = ShipRef::Npc(id);
+    other.id != id && (other.target == Some(quarry) || other.goal.quarry() == Some(quarry))
 }
 
 /// `value` held to the range of an `i16`, as a boarding grant reads a
@@ -7792,6 +7811,39 @@ pub(super) mod tests {
             [SimMessage::Arrived(SystemId(131))]
         );
         assert_eq!(session.take_messages(), [], "taking empties the list");
+    }
+
+    #[test]
+    fn a_boarding_or_a_capture_clears_the_travel_stellar_of_the_ships_it_lets_go() {
+        // `_AIShipBoardedByPlayer` @0x897e6-0x8980f and
+        // `_AIShipCapturedByPlayer` @0x896c5-0x896fa write +0x6c -1 for
+        // each ship they drop; a ship they leave keeps its own.
+        let catalog = lawful();
+        for capture in [false, true] {
+            let mut session = Session::start(&catalog).expect("starts");
+            let ship = |id| crate::traffic::fixture::npc(id, crate::stats::ShipStats::default());
+            let victim = session.traffic.add_npc(ship(0));
+            let after = Npc {
+                goal: Goal::Attack(ShipRef::Npc(victim)),
+                target: Some(ShipRef::Npc(victim)),
+                travel_set: true,
+                ..ship(1)
+            };
+            let after = session.traffic.add_npc(after);
+            let apart = Npc {
+                travel_set: true,
+                ..ship(2)
+            };
+            let apart = session.traffic.add_npc(apart);
+            if capture {
+                session.join_fleet(victim);
+            } else {
+                session.mark_boarded(victim);
+            }
+            let travel = |id| session.npc(id).expect("here").travel_set;
+            assert!(!travel(after), "dropped: capture {capture}");
+            assert!(travel(apart), "left alone: capture {capture}");
+        }
     }
 
     #[test]

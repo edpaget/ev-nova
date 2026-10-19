@@ -102,12 +102,14 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> Option<DockStep> {
 }
 
 /// `npc`'s repair done (@0x86f09-0x86f31): it drifts with a wait of
-/// [`REPAIR_HOLD`], its target and docking dropped.
+/// [`REPAIR_HOLD`], its target and docking dropped, its travel stellar
+/// with the nav (+0x6c -1, @0x86f31).
 pub fn complete(npc: &mut Npc) {
     npc.goal = Goal::Drift;
     npc.ai_wait = REPAIR_HOLD;
     npc.target = None;
     npc.docking = None;
+    npc.travel_set = false;
 }
 
 #[cfg(test)]
@@ -234,10 +236,12 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Dock,
         });
+        ship.travel_set = true;
         complete(&mut ship);
         assert_eq!(ship.goal, Goal::Drift);
         assert_eq!(ship.ai_wait, REPAIR_HOLD);
         assert_eq!((ship.target, ship.docking), (None, None));
+        assert!(!ship.travel_set, "nav -1, @0x86f31");
     }
 
     #[test]

@@ -353,6 +353,7 @@ impl Hunt {
             keeps_pursuit: false,
             plunders: None,
             lost_sight: None,
+            travel: crate::ai::travel::TravelWrite::Keep,
         }
     }
 }
@@ -1316,6 +1317,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             }
         );
         assert!(
@@ -1812,6 +1814,7 @@ mod tests {
             keeps_pursuit: false,
             plunders: None,
             lost_sight: None,
+            travel: crate::ai::travel::TravelWrite::Keep,
         }
     }
 
@@ -1893,6 +1896,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             }
         );
         let mut calm = grudger;
@@ -1914,6 +1918,7 @@ mod tests {
                 keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
             },
             "no grudge: dropped, and nothing picked"
         );
