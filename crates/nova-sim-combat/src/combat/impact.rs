@@ -28,9 +28,12 @@
 //!   and the tractor's self-pull alike.
 //!
 //! The player's top speed is 1.8 times its own there
-//! ([`AFTERBURNER_SPEED`]) while its afterburner is on and no gravity
-//! source is present (@0x3ab19-0x3ab68): a [`Body`] whose
-//! [`afterburner`](Body::afterburner) is set. Only the player's can be,
+//! ([`AFTERBURNER_SPEED`]) while its afterburner is on and
+//! `_gravitySourcesPresent` is clear (@0x3ab19-0x3ab68): a [`Body`] whose
+//! [`afterburner`](Body::afterburner) is set. Its session decides it, and
+//! the fight sets it apart for a beam tick, the one push that runs after
+//! `_HandleGravity` sets the flag (see
+//! [`Fighter::afterburner_beam`](super::Fighter::afterburner_beam)). Only the player's can be,
 //! as the block tests +0x86 for the player first (@0x3ab19); an NPC's
 //! cap is always its plain top speed.
 //!
@@ -114,9 +117,9 @@ pub struct Body {
     pub top_speed: f32,
     /// Whether its jump is under way (+0x50 above none).
     pub jumping: bool,
-    /// Whether it is the player with its afterburner on and no gravity
-    /// source present (`_abOn`, *0x3b5598, and `_gravitySourcesPresent`,
-    /// *0x3b5568), which widens a push's clamp to 1.8 times its top speed.
+    /// Whether it is the player with its afterburner widening this push's
+    /// clamp to 1.8 times its top speed (`_abOn`, *0x3b5598, with
+    /// `_gravitySourcesPresent`, *0x3b5568, clear).
     pub afterburner: bool,
 }
 

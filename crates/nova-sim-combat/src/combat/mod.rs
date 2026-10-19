@@ -843,11 +843,18 @@ pub struct Fighter<'a> {
     /// (`_HandleShipPointDefense` @0x392d6). The player's from J on, an
     /// NPC's through its warp stage, its own jump or its leader's.
     pub jumping: bool,
-    /// Whether it is the player with its afterburner on and no gravity
-    /// source present, which widens a push's clamp to 1.8 times its top
-    /// speed ([`Body::afterburner`](impact::Body::afterburner)); never an
-    /// NPC's.
+    /// Whether it is the player with its afterburner widening a hit's, a
+    /// blast's and the shockwave's clamp to 1.8 times its top speed
+    /// ([`Body::afterburner`](impact::Body::afterburner)); never an NPC's.
+    /// Its session decides it, a gravity source in the system as
+    /// `nova_sim::RuleKey::GravityAfterburner` reads.
     pub afterburner: bool,
+    /// Whether it is the player with its afterburner widening a beam
+    /// tick's clamp, as [`Fighter::afterburner`] does the others: only
+    /// with no gravity source in the system, as `_HandleBeams` runs after
+    /// `_HandleGravity` sets `_gravitySourcesPresent` (@0x316a1,
+    /// @0x39c27); never an NPC's.
+    pub afterburner_beam: bool,
     /// Its tractor lock, if a tractor beam holds it, or it holds itself
     /// along its own (the original's +0xc8dc and +0xb4): the fight sets
     /// and touches it ([`impact`]); what it does to the ship is the
@@ -2759,9 +2766,13 @@ impl Combat {
                 passes_shields: landed.hit.passes_shields,
                 late: landed.ship == ShipRef::Player || beam,
             });
-            if let Some(velocity) =
-                impact::push(&fighter.body(), from, impact, source, self.speed_cap)
-            {
+            if let Some(velocity) = impact::push(
+                &fighter.knocked_body(beam),
+                from,
+                impact,
+                source,
+                self.speed_cap,
+            ) {
                 self.shove(fighter, velocity);
             }
             let before = taken(fighter.reserves);
@@ -3276,6 +3287,20 @@ impl Fighter<'_> {
         }
     }
 
+    /// The ship as a hit's push reads it: its afterburner's widening is
+    /// [`Fighter::afterburner_beam`] for a `beam` tick, else
+    /// [`Fighter::afterburner`].
+    fn knocked_body(&self, beam: bool) -> Body {
+        Body {
+            afterburner: if beam {
+                self.afterburner_beam
+            } else {
+                self.afterburner
+            },
+            ..self.body()
+        }
+    }
+
     /// The ship as point defence weighs it as a quarry
     /// ([`defence::choose_ship`]).
     fn as_candidate(&self) -> Candidate {
@@ -3752,6 +3777,8 @@ mod tests {
         class_speed: f32,
         top_speed: f32,
         jumping: bool,
+        afterburner: bool,
+        afterburner_beam: bool,
         tractor: Option<TractorLock>,
         ion: Ion,
         ion_capacity: f32,
@@ -3810,6 +3837,8 @@ mod tests {
                 class_speed: 10.0,
                 top_speed: 10.0,
                 jumping: false,
+                afterburner: false,
+                afterburner_beam: false,
                 tractor: None,
                 ion: Ion::default(),
                 ion_capacity: 0.0,
@@ -3864,7 +3893,8 @@ mod tests {
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
-                afterburner: false,
+                afterburner: self.afterburner,
+                afterburner_beam: self.afterburner_beam,
                 tractor: &mut self.tractor,
                 ion: &mut self.ion,
                 ion_capacity: self.ion_capacity,
@@ -9943,6 +9973,33 @@ mod tests {
             "not from its end"
         );
         assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
+    }
+
+    /// The x velocity a ship of mass 1 and top speed 10 at (100, 0) is
+    /// left with by one hit of `weapon` from a ship at the centre facing
+    /// it, its afterburner widening its shots' cap as `shots` says and its
+    /// beams' as `beams` says.
+    fn knocked_with_caps(weapon: WeaponRecord, shots: bool, beams: bool) -> f32 {
+        let mut target = of_mass(Ship::at(2, 100.0, 0.0), 1.0);
+        target.top_speed = 10.0;
+        target.afterburner = shots;
+        target.afterburner_beam = beams;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(weapon), target];
+        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let pushed = shoves_on(&shoves, B);
+        assert!(!pushed.is_empty(), "it hit");
+        pushed[0].x
+    }
+
+    #[test]
+    fn a_beams_push_reads_its_own_afterburner_cap_and_a_shots_the_other() {
+        let burnt = crate::afterburner::afterburner_top(10.0);
+        let beam = || beam_of(50);
+        assert_eq!(knocked_with_caps(beam(), true, false), 10.0, "plain");
+        assert_eq!(knocked_with_caps(beam(), false, true), burnt, "widened");
+        let shot = || pushing(50);
+        assert_eq!(knocked_with_caps(shot(), true, false), burnt, "widened");
+        assert_eq!(knocked_with_caps(shot(), false, true), 10.0, "plain");
     }
 
     #[test]

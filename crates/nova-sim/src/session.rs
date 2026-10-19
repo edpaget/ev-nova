@@ -384,6 +384,7 @@ mod fire_gates;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
+mod gravity;
 mod hail;
 mod hire;
 mod hooks;
@@ -654,6 +655,7 @@ impl FightTerms {
             top_speed: self.top_speed,
             jumping: npc.warp.under_way(),
             afterburner: false,
+            afterburner_beam: false,
             tractor,
             ion_capacity: stats.ion.capacity(crate::flight::Flyer::Npc),
             ion,
@@ -2825,7 +2827,7 @@ impl Session {
         let armor_regen = self.player_armor_regen();
         // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
         // (see the `afterburner` module).
-        let afterburner = self.afterburner_knockback();
+        let knockback = self.afterburner_knockback();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2862,7 +2864,8 @@ impl Session {
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
-            afterburner,
+            afterburner: knockback.shots,
+            afterburner_beam: knockback.beams,
             tractor: &mut self.tractor,
             ion_capacity: self.stats.ion.capacity(crate::flight::Flyer::Player),
             ion: &mut self.ion,
@@ -2905,6 +2908,7 @@ impl Session {
         self.lose_escorts(&was, &struck);
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
+        self.stellar_hazards();
         self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
