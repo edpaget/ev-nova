@@ -2748,9 +2748,7 @@ impl Combat {
                 self.shove(fighter, velocity);
             }
             let before = taken(fighter.reserves);
-            let was_disabled = fighter.held_disabled
-                || *fighter.condition != Condition::Intact
-                || damage::disabled(fighter.reserves.armor, &fighter.hull, rule);
+            let was_disabled = fighter.disabled_now(rule);
             damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
             self.strikes.push(Strike {
                 ship: landed.ship,
@@ -3315,6 +3313,17 @@ impl Fighter<'_> {
         }
     }
 
+    /// Whether `_IsDisabled` holds for the ship now (@0x2ce6-0x2e0d), as
+    /// `rule` says: held disabled, not intact, or its armour under the
+    /// line ([`damage::disabled`]). Unlike [`Fighter::as_target`]'s, it
+    /// reads the armour the hits landed so far have left, before its
+    /// condition settles.
+    fn disabled_now(&self, rule: &dyn DisableRule) -> bool {
+        self.held_disabled
+            || *self.condition != Condition::Intact
+            || damage::disabled(self.reserves.armor, &self.hull, rule)
+    }
+
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
@@ -3707,6 +3716,7 @@ mod tests {
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::weapon;
 
+    mod collision_walk;
     mod exit_steps;
     mod hidden_shots;
     mod plunder_fire;
