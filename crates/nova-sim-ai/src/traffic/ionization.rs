@@ -214,6 +214,31 @@ mod tests {
     }
 
     #[test]
+    fn an_npcs_display_tints_it_on_its_class_capacity_and_clears_a_spent_colour() {
+        use crate::combat::ion_tint::IonTint;
+        use crate::rulebook::RuleSource;
+        use crate::traffic::ship_display::display;
+        use nova_sim_base::fixture::Draws;
+        let mut ship = charged(200.0);
+        ship.ion.colour = 0x0000_80ff;
+        display(&mut ship, false, RuleSource::Engine, &mut Draws::of(&[3]));
+        assert_eq!(
+            ship.display.ion_tint,
+            Some(IonTint {
+                level: 17,
+                colour: 0x0000_80ff
+            })
+        );
+        ship.ion.charge = 100.0;
+        display(&mut ship, false, RuleSource::Engine, &mut Draws::of(&[]));
+        assert_eq!(ship.display.ion_tint, None, "a factor of 0.25");
+        assert_eq!(ship.ion.colour, 0x0000_80ff);
+        ship.ion.charge = 0.0;
+        display(&mut ship, false, RuleSource::Engine, &mut Draws::of(&[]));
+        assert_eq!((ship.display.ion_tint, ship.ion.colour), (None, 0));
+    }
+
+    #[test]
     fn an_ion_dissipator_among_its_default_items_changes_nothing() {
         let dissipators = [
             OutfitMod {

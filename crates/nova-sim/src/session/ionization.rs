@@ -402,6 +402,46 @@ mod tests {
         assert_eq!(session.npc(id).expect("there").ion.charge, 9.0);
     }
 
+    // The display.
+
+    #[test]
+    fn the_players_display_tints_it_and_clears_a_spent_colour() {
+        use crate::combat::ion_tint::IonTint;
+        let mut session = flying(&ionizing(), 200.5);
+        session.ion.colour = 0x0000_80ff;
+        session.tick(Controls::default());
+        session.tick_combat(
+            crate::combat::Rules::default(),
+            &mut crate::testkit::Draws::of(&[0]),
+        );
+        assert_eq!(
+            session.player_ion_tint(),
+            Some(IonTint {
+                level: 14,
+                colour: 0x0000_80ff
+            })
+        );
+        session.ion.charge = 0.0;
+        session.tick(Controls::default());
+        session.tick_combat(
+            crate::combat::Rules::default(),
+            &mut crate::chance::NeverFires,
+        );
+        assert_eq!(session.player_ion_tint(), None);
+        assert_eq!(session.ion(), crate::combat::ion::Ion::default());
+    }
+
+    #[test]
+    fn the_murk_colour_rule_reaches_the_view_through_the_session() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let session = flying(&ionizing(), 0.0);
+        assert_eq!(session.ion_tint_murk_colour(), RuleSource::Engine);
+        let bible = session.with_rules(
+            Rulebook::default().with_override(RuleKey::IonTintMurkColour, RuleSource::Bible),
+        );
+        assert_eq!(bible.ion_tint_murk_colour(), RuleSource::Bible);
+    }
+
     // The lockout.
 
     /// The ticks, from 1, on which the player fires its blaster of

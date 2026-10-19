@@ -68,15 +68,18 @@
 //!
 //! **The display** ([`display`]): each frame after the flight and the
 //! fight, [`ShipFrames::step`] on its class's [`FrameSpec`], its fold and
-//! whether it is disabled and its key ship aboard. No sound plays in any
-//! of it.
+//! whether it is disabled and its key ship aboard; then its ion tint
+//! ([`ion_tint::display`]), on its class's capacity, its colour cleared
+//! once its charge is gone. No sound plays in any of it.
 
 use crate::catalog::GovtId;
 use crate::chance::Chance;
 use crate::combat::armament::Fold;
+use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
     BANKS, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, SPEED_MULT, ShipFrames, UNFOLDS_TO_FIRE,
 };
+use crate::flight::Flyer;
 use crate::flight::{Controls, FlightRules, Turn, heading_of, shortest_turn};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
@@ -160,6 +163,9 @@ pub struct NpcDisplay {
     pub drive: Drive,
     /// The rolls its spawn still owes.
     pub rolls: Rolls,
+    /// Its ion tint this frame, if it glows
+    /// ([`ion_tint`](crate::combat::ion_tint)).
+    pub ion_tint: Option<IonTint>,
 }
 
 /// What a ship's spawn reads (see [`NpcDisplay::spawned`]).
@@ -448,6 +454,8 @@ pub fn display(
     };
     let fold = npc.armament.fold_mut();
     npc.display.drawn = npc.display.frames.step(&spec, fold, moment);
+    let capacity = npc.stats.ion.capacity(Flyer::Npc);
+    npc.display.ion_tint = ion_tint::display(&mut npc.ion, capacity, chance);
 }
 
 impl Traffic {

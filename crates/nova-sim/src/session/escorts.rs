@@ -16,9 +16,11 @@
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
 //! and armour as they were; taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
-//! recorded. Each keeps its ion colour with its charge cleared, as
-//! `_RespawnEscort` clears +0x5c (@0x3d543) but leaves +0xb0, so the
-//! next ionization ORs onto the old colours. At a hypergate or wormhole exit each is placed on its slot
+//! recorded. Each enters with no ionization: `_RespawnEscort` clears its
+//! charge (+0x5c @0x3d543) and leaves its colour (+0xb0), but
+//! `_PrepareAllSprites` runs the display before the first frame
+//! (@0x3a783), which clears the colour of a ship with no charge
+//! (@0x2bf8a), so no frame shows it and no dose ORs into it. At a hypergate or wormhole exit each is placed on its slot
 //! and then comes out of the exit gate after the player (see
 //! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
 //! the record. A trader escort's
@@ -129,8 +131,6 @@ use crate::traffic::table::{self, ShipKind};
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
-    /// Its ion colour ([`Ion::colour`]); its charge is cleared.
-    pub(super) ion_colour: u32,
     /// Its display state and fold, its ship-table slot's, which
     /// `_RespawnEscort` leaves (see the `ship_display` module); none when
     /// its NPC was not in the system, and it takes a loaded pilot's.
@@ -170,14 +170,14 @@ impl Session {
     }
 
     /// What each of the fleet's escorts keeps across a setup, by its
-    /// index, from its NPC in the system, if any (none and colour 0
-    /// without one).
+    /// index, from its NPC in the system, if any (none without one).
     ///
     /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
-    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark. And as
-    /// `_RespawnEscort` clears an escort's ion charge (+0x5c @0x3d543)
-    /// but never writes its ion colour (+0xb0), the escort keeps the
-    /// colours it was ionized with.
+    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark. Its
+    /// ionization is not kept: `_RespawnEscort` clears the charge
+    /// (+0x5c @0x3d543), and the display `_PrepareAllSprites` runs before
+    /// the first frame (@0x3a783) clears the colour of a ship with no
+    /// charge (@0x2bf8a).
     pub(super) fn fleet_kept(&self) -> Vec<KeptEscort> {
         (0..self.pilot.escorts.len())
             .map(|index| {
@@ -189,7 +189,6 @@ impl Session {
                     .and_then(|id| self.npc(id));
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
                     aux: npc.aux,
-                    ion_colour: npc.ion.colour,
                     display: Some((npc.display.frames, npc.armament.fold())),
                 })
             })
@@ -200,7 +199,7 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark, its ion colour with no charge, and its display and fold, or a
+    /// mark and its display and fold, with no ionization, or a
     /// loaded pilot's fold set with none kept
     /// ([`Session::loaded_escort_set`]).
     pub(super) fn enter_escorts(&mut self, berths: &[u32], kept: &[KeptEscort]) {
@@ -224,10 +223,7 @@ impl Session {
                     .map(|npc| self.loaded_escort_set(&npc.hull.frames));
                 if let Some(npc) = self.npc_mut(id) {
                     npc.aux = kept.aux;
-                    npc.ion = Ion {
-                        charge: 0.0,
-                        colour: kept.ion_colour,
-                    };
+                    npc.ion = Ion::default();
                     match kept.display {
                         Some((frames, fold)) => {
                             npc.display.frames = frames;
@@ -1316,19 +1312,14 @@ mod tests {
     }
 
     /// Ionizes the first escort red, then checks that, once the fleet
-    /// has entered a new system, it has no charge but its colour, onto
-    /// which the next ionization ORs, and the second escort has none.
-    fn assert_ion_colour_kept(session: &mut Session, before: NpcId) {
+    /// has entered a new system, it has neither charge nor colour, so the
+    /// next ionization's colour is its own, and the second escort has
+    /// none.
+    fn assert_no_ion_colour_left(session: &mut Session, before: NpcId) {
         let escorts: Vec<NpcId> = session.fleet.iter().copied().flatten().collect();
         assert_ne!(escorts[0], before, "a new NPC");
         let first = session.npc(escorts[0]).expect("there").ion;
-        assert_eq!(
-            first,
-            Ion {
-                charge: 0.0,
-                colour: 0x00FF_0000
-            }
-        );
+        assert_eq!(first, Ion::default());
         assert_eq!(session.npc(escorts[1]).expect("there").ion, Ion::default());
         let npc = session.npc_mut(escorts[0]).expect("there");
         let at = npc.state.position;
@@ -1344,7 +1335,7 @@ mod tests {
             npc.ion,
             Ion {
                 charge: 10.0,
-                colour: 0x00FF_00FF
+                colour: 0x0000_00FF
             }
         );
     }
@@ -1359,16 +1350,16 @@ mod tests {
     }
 
     #[test]
-    fn an_ionized_escort_arrives_after_a_jump_with_no_charge_and_its_colour() {
+    fn an_ionized_escort_arrives_after_a_jump_with_no_charge_and_no_colour() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         let before = ionize_first_escort(&mut session);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        assert_ion_colour_kept(&mut session, before);
+        assert_no_ion_colour_left(&mut session, before);
     }
 
     #[test]
-    fn an_ionized_escort_takes_off_with_no_charge_and_its_colour() {
+    fn an_ionized_escort_takes_off_with_no_charge_and_no_colour() {
         let catalog = crate::testkit::far_129_reachable(fleeted());
         let mut session = flying(&catalog, RuleSource::Engine);
         let before = ionize_first_escort(&mut session);
@@ -1376,7 +1367,7 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        assert_ion_colour_kept(&mut session, before);
+        assert_no_ion_colour_left(&mut session, before);
     }
 
     #[test]

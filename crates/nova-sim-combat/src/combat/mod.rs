@@ -307,6 +307,7 @@ pub mod flags;
 pub mod hull;
 pub mod impact;
 pub mod ion;
+pub mod ion_tint;
 pub mod jamming;
 pub mod plunder;
 pub mod projectile;

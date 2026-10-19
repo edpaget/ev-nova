@@ -48,13 +48,16 @@
 //! **The display** ([`Session::display_ships`]): after each pass's fight,
 //! the player's frame and then each NPC's, so each ship's frame reads the
 //! fold its flight and fire left, as `_HandleShipDisplay` runs after
-//! `_HandlePlayer` and each `_HandleShip`; before the frame is drawn. No
-//! sound plays in any of it.
+//! `_HandlePlayer` and each `_HandleShip`; before the frame is drawn.
+//! Each display ends with the ship's ion tint
+//! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
+//! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
 
 use super::Session;
 use crate::Chance;
 use crate::RuleKey;
 use crate::combat::armament::{Fold, OutfitRounds};
+use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
     BANKS, Drawn, FOLDS, FrameSpec, Moment, ShipFrames, UNFOLDS_TO_FIRE,
 };
@@ -80,6 +83,8 @@ pub(super) struct PlayerDisplay {
     pub(super) frames: ShipFrames,
     /// The sets its last display drew it on.
     pub(super) drawn: Drawn,
+    /// Its ion tint this frame, if it glows.
+    pub(super) ion_tint: Option<IonTint>,
 }
 
 /// One frame of `_HandlePlayer`'s bank (see the module docs) of a ship of
@@ -245,6 +250,8 @@ impl Session {
         };
         let fold = self.armament.fold_mut();
         self.ship_display.drawn = self.ship_display.frames.step(&spec, fold, moment);
+        let capacity = self.ion_capacity();
+        self.ship_display.ion_tint = ion_tint::display(&mut self.ion, capacity, &mut *chance);
         let govts = &self.govts;
         self.traffic
             .display_ships(|govt| govts.derelict(govt), double_step, chance);
@@ -255,6 +262,20 @@ impl Session {
     #[must_use]
     pub fn player_drawn(&self) -> Drawn {
         self.ship_display.drawn
+    }
+
+    /// The player's ion tint as its last display left it, if it glows
+    /// (see `nova_sim::combat::ion_tint`).
+    #[must_use]
+    pub fn player_ion_tint(&self) -> Option<IonTint> {
+        self.ship_display.ion_tint
+    }
+
+    /// How a murk-colorized ionized ship's tint takes its colour
+    /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
+    #[must_use]
+    pub fn ion_tint_murk_colour(&self) -> RuleSource {
+        self.rules.source_for(RuleKey::IonTintMurkColour)
     }
 
     /// Ship class `ship`'s own `Shield` as the original loads it (class

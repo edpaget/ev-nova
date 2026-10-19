@@ -2317,8 +2317,9 @@ impl Session {
     /// disabled escort has left the fleet already, and mission escorts
     /// and fighters carry no aux mark, so the fleet is exactly the kept
     /// ships with one; each keeps its mark into the new system. Each
-    /// escort also keeps its ion colour, its charge cleared
-    /// (`_RespawnEscort` @0x3d543 leaves +0xb0).
+    /// escort enters with no ionization: `_RespawnEscort` clears its
+    /// charge (@0x3d543), and the display before the first frame clears
+    /// its colour (`_PrepareAllSprites` @0x3a783, @0x2bf8a).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),

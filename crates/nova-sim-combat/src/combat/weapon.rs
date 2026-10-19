@@ -335,7 +335,8 @@ pub struct WeaponSpec {
     /// its circle ([`ion`](super::ion)); never decayed or doubled.
     pub ionization: i32,
     /// Its `IonizeColor`, `00RRGGBB`: the colour it ORs into the ion
-    /// colour of a ship it ionizes ([`ion`](super::ion)).
+    /// colour of a ship it ionizes ([`ion`](super::ion)); 0 loads as
+    /// [`DEFAULT_IONIZE_COLOUR`].
     pub ionize_colour: u32,
     /// Its `JamVuln1-4`, raw: the range each jamming type's roll a shot
     /// of it takes at launch is drawn in (see
@@ -570,7 +571,7 @@ impl WeaponSpec {
             recoil: f32::from(record.recoil),
             impact: f32::from(record.impact),
             ionization: i32::from(record.ionization),
-            ionize_colour: record.ionize_color,
+            ionize_colour: ionize_colour(record.ionize_color),
             jam_vuln: record.jam_vuln,
             exit: ExitKind::from_raw(record.exit_type),
             steps_fold: record.exit_type == -1,
@@ -802,6 +803,18 @@ impl WeaponSpec {
     pub fn flight(&self) -> f32 {
         self.speed * self.lifetime as f32
     }
+}
+
+/// The ion colour a weapon of `IonizeColor` 0 takes: `_LoadObjectData`
+/// makes it `RGBColor` (0x0200, 0x0200, 0xffff), a blue (@0x79505-0x7951b),
+/// as `00RRGGBB`.
+pub const DEFAULT_IONIZE_COLOUR: u32 = 0x0002_02ff;
+
+/// A weapon's ion colour for `IonizeColor` `raw`: [`DEFAULT_IONIZE_COLOUR`]
+/// for 0, else its own.
+#[must_use]
+pub fn ionize_colour(raw: u32) -> u32 {
+    if raw == 0 { DEFAULT_IONIZE_COLOUR } else { raw }
 }
 
 /// The `Recoil` that, like 0, pushes its firer not at all.
@@ -1065,8 +1078,13 @@ mod tests {
     }
 
     #[test]
-    fn a_weapons_ionization_and_ion_colour_are_its_raw_ones() {
-        for (raw, colour) in [(100, 0x00d4_ffff), (-5, 0x0034_c2ff), (0, 0)] {
+    fn a_weapons_ionization_and_ion_colour_are_its_raw_ones_but_colour_0_is_blue() {
+        for (raw, colour, loaded) in [
+            (100, 0x00d4_ffff, 0x00d4_ffff),
+            (-5, 0x0034_c2ff, 0x0034_c2ff),
+            (0, 0, 0x0002_02ff),
+            (3, 1, 1),
+        ] {
             let spec = WeaponSpec::new(&WeaponRecord {
                 ionization: raw,
                 ionize_color: colour,
@@ -1074,7 +1092,7 @@ mod tests {
             });
             assert_eq!(
                 (spec.ionization, spec.ionize_colour),
-                (i32::from(raw), colour),
+                (i32::from(raw), loaded),
                 "{raw}"
             );
         }
