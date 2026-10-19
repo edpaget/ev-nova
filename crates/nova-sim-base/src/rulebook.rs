@@ -2016,7 +2016,7 @@ rule_keys! {
     CachedAvailBits => "cached_avail_bits",
     /// When a ship type's or fleet's `AppearOn`, and a randomly drawn
     /// person's `ActiveOn`, are read (see the session's
-    /// `spawn_availability` module, `nova_sim_ai::spawn` and
+    /// `spawn_availability` module, `nova_sim_ai::traffic::spawn` and
     /// `nova_sim_ai::traffic::persons`). By the engine, as
     /// `_PropagateMissionBitEffects` caches them at each galaxy refresh (a
     /// landing, a jump's arrival, a new pilot and a load; shïp +0xa41
