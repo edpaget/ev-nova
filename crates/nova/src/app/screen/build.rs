@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use nova_data::GameData;
 use nova_sim::ship_layer::SlotSprites;
+use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
@@ -49,6 +50,7 @@ impl AppScreen {
             data,
             flight: None,
             slot_sprites: SlotSprites::default(),
+            stellar_sprites: StellarSpritePool::default(),
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,
@@ -331,6 +333,7 @@ impl AppScreen {
             .with_hail_options(self.hail_options.clone())
             .with_rules(self.rules)
             .with_slot_sprites(self.slot_sprites.clone())
+            .with_stellar_sprite_pool(self.stellar_sprites.clone())
             .with_overlays(self.flight_overlays)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))

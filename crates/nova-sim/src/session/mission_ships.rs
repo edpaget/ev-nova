@@ -2509,6 +2509,7 @@ pub(super) mod tests {
                 frame_size: Some((2, 2)),
                 ..crate::testkit::planet(160, at.x, at.y)
             }];
+            session.listed = session.sites.clone();
             session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             assert!(session.npc(id).is_none(), "{reading:?}: killed");
             assert_eq!(session.npcs().len(), 1, "{reading:?}");

@@ -290,14 +290,18 @@ impl AppScreen {
     }
 
     /// Drops the flight, if any, keeping its ship slots' draw-layer and
-    /// cloned-frame history, its course map's zoom and whether the map
-    /// shows the borders, for the next flight in this run.
+    /// cloned-frame history, its stellar sprite pool, its course map's
+    /// zoom and whether the map shows the borders, for the next flight in
+    /// this run.
     fn put_away_flight(&mut self) {
         let Some(flight) = self.flight.take() else {
             return;
         };
         if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
+        }
+        if let Some(pool) = flight.stellar_sprite_pool() {
+            self.stellar_sprites = pool.clone();
         }
         if let Some(zoom) = flight.course_map_zoom() {
             self.course_map_zoom = Some(zoom);

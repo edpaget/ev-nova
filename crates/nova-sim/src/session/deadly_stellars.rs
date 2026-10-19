@@ -3,11 +3,14 @@
 //! (@0x39ccd-0x39e47), which `_DoPlayGameWork` calls straight after
 //! `_HandleGravity` (@0x4450e), on both passes.
 //!
-//! **Which stellars.** Each shown stellar, in slot order, that is deadly
-//! (`Flags2` 0x0100) and has a frame to draw, its dead one once destroyed
-//! ([`drawn_radius`]): only a shown stellar has a sprite (spöb +0), so a
-//! hidden one kills nothing.
-//!
+//! **Which stellars.** Each listed stellar, in slot order, that is deadly
+//! (`Flags2` 0x0100) and holds a sprite with a frame: a shown one its own,
+//! the frame it is drawn with, and a hidden one the sprite of the pool slot
+//! it last took, by [`RuleKey::StaleStellarSprite`] (see the
+//! `stale_sprites` module). A destroyed stellar shown draws its `DeadType`
+//! sheet, or, dead since the last rebuild point with none, graphic type
+//! 0's, which kills too.
+
 //! **Which ships.** The player, then each NPC in turn, that is neither
 //! destroyed nor breaking up, does not resist ([`resists_deadly`]) and
 //! touches the stellar ([`touches`]). A ship killed by one stellar is gone
@@ -75,8 +78,7 @@ use super::Session;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::combat::stellar_hazards::DeadlyDisc;
-use crate::deadly_stellar::{DeadlyStellarKill, drawn_radius, is_deadly};
+use crate::deadly_stellar::DeadlyStellarKill;
 use crate::player_fate::{Ending, HOLD_TICKS};
 use crate::rulebook::RuleKey;
 use crate::story::{Fate, StoryEvent};
@@ -88,22 +90,6 @@ use crate::{
 };
 
 impl Session {
-    /// The discs `_HandleDeadlyStellars` kills within, in slot order (see
-    /// the module docs).
-    pub(super) fn deadly_discs(&self) -> Vec<DeadlyDisc> {
-        self.sites
-            .iter()
-            .filter(|site| is_deadly(site.flags2))
-            .filter_map(|site| {
-                let radius = drawn_radius(site.frame_size, site.dead_frame_size, site.destroyed)?;
-                Some(DeadlyDisc {
-                    at: site.position,
-                    radius,
-                })
-            })
-            .collect()
-    }
-
     /// Settles the fight's kills by deadly stellars
     /// ([`Combat::take_stellar_kills`]; see the module docs), drawing on
     /// `chance`: the player's hold starts and its pod
@@ -407,7 +393,7 @@ mod tests {
             let shown = planet(139, 3000.0, 0.0);
             let mut hidden = among(&catalog, &[shown, on_the_npc()], 1, rules);
             fight(&mut hidden);
-            assert_eq!(hidden.npcs().len(), 1, "hidden");
+            assert_eq!(hidden.npcs().len(), 1, "hidden, never shown");
             let frameless = LandingSite {
                 frame_size: None,
                 ..on_the_npc()
@@ -433,7 +419,11 @@ mod tests {
             assert_eq!(session.npcs(), [], "its dead frame reaches");
             let mut none = among(&catalog, &[dead(None)], 1, rules);
             fight(&mut none);
-            assert_eq!(none.npcs().len(), 1, "no dead frame");
+            assert_eq!(
+                none.npcs().len(),
+                1,
+                "no dead frame: its Type frame, 10 across"
+            );
         }
     }
 
@@ -584,6 +574,7 @@ mod tests {
             assert_eq!(session.npcs().len(), 1);
             let at = session.npcs()[0].state.position;
             session.sites = vec![deadly_at(140, at.x, at.y)];
+            session.listed = session.sites.clone();
             session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
             assert_eq!(session.npcs(), []);
         }
@@ -673,6 +664,7 @@ mod tests {
         session.take_messages();
         session.take_sounds();
         session.sites = vec![deadly_at(140, 0.0, 40.0)];
+        session.listed = session.sites.clone();
         fire_at_the_player(&mut session, &catalog);
         assert!(
             session

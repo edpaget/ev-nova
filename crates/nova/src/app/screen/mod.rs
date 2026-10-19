@@ -283,6 +283,7 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::ship_layer::SlotSprites;
+use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
     Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HireTerms, LegalCode,
     PersonRules, PilotKeeper, PilotStore, PointDefenceRule, Rulebook,
@@ -436,6 +437,11 @@ pub struct AppScreen {
     /// original's sprites outlive a pilot, `_InitSprites` running once at
     /// launch (see [`nova_sim::ship_layer`]).
     slot_sprites: SlotSprites,
+    /// The stellar sprite pool the last flight put away left, which each
+    /// new flight carries on: the original never clears a stellar's sprite
+    /// pointer, so a stellar keeps the slot it last took for the run (see
+    /// [`nova_sim::story::sprite_pool`]).
+    stellar_sprites: StellarSpritePool,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.

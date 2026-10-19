@@ -434,6 +434,7 @@ mod self_destruct;
 mod self_repair;
 mod ship_change;
 mod ship_display;
+mod stale_sprites;
 mod status_cargo;
 mod steering;
 mod stellars;
@@ -561,6 +562,7 @@ use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
+use crate::story::sprite_pool::StellarSpritePool;
 use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::text_tags::RankTagGovts;
@@ -1183,6 +1185,10 @@ pub struct Session {
     /// (see the `stellars` module); never saved, as a load is itself a
     /// rebuild point.
     rebuilt: Rebuilt,
+    /// The stellar sprite pool, each stellar's last slot and each slot's
+    /// last place (see the `stale_sprites` module); never saved, as it
+    /// lives as long as the original's process.
+    stellar_sprites: StellarSpritePool,
     /// Graphic type 0's sheet's frame size, or `None` when it cannot be
     /// read, read from the catalog as the session starts: what a rebuild
     /// point fills an empty sprite slot with, and the box a click on that
@@ -1699,6 +1705,7 @@ impl Session {
             strength: BTreeMap::new(),
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
+            stellar_sprites: StellarSpritePool::default(),
             fallback_frame: catalog.fallback_frame_size(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
             missions,

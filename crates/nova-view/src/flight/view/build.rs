@@ -16,7 +16,7 @@ use nova_sim::{
 };
 use nova_sim::{
     ControlBits, Hailed, HireTerms, MissionInfo, MissionInfoPress, OfferPrompt, PersonRules,
-    PlayerInfo, ship_layer::SlotSprites,
+    PlayerInfo, ship_layer::SlotSprites, story::sprite_pool::StellarSpritePool,
 };
 
 use crate::flight::cadence::HudCadence;
@@ -288,6 +288,26 @@ impl<
     #[must_use]
     pub fn slot_sprites(&self) -> Option<&SlotSprites> {
         self.session.as_ref().ok().map(Session::slot_sprites)
+    }
+
+    /// The flight with its stellar sprite pool carried from `pool`, the
+    /// one an earlier flight of the same run left
+    /// ([`Session::carry_stellar_sprite_pool`]): the original never clears
+    /// a stellar's sprite pointer between pilots.
+    #[must_use]
+    pub fn with_stellar_sprite_pool(mut self, pool: StellarSpritePool) -> Self {
+        if let Ok(session) = &mut self.session {
+            session.carry_stellar_sprite_pool(pool);
+        }
+        self
+    }
+
+    /// The stellar sprite pool as the flight leaves it
+    /// ([`Session::stellar_sprite_pool`]), or `None` when its session never
+    /// started.
+    #[must_use]
+    pub fn stellar_sprite_pool(&self) -> Option<&StellarSpritePool> {
+        self.session.as_ref().ok().map(Session::stellar_sprite_pool)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
