@@ -129,12 +129,13 @@ pub fn aim(parent: &Shot, shot: Shot, n: u32, sides: &Sides, chance: &mut dyn Ch
     let (target, heading) = if parent.weapon.guidance == Guidance::PointDefence {
         (parent.target, parent.heading)
     } else if parent.weapon.seeks_with_subs() {
-        // The seated shot itself, its target -1 (@0x3f3c3).
-        let seeking = Shot {
-            target: None,
-            aimed_at: None,
-            ..shot
-        };
+        // The seated shot itself, its target -1 (@0x3f3c3). Clearing the
+        // target changes nothing it finds: it is the given one, which the
+        // seek falls back to, and a homing shot that may hit only it finds
+        // it or nothing. A shot no ship fired reads `aimed_at`.
+        let mut seeking = shot;
+        seeking.target = None;
+        seeking.aimed_at = None;
         let nearest = targets
             .iter()
             .filter(|ship| seeking.can_hit(ship, sides))
@@ -622,6 +623,26 @@ mod tests {
             &mut Draws::of(&[]),
         );
         assert_eq!(subs[0].target, Some(HIT), "its own government's passed by");
+    }
+
+    #[test]
+    fn a_seeking_sub_munition_no_ship_fired_seeks_past_the_given_target() {
+        // A shot no ship fired hits only the ship it is aimed at
+        // (@0x44a71-0x44a88), but the seek asks with no target of its own
+        // (@0x3f3c3): it takes the nearer ship, not the given one.
+        let unowned = Shot {
+            source: Source::Other,
+            ..parent(-1, 1, 0, 0, 0x0010)
+        };
+        let targets = [ship(HIT, 100.0, 450.0), ship(NEAR, 100.0, 60.0)];
+        let subs = released(
+            &unowned,
+            &sub(-1),
+            (Some(HIT), false),
+            &among(&targets),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(subs[0].target, Some(NEAR));
     }
 
     #[test]

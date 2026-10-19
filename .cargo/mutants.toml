@@ -462,9 +462,9 @@ exclude_re = [
     # texel shows.
     "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
     # A shot's slot is distinct among the shots in flight (it is the
-    # first not taken), so `put_in_flight`'s insertion point never meets
+    # first not taken), so `insert_seated`'s insertion point never meets
     # an equal slot, and `<` and `<=` find the same place.
-    "nova-sim-combat/src/combat/mod\\.rs:.*replace < with <= in Combat::put_in_flight$",
+    "nova-sim-combat/src/combat/shot_slots\\.rs:.*replace < with <= in Combat::insert_seated$",
     # `_HandleShot`'s walk: one visit past the last slot held or holding a
     # shot finds neither, and a sub-munition never takes the visited slot,
     # which its parent still holds as it releases.
