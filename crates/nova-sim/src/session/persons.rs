@@ -86,6 +86,7 @@ use crate::person::{
     QUOTE_ODDS, QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, hail_quote_patch_id,
     hail_quote_text, quote_eligible,
 };
+use crate::rulebook::RuleSource;
 use crate::sound::SimSound;
 use crate::text_tags::TagRules;
 use crate::traffic::npc::{Mode, Npc, NpcId, NpcPerson};
@@ -437,14 +438,41 @@ impl Session {
     /// shot does not count, nor does a blast or the player's death
     /// shockwave, which is no direct hit and never answered. No save is
     /// due.
+    ///
+    /// By [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)'s engine reading
+    /// a person that keeps its target against the player
+    /// ([`react::keeps_target`](crate::ai::react::keeps_target)) holds no
+    /// grudge, as the focus test's jump to 0x3bed2 (@0x3bcac) skips it; by
+    /// the other reading every answered player hit holds it. The test reads
+    /// the NPCs as the fight left them, as the reactions do: the settle
+    /// step holds the grudges before the strikes are answered
+    /// ([`Session::answer_strikes`]), and nothing between moves a goal or
+    /// a frame.
     pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
-        for strike in strikes
+        let strikes: Vec<&Strike> = strikes
             .iter()
             .filter(|strike| strike.by == Some(ShipRef::Player) && strike.answered)
-        {
+            .collect();
+        let kept: Vec<bool> = {
+            let world = self.world();
+            let around = world.around(self.traffic.npcs());
+            strikes
+                .iter()
+                .map(|strike| match (around.hit_focus, strike.ship) {
+                    (RuleSource::Engine, ShipRef::Npc(id)) => around.npc(id).is_some_and(|npc| {
+                        crate::ai::react::keeps_target(npc, npc, ShipRef::Player, &around)
+                    }),
+                    _ => false,
+                })
+                .collect()
+        };
+        for (strike, kept) in strikes.into_iter().zip(kept) {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
+            if kept {
+                continue;
+            }
             let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
             let Some(person) = npc.and_then(|npc| npc.person.as_mut()) else {
                 continue;
@@ -898,6 +926,54 @@ mod tests {
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
         session.hold_grudges(&[hit]);
         assert!(session.pilot().grudge(PersonId(600)), "answered");
+    }
+
+    /// [`facing_ace`] over [`duel`]`(GRUDGE, 0)` read by `focus`, with
+    /// Ace facing up and attacking a quarry `above` it, the player 100
+    /// below it.
+    fn ace_hunting(focus: RuleSource, above: f32) -> Session {
+        let catalog = duel(GRUDGE, 0);
+        let rules = Rulebook::default().with_override(RuleKey::HitFocus, focus);
+        let mut session = facing_ace(&catalog, ada(&catalog)).with_rules(rules);
+        let mut quarry = session.npcs()[0].clone();
+        quarry.person = None;
+        quarry.state.position = Vec2::new(0.0, -100.0 - above);
+        let quarry = session.traffic.add_npc(quarry);
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
+        ace.state.heading = 0.0;
+        ace.pursuit.frame = None;
+        session
+    }
+
+    #[test]
+    fn a_person_keeping_its_target_holds_no_grudge_for_the_players_hit() {
+        // The focus test's jump to 0x3bed2 (@0x3bcac) skips the grudge
+        // (@0x3be83-0x3beb3): its quarry 50 above, the player 100 off
+        // (10000 > 0.25 × 2500).
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        let mut session = ace_hunting(RuleSource::Engine, 50.0);
+        session.hold_grudges(&[hit]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+        let mut session = ace_hunting(RuleSource::Bible, 50.0);
+        session.hold_grudges(&[hit]);
+        assert!(
+            session.pilot().grudge(PersonId(600)),
+            "by the other reading every answered player hit"
+        );
+    }
+
+    #[test]
+    fn a_person_hit_by_the_player_nearer_than_half_its_targets_distance_holds_its_grudge() {
+        // Its quarry 400 above: 10000 is not above 0.25 × 160000.
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        for focus in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = ace_hunting(focus, 400.0);
+            session.hold_grudges(&[hit]);
+            assert!(session.pilot().grudge(PersonId(600)), "{focus:?}");
+            assert!(session.npcs()[0].person.expect("Ace").grudge, "{focus:?}");
+        }
     }
 
     #[test]
