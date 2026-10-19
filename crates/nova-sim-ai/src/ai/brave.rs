@@ -320,6 +320,7 @@ mod tests {
             let decision = decided_on_dying(provoked(x, y));
             assert_eq!(decision.goal, Goal::Idle, "({x}, {y})");
             assert!(decision.forgets_provocation, "({x}, {y})");
+            assert!(decision.clears_target, "target -1 (@0x8e717), ({x}, {y})");
             assert!(!decision.calls_reinforcements, "({x}, {y})");
             assert_eq!(decision.comm_call, Some(CommCall::Distress), "a warship");
         }
@@ -343,6 +344,7 @@ mod tests {
             let decision = decided_on_dying(provoked(x, y));
             assert_eq!(decision.goal, Goal::Flee(n(2)), "({x}, {y})");
             assert!(!decision.forgets_provocation, "({x}, {y})");
+            assert!(!decision.clears_target, "the flight keeps it, ({x}, {y})");
             assert!(decision.calls_reinforcements, "@0x8b6dc");
             assert_eq!(decision.comm_call, Some(CommCall::Distress), "@0x8b6cc");
         }
