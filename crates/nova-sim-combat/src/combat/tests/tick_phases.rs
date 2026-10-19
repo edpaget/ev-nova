@@ -547,3 +547,15 @@ fn a_player_whose_armour_is_gone_before_its_regeneration_regenerates_its_shield_
     assert_eq!(ships[1].reserves.shield.now, 51.0, "its shield");
     assert_eq!(ships[1].reserves.armor.now, 0.0, "no armour");
 }
+
+#[test]
+fn a_player_disabled_as_its_frame_began_regenerates_no_shield() {
+    // `_HandlePlayer` gates the shield on its frame-start flags
+    // (@0x6cfa2): a disabled player regenerates none.
+    let mut ships = beamed(ShipRef::Player, 0, 50.0, 5.0);
+    ships[0].trigger = QUIET;
+    ships[1].condition = Condition::Disabled;
+    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    assert_eq!(ships[1].reserves.shield.now, 50.0);
+    assert_eq!(ships[1].reserves.armor.now, 5.0);
+}

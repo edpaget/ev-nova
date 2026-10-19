@@ -2864,7 +2864,7 @@ impl Session {
             // The traffic flies the warp's lead-in, so each NPC's display
             // still steps its fade (@0x2d088-0x2d164, see
             // `Traffic::step_fades`).
-            if self.landed.is_none() && self.in_warp_lead_in() {
+            if self.in_warp_lead_in() {
                 self.traffic.step_fades();
             }
             self.drawn.clear();

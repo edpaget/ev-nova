@@ -919,6 +919,45 @@ mod tests {
     }
 
     #[test]
+    fn a_landed_fight_steps_no_fade() {
+        // Landed, no ship loop runs, and no display steps a fade.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        crate::testkit::land_now(&mut session).expect("lands");
+        let mut npc = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        npc.cloak = crate::cloak::Cloak {
+            fade: 4.0,
+            direction: 1,
+        };
+        let id = session.traffic.add_npc(npc);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.npc(id).expect("there").cloak.fade, 4.0);
+    }
+
+    #[test]
+    fn the_warps_lead_in_still_steps_each_npcs_fade() {
+        // The traffic flies the lead-in, and each NPC's display steps its
+        // fade (@0x2d088), though the fight stands still.
+        let catalog = crate::testkit::catalog();
+        let mut session = crate::session::tests::bound_for_131(
+            &catalog,
+            crate::session::tests::OUT,
+            Vec2::ZERO,
+            90.0,
+        );
+        let mut npc = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        npc.cloak = crate::cloak::Cloak {
+            fade: 4.0,
+            direction: 1,
+        };
+        let id = session.traffic.add_npc(npc);
+        session.begin_jump().expect("jumps");
+        assert!(session.in_warp_lead_in());
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.npc(id).expect("there").cloak.fade, 4.75);
+    }
+
+    #[test]
     fn a_ship_disabled_by_the_hit_pass_raises_its_fate_once() {
         // Each phase settles its own hits, against the NPCs as the phase
         // found them: the disabling raises its fate after the collision

@@ -2029,4 +2029,18 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn a_player_whose_class_holds_no_armour_is_never_dying_at_the_eject_check() {
+        // `_IsDying` reads armour at none or below (@0x253d), but a ship
+        // that holds none has none to lose (see `holds_armour`): the
+        // chord on an intact player of no armour ejects nothing.
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        session.pilot.reserves.armor = crate::reserves::Gauge::full(0.0);
+        session.hold_eject(true);
+        session.eject_check(&mut NeverFires);
+        assert!(!in_the_pod(&session));
+        assert_eq!(session.condition, Condition::Intact);
+    }
 }
