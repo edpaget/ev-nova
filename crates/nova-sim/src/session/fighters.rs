@@ -540,6 +540,8 @@ fn fighter(
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.pod_count,
+        // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
+        odds: crate::traffic::odds_cache::STALE,
     }
 }
 

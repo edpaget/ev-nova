@@ -323,6 +323,8 @@ impl Session {
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
             // `_RespawnEscort` leaves +0xc908 alone.
             pods_left: kind.hull.pod_count,
+            // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
+            odds: crate::traffic::odds_cache::STALE,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),

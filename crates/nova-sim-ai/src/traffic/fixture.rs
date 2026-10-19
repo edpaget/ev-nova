@@ -76,6 +76,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         swarm_leader: None,
         marines: ClassMarines::default(),
         pods_left: 0,
+        odds: 0.0,
     }
 }
 

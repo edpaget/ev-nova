@@ -151,6 +151,9 @@ pub mod leave_flight;
 #[cfg(test)]
 mod lost_sight_tests;
 pub mod npc;
+pub mod odds_cache;
+#[cfg(test)]
+mod odds_cache_tests;
 pub mod on_line;
 pub mod persons;
 pub mod plunder;
@@ -195,6 +198,7 @@ use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
+use odds_cache::OddsCache;
 use on_line::{LineQueue, OnLine};
 use persons::{GateView, PersonWorld, derelict_armor};
 use plunder::{HighLevel, PirateEvent};
@@ -664,6 +668,10 @@ pub struct Traffic {
     /// which a new ship there takes ([`berth_exits`]): written after each
     /// fight, kept as it dies or leaves, and across systems.
     berth_exits: BerthExits,
+    /// The odds each berth caches (+0xc914), refreshed one berth a tick
+    /// ([`odds_cache`]): kept as its ship dies or leaves, and across
+    /// systems.
+    odds: OddsCache,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -731,6 +739,7 @@ impl Traffic {
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
             berth_exits: BerthExits::default(),
+            odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -1032,6 +1041,9 @@ impl Traffic {
             }
         }
         let freed = pod_flight::count_down(&mut self.npcs);
+        // `_DoPlayGameWork`'s odds pass, after every think and before
+        // `_HandleShip` (@0x442b0-0x44336; see `odds_cache`).
+        self.refresh_odds(&world);
         self.fly(&world, true, still, chance);
         self.departed.extend(freed);
         // The display pass (`_DoPlayGameWork` @0x444ad) follows the
@@ -1800,6 +1812,10 @@ impl Traffic {
         };
         // Nor the exit cursors (+0xc8fe-+0xc905): they are the berth's.
         *npc.armament.exit_cursors_mut() = self.berth_cursors(berth);
+        // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
+        // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
+        npc.odds = odds_cache::STALE;
+        self.mark_spawned(berth);
         self.npcs.push(npc);
         id
     }
@@ -2205,8 +2221,10 @@ impl Traffic {
                 swarm_leader: None,
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,
+                odds: odds_cache::STALE,
             };
             self.write_berth_person(berth, name);
+            self.mark_spawned(berth);
             self.npcs.push(npc);
         }
         placed.iter().flatten().count()
@@ -2295,7 +2313,7 @@ mod tests {
 
     /// `avg_ships` on average, all of düde 128's ship 200 (a wimpy
     /// trader, govt 130; its own `InherentAI` is 3).
-    fn table(avg_ships: u32) -> SpawnTable {
+    pub(super) fn table(avg_ships: u32) -> SpawnTable {
         SpawnTable {
             avg_ships,
             dudes: vec![(DudeId(128), 100)],
@@ -2347,7 +2365,7 @@ mod tests {
 
     /// One setup pass placing ship 200 in the system at
     /// (`x` - 750, `y` - 750), facing up, of aggression 0.
-    fn placed(x: u32, y: u32) -> [u32; 8] {
+    pub(super) fn placed(x: u32, y: u32) -> [u32; 8] {
         [6, 6, 0, 0, x, y, 0, 2]
     }
 

@@ -441,6 +441,14 @@ pub struct Npc {
     /// set it (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe), one fewer for each
     /// pod it ejects (see `nova_sim::npc_escape`). Never saved.
     pub pods_left: u16,
+    /// The odds against it as its slot caches them (the original's
+    /// +0xc914): -1 ([`odds_cache::STALE`](crate::traffic::odds_cache::STALE))
+    /// from its spawn until the frame's odds pass reaches its berth, then
+    /// the odds then, until the next round (see
+    /// [`odds_cache`](crate::traffic::odds_cache)). What its odds retreat
+    /// and its calls for reinforcements read by the engine
+    /// ([`cached_odds`](crate::ai::odds::cached_odds)). Never saved.
+    pub odds: f32,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
