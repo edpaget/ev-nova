@@ -1058,6 +1058,18 @@ impl Npc {
                 | Mode::EnteringGate { .. }
         )
     }
+
+    /// The heading its low level last wanted (+0x68): the last body's
+    /// heading of its pursuit frame while that frame is for its goal
+    /// ([`Pursuit::frame`]); none without such a frame.
+    #[must_use]
+    pub fn wanted_heading(&self) -> Option<i16> {
+        self.pursuit
+            .frame
+            .filter(|frame| frame.goal == self.goal)
+            .and_then(|frame| frame.last())
+            .map(|body| body.heading)
+    }
 }
 
 #[cfg(test)]
@@ -1075,6 +1087,28 @@ mod tests {
         let mut npc = crate::traffic::fixture::npc(1, stats);
         npc.reserves.fuel.now = now;
         npc
+    }
+
+    #[test]
+    fn the_heading_wanted_is_the_last_body_of_a_frame_for_its_goal() {
+        use crate::ai::fire::Manoeuvre;
+        use crate::ai::pursuit::{Body, Frame};
+        let body = |heading| {
+            Some(Body {
+                manoeuvre: Manoeuvre::Dogfight,
+                heading,
+            })
+        };
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
+        assert_eq!(npc.wanted_heading(), None, "no frame");
+        npc.goal = Goal::Attack(ShipRef::Player);
+        npc.pursuit.frame = Some(Frame {
+            goal: npc.goal,
+            bodies: [body(10), body(20)],
+        });
+        assert_eq!(npc.wanted_heading(), Some(20), "the last body");
+        npc.goal = Goal::Idle;
+        assert_eq!(npc.wanted_heading(), None, "a frame for another goal");
     }
 
     #[test]

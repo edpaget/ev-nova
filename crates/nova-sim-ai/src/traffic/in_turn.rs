@@ -29,22 +29,14 @@ use crate::traffic::npc::{Npc, NpcId};
 #[cfg(doc)]
 use super::Traffic;
 
-/// The heading each of `npcs` wanted as the pass began (+0x68): the last
-/// body's heading of its pursuit frame while that frame is for its goal
-/// ([`Pursuit::frame`](crate::ai::pursuit::Pursuit::frame)), read before
-/// the first strike is answered. An NPC with no such frame is left out,
+/// The heading each of `npcs` wanted as the pass began (+0x68,
+/// [`Npc::wanted_heading`]), read before the first strike is answered. An NPC with no such frame is left out,
 /// and the focus test takes the whole-degree bearing to its target
 /// instead ([`Surroundings::wanted`](crate::ai::Surroundings::wanted)).
 #[must_use]
 pub fn wanted_headings(npcs: &[Npc]) -> BTreeMap<NpcId, i16> {
     npcs.iter()
-        .filter_map(|npc| {
-            npc.pursuit
-                .frame
-                .filter(|frame| frame.goal == npc.goal)
-                .and_then(|frame| frame.last())
-                .map(|body| (npc.id, body.heading))
-        })
+        .filter_map(|npc| npc.wanted_heading().map(|heading| (npc.id, heading)))
         .collect()
 }
 
