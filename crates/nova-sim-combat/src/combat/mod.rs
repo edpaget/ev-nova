@@ -215,11 +215,11 @@
 //!    firer's reload for it at its `Reload` ([`Armament::hold`]).
 //! 6. `_HandleShip`'s fire (@0x44483, [`Combat::fire_npcs`]): each NPC's
 //!    reloads count down a tick (@0x33896), then it fires the weapons its
-//!    trigger holds that are ready, as in step 1, but no fighter bay's
-//!    launch, which step 4 made, reading the conditions
-//!    the passes and the ends of life left. Its shots first move in the
-//!    next tick's step 5. An NPC fires its pick as `_FireAIShipWeapon`
-//!    does ([`ai_fire`]): a copy that spawns nothing still spends, by the
+//!    trigger holds that are ready, as in step 1 (but no fighter bay's
+//!    launch, which step 4 made), reading the conditions the passes and
+//!    the ends of life left. Its shots first move in the next tick's
+//!    step 5. An NPC fires its pick as `_FireAIShipWeapon` does
+//!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
 //!    engine, and a recoil sets the firer's velocity, reported as a
 //!    [`Shove`]. Then, in `_HandleBeams` (@0x4453d,
 //!    [`Combat::close_tick`]), each beam spends a tick of its life, or
