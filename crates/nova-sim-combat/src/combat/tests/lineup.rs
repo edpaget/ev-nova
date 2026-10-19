@@ -49,9 +49,17 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
     struck.reserves.armor.now = 1.0;
     struck.leader = None;
     struck.fleet = E;
+    // Its jamming and cloak, which a homing shot's sight reads, change
+    // too. Its condition is left to settle, so the targets' `disabled`
+    // above can only come from the armour.
+    struck.jamming = Jamming([30, 0, 0, 0]);
+    struck.cloaked = true;
+    let before = lineup.sights[1];
     // A is changed too, but nothing struck it.
     let unstruck = lineup.stood[0];
+    let unstruck_sight = lineup.sights[0];
     fighters[0].state.velocity = Vec2::new(7.0, 7.0);
+    fighters[0].jamming = Jamming([50, 0, 0, 0]);
     lineup.refresh(&fighters, &[E], &NovaDisable);
     let reread = Target {
         disabled: true,
@@ -67,7 +75,14 @@ fn a_struck_ship_is_read_again_whole_in_each_view_at_its_own_place() {
         ..reread
     };
     assert_eq!(lineup.seen[1], seen);
-    assert_eq!(lineup.sights[1], fighters[1].sight());
+    let sight = Sight {
+        jamming: Jamming([30, 0, 0, 0]),
+        cloaked: true,
+        ..before
+    };
+    assert_ne!(sight, before);
+    assert_eq!(lineup.sights[1], sight);
     assert_eq!(lineup.stood[0], unstruck, "A was not struck");
+    assert_eq!(lineup.sights[0], unstruck_sight, "nor read again");
     assert_eq!(fighters[0].ship, A);
 }

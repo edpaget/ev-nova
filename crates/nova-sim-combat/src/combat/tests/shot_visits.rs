@@ -227,3 +227,77 @@ fn every_visits_blast_meets_a_struck_ship_where_it_stood() {
     let struck = handle(&mut combat, &mut ships, &Arsenal::default());
     assert_eq!(struck, [(n, false), (n, false)]);
 }
+
+/// The player's homing missile at (0, -600), heading 90 with E straight
+/// below it, past its homing delay, chasing E: its roll of 71 against the
+/// first jamming type is jammed by 30 or more of it (@0x321b7-0x32275).
+fn homing_at_e() -> Shot {
+    let mut shot = Shot::launch(
+        WeaponSpec::new(&missile()),
+        ShipRef::Player,
+        ShipRef::Player,
+        &ShipState {
+            position: Vec2::new(0.0, -600.0),
+            ..ShipState::default()
+        },
+        90.0,
+    );
+    shot.moved_from = Some(shot.position);
+    shot.age = projectile::HOMING_DELAY;
+    shot.aimed_at = Some(E);
+    shot.target = Some(E);
+    shot.jam_rolls = [71, 0, 0, 0];
+    shot
+}
+
+/// The flak going off beside E, jamming 30 of the first type, and the
+/// missile chasing it, the missile in the lower slot when `missile_first`:
+/// the missile's heading after the pass.
+fn homing_and_blast(missile_first: bool) -> f32 {
+    let mut combat = Combat::default();
+    let jammer = Ship {
+        jamming: Jamming([30, 0, 0, 0]),
+        ..escort()
+    };
+    let mut ships = among(&mut combat, jammer);
+    let (lower, upper) = if missile_first {
+        (homing_at_e(), spent(flak(), BESIDE_E))
+    } else {
+        (spent(flak(), BESIDE_E), homing_at_e())
+    };
+    combat.put_in_flight(lower);
+    combat.put_in_flight(upper);
+    let struck = handle(&mut combat, &mut ships, &Arsenal::default());
+    assert_eq!(struck, [(E, false)], "the flak's blast alone");
+    assert_eq!(
+        ships[2].condition,
+        Condition::Disabled,
+        "the blast downed E"
+    );
+    let missile = combat
+        .shots()
+        .iter()
+        .find(|shot| shot.weapon.guidance == Guidance::Homing)
+        .expect("the missile flies on");
+    missile.heading
+}
+
+#[test]
+fn a_later_slots_missile_reads_the_jamming_an_earlier_slots_blast_left() {
+    // Slot 0's blast disables E at its own visit (`_DamageShip`
+    // @0x36106); slot 1's guidance then reads E's jamming off the live
+    // record (`_ShipECM`, @0x321b7), where a disabled ship jams nothing,
+    // so the missile turns towards E.
+    let heading = homing_and_blast(false);
+    assert!(
+        (heading - 90.0).abs() > 1.0,
+        "unjammed, it turns: {heading}"
+    );
+}
+
+#[test]
+fn a_lower_slots_missile_is_jammed_before_a_later_slots_blast_lands() {
+    // The missile's visit comes first: E still jams it, so it stops
+    // turning.
+    assert_eq!(homing_and_blast(true), 90.0, "jammed, it holds its heading");
+}

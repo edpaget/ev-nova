@@ -3277,9 +3277,14 @@ impl Fighter<'_> {
         }
     }
 
-    /// What homing guidance reads of the ship as the tick begins: its
-    /// jamming, whether it is disabled as `_IsDisabled` reads it (not
-    /// intact, or held disabled), and its sight facts.
+    /// What homing guidance reads of the ship (`_ShipECM` and the cloak
+    /// test, @0x321b7-0x32335): its jamming, whether it is disabled as
+    /// `_IsDisabled` reads it (not intact, or held disabled), and its sight
+    /// facts. Read as the tick begins, and again after each landing on the
+    /// ship within a loop ([`Lineup::refresh`](lineup::Lineup::refresh)),
+    /// once `Combat::settle_struck` has settled its condition, so a later
+    /// visit's shot reads a ship an earlier landing disabled as jamming
+    /// nothing, as the original reads the live record after `_DamageShip`.
     fn sight(&self) -> Sight {
         Sight {
             ship: self.ship,
