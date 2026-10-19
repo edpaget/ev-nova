@@ -211,13 +211,16 @@ fn a_kill_destroys_at_minus_1000_armour_in_one_explode2_once_however_many_discs(
     ships[0].condition = Condition::Disabled;
     let overlapping = deadly(&[(Vec2::new(0.0, 50.0), 80.0), (Vec2::ZERO, 80.0)]);
     tick_in(&mut combat, &mut ships, &overlapping, ADVANCE);
+    let seen = combat.stellar_kills().to_vec();
+    assert_eq!(seen.len(), 2, "seen in place");
     for ship in &ships[..2] {
         assert_eq!(ship.condition, Condition::Destroyed, "{:?}", ship.id);
         assert_eq!(ship.reserves.armor.now, -1000.0);
     }
     assert_eq!(ships[2].condition, Condition::Intact, "clear of both");
+    assert_eq!(combat.take_stellar_kills(), seen, "and left there");
     assert_eq!(
-        combat.take_stellar_kills(),
+        seen,
         [
             StellarKill {
                 ship: A,
