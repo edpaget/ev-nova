@@ -898,6 +898,31 @@ mod tests {
         assert!(!session.pilot().grudge(PersonId(600)));
     }
 
+    /// Fires on Ace until its shield drops, at most 60 ticks, leaving the
+    /// strikes for the traffic to answer.
+    fn hit_ace(session: &mut Session) {
+        for _ in 0..60 {
+            let shield = session.npcs()[0].reserves.shield.now;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < shield {
+                return;
+            }
+        }
+        panic!("never hit: {:?}", session.npcs()[0]);
+    }
+
+    #[test]
+    fn a_grudge_whose_strike_the_traffic_tick_answers_is_held_after_the_tick() {
+        // A caller that never calls `answer_strikes` leaves the strike to
+        // the next traffic tick, which answers it.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        hit_ace(&mut session);
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+    }
+
     #[test]
     fn the_traffic_steps_in_a_world_holding_the_rulebooks_hit_focus() {
         let catalog = duel(GRUDGE, 0);
