@@ -7,11 +7,14 @@
 //!   original tests shots against sprite masks, which the simulation does
 //!   not have. A ship type without a `shän` is a placeholder
 //!   [`DEFAULT_HIT_RADIUS`] across.
-//! - Its board reach, how far off its centre on either axis the player
-//!   can board it, is half its `shän`'s size ([`BOARD_REACH_PER_SIZE`],
-//!   0.5 @0xdd128 x the sprite's width and height in
-//!   `_HandlePlayerBoardAttempt`; the simulation reads only the width),
-//!   and [`DEFAULT_BOARD_REACH`] without a `shän`.
+//! - Its board reach, how far off its centre the player can board it, is
+//!   half its `shän`'s `BaseXSize` on the x axis and half its `BaseYSize`
+//!   on the y axis ([`BOARD_REACH_PER_SIZE`], 0.5 @0xdd128 x the sprite's
+//!   width and height, `_GetSpriteXSize` @0x26d4 and `_GetSpriteYSize`
+//!   @0x2703, in `_HandlePlayerBoardAttempt`). Those read the loaded
+//!   sprite's frame, which is the `shän`'s sizes for every stock ship; a
+//!   missing or non-positive size reads as [`FALLBACK_SPRITE_SIZE`], as
+//!   they return for a sprite without a frame (@0x26fc, @0x272b).
 //! - A ship is disabled as a [`DisableRule`] says. Nova's,
 //!   [`NovaDisable`], is `_IsDisabled`'s.
 //! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
@@ -55,6 +58,7 @@ use super::ship_frames::FrameSpec;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{EscortClass, HullRecord, ShipId};
+use crate::geometry::Vec2;
 use crate::gravity::STELLAR_IMMUNE_HULL;
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
@@ -91,10 +95,12 @@ pub fn never_breaks_up(ship: ShipId) -> bool {
 pub const DEFAULT_HIT_RADIUS: f32 = 16.0;
 /// A ship's hit radius per pixel of its `shän`'s `BaseXSize`.
 pub const HIT_RADIUS_PER_SIZE: f32 = 0.33;
-/// The board reach of a ship type without a `shän`, in pixels: half a
-/// 48-pixel sprite, a placeholder.
-pub const DEFAULT_BOARD_REACH: f32 = 24.0;
-/// A ship's board reach per pixel of its `shän`'s `BaseXSize`.
+/// The size, in pixels, `_GetSpriteXSize` and `_GetSpriteYSize` give a
+/// sprite without a usable frame (@0x26fc, @0x272b): the board reach of a
+/// ship without a `shän` size is half of it on that axis.
+pub const FALLBACK_SPRITE_SIZE: f32 = 32.0;
+/// A ship's board reach per pixel of its `shän`'s `BaseXSize` (on the x
+/// axis) and `BaseYSize` (on the y axis).
 pub const BOARD_REACH_PER_SIZE: f32 = 0.5;
 /// The `shïp` `Flags` bit that disables it at [`TOUGH_DISABLE_PERCENT`]
 /// of its armour instead of [`DISABLE_PERCENT`].
@@ -207,9 +213,9 @@ pub struct HullSpec {
     pub blind_spots: u16,
     /// How strong it counts in a fight, its `Strength`; none below none.
     pub strength: f32,
-    /// How far off its centre, in pixels on either axis, the player can
-    /// board it.
-    pub board_reach: f32,
+    /// How far off its centre, in pixels, the player can board it: `x` on
+    /// the x axis and `y` on the y axis.
+    pub board_reach: Vec2,
     /// Its sprite's width, its `shän`'s `BaseXSize`, in pixels; none
     /// without a sprite. A formation is spaced by it (see
     /// `nova_sim::escort::spacing`).
@@ -331,7 +337,10 @@ impl Default for HullSpec {
             mass: 0.0,
             blind_spots: 0,
             strength: 0.0,
-            board_reach: DEFAULT_BOARD_REACH,
+            board_reach: Vec2::new(
+                FALLBACK_SPRITE_SIZE * BOARD_REACH_PER_SIZE,
+                FALLBACK_SPRITE_SIZE * BOARD_REACH_PER_SIZE,
+            ),
             sprite_size: None,
             sprite_height: None,
             planet_type: false,
@@ -361,7 +370,11 @@ impl HullSpec {
     pub fn new(record: &HullRecord) -> Self {
         let size = record.size.filter(|&size| size > 0).map(f32::from);
         let hit_radius = size.map_or(DEFAULT_HIT_RADIUS, |size| size * HIT_RADIUS_PER_SIZE);
-        let board_reach = size.map_or(DEFAULT_BOARD_REACH, |size| size * BOARD_REACH_PER_SIZE);
+        let height = record.height.filter(|&height| height > 0).map(f32::from);
+        let board_reach = Vec2::new(
+            size.unwrap_or(FALLBACK_SPRITE_SIZE) * BOARD_REACH_PER_SIZE,
+            height.unwrap_or(FALLBACK_SPRITE_SIZE) * BOARD_REACH_PER_SIZE,
+        );
         let frames = FrameSpec::new(record.display.as_ref(), record.exits.as_ref());
         Self {
             hit_radius,
@@ -378,7 +391,7 @@ impl HullSpec {
             strength: f32::from(record.strength.max(0)),
             board_reach,
             sprite_size: size,
-            sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
+            sprite_height: height,
             planet_type: record.flags & PLANET_TYPE != 0,
             pd_target: record.flags2 & PD_TARGET != 0,
             retreats_dry: record.flags2 & RETREATS_DRY != 0,
@@ -762,19 +775,36 @@ mod tests {
     }
 
     #[test]
-    fn the_board_reach_is_half_the_shäns_size() {
-        let shuttle = HullSpec::new(&HullRecord {
-            size: Some(25),
+    fn the_board_reach_is_half_the_shäns_size_on_each_axis() {
+        let tall = HullSpec::new(&HullRecord {
+            size: Some(24),
+            height: Some(40),
             ..hull(128)
         });
-        assert_eq!(shuttle.board_reach, 12.5);
+        assert_eq!(tall.board_reach, Vec2::new(12.0, 20.0));
+        let shuttle = HullSpec::new(&HullRecord {
+            size: Some(25),
+            height: Some(25),
+            ..hull(128)
+        });
+        assert_eq!(shuttle.board_reach, Vec2::new(12.5, 12.5));
         assert_eq!(BOARD_REACH_PER_SIZE, 0.5);
-        for size in [None, Some(0), Some(-5)] {
-            let placeholder = HullSpec::new(&HullRecord { size, ..hull(128) });
-            assert_eq!(placeholder.board_reach, DEFAULT_BOARD_REACH, "{size:?}");
+        for bad in [None, Some(0), Some(-5)] {
+            let no_width = HullSpec::new(&HullRecord {
+                size: bad,
+                height: Some(40),
+                ..hull(128)
+            });
+            assert_eq!(no_width.board_reach, Vec2::new(16.0, 20.0), "{bad:?}");
+            let no_height = HullSpec::new(&HullRecord {
+                size: Some(24),
+                height: bad,
+                ..hull(128)
+            });
+            assert_eq!(no_height.board_reach, Vec2::new(12.0, 16.0), "{bad:?}");
         }
-        assert_eq!(DEFAULT_BOARD_REACH, 24.0);
-        assert_eq!(HullSpec::default().board_reach, 24.0);
+        assert_eq!(FALLBACK_SPRITE_SIZE, 32.0);
+        assert_eq!(HullSpec::default().board_reach, Vec2::new(16.0, 16.0));
     }
 
     #[test]

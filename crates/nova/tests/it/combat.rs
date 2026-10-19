@@ -1678,7 +1678,9 @@ fn steering(session: &Session, quarry: &Npc) -> nova_sim::Controls {
         };
         (turn, side)
     };
-    if error.length() > accel || distance > quarry.hull.board_reach / 3.0 {
+    if error.length() > accel
+        || distance > quarry.hull.board_reach.x.min(quarry.hull.board_reach.y) / 3.0
+    {
         let (turn, side) = toward(heading_of(error));
         return nova_sim::Controls {
             thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,

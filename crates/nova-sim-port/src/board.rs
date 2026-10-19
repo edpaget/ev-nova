@@ -17,8 +17,9 @@
 //! the player: a disabled player boards) (`STR#` 2002 #130); not moving
 //! more than [`MAX_RELATIVE_SPEED`] against it on either axis (#132),
 //! then not off its centre by more than its board reach on either axis
-//! (#131); silently, the player must face within [`FACING_LIMIT`] of its
-//! heading or its reverse; and last, a ship with no mission mark and no
+//! (#131), each axis by its own reach and a NaN offset failing either
+//! test; silently, the player must face within [`FACING_LIMIT`] of its
+//! heading or its reverse, both headings truncated to whole degrees; and last, a ship with no mission mark and no
 //! `Crew` cannot be boarded (#130, @0x65768-0x65789), so a mission's
 //! special ship is boarded whatever its crew. By the other reading of
 //! [`RuleKey::CrewlessMissionShip`], every ship of no crew is refused up
@@ -132,15 +133,17 @@ use std::fmt::Debug;
 
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::combat::aim::angle_off;
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{FIRST_AMMO_WEAPON, WeaponSpec};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::market::{Good, hold_tons};
 use crate::mission::VenueOffer;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::NpcId;
+use nova_sim_base::speed_cap::whole_degree;
+use nova_sim_base::trig::angular_difference;
 
 /// Why the player cannot board its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,16 +174,18 @@ pub struct BoardTarget {
     /// Whether it carries a mission's mark (+0xc8d2 not -1), whether its
     /// mission stands, has failed or has left its slot.
     pub mission: bool,
-    /// How far off its centre, on either axis, the player may be.
-    pub reach: f32,
+    /// How far off its centre the player may be: `x` on the x axis and
+    /// `y` on the y axis (see
+    /// [`HullSpec::board_reach`](crate::combat::hull::HullSpec::board_reach)).
+    pub reach: Vec2,
 }
 
 /// How fast, in pixels a tick on either axis, the player may move against
 /// the ship it boards (the float @0xdd694).
 pub const MAX_RELATIVE_SPEED: f32 = 0.5;
-/// How far off the target's heading, or its reverse, in degrees, the
-/// player may face to board it (@0x6523b, @0x65295).
-pub const FACING_LIMIT: f32 = 30.0;
+/// How far off the target's heading, or its reverse, in whole degrees,
+/// the player may face to board it (@0x6523b, @0x65295).
+pub const FACING_LIMIT: i16 = 30;
 
 impl BoardRefusal {
     /// Whether the player is told nothing: no target, or not facing it.
@@ -807,6 +812,13 @@ impl BoardingRule for NovaBoarding {
     }
 }
 
+/// `heading`'s whole degree, as the board check truncates it
+/// ([`whole_degree`]), in the original's 16 bits.
+#[allow(clippy::cast_possible_truncation)]
+fn whole_degrees(heading: f32) -> i16 {
+    whole_degree(heading) as i16
+}
+
 /// Whether the player's ship, at `player` and in `condition`, can board
 /// `target`, a ship of no crew refused as `crewless`, the reading of
 /// [`RuleKey::CrewlessMissionShip`], says; the first refusal that
@@ -833,19 +845,28 @@ pub fn check_board(
     {
         return Err(BoardRefusal::CantBoard);
     }
-    let beyond = |offset: crate::geometry::Vec2, limit: f32| {
-        offset.x.abs() > limit || offset.y.abs() > limit
-    };
-    if beyond(player.velocity - target.state.velocity, MAX_RELATIVE_SPEED) {
+    // Each axis passes only at or within its limit: the original
+    // `ucomiss`es the limit against |Δ| and `jb`s away (speed @0x6514e,
+    // reach @0x651aa and @0x65206), so a NaN offset fails too.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let beyond =
+        |offset: Vec2, limit: Vec2| !(offset.x.abs() <= limit.x) || !(offset.y.abs() <= limit.y);
+    let max_speed = Vec2::new(MAX_RELATIVE_SPEED, MAX_RELATIVE_SPEED);
+    if beyond(player.velocity - target.state.velocity, max_speed) {
         return Err(BoardRefusal::TooFast);
     }
     if beyond(player.position - target.state.position, target.reach) {
         return Err(BoardRefusal::TooFar);
     }
-    // Off the target's heading by 0 to 180 degrees: within the limit of
-    // it, or of its reverse, is facing it.
-    let off = angle_off(player.heading, target.state.heading);
-    if off > FACING_LIMIT && off < 180.0 - FACING_LIMIT {
+    // Both headings in whole degrees (`cvttss2si` @0x65218, @0x65223,
+    // @0x6524c, @0x6527d): within the limit of the target's, or of its
+    // reverse, is facing it (@0x6521f-0x6523b, @0x65279-0x65295).
+    let mine = whole_degrees(player.heading);
+    let theirs = whole_degrees(target.state.heading);
+    let reverse = (theirs + 180) % 360;
+    if angular_difference(mine, theirs).abs() > FACING_LIMIT
+        && angular_difference(mine, reverse).abs() > FACING_LIMIT
+    {
         return Err(BoardRefusal::Misaligned);
     }
     // By the engine, only a ship with no mission mark has its crew
@@ -860,7 +881,6 @@ pub fn check_board(
 #[allow(clippy::float_cmp, clippy::trivially_copy_pass_by_ref)]
 mod tests {
     use super::*;
-    use crate::geometry::Vec2;
     use crate::grant::{COUNT_FLOOR_PERCENT, COUNT_PERCENT, COUNT_SPREAD, GRANT_ROLL};
     use nova_sim_base::fixture::Draws;
 
@@ -873,7 +893,7 @@ mod tests {
             boarded: false,
             crew: 3,
             mission: false,
-            reach: 20.0,
+            reach: Vec2::new(20.0, 20.0),
         }
     }
 
@@ -1110,6 +1130,44 @@ mod tests {
     }
 
     #[test]
+    fn each_axis_is_reached_by_its_own_size() {
+        let wide = BoardTarget {
+            reach: Vec2::new(20.0, 10.0),
+            ..quarry()
+        };
+        for (x, y) in [(20.0, 0.0), (-20.0, 10.0), (0.0, -10.0)] {
+            assert_eq!(
+                board(player((x, y), (0.0, 0.0), 0.0), wide),
+                Ok(()),
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(20.01, 0.0), (0.0, 10.01), (0.0, -10.01), (15.0, 15.0)] {
+            assert_eq!(
+                board(player((x, y), (0.0, 0.0), 0.0), wide),
+                Err(BoardRefusal::TooFar),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nan_offset_is_too_fast_or_too_far() {
+        for (x, y) in [(f32::NAN, 0.0), (0.0, f32::NAN)] {
+            assert_eq!(
+                board(player((x, y), (0.0, 0.0), 0.0), quarry()),
+                Err(BoardRefusal::TooFar),
+                "({x}, {y})"
+            );
+            assert_eq!(
+                board(player((0.0, 0.0), (x, y), 0.0), quarry()),
+                Err(BoardRefusal::TooFast),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
     fn too_fast_is_said_before_too_far() {
         assert_eq!(
             board(player((50.0, 0.0), (3.0, 0.0), 0.0), quarry()),
@@ -1155,7 +1213,41 @@ mod tests {
                 "{mine} on {theirs}"
             );
         }
-        assert_eq!(FACING_LIMIT, 30.0);
+        assert_eq!(FACING_LIMIT, 30);
+    }
+
+    #[test]
+    fn both_headings_face_in_whole_degrees() {
+        let facing = |heading| BoardTarget {
+            state: ShipState {
+                heading,
+                ..ShipState::default()
+            },
+            ..quarry()
+        };
+        // Truncated toward zero (`cvttss2si` @0x65218, @0x65223, @0x6524c,
+        // @0x6527d) before the 30-degree tests.
+        for (mine, theirs) in [
+            (30.9, 0.0),
+            (0.0, 30.9),
+            (330.0, 0.0),
+            (210.9, 0.0),
+            (150.0, 0.0),
+            (30.5, 0.9),
+        ] {
+            assert_eq!(
+                board(player((0.0, 0.0), (0.0, 0.0), mine), facing(theirs)),
+                Ok(()),
+                "{mine} on {theirs}"
+            );
+        }
+        for (mine, theirs) in [(31.0, 0.0), (329.5, 0.0), (211.0, 0.0), (149.5, 0.0)] {
+            assert_eq!(
+                board(player((0.0, 0.0), (0.0, 0.0), mine), facing(theirs)),
+                Err(BoardRefusal::Misaligned),
+                "{mine} on {theirs}"
+            );
+        }
     }
 
     // What is on board.
