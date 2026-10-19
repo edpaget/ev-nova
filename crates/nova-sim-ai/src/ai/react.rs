@@ -192,9 +192,11 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
             goal: None,
         };
     };
+    // The ship struck: `npc` itself, or the escort it leads, both among
+    // `around` (`hits` checked it).
     let hit = match strike.ship {
-        ShipRef::Npc(id) if id != npc.id => around.npc(id).unwrap_or(npc),
-        _ => npc,
+        ShipRef::Npc(id) => around.npc(id).unwrap_or(npc),
+        ShipRef::Player => npc,
     };
     if keeps_target(npc, hit, by, around) {
         return Reaction::default();
