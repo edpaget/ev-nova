@@ -62,6 +62,7 @@ pub mod effects;
 pub mod escorts;
 pub mod flash;
 pub mod floating;
+pub mod gate_colorize;
 pub mod held_alt;
 pub mod hud;
 pub mod ion_tint;

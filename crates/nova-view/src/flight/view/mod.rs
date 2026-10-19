@@ -868,13 +868,14 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// leave, fading out; plain white otherwise, held at its gate by the
 /// player's hit too (its goal 4 is not the fade's goal 0x15).
 ///
-/// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
-/// at 16-bit depth by a destination factor of twice the ticks left and a
-/// bias of four times them, at most 32, and out again entering a gate
-/// (@0x2bf94-0x2c088). Those translucent blits were not traced; this
-/// draws the ship's alpha rising from none to full, or falling, as the
-/// cloak's fade does. An NPC gets no screen flash, as the player's own
-/// gate arrival does (see [`jump`](super::jump)).
+/// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) sets the hull's
+/// translucency t to 32 less this level, entering a gate as
+/// trunc(−2.0 × w + 32.0) (@0x2bfb2-0x2c007) and coming out as 32 − 2d,
+/// d = trunc(16.0 − w) (@0x2c0c8-0x2c12b), and blits it washed toward
+/// white ([`gate_colorize`](crate::flight::gate_colorize)) and then
+/// crossfaded at (32 − t)/32, which this alpha draws. An NPC gets no
+/// screen flash, as the player's own gate arrival does (see
+/// [`jump`](super::jump)).
 fn npc_tint(npc: &Npc) -> Option<Color> {
     let level = match npc.mode {
         Mode::Emerging { ticks_left } => emerge_level(ticks_left)?,

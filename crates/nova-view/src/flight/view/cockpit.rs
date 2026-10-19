@@ -20,6 +20,7 @@ use crate::flight::escorts::{
 };
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
+use crate::flight::gate_colorize::gate_colorize;
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
 use crate::flight::ion_tint::hull_colorize;
 use crate::flight::murk::{self, sprite_murk};
@@ -210,7 +211,8 @@ impl<C> FlightView<C> {
     /// a crossed box when its sheet cannot be read, at the alpha its cloak
     /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
     /// waiting at the gate it comes out of is hidden, then fades in over
-    /// its last ticks there ([`npc_tint`]); with neither, its hull is as
+    /// its last ticks there ([`npc_tint`]), washed white by the gate, as
+    /// one entering a gate is ([`gate_colorize`]); with neither, its hull is as
     /// translucent as its `BaseTransp` ([`base_alpha`]). Its hull and
     /// layers are drawn on the frames its display picked and murked (see
     /// the [`ship_layers`](crate::flight::ship_layers) module): its engine
@@ -255,14 +257,15 @@ impl<C> FlightView<C> {
                 let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
                 let glow_rolls = npc_glow_rolls(npc.id);
-                // A gate's fade writes the hull's colorize after the ion
-                // tint, so none shows while it fades (`_HandleShipDisplay`
-                // @0x2bfa5-0x2c17b).
-                let colorize = (!gating)
-                    .then(|| {
-                        hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
-                    })
-                    .flatten();
+                // A gate writes the hull's colorize after the ion tint, so
+                // while it fades the gate's white shows in place of the
+                // tint and the murk ([`gate_colorize`],
+                // `_HandleShipDisplay` @0x2bfa5-0x2c17b).
+                let colorize = if gating {
+                    gate_colorize(&npc.mode)
+                } else {
+                    hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
+                };
                 let base = nova_sim::glow::drawn_base(npc.display.glow);
                 let ship = ShipDraw {
                     sheet,

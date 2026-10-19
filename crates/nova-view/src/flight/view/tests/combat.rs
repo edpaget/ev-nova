@@ -176,11 +176,17 @@ fn an_npc_is_a_dim_blip_on_the_radar() {
     );
 }
 
-/// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with.
+/// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with,
+/// plainly or colorized.
 fn npc_tints(list: &DrawList) -> Vec<Color> {
     list.iter()
         .filter_map(|command| match command {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(*tint),
+            DrawCommand::Sprite { image, tint, .. }
+            | DrawCommand::Colorized { image, tint, .. }
+                if image.id == 2001 =>
+            {
+                Some(*tint)
+            }
             _ => None,
         })
         .collect()

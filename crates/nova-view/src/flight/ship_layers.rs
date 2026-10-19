@@ -40,6 +40,9 @@
 //!   (@0x2c25a-0x2c291, @0x2c616-0x2c64d, @0x2c74a-0x2c781). The
 //!   player's glow, lights and weapon glow are never colorized
 //!   (@0x2c209, @0x2c5d1, @0x2c715).
+//! - **A gate's colorize** ([`gate_colorize`](super::gate_colorize)): an
+//!   NPC entering or leaving a gate takes the gate's white in place of
+//!   its ion tint and murk, and its layers copy it as they copy the tint.
 //!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
@@ -124,9 +127,11 @@ pub struct ShipDraw<'a> {
     pub weapon: Option<u8>,
     /// Its shield flash's level, if shown.
     pub shield: Option<u8>,
-    /// Its hull's ion colorize, if it shows one
-    /// ([`hull_colorize`](super::ion_tint::hull_colorize)), which takes
-    /// the place of its murk.
+    /// Its hull's colorize, if it shows one, which takes the place of its
+    /// murk: its ion tint's
+    /// ([`hull_colorize`](super::ion_tint::hull_colorize)), or, for an NPC
+    /// at a gate, the gate's white, written after it
+    /// ([`gate_colorize`](super::gate_colorize::gate_colorize)).
     pub colorize: Option<Colorize>,
 }
 

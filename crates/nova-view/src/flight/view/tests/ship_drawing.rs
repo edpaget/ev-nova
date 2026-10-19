@@ -516,7 +516,11 @@ fn npc_hull(view: &View, npc: &nova_sim::Npc) -> Option<Color> {
     let mut list = DrawList::new();
     view.draw_npc(&mut list, session, npc, VIEW_CENTER, npc.state.heading);
     list.iter().find_map(|command| match *command {
-        DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(tint),
+        DrawCommand::Sprite { image, tint, .. } | DrawCommand::Colorized { image, tint, .. }
+            if image.id == 2001 =>
+        {
+            Some(tint)
+        }
         _ => None,
     })
 }
@@ -785,13 +789,90 @@ fn a_murkier_ionized_npc_takes_its_ion_colour_at_its_murk_by_the_other_reading()
     );
 }
 
+/// The alpha a fade `level` 32nds draws at, rounded to nearest.
+fn fade_alpha(level: u16) -> u8 {
+    u8::try_from((level * 255 + 16) / 32).expect("at most 255")
+}
+
 #[test]
-fn an_ionized_npc_at_its_gate_shows_the_gates_fade_not_its_tint() {
+fn an_ionized_npc_at_its_gate_shows_the_gates_white_colorize_not_its_tint() {
     let view = murky_ionizing(None);
     let mut npc = npc_of(&view);
     npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
     let (list, _) = npc_drawn_ionized(&view, &npc, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
-    assert!(colorized_of(&list, 2001).is_empty());
+    // A fade of 26: washed white at min(2 × 6, 32).
+    let faded = Color {
+        a: fade_alpha(26),
+        ..Color::WHITE
+    };
+    assert_eq!(
+        colorized_of(&list, 2001),
+        [(faded, false, crate::Colorize::toward_pixel(12, 0xffff))]
+    );
+}
+
+#[test]
+fn an_npc_entering_a_gate_is_colorized_white_and_its_glow_held_out() {
+    let mut view = murky_with(ShipSheet {
+        weapon: Some(layer(2301, 72)),
+        ..ionized_sheet()
+    });
+    let mut npc = npc_of(&view);
+    lit_at_28(&mut view, &npc);
+    npc.mode = nova_sim::traffic::npc::Mode::EnteringGate {
+        gate: nova_sim::StellarId(130),
+        ticks_left: 4,
+    };
+    let (list, _) = npc_drawn_ionized(&view, &npc, None, nova_sim::Vec2::new(100.0, -100.0));
+    let white = crate::Colorize::toward_pixel(32, 0xffff);
+    let faded = Color {
+        a: fade_alpha(8),
+        ..Color::WHITE
+    };
+    assert_eq!(
+        colorized_of(&list, 2001),
+        [(faded, false, white)],
+        "the hull"
+    );
+    // The glow and weapon glow copy it and are held to none below it; the
+    // lights take a third of it.
+    for image in [2101, 2301] {
+        assert_eq!(
+            colorized_of(&list, image),
+            [(lights_tint(0), true, white)],
+            "{image}"
+        );
+    }
+    let lights = lights_murk(32);
+    assert_eq!(
+        colorized_of(&list, 2201),
+        [(
+            lights_tint(npc_glow_level(32, lights)),
+            true,
+            crate::Colorize {
+                level: lights,
+                ..white
+            }
+        )]
+    );
+}
+
+#[test]
+fn a_murked_npc_at_its_gate_takes_the_gates_colorize_in_place_of_its_murk() {
+    let view = murky_ionizing(None);
+    let mut npc = npc_of(&view);
+    npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
+    let (list, murk) = npc_drawn_ionized(&view, &npc, None, nova_sim::Vec2::new(100.0, -100.0));
+    assert!(murk > 0, "murked");
+    let faded = Color {
+        a: fade_alpha(26),
+        ..Color::WHITE
+    };
+    assert_eq!(
+        colorized_of(&list, 2001),
+        [(faded, false, crate::Colorize::toward_pixel(12, 0xffff))]
+    );
+    assert_eq!(plain_of(&list, 2001), [], "not murked");
 }
 
 #[test]
