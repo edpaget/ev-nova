@@ -520,6 +520,23 @@ mod tests {
     }
 
     #[test]
+    fn the_player_in_its_escape_pod_is_killed_and_never_rescued() {
+        let catalog = armed();
+        let on_the_player = deadly_at(140, 0.0, 40.0);
+        let mut session = among(&catalog, &[on_the_player], 1, Rulebook::default());
+        session.pod = Some(crate::player_fate::POD_TICKS);
+        fight(&mut session);
+        assert_eq!(session.pod, None);
+        assert_eq!(session.player_fate(), crate::PlayerFate::Exploded);
+        assert!(matches!(session.player_end, Some(Ending::Holding { .. })));
+        for _ in 0..400 {
+            session.tick(Controls::default());
+            fight(&mut session);
+            assert!(!session.rescue_due, "never rescued");
+        }
+    }
+
+    #[test]
     fn the_second_pass_kills_too() {
         let catalog = armed();
         let mut session = among(
