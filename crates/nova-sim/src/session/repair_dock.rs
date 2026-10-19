@@ -2,8 +2,10 @@
 //! (`_LowLevelAIHandler` @0x86d84-0x86f37 in the `EV Nova` executable),
 //! which the traffic queues as [`PirateEvent::PlayerRepaired`] once the
 //! ship has docked and waited its dock (see
-//! [`repair_dock`](crate::traffic::repair_dock)), and
-//! [`Session::answer_pirates`] drains right after the traffic's tick.
+//! [`repair_dock`](crate::traffic::repair_dock)), on the line at the
+//! repairer's berth, and [`Session::answer_pirate`] answers in slot order
+//! with the frame's other lines in the combat tick (see the `comm_calls`
+//! module).
 //!
 //! - The player is unboarded (+0xb9 = 0, @0x86d92).
 //! - While the player's ship is disabled, its armour rises
@@ -139,7 +141,7 @@ mod tests {
         session
             .traffic
             .queue_pirate_event(PirateEvent::PlayerRepaired { helper, ship });
-        session.answer_pirates(&mut Draws::of(&[]));
+        session.settle_line_queue(crate::Rules::default().law, &mut Draws::of(&[]));
     }
 
     #[test]
@@ -213,6 +215,7 @@ mod tests {
         npc.state.velocity = Vec2::ZERO;
         let tick = |session: &mut Session| {
             session.tick_traffic(&catalog, &WimpyTrader::default(), &mut Draws::of(&[0; 64]));
+            session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
             session.take_comm()
         };
         let mut boarded = false;

@@ -190,8 +190,8 @@ impl<
     /// does. The escort menu times out on every step the map is shut, the
     /// streak's included.
     ///
-    /// Each step runs the session's tick, the traffic's, the assistance's
-    /// and the fight's, then has the NPCs answer the fight's hits
+    /// Each step runs the session's tick, the traffic's (the assistance's
+    /// within it) and the fight's, then has the NPCs answer the fight's hits
     /// ([`Session::answer_strikes`]) and the persons say their quotes, so
     /// a ship hit in its gate is drawn on the frame of the hit.
     ///

@@ -197,14 +197,14 @@ fn a_think_at_stale_odds_calls_nothing_and_its_think_after_the_refresh_calls() {
     let warship = fight(&mut session, FED, 150.0);
     session.traffic.cache_odds(warship, STALE);
     let calls = Calling(vec![warship]);
-    session.tick_traffic(&catalog, &calls, &mut NeverFires);
+    step(&mut session, &catalog, &calls);
     assert_eq!(timer(&session), 0, "-1 at its think");
     assert_eq!(
         session.npc(warship).map(|npc| npc.odds),
         Some(1.5),
         "refreshed after it"
     );
-    session.tick_traffic(&catalog, &calls, &mut NeverFires);
+    step(&mut session, &catalog, &calls);
     assert_eq!(
         timer(&session),
         i32::from(TIME) - 1,
@@ -337,6 +337,13 @@ fn timer(session: &Session) -> i32 {
     session.clock_here().timer
 }
 
+/// A traffic tick as `calls` decide, then the combat tick of the same
+/// step, which settles the calls (see the `comm_calls` module).
+fn step(session: &mut Session, catalog: &FakePilotCatalog, calls: &Calling) {
+    session.tick_traffic(catalog, calls, &mut NeverFires);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+}
+
 /// The player's system's countdown.
 fn countdown(session: &Session) -> u16 {
     session.clock_here().countdown
@@ -356,7 +363,7 @@ fn a_think_that_calls_starts_the_timer_and_the_clock_ticks_on_the_same_frame() {
     let warship = fight(&mut session, FED, 100.0);
     let calls = Calling(vec![warship]);
     for _ in 0..20 {
-        session.tick_traffic(&catalog, &calls, &mut NeverFires);
+        step(&mut session, &catalog, &calls);
         if timer(&session) > 0 {
             break;
         }

@@ -1,15 +1,19 @@
 //! The session's side of a pirate's plunder (`_AIPlunderShipContents`
-//! @0x83fab-0x84a2d), which the traffic queues as
-//! [`PirateEvent`]s and this drains right after the traffic's tick
-//! ([`Session::answer_pirates`]).
+//! @0x83fab-0x84a2d), which the traffic queues as [`PirateEvent`]s on the
+//! line at the pirate's berth, and this answers one by one
+//! ([`Session::answer_pirate`]) as the frame's work on the line settles in
+//! slot order in the combat tick (see the `comm_calls` module).
 //!
 //! - **A dock with the player** ([`PirateEvent::PlayerDockedWith`]): the
 //!   player is boarded ([`Session::player_boarded`], its slot's +0xb9,
 //!   `_LowLevelAIHandler` @0x86fc7), so pirates pass it over or wait on it
 //!   ([`PlayerSide::boarded`](crate::ai::PlayerSide::boarded)). It is
-//!   cleared on each tick the player isn't disabled, as `_HandlePlayer`
-//!   clears it each frame (@0x68b02), and kept only in flight: a ship slot
-//!   field, it is never saved.
+//!   cleared at the head of each combat tick the player isn't disabled
+//!   ([`Session::unboard_unless_disabled`]), as `_HandlePlayer` clears it
+//!   each frame before the ships think (@0x68b02), and kept only in
+//!   flight: a ship slot field, it is never saved. The frame's traffic
+//!   tick reads the flag the last frame left, as it runs before the
+//!   combat tick: a frame's lag crossing no boundary the player sees.
 //! - **A repair of the player** ([`PirateEvent::PlayerRepaired`]): see the
 //!   `repair_dock` module. A ship docking to repair the player boards it
 //!   as a pirate does ([`PirateEvent::PlayerDockedWith`]).
@@ -32,9 +36,10 @@
 //!   "Escort stolen!" or "Fighter stolen!" ([`SimMessage::ShipStolen`],
 //!   400 ticks), each with `snd ` 151 ([`SimSound::ShipStolen`]).
 //!
-//! It all settles in the tick the pirate plunders, before the frame is
-//! drawn and before any dialog opens; the boarded flag a tick after the
-//! player is repaired, which the player never sees. The pirate's credits
+//! It all settles in the step the pirate plunders, after `_HandlePlayer`'s
+//! part of the frame (as the original's loop follows `_HandlePlayer`),
+//! before the fight, the frame's drawing and any dialog; the boarded flag a
+//! tick after the player is repaired, which the player never sees. The pirate's credits
 //! (+0xa0) are read by no one, so the credits it gains are not kept.
 
 use super::Session;
@@ -59,29 +64,32 @@ use crate::traffic::plunder::PirateEvent;
 pub const FAILS_IF_PLUNDERED: u16 = 0x8000;
 
 impl Session {
-    /// Answers what the pirates did this tick, drawing on `chance` (see
-    /// the module docs).
-    pub(super) fn answer_pirates(&mut self, chance: &mut dyn Chance) {
-        if self.condition != Condition::Disabled {
-            self.player_boarded = false;
-        }
-        for event in self.traffic.take_pirate_events() {
-            match event {
-                PirateEvent::PlayerDockedWith { .. } => self.player_boarded = true,
-                PirateEvent::PlunderPlayer { pirate } => self.plundered_by(pirate, chance),
-                PirateEvent::PlayerRepaired { helper, ship } => self.repaired_by(helper, ship),
-                PirateEvent::Plundered { line, taken, .. } => {
-                    if let Some(line) = line {
-                        self.say_stolen_cargo(line.tons, line.credits);
-                    }
-                    if let Some(Taken::Escort | Taken::Fighter) = taken {
-                        self.sounds.push(SimSound::ShipStolen);
-                        self.say(SimMessage::ShipStolen {
-                            fighter: taken == Some(Taken::Fighter),
-                        });
-                    }
+    /// Answers what a pirate or repairer did, `event`, drawing on `chance`
+    /// (see the module docs).
+    pub(super) fn answer_pirate(&mut self, event: PirateEvent, chance: &mut dyn Chance) {
+        match event {
+            PirateEvent::PlayerDockedWith { .. } => self.player_boarded = true,
+            PirateEvent::PlunderPlayer { pirate } => self.plundered_by(pirate, chance),
+            PirateEvent::PlayerRepaired { helper, ship } => self.repaired_by(helper, ship),
+            PirateEvent::Plundered { line, taken, .. } => {
+                if let Some(line) = line {
+                    self.say_stolen_cargo(line.tons, line.credits);
+                }
+                if let Some(Taken::Escort | Taken::Fighter) = taken {
+                    self.sounds.push(SimSound::ShipStolen);
+                    self.say(SimMessage::ShipStolen {
+                        fighter: taken == Some(Taken::Fighter),
+                    });
                 }
             }
+        }
+    }
+
+    /// `_HandlePlayer` clears the boarded flag on each frame the player
+    /// isn't disabled (@0x68b02), before the frame's ships think.
+    pub(super) fn unboard_unless_disabled(&mut self) {
+        if self.condition != Condition::Disabled {
+            self.player_boarded = false;
         }
     }
 
@@ -227,13 +235,18 @@ mod tests {
         (session, pirate)
     }
 
+    /// `session` settling the line's work queued, drawing on `chance`.
+    fn settle(session: &mut Session, chance: &mut dyn Chance) {
+        session.settle_line_queue(crate::Rules::default().law, chance);
+    }
+
     /// `session` answering a plunder of the player by `pirate`, every draw
     /// `drawn`.
     fn answer(session: &mut Session, pirate: NpcId, drawn: u32) {
         session
             .traffic
             .queue_pirate_event(PirateEvent::PlunderPlayer { pirate });
-        session.answer_pirates(&mut Draws::of(&[drawn; 16]));
+        settle(session, &mut Draws::of(&[drawn; 16]));
     }
 
     #[test]
@@ -398,13 +411,13 @@ mod tests {
         session
             .traffic
             .queue_pirate_event(PirateEvent::PlayerDockedWith { pirate });
-        session.answer_pirates(&mut Draws::of(&[]));
+        settle(&mut session, &mut Draws::of(&[]));
         assert!(session.player_boarded());
         assert!(session.player_side().boarded);
-        session.answer_pirates(&mut Draws::of(&[]));
+        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
         assert!(session.player_boarded(), "still disabled");
         session.condition = Condition::Intact;
-        session.answer_pirates(&mut Draws::of(&[]));
+        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 8]));
         assert!(!session.player_boarded(), "@0x68b02");
         assert!(!session.player_side().boarded);
     }
@@ -434,7 +447,7 @@ mod tests {
         ] {
             session.traffic.queue_pirate_event(event);
         }
-        session.answer_pirates(&mut Draws::of(&[]));
+        settle(&mut session, &mut Draws::of(&[]));
         assert_eq!(
             session.take_messages(),
             [
@@ -457,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn a_docked_pirates_plunder_reaches_the_player_in_the_traffics_tick() {
+    fn a_docked_pirates_plunder_reaches_the_player_in_its_steps_combat_tick() {
         let catalog = catalog_of(vec![plunderable(140, 0x8000)]);
         let (mut session, pirate) = plundering(&catalog, 20);
         assert!(session.pilot.missions.put(0, carrying(140, 0)));
@@ -476,6 +489,8 @@ mod tests {
             &PirateWarship::default(),
             &mut Draws::of(&[0; 64]),
         );
+        assert_eq!(session.pilot.cash, 10_000, "held for the combat tick");
+        session.tick_combat(crate::Rules::default(), &mut Draws::of(&[0; 64]));
         assert_eq!(
             session.npc(pirate).map(|npc| npc.goal),
             Some(crate::ai::Goal::Drift)

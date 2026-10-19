@@ -60,9 +60,10 @@
 //! - **Help** (`_AIMakeShipRefuelPlayer` @0x82dbb,
 //!   `_AIMakeShipRepairPlayer` @0x82df2): it assists the player
 //!   ([`Goal::Assist`]), its provocation gone. Each step a refuel
-//!   ([`Session::tick_assistance`]) gives the help as
-//!   [`assist`](crate::hail::assist) says; once done it says so
-//!   ([`Session::take_comm`]) with `snd ` 151 and decides again. A repair
+//!   ([`Session::tick_assistance`], in the traffic's tick) gives the help
+//!   as [`assist`](crate::hail::assist) says; once done it decides again,
+//!   and says so ([`Session::take_comm`]) with `snd ` 151 in slot order
+//!   with the frame's other lines (see the `comm_calls` module). A repair
 //!   is the traffic's: the ship docks with the player as a pirate does and
 //!   repairs it once its dock's wait is done (see
 //!   [`repair_dock`](crate::traffic::repair_dock) and the session's
@@ -97,6 +98,7 @@ use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::on_line::OnLine;
 
 /// What the comm key hails ([`Session::hail_target`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -627,11 +629,13 @@ impl Session {
     }
 
     /// Gives a tick of the refuel each NPC refuelling the player gives (see
-    /// [`assist`](crate::hail::assist)), saying "Energy transfer complete"
-    /// with `snd ` 151 once it is done. While the ship is landed or
+    /// [`assist`](crate::hail::assist)), queueing its note "Energy
+    /// transfer complete" on the line at its berth once it is done
+    /// ([`OnLine::RefuelDone`]), said with `snd ` 151 as the line's work
+    /// settles (see the `comm_calls` module). While the ship is landed or
     /// jumping, nothing happens. A repair is the traffic's (see the
-    /// `repair_dock` module).
-    pub fn tick_assistance(&mut self) {
+    /// `repair_dock` module). [`Session::tick_traffic`] runs it.
+    pub(super) fn tick_assistance(&mut self) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
@@ -658,8 +662,8 @@ impl Session {
             }
         }
         for (from, ship) in done {
-            // `_beepSnd[1]` (@0x8f585-0x8f5b0), with the line.
-            self.say_help_done(from, ship, Help::Refuel, SimSound::EnergyTransferComplete);
+            self.traffic
+                .queue_on_line(from, OnLine::RefuelDone(from, ship));
         }
     }
 
@@ -2251,6 +2255,13 @@ mod tests {
 
     // Assistance.
 
+    /// A tick of `session`'s assistance, then the line's work settled, as
+    /// the combat tick of the same step settles it: the refuel's note.
+    fn assist(session: &mut Session) {
+        session.tick_assistance();
+        session.settle_line_queue(crate::Rules::default().law, &mut crate::NeverFires);
+    }
+
     /// `catalog`'s session with its ship (NPC 0, `Maneuver` 20, so a
     /// refuel's reach of 120 and a repair's of 290) assisting the player
     /// with `help` from (`x`, 0), at rest; the player at the centre.
@@ -2270,16 +2281,16 @@ mod tests {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 120.0);
         session.pilot.reserves.fuel.now = 40.0;
-        session.tick_assistance();
+        assist(&mut session);
         assert_eq!(session.reserves().fuel.now, 41.0);
         let mut far = helped(&catalog, Help::Refuel, 121.0);
         far.pilot.reserves.fuel.now = 40.0;
-        far.tick_assistance();
+        assist(&mut far);
         assert_eq!(far.reserves().fuel.now, 40.0, "beyond its reach");
         let mut moving = helped(&catalog, Help::Refuel, 120.0);
         moving.pilot.reserves.fuel.now = 40.0;
         npc(&mut moving).state.velocity = Vec2::new(0.0, 0.35);
-        moving.tick_assistance();
+        assist(&mut moving);
         assert_eq!(moving.reserves().fuel.now, 40.0, "not slow enough");
     }
 
@@ -2289,10 +2300,10 @@ mod tests {
         let mut session = helped(&catalog, Help::Refuel, 120.0);
         session.pilot.reserves.fuel.now = 40.0;
         npc(&mut session).mode = Mode::Coasting { ticks_left: 3 };
-        session.tick_assistance();
+        assist(&mut session);
         assert_eq!(session.reserves().fuel.now, 40.0);
         npc(&mut session).mode = Mode::Flying;
-        session.tick_assistance();
+        assist(&mut session);
         assert_eq!(session.reserves().fuel.now, 41.0);
     }
 
@@ -2305,7 +2316,7 @@ mod tests {
         let _ = session.take_sounds();
         for tick in 1..=61 {
             assert!(session.take_comm().is_empty(), "tick {tick}");
-            session.tick_assistance();
+            assist(&mut session);
         }
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert_eq!(
@@ -2322,7 +2333,7 @@ mod tests {
         assert_eq!(helper.goal, Goal::Idle, "it decides again");
         assert_eq!(helper.target, None);
         assert!(!helper.travel_set, "+0x6c -1, @0x8f6ce");
-        session.tick_assistance();
+        assist(&mut session);
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert!(session.take_comm().is_empty());
     }
@@ -2333,7 +2344,7 @@ mod tests {
         let mut session = helped(&catalog, Help::Refuel, 0.0);
         session.pilot.reserves.fuel.now = 150.0;
         assert!(session.comm_line().free_for_calls(), "free before");
-        session.tick_assistance();
+        assist(&mut session);
         let [note] = session.take_comm().try_into().expect("one note");
         for tick in 1..note.ticks() {
             session.count_down_comm_line();
@@ -2348,7 +2359,7 @@ mod tests {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 0.0);
         session.pilot.reserves.fuel.now = 150.0;
-        session.tick_assistance();
+        assist(&mut session);
         assert_eq!(session.reserves().fuel.now, 150.0);
         assert_eq!(session.take_comm().len(), 1);
     }
@@ -2361,7 +2372,7 @@ mod tests {
             now: 79.5,
             max: 80.0,
         };
-        session.tick_assistance();
+        assist(&mut session);
         assert_eq!(session.reserves().fuel.now, 80.0);
         assert_eq!(session.take_comm().len(), 1);
     }
@@ -2381,7 +2392,7 @@ mod tests {
         // One at a time: three sessions make too large an array.
         let given_nothing = |mut session: Session| {
             session.pilot.reserves.fuel.now = 40.0;
-            session.tick_assistance();
+            assist(&mut session);
             assert_eq!(session.reserves().fuel.now, 40.0);
         };
         given_nothing(landed);

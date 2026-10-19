@@ -1412,38 +1412,14 @@ mod tests {
         assert!(!session.take_save_due());
     }
 
-    /// The escape ship's bay, its fighters' outfit and the fighter.
-    const BAY: i16 = 160;
-    const FIGHTERS: i16 = 310;
-    const VIPER: i16 = 144;
+    /// The escape ship's fighters' outfit and the fighter.
+    const FIGHTERS: i16 = crate::testkit::ESCAPE_FIGHTERS;
+    const VIPER: i16 = crate::testkit::ESCAPE_SHIP;
 
-    /// `ejecting(100)` with a fighter bay of `VIPER`s, an escape ship
-    /// (`Flags` 0x8000) of 100 shield, 200 armour and 300 fuel, long
-    /// named "Federation Viper".
+    /// `ejecting(100)` with an escape ship
+    /// ([`with_escape_ship`](crate::testkit::with_escape_ship)).
     fn escaping() -> FakePilotCatalog {
-        let mut catalog = ejecting(100);
-        catalog.weapons.push(crate::catalog::WeaponRecord {
-            guidance: crate::bay::FIGHTER_BAY,
-            ammo_type: VIPER,
-            ..crate::testkit::weapon(BAY)
-        });
-        catalog.outfits.push(outfit(
-            FIGHTERS,
-            &[(crate::combat::armament::MOD_AMMO, BAY)],
-        ));
-        let mut viper = ship(
-            VIPER,
-            ShipFields {
-                shield: 100,
-                armor: 200,
-                fuel: 300,
-                ..FAST
-            },
-        );
-        viper.flags = crate::escape::ESCAPE_SHIP_FLAG;
-        viper.long_name = "Federation Viper".to_owned();
-        catalog.ship_records.push(viper);
-        catalog
+        crate::testkit::with_escape_ship(ejecting(100))
     }
 
     /// `escaping`'s session, disabled with two fighters aboard, ejected

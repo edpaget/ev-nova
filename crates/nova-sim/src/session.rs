@@ -228,7 +228,7 @@
 //! that apply ([`Session::hailing`]). A press ([`Session::answer`]) says
 //! the ship's reply and does its deed: a ship paid to spare the player
 //! never targets it again and leaves; one declined attacks; one asked for
-//! help flies over to refuel the player ([`Session::tick_assistance`]) or
+//! help flies over to refuel the player (`Session::tick_assistance`) or
 //! docks with it to repair it (the `repair_dock` module), and says when it
 //! is done ([`Session::take_comm`]). A price asked is
 //! haggled over and paid from the cash ([`Session::haggle`]), which makes
@@ -841,8 +841,8 @@ pub struct Session {
     /// neither.
     reinforcements: reinforcements::Reinforcements,
     /// Whether the reinforcement clock's tick of the last traffic tick is
-    /// held behind the frame's calls held behind a scan, for
-    /// `settle_line_queue` to run (see [`Session::tick_traffic`]).
+    /// held behind the frame's work on the line, for `settle_line_queue`
+    /// to run (see [`Session::tick_traffic`]).
     reinforcements_held: bool,
     /// The governments an IFF scrambler has marked (see the
     /// `iff_scramblers` module); never saved, as the original saves none.
@@ -2421,15 +2421,18 @@ impl Session {
     /// the NPCs raises the first sighting of the ships watched
     /// ([`Session::watch_ship`]), and each mission ship that left the
     /// system raises [`Fate::Departed`] and is counted (see the
-    /// `mission_ships` module). Then, unless the ship is docked, each
+    /// `mission_ships` module). The NPCs refuelling the player give their
+    /// help (`Session::tick_assistance`). The frame's work on the line,
+    /// its calls, scans, plunders, docks, repairs and refuel notes, is
+    /// queued in slot order, and settles in [`Session::tick_combat`] (see
+    /// the `comm_calls` module). Then, unless the ship is docked, each
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
     /// while a jump plays too; before that, in flight or jumping, the
     /// player's system's reinforcement clock ticks, after the frame's
-    /// calls (see the `reinforcements` module), unless calls or scans are
-    /// held behind the frame's first scan: then its tick is held, and runs
-    /// in [`Session::tick_combat`] right after they settle (see the
-    /// `comm_calls` module), or, if no combat tick came between, first
-    /// thing in the next traffic tick. The traffic ticks in the same [`World`] the
+    /// calls (see the `reinforcements` module), unless work is queued on
+    /// the line: then its tick is held, and runs in
+    /// [`Session::tick_combat`] right after the work settles, or, if no
+    /// combat tick came between, first thing in the next traffic tick. The traffic ticks in the same [`World`] the
     /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
@@ -2459,8 +2462,7 @@ impl Session {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });
                 self.announce_fleets(chance);
-                self.answer_comm_calls(chance);
-                self.answer_pirates(&mut &mut *chance);
+                self.tick_assistance();
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2763,10 +2765,12 @@ impl Session {
     /// ([`Session::tractor`]) or an NPC's. Before anything else,
     /// unless landed or jumping, the sabotage clock ticks, and what it sets
     /// off goes off (see the `sabotage` module), and the eject is checked
-    /// (see the `eject` module), both before the scans. Then the frame's
-    /// calls and scans held behind its first scan settle in slot order,
-    /// with the reinforcement clock's tick held behind them, jumping or
-    /// not (see the `comm_calls` module). The player's
+    /// (see the `eject` module), both before the scans, the boarded flag
+    /// cleared first unless the player is disabled (see the
+    /// `pirate_plunder` module). Then the frame's work on the line, its
+    /// calls, scans, plunders, docks, repairs and refuel notes, settles in
+    /// slot order, with the reinforcement clock's tick held behind it,
+    /// jumping or not (see the `comm_calls` module). The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
     /// fight's hits leave it (see the `player_downed` module), before the
     /// eject on a breakup's first tick takes it into a new ship. After
@@ -2802,12 +2806,14 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s part of a game-work pass that comes before the
-    /// fight, on either pass (see the `double_time` module): the repair
+    /// fight, on either pass (see the `double_time` module): the boarded
+    /// flag's clear (see the `pirate_plunder` module), the repair
     /// inhibit's countdown and the disabled player's self-repair (see the
     /// `player_repair` module), the sabotage clock's tick (see the
     /// `sabotage` module), then the eject check for a player who enters it
     /// disabled or dying (see the `eject` module), drawing on `chance`.
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
+        self.unboard_unless_disabled();
         self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
         self.eject_before_fight(chance);

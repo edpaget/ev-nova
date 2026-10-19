@@ -561,7 +561,7 @@ mod tests {
         assert_eq!(traffic.npcs()[0].ai_wait, 0, "the attacker waits none");
         assert_eq!(traffic.npcs()[1].target, None);
         assert_eq!(
-            traffic.take_comm_calls(),
+            crate::traffic::fixture::calls_on_line(&traffic.take_on_line()),
             [(NpcId(1), CommCall::Reinforcements, 0.0)],
             "the waiting pirate calls for none"
         );

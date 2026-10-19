@@ -77,8 +77,8 @@ use nova_sim_catalog::catalog::ShipId;
 /// (the double 0.7 @0xdd0d0, by the frame).
 pub const DRIFT: f32 = 0.7;
 
-/// What the pirates did that their session answers, taken by
-/// `Traffic::take_pirate_events`.
+/// What the pirates did that their session answers, queued on the line
+/// at the actor's berth ([`OnLine::Pirate`](crate::traffic::on_line::OnLine::Pirate)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PirateEvent {
     /// A pirate, or a ship repairing the player, started its dock with the
@@ -116,6 +116,19 @@ pub enum PirateEvent {
         /// How the victim was captured, if it was.
         taken: Option<Taken>,
     },
+}
+
+impl PirateEvent {
+    /// The ship that acted: the pirate, or the ship repairing the player.
+    #[must_use]
+    pub fn actor(&self) -> NpcId {
+        match *self {
+            Self::PlayerDockedWith { pirate }
+            | Self::PlunderPlayer { pirate }
+            | Self::Plundered { pirate, .. } => pirate,
+            Self::PlayerRepaired { helper, .. } => helper,
+        }
+    }
 }
 
 /// What a ship's high level does this think (see the module docs).
@@ -1010,6 +1023,64 @@ mod tests {
             [PirateEvent::PlunderPlayer { pirate: PIRATE }]
         );
         assert_eq!(ship(&traffic, PIRATE).goal, Goal::Drift);
+    }
+
+    #[test]
+    fn each_events_actor_is_its_pirate_or_repairer() {
+        let helper = NpcId(4);
+        assert_eq!(
+            PirateEvent::PlayerDockedWith { pirate: PIRATE }.actor(),
+            PIRATE
+        );
+        assert_eq!(
+            PirateEvent::PlunderPlayer { pirate: PIRATE }.actor(),
+            PIRATE
+        );
+        let plundered = PirateEvent::Plundered {
+            pirate: PIRATE,
+            victim: VICTIM,
+            tons: 0,
+            line: None,
+            taken: None,
+        };
+        assert_eq!(plundered.actor(), PIRATE);
+        let repaired = PirateEvent::PlayerRepaired {
+            helper,
+            ship: ShipId(128),
+        };
+        assert_eq!(repaired.actor(), helper);
+    }
+
+    #[test]
+    fn a_plunder_is_queued_at_its_pirates_berth_among_the_calls() {
+        use crate::ai::CommCall;
+        use crate::traffic::on_line::OnLine;
+        let mut docked = pirate(1);
+        docked.berth = 3;
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = victim();
+        boarded.boarded = true;
+        let mut traffic = traffic_of(vec![docked, boarded]);
+        tick(&mut traffic, 0);
+        let call = |id| OnLine::Call(NpcId(id), CommCall::Distress, 0.0);
+        traffic.on_line.push(2, call(2));
+        traffic.on_line.push(4, call(4));
+        let work = traffic.take_on_line();
+        assert_eq!(work.len(), 3, "{work:?}");
+        assert_eq!(work[0], call(2));
+        assert!(
+            matches!(
+                work[1],
+                OnLine::Pirate(PirateEvent::Plundered { pirate: PIRATE, .. })
+            ),
+            "{work:?}"
+        );
+        assert_eq!(work[2], call(4));
     }
 
     #[test]

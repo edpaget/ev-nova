@@ -77,8 +77,8 @@
 //!    asking its person's quote gate, [`Traffic::turn_with_quote`], before
 //!    any goal is taken; a pirate's count wait ending at none left,
 //!    [`board_wait::lapse`]; then each plunder decided, in berth order,
-//!    [`plunder::resolve`], queued for the session
-//!    [`Traffic::take_pirate_events`]; then, on the AI timer, each
+//!    [`plunder::resolve`], queued on the line at the pirate's berth
+//!    ([`on_line`]); then, on the AI timer, each
 //!    ship's swarm check ([`swarm::pass`], which a coasting ship, one
 //!    entering a gate or one assisting the player unprovoked runs too);
 //!    then each NPC's high level, a
@@ -662,9 +662,10 @@ pub struct Traffic {
     interval: u32,
     /// The NPCs that left on the last tick, and how.
     departed: Vec<(NpcId, Outcome)>,
-    /// The calls the decisions made on the message line and the scans of
-    /// the player, in slot order, since they were last taken
-    /// ([`Traffic::take_comm_calls`], [`Traffic::take_on_line`]).
+    /// The frame's work on the message line, in slot order, since it was
+    /// last taken ([`Traffic::take_on_line`]): the calls the decisions
+    /// made, the scans of the player, what the pirates and repairers did
+    /// and the session's refuel notes.
     on_line: LineQueue,
     /// The `STR#`s of the arrival quotes of the fleets added since the
     /// quotes were last taken, in order ([`NewShip::quote`]).
@@ -673,9 +674,6 @@ pub struct Traffic {
     /// at once, since they were last taken, in order
     /// ([`Traffic::take_attack_quotes`]).
     attack_quotes: Vec<NpcId>,
-    /// What the pirates did since it was last taken, for the session to
-    /// answer, in order ([`Traffic::take_pirate_events`]).
-    pirate_events: Vec<PirateEvent>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
     /// The name of the person of the ship last brought in at each berth,
@@ -763,7 +761,6 @@ impl Traffic {
             on_line: LineQueue::default(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
-            pirate_events: Vec::new(),
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
@@ -832,7 +829,6 @@ impl Traffic {
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
-        self.pirate_events.clear();
         self.add(
             missions,
             world.persons.grudges,
@@ -928,7 +924,6 @@ impl Traffic {
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
-        self.pirate_events.clear();
     }
 
     /// Advances the traffic one tick among `sites` alone ([`World::new`],
@@ -968,6 +963,7 @@ impl Traffic {
         still: &BTreeSet<NpcId>,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.on_line.next_frame();
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         self.forget_provocations();
@@ -1048,6 +1044,30 @@ impl Traffic {
                 npc.target = target;
             }
         }
+        self.take_gate_waits(behaviour, &world);
+        let freed = pod_flight::count_down(&mut self.npcs);
+        // `_DoPlayGameWork`'s odds pass, after every think and before
+        // `_HandleShip` (@0x442b0-0x44336; see `odds_cache`).
+        self.refresh_odds(&world);
+        self.fly(&world, true, still, chance);
+        self.departed.extend(freed);
+        // The display pass (`_DoPlayGameWork` @0x444ad) follows the
+        // frame's arrivals pass (step 1) and frees each ship left behind
+        // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them
+        // after the frame's AI and ship handling too, whose scans test the
+        // system; here none of those steps sees a ship left behind. The
+        // engine's move settles after the frame's traffic tick, so its one
+        // arrivals pass is the next tick's: the lag of a settled script,
+        // crossing no boundary, as a ship left behind is never drawn.
+        self.left_behind.clear();
+        self.ticks += 1;
+    }
+
+    /// Each ship waiting in its gate or held at it holds only what
+    /// `behaviour` gives it for the wait in `world`
+    /// ([`Behaviour::gate_wait`]), dropping its target if the behaviour
+    /// says so (step 4 of the module docs).
+    fn take_gate_waits(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World) {
         let around = world.around(&self.npcs);
         let waits: Vec<Option<GateWait>> = self
             .npcs
@@ -1071,22 +1091,6 @@ impl Traffic {
                 }
             }
         }
-        let freed = pod_flight::count_down(&mut self.npcs);
-        // `_DoPlayGameWork`'s odds pass, after every think and before
-        // `_HandleShip` (@0x442b0-0x44336; see `odds_cache`).
-        self.refresh_odds(&world);
-        self.fly(&world, true, still, chance);
-        self.departed.extend(freed);
-        // The display pass (`_DoPlayGameWork` @0x444ad) follows the
-        // frame's arrivals pass (step 1) and frees each ship left behind
-        // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them
-        // after the frame's AI and ship handling too, whose scans test the
-        // system; here none of those steps sees a ship left behind. The
-        // engine's move settles after the frame's traffic tick, so its one
-        // arrivals pass is the next tick's: the lag of a settled script,
-        // crossing no boundary, as a ship left behind is never drawn.
-        self.left_behind.clear();
-        self.ticks += 1;
     }
 
     /// Whether each NPC flies its high level this tick: each whose decision
@@ -1351,23 +1355,20 @@ impl Traffic {
             })
             .collect();
         self.dock_starts(&docked);
-        self.pirate_events.extend(
-            repaired
-                .into_iter()
-                .map(|(helper, ship)| PirateEvent::PlayerRepaired { helper, ship }),
-        );
+        for (helper, ship) in repaired {
+            self.queue_pirate(PirateEvent::PlayerRepaired { helper, ship });
+        }
         outcomes
     }
 
     /// Each dock a pirate started this tick, `docked` as (pirate, victim):
     /// the victim is boarded (+0xb9 = 1, `_LowLevelAIHandler` @0x86fc7), the
-    /// player too, which its session holds ([`PirateEvent::PlayerDockedWith`]).
+    /// player too, which its session holds ([`PirateEvent::PlayerDockedWith`],
+    /// queued at the pirate's berth).
     fn dock_starts(&mut self, docked: &[(NpcId, ShipRef)]) {
         for &(pirate, victim) in docked {
             match victim {
-                ShipRef::Player => self
-                    .pirate_events
-                    .push(PirateEvent::PlayerDockedWith { pirate }),
+                ShipRef::Player => self.queue_pirate(PirateEvent::PlayerDockedWith { pirate }),
                 ShipRef::Npc(id) => {
                     if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
                         npc.boarded = true;
@@ -1379,7 +1380,7 @@ impl Traffic {
 
     /// Runs the `plunders` the decisions made, in berth order, in `world`,
     /// rolling on `chance` ([`plunder::resolve`]), queueing what happened
-    /// for the session ([`Traffic::take_pirate_events`]); a captured ship's
+    /// on the line at each pirate's berth ([`on_line`]); a captured ship's
     /// berth forgets its person's name, as its slot's +0xc8d0 is cleared
     /// (@0x84953).
     fn plunder(
@@ -1404,16 +1405,38 @@ impl Traffic {
                 self.forget_berth_person(berth);
             }
         }
-        self.pirate_events.extend(events);
+        for event in events {
+            self.queue_pirate(event);
+        }
     }
 
-    /// What the pirates did since this was last called, in order: a dock
-    /// started with the player, a plunder of the player for the session to
-    /// carry out, and each NPC plundered, with its line and capture (see
-    /// [`plunder`]). Taking them empties the list; entering or going on
-    /// into another system drops them.
+    /// Queues `event` on the line at its actor's berth ([`on_line`]).
+    fn queue_pirate(&mut self, event: PirateEvent) {
+        self.queue_on_line(event.actor(), OnLine::Pirate(event));
+    }
+
+    /// Queues `work` on the line at NPC `id`'s berth in the frame now being
+    /// queued, or after the frame's other work if it has gone (see
+    /// [`on_line`]): the session's refuel note
+    /// ([`OnLine::RefuelDone`]) among them.
+    pub fn queue_on_line(&mut self, id: NpcId, work: OnLine) {
+        let berth = self
+            .npcs
+            .iter()
+            .find(|npc| npc.id == id)
+            .map_or(u32::MAX, |npc| npc.berth);
+        self.on_line.push(berth, work);
+    }
+
+    /// What the pirates and repairers did since this was last called, in
+    /// slot order: a dock started with the player, a repair of it, a
+    /// plunder of the player for the session to carry out, and each NPC
+    /// plundered, with its line and capture (see [`plunder`]). Taking them
+    /// leaves the rest of the line's work queued, for the tests of the
+    /// traffic alone.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn take_pirate_events(&mut self) -> Vec<PirateEvent> {
-        std::mem::take(&mut self.pirate_events)
+        self.on_line.take_pirate_events()
     }
 
     /// Releases the followers of each NPC that reached its gate's box this
@@ -1899,11 +1922,12 @@ impl Traffic {
         self.berth_persons.get(&berth).map(String::as_str)
     }
 
-    /// Queues `event` as if a pirate made it this tick, for the session's
-    /// tests of its answer ([`Traffic::take_pirate_events`]).
+    /// Queues `event` as if a pirate made it this tick, at its actor's
+    /// berth in the frame now being queued, for the session's tests of its
+    /// answer ([`Traffic::take_on_line`]).
     #[cfg(any(test, feature = "fixture"))]
     pub fn queue_pirate_event(&mut self, event: PirateEvent) {
-        self.pirate_events.push(event);
+        self.queue_pirate(event);
     }
 
     /// Writes `name` as the person of the ship last brought in at `berth`,
@@ -2002,7 +2026,7 @@ impl Traffic {
     /// [`travel::take`](crate::ai::travel::take)), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. Each decision's calls,
-    /// then its scan, are queued on the line in slot order ([`on_line`]).
+    /// then its scan, are queued on the line at its berth ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
             let Some(decision) = decision else {
@@ -2041,7 +2065,8 @@ impl Traffic {
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
             }
             // The calls carry the odds the think read, before the pass.
-            self.on_line.push_think(npc.id, calls, npc.odds, scans);
+            self.on_line
+                .push_think(npc.berth, npc.id, calls, npc.odds, scans);
             if provokes {
                 npc.provoked = 1.0;
             }
@@ -2069,19 +2094,22 @@ impl Traffic {
         }
     }
 
-    /// The frame's work on the message line held behind its first scan,
-    /// in slot order ([`on_line`]), with every call and scan queued since
-    /// [`Traffic::take_comm_calls`] was last called: each NPC that stopped
-    /// inspecting the player while within an interceptor's reach of it
-    /// scans it (`_HighLevelAIHandler` @0x8f11e-0x8f38a calls
-    /// `_ScanPlayer` there), after its own think's calls. Taking it
+    /// The work on the message line queued since this was last called, in
+    /// slot order ([`on_line`]): each think's calls ([`Decision::comm_call`],
+    /// then its call for reinforcements, [`Decision::calls_reinforcements`],
+    /// each with the odds against its caller its think read, [`Npc::odds`],
+    /// before the tick's odds pass); then, when the NPC stopped inspecting
+    /// the player while within an interceptor's reach of it, its scan of
+    /// the player (`_HighLevelAIHandler` @0x8f11e-0x8f38a calls
+    /// `_ScanPlayer` there); what its pirate or repairer did; and the
+    /// session's refuel note ([`Traffic::queue_on_line`]). Taking it
     /// empties the queue; entering or going on into another system drops
     /// it.
     pub fn take_on_line(&mut self) -> Vec<OnLine> {
         self.on_line.take_all()
     }
 
-    /// Whether any call or scan is queued, not yet taken.
+    /// Whether any work is queued on the line, not yet taken.
     #[must_use]
     pub fn holds_line_work(&self) -> bool {
         self.on_line.holds_any()
@@ -2102,21 +2130,6 @@ impl Traffic {
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)
-    }
-
-    /// The calls the decisions made on the message line ahead of the
-    /// first scan queued, in NPC order within a tick
-    /// ([`Decision::comm_call`]), each think's call for reinforcements
-    /// after its own call ([`Decision::calls_reinforcements`],
-    /// [`CommCall::Reinforcements`]), for the session to answer. Taking
-    /// them leaves the first scan and everything after it held for
-    /// [`Traffic::take_on_line`], as that scan's line comes first in the
-    /// original's slot order (see [`on_line`]); entering or going on into
-    /// another system drops them. Each comes with the odds against its
-    /// caller its think read ([`Npc::odds`], before the tick's odds
-    /// pass).
-    pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall, f32)> {
-        self.on_line.take_ahead_of_scans()
     }
 
     /// The ship types the system's traffic can spawn, by ascending ID.

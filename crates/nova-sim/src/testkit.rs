@@ -321,3 +321,50 @@ pub(crate) fn click_stellar(session: &mut Session, at: Vec2) -> Option<StellarId
         _ => None,
     }
 }
+
+/// A bomb outfit (`ModType` [`SABOTAGE_BOMB`](crate::SABOTAGE_BOMB)), with
+/// no `bööm`: the sabotage tests' and the message line's.
+pub(crate) const BOMB: i16 = 262;
+
+/// The [`BOMB`] outfit's record.
+pub(crate) fn bomb_outfit() -> crate::catalog::OutfitRecord {
+    outfit(BOMB, &[(crate::SABOTAGE_BOMB, 0)])
+}
+
+/// The fighter bay whose fighter is an escape ship.
+pub(crate) const ESCAPE_BAY: i16 = 160;
+
+/// The outfit of the escape ships aboard, the bay's ammunition.
+pub(crate) const ESCAPE_FIGHTERS: i16 = 310;
+
+/// The escape ship, a fighter of `Flags` 0x8000.
+pub(crate) const ESCAPE_SHIP: i16 = 144;
+
+/// `catalog` with a fighter bay of [`ESCAPE_SHIP`]s carried as
+/// [`ESCAPE_FIGHTERS`], an escape ship of 100 shield, 200 armour and 300
+/// fuel, long named "Federation Viper", so a player owning the fighters
+/// ejects into one.
+pub(crate) fn with_escape_ship(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+    catalog.weapons.push(crate::catalog::WeaponRecord {
+        guidance: crate::bay::FIGHTER_BAY,
+        ammo_type: ESCAPE_SHIP,
+        ..weapon(ESCAPE_BAY)
+    });
+    catalog.outfits.push(outfit(
+        ESCAPE_FIGHTERS,
+        &[(crate::combat::armament::MOD_AMMO, ESCAPE_BAY)],
+    ));
+    let mut viper = ship(
+        ESCAPE_SHIP,
+        ShipFields {
+            shield: 100,
+            armor: 200,
+            fuel: 300,
+            ..FAST
+        },
+    );
+    viper.flags = crate::escape::ESCAPE_SHIP_FLAG;
+    viper.long_name = "Federation Viper".to_owned();
+    catalog.ship_records.push(viper);
+    catalog
+}

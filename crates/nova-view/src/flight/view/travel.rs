@@ -522,8 +522,9 @@ impl<
 
     /// Runs up to `steps` of the session's steps, each only while
     /// `go_on` holds of the session before it: the ship's tick under the
-    /// keys held, the traffic's, the quotes', the assistance's and the
-    /// fight's, then the effects; in double time, the second pass
+    /// keys held, the traffic's (the assistance's within it) and the
+    /// fight's, which settles the frame's lines, then the quotes and the
+    /// effects; in double time, the second pass
     /// ([`Session::tick_again`]) with the answers to its hits and their
     /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
@@ -586,9 +587,8 @@ impl<
                     }
                     if !again {
                         session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_assistance();
-                        notes.extend(session.take_comm());
                         session.tick_combat(rules, &mut self.chance);
+                        notes.extend(session.take_comm());
                     }
                     // The pass's hits are answered before the frame is
                     // drawn, as `_HandleShot` answers them (@0x44385)

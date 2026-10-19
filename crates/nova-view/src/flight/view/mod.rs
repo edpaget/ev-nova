@@ -442,9 +442,11 @@
 //!   paused flight; each press there goes through [`FlightView::answer`],
 //!   each haggle through [`FlightView::haggle`], and closing the channel
 //!   through [`FlightView::hang_up`]. Each step, the NPCs refuelling the
-//!   player give their help ([`Session::tick_assistance`]; a repair is the
+//!   player give their help in the traffic's tick (a repair is the
 //!   traffic's, by the screen's [`DisableRule`]), and each that is done
-//!   says so, as a message ([`comm_message`]). During a jump, its pre-jump stage included, Y is
+//!   says so, as a message ([`comm_message`]), taken after the step's
+//!   combat tick, which settles the notes in slot order with the frame's
+//!   other lines ([`Session::take_comm`]). During a jump, its pre-jump stage included, Y is
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set
 //!   (@0x61f87; its beep is player-death phase 16's).

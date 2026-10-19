@@ -1,11 +1,13 @@
 //! Test support for the ai and traffic layer's tests and the tests above
-//! it, behind the `fixture` feature: a default NPC ([`npc`]), and one put
-//! in a pirate's count wait ([`count_waiting`]).
+//! it, behind the `fixture` feature: a default NPC ([`npc`]), one put
+//! in a pirate's count wait ([`count_waiting`]), and the calls among the
+//! line's work ([`calls_on_line`]).
 
 use super::npc::{AiType, Mode, Npc, NpcHold, NpcId};
-use crate::ai::Goal;
+use super::on_line::OnLine;
 use crate::ai::plunder_contents::ClassMarines;
 use crate::ai::pursuit::Pursuit;
+use crate::ai::{CommCall, Goal};
 use crate::catalog::{EscortClass, ShipId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::armament::{Armament, LauncherRounds, Trigger};
@@ -92,4 +94,16 @@ pub fn count_waiting(npc: &mut Npc, ticks: u32) {
 #[allow(clippy::cast_possible_truncation)]
 fn class_fuel(stats: &ShipStats) -> i16 {
     stats.fuel as i16
+}
+
+/// The calls among the line's `work`, in order, each with the odds its
+/// think read.
+#[must_use]
+pub fn calls_on_line(work: &[OnLine]) -> Vec<(NpcId, CommCall, f32)> {
+    work.iter()
+        .filter_map(|work| match *work {
+            OnLine::Call(id, call, odds) => Some((id, call, odds)),
+            _ => None,
+        })
+        .collect()
 }
