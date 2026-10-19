@@ -31,6 +31,14 @@
 //! sub-munition writes none and carries what the slot's last ship-fired
 //! shot left there ([`ShotSlots::write_roll`], [`ShotSlots::roll`]).
 //!
+//! **The leftover spin timer.** `_SpawnShot` never writes a shot's spin
+//! timer (+0x1c; no store to it @0x3e550-0x3f143), and only
+//! `_HandleShot`'s spin step does (@0x35884-0x358c4), so a new shot
+//! starts on the timer the slot's last spinning shot left
+//! ([`ShotSlots::spin`], [`ShotSlots::spin_pass`]; see
+//! [`spin_timer`](super::spin_timer)), across systems and pilots too. A
+//! slot never used holds 0, the zeroed table's.
+//!
 //! Slots past 127 exist only uncapped
 //! ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s default), the
 //! engine's extension past the table: such a slot is in no layer until
@@ -40,6 +48,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::projectile::{Shot, Source};
 use super::shot_layer::ShotLayer;
+use super::spin_timer;
 use super::{Combat, MAX_SHOTS};
 use crate::rulebook::RuleSource;
 
@@ -58,6 +67,9 @@ pub struct ShotSlots {
     /// The miss roll each slot's last ship-fired shot left, where it left
     /// one.
     rolls: BTreeMap<usize, u32>,
+    /// Each slot's spin timer (+0x1c), in passes, where a spinning shot
+    /// has run it.
+    spins: BTreeMap<usize, u32>,
 }
 
 impl ShotSlots {
@@ -156,8 +168,28 @@ impl ShotSlots {
         self.rolls.get(&slot).copied()
     }
 
+    /// The spin timer `slot` holds, in passes, which a shot put in it
+    /// starts on: 0 for a slot never used.
+    #[must_use]
+    pub fn spin(&self, slot: usize) -> u32 {
+        self.spins.get(&slot).copied().unwrap_or(0)
+    }
+
+    /// Runs `slot`'s spin timer a pass, as a live visit of a spinning shot
+    /// of `BeamWidth` `beam_width` does ([`spin_timer::pass`]).
+    pub fn spin_pass(&mut self, slot: usize, beam_width: i16) {
+        let (timer, _) = spin_timer::pass(self.spin(slot), beam_width);
+        self.spins.insert(slot, timer);
+    }
+
+    /// Puts `slot`'s spin timer back to 0.
+    pub fn reset_spin(&mut self, slot: usize) {
+        self.spins.remove(&slot);
+    }
+
     /// Frees every slot, as a system change does, and keeps each slot's
-    /// place in its layer and its roll (see the module docs).
+    /// place in its layer, its roll and its spin timer (see the module
+    /// docs).
     pub fn clear(&mut self) {
         self.held.clear();
     }
@@ -178,11 +210,19 @@ impl Combat {
     /// slot (@0x3e5e1-0x3e5f7, @0x3e89e); any other writes none, and by
     /// [`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)'s
     /// engine reading carries the roll the slot's last ship-fired shot
-    /// left ([`ShotSlots::roll`]). The slot it took, if it found one.
+    /// left ([`ShotSlots::roll`]). It starts on the spin timer the slot
+    /// holds ([`ShotSlots::spin`]), as `_SpawnShot` never writes +0x1c, by
+    /// [`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)'s
+    /// engine reading; by the other, on 0, the slot's put back to 0. The
+    /// slot it took, if it found one.
     pub(super) fn put_in_flight(&mut self, mut shot: Shot) -> Option<usize> {
         let free = self.first_free_slot()?;
         shot.slot = free;
         self.slots.put(free, shot.layer);
+        if self.reused_spin != RuleSource::Engine {
+            self.slots.reset_spin(free);
+        }
+        shot.spin_timer = self.slots.spin(free);
         if shot.generation == 0 && matches!(shot.source, Source::Ship(_)) {
             self.slots.write_roll(free, shot.miss_roll);
         } else if self.reused_roll == RuleSource::Engine {
@@ -265,6 +305,14 @@ impl Combat {
     /// by default, the engine's, it does; by the other reading, none.
     pub fn set_reused_shot_slot_roll(&mut self, source: RuleSource) {
         self.reused_roll = source;
+    }
+
+    /// Has a new shot start on its slot's leftover spin timer as `source`
+    /// reads
+    /// ([`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)):
+    /// by default, the engine's, it does; by the other reading, on 0.
+    pub fn set_reused_shot_slot_spin(&mut self, source: RuleSource) {
+        self.reused_spin = source;
     }
 }
 
@@ -378,6 +426,33 @@ mod tests {
         slots.put(5, ShotLayer::Homing);
         slots.put(MAX_SHOTS + 1, ShotLayer::Homing);
         assert!(slots.rank(5) < slots.rank(MAX_SHOTS + 1));
+    }
+
+    #[test]
+    fn a_slots_spin_timer_runs_on_its_spinning_shots_passes() {
+        let mut slots = ShotSlots::new();
+        assert_eq!(slots.spin(0), 0, "never used");
+        slots.spin_pass(0, 3);
+        slots.spin_pass(0, 3);
+        assert_eq!(slots.spin(0), 2);
+        assert_eq!(slots.spin(1), 0, "its own");
+        slots.spin_pass(0, 3);
+        assert_eq!(slots.spin(0), 0, "stepped at 3");
+        slots.spin_pass(0, 3);
+        slots.reset_spin(0);
+        assert_eq!(slots.spin(0), 0, "reset");
+    }
+
+    #[test]
+    fn freeing_and_clearing_keep_the_spin_timers() {
+        let mut slots = ShotSlots::new();
+        slots.spin_pass(4, 9);
+        slots.hold(4);
+        slots.free(4);
+        assert_eq!(slots.spin(4), 1);
+        slots.hold(4);
+        slots.clear();
+        assert_eq!(slots.spin(4), 1);
     }
 
     #[test]

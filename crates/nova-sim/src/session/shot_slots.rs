@@ -76,6 +76,12 @@ mod tests {
         let other =
             Rulebook::default().with_override(RuleKey::ReusedShotSlotRoll, RuleSource::Bible);
         assert_eq!(session(other).combat, no_roll);
+        let mut no_spin = Combat::default();
+        no_spin.set_reused_shot_slot_spin(RuleSource::Bible);
+        assert_ne!(no_spin, Combat::default());
+        let other =
+            Rulebook::default().with_override(RuleKey::ReusedShotSlotSpin, RuleSource::Bible);
+        assert_eq!(session(other).combat, no_spin);
     }
 
     /// [`armed`] with its ships firing a shell that releases one turret
@@ -174,5 +180,35 @@ mod tests {
             .expect("starts")
             .with_slot_sprites(session.slot_sprites().clone());
         assert_eq!(next.combat.shot_slots(), left);
+    }
+
+    #[test]
+    fn a_slots_spin_timer_reaches_the_next_session_and_its_first_spinning_shot() {
+        // `_SpawnShot` never writes +0x1c (@0x3e550-0x3f143), and the shot
+        // table outlives a system change and a pilot, so a spinning shot
+        // starts on what its slot's last one left.
+        let mut catalog = armed();
+        catalog.weapons[0].flags |= crate::combat::weapon::SPINS;
+        catalog.weapons[0].beam_width = 9;
+        let mut history = crate::combat::shot_slots::ShotSlots::new();
+        history.spin_pass(0, 9);
+        history.spin_pass(0, 9);
+        let sprites = crate::ship_layer::SlotSprites {
+            shots: history,
+            ..Default::default()
+        };
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_slot_sprites(sprites);
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.shots().len(), 1);
+        assert_eq!(session.shots()[0].spin_timer, 2, "the slot's leftover");
+        let left = session.slot_sprites().shots.spin(0);
+        assert!(left >= 2, "{left}");
+        let next = Session::start(&catalog)
+            .expect("starts")
+            .with_slot_sprites(session.slot_sprites().clone());
+        assert_eq!(next.combat.shot_slots().spin(0), left);
     }
 }

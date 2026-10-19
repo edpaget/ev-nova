@@ -273,6 +273,10 @@ pub struct WeaponSpec {
     pub blast_radius: f32,
     /// A beam's length, in pixels.
     pub beam_length: f32,
+    /// Its `BeamWidth` as it is: a spinning shot steps its frame once its
+    /// spin timer reaches it, every pass at 0 or less (`_HandleShot`
+    /// @0x358a7-0x358bb; see [`spin_timer`](super::spin_timer)).
+    pub beam_width: i16,
     /// Its `Falloff` as the original loads it ([`loaded_falloff`]): how
     /// fast a beam's corona fades, and how long a decaying beam fades for
     /// (see [`beam`](super::beam)).
@@ -434,6 +438,9 @@ pub const EXCLUSIVE_HOLD: f32 = 2.0;
 /// (`_ModifyShotStartPosition` @0x73d9-0x742c, `_SpawnBeam`
 /// @0x45126-0x451af; see [`exits`](super::exits)).
 pub const NEAREST_EXIT: u16 = 0x0010;
+/// `Flags`: its shots spin through their frames (`_HandleShot`
+/// @0x35879-0x3587e).
+pub const SPINS: u16 = 0x0001;
 /// `Flags3`: it uses ammo only at the end of a burst.
 pub const AMMO_AT_BURST_END: u16 = 0x0001;
 /// `Flags3`: one shot at a time: while a shot of it is in flight, its
@@ -552,6 +559,7 @@ impl WeaponSpec {
             prox_radius: ticks(record.prox_radius),
             blast_radius: ticks(record.blast_radius),
             beam_length: ticks(record.beam_length),
+            beam_width: record.beam_width,
             falloff: loaded_falloff(record.beam_length, record.falloff, record.li_density),
             burst_count: count(record.burst_count),
             burst_reload: ticks(record.burst_reload),
@@ -591,6 +599,14 @@ impl WeaponSpec {
                 color: record.hit_part_color,
             }),
         }
+    }
+
+    /// Whether its shots spin through their frames: its `Flags` [`SPINS`]
+    /// (`_HandleShot` @0x35879-0x3587e), their spin timer stepping each
+    /// live visit ([`spin_timer`](super::spin_timer)).
+    #[must_use]
+    pub fn spins(&self) -> bool {
+        self.flags & SPINS != 0
     }
 
     /// Whether firing it lights its ship's weapon glow: its `Flags2`
@@ -1714,6 +1730,26 @@ mod tests {
         assert!(!others.secondary() && !others.passes_shields());
         assert!(!others.spares_player() && !others.detonates());
         assert!(!others.ammo_at_burst_end());
+    }
+
+    #[test]
+    fn a_spinning_weapon_loads_its_flags_0x0001_and_its_beam_width() {
+        let spinning = WeaponSpec::new(&WeaponRecord {
+            flags: SPINS,
+            beam_width: 4,
+            ..weapon(128)
+        });
+        assert!(spinning.spins());
+        assert_eq!(spinning.beam_width, 4);
+        assert_eq!(SPINS, 0x0001);
+        assert!(!WeaponSpec::new(&weapon(128)).spins());
+        let others = WeaponSpec::new(&WeaponRecord {
+            flags: !SPINS,
+            beam_width: -2,
+            ..weapon(128)
+        });
+        assert!(!others.spins());
+        assert_eq!(others.beam_width, -2, "as it is, below none too");
     }
 
     #[test]

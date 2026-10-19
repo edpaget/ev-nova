@@ -1338,6 +1338,9 @@ pub struct WeaponRecord {
     pub decay: i16,
     /// Its `BeamLength`, in pixels.
     pub beam_length: i16,
+    /// Its `BeamWidth`: a beam's width, and a spinning shot's passes a
+    /// frame (`_HandleShot` @0x358a7).
+    pub beam_width: i16,
     /// Its `Falloff`: how fast a beam's corona fades, and how long a
     /// decaying beam fades for.
     pub falloff: i16,

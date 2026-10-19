@@ -50,6 +50,7 @@ impl CombatCatalog for Pilot {
             flags3: 0,
             decay: 0,
             beam_length: 0,
+            beam_width: 0,
             falloff: 0,
             li_density: 0,
             burst_count: 0,

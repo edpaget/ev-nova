@@ -555,6 +555,13 @@ pub struct Shot {
     /// [`Combat`](super::Combat) gives it as it puts it in flight: the
     /// shots in flight are kept in slot order.
     pub slot: usize,
+    /// The spin timer it started on (the original's +0x1c as it took its
+    /// slot, which `_SpawnShot` never writes), in passes: its slot's
+    /// leftover ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)),
+    /// which [`Combat`](super::Combat) gives it as it puts it in flight.
+    /// The view counts its frame steps from it
+    /// ([`spin_timer::steps`](super::spin_timer::steps)).
+    pub spin_timer: u32,
     /// The ship slot its firer fired from, which a sub-munition takes from
     /// its parent (the original's source slot, shot +0x2c): none for a
     /// shot no ship fired. As it spawns, a sub-munition reads whatever
@@ -714,6 +721,7 @@ impl Shot {
             jam_rolls: [0; JAMMING_TYPES],
             moved_from: None,
             slot: 0,
+            spin_timer: 0,
             firer_slot: None,
         }
     }

@@ -5,6 +5,7 @@
 
 use super::collision_walk::{BESIDE_C, D, INTO_C, fly, fused, missile, rolled_over, three, walk};
 use super::*;
+use crate::combat::weapon::SPINS;
 
 /// A long-lived shot of C's, far from every ship, never moving.
 fn idle() -> Shot {
@@ -750,4 +751,94 @@ fn a_fight_starts_from_the_shot_slots_an_earlier_one_left_none_held() {
     assert_eq!(later.shot_slots(), history);
     assert_eq!(later.first_free_slot(), Some(0), "none held");
     assert_eq!(later.slots.rank(0), history.rank(0));
+}
+
+/// [`idle`] of `Flags` `flags` and `BeamWidth` 4.
+fn idle_of(flags: u16) -> Shot {
+    let mut shot = idle();
+    shot.weapon.flags = flags;
+    shot.weapon.beam_width = 4;
+    shot
+}
+
+/// `n` of `_HandleShot`'s passes among two ships far off.
+fn visits(combat: &mut Combat, n: usize) {
+    let arsenal = Arsenal::default();
+    for _ in 0..n {
+        handle_shots(combat, &arsenal);
+    }
+}
+
+#[test]
+fn a_spinning_shot_runs_its_slots_spin_timer_and_the_next_shot_there_starts_on_it() {
+    // `_HandleShot` runs +0x1c each live visit of a `Flags` 0x0001 shot,
+    // stepping at `BeamWidth` (@0x35884-0x358c4); `_SpawnShot` never
+    // writes it (@0x3e550-0x3f143).
+    let mut combat = Combat::default();
+    combat.put_in_flight(idle_of(SPINS));
+    assert_eq!(combat.shots()[0].spin_timer, 0, "a slot never used");
+    visits(&mut combat, 6);
+    assert_eq!(combat.slots.spin(0), 2, "6 passes at 4: stepped at 4");
+    end_and_free(&mut combat, 0);
+    combat.put_in_flight(idle_of(SPINS));
+    assert_eq!(combat.shots()[0].spin_timer, 2, "the slot's leftover");
+    visits(&mut combat, 3);
+    assert_eq!(combat.slots.spin(0), 1, "(2 + 3) mod 4");
+    assert_eq!(combat.slots.spin(1), 0, "another slot's own");
+}
+
+#[test]
+fn a_shot_that_does_not_spin_leaves_its_slots_spin_timer_as_it_found_it() {
+    let mut combat = Combat::default();
+    combat.put_in_flight(idle_of(SPINS));
+    visits(&mut combat, 3);
+    end_and_free(&mut combat, 0);
+    combat.put_in_flight(idle_of(0));
+    assert_eq!(combat.shots()[0].spin_timer, 3, "it starts on it too");
+    visits(&mut combat, 5);
+    assert_eq!(combat.slots.spin(0), 3, "untouched");
+    end_and_free(&mut combat, 0);
+    combat.put_in_flight(idle_of(SPINS));
+    assert_eq!(combat.shots()[0].spin_timer, 3);
+}
+
+#[test]
+fn a_sub_munition_put_in_a_slot_starts_on_its_spin_timer() {
+    let (shell, arsenal) = one_sub();
+    let mut combat = Combat::default();
+    combat.put_in_flight(idle_of(SPINS));
+    visits(&mut combat, 3);
+    combat.put_in_flight(spent_shell(shell));
+    end_and_free(&mut combat, 0);
+    handle_shots(&mut combat, &arsenal);
+    let subs = sub_shots(&combat);
+    assert_eq!((subs[0].slot, subs[0].spin_timer), (0, 3));
+}
+
+#[test]
+fn by_the_other_reading_every_shot_starts_its_spin_timer_on_0() {
+    let mut combat = Combat::default();
+    combat.set_reused_shot_slot_spin(RuleSource::Bible);
+    combat.put_in_flight(idle_of(SPINS));
+    visits(&mut combat, 3);
+    end_and_free(&mut combat, 0);
+    combat.put_in_flight(idle_of(SPINS));
+    assert_eq!(combat.shots()[0].spin_timer, 0);
+    assert_eq!(combat.slots.spin(0), 0, "the slot's own put back too");
+    visits(&mut combat, 1);
+    assert_eq!(combat.slots.spin(0), 1, "and running from there");
+}
+
+#[test]
+fn the_shot_slots_keep_their_spin_timers_through_a_system_change() {
+    let mut combat = Combat::default();
+    combat.put_in_flight(idle_of(SPINS));
+    visits(&mut combat, 2);
+    let history = combat.shot_slots();
+    assert_eq!(history.spin(0), 2);
+    combat.clear();
+    let mut later = Combat::default();
+    later.set_shot_slots(history);
+    later.put_in_flight(idle_of(SPINS));
+    assert_eq!(later.shots()[0].spin_timer, 2);
 }

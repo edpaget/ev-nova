@@ -371,6 +371,7 @@ pub mod shot_layer;
 pub mod shot_slots;
 pub mod sides;
 mod source_slot;
+pub mod spin_timer;
 pub mod stellar;
 pub mod submunition;
 pub mod weapon;
@@ -1185,6 +1186,10 @@ pub struct Combat {
     /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
     /// by the engine, it does.
     reused_roll: RuleSource,
+    /// Whether a shot starts on its slot's leftover spin timer
+    /// ([`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)):
+    /// by the engine, it does.
+    reused_spin: RuleSource,
     /// Each ship slot's record of the last ship in it, which a
     /// sub-munition reads as it spawns ([`source_slot`]).
     slot_ships: BTreeMap<Slot, source_slot::SlotShip>,
@@ -1302,7 +1307,8 @@ impl Combat {
     /// [`Combat::visit_slots`]) flies a tick ([`Shot::step`]), homing
     /// among `targets` with each ship's jamming and sight as the hit pass
     /// left them ([`Sight`]), its draws made on `chance`. The loop has
-    /// already dropped each shot of no life.
+    /// already dropped each shot of no life. Each visit runs a spinning
+    /// shot's spin timer in its slot ([`ShotSlots::spin_pass`]).
     fn fly(
         &mut self,
         fighters: &[Fighter],
@@ -1318,9 +1324,15 @@ impl Combat {
             bomb_heading_wrap: self.bomb_heading_wrap,
             ..Guide::among(targets)
         };
+        let slots = &mut self.slots;
         for shot in &mut self.shots {
             if !sitting_out.contains(&shot.slot) {
                 shot.step(&guide, chance);
+                // The visit runs a spinning shot's spin timer, which its
+                // slot keeps (`_HandleShot` @0x35879-0x358c4).
+                if shot.weapon.spins() {
+                    slots.spin_pass(shot.slot, shot.weapon.beam_width);
+                }
             }
         }
     }

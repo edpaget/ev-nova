@@ -1850,6 +1850,8 @@ impl Session {
             .set_submunition_source_slot(rules.source_for(RuleKey::SubmunitionSourceSlot));
         self.combat
             .set_reused_shot_slot_roll(rules.source_for(RuleKey::ReusedShotSlotRoll));
+        self.combat
+            .set_reused_shot_slot_spin(rules.source_for(RuleKey::ReusedShotSlotSpin));
         self.traffic
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic
