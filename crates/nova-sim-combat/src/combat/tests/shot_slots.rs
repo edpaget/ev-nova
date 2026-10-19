@@ -331,3 +331,113 @@ fn point_defence_meets_a_missile_with_its_first_shot_in_entry_order() {
         assert_eq!(left, [kept], "{source:?}: {spent} spent, {missile:?} gone");
     }
 }
+
+/// A shell releasing one of weapon 148 at the end of its life, and that
+/// weapon.
+fn one_sub() -> (WeaponRecord, Arsenal) {
+    let (shell, _) = cluster(0);
+    let shell = WeaponRecord {
+        sub_count: 1,
+        ..shell
+    };
+    let sub = WeaponRecord {
+        count: 50,
+        speed: 500,
+        ..weapon(148)
+    };
+    (shell, Arsenal::new(&[shell, sub], Vec::new()))
+}
+
+/// A shell of `record` whose last move, its third, spent it, at (0, 300).
+fn spent_shell(record: WeaponRecord) -> Shot {
+    let at = Vec2::new(0.0, 300.0);
+    Shot {
+        position: at,
+        moved_from: Some(at - Vec2::new(10.0, 0.0)),
+        age: 3,
+        ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
+    }
+}
+
+/// `_HandleShot`'s pass alone, among two ships far off, its
+/// sub-munitions read from `arsenal`.
+fn handle_shots(combat: &mut Combat, arsenal: &Arsenal) {
+    let mut ships = [Ship::at(1, -5000.0, 0.0), Ship::at(2, 5000.0, 0.0)];
+    let govts = Governments::default();
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    };
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.fly_shots(&mut fighters, arena, &mut NeverFires);
+}
+
+/// Idle shots in slots `0..n` but the shell spent in slot 5.
+fn shell_in_slot_5(shell: WeaponRecord, n: usize) -> Combat {
+    let mut combat = Combat::default();
+    for slot in 0..n {
+        if slot == 5 {
+            combat.put_in_flight(spent_shell(shell));
+        } else {
+            combat.put_in_flight(idle());
+        }
+    }
+    combat
+}
+
+#[test]
+fn a_sub_munition_released_behind_the_visit_sits_out_the_tick() {
+    // `_HandleShot` visits slot 5, whose shell releases its sub-munition
+    // into slot 2, which the loop has passed (@0x4435e-0x44393): it is not
+    // moved this frame. Into slot 7, it is visited and moved.
+    let (shell, arsenal) = one_sub();
+    let mut behind = shell_in_slot_5(shell, 6);
+    end_and_free(&mut behind, 2);
+    handle_shots(&mut behind, &arsenal);
+    let subs = sub_shots(&behind);
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].slot, 2);
+    assert_eq!(subs[0].moved_from, None, "not moved");
+    assert_eq!(
+        subs[0].position,
+        Vec2::new(0.0, 300.0),
+        "where it was released"
+    );
+    let mut ahead = shell_in_slot_5(shell, 10);
+    end_and_free(&mut ahead, 7);
+    handle_shots(&mut ahead, &arsenal);
+    let subs = sub_shots(&ahead);
+    assert_eq!(subs[0].slot, 7);
+    assert!(subs[0].moved_from.is_some(), "moved");
+    assert!(
+        !ahead.shots().iter().any(|shot| shot.slot == 5),
+        "the shell freed"
+    );
+}
+
+#[test]
+fn a_held_slot_is_freed_at_its_own_visit() {
+    // Slots 2 and 7 hold shots the collision passes ended. Slot 2's visit
+    // frees it before slot 5's shell releases, so the sub-munition takes
+    // it; slot 7, still held then, is passed over for slot 10.
+    let (shell, arsenal) = one_sub();
+    let mut both = shell_in_slot_5(shell, 10);
+    for slot in [2, 7] {
+        end_and_free(&mut both, slot);
+        both.slots.hold(slot);
+    }
+    handle_shots(&mut both, &arsenal);
+    assert_eq!(sub_shots(&both)[0].slot, 2, "freed at its visit");
+    assert_eq!(both.slots.held().count(), 0, "both freed");
+    let mut above = shell_in_slot_5(shell, 10);
+    end_and_free(&mut above, 7);
+    above.slots.hold(7);
+    handle_shots(&mut above, &arsenal);
+    let subs = sub_shots(&above);
+    assert_eq!(subs[0].slot, 10, "7 still held at slot 5's visit");
+    assert!(subs[0].moved_from.is_some(), "visited after slot 5");
+    assert!(!above.slots.is_held(7), "freed at its own visit");
+}

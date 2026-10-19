@@ -255,7 +255,7 @@ impl Combat {
     /// (`_ShotCanHitShip` @0x447c2, `_CheckShotProximities` @0x371ea), nor
     /// an asteroid's fuse, but meets an asteroid it touches, as
     /// `_AsteroidCollisionHandler` tests no life. Such a shot meeting none
-    /// is kept for its end of life in `_HandleShot` ([`Combat::expire`]),
+    /// is kept for its end of life in `_HandleShot` ([`Combat::visit_slots`]),
     /// as is every shot that met nothing.
     pub(super) fn resolve(
         &mut self,

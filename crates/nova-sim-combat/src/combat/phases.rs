@@ -132,13 +132,15 @@ impl Combat {
         self.fire(fighters, &targets, chance, Firers::Npcs);
     }
 
-    /// Step 5, `_HandleShot` (@0x44385): first each shot its last move
-    /// spent comes to its end of life ([`Combat::expire`], @0x36195), its
+    /// Step 5, `_HandleShot` (@0x44385): first its loop visits the slots
+    /// in order ([`Combat::visit_slots`]): each held slot is freed, and
+    /// each shot its last move spent comes to its end of life (@0x36195), its
     /// blast meeting each NPC where it stood as the last tick ran and the
     /// player where it is, as the collision passes do
     /// (`Combat::hit_pass`); its hits land and each ship struck settles
     /// its condition as in the collision passes. Then the shots fly among
-    /// `fighters`, drawing on `chance` ([`Combat::fly`]), the tick's
+    /// `fighters`, drawing on `chance` ([`Combat::fly`]), all but the
+    /// sub-munitions released into a slot the loop had passed; the tick's
     /// missile locks land ([`Strike::lock`](super::Strike::lock),
     /// @0x35855), and each one-at-a-time shot holds its firer's reload
     /// (`Combat::hold_reloads`, @0x35c09).
@@ -152,12 +154,6 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let rule = arena.rules.disable;
-        // `_HandleShot` frees the slots of the shots ended since its last
-        // pass, each at its visit (@0x356c1, @0x30ab1). A shot point
-        // defence ended, hidden at life 0, is freed with no end of life
-        // (@0x36195 → @0x35f0a → @0x3617c); the collision passes have
-        // already tested and let it go (`Combat::test_hidden`).
-        self.slots.clear();
         let now = self.stand_where_they_stood(fighters);
         let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let sides = Sides {
@@ -166,16 +162,19 @@ impl Combat {
             pass_through: self.pass_through,
         };
         let first_strike = self.strikes.len();
-        let expiries = self.expire(fighters, &sides, arena.arsenal, chance);
-        // Each end of life frees its slot as it ends (@0x3617c).
-        self.slots.clear();
+        // Each held slot is freed at its visit, a shot point defence ended,
+        // hidden at life 0, with no end of life (@0x36195 → @0x35f0a →
+        // @0x3617c): the collision passes have already tested and let it
+        // go (`Combat::test_hidden`).
+        let visited = self.visit_slots(fighters, &sides, arena.arsenal, chance);
+        let expiries = visited.expiries;
         self.land(fighters, expiries, rule);
         for (fighter, position) in fighters.iter_mut().zip(now) {
             fighter.state.position = position;
         }
         self.settle_struck(fighters, first_strike, rule);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.fly(fighters, &targets, chance);
+        self.fly(fighters, &targets, &visited.sitting_out, chance);
         let sides = Sides {
             targets: &targets,
             ..sides
