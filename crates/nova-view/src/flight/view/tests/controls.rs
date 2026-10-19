@@ -124,8 +124,9 @@ fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
             ticks += 1;
         }
         // A tick of help on the advance pass alone: 95 to past 100,
-        // one at a time.
-        assert_eq!(ticks, 6, "{on}");
+        // one at a time, and done on the think after (`_HighLevelAIHandler`
+        // tests done before the add, @0x8f548).
+        assert_eq!(ticks, 7, "{on}");
         assert_eq!(reserves(&view).fuel.now, 101.0, "{on}");
         let note = view.message().expect("refuelled").to_owned();
         assert!(note.contains(":  Energy transfer complete, "), "{note}");
