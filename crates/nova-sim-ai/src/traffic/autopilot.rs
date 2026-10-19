@@ -378,10 +378,7 @@ fn fly_mobile(
         // `_HandleShip` skips its turn and thrust while +0x4c runs
         // (@0x34a54-0x34a72) and moves it first (@0x34274-0x342aa), an
         // inertialess ship's velocity following its speed (@0x3425f).
-        match inertia {
-            Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
-            Inertia::Inertialess { .. } => inertialess::drift(npc, &handling),
-        }
+        position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }
     let state = npc.state;
@@ -959,11 +956,35 @@ pub(crate) fn cut_wait(npc: &mut Npc) {
 /// (@0x3501f-0x35048). An inertialess ship's velocity follows its speed
 /// as it moves (@0x3425f; [`inertialess::drift`]).
 fn coast(npc: &mut Npc, ticks_left: u32, flown: Flown) {
-    match flown.inertia {
-        Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
-        Inertia::Inertialess { .. } => inertialess::drift(npc, flown.handling),
-    }
+    position_step(npc, flown.handling, flown.inertia);
     count_down(npc, ticks_left);
+}
+
+/// `_HandleShip`'s move alone (@0x34274-0x342aa), with neither turn nor
+/// thrust: `npc` moves by its velocity, an inertialess one's velocity
+/// following its speed at `handling`'s rate first (@0x3425f,
+/// [`inertialess::drift`]).
+fn position_step(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
+    match inertia {
+        Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
+        Inertia::Inertialess { .. } => inertialess::drift(npc, handling),
+    }
+}
+
+/// `npc`'s flight in a pass no `_AIDispatch` steered it in, the ship its
+/// goal is about at `other`, under the flight rules `flight`: only
+/// `_HandleShip`'s move ([`position_step`]), as for a fighter launched
+/// into a later slot of the ship loop (`_LaunchFighter` @0x3c90b,
+/// @0x3d680). An [`immobile`](Npc::immobile) ship's velocity goes to none
+/// and it stays put (@0x34209-0x3423b).
+pub(crate) fn coast_unsteered(npc: &mut Npc, other: Option<&ShipState>, flight: FlightRules) {
+    if npc.immobile {
+        npc.state.velocity = Vec2::ZERO;
+        return;
+    }
+    let handling = flight.handling(npc.stats.handling);
+    let inertia = Inertia::of(npc, other, flight);
+    position_step(npc, &handling, inertia);
 }
 
 /// What a ship with no say in its flight flies on: its handling, and

@@ -162,6 +162,23 @@ impl Traffic {
         Some(outcome)
     }
 
+    /// Moves NPC `id`, one the fly half `pass` did not find as it began
+    /// (a fighter launched into a later slot of the ship loop), in
+    /// `world`: only `_HandleShip`'s move (@0x34274-0x342aa), after an
+    /// inertialess ship's velocity adjust (@0x3425f), with no steering,
+    /// as `_AIDispatch` ran before the loop (@0x44270-0x442ae) and gave it
+    /// no turn that frame. Nothing happens for an NPC not in the system.
+    ///
+    /// The original's escape fighter thinks first on the frame after its
+    /// launch, as here; it moves on its launch frame, as here too.
+    pub fn coast_npc(&mut self, pass: &FlyPass, id: NpcId, world: &World) {
+        let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) else {
+            return;
+        };
+        let (other, _) = other_of(pass, npc);
+        autopilot::coast_unsteered(npc, other.as_ref(), world.flight);
+    }
+
     /// Ends the fly half `pass` (see the module docs).
     pub fn end_fly(&mut self, pass: FlyPass) {
         let FlyPass {
@@ -209,6 +226,28 @@ impl Traffic {
     }
 }
 
+/// The ship `npc`'s flight is about (the one it docks with, follows,
+/// escorts, fights or inspects), where the fly half `pass` found it, and
+/// whether it was disabled then.
+fn other_of(pass: &FlyPass, npc: &Npc) -> (Option<ShipState>, bool) {
+    let other = match npc.goal {
+        _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
+        Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
+        Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
+        Goal::Dock(carrier) => Some(carrier),
+        goal => goal.quarry().or(goal.inspecting()),
+    };
+    let disabled = other.is_some_and(|ship| match ship {
+        ShipRef::Player => pass.player_disabled,
+        ShipRef::Npc(id) => pass.disabled.contains(&id),
+    });
+    let other = other.and_then(|ship| match ship {
+        ShipRef::Player => pass.player,
+        ShipRef::Npc(id) => pass.states.get(&id).copied(),
+    });
+    (other, disabled)
+}
+
 /// `npc`'s flight in the fly half `pass` at `speeds`, in `world`, rolling
 /// on `chance`: what became of it.
 fn fly_one(
@@ -218,21 +257,7 @@ fn fly_one(
     world: &World,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    let other = match npc.goal {
-        _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
-        Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
-        Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
-        Goal::Dock(carrier) => Some(carrier),
-        goal => goal.quarry().or(goal.inspecting()),
-    };
-    let other_disabled = other.is_some_and(|ship| match ship {
-        ShipRef::Player => pass.player_disabled,
-        ShipRef::Npc(id) => pass.disabled.contains(&id),
-    });
-    let other = other.and_then(|ship| match ship {
-        ShipRef::Player => pass.player,
-        ShipRef::Npc(id) => pass.states.get(&id).copied(),
-    });
+    let (other, other_disabled) = other_of(pass, npc);
     if pass.still.contains(&npc.id) {
         return Outcome::Flying;
     }
@@ -657,5 +682,69 @@ mod tests {
         let flying = plunderer_speed(ShipRef::Player, vec![], &player(Condition::Intact));
         let braking = plunderer_speed(ShipRef::Player, vec![], &player(Condition::Disabled));
         assert!(braking < flying, "the player: {braking} {flying}");
+    }
+
+    /// [`busy`] with a ship launched after its fly half began, at
+    /// (100, 100) moving by (3, -2) and facing 45, set to jump out, which
+    /// a steered flight would turn and thrust for; the half, and the ship.
+    fn launched_mid_half(world: &World, inertialess: bool) -> (Traffic, FlyPass, NpcId) {
+        let mut traffic = busy();
+        let pass = traffic.begin_fly(world, &BTreeSet::new(), FlyHalf::Advance);
+        let mut fighter = at(7, 100.0, 100.0);
+        fighter.state.velocity = Vec2::new(3.0, -2.0);
+        fighter.state.heading = 45.0;
+        fighter.goal = Goal::JumpOut;
+        fighter.stats.inertialess_hull = inertialess;
+        let id = fighter.id;
+        traffic.npcs.push(fighter);
+        (traffic, pass, id)
+    }
+
+    #[test]
+    fn a_ship_launched_after_the_half_began_coasts_unsteered() {
+        // `_LaunchFighter` makes its slot active in the ship loop
+        // (@0x3c90b, @0x3d680), whose `_HandleShip` moves it
+        // (@0x34274-0x342aa) with no `_AIDispatch` that frame to steer it.
+        let sites = sites();
+        let world = World::new(&sites);
+        let (mut traffic, pass, id) = launched_mid_half(&world, false);
+        assert!(!pass.order().contains(&id), "not in the half's snapshot");
+        traffic.coast_npc(&pass, id, &world);
+        let coasted = traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("here");
+        let moved = ShipState {
+            position: Vec2::new(103.0, 98.0),
+            velocity: Vec2::new(3.0, -2.0),
+            heading: 45.0,
+        };
+        assert_eq!(coasted.state, moved, "unturned and unthrust");
+    }
+
+    #[test]
+    fn an_inertialess_ship_launched_after_the_half_began_drifts_by_its_speed() {
+        // `_AdjustInertialessShipVelocity` (@0x3425f) comes before the
+        // position step.
+        let sites = sites();
+        let world = World::new(&sites);
+        let (mut traffic, pass, id) = launched_mid_half(&world, true);
+        let mut expected = traffic.npcs().iter().find(|npc| npc.id == id).cloned();
+        let handling = world
+            .flight
+            .handling(expected.as_ref().expect("here").stats.handling);
+        crate::traffic::inertialess::drift(expected.as_mut().expect("here"), &handling);
+        traffic.coast_npc(&pass, id, &world);
+        let coasted = traffic.npcs().iter().find(|npc| npc.id == id).cloned();
+        assert_eq!(
+            coasted.as_ref().map(|npc| npc.state),
+            expected.map(|npc| npc.state)
+        );
+        assert_ne!(
+            coasted.map(|npc| npc.state.velocity),
+            Some(Vec2::new(3.0, -2.0)),
+            "its velocity follows its speed"
+        );
     }
 }
