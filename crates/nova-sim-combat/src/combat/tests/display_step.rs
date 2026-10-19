@@ -221,7 +221,11 @@ fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
 fn stepping_each_npc_by_slot_matches_the_whole_loop() {
     // The session steps each NPC at its own slot, after its flight
     // (`nova_sim::Session::ship_loop`), keeping the ships shown: the same
-    // fight as the loop over every NPC.
+    // fight as the loop over every NPC did before it was split NPC by NPC
+    // (rdm weapons-fidelity phase 46, recorded from the parent of
+    // 5db4172e). By slot: A (1) regenerates and is shown; the wreck (5)
+    // goes off, striking A late and 7 not yet shown; 7 then regenerates
+    // its point back.
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let arena = arena(&arsenal, &govts);
     let ships = || {
@@ -238,6 +242,62 @@ fn stepping_each_npc_by_slot_matches_the_whole_loop() {
             .map(|ship| (ship.condition, ship.reserves, ship.state))
             .collect::<Vec<_>>()
     };
+    let left = |ships: &[Ship]| {
+        ships
+            .iter()
+            .map(|ship| {
+                (
+                    ship.id,
+                    ship.condition,
+                    ship.reserves.shield.now,
+                    ship.reserves.armor.now,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let seven = ShipRef::Npc(NpcId(7));
+    let origin = Vec2::new(0.0, 0.0);
+    let hit = |ship, late| CombatEvent::Hit {
+        ship,
+        weapon: None,
+        at: origin,
+        passes_shields: false,
+        late,
+    };
+    let events = [
+        CombatEvent::BreakingUp {
+            ship: WRECK,
+            at: origin,
+            explosion: None,
+        },
+        CombatEvent::Destroyed {
+            ship: WRECK,
+            ship_type: ShipId(128),
+            at: origin,
+            velocity: origin,
+            explosion: None,
+            size: 65.0,
+        },
+        hit(seven, false),
+        hit(A, true),
+    ];
+    let displays = [
+        Displayed {
+            ship: A,
+            slot: Slot::Berth(1),
+            disabled: false,
+        },
+        Displayed {
+            ship: WRECK,
+            slot: Slot::Berth(5),
+            disabled: true,
+        },
+        Displayed {
+            ship: seven,
+            slot: Slot::Berth(7),
+            disabled: false,
+        },
+    ];
     let mut whole = ships();
     let mut loop_combat = Combat::default();
     let mut fighters: Vec<Fighter> = whole.iter_mut().map(Ship::fighter).collect();
@@ -246,12 +306,23 @@ fn stepping_each_npc_by_slot_matches_the_whole_loop() {
     let mut each = ships();
     let mut each_combat = Combat::default();
     let mut shown = vec![ShipRef::Player];
-    for ship in [A, WRECK, ShipRef::Npc(NpcId(7))] {
+    for ship in [A, WRECK, seven] {
         let mut fighters: Vec<Fighter> = each.iter_mut().map(Ship::fighter).collect();
         each_combat.handle_npc(&mut fighters, arena, ship, &mut shown, &mut NeverFires);
     }
     assert_eq!(read(&each), read(&whole));
     assert_eq!(each_combat, loop_combat);
-    assert_eq!(shown, [ShipRef::Player, A, WRECK, ShipRef::Npc(NpcId(7))]);
-    assert_eq!(each[2].condition, Condition::Destroyed, "it went off");
+    assert_eq!(shown, [ShipRef::Player, A, WRECK, seven]);
+    for (ships, combat) in [(&each, &mut each_combat), (&whole, &mut loop_combat)] {
+        assert_eq!(
+            left(ships),
+            [
+                (seven, Condition::Intact, 69.0, 300.0),
+                (A, Condition::Intact, 68.0, 300.0),
+                (WRECK, Condition::Destroyed, 10.0, 0.0),
+            ]
+        );
+        assert_eq!(combat.take_events(), events);
+        assert_eq!(combat.take_displays(), displays);
+    }
 }

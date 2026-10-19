@@ -298,7 +298,7 @@ mod tests {
     /// into its gate's box (releasing its follower) and holds one still:
     /// 0 lands on planet 140; 1, a fighter, docks with 2, its carrier;
     /// 3 docks with 2 to plunder it; 4 enters the gate, 5 following it;
-    /// 6 flies on.
+    /// 6 flies on, short of fuel and regenerating half a unit a tick.
     fn busy() -> Traffic {
         let mut lander = at(0, 0.0, 0.0);
         lander.goal = Goal::Land(StellarId(140));
@@ -330,6 +330,8 @@ mod tests {
         let mut flier = at(6, -300.0, 0.0);
         flier.state.velocity = Vec2::new(1.0, 0.0);
         flier.goal = Goal::JumpOut;
+        flier.reserves.fuel.now = 100.0;
+        flier.stats.fuel_regen = 0.5;
         Traffic {
             npcs: vec![
                 lander,
@@ -342,6 +344,136 @@ mod tests {
             ],
             ..Traffic::default()
         }
+    }
+
+    /// What a fly half leaves of each NPC still in the traffic, in order:
+    /// its id, state, whether it was boarded, its docking, goal, fuel,
+    /// mode and AI wait.
+    type Left = (
+        NpcId,
+        ShipState,
+        bool,
+        Option<Docking>,
+        Goal,
+        f32,
+        Mode,
+        u32,
+    );
+
+    fn left(traffic: &Traffic) -> Vec<Left> {
+        traffic
+            .npcs()
+            .iter()
+            .map(|npc| {
+                (
+                    npc.id,
+                    npc.state,
+                    npc.boarded,
+                    npc.docking,
+                    npc.goal,
+                    npc.reserves.fuel.now,
+                    npc.mode,
+                    npc.ai_wait,
+                )
+            })
+            .collect()
+    }
+
+    /// A ship's state at (`x`, `y`) moving by (`dx`, 0), facing `heading`.
+    fn state(x: f32, y: f32, dx: f32, heading: f32) -> ShipState {
+        ShipState {
+            position: Vec2::new(x, y),
+            velocity: Vec2::new(dx, 0.0),
+            heading,
+        }
+    }
+
+    /// What [`busy`]'s fly half left of its NPCs, the flier in `flier`,
+    /// as the batch fly half did before it was split NPC by NPC (rdm
+    /// weapons-fidelity phase 46, recorded from the parent of 898d0253).
+    fn busy_left(flier: ShipState) -> Vec<Left> {
+        let docking = Docking {
+            ship: ShipRef::Npc(NpcId(2)),
+            sub: DockSub::Dock,
+        };
+        let entering = Mode::EnteringGate {
+            gate: GATE,
+            ticks_left: 15,
+        };
+        let plunder = Goal::Plunder {
+            ship: ShipRef::Npc(NpcId(2)),
+            hopeless: false,
+        };
+        let gate = Goal::EnterGate(GATE);
+        vec![
+            // The carrier, boarded by its fighter.
+            (
+                NpcId(2),
+                state(500.0, 0.0, 0.0, 0.0),
+                true,
+                None,
+                Goal::Idle,
+                300.0,
+                Mode::Flying,
+                0,
+            ),
+            // The pirate, its dock started (`Rand(80)` + 100) and counted once.
+            (
+                NpcId(3),
+                state(501.0, 1.0, 0.0, 0.0),
+                false,
+                Some(docking),
+                plunder,
+                300.0,
+                Mode::Flying,
+                99,
+            ),
+            (
+                NpcId(4),
+                state(1.0, 0.0, 0.0, 0.0),
+                false,
+                None,
+                gate,
+                300.0,
+                entering,
+                0,
+            ),
+            // The follower, released into its lead's gate.
+            (
+                NpcId(5),
+                state(2.0, 0.0, 0.0, 0.0),
+                false,
+                None,
+                gate,
+                300.0,
+                Mode::Flying,
+                0,
+            ),
+            (
+                NpcId(6),
+                flier,
+                false,
+                None,
+                Goal::JumpOut,
+                100.5,
+                Mode::Flying,
+                0,
+            ),
+        ]
+    }
+
+    /// What [`busy`]'s fly half sent away, the lander then the fighter.
+    fn busy_departed() -> [(NpcId, Outcome); 2] {
+        [
+            (NpcId(0), Outcome::Landed(StellarId(140))),
+            (
+                NpcId(1),
+                Outcome::Docked {
+                    carrier: ShipRef::Npc(NpcId(2)),
+                    ship: ShipId(200),
+                },
+            ),
+        ]
     }
 
     /// `traffic`'s fly half of `half` run one NPC at a time, in the
@@ -362,6 +494,8 @@ mod tests {
 
     #[test]
     fn flying_each_npc_in_turn_matches_the_batch_fly_half() {
+        // The advance pass, the flier held still, ends as the batch fly
+        // half before the split did.
         let sites = sites();
         let world = World::new(&sites);
         let still = BTreeSet::from([NpcId(6)]);
@@ -369,31 +503,18 @@ mod tests {
         batch.fly_holding(world, &still, &mut NeverFires);
         let mut turn = busy();
         each(&mut turn, &world, &still, FlyHalf::Advance);
+        for traffic in [&turn, &batch] {
+            assert_eq!(traffic.departed(), busy_departed());
+            assert_eq!(left(traffic), busy_left(state(-300.0, 0.0, 1.0, 0.0)));
+            assert_eq!(traffic.ticks, 1);
+        }
         assert_eq!(turn, batch);
-        // The fixture does what it says.
-        assert_eq!(
-            turn.departed(),
-            [
-                (NpcId(0), Outcome::Landed(StellarId(140))),
-                (
-                    NpcId(1),
-                    Outcome::Docked {
-                        carrier: ShipRef::Npc(NpcId(2)),
-                        ship: ShipId(200)
-                    }
-                ),
-            ]
-        );
-        let npc = |id| turn.npcs().iter().find(|npc| npc.id == NpcId(id));
-        assert!(npc(2).is_some_and(|carrier| carrier.boarded), "docked with");
-        assert!(npc(4).is_some_and(Npc::entering_gate));
-        assert!(npc(5).is_some_and(|follower| follower.goal == Goal::EnterGate(GATE)));
-        assert!(npc(6).is_some_and(|flier| flier.state.position.x == -300.0));
-        assert_eq!(turn.ticks, 1);
     }
 
     #[test]
     fn the_second_pass_flown_npc_by_npc_matches_its_move() {
+        // Double time's second pass ends as the batch `move_in` before the
+        // split did: the flier moves on, and the tick is not counted.
         let sites = sites();
         let world = World::new(&sites);
         let mut batch = busy();
@@ -402,8 +523,12 @@ mod tests {
         let mut turn = busy();
         turn.ticks = 7;
         each(&mut turn, &world, &BTreeSet::new(), FlyHalf::Again);
+        for traffic in [&turn, &batch] {
+            assert_eq!(traffic.departed(), busy_departed());
+            assert_eq!(left(traffic), busy_left(state(-299.0, 0.0, 1.0, 357.0)));
+            assert_eq!(traffic.ticks, 7, "not counted");
+        }
         assert_eq!(turn, batch);
-        assert_eq!(turn.ticks, 7, "not counted");
     }
 
     #[test]
