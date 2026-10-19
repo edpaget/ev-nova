@@ -401,8 +401,13 @@ impl Session {
     /// text with index -1 on each update (@0x907f7-0x9080b): its mission
     /// tags read as [`RuleKey::MissionlessTags`] says, its crossed rank
     /// tags the governments remembered, and the `l33t` munge applies. The
-    /// escort status is not filled (@0x90688-0x906ff). This changes
-    /// nothing, as the original's update does not.
+    /// escort status is not filled (@0x90688-0x906ff). Every text the
+    /// dialog shows is filled this way: the opening line, each reply
+    /// (haggle outcomes included), the line said first, the government
+    /// hail lines, specific advice and a person's comm quote. The planet
+    /// comm dialog's update (`_PlanetCommDialogUpdate` @0x90a98) munges
+    /// nothing, so its texts show as written. This changes nothing, as
+    /// the original's update does not.
     #[must_use]
     pub fn hailing(
         &self,
@@ -1525,6 +1530,42 @@ mod tests {
         let mut session = advised(&catalog);
         session.leet = true;
         assert_eq!(greeted(&mut session, &catalog, 2), "H377o, Stox0r.");
+    }
+
+    #[test]
+    fn a_comm_reply_fills_the_pilots_rank_tags() {
+        let mut catalog = advising("Yes, <PRK>. <SRK>.");
+        catalog.ranks = vec![RankRecord {
+            conv_name: "Cmdr".to_owned(),
+            short_name: "Cdr".to_owned(),
+            affil_govt: Some(GovtId(128)),
+            ..crate::testkit::rank(128)
+        }];
+        let mut session = advised(&catalog);
+        session.pilot.ranks.insert(RankId(128));
+        assert_eq!(greeted(&mut session, &catalog, 2), "Yes, Cmdr. Cdr.");
+        let mut session = advised(&catalog);
+        assert_eq!(
+            greeted(&mut session, &catalog, 2),
+            "Yes, captain. captain.",
+            "with no rank"
+        );
+    }
+
+    #[test]
+    fn the_line_said_first_is_filled_too() {
+        let mut catalog = hailable();
+        catalog.govts[0].flags2 = crate::hail::FREE_HELP;
+        catalog.strings[0].1[140] = "I'll help you, <PN>, if you pay me.".to_owned();
+        let mut session = targeting(&catalog);
+        session.pilot.name = "Stock".to_owned();
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(
+            view.first.as_deref(),
+            Some("I'll help you, Stock, if you pay me.")
+        );
     }
 
     #[test]
