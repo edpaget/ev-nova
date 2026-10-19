@@ -521,6 +521,17 @@ impl Condition {
             starting: true,
         })
     }
+
+    /// `_IsDying` (@0x253d): whether a ship in this condition with `armor`
+    /// is dying, its death timer running or, though nothing has settled
+    /// its condition yet, its armour gone ([`breaking_up`](Self::breaking_up)).
+    /// A ship type that holds no armour never reads dying by its armour,
+    /// and a destroyed ship never reads dying. The NPC escape-ship check
+    /// (`nova_sim::Session::npc_escapes`) reads it.
+    #[must_use]
+    pub fn is_dying(self, armor: Gauge) -> bool {
+        matches!(self, Self::Dying { .. }) || self.breaking_up(armor).is_some()
+    }
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
@@ -654,6 +665,28 @@ mod tests {
         for condition in [dying, Condition::Destroyed] {
             assert_eq!(condition.breaking_up(armor(-1.0, 100.0)), None);
         }
+    }
+
+    #[test]
+    fn is_dying_reads_a_breakup_or_a_standing_ship_whose_armour_is_gone() {
+        // `_IsDying` (@0x253d): its timer runs, or its armour is at none or
+        // below on a ship that holds any, though nothing settled it yet.
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert!(dying.is_dying(armor(5.0, 100.0)), "breaking up");
+        assert!(UNSET.is_dying(armor(5.0, 100.0)), "its timer unset");
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert!(condition.is_dying(armor(0.0, 100.0)), "{condition:?}");
+            assert!(condition.is_dying(armor(-1.0, 100.0)), "{condition:?}");
+            assert!(!condition.is_dying(armor(0.5, 100.0)), "{condition:?}");
+            assert!(
+                !condition.is_dying(armor(0.0, 0.0)),
+                "{condition:?} holds no armour to lose"
+            );
+        }
+        assert!(!Condition::Destroyed.is_dying(armor(-1.0, 100.0)), "gone");
     }
 
     #[test]

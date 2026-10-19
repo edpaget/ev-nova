@@ -91,7 +91,8 @@ pub const ESCAPE_CUT_SHIELD: f32 = 1.0;
 pub(super) struct AtStep {
     id: NpcId,
     /// `_IsDying`: its death timer runs, or its armour is at none or
-    /// below, though no display has settled its condition yet.
+    /// below on a ship that holds any, though no display has settled its
+    /// condition yet (`Condition::is_dying`).
     dying: bool,
 }
 
@@ -99,8 +100,7 @@ impl AtStep {
     pub(super) fn of(npc: &Npc) -> Self {
         Self {
             id: npc.id,
-            dying: matches!(npc.condition, Condition::Dying { .. })
-                || (npc.condition != Condition::Destroyed && npc.reserves.armor.now <= 0.0),
+            dying: npc.condition.is_dying(npc.reserves.armor),
         }
     }
 }
@@ -740,6 +740,39 @@ mod tests {
         ship.reserves.armor.now = 0.0;
         ship.condition = Condition::Destroyed;
         assert!(!AtStep::of(&ship).dying, "gone");
+    }
+
+    #[test]
+    fn a_ship_type_holding_no_armour_is_never_found_dying_by_its_armour() {
+        // `_IsDying` reads the core's `armour_gone`: a type with no armour
+        // at all (stock `shïp` 895) has none to lose.
+        let mut ship = npc(0, ShipStats::new(FAST, &[]));
+        ship.reserves.armor.max = 0.0;
+        ship.reserves.armor.now = 0.0;
+        assert!(!AtStep::of(&ship).dying, "intact");
+        ship.condition = Condition::Disabled;
+        assert!(!AtStep::of(&ship).dying, "disabled");
+    }
+
+    #[test]
+    fn a_carrier_holding_no_armour_never_rolls_its_escape_ship() {
+        let catalog = escaping(0);
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let mut carrier = carrying(doomed(100, 0), 2);
+        carrier.reserves.armor.max = 0.0;
+        let id = session.traffic.add_npc(carrier);
+        let mut chance = Rolls::launching(0, 0);
+        for tick in 0..5 {
+            session.pass_frame = tick;
+            session.tick_combat(Rules::default(), &mut chance);
+        }
+        assert_eq!(chance.rolls(), 0, "never read dying");
+        assert!(vipers(&session).is_empty(), "nothing launched");
+        assert_eq!(
+            session.npc(id).map(|npc| npc.condition),
+            Some(Condition::Intact),
+            "it never breaks up"
+        );
     }
 
     /// The session's armed catalog, the player's weapon a 200-pixel beam
