@@ -152,6 +152,7 @@ pub mod destination;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod fly_pass;
 pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
@@ -199,12 +200,12 @@ use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
+pub use fly_pass::{FlyHalf, FlyPass};
 use launch_room::LaunchRoom;
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use persons::{GateView, PersonWorld, derelict_armor};
 use plunder::{HighLevel, PirateEvent};
-use plunder_dock::DockOutcome;
 use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
@@ -1118,24 +1119,15 @@ impl Traffic {
     /// fuel, rolling on `chance`, but for the NPCs in `still`, which keep
     /// their place; the pods the think half freed join the departures.
     /// The tick is then counted on the AI timer.
+    ///
+    /// It runs the resumable half ([`fly_pass`]) over every NPC in order.
     pub fn fly_holding(
         &mut self,
         world: World,
         still: &BTreeSet<NpcId>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.fly(&world, still, chance);
-        self.departed.extend(std::mem::take(&mut self.freed));
-        // The display pass (`_DoPlayGameWork` @0x444ad) follows the
-        // frame's arrivals pass (step 1) and frees each ship left behind
-        // (`_HandleShipDisplay` @0x2ded6-0x2dee7). The original frees them
-        // after the frame's AI and ship handling too, whose scans test the
-        // system; here none of those steps sees a ship left behind. The
-        // engine's move settles after the frame's traffic tick, so its one
-        // arrivals pass is the next tick's: the lag of a settled script,
-        // crossing no boundary, as a ship left behind is never drawn.
-        self.left_behind.clear();
-        self.ticks += 1;
+        self.fly_every(&world, still, FlyHalf::Advance, chance);
     }
 
     /// Every NPC that is not intact forgets what provoked it.
@@ -1212,36 +1204,10 @@ impl Traffic {
     /// the second pass stands still once the jump that holds them has
     /// begun. The ships an in-flight move left behind stay until the next
     /// advance pass frees them, as none of them is drawn.
+    ///
+    /// It runs the resumable half ([`fly_pass`]) over every NPC in order.
     pub fn move_in(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
-        self.fly(&world, &BTreeSet::new(), chance);
-    }
-
-    /// Steps 6 to 8 of a tick in `world` (see the module docs), rolling on
-    /// `chance`: every NPC's cloak held ([`Traffic::hold_cloaks`]),
-    /// then the autopilot, a flight step, the followers of a ship that
-    /// reached its gate released ([`Traffic::release_followers`]), the
-    /// departures, but for the NPCs in `still`, which keep their place,
-    /// and every NPC's fuel regeneration.
-    fn fly(&mut self, world: &World, still: &BTreeSet<NpcId>, chance: &mut (impl Chance + ?Sized)) {
-        let states: Vec<(NpcId, ShipState)> =
-            self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
-        let player = world.player.map(|player| player.state);
-        self.hold_cloaks();
-        let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
-        let outcomes = self.fly_all(world, player, &states, still, chance);
-        board_wait::count_down(&mut self.npcs);
-        plunder::count_down(&mut self.npcs);
-        self.release_followers(&entering);
-        self.departed = self
-            .npcs
-            .iter()
-            .zip(&outcomes)
-            .filter(|(_, outcome)| **outcome != Outcome::Flying)
-            .map(|(npc, outcome)| (npc.id, *outcome))
-            .collect();
-        let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
-        self.npcs.retain(|_| flying.next().unwrap_or(false));
-        self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
+        self.fly_every(&world, &BTreeSet::new(), FlyHalf::Again, chance);
     }
 
     /// The traffic's part of one `_EnterMoreShips` pass in `world`,
@@ -1281,80 +1247,6 @@ impl Traffic {
             Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
         );
         self.escort_strength(&world, draw.world.gate(), chance);
-    }
-
-    /// Flies every NPC a tick in `world` ([`autopilot::fly`]), each towards
-    /// the ship its goal is about among the `player` and `states`, at its
-    /// top speeds, rolling on `chance`, but for the NPCs in `still`, which
-    /// keep their place: what became of each, in order.
-    fn fly_all(
-        &mut self,
-        world: &World,
-        player: Option<ShipState>,
-        states: &[(NpcId, ShipState)],
-        still: &BTreeSet<NpcId>,
-        chance: &mut (impl Chance + ?Sized),
-    ) -> Vec<Outcome> {
-        let speeds = self.top_speeds(world);
-        let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
-        let disabled: BTreeSet<NpcId> = self
-            .npcs
-            .iter()
-            .filter(|npc| npc.condition == Condition::Disabled)
-            .map(|npc| npc.id)
-            .collect();
-        let outcomes = self
-            .npcs
-            .iter_mut()
-            .zip(speeds)
-            .map(|(npc, speeds)| {
-                let other = match npc.goal {
-                    _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
-                    Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
-                    Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
-                    Goal::Dock(carrier) => Some(carrier),
-                    goal => goal.quarry().or(goal.inspecting()),
-                };
-                let other_disabled = other.is_some_and(|ship| match ship {
-                    ShipRef::Player => world
-                        .player
-                        .is_some_and(|player| player.condition == Condition::Disabled),
-                    ShipRef::Npc(id) => disabled.contains(&id),
-                });
-                let other = other.and_then(|ship| match ship {
-                    ShipRef::Player => player,
-                    ShipRef::Npc(id) => states
-                        .iter()
-                        .find(|(other, _)| *other == id)
-                        .map(|(_, state)| *state),
-                });
-                if still.contains(&npc.id) {
-                    return Outcome::Flying;
-                }
-                match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance)
-                {
-                    Some(DockOutcome::Started { victim, .. }) => {
-                        docked.push((npc.id, victim));
-                        return Outcome::Flying;
-                    }
-                    Some(_) => return Outcome::Flying,
-                    None => {}
-                }
-                autopilot::fly(
-                    npc,
-                    world.sites,
-                    world.type_widths,
-                    other.as_ref(),
-                    other_disabled,
-                    speeds,
-                    world.flight,
-                    world.snipe_brake_lead,
-                    &mut *chance,
-                )
-            })
-            .collect();
-        self.dock_starts(&docked);
-        outcomes
     }
 
     /// Each dock a pirate started this tick, `docked` as (pirate, victim):
@@ -1414,8 +1306,9 @@ impl Traffic {
         std::mem::take(&mut self.pirate_events)
     }
 
-    /// Releases the followers of each NPC that reached its gate's box this
-    /// tick, not `entering` one as the tick began (see
+    /// Releases the followers of each NPC that `reached` its gate's box
+    /// this tick, not entering one as the tick began, with that gate and
+    /// its AI type (see
     /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
     /// loses its lead, its carrier, its target and its provocation, takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
@@ -1427,17 +1320,8 @@ impl Traffic {
     /// its later slots start for the gate that tick; here they start on
     /// the next. That one-tick lag settles before anything the player sees
     /// is drawn, so it is not filed.
-    fn release_followers(&mut self, entering: &[bool]) {
-        let released: Vec<(NpcId, StellarId, AiType)> = self
-            .npcs
-            .iter()
-            .zip(entering)
-            .filter_map(|(npc, &was)| match npc.mode {
-                Mode::EnteringGate { gate, .. } if !was => Some((npc.id, gate, npc.ai_type)),
-                _ => None,
-            })
-            .collect();
-        for (lead, gate, ai_type) in released {
+    fn release_followers(&mut self, reached: &[(NpcId, StellarId, AiType)]) {
+        for &(lead, gate, ai_type) in reached {
             for follower in self.npcs.iter_mut().filter(|npc| npc.leader == Some(lead)) {
                 follower.leader = None;
                 follower.carrier = None;
