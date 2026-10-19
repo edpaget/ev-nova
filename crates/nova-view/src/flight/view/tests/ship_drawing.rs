@@ -408,3 +408,25 @@ fn the_alt_layer_is_drawn_at_its_own_set_with_the_hulls_tint() {
         "every 6 frames"
     );
 }
+
+#[test]
+fn each_npc_is_noted_on_the_tick_it_was_first_seen_until_it_leaves() {
+    let mut view = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
+        0,
+        Rc::new(Still),
+        &[],
+    );
+    let id = npc_of(&view).id;
+    let first = view.appeared.get(&id).copied().expect("noted");
+    ticks(&mut view, 3);
+    assert_eq!(
+        view.appeared.get(&id),
+        Some(&first),
+        "kept from its first tick"
+    );
+    let gone = NpcId(99);
+    view.appeared.insert(gone, 0);
+    view.tick(TICK);
+    assert_eq!(view.appeared.get(&gone), None, "forgotten once gone");
+}

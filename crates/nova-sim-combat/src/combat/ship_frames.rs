@@ -707,6 +707,10 @@ mod tests {
             "past 2 it loses 2: a step every second frame"
         );
         assert_eq!(ship.anim_timer, 1.0);
+        // Past it by a whole delay, it loses it down to the delay itself.
+        ship.anim_timer = 3.0;
+        ship.step(&spec, &mut fold, MOMENT);
+        assert_eq!(ship.anim_timer, 2.0, "4 less 2, not less 4");
         // A negative anim set reads 0 before its step.
         ship.anim_set = -4;
         ship.anim_timer = 2.0;
@@ -929,6 +933,10 @@ mod tests {
         // Squashed above it, 90 and 270 themselves among the up frames.
         let wide = FrameTable::new(frames(8), Vec2::new(1.0, 0.5), Vec2::new(1.0, 1.0));
         assert_eq!(angles(&wide), [0, 64, 90, 134, 180, 224, 270, 296]);
+        // Squashed across above it, a diagonal shows nearer the vertical.
+        let narrow = FrameTable::new(frames(8), Vec2::new(0.5, 1.0), Vec2::new(1.0, 1.0));
+        assert_eq!(angles(&narrow)[1], 26);
+        assert_eq!(angles(&narrow)[7], 334);
     }
 
     #[test]

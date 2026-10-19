@@ -220,6 +220,16 @@ mod tests {
         };
         assert_ne!(rolls(0), rolls(1));
         let (glow, blink) = npc_rolls(NpcId(4));
+        let seeded = |seed| {
+            let rolls = HashedRolls::new(seed);
+            (0..8).map(|c| rolls.roll(c, 100)).collect::<Vec<_>>()
+        };
+        let of = |rolls: &HashedRolls| (0..8).map(|c| rolls.roll(c, 100)).collect::<Vec<_>>();
+        assert_eq!(
+            (of(&glow), of(&blink)),
+            (seeded(10), seeded(11)),
+            "2 + 2·4, 3 + 2·4"
+        );
         let player = HashedRolls::new(1);
         assert_ne!(
             (0..8).map(|c| glow.roll(c, 100)).collect::<Vec<_>>(),

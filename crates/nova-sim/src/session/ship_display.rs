@@ -369,6 +369,18 @@ mod tests {
         assert_eq!(turned(&mut frames, Turn::None, false, 1), (0.0, 0));
         frames.bank = -3.0;
         assert_eq!(turned(&mut frames, Turn::None, false, 1), (-1.0, 0));
+        frames.bank = -16.0;
+        assert_eq!(
+            turned(&mut frames, Turn::Left, false, 1),
+            (-16.0, -1),
+            "held at -16"
+        );
+        frames.bank = -5.0;
+        assert_eq!(
+            turned(&mut frames, Turn::Left, false, 1),
+            (-6.0, 0),
+            "-6: no flag"
+        );
     }
 
     #[test]
@@ -387,6 +399,12 @@ mod tests {
             "turning back"
         );
         assert_eq!(turned(&mut frames, Turn::Left, true, 1), (8.0, 1), "auto");
+        frames.bank = 3.0;
+        assert_eq!(
+            turned(&mut frames, Turn::None, true, 1),
+            (1.0, 0),
+            "a small bank: none"
+        );
     }
 
     #[test]
@@ -546,6 +564,11 @@ mod tests {
             }
             assert_eq!(session.armament.fold().dir, dir, "{flags:#x}");
         }
+        // Unfolded already, nothing turns.
+        let mut session = Session::start(&displaying(FOLDS, 6)).expect("starts");
+        *session.armament.fold_mut() = crate::combat::armament::Fold::default();
+        session.jump_unfold();
+        assert_eq!(session.armament.fold().dir, 0);
     }
 
     #[test]

@@ -1644,6 +1644,11 @@ mod tests {
         let mut far = folding(-80.0, 0.0);
         fly(&mut far, &sites, None);
         assert_eq!(far.armament.fold().dir, 0, "too far");
+        // Near a stellar far from the centre.
+        let distant = [planet(140, 600.0, 0.0)];
+        let mut there = folding(600.0, 1.5);
+        fly(&mut there, &distant, None);
+        assert_eq!(there.armament.fold().dir, -1, "near it, wherever it is");
     }
 
     #[test]

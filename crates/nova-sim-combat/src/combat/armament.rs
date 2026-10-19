@@ -4077,6 +4077,14 @@ mod tests {
         let unflagged = Armament::new([(WeaponSpec::new(&flagged(0)), 1)]);
         assert!(has(&unflagged, NPC, &[]), "no key needed");
         assert_eq!(NEEDS_KEY_SHIP, 0x0080);
+        // The display's own question, `_KeyCarriedShipTypeOnboard`.
+        let aboard = |key: Option<i16>, rounds: &[(i16, i32)]| {
+            armament.key_ship_aboard(key.map(ShipId), &slots(rounds))
+        };
+        assert!(aboard(Some(200), &[(150, 1)]));
+        assert!(!aboard(Some(200), &[]), "the bay empty");
+        assert!(!aboard(Some(202), &[(150, 1)]), "no bay of it");
+        assert!(!aboard(None, &[(150, 1)]), "no KeyCarried");
     }
 
     #[test]

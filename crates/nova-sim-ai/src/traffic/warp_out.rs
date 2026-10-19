@@ -901,6 +901,11 @@ mod tests {
         moving.display.glow = 10;
         warp_block(&mut moving, Led::No, &world);
         assert_eq!(moving.display.glow, 13, "moving, its glow 3 higher");
+        // Led by a player still at stage 1.0, its v is 0: no move, no glow.
+        let mut led = warping(3.0, 100);
+        led.display.glow = 10;
+        warp_block(&mut led, Led::ByPlayer, &world);
+        assert_eq!(led.display.glow, 10, "v of 0");
         let v = npc_warp_out_speed(WarpOutClock::Own, 200, warp_factor(0), 364, false);
         assert!(v > 0.0 && v < 50.0, "{v}");
         assert_eq!(

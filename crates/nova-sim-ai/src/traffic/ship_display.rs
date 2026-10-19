@@ -555,6 +555,13 @@ mod tests {
         ship.display.frames.bank = -0.5;
         flown(&mut ship, 0, Thrust::None);
         assert_eq!(ship.display.frames.bank, 0.0);
+        ship.display.frames.bank = -3.0;
+        flown(&mut ship, 0, Thrust::None);
+        assert_eq!(ship.display.frames.bank, -2.0, "back up a frame");
+        ship.display.frames.bank = -5.0;
+        flown(&mut ship, 0, Thrust::None);
+        let shown = (ship.display.frames.bank, ship.display.frames.flag);
+        assert_eq!(shown, (-4.0, 0), "-4: level");
     }
 
     #[test]
@@ -766,6 +773,15 @@ mod tests {
             Inertia::Inertial,
         );
         assert_eq!(ship.display.drive.thrust, Thrust::None);
+        // A ship of no acceleration of its own never rushes.
+        ship.stats.handling.accel = 0.0;
+        let still = Handling {
+            accel: 0.0,
+            ..handling
+        };
+        let thrust = controls(Turn::None, true);
+        record(&mut ship, &still, thrust, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.thrust, Thrust::Plain);
     }
 
     #[test]
@@ -794,6 +810,9 @@ mod tests {
         ship.state.velocity = Vec2::ZERO;
         record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
         assert_eq!(ship.display.drive.turn, 0, "at rest: no turn");
+        ship.state.velocity = Vec2::new(flight.at_rest_speed(), 0.0);
+        record(&mut ship, &handling, reverse, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.turn, 0, "at the rest speed: no turn");
         ship.state.velocity = Vec2::new(2.0, 0.0);
         let inertialess = Inertia::Inertialess { speed: 2.0 };
         record(&mut ship, &handling, reverse, flight, inertialess);
@@ -949,6 +968,8 @@ mod tests {
         ship.goal = crate::ai::Goal::Land(StellarId(128));
         dispatch_fold(&mut ship);
         assert_eq!(ship.armament.fold().dir, 0, "landing: no fold");
+        landing_unfold(&mut ship);
+        assert_eq!(ship.armament.fold().dir, 0, "near, unfolded already");
         ship.armament.fold_mut().set = 3;
         landing_unfold(&mut ship);
         assert_eq!(ship.armament.fold().dir, -1, "near: unfold");
