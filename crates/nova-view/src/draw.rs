@@ -72,6 +72,53 @@ pub enum Blend {
     /// so overlapping nebulae, and the borders under them, take the
     /// brighter of each channel.
     Max,
+    /// Crossfades it with what is beneath by OR, in 5 bits: the original's
+    /// translucent copy, `_BlitPixieTranslucentCopy` (0xc1110), with its
+    /// channel factors at 0, which computes
+    /// `((src_c × k) >> 5) | ((dst_c × (32 − k)) >> 5)` per 5-bit channel,
+    /// k the source's opacity in 32nds (32 − the sprite's translucency
+    /// +0xa8). A shot's plain fade zeroes the channel factors
+    /// (`_HandleShot` @0x359ac-0x359d8) and an escape pod's are never set
+    /// (`_SWCreateSprite` @0xa8d56-0xa8d71; `_HandleEscapePods`
+    /// @0x3a00a-0x3a024), so the general form, `min(c − t + 32, 32)` for
+    /// a channel factor c, is never needed.
+    ///
+    /// # The tint
+    ///
+    /// The tint's colour multiplies the source (white, or a murk's
+    /// darkening), and its alpha is the opacity: `k = round(a × 32 / 255)`,
+    /// exact for [`lights_tint`]`(k)` and every alpha a fade gives, as the
+    /// renderer stores it in 32nds.
+    ///
+    /// # The bit depth
+    ///
+    /// Per channel, with the texel `t` (straight RGBA) and the destination
+    /// `d8`:
+    ///
+    /// ```text
+    /// s5  = round(t.rgb × tint.rgb × 255) >> 3
+    /// d5  = d8 >> 3
+    /// c5  = ((s5 × k) >> 5) | ((d5 × (32 − k)) >> 5)
+    /// c8  = (c5 << 3) | (c5 >> 2)
+    /// out = mix(d8, c8, t.a) ;  out.a = d.a
+    /// ```
+    ///
+    /// Unlike [`Blend::Or`], the destination is quantised to 5 bits, as the
+    /// original scales it: every bit of it moves, so none can be kept at
+    /// 8. A transparent texel (the original's skipped RLE pixel) and k = 0
+    /// leave the destination exactly; an opaque black texel darkens it to
+    /// `d5 × (32 − k) >> 5`.
+    OrCrossfade,
+}
+
+impl Blend {
+    /// Whether it reads what is beneath it as it draws ([`Blend::Or`] and
+    /// [`Blend::OrCrossfade`]): every quad of such a batch reads the same
+    /// copy of the scene, so a later overlapping quad starts a new batch.
+    #[must_use]
+    pub fn reads_backdrop(self) -> bool {
+        matches!(self, Self::Or | Self::OrCrossfade)
+    }
 }
 
 /// One thing to draw, in logical coordinates.
@@ -343,6 +390,16 @@ impl DrawList {
             center,
             tint,
             blend: Blend::Or,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::OrCrossfade`].
+    pub fn crossfade_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::OrCrossfade,
         })
     }
 
@@ -626,6 +683,45 @@ mod tests {
                 tint,
                 blend: Blend::Or,
             }]
+        );
+    }
+
+    #[test]
+    fn a_crossfade_sprite_asks_for_the_or_crossfade() {
+        let tint = Color::rgba(200, 200, 200, 191);
+        let mut list = DrawList::new();
+        list.crossfade_sprite(ImageKey::sprite(202, 5), at(50.0, 60.0), tint);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Sprite {
+                image: ImageKey::sprite(202, 5),
+                center: at(50.0, 60.0),
+                tint,
+                blend: Blend::OrCrossfade,
+            }]
+        );
+    }
+
+    #[test]
+    fn only_the_or_blends_read_the_backdrop() {
+        let reads: Vec<(Blend, bool)> = [
+            Blend::Normal,
+            Blend::Additive,
+            Blend::Or,
+            Blend::Max,
+            Blend::OrCrossfade,
+        ]
+        .map(|blend| (blend, blend.reads_backdrop()))
+        .into();
+        assert_eq!(
+            reads,
+            [
+                (Blend::Normal, false),
+                (Blend::Additive, false),
+                (Blend::Or, true),
+                (Blend::Max, false),
+                (Blend::OrCrossfade, true),
+            ]
         );
     }
 

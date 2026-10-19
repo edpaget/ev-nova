@@ -228,7 +228,9 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
 /// Draws `shot` as its weapon's frame ([`shot_frame`]), shaded as it
 /// fades ([`shot_shade`], by `fade`'s reading of
 /// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
-/// opaque, translucent at alpha (32 − t)/32, or additive,
+/// opaque; translucent by t, crossfaded by OR,
+/// [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade) at alpha
+/// (32 − t)/32 ([`see_through`]); or additive,
 /// [`Blend::Or`](crate::draw::Blend::Or) at [`lights_tint`]`(n)`; each
 /// darkened by its murk ([`murk_tint`]). Nothing for a weapon whose shots
 /// have no graphic, and a crossed box for one whose look or sheet was not
@@ -250,7 +252,7 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
                 }
                 ShotShade::Translucent(t) => {
                     let tint = see_through(t);
-                    list.sprite(image, shot.at, murk_tint(tint, shot.murk));
+                    list.crossfade_sprite(image, shot.at, murk_tint(tint, shot.murk));
                 }
                 ShotShade::Additive(n) => {
                     list.or_sprite(image, shot.at, murk_tint(lights_tint(n), shot.murk));
@@ -333,6 +335,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::draw::Blend;
     use crate::flight::catalog::EffectSheet;
 
     fn n(frames: u16) -> NonZeroU16 {
@@ -793,8 +796,8 @@ mod tests {
     }
 
     /// How a shot of `look` is drawn at `age`, `murk` 32nds murky, by
-    /// `rule`: its tint and whether it is drawn by OR.
-    fn shaded(look: WeaponLook, age: u32, murk: u8, rule: RuleSource) -> (Color, bool) {
+    /// `rule`: its tint and its blend.
+    fn shaded(look: WeaponLook, age: u32, murk: u8, rule: RuleSource) -> (Color, Blend) {
         let looks = looks(&[(
             128,
             WeaponLook {
@@ -815,9 +818,7 @@ mod tests {
         let mut list = DrawList::new();
         draw_shot(&mut list, &shot, &looks, rule);
         match list.iter().next() {
-            Some(&DrawCommand::Sprite { tint, blend, .. }) => {
-                (tint, blend == crate::draw::Blend::Or)
-            }
+            Some(&DrawCommand::Sprite { tint, blend, .. }) => (tint, blend),
             other => panic!("{other:?}"),
         }
     }
@@ -831,32 +832,35 @@ mod tests {
             ..WeaponLook::default()
         };
         let engine = RuleSource::Engine;
-        assert_eq!(shaded(fading(0), 8, 0, engine), (Color::WHITE, false));
+        assert_eq!(
+            shaded(fading(0), 8, 0, engine),
+            (Color::WHITE, Blend::Normal)
+        );
         assert_eq!(
             shaded(fading(0), 25, 0, engine),
-            (Color::rgba(255, 255, 255, 8), false),
+            (Color::rgba(255, 255, 255, 8), Blend::OrCrossfade),
             "16 ticks into its window: 2 × 16, translucent by 31 at most"
         );
         assert_eq!(
             shaded(fading(0), 12, 0, engine),
-            (see_through(6), false),
-            "translucent by 6"
+            (see_through(6), Blend::OrCrossfade),
+            "translucent by 6, crossfaded by OR"
         );
         assert_eq!(see_through(6), Color::rgba(255, 255, 255, 207));
         assert_eq!(see_through(0), Color::WHITE);
         assert_eq!(
             shaded(fading(TRANSLUCENT), 10, 0, engine),
-            (lights_tint(30), true),
+            (lights_tint(30), Blend::Or),
             "added at 30"
         );
         assert_eq!(
             shaded(fading(TRANSLUCENT), 5, 0, engine),
-            (Color::WHITE, false),
+            (Color::WHITE, Blend::Normal),
             "opaque before its window, by the engine"
         );
         assert_eq!(
             shaded(fading(TRANSLUCENT), 5, 0, RuleSource::Bible),
-            (lights_tint(32), true),
+            (lights_tint(32), Blend::Or),
             "added at 32, by the other reading"
         );
     }
@@ -867,7 +871,7 @@ mod tests {
         let engine = RuleSource::Engine;
         assert_eq!(
             shaded(plain.clone(), 1, 16, engine),
-            (Color::rgba(127, 127, 127, 255), false)
+            (Color::rgba(127, 127, 127, 255), Blend::Normal)
         );
         let added = WeaponLook {
             flags3: TRANSLUCENT,
@@ -875,9 +879,22 @@ mod tests {
         };
         assert_eq!(
             shaded(added, 1, 31, engine),
-            (murk_tint(lights_tint(32), 31), true)
+            (murk_tint(lights_tint(32), 31), Blend::Or)
         );
         assert_eq!(murk_tint(lights_tint(32), 31), Color::rgba(7, 7, 7, 255));
+    }
+
+    #[test]
+    fn a_murky_shot_fading_plainly_is_crossfaded_at_its_darkened_tint() {
+        let fading = WeaponLook {
+            count: 40,
+            shot_falloff: 2,
+            ..WeaponLook::default()
+        };
+        assert_eq!(
+            shaded(fading, 12, 16, RuleSource::Engine),
+            (murk_tint(see_through(6), 16), Blend::OrCrossfade)
+        );
     }
 
     #[test]

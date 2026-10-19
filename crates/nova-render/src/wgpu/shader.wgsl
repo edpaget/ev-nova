@@ -80,6 +80,26 @@ fn or_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     return vec4<f32>(vec3<f32>(d8 | t8) / 255.0, d.a);
 }
 
+// Crossfades the texel with the backdrop by OR, in 5 bits: the original's
+// `((src_c * k) >> 5) | ((dst_c * (32 - k)) >> 5)`, k the tint's alpha in
+// 32nds and the tint's colour a multiplier on the source. A transparent
+// texel or k = 0 leaves the backdrop as it is. The arithmetic and why are
+// on `Blend::OrCrossfade`.
+@fragment
+fn crossfade_fs(in: SpriteOut) -> @location(0) vec4<f32> {
+    let t = textureSampleLevel(page, page_sampler, in.uv, 0.0);
+    let d = textureLoad(backdrop, vec2<u32>(in.position.xy), 0);
+    let k = u32(round(in.tint.a * 32.0));
+    if (t.a == 0.0 || k == 0u) {
+        return d;
+    }
+    let s5 = vec3<u32>(round(t.rgb * in.tint.rgb * 255.0)) >> vec3<u32>(3u);
+    let d5 = vec3<u32>(round(d.rgb * 255.0)) >> vec3<u32>(3u);
+    let c5 = ((s5 * k) >> vec3<u32>(5u)) | ((d5 * (32u - k)) >> vec3<u32>(5u));
+    let c8 = (c5 << vec3<u32>(3u)) | (c5 >> vec3<u32>(2u));
+    return vec4<f32>(mix(d.rgb, vec3<f32>(c8) / 255.0, t.a), d.a);
+}
+
 struct SolidOut {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,

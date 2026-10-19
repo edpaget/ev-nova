@@ -12,8 +12,9 @@
 //! [`WgpuRenderer`] draws every frame into an offscreen scene texture of
 //! its own (always RGBA8, whatever the target's format), then copies it to
 //! the window or offscreen target with one blit. An OR batch
-//! ([`Blend::Or`](nova_view::Blend::Or)) reads a backdrop copy of the
-//! rectangle the core says it covers, in its layer's pixels
+//! ([`Blend::Or`](nova_view::Blend::Or)) and an OR crossfade batch
+//! ([`Blend::OrCrossfade`](nova_view::Blend::OrCrossfade)) read a backdrop
+//! copy of the rectangle the core says it covers, in its layer's pixels
 //! ([`Frame::pixels_covered`](crate::Frame::pixels_covered)), taken just
 //! before it.
 //!
