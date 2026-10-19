@@ -166,6 +166,10 @@ fn a_bay_launch_glows_never_in_the_fight() {
     let mut player = Ship {
         id: ShipRef::Player,
         fleet: ShipRef::Player,
+        trigger: Trigger {
+            secondary: Some(WeaponId(149)),
+            ..Trigger::default()
+        },
         ..carrier
     };
     player.armament = Armament::new([(WeaponSpec::new(&bay), 1)]);

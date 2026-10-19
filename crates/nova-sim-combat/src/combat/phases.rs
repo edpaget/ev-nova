@@ -1,9 +1,9 @@
 //! The fight's tick as phases of `_DoPlayGameWork`, which its session runs
 //! between its own work: the player's point defence, the player's
-//! trigger, the collision passes, the NPCs' point defence, `_HandleShot`,
-//! the NPCs' picks, then `_HandleBeams` and the late steps (see the
-//! [`combat`](super) module docs' steps). [`Combat::tick_on`] runs them in
-//! that order with nothing between them.
+//! trigger, the collision passes, the NPCs' point defence and launches,
+//! `_HandleShot`, the NPCs' picks, then `_HandleBeams` and the late steps
+//! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
+//! runs them in that order with nothing between them.
 
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Landed, Rules, Scenery, Sides, Target, lock,
@@ -89,16 +89,23 @@ impl Combat {
         self.hit_pass(fighters, terms, arena.rules.disable, scenery, chance);
     }
 
-    /// Step 4's point defence: every NPC's, as `_AIDispatch` runs it in
-    /// its slot loop (@0x4429d, `_AIFireTurret` @0x80b0d), reading the
-    /// conditions the collision passes left, drawing on `chance`. None on
-    /// double time's second pass ([`GamePass::Again`]), as `_AIDispatch`
-    /// runs on the advance pass alone (@0x4402a).
+    /// Step 4's point defence and fighter launches: every NPC's, as
+    /// `_AIDispatch` runs them in its slot loop (@0x44270-0x442ae): by
+    /// [`Fighter::slot`], each NPC's goal-4 launch (`_AILaunchFighter`
+    /// @0x8e6fa, [`Trigger::bays`](super::armament::Trigger::bays)), its
+    /// point defence (`_AIFireTurret` @0x80b0d), then the snipe's launch
+    /// (@0x8732f, [`Trigger::bays_after`](super::armament::Trigger::bays_after)),
+    /// reading the conditions the collision passes left, drawing on
+    /// `chance` (see `ai_dispatch`). Each launch leaves a
+    /// [`Sortie`](super::Sortie) for the session to put in the system
+    /// before step 5. None on double time's second pass
+    /// ([`GamePass::Again`]), as `_AIDispatch` runs on the advance pass
+    /// alone (@0x4402a).
     ///
-    /// The original interleaves each NPC's point defence with its
-    /// decision, slot by slot; the session runs every decision first
-    /// (`nova_sim::Session::game_work`), and the simulation has no slots.
-    /// Both settle before the frame is drawn.
+    /// The original interleaves each NPC's point defence and launches with
+    /// its decision, slot by slot; the session runs every decision first
+    /// (`nova_sim::Session::game_work`). Both settle before the frame is
+    /// drawn.
     pub fn defend_npcs(
         &mut self,
         fighters: &mut [Fighter],
@@ -114,7 +121,7 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let defence = (arena.rules.defence, arena.govts);
-        self.defend(fighters, &targets, defence, chance, Firers::Npcs);
+        self.dispatch_npcs(fighters, &targets, defence, chance);
     }
 
     /// Step 6's picks, `_HandleShip`'s (@0x44483): each NPC's reloads

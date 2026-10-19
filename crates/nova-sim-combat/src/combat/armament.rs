@@ -15,8 +15,8 @@
 //!   spending, its burst counting one a call, and an exclusive weapon
 //!   (`Flags3` 0x0020) holding the others by its shot's reload, before its
 //!   burst.
-//! - On an NPC's bay launch and an escort's formation trigger
-//!   ([`Armament::fire`]), a ship carrying n of a weapon fires one shot
+//! - On an escort's formation trigger ([`Armament::fire`]), a ship
+//!   carrying n of a weapon fires one shot
 //!   once its reload timer has run out, and sets the timer to `Reload / n`
 //!   ticks; a timer counts down a tick at a time ([`Armament::reload`]),
 //!   so `Reload` 0 fires every tick.
@@ -48,7 +48,7 @@
 //!   never uses a weapon of `Flags2` 0x0100, a cloaked ship only a weapon
 //!   of `Flags2` 0x4000, and a weapon of `Flags2` 0x0080 needs its ship's
 //!   `KeyCarried` aboard; then its rounds or fuel. An NPC's bay launch
-//!   with [`Trigger::bays`] reads its bay's rounds alone
+//!   ([`Armament::launch_bay`]) reads its bay's rounds alone
 //!   (`_AILaunchFighter`).
 //! - Its guidance aims it ([`aim`](super::aim)): a weapon that does not
 //!   fire (a turret with no target, or one in a blind spot or out of its
@@ -62,11 +62,13 @@
 //!   reported once ([`SimDiagnostic::UnimplementedGuidance`]), and so is
 //!   each flag a weapon that does fire sets and the simulation ignores.
 //! - A fighter bay ([`Guidance::FighterBay`]) fires on the secondary
-//!   trigger, never on the primary, and with [`Trigger::bays`], an NPC
-//!   attacking (`_AILaunchFighter` @0x81372): then only the bay of lowest
-//!   weapon ID holding rounds launches, once it is ready, a later bay
-//!   waiting until that one is empty. Its round is a fighter, launched
-//!   as a [`Launch`] the fight turns into a sortie. A fighter docking
+//!   trigger, never on the primary, or as an NPC's pick. An NPC attacking
+//!   launches as `_AILaunchFighter` does ([`Armament::launch_bay`],
+//!   @0x81372, on [`Trigger::bays`] and [`Trigger::bays_after`], which
+//!   the fight reads in its NPCs' point-defence phase): only the bay of
+//!   lowest weapon ID holding rounds that AI ships may use launches, once
+//!   it is ready, a later bay waiting until that one is empty. Its round
+//!   is a fighter, launched as a [`Launch`] the fight turns into a sortie. A fighter docking
 //!   goes back aboard ([`Armament::stow`], `_AIAddFighterToParent`
 //!   @0x802a5): a round to the bay of lowest weapon ID launching its type,
 //!   with no cap; a bay whose slot held exactly none restarts its reload.
@@ -250,17 +252,16 @@ pub struct Trigger {
 }
 
 impl Trigger {
-    /// Whether it fires `weapon`: a fighter bay with `bays` or
-    /// `bays_after`, as the secondary on the secondary trigger, or as
-    /// `only`, never on the primary; otherwise `only` that weapon when set,
-    /// or the secondary on the secondary trigger and the rest on the
-    /// primary, only the turrets among them when `turrets_only`.
+    /// Whether it fires `weapon`: a fighter bay as the secondary on the
+    /// secondary trigger, or as `only`, never on the primary nor for
+    /// `bays` or `bays_after`, which [`Armament::launch_bay`] answers;
+    /// otherwise `only` that weapon when set, or the secondary on the
+    /// secondary trigger and the rest on the primary, only the turrets
+    /// among them when `turrets_only`.
     #[must_use]
     pub fn fires(self, weapon: &WeaponSpec) -> bool {
         if weapon.is_bay() {
-            return self.launches()
-                || self.only == Some(weapon.id)
-                || self.secondary == Some(weapon.id);
+            return self.only == Some(weapon.id) || self.secondary == Some(weapon.id);
         }
         if let Some(only) = self.only {
             return weapon.id == only;
@@ -748,13 +749,12 @@ impl Armament {
     /// has the ammunition for ([`Armament::has_ammo`]) and that `aim`
     /// aims, on a ship in `condition`, paying from `rounds` and `fuel`, the
     /// inaccuracy drawn on `chance`, and gives what it launched; what it
-    /// reports goes to `reports` (see the module docs): an NPC's bay launch
-    /// and an escort's formation trigger, whose owners
-    /// (`_AILaunchFighter`, `_AIEscortFireUnprovoked`) are rdm phases
-    /// escort-fleet-fidelity/phase-4 and phase-1; the player fires through
-    /// [`Armament::fire_player`]. A bay launching
-    /// with [`Trigger::bays`] reads its own rounds alone, as
-    /// `_AILaunchFighter` (@0x813cc-0x813e8) never asks `_WeaponHasAmmo`.
+    /// reports goes to `reports` (see the module docs): an escort's
+    /// formation trigger, whose owner (`_AIEscortFireUnprovoked`) is rdm
+    /// phase escort-fleet-fidelity/phase-1; the player fires through
+    /// [`Armament::fire_player`], an NPC's pick through
+    /// [`Armament::fire_pick`] and its bay launch through
+    /// [`Armament::launch_bay`].
     // Each is a separate borrow the fight holds: the ship's command, its
     // condition, who it is, its stores, the dice, the reports and its aim.
     #[allow(clippy::too_many_arguments)]
@@ -773,21 +773,12 @@ impl Armament {
         if condition != Condition::Intact {
             return launches;
         }
-        let launching = self.launching_bay(trigger, rounds);
         for index in 0..self.mounts.len() {
             let mount = &self.mounts[index];
             if !trigger.fires(&mount.spec) || mount.reload > 0.0 {
                 continue;
             }
-            let bay_launch = mount.spec.is_bay() && trigger.launches();
-            if bay_launch && launching != Some(mount.spec.id) {
-                continue;
-            }
-            let paid = if bay_launch {
-                mount.affords(rounds, *fuel, shooter.npc)
-            } else {
-                self.has_ammo(mount, rounds, *fuel, shooter)
-            };
+            let paid = self.has_ammo(mount, rounds, *fuel, shooter);
             let mount = &mut self.mounts[index];
             if let Guidance::Other(guidance) = mount.spec.guidance {
                 reports.report(SimDiagnostic::UnimplementedGuidance {
@@ -1221,16 +1212,6 @@ impl Armament {
             target: None,
         };
         Some((launch, quarry))
-    }
-
-    /// The bay `trigger` launches from with [`Trigger::bays`]: the one of
-    /// lowest weapon ID holding rounds of its own, ready or not; none
-    /// without `bays`.
-    fn launching_bay(&self, trigger: Trigger, rounds: &dyn Rounds) -> Option<WeaponId> {
-        if !trigger.launches() {
-            return None;
-        }
-        self.first_bay(rounds)
     }
 
     /// The bay of lowest weapon ID holding rounds of its own that AI ships
@@ -1904,6 +1885,27 @@ mod tests {
         fn firing(&mut self, armament: &mut Armament, trigger: Trigger, ticks: u32) -> Vec<u32> {
             (0..ticks)
                 .filter(|_| !self.tick(armament, trigger).is_empty())
+                .collect()
+        }
+
+        /// One tick of an NPC's: `_AILaunchFighter`'s launch
+        /// ([`Armament::launch_bay`]), then reload.
+        fn launch(&mut self, armament: &mut Armament) -> Vec<Launch> {
+            let launch = armament.launch_bay(
+                Condition::Intact,
+                &mut self.rounds,
+                &mut NeverFires,
+                &mut self.reports,
+                &mut ahead,
+            );
+            armament.reload();
+            launch.into_iter().collect()
+        }
+
+        /// The ticks of `ticks` on which `armament` launches a fighter.
+        fn launching(&mut self, armament: &mut Armament, ticks: u32) -> Vec<u32> {
+            (0..ticks)
+                .filter(|_| !self.launch(armament).is_empty())
                 .collect()
         }
     }
@@ -4185,16 +4187,10 @@ mod tests {
     }
 
     #[test]
-    fn a_bay_launching_with_bays_reads_its_rounds_alone() {
-        // `_AILaunchFighter` never asks `_WeaponHasAmmo`: a cloaked NPC
-        // launches. It passes over a bay AI ships won't use itself
-        // (@0x813f3-0x813f7; `ai_launch_skips_a_bay_ai_ships_wont_use`).
-        let (mut armament, mut supplies) = two_bays([2, 2]);
-        supplies.shooter = Shooter {
-            cloaked: true,
-            ..NPC
-        };
-        assert_eq!(launched(&supplies.tick(&mut armament, BAYS)), [149]);
+    fn a_bay_picked_alone_asks_whether_ai_ships_may_use_it() {
+        // Picked, a bay goes through `_WeaponHasAmmo` as any weapon does;
+        // `_AILaunchFighter` reads its rounds alone
+        // (`ai_launch_reads_its_rounds_alone`).
         let mut armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
                 flags2: AI_WONT_USE,
@@ -4202,15 +4198,14 @@ mod tests {
             }),
             1,
         )]);
+        let mut supplies = Supplies::none();
+        supplies.rounds = LauncherRounds::from([(WeaponId(149), 2)]);
         supplies.shooter = NPC;
         let only = Trigger {
             only: Some(WeaponId(149)),
             ..Trigger::default()
         };
-        assert!(
-            supplies.tick(&mut armament, only).is_empty(),
-            "picked alone, it asks"
-        );
+        assert!(supplies.tick(&mut armament, only).is_empty());
     }
 
     #[test]
@@ -5168,7 +5163,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bay_fires_on_the_secondary_trigger_or_with_bays_never_on_the_primary() {
+    fn a_bay_fires_on_the_secondary_trigger_or_picked_never_on_the_primary_nor_with_bays() {
         let viper = WeaponSpec::new(&bay(149, 144, 60));
         let unflagged = WeaponSpec::new(&WeaponRecord {
             flags: 0,
@@ -5183,14 +5178,13 @@ mod tests {
             assert!(secondary.fires(&spec));
             let bays = Trigger {
                 bays: true,
+                bays_after: true,
                 ..Trigger::default()
             };
-            assert!(bays.fires(&spec), "with bays");
-            let other = Trigger {
-                only: Some(WeaponId(128)),
-                ..bays
-            };
-            assert!(other.fires(&spec), "whatever only says");
+            assert!(
+                !bays.fires(&spec),
+                "fires ignores bays, which launch_bay reads"
+            );
             assert!(!Trigger::default().fires(&spec));
             let only = Trigger {
                 only: Some(spec.id),
@@ -5203,7 +5197,7 @@ mod tests {
             bays: true,
             ..Trigger::default()
         };
-        assert!(!bays.fires(&blaster), "bays fires bays alone");
+        assert!(!bays.fires(&blaster));
     }
 
     /// Two ready bays, 149 and 150, mounted 150 first, of `rounds` each.
@@ -5218,49 +5212,38 @@ mod tests {
         (armament, supplies)
     }
 
-    const BAYS: Trigger = Trigger {
-        primary: false,
-        secondary: None,
-        only: None,
-        turrets_only: false,
-        bays: true,
-        bays_after: false,
-        point_defence: false,
-        keep: None,
-    };
-
     fn launched(launches: &[Launch]) -> Vec<i16> {
         launches.iter().map(|launch| launch.weapon.id.0).collect()
     }
 
     #[test]
-    fn with_bays_only_the_lowest_bay_holding_rounds_launches() {
+    fn an_npcs_launch_takes_only_the_lowest_bay_holding_rounds() {
         let (mut armament, mut supplies) = two_bays([2, 2]);
-        assert_eq!(launched(&supplies.tick(&mut armament, BAYS)), [149]);
+        assert_eq!(launched(&supplies.launch(&mut armament)), [149]);
         assert_eq!(supplies.rounds.slot(WeaponId(149)), 1, "a round spent");
         assert_eq!(supplies.rounds.slot(WeaponId(150)), 2);
-        let launch = supplies.tick(&mut armament, BAYS);
+        let launch = supplies.launch(&mut armament);
         assert!(launch.is_empty(), "149 reloads, and 150 waits");
         let (mut armament, mut supplies) = two_bays([0, 2]);
         assert_eq!(
-            launched(&supplies.tick(&mut armament, BAYS)),
+            launched(&supplies.launch(&mut armament)),
             [150],
             "149 empty"
         );
         let (mut armament, mut supplies) = two_bays([0, 0]);
-        assert!(supplies.tick(&mut armament, BAYS).is_empty());
+        assert!(supplies.launch(&mut armament).is_empty());
     }
 
     #[test]
     fn a_launch_reloads_reload_over_the_bays_and_the_next_waits_for_it() {
         let (mut armament, mut supplies) = two_bays([3, 0]);
         // Reload 60 over 2 bays: a launch every 30 ticks.
-        assert_eq!(supplies.firing(&mut armament, BAYS, 61), [0, 30, 60]);
+        assert_eq!(supplies.launching(&mut armament, 61), [0, 30, 60]);
         assert_eq!(supplies.rounds.slot(WeaponId(149)), 0);
-        assert!(supplies.firing(&mut armament, BAYS, 100).is_empty());
+        assert!(supplies.launching(&mut armament, 100).is_empty());
         let (mut armament, mut supplies) = two_bays([2, 3]);
         assert_eq!(
-            supplies.firing(&mut armament, BAYS, 102),
+            supplies.launching(&mut armament, 102),
             [0, 30, 31, 101],
             "150 waits while 149 reloads with rounds, then launches every 70"
         );
@@ -5274,7 +5257,7 @@ mod tests {
             armament.bay_to_launch(&supplies.rounds),
             Some(WeaponId(149))
         );
-        supplies.tick(&mut armament, BAYS);
+        supplies.launch(&mut armament);
         assert_eq!(
             armament.bay_to_launch(&supplies.rounds),
             None,

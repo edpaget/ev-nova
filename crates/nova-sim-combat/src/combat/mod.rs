@@ -70,7 +70,8 @@
 //!    rolls its weapon's `JamVuln` ([`jamming`]), and a `Seeker` 0x0008
 //!    homing one the [`Field`]'s `Interference` ([`Shot::roll_at_launch`]).
 //!    A fighter bay's launch is no shot but a [`Sortie`], which the session
-//!    takes ([`Combat::take_sorties`]) and puts in the system as a ship.
+//!    takes ([`Combat::take_sorties`]) and puts in the system as a ship:
+//!    the player's after its trigger, an NPC's after step 4.
 //!    The player fires each weapon its trigger picks as `_FirePlayerWeapon`
 //!    does ([`Armament::fire_player`]): its copies together, sounding once
 //!    a call at [`PLAYER_FIRE_PRIORITY`] or
@@ -177,12 +178,16 @@
 //!    pass's last strike on it says so. So an NPC downed by a shot runs no
 //!    point defence and fires nothing more that tick, as `_AIDispatch` and
 //!    `_HandleShip` read `_IsDisabled` after the passes.
-//! 4. Every NPC's point defence fires ([`Combat::defend_npcs`]), as
-//!    `_AIDispatch` runs it in its slot loop (@0x4429d, `_AIFireTurret`
-//!    @0x80b0d), on the advance pass alone (@0x4402a). So a missile an NPC
-//!    fires is first met by an NPC's point defence on the next tick, and
-//!    under the caps it finds the slots of the shots the collision passes
-//!    ended, and of the spent ones, still held ([`Combat::shot_room`]).
+//! 4. Every NPC's point defence fires and every NPC launches its fighters
+//!    ([`Combat::defend_npcs`]), as `_AIDispatch` runs them in its slot
+//!    loop (@0x44270-0x442ae), on the advance pass alone (@0x4402a): by
+//!    slot, each NPC's goal-4 launch (`_AILaunchFighter` @0x8e6fa), its
+//!    point defence (`_AIFireTurret` @0x80b0d), then the snipe's launch
+//!    (@0x8732f), each launch sounding at [`BAY_LAUNCH_PRIORITY`] (see
+//!    `ai_dispatch`). So a missile an NPC fires is first met by an NPC's
+//!    point defence on the next tick, and under the caps it finds the
+//!    slots of the shots the collision passes ended, and of the spent
+//!    ones, still held ([`Combat::shot_room`]).
 //! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots`]) visits the shot
 //!    slots in order ([`Combat::visit_slots`]), freeing each slot held
 //!    since its last pass at its visit. Each shot whose last move spent
@@ -210,7 +215,8 @@
 //!    firer's reload for it at its `Reload` ([`Armament::hold`]).
 //! 6. `_HandleShip`'s fire (@0x44483, [`Combat::fire_npcs`]): each NPC's
 //!    reloads count down a tick (@0x33896), then it fires the weapons its
-//!    trigger holds that are ready, as in step 1, reading the conditions
+//!    trigger holds that are ready, as in step 1, but no fighter bay's
+//!    launch, which step 4 made, reading the conditions
 //!    the passes and the ends of life left. Its shots first move in the
 //!    next tick's step 5. An NPC fires its pick as `_FireAIShipWeapon`
 //!    does ([`ai_fire`]): a copy that spawns nothing still spends, by the
@@ -344,6 +350,7 @@
 //! shots, their targets, durability and generations live only in flight,
 //! and a stellar's strength is the session's, which saves none either.
 
+mod ai_dispatch;
 pub mod ai_fire;
 pub mod aim;
 pub mod armament;
@@ -1981,11 +1988,10 @@ impl Combat {
     /// 6, as `_HandleShip` fires their picks after `_AIDispatch` has run
     /// their point defence and `_HandleShot` has moved the shots
     /// ([`Combat::fire_npcs`]).
-    /// An NPC launches its fighters with [`Trigger::bays`] and fires an
-    /// escort's formation trigger through [`Armament::fire`], its quadrant
-    /// turrets testing their blind spots as the original's AI picks them
-    /// (`_AIFireTurret` @0x80d0b), each launch sounding as
-    /// [`trigger_sound`] says, then fires its pick
+    /// An NPC fires an escort's formation trigger through
+    /// [`Armament::fire`], its quadrant turrets testing their blind spots
+    /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
+    /// weapon sounding at [`AI_FIRE_PRIORITY`], then fires its pick
     /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
     /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
     /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
@@ -2002,11 +2008,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| firers.take(fighter.ship))
         {
-            let target = fighter.target.and_then(|ship| {
-                targets
-                    .iter()
-                    .find(|target| target.ship == ship && target.condition.standing())
-            });
+            let target = ai_dispatch::standing(fighter.target, targets);
             if fighter.ship == ShipRef::Player {
                 self.pull_player_trigger(fighter, target, targets, chance);
                 continue;
@@ -2026,7 +2028,9 @@ impl Combat {
                 &mut self.reports,
                 &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
             );
-            let sound = |copy: usize| Some(trigger_sound(&launches[copy]));
+            // Each weapon launches at most once a call, its copies as one,
+            // and sounds as `_FireAIShipWeapon` does, once a call.
+            let sound = |_| Some(FireSound::at(AI_FIRE_PRIORITY));
             self.launch_volley(fighter, &launches, sound, targets, chance);
             let Some(pick) = fighter.trigger.only else {
                 continue;
@@ -2185,9 +2189,10 @@ impl Combat {
 
     /// Steps 1 and 4, before the firing ([`Combat::fire`]), as
     /// `_HandlePlayer` runs the player's (@0x68c74) before its trigger
-    /// (@0x6ab55) and `_AIDispatch` every NPC's (@0x4429d) before
-    /// `_HandleShip` fires any pick (@0x44483): the point defence of each of
-    /// the `firers` its trigger asks for
+    /// (@0x6ab55) and `_AIDispatch` every NPC's (@0x4429d, by slot among
+    /// its launches, `Combat::dispatch_npcs`) before `_HandleShip` fires any
+    /// pick (@0x44483): the point defence of each of the `firers` its
+    /// trigger asks for
     /// ([`Trigger::point_defence`](armament::Trigger::point_defence))
     /// fires at the missile it picks ([`defence::choose`]), asking `rule`
     /// which are hostile, with the relations in `govts`, only by the
@@ -2214,59 +2219,75 @@ impl Combat {
         for fighter in fighters.iter_mut().filter(|fighter| {
             firers.take(fighter.ship) && fighter.trigger.point_defence && !fighter.jumping
         }) {
-            let (state, hull) = (fighter.state, fighter.hull);
-            let side = fighter.side();
-            let ties = fighter.ties();
-            let plunderer = Plunderer::of(fighter);
-            let guard = fighter.guard();
-            let shots = &self.shots;
-            let candidates = &candidates;
-            let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
-            let room = self.shot_room();
-            let fired = fighter.armament.fire_point_defence(
-                *fighter.condition,
-                fighter.shooter(),
-                fighter.rounds,
-                &mut fighter.reserves.fuel,
-                chance,
-                &mut self.reports,
-                room,
-                &mut |spec| {
-                    if let Some(missile) =
-                        defence::choose(side, &state, &hull, spec, shots, rule, govts)
-                    {
-                        return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
-                    }
-                    let ship = defence::choose_ship(guard, &state, &hull, spec, candidates)?;
-                    // A beam reads no launch heading (`Beam::launch`).
-                    let pointing = aim::led(spec, &ship.target).pointing;
-                    Some((pointing, Quarry::Ship(ship.target)))
-                },
-            );
-            if let Some((launch, quarry)) = fired {
-                // `_SpawnBeam`'s target, beam +0x18. A shot is aimed at none
-                // (`_SpawnShot(.., -1, ..)` @0x396e5), as its every step
-                // leaves a point-defence shot anyway (`Shot::step`).
-                let aimed_at = match quarry {
-                    Quarry::Ship(target) if launch.weapon.is_beam() => Some(target.ship),
-                    _ => None,
-                };
-                let drawn = fighter.drawn_heading;
-                let firing_from = fighter.slot;
-                let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
-                muzzle.firer_slot = Some(firing_from);
-                let shot = self.launch(
-                    (side, ties, plunderer),
-                    &mut muzzle,
-                    &launch,
-                    (Some(quarry), aimed_at),
-                    Some(FireSound::at(PD_FIRE_PRIORITY)),
-                    targets,
-                    chance,
-                );
-                if self_destructs(&launch, shot) {
-                    self_destruct(fighter);
+            self.defend_ship(fighter, &candidates, targets, (rule, govts), chance);
+        }
+    }
+
+    /// `fighter`'s point defence, as [`Combat::defend`] runs it for each
+    /// ship whose trigger asks: at the missile it picks, asking `rule`
+    /// which are hostile, with the relations in `govts`, only by the other
+    /// reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility);
+    /// with none, at the ship it picks among `candidates`, its exit's
+    /// toward point among `targets`; sounding at [`PD_FIRE_PRIORITY`].
+    fn defend_ship(
+        &mut self,
+        fighter: &mut Fighter,
+        candidates: &[Candidate],
+        targets: &[Target],
+        (rule, govts): (&dyn PointDefenceRule, &Governments),
+        chance: &mut dyn Chance,
+    ) {
+        let (state, hull) = (fighter.state, fighter.hull);
+        let side = fighter.side();
+        let ties = fighter.ties();
+        let plunderer = Plunderer::of(fighter);
+        let guard = fighter.guard();
+        let shots = &self.shots;
+        let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
+        let room = self.shot_room();
+        let fired = fighter.armament.fire_point_defence(
+            *fighter.condition,
+            fighter.shooter(),
+            fighter.rounds,
+            &mut fighter.reserves.fuel,
+            chance,
+            &mut self.reports,
+            room,
+            &mut |spec| {
+                if let Some(missile) =
+                    defence::choose(side, &state, &hull, spec, shots, rule, govts)
+                {
+                    return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
                 }
+                let ship = defence::choose_ship(guard, &state, &hull, spec, candidates)?;
+                // A beam reads no launch heading (`Beam::launch`).
+                let pointing = aim::led(spec, &ship.target).pointing;
+                Some((pointing, Quarry::Ship(ship.target)))
+            },
+        );
+        if let Some((launch, quarry)) = fired {
+            // `_SpawnBeam`'s target, beam +0x18. A shot is aimed at none
+            // (`_SpawnShot(.., -1, ..)` @0x396e5), as its every step
+            // leaves a point-defence shot anyway (`Shot::step`).
+            let aimed_at = match quarry {
+                Quarry::Ship(target) if launch.weapon.is_beam() => Some(target.ship),
+                _ => None,
+            };
+            let drawn = fighter.drawn_heading;
+            let firing_from = fighter.slot;
+            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+            muzzle.firer_slot = Some(firing_from);
+            let shot = self.launch(
+                (side, ties, plunderer),
+                &mut muzzle,
+                &launch,
+                (Some(quarry), aimed_at),
+                Some(FireSound::at(PD_FIRE_PRIORITY)),
+                targets,
+                chance,
+            );
+            if self_destructs(&launch, shot) {
+                self_destruct(fighter);
             }
         }
     }
@@ -3361,25 +3382,6 @@ fn first_copy_sounds_at(priority: u8) -> impl Fn(usize) -> Option<FireSound> {
     move |copy| (copy == 0).then_some(FireSound::at(priority))
 }
 
-/// How an NPC's `launch` through [`Armament::fire`] sounds: a fighter
-/// bay's at [`BAY_LAUNCH_PRIORITY`], with no looped test, as
-/// `_AILaunchFighter` sounds each `_LaunchFighter`; any other weapon's at
-/// [`AI_FIRE_PRIORITY`], as `_FireAIShipWeapon` sounds once a call. Each
-/// weapon launches at most once a call, its copies as one. The engine
-/// fires every ready turret of an escort's formation trigger, where the
-/// original fires `_AIFireTurret`'s one pick
-/// (rdm:phase/escort-fleet-fidelity/phase-1-formation-fire-unprovoked).
-fn trigger_sound(launch: &Launch) -> FireSound {
-    if launch.weapon.guidance_99() {
-        FireSound {
-            priority: BAY_LAUNCH_PRIORITY,
-            unless_playing: false,
-        }
-    } else {
-        FireSound::at(AI_FIRE_PRIORITY)
-    }
-}
-
 /// The ship `launch`'s damage is aimed at, its firer's `target`: none for
 /// a front-quadrant turret firing ahead (@0x88bf0).
 fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
@@ -3680,6 +3682,7 @@ mod tests {
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::weapon;
 
+    mod ai_dispatch;
     mod collision_walk;
     mod exit_steps;
     mod hidden_shots;
@@ -8311,14 +8314,16 @@ mod tests {
         }
     }
 
-    /// Ship A at (10, 20), moving (1, 2) and facing right, its secondary
-    /// trigger on a fighter bay, 149, of ship 144, 10 degrees inaccurate,
-    /// holding 2 fighters, and targeting B, which is at (300, 0).
+    /// Ship A at (10, 20), moving (1, 2) and facing right, launching its
+    /// fighters as its AI does (`_AILaunchFighter` @0x8e6fa,
+    /// [`Trigger::bays`]) from a fighter bay, 149, of ship 144, 10 degrees
+    /// inaccurate, holding 2 fighters, and targeting B, which is at
+    /// (300, 0).
     fn carrier() -> [Ship; 2] {
         let mut carrier = Ship::at(1, 10.0, 20.0).armed(carrier_bay());
         carrier.state.velocity = Vec2::new(1.0, 2.0);
         carrier.trigger = Trigger {
-            secondary: Some(WeaponId(149)),
+            bays: true,
             ..Trigger::default()
         };
         carrier.rounds = LauncherRounds::from([(WeaponId(149), 2)]);
@@ -8496,6 +8501,9 @@ mod tests {
 
     #[test]
     fn on_a_launch_tick_the_kept_bay_fires_nothing_more() {
+        // The launch in `_AIDispatch` (@0x8e6fa) sets the bay's reload to
+        // 60; `_HandleShip` counts it down to 59 (@0x33896) before the
+        // pick, which finds it reloading.
         let mut combat = Combat::default();
         let mut ships = carrier();
         ships[0].trigger = Trigger {
