@@ -178,6 +178,10 @@ mod tests {
         let ship_pass = gone(Freed::InShipPass);
         assert!(ship_pass.held_by(&reader(4, on_it)));
         assert!(!ship_pass.held_by(&reader(6, on_it)), "its _HandleShip ran");
+        // A ship in the gone one's own slot is the slot's new occupant,
+        // neither after nor before it.
+        assert!(!dispatch.held_by(&reader(5, on_it)), "its own slot");
+        assert!(!ship_pass.held_by(&reader(5, on_it)), "its own slot");
         for other in [None, Some(ShipRef::Player), Some(ShipRef::Npc(NpcId(3)))] {
             assert!(!dispatch.held_by(&reader(6, other)), "{other:?}");
             assert!(!ship_pass.held_by(&reader(4, other)), "{other:?}");

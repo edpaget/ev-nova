@@ -483,6 +483,16 @@ mod tests {
     }
 
     #[test]
+    fn a_fight_on_a_ship_neither_in_the_system_nor_recorded_gone_is_no_fight_on_a_gone_ship() {
+        let (sites, govts) = (sites(), govts(0, 0));
+        let npcs = [provoked(Goal::Idle)];
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        for goal in [Goal::Flee(n(7)), Goal::Attack(n(7))] {
+            assert_eq!(fight_on_gone(goal, &around), None, "{goal:?}");
+        }
+    }
+
+    #[test]
     fn an_attack_is_on_a_ship_breaking_up_and_a_flight_from_one_gone_from_its_slot() {
         let (sites, govts) = (sites(), govts(0, 0));
         let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
