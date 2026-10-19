@@ -622,7 +622,8 @@ pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation, shield: &
 /// never empties it.
 pub fn drain_shield(shield: &mut f32, usage: u8, cloaked: bool) {
     let usage = f32::from(usage);
-    if cloaked && usage > 0.0 && *shield >= usage {
+    // A usage of 0 costs nothing, so its `> 0` test (@0x341b6) is subsumed.
+    if cloaked && *shield >= usage {
         *shield -= usage * CLOAK_UPKEEP_RATE;
     }
 }
