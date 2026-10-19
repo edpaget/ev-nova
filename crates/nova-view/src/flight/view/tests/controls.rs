@@ -492,6 +492,32 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
 }
 
 #[test]
+fn a_flight_hands_its_stellar_sprite_pool_to_its_session_and_back() {
+    use nova_sim::story::sprite_pool::{SlotSprite, StellarSpritePool};
+    let mut pool = StellarSpritePool::default();
+    pool.rebuild((2000..2016).map(nova_sim::StellarId));
+    pool.place(nova_sim::StellarId(2015), (-7, 9));
+    pool.rebuild([]);
+    let view = flight().with_stellar_sprite_pool(pool);
+    let ghost = SlotSprite::Ghost { top_left: (-7, 9) };
+    let carried = view.stellar_sprite_pool().expect("flying");
+    assert_eq!(carried.sprite_of(nova_sim::StellarId(2015), false), ghost);
+    assert_eq!(
+        view.session()
+            .expect("flying")
+            .stellar_sprite_pool()
+            .sprite_of(nova_sim::StellarId(2015), false),
+        ghost
+    );
+    let failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    })
+    .with_stellar_sprite_pool(StellarSpritePool::default());
+    assert_eq!(failed.stellar_sprite_pool(), None);
+}
+
+#[test]
 fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
     let mut sprites = SlotSprites::default();
     sprites.layers.put(
