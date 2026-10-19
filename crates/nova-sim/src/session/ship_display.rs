@@ -244,7 +244,7 @@ impl Session {
         if !escort.has(UNFOLDS_TO_FIRE) {
             return 0;
         }
-        match self.rules.source_for(RuleKey::LoadedEscortFoldSet) {
+        match self.setup.rules.source_for(RuleKey::LoadedEscortFoldSet) {
             RuleSource::Engine => self.hull.frames.last_set(),
             RuleSource::Bible => escort.last_set(),
         }
@@ -315,9 +315,12 @@ impl Session {
     /// rulebook.
     fn display_rules(&self) -> DisplayRules {
         DisplayRules {
-            double_step: self.rules.source_for(RuleKey::ShipAnimationDoubleStep),
-            alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
-            lights_zeroed: self.rules.source_for(RuleKey::LightsOutZeroesBlink),
+            double_step: self
+                .setup
+                .rules
+                .source_for(RuleKey::ShipAnimationDoubleStep),
+            alt_held: self.setup.rules.source_for(RuleKey::DisabledAltHeld),
+            lights_zeroed: self.setup.rules.source_for(RuleKey::LightsOutZeroesBlink),
         }
     }
 
@@ -339,7 +342,7 @@ impl Session {
     /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
     #[must_use]
     pub fn ion_tint_murk_colour(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::IonTintMurkColour)
+        self.setup.rules.source_for(RuleKey::IonTintMurkColour)
     }
 
     /// Ship class `ship`'s own `Shield` as the original loads it (class

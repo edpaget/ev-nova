@@ -80,7 +80,7 @@ impl Session {
     /// in slot order, by [`RuleKey::StaleStellarSprite`] (see the module
     /// docs).
     pub(super) fn deadly_discs(&self) -> Vec<DeadlyDisc> {
-        let stale = self.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
+        let stale = self.setup.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
         self.listed
             .iter()
             .filter(|site| is_deadly(site.flags2))

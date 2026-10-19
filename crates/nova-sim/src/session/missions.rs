@@ -253,7 +253,7 @@ impl Session {
     /// as [`RuleKey::StellarIdentityRecord`] says
     /// ([`StellarMarks::identical`](crate::mission::StellarMarks::identical)). No stop is never docked at.
     pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
-        let rules = IdentityRules::of(&self.rules);
+        let rules = IdentityRules::of(&self.setup.rules);
         stop.is_some_and(|stop| {
             self.statics
                 .stellar_marks
@@ -313,7 +313,7 @@ impl Session {
         }
         self.statics
             .stellar_marks
-            .variants(stop.stellar, IdentityRules::of(&self.rules))
+            .variants(stop.stellar, IdentityRules::of(&self.setup.rules))
             .find_map(|variant| Some((visible_listers(variant).next()?, variant)))
             .ok_or(StopRefusal::Hidden)
     }
@@ -414,7 +414,7 @@ impl Session {
         let facts = AcceptFacts {
             active: &self.pilot.missions,
             cargo: self.room_for(tons),
-            rules: &self.rules,
+            rules: &self.setup.rules,
         };
         accept_checks().first_refusal(&facts, chance)
     }
@@ -590,7 +590,7 @@ impl Session {
     /// original shifts once `_OfferOneMission` returns, so no boundary the
     /// player sees comes between the two.
     fn drop_offered(&mut self, mission: MissionId, at: Option<usize>) {
-        if self.rules.source_for(RuleKey::OfferShift) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::OfferShift) == RuleSource::Bible {
             self.offers.drop_offer(mission);
         } else if let Some(at) = at {
             self.offers.drop_at(Venue::Outside, at);
@@ -628,7 +628,7 @@ impl Session {
         let record = self.statics.lifecycle_record(mission);
         let facts = AbortFacts {
             mission: &record,
-            rules: &self.rules,
+            rules: &self.setup.rules,
         };
         abort_checks()
             .first_refusal(&facts, chance)
@@ -699,7 +699,7 @@ impl Session {
         );
         self.load_at_accept(slot, record, chance);
         let in_dialog = self.offer_dialog_open
-            || self.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
+            || self.setup.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
         let docked = self.landed;
         let here = docked
             .or_else(|| self.ship_offer_reaches())
@@ -980,7 +980,8 @@ impl Session {
             return;
         };
         let record = self.statics.lifecycle_record(active.mission);
-        let repeats = self.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
+        let repeats =
+            self.setup.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
         if failed == FailedBy::Marked || repeats {
             self.run_mission_script(slot, &record.on_failure, chance);
         }
@@ -1176,7 +1177,8 @@ impl Session {
         let Some(record) = self.statics.mission_record(mission).cloned() else {
             return;
         };
-        let restarts = self.rules.source_for(RuleKey::StartActiveMission) == RuleSource::Engine;
+        let restarts =
+            self.setup.rules.source_for(RuleKey::StartActiveMission) == RuleSource::Engine;
         if !restarts && !self.pilot.missions.holding(mission).is_empty() {
             return;
         }
@@ -1296,9 +1298,9 @@ impl Session {
             placed: &placed,
             map: self.galaxy.map(),
             govts: &self.statics.govts,
-            draw: self.rules.source_for(RuleKey::MissionStellarDraw),
-            distance: self.rules.source_for(RuleKey::MissionStellarDistance),
-            ally_index: self.rules.source_for(RuleKey::MissionAllyIndex),
+            draw: self.setup.rules.source_for(RuleKey::MissionStellarDraw),
+            distance: self.setup.rules.source_for(RuleKey::MissionStellarDistance),
+            ally_index: self.setup.rules.source_for(RuleKey::MissionAllyIndex),
         })
     }
 
@@ -1333,7 +1335,7 @@ impl Session {
                 player,
                 active: &active,
                 gate: self.gate(),
-                rules: &self.rules,
+                rules: &self.setup.rules,
                 today: self.pilot.date,
             })
         })
@@ -1400,7 +1402,7 @@ impl Session {
     /// check of it ([`Session::propagate_avail_bits`]), by the other
     /// reading tested now; the rest as [`Session::ship_mission_available`].
     pub(crate) fn quoted_mission_available(&self, mission: MissionId) -> bool {
-        let cached = match self.rules.source_for(RuleKey::CachedAvailBits) {
+        let cached = match self.setup.rules.source_for(RuleKey::CachedAvailBits) {
             RuleSource::Engine => self.avail_cache.get(&mission).copied(),
             RuleSource::Bible => None,
         };
@@ -1451,7 +1453,7 @@ impl Session {
             pilot: &self.pilot.name,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
-            person: match self.rules.source_for(RuleKey::OfferingShipName) {
+            person: match self.setup.rules.source_for(RuleKey::OfferingShipName) {
                 RuleSource::Engine => self.offering_ship_name(),
                 RuleSource::Bible => self.offering_person(),
             },
@@ -1461,12 +1463,12 @@ impl Session {
                 cash: self.pilot.cash,
                 today: self.pilot.date,
                 date_affixes: &self.statics.date_affixes,
-                pay_millions: self.rules.source_for(RuleKey::PayMillions),
+                pay_millions: self.setup.rules.source_for(RuleKey::PayMillions),
                 slot,
             }),
             rank_govts,
-            leet: self.leet,
-            rules: TagRules::from_rulebook(&self.rules),
+            leet: self.setup.leet,
+            rules: TagRules::from_rulebook(&self.setup.rules),
         }
     }
 
@@ -1491,7 +1493,7 @@ impl Session {
     ) -> String {
         let (parsed, govts) = source.parse(self, self.rank_govts, raw);
         self.rank_govts = govts;
-        if self.leet && source == TextSource::Desc {
+        if self.setup.leet && source == TextSource::Desc {
             text_tags::load_leet(&parsed, chance)
         } else {
             parsed
@@ -1528,7 +1530,7 @@ impl Session {
     /// argument 0, which gates off the before-check alone (@0x5a76c).
     #[must_use]
     pub fn loaded_after_movie(&self) -> Option<DescMovie> {
-        match self.rules.source_for(RuleKey::DescMovieGlobals) {
+        match self.setup.rules.source_for(RuleKey::DescMovieGlobals) {
             RuleSource::Engine => self.loaded_movie.clone().filter(|movie| movie.after),
             RuleSource::Bible => None,
         }
@@ -1659,7 +1661,7 @@ impl TextSource {
         remembered: RankTagGovts,
         raw: &str,
     ) -> (String, RankTagGovts) {
-        let rules = ParseRules::from_rulebook(&session.rules);
+        let rules = ParseRules::from_rulebook(&session.setup.rules);
         let before = match self {
             Self::Desc => RankTagGovts::NONE,
             Self::Quote | Self::Advice => remembered,
@@ -1686,7 +1688,8 @@ impl TagNames for Session {
     }
 
     fn cargo_name(&self, cargo: u8) -> Option<String> {
-        self.strings
+        self.setup
+            .strings
             .0
             .string_list(CARGO_NAMES)
             .into_iter()

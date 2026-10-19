@@ -75,7 +75,7 @@ impl Session {
             states: &self.pilot.crons,
             stellar_govt: site.govt,
             govts: &self.statics.govts,
-            rules: &self.rules,
+            rules: &self.setup.rules,
         });
         let pool = if found.government.is_empty() {
             found.independent
@@ -123,7 +123,7 @@ impl Session {
             events: &self.pilot.events,
             disasters: &self.statics.goods.disasters,
             docked,
-            rules: &self.rules,
+            rules: &self.setup.rules,
         });
         if pool.is_empty() {
             return String::new();
@@ -139,7 +139,7 @@ impl Session {
         ) else {
             return String::new();
         };
-        let words = StoryWords::read(&*self.strings.0);
+        let words = StoryWords::read(&*self.setup.strings.0);
         oops_story(record, market::place(active, record), &words, self).unwrap_or_default()
     }
 }

@@ -127,11 +127,14 @@ impl Session {
                 .get(&system)
                 .map_or(0, |field| field.count),
             interference: map.interference(system),
-            murk: murk::loaded_murk(map.murk(system), self.rules.source_for(RuleKey::LowMurk)),
+            murk: murk::loaded_murk(
+                map.murk(system),
+                self.setup.rules.source_for(RuleKey::LowMurk),
+            ),
             stellars,
             inhabited: exploration::inhabited(
                 map.stellars(system),
-                self.rules.source_for(RuleKey::MapExplore),
+                self.setup.rules.source_for(RuleKey::MapExplore),
             ),
             legal: self.legal_status_in(catalog, system, &self.player_info_words()),
         }

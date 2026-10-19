@@ -19,7 +19,7 @@ impl Session {
     #[must_use]
     pub fn effective_murk(&self) -> u8 {
         let raw = self.galaxy.map().murk(self.pilot.system);
-        let loaded = murk::loaded_murk(raw, self.rules.source_for(RuleKey::LowMurk));
+        let loaded = murk::loaded_murk(raw, self.setup.rules.source_for(RuleKey::LowMurk));
         murk::effective_murk(
             loaded,
             murk::outfit_murk(&self.pilot.outfits, &self.statics.outfits),

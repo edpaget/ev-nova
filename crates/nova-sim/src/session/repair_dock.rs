@@ -60,7 +60,7 @@ impl Session {
     pub(super) fn repaired_by(&mut self, helper: NpcId, ship: ShipId) {
         self.player_boarded = false;
         if self.condition == Condition::Disabled {
-            let rule = std::rc::Rc::clone(&self.disable_rule.0);
+            let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
             let armor = &mut self.pilot.reserves.armor;
             repair(armor, &self.hull, |armor, hull| rule.disabled(armor, hull));
             if !rule.disabled(*armor, &self.hull) {
@@ -75,7 +75,7 @@ impl Session {
     /// as the player's is, `_IsDisabled` holding a mission's rescue ship
     /// disabled at any armour; silently.
     pub(super) fn npc_repaired(&mut self, ship: NpcId) {
-        let rule = std::rc::Rc::clone(&self.disable_rule.0);
+        let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
         let Some(npc) = self.npc_mut(ship) else {
             return;
         };
@@ -317,7 +317,7 @@ mod tests {
             max: most,
         };
         assert!(
-            !session.disable_rule.0.disabled(full, &hull),
+            !session.setup.disable_rule.0.disabled(full, &hull),
             "the rule alone would let it fly at its most"
         );
         session

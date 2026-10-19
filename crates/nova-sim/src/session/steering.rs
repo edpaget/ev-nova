@@ -106,7 +106,7 @@ impl Session {
             NavMode::Off | NavMode::Stellar(None) | NavMode::Hyperspace(None) => return None,
             NavMode::Stellar(Some(id)) => id,
             NavMode::Hyperspace(Some(selected)) => {
-                if self.rules.source_for(RuleKey::FaceNavSlot) == RuleSource::Bible {
+                if self.setup.rules.source_for(RuleKey::FaceNavSlot) == RuleSource::Bible {
                     return None;
                 }
                 let slot = i16::try_from(self.selected_slot(selected)?).ok()?;

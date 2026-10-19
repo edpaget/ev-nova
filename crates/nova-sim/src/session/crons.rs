@@ -91,7 +91,7 @@ impl Session {
     /// [`cron`](crate::cron)), drawing on `chance`.
     pub(super) fn crons_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
         let crons = Rc::clone(&self.statics.crons);
-        let rules = self.rules;
+        let rules = self.setup.rules;
         cron::pass(
             &crons,
             &rules,
@@ -132,7 +132,7 @@ impl Session {
             today: self.pilot.date,
             contributed: self.contributed(),
             gate: self.gate(),
-            rules: &self.rules,
+            rules: &self.setup.rules,
         }
     }
 

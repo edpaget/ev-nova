@@ -52,15 +52,15 @@ impl Session {
     /// is when a Red Alert blinks its icon. Not quiet until it says, as
     /// the default preferences play sound at full level.
     pub fn set_sound_quiet(&mut self, quiet: bool) {
-        self.sound_quiet = quiet;
+        self.setup.sound_quiet = quiet;
     }
 
     /// The Red Alert's check on `frame`, which runs on both of double
     /// time's passes (see the module docs).
     pub(super) fn red_alert_check(&mut self, frame: i16) {
         if self.condition != Condition::Destroyed && alert_check_due(frame) {
-            let blinks = self.sound_quiet
-                || self.rules.source_for(RuleKey::AlertBlink) != RuleSource::Engine;
+            let blinks = self.setup.sound_quiet
+                || self.setup.rules.source_for(RuleKey::AlertBlink) != RuleSource::Engine;
             if self
                 .red_alert
                 .check(self.player_threatened(), self.pod.is_some(), blinks)

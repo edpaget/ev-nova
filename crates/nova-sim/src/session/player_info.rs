@@ -141,7 +141,7 @@ impl Session {
                 owned,
                 &words,
                 self.trade_in_shown(),
-                self.rules.source_for(RuleKey::PayMillions),
+                self.setup.rules.source_for(RuleKey::PayMillions),
             )
         });
         let costs: Vec<i32> = self
@@ -259,8 +259,8 @@ impl Session {
             self.fields.mass,
             &self.pilot.outfits,
             &self.statics.outfits,
-            self.rules.source_for(RuleKey::TradeInOutfits),
-            &self.rules,
+            self.setup.rules.source_for(RuleKey::TradeInOutfits),
+            &self.setup.rules,
         )
     }
 

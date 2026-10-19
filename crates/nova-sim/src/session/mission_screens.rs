@@ -369,7 +369,7 @@ impl Session {
         if venue == Venue::Computer {
             return;
         }
-        let movie = match self.rules.source_for(RuleKey::DescMovieGlobals) {
+        let movie = match self.setup.rules.source_for(RuleKey::DescMovieGlobals) {
             RuleSource::Engine => self.loaded_movie.clone(),
             RuleSource::Bible => self.statics.offer_movie(mission),
         };

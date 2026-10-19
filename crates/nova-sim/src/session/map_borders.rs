@@ -74,7 +74,7 @@ impl Session {
         }
         let inhabited = exploration::inhabited(
             galaxy.map().stellars(system),
-            self.rules.source_for(RuleKey::MapExplore),
+            self.setup.rules.source_for(RuleKey::MapExplore),
         );
         let position = galaxy.position(system)?;
         // A system's map position is a whole `i16` in its `sÿst`.

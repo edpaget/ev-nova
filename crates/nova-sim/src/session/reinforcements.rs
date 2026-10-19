@@ -267,7 +267,7 @@ impl Session {
     /// reading of [`RuleKey::ReinforcementInhibitor`], in place of them by
     /// the other.
     pub(super) fn reset_inhibitors(&mut self) {
-        if self.rules.source_for(RuleKey::ReinforcementInhibitor) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::ReinforcementInhibitor) == RuleSource::Bible {
             self.reinforcements.every_government = false;
             self.reinforcements.inhibited.clear();
         }

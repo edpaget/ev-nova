@@ -329,7 +329,7 @@ impl Session {
     /// The rules the moving set operators follow, projected from the
     /// session's rule set ([`Session::with_rules`]).
     pub(super) fn script_effect_rules(&self) -> ScriptEffectRules {
-        ScriptEffectRules::from_rulebook(&self.rules)
+        ScriptEffectRules::from_rulebook(&self.setup.rules)
     }
 
     /// Applies what the set expressions run since the last settling
@@ -369,7 +369,7 @@ impl Session {
             let due = std::mem::take(&mut self.goal_checks_due);
             if due.is_empty() {
                 if std::mem::take(&mut self.galaxy_stale)
-                    && self.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
+                    && self.setup.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
                 {
                     self.refresh_galaxy(catalog);
                 }

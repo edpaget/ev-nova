@@ -63,11 +63,11 @@ impl Session {
         exit: Vec2,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.gate_arrival == GateArrivalRule::LikeJump {
+        if self.setup.gate_arrival == GateArrivalRule::LikeJump {
             return;
         }
         let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
-        if self.rules.source_for(RuleKey::GateEscorts) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateEscorts) != RuleSource::Engine {
             for id in led {
                 self.snap(id);
                 if let Some(npc) = self.npc_mut(id) {

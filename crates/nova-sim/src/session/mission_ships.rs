@@ -485,7 +485,7 @@ impl Session {
                 active.failed.get_or_insert(FailedBy::Marked);
             }
         }
-        let once = self.rules.source_for(RuleKey::ShipDoneOnce) == RuleSource::Bible;
+        let once = self.setup.rules.source_for(RuleKey::ShipDoneOnce) == RuleSource::Bible;
         if goals_met_moment(met_before(&facts), check, failed_before) && !(once && done_before) {
             self.ship_goals_met(slot, &record, chance);
         }
@@ -706,7 +706,8 @@ impl Session {
                 self.aux_arrivals(catalog, slot, chance);
                 let freed = !self.pilot.missions.holds(slot, mission);
                 if freed
-                    && self.rules.source_for(RuleKey::AuxAbortFallThrough) == RuleSource::Engine
+                    && self.setup.rules.source_for(RuleKey::AuxAbortFallThrough)
+                        == RuleSource::Engine
                 {
                     if let Some(before) = before {
                         self.freed_special_arrivals(catalog, slot, &before, chance);
@@ -990,7 +991,7 @@ impl Session {
         ) else {
             return;
         };
-        if self.rules.source_for(RuleKey::LeaderlessSwapHold) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::LeaderlessSwapHold) == RuleSource::Bible {
             ship.held = false;
         }
         let last = self.last_npc();
@@ -1019,7 +1020,7 @@ impl Session {
         if let Some(npc) = swapped_in.and_then(|id| self.npc(id)) {
             self.offering_ship = Some(super::person_offers::OfferingShip { berth: npc.berth });
         }
-        if self.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
+        if self.setup.rules.source_for(RuleKey::SwapArrives) == RuleSource::Bible
             && let Some(active) = self.slot_holding(slot, record.id)
         {
             active.ships.appear = NOT_APPEARING;
@@ -1153,7 +1154,10 @@ impl Session {
                     self.hold_boarded(npc.id);
                 }
                 assist.is_some()
-                    || plain_board_counts(goal, self.rules.source_for(RuleKey::PlainBoardCounts))
+                    || plain_board_counts(
+                        goal,
+                        self.setup.rules.source_for(RuleKey::PlainBoardCounts),
+                    )
             };
             if counts && let Some(active) = self.slot_holding(mark.slot, record.id) {
                 active.ships.boarded = active.ships.boarded.saturating_add(1);
@@ -1273,8 +1277,9 @@ impl Session {
     /// [`RuleKey::GateExitCounts`]'s other reading; a docked fighter never
     /// left, nor did an escape pod freed (see `nova_sim::traffic::pod_flight`).
     pub(super) fn mission_ships_left(&mut self, marks: &[(NpcId, MissionMark)]) {
-        let landed_leaves = self.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
-        let gate_exit_counts = self.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
+        let landed_leaves = self.setup.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
+        let gate_exit_counts =
+            self.setup.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
         let left: Vec<(NpcId, MissionMark, bool)> = self
             .traffic
             .departed()
@@ -1323,7 +1328,7 @@ impl Session {
         let counted = departure(
             ShipGoal::from_code(record.ships.goal),
             active.ships.system == ShipSystem::FollowsPlayer,
-            self.rules.source_for(RuleKey::LeftRespawn),
+            self.setup.rules.source_for(RuleKey::LeftRespawn),
         );
         if counted == Departure::default() {
             return;
@@ -1380,7 +1385,8 @@ impl Session {
                 Loss::Disabled => active.ships.disabled,
             },
             boarded,
-            hidden_fails: self.rules.source_for(RuleKey::HiddenLossFails) == RuleSource::Bible,
+            hidden_fails: self.setup.rules.source_for(RuleKey::HiddenLossFails)
+                == RuleSource::Bible,
         };
         let fails = match loss {
             Loss::Destroyed => fails_on_destroyed(facts),
@@ -2503,7 +2509,8 @@ pub(super) mod tests {
         for (reading, left, destroyed) in [(RuleSource::Engine, 2, 0), (RuleSource::Bible, 1, 1)] {
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
-            session.rules = session
+            session.setup.rules = session
+                .setup
                 .rules
                 .with_override(crate::RuleKey::DeadlyStellarKill, reading);
             // Apart from the other ship and the player.
@@ -2543,7 +2550,8 @@ pub(super) mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
-            session.rules = session
+            session.setup.rules = session
+                .setup
                 .rules
                 .with_override(crate::RuleKey::DeadlyStellarKill, reading);
             let id = session.npcs()[0].id;

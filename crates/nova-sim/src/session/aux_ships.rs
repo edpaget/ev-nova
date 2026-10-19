@@ -235,7 +235,7 @@ impl Session {
     /// loses its ships until the next restart, its countdown 0x7fff
     /// (@0x6729b-0x672ac). Nothing under the other reading.
     pub(super) fn lose_aux_at_gate(&mut self, slot: u8) {
-        if self.rules.source_for(RuleKey::AuxGate) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::AuxGate) != RuleSource::Engine {
             return;
         }
         let Some(active) = self.pilot.missions.get(slot) else {

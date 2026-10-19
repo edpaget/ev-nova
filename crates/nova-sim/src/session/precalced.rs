@@ -151,7 +151,7 @@ impl Session {
         }
         match cause {
             ResetCause::SetExpr => {
-                self.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
+                self.setup.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
             }
             ResetCause::Purchase => false,
             ResetCause::Other => true,
@@ -162,7 +162,7 @@ impl Session {
     /// through its resets, `OnSell`'s included: by the other reading of
     /// [`RuleKey::OutfitSaleCargo`].
     pub(super) fn sell_keeps_cargo(&self) -> bool {
-        self.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
+        self.setup.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
     }
 
     /// The reset's trim of the commodities (see

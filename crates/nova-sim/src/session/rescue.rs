@@ -306,7 +306,7 @@ impl Session {
     /// [`RuleKey::RescueArmor`] reads (see the module docs).
     fn fill_reserves_for_rescue(&mut self) {
         let stats = self.stats;
-        let armor = match self.rules.source_for(RuleKey::RescueArmor) {
+        let armor = match self.setup.rules.source_for(RuleKey::RescueArmor) {
             RuleSource::Engine => stats.shield,
             RuleSource::Bible => stats.armor,
         };

@@ -104,7 +104,7 @@ impl Session {
     /// The player plundered by NPC `pirate`, drawing on `chance` (see the
     /// module docs): nothing when the pirate has gone.
     fn plundered_by(&mut self, pirate: NpcId, chance: &mut dyn Chance) {
-        let reading = self.rules.source_for(RuleKey::PlunderMarines);
+        let reading = self.setup.rules.source_for(RuleKey::PlunderMarines);
         let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == pirate) else {
             return;
         };

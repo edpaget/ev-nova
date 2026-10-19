@@ -56,7 +56,7 @@ impl Session {
     /// Which of the afterburner's widenings a gravity source keeps plain,
     /// by [`RuleKey::GravityAfterburner`].
     pub(super) fn gravity_afterburner(&self) -> GravityAfterburner {
-        GravityAfterburner::from(self.rules.source_for(RuleKey::GravityAfterburner))
+        GravityAfterburner::from(self.setup.rules.source_for(RuleKey::GravityAfterburner))
     }
 
     /// `_HandleGravity`'s sources (see the module docs): each listed

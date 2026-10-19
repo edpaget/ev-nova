@@ -139,7 +139,7 @@ impl Session {
             });
         }
         let docked = self.landed.is_some();
-        if self.rules.source_for(RuleKey::MapPlotting) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::MapPlotting) == RuleSource::Bible {
             let _ = self.plot_course(pick);
             return Some(MapClicked {
                 selected: Some(pick),
@@ -156,7 +156,7 @@ impl Session {
             if self
                 .galaxy
                 .map()
-                .jumps(self.pilot.system, self.hyperlinks)
+                .jumps(self.pilot.system, self.setup.hyperlinks)
                 .contains(&pick)
             {
                 self.select_at_place(pick);
@@ -234,7 +234,7 @@ impl Session {
     /// Whether, by [`HyperlinkRule::BothWays`], `to` links to `source`, so
     /// its jumps reach `to` from `source`.
     fn links_back(&self, source: SystemId, to: SystemId) -> bool {
-        self.hyperlinks == HyperlinkRule::BothWays
+        self.setup.hyperlinks == HyperlinkRule::BothWays
             && self
                 .galaxy
                 .map()

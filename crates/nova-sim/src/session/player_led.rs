@@ -116,7 +116,7 @@ impl Session {
     #[must_use]
     pub fn draw_layers(&self) -> Vec<(ShipRef, ShipLayer)> {
         let (order, layers): (Vec<ShipRef>, Vec<(ShipRef, ShipLayer)>) =
-            match self.rules.source_for(RuleKey::ShipOverlap) {
+            match self.setup.rules.source_for(RuleKey::ShipOverlap) {
                 RuleSource::Engine => {
                     let entries = &self.slot_sprites.layers;
                     let mut ships = self.shown_slots();
@@ -192,7 +192,7 @@ impl Session {
             }
         };
         let hidden = !self.shown(&hull)
-            && self.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
+            && self.setup.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
         let stale = hidden || !self.is_laid_out(ship, slot);
         Some(if stale {
             self.slot_sprites.frames.of(slot)
@@ -219,7 +219,7 @@ impl Session {
     /// Whether a ship of `hull` is drawn and laid out (see
     /// [`Session::is_hidden`]).
     fn shown(&self, hull: &HullSpec) -> bool {
-        !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
+        !hull.hidden || self.setup.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
     }
 
     /// Each ship slot's draw layer and when it entered it, as the last

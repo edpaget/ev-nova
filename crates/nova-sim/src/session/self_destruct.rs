@@ -82,7 +82,8 @@ impl Session {
             Beat::Started => (SimSound::SelfDestructStarted, SelfDestructLine::Initiated),
             Beat::Count { seconds } => {
                 let singular = seconds == 1
-                    && self.rules.source_for(RuleKey::SelfDestructSecond) == RuleSource::Bible;
+                    && self.setup.rules.source_for(RuleKey::SelfDestructSecond)
+                        == RuleSource::Bible;
                 (
                     SimSound::SelfDestructCountdown,
                     SelfDestructLine::In { seconds, singular },

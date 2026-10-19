@@ -101,7 +101,7 @@ impl Session {
     /// default.
     #[must_use]
     pub fn with_hire_terms(mut self, terms: Rc<dyn HireTerms>) -> Self {
-        self.hire_terms = Shared(terms);
+        self.setup.hire_terms = Shared(terms);
         self
     }
 
@@ -110,7 +110,7 @@ impl Session {
     /// ([`NovaBits`](crate::NovaBits)) by default.
     #[must_use]
     pub fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
-        self.control_bits = Shared(bits);
+        self.setup.control_bits = Shared(bits);
         self
     }
 
@@ -127,11 +127,11 @@ impl Session {
     /// hired.
     pub(super) fn paid_wage(&self, escort: &Escort) -> i64 {
         let kept = escort.wage.unwrap_or(0);
-        match self.rules.source_for(RuleKey::EscortWage) {
+        match self.setup.rules.source_for(RuleKey::EscortWage) {
             RuleSource::Engine => self
                 .statics
                 .ship_record(escort.ship)
-                .map_or(kept, |record| self.hire_terms.0.wage(record)),
+                .map_or(kept, |record| self.setup.hire_terms.0.wage(record)),
             RuleSource::Bible => kept,
         }
     }
@@ -199,12 +199,12 @@ impl Session {
             cash: self.pilot.cash,
             room: self.can_hire_escorts(),
             slot: self.hire_berth().is_some()
-                || self.rules.source_for(RuleKey::HireNoSlot) == RuleSource::Engine,
-            terms: &*self.hire_terms.0,
+                || self.setup.rules.source_for(RuleKey::HireNoSlot) == RuleSource::Engine,
+            terms: &*self.setup.hire_terms.0,
             rank_mult: self.price_mults().second,
-            control_bits: &*self.control_bits.0,
+            control_bits: &*self.setup.control_bits.0,
             pilot: &facts,
-            rules: self.rules,
+            rules: self.setup.rules,
             arsenal: &self.statics.arsenal,
             outfits: &self.statics.outfits,
         };
@@ -240,11 +240,13 @@ impl Session {
             .cloned()
             .ok_or(HireRefusal::NotListed)?;
         let site = self.bar_site().ok_or(HireRefusal::NoBar)?;
-        let fee =
-            self.hire_terms
-                .0
-                .charge(&record, &site, self.price_mults().second, self.pilot.cash);
-        let wage = self.hire_terms.0.wage(&record);
+        let fee = self.setup.hire_terms.0.charge(
+            &record,
+            &site,
+            self.price_mults().second,
+            self.pilot.cash,
+        );
+        let wage = self.setup.hire_terms.0.wage(&record);
         let reserves = self.ship_kind(&record).stats.full();
         let berth = self.hire_berth();
         self.transact(|pilot| {

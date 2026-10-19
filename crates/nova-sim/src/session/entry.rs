@@ -684,7 +684,7 @@ impl Session {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
         };
-        let resets = resets(how, &self.rules, facts);
+        let resets = resets(how, &self.setup.rules, facts);
         if resets.has(Reset::Strikes) {
             // The strikes still unanswered are dropped (`leave_behind`):
             // their grudges are held first, against the system left, its
@@ -979,13 +979,13 @@ impl Session {
                 // By the engine the rest stay in the ship table until the
                 // display pass frees them, nothing given back
                 // (`_HandleShipDisplay` @0x2ded6-0x2dee7).
-                let leave = if self.rules.source_for(RuleKey::MoveLeftBehind) == RuleSource::Engine
-                {
-                    Leave::Held { from, to }
-                } else {
-                    self.give_back_aux_ships(&led);
-                    Leave::Dropped
-                };
+                let leave =
+                    if self.setup.rules.source_for(RuleKey::MoveLeftBehind) == RuleSource::Engine {
+                        Leave::Held { from, to }
+                    } else {
+                        self.give_back_aux_ships(&led);
+                        Leave::Dropped
+                    };
                 self.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
@@ -998,17 +998,19 @@ impl Session {
                 // A new traffic reads reused slots' picks, exit cursors and
                 // blink timers and search timers by the rulebook.
                 self.traffic
-                    .set_reused_slot_pick(self.rules.source_for(RuleKey::ReusedSlotPick));
+                    .set_reused_slot_pick(self.setup.rules.source_for(RuleKey::ReusedSlotPick));
                 self.traffic
-                    .set_reused_slot_exits(self.rules.source_for(RuleKey::ReusedSlotExits));
+                    .set_reused_slot_exits(self.setup.rules.source_for(RuleKey::ReusedSlotExits));
                 self.traffic.set_reused_slot_blink_timer(
-                    self.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
+                    self.setup.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
                 );
                 self.traffic.set_spawn_anim_rolls_first_class(
-                    self.rules.source_for(RuleKey::SpawnAnimRollsFirstClass),
+                    self.setup
+                        .rules
+                        .source_for(RuleKey::SpawnAnimRollsFirstClass),
                 );
                 self.traffic
-                    .set_reused_slot_search(self.rules.source_for(RuleKey::ReusedSlotSearch));
+                    .set_reused_slot_search(self.setup.rules.source_for(RuleKey::ReusedSlotSearch));
                 self.traffic.keep_berths(kept);
                 self.set_first_class();
                 self.traffic_due = true;

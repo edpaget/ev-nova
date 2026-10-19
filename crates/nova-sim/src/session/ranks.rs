@@ -134,8 +134,8 @@ impl Session {
     /// government now.
     #[must_use]
     pub fn price_mults(&self) -> PriceMults {
-        let reach = self.rules.source_for(RuleKey::RankGovtReach);
-        let (active, govt) = match self.rules.source_for(RuleKey::RankPriceTiming) {
+        let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
+        let (active, govt) = match self.setup.rules.source_for(RuleKey::RankPriceTiming) {
             RuleSource::Engine => (&self.port_ranks.active, self.port_ranks.govt),
             RuleSource::Bible => (&self.pilot.ranks, self.docked_govt()),
         };
@@ -153,7 +153,7 @@ impl Session {
     /// as the original's outfitter never reads `_priceFluxMult`; by the
     /// other reading, `[1]`, as the shipyard's ship price takes it.
     pub(super) fn outfit_price_mult(&self) -> f32 {
-        match self.rules.source_for(RuleKey::RankPriceScope) {
+        match self.setup.rules.source_for(RuleKey::RankPriceScope) {
             RuleSource::Engine => 1.0,
             RuleSource::Bible => self.price_mults().second,
         }
@@ -166,8 +166,8 @@ impl Session {
     /// now.
     #[must_use]
     pub fn blessing(&self) -> Blessing {
-        let reach = self.rules.source_for(RuleKey::RankGovtReach);
-        let active = match self.rules.source_for(RuleKey::BlessingRefresh) {
+        let reach = self.setup.rules.source_for(RuleKey::RankGovtReach);
+        let active = match self.setup.rules.source_for(RuleKey::BlessingRefresh) {
             RuleSource::Engine => &self.blessing_ranks,
             RuleSource::Bible => &self.pilot.ranks,
         };
@@ -185,7 +185,7 @@ impl Session {
     /// `K`: activates rank `rank` (see [`rank::activate`]), unaffiliated
     /// ranks grouped by the session's `rank_unaffiliated_group` rule.
     pub(super) fn activate_rank(&mut self, rank: RankId) {
-        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let unaffiliated = self.setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
         let records = std::rc::Rc::clone(&self.statics.ranks);
         rank::activate(&records, self.held_ranks(), rank, unaffiliated);
     }
@@ -194,7 +194,7 @@ impl Session {
     /// unaffiliated ranks grouped by the session's
     /// `rank_unaffiliated_group` rule.
     pub(super) fn deactivate_rank(&mut self, rank: RankId) {
-        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let unaffiliated = self.setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
         let records = std::rc::Rc::clone(&self.statics.ranks);
         rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
     }
@@ -207,8 +207,8 @@ impl Session {
     /// (@0x9c10). No save is due, as a conviction makes none in flight,
     /// and no sound plays.
     pub(super) fn lose_ranks_to(&mut self, crime: Crime, victim: Option<GovtId>) {
-        let reach = self.rules.source_for(RuleKey::RankCrimeReach);
-        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        let reach = self.setup.rules.source_for(RuleKey::RankCrimeReach);
+        let unaffiliated = self.setup.rules.source_for(RuleKey::RankUnaffiliatedGroup);
         rank::lose_to_crime(
             &self.statics.ranks,
             Held {
@@ -253,7 +253,7 @@ impl Session {
             &self.statics.ranks,
             &self.pilot.ranks,
             self.pilot.cash,
-            self.rules.source_for(RuleKey::SalaryCap),
+            self.setup.rules.source_for(RuleKey::SalaryCap),
             &and,
             crate::player_info::special_groups(&self.statics.outfits, &self.pilot.outfits).len(),
         )
@@ -263,7 +263,7 @@ impl Session {
     /// [`rank::pay_salaries`]), capped by the session's `salary_cap`
     /// rule. A change to the cash makes a save due.
     pub(super) fn ranks_day(&mut self) {
-        let cap = self.rules.source_for(RuleKey::SalaryCap);
+        let cap = self.setup.rules.source_for(RuleKey::SalaryCap);
         let before = self.pilot.cash;
         rank::pay_salaries(
             &self.statics.ranks,

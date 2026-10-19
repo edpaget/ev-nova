@@ -99,7 +99,7 @@ impl Session {
             return;
         }
         self.asteroid_kill = None;
-        let ring = match self.rules.source_for(RuleKey::AsteroidRespawnRing) {
+        let ring = match self.setup.rules.source_for(RuleKey::AsteroidRespawnRing) {
             RuleSource::Engine => Ring::Original,
             RuleSource::Bible => Ring::Outside,
         };
@@ -157,7 +157,7 @@ impl Session {
     /// Whether an arrival keeps the field `_CreateAsteroids` places, as
     /// [`RuleKey::AsteroidEntryField`] reads.
     pub(super) fn places_asteroids(&self) -> bool {
-        self.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
+        self.setup.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
     }
 
     /// The asteroids shots may hit this tick, slot by slot, each with its

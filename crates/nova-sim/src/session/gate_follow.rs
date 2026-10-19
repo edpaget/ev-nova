@@ -48,7 +48,7 @@ impl Session {
     pub(super) fn gate_decides(&self, how: Entrance, system: ShipSystem) -> bool {
         how == Entrance::Gate
             && system == ShipSystem::FollowsPlayer
-            && self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine
+            && self.setup.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine
     }
 
     /// The player's exit from a gate of `kind`, before the system is
@@ -63,7 +63,7 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut dyn Chance,
     ) {
-        if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
             return;
         }
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
@@ -114,7 +114,7 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
             self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
         }
         let last = self.last_npc();
@@ -145,7 +145,7 @@ impl Session {
         exit: Vec2,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
             return;
         }
         let followers: Vec<u8> = self
@@ -163,7 +163,7 @@ impl Session {
             })
             .map(|(slot, _)| slot)
             .collect();
-        let position = match self.gate_arrival {
+        let position = match self.setup.gate_arrival {
             GateArrivalRule::Engine => exit,
             GateArrivalRule::LikeJump => self.player.position,
         };

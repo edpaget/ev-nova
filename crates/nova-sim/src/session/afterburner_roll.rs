@@ -49,7 +49,7 @@ impl Session {
         #[allow(clippy::cast_possible_truncation)]
         let own = hull.strength as i16;
         let yardstick = afterburner::yardstick(
-            self.rules.source_for(RuleKey::AfterburnerYardstick),
+            self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             side.yardstick,
             own,
         );

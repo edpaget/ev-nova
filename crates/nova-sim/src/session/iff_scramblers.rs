@@ -44,7 +44,7 @@ impl Session {
     /// `ModType` 48 outfit, on top of those set before by the engine's
     /// reading of [`RuleKey::IffScrambler`], in place of them by the other.
     pub(super) fn reset_iff_scramblers(&mut self) {
-        if self.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
             self.iff_marked.clear();
         }
         for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
@@ -117,7 +117,7 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session =
             Session::fly(catalog, Pilot::new(catalog, "Ada").expect("a pilot")).expect("flies");
-        session.rules = rules;
+        session.setup.rules = rules;
         session
     }
 

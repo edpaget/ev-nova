@@ -88,11 +88,11 @@ impl Session {
         } else {
             None
         };
-        let explored = match self.rules.source_for(RuleKey::ExploredByPlace) {
+        let explored = match self.setup.rules.source_for(RuleKey::ExploredByPlace) {
             RuleSource::Engine => head.is_some_and(|head| self.pilot.has_explored(head)),
             RuleSource::Bible => self.pilot.has_explored(system),
         };
-        let record = match self.rules.source_for(RuleKey::LegalRecords) {
+        let record = match self.setup.rules.source_for(RuleKey::LegalRecords) {
             RuleSource::Engine => head.map_or(0, |head| self.pilot.system_record(head)),
             RuleSource::Bible => self
                 .galaxy
@@ -104,7 +104,7 @@ impl Session {
         };
         let inhabited = exploration::inhabited(
             self.galaxy.map().stellars(active),
-            self.rules.source_for(RuleKey::MapExplore),
+            self.setup.rules.source_for(RuleKey::MapExplore),
         );
         let stellars: Vec<MapStellar> = coding
             .listed
@@ -246,7 +246,7 @@ impl Session {
             missions,
             green: marks.green,
             multi_arrows: marks.multi_arrows,
-            pairing: self.rules.source_for(RuleKey::MapLinkPairing),
+            pairing: self.setup.rules.source_for(RuleKey::MapLinkPairing),
         };
         galaxy_map::draw_map(&state, |system| self.color_code(&coding, system))
     }

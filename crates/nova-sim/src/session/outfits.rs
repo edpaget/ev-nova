@@ -141,7 +141,7 @@ impl Session {
     /// The rules granting and removing outfits follow, projected from
     /// the session's rule set ([`Session::with_rules`]).
     pub(super) fn outfit_rules(&self) -> OutfitRules {
-        OutfitRules::from_rulebook(&self.rules)
+        OutfitRules::from_rulebook(&self.setup.rules)
     }
 
     /// What granting one of `outfit` does: a plain item's when it has no
@@ -165,7 +165,7 @@ impl Session {
             outfit: record.id,
             item_class: record.item_class,
             mass: record.mass,
-            unit_mass: unit_mass(record, self.fields.mass, &self.rules),
+            unit_mass: unit_mass(record, self.fields.mass, &self.setup.rules),
             owned: self.pilot.owned(record.id),
             max: clamp_i16(self.raised_max_of(record)),
         }
@@ -179,7 +179,7 @@ impl Session {
             &self.standard(),
             &self.pilot.outfits,
             &self.statics.outfits,
-            &self.rules,
+            &self.setup.rules,
         )
     }
 
@@ -195,7 +195,7 @@ impl Session {
                 reach,
                 self.pilot.system,
                 self.galaxy.map(),
-                self.hyperlinks,
+                self.setup.hyperlinks,
                 &self.statics.govts,
                 self.outfit_rules().map_explore,
             );
@@ -262,7 +262,7 @@ impl Session {
         }
         if self.outfit_rules().remove_refund == RuleSource::Bible {
             let price = self.statics.outfit_record(outfit).map_or(0, |record| {
-                unit_price(record, self.fields.mass, &self.rules)
+                unit_price(record, self.fields.mass, &self.setup.rules)
             });
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }

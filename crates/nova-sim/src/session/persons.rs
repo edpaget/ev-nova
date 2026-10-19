@@ -142,14 +142,14 @@ impl Session {
     /// ([`NovaPersons`](crate::NovaPersons)) by default.
     #[must_use]
     pub fn with_person_rules(mut self, rules: Rc<dyn PersonRules>) -> Self {
-        self.person_rules = hire::Shared(rules);
+        self.setup.person_rules = hire::Shared(rules);
         self
     }
 
     /// How persons appear.
     #[must_use]
     pub fn person_rules(&self) -> &dyn PersonRules {
-        &*self.person_rules.0
+        &*self.setup.person_rules.0
     }
 
     /// `npc`'s comm quote, an entry in `STR#` 7100, when it is a person
@@ -369,8 +369,8 @@ impl Session {
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             ranks: self.rank_names(),
             rank_govts: self.rank_govts,
-            leet: self.leet,
-            rules: TagRules::from_rulebook(&self.rules),
+            leet: self.setup.leet,
+            rules: TagRules::from_rulebook(&self.setup.rules),
         };
         let text = expand_tags(&line, &tags);
         self.quotes.push(PersonQuote { npc: id, text });

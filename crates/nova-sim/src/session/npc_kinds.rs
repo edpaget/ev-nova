@@ -12,7 +12,7 @@ use crate::traffic::table::{self, ShipKind};
 impl Session {
     /// The [`RuleKey::NpcDefaultItems`] reading the session follows.
     pub(super) fn npc_items(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::NpcDefaultItems)
+        self.setup.rules.source_for(RuleKey::NpcDefaultItems)
     }
 
     /// A ship of class `record` as an NPC flies it, its default items

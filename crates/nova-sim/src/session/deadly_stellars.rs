@@ -153,7 +153,7 @@ impl Session {
     /// ([`Combat::take_stellar_kills`]) still here vanishes or is
     /// destroyed, as [`Session::take_out_the_killed`] says.
     fn settle_stellar_kills(&mut self) {
-        let rule = DeadlyStellarKill::from(self.rules.source_for(RuleKey::DeadlyStellarKill));
+        let rule = DeadlyStellarKill::from(self.setup.rules.source_for(RuleKey::DeadlyStellarKill));
         let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
         let killed: BTreeSet<NpcId> = self
             .combat

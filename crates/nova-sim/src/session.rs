@@ -261,8 +261,8 @@
 //!
 //! Landed at a stellar with a bar, the player hires escorts
 //! ([`Session::escorts_for_hire`], [`Session::hire`]) as the
-//! [`hire`](crate::hire) rules say, by the session's [`HireTerms`] and
-//! [`ControlBits`]: a hire pays its fee and joins the fleet with its daily
+//! [`hire`](crate::hire) rules say, by the session's [`HireTerms`](crate::hire::HireTerms) and
+//! [`ControlBits`](crate::control::ControlBits): a hire pays its fee and joins the fleet with its daily
 //! wage, which makes a save due. Each hired escort is paid its wage for
 //! each day of a jump, and for one day at each take-off, whatever days
 //! the stay passes, as the rule set reads [`RuleKey::TakeOffPay`]; one
@@ -312,7 +312,7 @@
 //! save due; see the `edit` module.
 //!
 //! Persons (see [`person`](crate::person)) appear in the systems their
-//! records allow, by the session's [`PersonRules`]
+//! records allow, by the session's [`PersonRules`](crate::person::PersonRules)
 //! ([`Session::with_person_rules`]), named by their records
 //! ([`Session::npc_name`]); a destroyed unique person, or a captured one,
 //! is gone for good, and one the player hits may hold a grudge, both
@@ -478,6 +478,7 @@ mod sabotage;
 mod script_effects;
 mod self_destruct;
 mod self_repair;
+mod setup;
 mod ship_change;
 mod ship_display;
 mod ship_loop;
@@ -530,6 +531,7 @@ use std::rc::Rc;
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::outfits::{carries, launches};
+use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::statics::Statics;
 use crate::afterburner::MaxVel;
@@ -553,7 +555,7 @@ use crate::combat::armament::{
 };
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
-use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
+use crate::combat::hull::{Breakup, Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::combat::jamming::{Halving, Jamming};
@@ -566,7 +568,7 @@ use crate::combat::{
     SpriteRank, Strike,
 };
 use crate::comm_line::CommLine;
-use crate::control::{ControlBits, NovaBits, ScriptNote};
+use crate::control::ScriptNote;
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, FlightRules, ShipState, player_step};
 use crate::fuel::regenerate;
@@ -581,7 +583,7 @@ use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
-use crate::hire::{HireTerms, NovaHire, PayNote};
+use crate::hire::PayNote;
 use crate::hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hold_jump, hops_per_jump, jump_zone,
@@ -601,7 +603,7 @@ use crate::outfitter::{
     self, FIRST_OUTFIT, Hardpoints, LIST_SLOTS, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun,
     OutfitVisit, Outfitter, Reselection, SaleAlert, Shop, outfit_mods,
 };
-use crate::person::{NovaPersons, PersonRules, PersonWorld};
+use crate::person::PersonWorld;
 use crate::pilot::{self, Escort, ExploredLevel, Pilot};
 use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
@@ -815,6 +817,9 @@ pub struct Session {
     /// The catalog data read when the session starts and never written
     /// again, shared by every clone (see the `statics` module).
     statics: Rc<Statics>,
+    /// The rule set and the strategy ports the `with_*` builders set
+    /// (see the `setup` module).
+    setup: Setup,
     /// The ship's fields, read when the session starts.
     fields: ShipFields,
     /// The ship's default items, read when the session starts.
@@ -871,21 +876,9 @@ pub struct Session {
     /// The player's warp stage: its +0x50, the warp end's flags and the
     /// screen's white (see the `warp_stage` module).
     warp: warp_stage::PlayerWarp,
-    /// The rule a multi-jump follows.
-    multi_jump: MultiJumpRule,
-    /// The rule Hyper Select follows.
-    hyper_select: HyperSelectRule,
-    /// The rule jumps along the hyperlinks follow.
-    hyperlinks: HyperlinkRule,
-    /// The rule for where the no-jump zone applies.
-    jump_zone: JumpZoneRule,
     /// The hypergate or wormhole the land key has just been pressed over,
     /// cleared: its entry awaits until the next tick.
     gate: Option<StellarId>,
-    /// The rule a ship coming out of a gate follows.
-    gate_arrival: GateArrivalRule,
-    /// The rule an unlinked wormhole follows.
-    wormholes: WormholeRule,
     /// Whether the ship is thrusting, as the last sounds told it.
     thrusting: bool,
     /// The engine glow's base level (see [`glow`](crate::glow)), an
@@ -1071,11 +1064,6 @@ pub struct Session {
     /// never saved; reset with their orders on entering a system by the
     /// engine's [`RuleKey::EscortOrders`].
     class_orders: [Option<crate::escort::EscortOrder>; 4],
-    /// The fee and wage of a hire (see [`Session::with_hire_terms`]).
-    hire_terms: hire::Shared<dyn HireTerms>,
-    /// The control-bit test a ship's `Availability` for hire goes through
-    /// (see [`Session::with_control_bits`]).
-    control_bits: hire::Shared<dyn ControlBits>,
     /// Each ship class's roll for hire today: drawn by the daily step, or
     /// else the first time the bar's list asks it (see
     /// [`RuleKey::DayRolls`]). Not saved.
@@ -1165,32 +1153,17 @@ pub struct Session {
     nav_fly_in: crate::brackets::FlyIn,
     /// How far out the ship target's brackets are; not saved either.
     target_fly_in: crate::brackets::FlyIn,
-    /// Whether the player's sound effects are quiet, which by
-    /// [`RuleKey::AlertBlink`]'s engine reading blinks the Red Alert's
-    /// icon; set by the view from the player's preferences, never saved.
-    sound_quiet: bool,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
-    /// What sees each set operator `run_set` hands to `apply_op`: none
-    /// outside tests (see `control::SetOpObserver`).
-    op_observer: Option<hire::Shared<dyn control::SetOpObserver>>,
     /// What running set expressions had to tell since this was last taken.
     script_notes: Vec<ScriptNote>,
-    /// How persons appear (see [`Session::with_person_rules`]).
-    person_rules: hire::Shared<dyn PersonRules>,
     /// The hail quotes' clock.
     quote_clock: persons::QuoteClock,
     /// The hail quotes said since they were last taken.
     quotes: Vec<persons::PersonQuote>,
-    /// When the player's ship is disabled after a change of ship (see
-    /// [`Session::with_disable_rule`]).
-    disable_rule: hire::Shared<dyn DisableRule>,
     /// Whether a pirate has docked with the player's disabled ship (its
     /// slot's +0xb9; see the `pirate_plunder` module): never saved.
     player_boarded: bool,
-    /// The string lists `T` names the ship from (see
-    /// [`Session::with_strings`]).
-    strings: ship_change::Strings,
     /// What the set expressions left for later: for
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
@@ -1204,9 +1177,6 @@ pub struct Session {
     /// Where the ship was as it last landed, before it was docked at the
     /// stellar's centre.
     touchdown: Vec2,
-    /// How each disputed rule the session acts on reads (see
-    /// [`Session::with_rules`]); never saved.
-    rules: Rulebook,
     /// Each ship slot's draw layer and when it entered it (see
     /// [`Session::draw_order`]), and the frames it last cloned (see
     /// [`Session::framed_by`]): kept from the session's start, across
@@ -1333,9 +1303,6 @@ pub struct Session {
     /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`]); never saved,
     /// as a load refreshes it.
     avail_cache: BTreeMap<MissionId, bool>,
-    /// Whether the data turns on the `l33t` mode (`_leetMode`; see
-    /// [`Session::with_strings`]); never saved.
-    leet: bool,
     /// How many mission texts have been queued, never reset (see the
     /// `mission_screens` module); never saved.
     texts_queued: u64,
@@ -1626,13 +1593,7 @@ impl Session {
             warp_ups: warp::WarpUps::default(),
             warp_out: warp::WarpOut::default(),
             warp: warp_stage::PlayerWarp::default(),
-            multi_jump: MultiJumpRule::default(),
-            hyper_select: HyperSelectRule::default(),
-            hyperlinks: HyperlinkRule::default(),
-            jump_zone: JumpZoneRule::default(),
             gate: None,
-            gate_arrival: GateArrivalRule::default(),
-            wormholes: WormholeRule::default(),
             thrusting: false,
             engine_glow: 0,
             ship_display: ship_display::PlayerDisplay::default(),
@@ -1688,8 +1649,6 @@ impl Session {
             fleet: Vec::new(),
             restock_persons: false,
             class_orders: [None; 4],
-            hire_terms: hire::Shared(Rc::new(NovaHire::default())),
-            control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_rolls: DayRolls::default(),
             bar_news: None,
             outfit_rolls: DayRolls::default(),
@@ -1711,25 +1670,19 @@ impl Session {
             tutorial: crate::tutorial::Tutorial::SEASONED,
             nav_fly_in: crate::brackets::FlyIn::default(),
             target_fly_in: crate::brackets::FlyIn::default(),
-            sound_quiet: false,
             pay_notes: Vec::new(),
-            op_observer: None,
             script_notes: Vec::new(),
-            person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
             reinforcements_held: false,
             iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
-            disable_rule: Self::nova_disable(),
             player_boarded: false,
-            strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
             next_sites: None,
             hold_position: false,
             touchdown: player.position,
-            rules: Rulebook::default(),
             slot_sprites: crate::ship_layer::SlotSprites::default(),
             slot_shown: BTreeMap::new(),
             slot_placed: BTreeMap::new(),
@@ -1761,7 +1714,6 @@ impl Session {
             loaded_movie: None,
             offering_ship: None,
             avail_cache: BTreeMap::new(),
-            leet: false,
             texts_queued: 0,
             text_bars: Vec::new(),
             interface_loads: Vec::new(),
@@ -1775,6 +1727,7 @@ impl Session {
             load_repaired,
             pilot,
             statics: Rc::new(statics),
+            setup: Setup::default(),
         };
         session.register_offer_roll();
         session.register_nebulae();
@@ -1926,21 +1879,21 @@ impl Session {
             .set_spawn_anim_rolls_first_class(rules.source_for(RuleKey::SpawnAnimRollsFirstClass));
         self.traffic
             .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
-        self.rules = rules;
+        self.setup.rules = rules;
         self
     }
 
     /// How each disputed rule reads (see [`Session::with_rules`]).
     #[must_use]
     pub fn rules(&self) -> &Rulebook {
-        &self.rules
+        &self.setup.rules
     }
 
     /// This session with multi-jumps following `rule`; the engine's by
     /// default.
     #[must_use]
     pub fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
-        self.multi_jump = rule;
+        self.setup.multi_jump = rule;
         self
     }
 
@@ -1948,7 +1901,7 @@ impl Session {
     /// default.
     #[must_use]
     pub fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
-        self.hyper_select = rule;
+        self.setup.hyper_select = rule;
         self
     }
 
@@ -1956,7 +1909,7 @@ impl Session {
     /// engine's by default.
     #[must_use]
     pub fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
-        self.hyperlinks = rule;
+        self.setup.hyperlinks = rule;
         self
     }
 
@@ -1964,7 +1917,7 @@ impl Session {
     /// engine's by default, only in a system with an ordinary stellar.
     #[must_use]
     pub fn with_jump_zone(mut self, rule: JumpZoneRule) -> Self {
-        self.jump_zone = rule;
+        self.setup.jump_zone = rule;
         self
     }
 
@@ -1972,7 +1925,7 @@ impl Session {
     /// `rule` says; the engine's by default.
     #[must_use]
     pub fn with_gate_arrival(mut self, rule: GateArrivalRule) -> Self {
-        self.gate_arrival = rule;
+        self.setup.gate_arrival = rule;
         self
     }
 
@@ -1980,7 +1933,7 @@ impl Session {
     /// engine's by default.
     #[must_use]
     pub fn with_wormholes(mut self, rule: WormholeRule) -> Self {
-        self.wormholes = rule;
+        self.setup.wormholes = rule;
         self
     }
 
@@ -2045,7 +1998,7 @@ impl Session {
             refit(gauge, max, gain, hold);
         }
         self.stats = stats;
-        if self.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
+        if self.setup.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
             && !carries(&self.pilot, &self.statics.outfits, self.secondary)
         {
             self.secondary = None;
@@ -2162,7 +2115,7 @@ impl Session {
                 &mut self.pilot.cargo,
                 capacity,
                 self.pilot.missions.tons_aboard(),
-                self.rules.source_for(RuleKey::JunkFlags),
+                self.setup.rules.source_for(RuleKey::JunkFlags),
                 self.junk_latches,
             );
         }
@@ -2461,10 +2414,10 @@ impl Session {
         let world = World {
             govts: &self.statics.govts,
             persons: PersonWorld {
-                rules: &*self.person_rules.0,
+                rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
-                control_bits: &*self.control_bits.0,
+                control_bits: &*self.setup.control_bits.0,
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
@@ -2505,7 +2458,7 @@ impl Session {
             &self.statics.ships,
             &self.statics.outfits,
             &self.statics.arsenal,
-            &*self.person_rules.0,
+            &*self.setup.person_rules.0,
             &self
                 .pilot
                 .escorts
@@ -2695,10 +2648,10 @@ impl Session {
             system_govt,
             record: self.system_record(),
             persons: PersonWorld {
-                rules: &*self.person_rules.0,
+                rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
-                control_bits: &*self.control_bits.0,
+                control_bits: &*self.setup.control_bits.0,
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
@@ -2708,22 +2661,22 @@ impl Session {
             targeted: &targeted,
             type_widths: &type_widths,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
-            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
-            snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
-            hit_focus: self.rules.source_for(RuleKey::HitFocus),
-            npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
-            odds_cache: self.rules.source_for(RuleKey::OddsCache),
-            refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
+            arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
+            snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
+            hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
+            npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
+            odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
+            refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
             iff_marked: &self.iff_marked,
-            stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
-            independent_kin: self.rules.source_for(RuleKey::IndependentKin),
-            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
-            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
-            disable: &*self.disable_rule.0,
-            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            stray_shoot_penalty: self.setup.rules.source_for(RuleKey::StrayShootPenalty),
+            independent_kin: self.setup.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.setup.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.setup.disable_rule.0,
+            plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
             warp: self.warp_world(),
             tractor_step: self.tractor_step(),
             weapons: &self.statics.arsenal,
@@ -2745,7 +2698,7 @@ impl Session {
     /// leaves free, as [`RuleKey::SpawnReserve`] reads: `reserve` by the
     /// engine, none by the Bible.
     pub(crate) fn spawn_reserve(&self, reserve: u32) -> u32 {
-        match self.rules.source_for(RuleKey::SpawnReserve) {
+        match self.setup.rules.source_for(RuleKey::SpawnReserve) {
             RuleSource::Engine => reserve,
             RuleSource::Bible => 0,
         }
@@ -2788,10 +2741,10 @@ impl Session {
             system_govt,
             record: self.system_record(),
             persons: PersonWorld {
-                rules: &*self.person_rules.0,
+                rules: &*self.setup.person_rules.0,
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
-                control_bits: &*self.control_bits.0,
+                control_bits: &*self.setup.control_bits.0,
                 pilot: self,
                 fleet: &self.pilot.escorts,
             },
@@ -2801,22 +2754,22 @@ impl Session {
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
-            arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
-            snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
-            hit_focus: self.rules.source_for(RuleKey::HitFocus),
-            npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
-            odds_cache: self.rules.source_for(RuleKey::OddsCache),
-            refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
+            arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
+            snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
+            hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
+            npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
+            odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
+            refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
             iff_marked: &self.iff_marked,
-            stray_shoot_penalty: self.rules.source_for(RuleKey::StrayShootPenalty),
-            independent_kin: self.rules.source_for(RuleKey::IndependentKin),
-            approach_lead: self.rules.source_for(RuleKey::ApproachLead),
-            afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
-            disable: &*self.disable_rule.0,
-            plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            stray_shoot_penalty: self.setup.rules.source_for(RuleKey::StrayShootPenalty),
+            independent_kin: self.setup.rules.source_for(RuleKey::IndependentKin),
+            approach_lead: self.setup.rules.source_for(RuleKey::ApproachLead),
+            afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
+            disable: &*self.setup.disable_rule.0,
+            plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
             warp: self.warp_world(),
             tractor_step: self.tractor_step(),
             weapons: &self.statics.arsenal,
@@ -3109,7 +3062,7 @@ impl Session {
         let halving = Halving::of(
             self.statics.govts.flag(npc.govt, HALF_JAMMING),
             freighter,
-            self.rules.source_for(RuleKey::JamHalving),
+            self.setup.rules.source_for(RuleKey::JamHalving),
         );
         Jamming::of_npc(
             self.statics.govts.inh_jam(record.inherent_govt),
@@ -3598,7 +3551,7 @@ impl Session {
         match self
             .galaxy
             .map()
-            .route(self.pilot.system, to, self.hyperlinks)
+            .route(self.pilot.system, to, self.setup.hyperlinks)
         {
             Ok(route) => {
                 self.pilot.course = route;
@@ -3689,7 +3642,7 @@ impl Session {
             &self.player,
             self.pilot.reserves.fuel.now,
             self.jump_selection(),
-            jump_zone(&self.sites, self.stats.jump_distance, self.jump_zone),
+            jump_zone(&self.sites, self.stats.jump_distance, self.setup.jump_zone),
         )
     }
 
@@ -3970,12 +3923,12 @@ impl Session {
             .is_some_and(|&hop| hop == first || self.galaxy.same_place(hop) == Some(first))
         {
             hops = 1;
-            for _ in 1..hops_per_jump(self.stats.multi_jump, self.multi_jump) {
+            for _ in 1..hops_per_jump(self.stats.multi_jump, self.setup.multi_jump) {
                 let next = self.pilot.course.get(hops);
                 let Some(next) = next.and_then(|&hop| self.galaxy.same_place(hop)) else {
                     break;
                 };
-                if self.multi_jump == MultiJumpRule::PerHop {
+                if self.setup.multi_jump == MultiJumpRule::PerHop {
                     if self.pilot.reserves.fuel.now < JUMP_FUEL {
                         break;
                     }
@@ -4198,7 +4151,7 @@ impl Session {
             }
         };
         let blessing = self.blessing();
-        let reading = self.rules.source_for(RuleKey::BlessingLanding);
+        let reading = self.setup.rules.source_for(RuleKey::BlessingLanding);
         let press = land_or_select(
             self.nav_target(),
             self.dock,
@@ -4415,7 +4368,8 @@ impl Session {
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
         let owner_of = |id| self.galaxy.holder(self.statics.listers(id), player);
-        let Some(exit) = wormhole_exit(here, player, &sites, owner_of, self.wormholes, chance)
+        let Some(exit) =
+            wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
         else {
             self.deselect();
             return Err(GateRefusal::NoExit);
@@ -4444,7 +4398,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let ship = match self.gate_arrival {
+        let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.galaxy.position(id).unwrap_or_default();
@@ -4547,7 +4501,7 @@ impl Session {
     /// them again at once (`_DoShipyardDialog` @0x5f0f8). By the other
     /// reading, it forgets every roll.
     fn land_day_rolls(&mut self) {
-        if self.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
             for ship in std::mem::take(&mut self.ship_redraws) {
                 self.ship_rolls.redraw(&ship);
             }
@@ -4645,11 +4599,11 @@ impl Session {
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
         self.bar_nav = None;
-        let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
+        let stay_days = self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
             self.pass_days(stay.escort_days(), chance);
         }
-        if self.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
             self.pay_escorts(1);
         }
         if stay_days {
@@ -4742,7 +4696,7 @@ impl Session {
             pilot: &self.pilot,
             capacity: self.capacity(),
             gate: self.gate(),
-            rules: self.rules,
+            rules: self.setup.rules,
             markup: self.markup(site),
         })
     }
@@ -4780,7 +4734,7 @@ impl Session {
     /// independent system; at `site`,
     /// [`landing_record`](crate::landing::landing_record).
     fn record_in(&self, system: SystemId, site: Option<&LandingSite>) -> i16 {
-        match self.rules.source_for(RuleKey::LegalRecords) {
+        match self.setup.rules.source_for(RuleKey::LegalRecords) {
             RuleSource::Engine => self.pilot.system_record(system),
             RuleSource::Bible => {
                 let govt = self.galaxy.govt(system);
@@ -4896,7 +4850,7 @@ impl Session {
             launchers: &self.launchers(),
             visit: &self.outfit_visit,
             price_mult: self.outfit_price_mult(),
-            rules: self.rules,
+            rules: self.setup.rules,
             gate: self.gate(),
         }
         .outfitter_with(&self.pilot, &mut rolls, chance, also);
@@ -5050,7 +5004,7 @@ impl Session {
         // The bar's loads are this order's alone (see
         // [`Session::take_interface_loads`]).
         self.interface_loads.clear();
-        let follows = self.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
+        let follows = self.setup.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
         if self.outfit_reselected != Some(order.outfit) {
@@ -5068,7 +5022,7 @@ impl Session {
         let mut button_passed = false;
         let run = match order.direction {
             Direction::Sell
-                if self.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
+                if self.setup.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
             {
                 self.relisted_sale(order, count, chance, &mut alert, asked, &mut relisting)
             }
@@ -5276,7 +5230,7 @@ impl Session {
                 // The sale lets go of the secondary selected, before
                 // `OnSell` runs, as `SecondarySale` reads (see [`launches`]
                 // and [`carries`]).
-                let let_go = match self.rules.source_for(RuleKey::SecondarySale) {
+                let let_go = match self.setup.rules.source_for(RuleKey::SecondarySale) {
                     RuleSource::Engine => {
                         self.pilot.owned(record.id) == 0 && launches(&record, self.secondary)
                     }
@@ -5382,7 +5336,7 @@ impl Session {
             fields: self.fields,
             site,
             mults: self.price_mults(),
-            rules: self.rules,
+            rules: self.setup.rules,
             gate: self.gate(),
         }
         .shipyard(&self.pilot, &mut rolls, chance);
@@ -5488,7 +5442,7 @@ impl Session {
                 fits: &fits,
                 records: &self.statics.outfits,
                 escorts: &escorts,
-                rules: self.rules,
+                rules: self.setup.rules,
             },
             quote,
         );
@@ -5516,7 +5470,7 @@ impl Session {
         // Filled once `OnPurchase` has run and the paint is cleared, to the
         // class and outfits it leaves (`_DoShipyardDialog`
         // @0x5f051-0x5f07b); the save is due already.
-        self.pilot.reserves = shipyard::filled(&self.stats, &self.rules);
+        self.pilot.reserves = shipyard::filled(&self.stats, &self.setup.rules);
         self.stay.ship_bought = true;
         Ok(report)
     }
@@ -5667,14 +5621,14 @@ impl Session {
     /// leads (see [`top_speed::led_speed`]), read from the rules and the
     /// pilot at each use, so nothing is deferred.
     pub(crate) fn led_speed(&self) -> f32 {
-        top_speed::led_speed(&self.rules, self.pilot.strict_play())
+        top_speed::led_speed(&self.setup.rules, self.pilot.strict_play())
     }
 
     /// The flight rules every ship flies by, read from the rules at each
     /// use, as the led speed is: the thrust's divisor (see
     /// [`FlightRules`]).
     pub(crate) fn flight_rules(&self) -> FlightRules {
-        FlightRules::from_rulebook(&self.rules)
+        FlightRules::from_rulebook(&self.setup.rules)
     }
 
     /// How the player's ship flies in flight: its own handling at
@@ -5802,7 +5756,7 @@ impl Session {
             return Err(BoardRefusal::NoTarget);
         }
         let target = self.target().map(|npc| self.statics.board_target(npc));
-        let crewless = self.rules.source_for(RuleKey::CrewlessMissionShip);
+        let crewless = self.setup.rules.source_for(RuleKey::CrewlessMissionShip);
         check_board(&self.player, self.condition, target, crewless)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
         if let Some(boarding) = self.board_mission_ship(&npc) {
@@ -5957,7 +5911,7 @@ impl Session {
             .iter()
             .map(|mount| mount.spec)
             .collect();
-        let bays = self.rules.source_for(RuleKey::PlunderAmmoBays);
+        let bays = self.setup.rules.source_for(RuleKey::PlunderAmmoBays);
         Prize {
             booty: npc.booty.unwrap_or(0),
             cost: record.map_or(0, |record| record.cost),
@@ -6143,7 +6097,7 @@ impl Session {
             record,
             &self.pilot.outfits,
             &self.statics.outfits,
-            self.rules.source_for(RuleKey::RaisedMax),
+            self.setup.rules.source_for(RuleKey::RaisedMax),
         )
     }
 
@@ -6180,7 +6134,7 @@ impl Session {
                 &self.standard(),
                 &self.pilot.outfits,
                 &self.statics.outfits,
-                &self.rules,
+                &self.setup.rules,
             ) >= unit
         {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
@@ -10817,7 +10771,8 @@ pub(super) mod tests {
     /// each good, a ton a click: it is left on the other reading of
     /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
     fn buy_goods(session: &mut Session, tons: &[(Good, u32)]) {
-        session.rules = session
+        session.setup.rules = session
+            .setup
             .rules
             .with_override(RuleKey::TradeLot, RuleSource::Bible);
         for &(good, tons) in tons {
@@ -16598,7 +16553,7 @@ pub(super) mod tests {
     fn the_player_hits_a_ship_in_its_gate(arrival_hits: RuleSource) -> Session {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
-        session.rules = Rulebook::default().with_override(RuleKey::ArrivalHits, arrival_hits);
+        session.setup.rules = Rulebook::default().with_override(RuleKey::ArrivalHits, arrival_hits);
         let npc = &mut session.traffic.npcs_mut()[0];
         npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
@@ -16774,7 +16729,8 @@ pub(super) mod tests {
         // hits it while it is unseen says it again: `_DamageShip` asks the
         // gate for each hit it answers (@0x3be69), and the gate reads no
         // "quoted" (+0xbc). Nothing else does.
-        session.rules = Rulebook::default().with_override(RuleKey::HitFocus, RuleSource::Bible);
+        session.setup.rules =
+            Rulebook::default().with_override(RuleKey::HitFocus, RuleSource::Bible);
         let mut again = 0;
         for tick in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;
@@ -22106,7 +22062,7 @@ pub(super) mod tests {
         assert_eq!(session.secondary(), None, "a ship bought");
         let catalog = ammo_aboard(1, 20);
         let mut session = ammo_session(&catalog);
-        session.rules = both;
+        session.setup.rules = both;
         selecting(&mut session, 1);
         assert_eq!(session.secondary(), Some(ROCKET));
         assert_eq!(
@@ -26254,14 +26210,16 @@ pub(super) mod tests {
             "61 NPCs: slot 62 free"
         );
         let mut bible = crowded(61);
-        bible.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        bible.setup.rules =
+            Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
         assert_eq!(
             bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::MyShip),
             "by the Bible, slot 63"
         );
         let mut bible = crowded(62);
-        bible.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
+        bible.setup.rules =
+            Rulebook::default().with_override(RuleKey::SpawnReserve, RuleSource::Bible);
         assert_eq!(
             bible.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::Abandoned),

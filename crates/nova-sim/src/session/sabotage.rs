@@ -154,7 +154,7 @@ impl Session {
         let outfit = kill_notice(&self.pilot.outfits, &self.statics.outfits);
         self.halt_sounds(&WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
-        self.say(if outfit.is_none() && self.leet {
+        self.say(if outfit.is_none() && self.setup.leet {
             SimMessage::BombSetUp
         } else {
             SimMessage::Sabotaged { outfit }
@@ -459,14 +459,14 @@ mod tests {
             record.lc_name.clear();
         }
         let mut session = lit(&catalog, &[(KILL, 1)]);
-        session.leet = true;
+        session.setup.leet = true;
         fight(&mut session, &[]);
         let messages = session.take_messages();
         assert_eq!(messages, [SimMessage::BombSetUp]);
         assert_eq!(messages[0].ticks(), 360);
         let catalog = sabotaged();
         let mut session = lit(&catalog, &[(KILL, 1)]);
-        session.leet = true;
+        session.setup.leet = true;
         fight(&mut session, &[]);
         assert!(
             matches!(

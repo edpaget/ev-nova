@@ -35,7 +35,7 @@ impl Session {
         let patch = patch_id(index).map_or(StringPatch::Absent, |id| catalog.string_patch(id));
         match buoy_text(index, patch, &catalog.buoy_strings()) {
             Some(text) => SimMessage::Buoy(text),
-            None => match self.rules.source_for(RuleKey::MissingBuoyString) {
+            None => match self.setup.rules.source_for(RuleKey::MissingBuoyString) {
                 RuleSource::Engine => SimMessage::Buoy(String::new()),
                 RuleSource::Bible => SimMessage::Arrived(system),
             },

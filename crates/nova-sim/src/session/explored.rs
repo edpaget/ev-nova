@@ -85,7 +85,7 @@ impl Session {
     /// How the session shares exploration by place
     /// ([`RuleKey::ExploredByPlace`]).
     fn explored_by_place(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::ExploredByPlace)
+        self.setup.rules.source_for(RuleKey::ExploredByPlace)
     }
 
     /// Raises `system` and, by the engine, its place's head to `level`

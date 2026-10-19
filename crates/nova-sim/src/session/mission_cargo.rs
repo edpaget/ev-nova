@@ -243,8 +243,8 @@ impl Session {
             outfit_records: &self.statics.outfits,
         };
         let rules = scan::ScanRules {
-            outfits_past_junk: self.rules.source_for(RuleKey::ScanOutfitsPastJunk),
-            outfit_fine: self.rules.source_for(RuleKey::OutfitScanFine),
+            outfits_past_junk: self.setup.rules.source_for(RuleKey::ScanOutfitsPastJunk),
+            outfit_fine: self.setup.rules.source_for(RuleKey::OutfitScanFine),
         };
         let Some(found) =
             scan::contraband(&govt, &carried, self.pilot.cash, self.scan_latches, rules)
@@ -316,7 +316,7 @@ impl Session {
                     .find(|npc| npc.id == id)
                     .and_then(|npc| npc.mission)
                     .map(|mark| mark.slot);
-                let source = self.rules.source_for(RuleKey::SmugglingShipName);
+                let source = self.setup.rules.source_for(RuleKey::SmugglingShipName);
                 let ship_name = self.pilot.missions.get(slot).and_then(|active| {
                     smuggling_ship_name(&active.ships.name, slot, marked, source)
                 });
@@ -364,7 +364,7 @@ impl Session {
             .map_or(0, |active| active.cargo_tons);
         let facts = PickupFacts {
             cargo: self.room_for(tons),
-            rules: &self.rules,
+            rules: &self.setup.rules,
         };
         match pickup_checks().first_refusal(&facts, &mut NeverFires) {
             Ok(()) => {
@@ -1747,7 +1747,7 @@ mod tests {
     fn by_the_other_reading_of_outfit_scan_fine_a_negative_fine_takes_its_percent() {
         let catalog = contraband_catalog(-10);
         let mut session = smuggler(&catalog, 0, 1, 50_000);
-        session.rules =
+        session.setup.rules =
             Rulebook::default().with_override(RuleKey::OutfitScanFine, RuleSource::Bible);
         looked_over(&mut session, &catalog, 0);
         assert_eq!(session.take_messages(), [illegal_outfit(true, 5000)]);
@@ -1763,7 +1763,8 @@ mod tests {
             (RuleSource::Bible, vec![illegal_outfit(true, 500)]),
         ] {
             let mut session = smuggler(&catalog, 1, 1, 1200);
-            session.rules = Rulebook::default().with_override(RuleKey::ScanOutfitsPastJunk, source);
+            session.setup.rules =
+                Rulebook::default().with_override(RuleKey::ScanOutfitsPastJunk, source);
             looked_over(&mut session, &catalog, 0);
             assert_eq!(session.take_messages(), messages, "{source:?}");
         }

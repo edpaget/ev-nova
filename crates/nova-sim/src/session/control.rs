@@ -151,7 +151,7 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_set_op_observer(mut self, observer: std::rc::Rc<dyn SetOpObserver>) -> Self {
-        self.op_observer = Some(super::hire::Shared(observer));
+        self.setup.op_observer = Some(super::hire::Shared(observer));
         self
     }
 
@@ -249,7 +249,7 @@ impl Session {
         chance: &mut dyn Chance,
         between: &mut dyn FnMut(&mut Session, &mut dyn Chance),
     ) {
-        let observer = self.op_observer.clone();
+        let observer = self.setup.op_observer.clone();
         let before = self.pilot.clone();
         let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
             if let Some(observer) = &observer {
@@ -298,7 +298,7 @@ impl Session {
     /// pilot, as the rules that test a record's control bits ask them.
     pub(crate) fn gate(&self) -> Gate<'_> {
         Gate {
-            control_bits: &*self.control_bits.0,
+            control_bits: &*self.setup.control_bits.0,
             pilot: self,
         }
     }

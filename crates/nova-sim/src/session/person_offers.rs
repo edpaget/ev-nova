@@ -121,7 +121,7 @@ impl Session {
     /// target: by the engine the navigation target; by the other reading
     /// the first stellar the player's system lists, or spöb 128 with none.
     pub(super) fn person_mission_stellar(&self) -> Option<StellarId> {
-        match self.rules.source_for(RuleKey::PersonMissionStellar) {
+        match self.setup.rules.source_for(RuleKey::PersonMissionStellar) {
             RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => Some(self.first_listed_stellar()),
         }
@@ -143,7 +143,7 @@ impl Session {
     /// reading none.
     pub(super) fn ship_offer_reaches(&self) -> Option<StellarId> {
         self.offering?;
-        match self.rules.source_for(RuleKey::PersonMissionStellar) {
+        match self.setup.rules.source_for(RuleKey::PersonMissionStellar) {
             RuleSource::Engine => self.nav_target(),
             RuleSource::Bible => None,
         }

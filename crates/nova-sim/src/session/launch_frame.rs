@@ -72,7 +72,7 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let stop = self.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
+        let stop = self.setup.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
         let mut after = None;
         loop {
             let mut stopped = None;

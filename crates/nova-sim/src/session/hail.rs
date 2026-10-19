@@ -189,7 +189,7 @@ impl Session {
             )
         };
         let opening = match Self::quote_of(npc) {
-            Some(index) if self.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
+            Some(index) if self.setup.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
                 Reply::Line {
                     list: COMM_QUOTES,
                     index,
@@ -352,7 +352,7 @@ impl Session {
             &self.pilot.ranks,
             npc.govt,
             &self.statics.govts,
-            self.rules.source_for(RuleKey::RankGovtReach),
+            self.setup.rules.source_for(RuleKey::RankGovtReach),
         );
         Dispositions::of(npc, inherent, &self.statics.govts, favour)
     }
@@ -363,7 +363,7 @@ impl Session {
         let around = self.world();
         let around = around.around(self.npcs());
         let quote = Self::quote_of(npc)
-            .filter(|_| self.rules.source_for(RuleKey::CommQuote) == RuleSource::Engine);
+            .filter(|_| self.setup.rules.source_for(RuleKey::CommQuote) == RuleSource::Engine);
         Hail {
             quote,
             joins: self.joins(npc),
@@ -1526,7 +1526,7 @@ mod tests {
     fn with_leet_mode_the_comm_text_is_munged() {
         let catalog = advising("Hello, <PN>.");
         let mut session = advised(&catalog);
-        session.leet = true;
+        session.setup.leet = true;
         assert_eq!(greeted(&mut session, &catalog, 2), "H377o, Stox0r.");
     }
 
@@ -1954,7 +1954,7 @@ mod tests {
         assert_eq!(session.pilot().cash, 100_000);
         assert_eq!(session.npcs()[0].goal, Goal::Assist(Help::Refuel));
         let (catalog, mut session) = ranked(crate::rank::HELPS_FREE);
-        session.rules =
+        session.setup.rules =
             Rulebook::default().with_override(RuleKey::RankGovtReach, RuleSource::Bible);
         session.pilot.reserves.fuel.now = 40.0;
         hail(&mut session, &catalog);

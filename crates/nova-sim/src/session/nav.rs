@@ -313,7 +313,10 @@ impl Session {
         let NavMode::Hyperspace(Some(selected)) = self.nav_mode() else {
             return None;
         };
-        let jumps = self.galaxy.map().jumps(self.pilot.system, self.hyperlinks);
+        let jumps = self
+            .galaxy
+            .map()
+            .jumps(self.pilot.system, self.setup.hyperlinks);
         jumps.contains(&selected).then_some(selected)
     }
 
@@ -449,7 +452,7 @@ impl Session {
         if self
             .galaxy
             .map()
-            .jumps(self.pilot.system, self.hyperlinks)
+            .jumps(self.pilot.system, self.setup.hyperlinks)
             .contains(&hop)
         {
             self.select_at_place(hop);
@@ -470,7 +473,7 @@ impl Session {
     /// resolving to −1 (@0xec25-0xec2b). By the other reading nothing
     /// changes.
     fn cue_unplaced_hop(&mut self) {
-        if self.rules.source_for(RuleKey::CueUnplacedHop) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::CueUnplacedHop) != RuleSource::Engine {
             return;
         }
         let slots = self.galaxy.con_slots(self.pilot.system);
@@ -623,14 +626,14 @@ impl Session {
             self.pilot.system,
             &self.course_shown(),
             selected,
-            self.hyper_select,
-            self.hyperlinks,
+            self.setup.hyper_select,
+            self.setup.hyperlinks,
         ) else {
             self.deselect();
             return None;
         };
         self.sounds.push(SimSound::HyperSelected);
-        if self.hyper_select == HyperSelectRule::OneJumpCourse {
+        if self.setup.hyper_select == HyperSelectRule::OneJumpCourse {
             self.pilot.course = vec![next];
         }
         self.set_nav(NavMode::Hyperspace(Some(next)));
@@ -703,7 +706,7 @@ impl Session {
                 .and_then(|slot| i32::try_from(slot).ok())
                 .unwrap_or(-1),
             NavMode::Stellar(Some(stellar))
-                if self.rules.source_for(RuleKey::MapCycleStart) == RuleSource::Engine =>
+                if self.setup.rules.source_for(RuleKey::MapCycleStart) == RuleSource::Engine =>
             {
                 i32::from(stellar.0) - 128
             }

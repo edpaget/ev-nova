@@ -189,7 +189,7 @@ impl Session {
     /// player targets `target` (see the module docs): its number.
     fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
         let target = target
-            .filter(|_| self.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
+            .filter(|_| self.setup.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
                 ShipRef::Npc(id) => !self.is_escort(id),
                 ShipRef::Player => false,
@@ -319,7 +319,7 @@ impl Session {
     /// abandoned ([`Session::abandon_fighters`]); by the other reading, on arrival and on
     /// landing, every one goes back aboard.
     pub(super) fn leave_with_fighters(&mut self, landing: bool) {
-        match self.rules.source_for(RuleKey::FighterRecall) {
+        match self.setup.rules.source_for(RuleKey::FighterRecall) {
             RuleSource::Engine if !landing => self.abandon_fighters(),
             RuleSource::Engine => {}
             RuleSource::Bible => self.recall_fighters(),
@@ -334,7 +334,7 @@ impl Session {
     /// its ship type's `Fuel` alone. Its record goes, with no round back,
     /// and the flight is told how many; a save is due when any was.
     fn abandon_fighters(&mut self) {
-        let reading = self.rules.source_for(RuleKey::NpcJumpFuel);
+        let reading = self.setup.rules.source_for(RuleKey::NpcJumpFuel);
         let fuelled = |session: &Self, escort: &Escort, npc: Option<&Npc>| match npc {
             Some(npc) => leave::can_jump(npc, reading),
             None => session
@@ -1300,7 +1300,7 @@ pub(super) mod tests {
         let catalog = carrying();
         let crowded = |ships: u32, reserve: RuleSource| {
             let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
             for n in 0..ships {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
@@ -1342,7 +1342,7 @@ pub(super) mod tests {
         let catalog = carrying_a_glow_bay();
         let launched = |ships: u32, reserve: RuleSource| {
             let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
-            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
             for n in 0..ships {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
@@ -2862,7 +2862,8 @@ pub(super) mod tests {
     fn by_the_other_jump_fuel_reading_a_fighter_with_an_empty_tank_is_abandoned() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
-        session.rules = session
+        session.setup.rules = session
+            .setup
             .rules
             .with_override(RuleKey::NpcJumpFuel, RuleSource::Bible);
         let viper = session.fleet[0].expect("placed");
@@ -2895,7 +2896,8 @@ pub(super) mod tests {
     ) -> (Vec<FighterNote>, Vec<crate::SimMessage>, usize, bool) {
         let catalog = buoyed_131(message);
         let mut session = both_out(&catalog, RuleSource::Engine);
-        session.rules = session
+        session.setup.rules = session
+            .setup
             .rules
             .with_override(RuleKey::MissingBuoyString, buoy);
         session.take_messages();

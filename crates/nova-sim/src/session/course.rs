@@ -31,7 +31,7 @@ use crate::rulebook::{RuleKey, RuleSource};
 impl Session {
     /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
     fn route_rewrite(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::RouteRewrite)
+        self.setup.rules.source_for(RuleKey::RouteRewrite)
     }
 
     /// A rebuild point's rewrite (see the module docs): by the engine,

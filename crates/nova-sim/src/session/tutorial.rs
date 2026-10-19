@@ -55,7 +55,8 @@ impl Session {
                 newbie && !matches!(self.nav_mode(), NavMode::Hyperspace(Some(_)))
             }
             JumpRefusal::NoFuel { .. } => {
-                !newbie || self.rules.source_for(RuleKey::NewbieFuelRefusal) == RuleSource::Bible
+                !newbie
+                    || self.setup.rules.source_for(RuleKey::NewbieFuelRefusal) == RuleSource::Bible
             }
         }
     }

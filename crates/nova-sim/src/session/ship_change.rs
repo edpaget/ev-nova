@@ -330,7 +330,7 @@ impl Session {
     /// The rules the ship-change set operators follow, projected from
     /// the session's rule set ([`Session::with_rules`]).
     pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
-        ShipChangeRules::from_rulebook(&self.rules)
+        ShipChangeRules::from_rulebook(&self.setup.rules)
     }
 
     /// This session with `rule` saying when the player's ship is
@@ -339,7 +339,7 @@ impl Session {
     /// tick ([`Session::tick_combat`]).
     #[must_use]
     pub fn with_disable_rule(mut self, rule: Rc<dyn DisableRule>) -> Self {
-        self.disable_rule = Shared(rule);
+        self.setup.disable_rule = Shared(rule);
         self
     }
 
@@ -347,7 +347,7 @@ impl Session {
     /// change of ship.
     #[must_use]
     pub fn disable_rule(&self) -> &dyn DisableRule {
-        &*self.disable_rule.0
+        &*self.setup.disable_rule.0
     }
 
     /// This session with `T` reading its names from `strings`' string
@@ -358,15 +358,15 @@ impl Session {
     /// see [`text_tags`](crate::text_tags)).
     #[must_use]
     pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
-        self.leet = strings.leet_mode();
-        self.strings = Strings(Rc::new(PatchedStrings::new(strings)));
+        self.setup.leet = strings.leet_mode();
+        self.setup.strings = Strings(Rc::new(PatchedStrings::new(strings)));
         self
     }
 
     /// The string lists `T` reads its names from.
     #[must_use]
     pub fn strings(&self) -> &dyn CommCatalog {
-        &*self.strings.0
+        &*self.setup.strings.0
     }
 
     /// The disable rule a session starts with.
@@ -405,7 +405,7 @@ impl Session {
         // The original's ship change writes no exit cursor (+0xc8fe-+0xc905),
         // so the turn of exits goes on, as the refit carried it; by the
         // other reading a new ship starts each `ExitType` at exit 0.
-        if self.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::ReusedSlotExits) == RuleSource::Bible {
             *self.armament.exit_cursors_mut() = ExitCursors::default();
         }
         // The fold does not carry: the original's ship change rewrites it
@@ -449,7 +449,7 @@ impl Session {
                 turrets: record.max_tur,
             },
             max_ammo: &max_ammo,
-            raised_max: self.rules.source_for(RuleKey::RaisedMax),
+            raised_max: self.setup.rules.source_for(RuleKey::RaisedMax),
         };
         let held = clamp.then_some(&limits);
         let change = ClassChange {
@@ -498,7 +498,7 @@ impl Session {
     /// as the original's loop does (@0x15677-0x156c5). It ends at the
     /// most, so a rule that never lets the ship fly still ends.
     fn bump_armor(&mut self) {
-        let rule = Rc::clone(&self.disable_rule.0);
+        let rule = Rc::clone(&self.setup.disable_rule.0);
         let armor = &mut self.pilot.reserves.armor;
         while armor.now < armor.max && rule.disabled(*armor, &self.hull) {
             armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
@@ -523,7 +523,7 @@ impl Session {
     /// fleet's arrival quote and [`pick_string`](Self::pick_string) all
     /// draw through it.
     pub(super) fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
-        let strings = self.strings.0.string_list(list);
+        let strings = self.setup.strings.0.string_list(list);
         if strings.is_empty() {
             return None;
         }
@@ -535,7 +535,7 @@ impl Session {
     /// string lists, if it has one: what the bar's news and the rank tags
     /// read through.
     pub(super) fn nth_string(&self, list: i16, index: usize) -> Option<String> {
-        let mut strings = self.strings.0.string_list(list);
+        let mut strings = self.setup.strings.0.string_list(list);
         let at = index.checked_sub(1)?;
         (at < strings.len()).then(|| strings.swap_remove(at))
     }

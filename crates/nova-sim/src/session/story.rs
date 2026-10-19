@@ -374,7 +374,7 @@ impl Session {
     ) where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
-        let reentry = Reentry::from(self.rules.source_for(RuleKey::StoryReentry));
+        let reentry = Reentry::from(self.setup.rules.source_for(RuleKey::StoryReentry));
         let dropped = dispatch::settle(
             &mut SessionStage {
                 session: self,
@@ -686,10 +686,10 @@ impl Session {
     /// with them: the day drew those classes afresh already. By the other
     /// reading, nothing: a landing forgets the rolls instead.
     fn draw_day_rolls(&mut self, chance: &mut dyn Chance) {
-        if self.rules.source_for(RuleKey::DayRolls) != RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::DayRolls) != RuleSource::Engine {
             return;
         }
-        let buy_random = self.rules.source_for(RuleKey::BuyRandom);
+        let buy_random = self.setup.rules.source_for(RuleKey::BuyRandom);
         wares::draw_day(
             &mut self.hire_rolls,
             &mut self.ship_rolls,

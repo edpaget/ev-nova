@@ -199,7 +199,7 @@ impl Session {
     /// hold they make, empty by the other reading.
     pub(super) fn commodities_for_old_ship(&mut self) -> NpcHold {
         let mut hold = NpcHold::default();
-        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
             self.pilot.cargo.retain(|good, tons| match good {
                 Good::Commodity(commodity) if usize::from(*commodity) < NPC_COMMODITIES => {
                     hold.add(*commodity, *tons);
@@ -215,7 +215,7 @@ impl Session {
     /// of its own, by the engine reading of [`RuleKey::CaptureCargo`]
     /// (@0x41760-0x41779); by the other the captured hold is lost.
     pub(super) fn take_captured_commodities(&mut self, hold: &NpcHold) {
-        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
             for (good, tons) in hold.held() {
                 self.pilot.cargo.insert(good, tons);
             }
@@ -225,7 +225,7 @@ impl Session {
     /// Whether a person captured as an escort is gone for good, as
     /// [`RuleKey::CapturedPerson`] reads: by the engine it lives on.
     pub(super) fn escort_capture_loses_person(&self) -> bool {
-        self.rules.source_for(RuleKey::CapturedPerson) == RuleSource::Bible
+        self.setup.rules.source_for(RuleKey::CapturedPerson) == RuleSource::Bible
     }
 }
 

@@ -217,7 +217,7 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_odds_cache() {
     let catalog = reinforced();
     for source in RuleSource::ALL {
         let mut session = flying(&catalog);
-        session.rules =
+        session.setup.rules =
             crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, source);
         assert_eq!(session.world().odds_cache, source);
         let mut flown = None;
@@ -255,14 +255,14 @@ fn a_forced_call_reads_the_cache_and_needs_odds_above_0() {
 fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
-    session.rules =
+    session.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let warship = fight(&mut session, FED, 150.0);
     session.traffic.cache_odds(warship, STALE);
     session.call_for_reinforcements(warship, false, Some(STALE));
     assert_eq!(timer(&session), i32::from(TIME), "1.5 now, stale or not");
     let mut calm = flying(&catalog);
-    calm.rules =
+    calm.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let warship = fight(&mut calm, FED, 50.0);
     calm.traffic.cache_odds(warship, 0.0);
@@ -273,7 +273,7 @@ fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
         "forced at 0.5 now, cached at 0"
     );
     let mut alone = flying(&catalog);
-    alone.rules =
+    alone.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
     let lone = add(&mut alone, FED, 100.0, Goal::Idle);
     alone.traffic.cache_odds(lone, 1.5);
@@ -583,7 +583,7 @@ fn each_inhibitor_marks_the_call_with_no_fleet_no_timer_and_no_line() {
 fn comes_after_the_sale(source: RuleSource) -> bool {
     let catalog = reinforced();
     let mut session = flying(&catalog);
-    session.rules =
+    session.setup.rules =
         crate::rulebook::Rulebook::default().with_override(RuleKey::ReinforcementInhibitor, source);
     session.pilot.outfits.insert(JAMMER, 1);
     session.reset_precalced();

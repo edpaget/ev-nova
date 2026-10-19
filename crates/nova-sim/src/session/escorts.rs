@@ -249,7 +249,7 @@ impl Session {
         kept: &[KeptEscort],
         chance: &mut dyn Chance,
     ) {
-        if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
             }
@@ -662,7 +662,7 @@ impl Session {
         let Some(holds) = self.statics.trader_holds(ship) else {
             return;
         };
-        let counted = self.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
+        let counted = self.setup.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
         self.destroy_cargo_share(holds, counted);
     }
 
@@ -748,7 +748,7 @@ impl Session {
     fn released_holds(&self, id: NpcId) -> Option<i16> {
         let index = self.fleet.iter().position(|&placed| placed == Some(id))?;
         let ship = self.pilot.escorts.get(index)?.ship;
-        match self.rules.source_for(RuleKey::ReleaseCargoShare) {
+        match self.setup.rules.source_for(RuleKey::ReleaseCargoShare) {
             RuleSource::Engine => self
                 .statics
                 .ship_record(ship)
@@ -2114,6 +2114,7 @@ mod tests {
         for (reading, left) in [(RuleSource::Engine, kept), (RuleSource::Bible, shared)] {
             let session = laden(&catalog, trader_fleet(), RuleSource::Engine);
             let rules = session
+                .setup
                 .rules
                 .with_override(RuleKey::DeadlyStellarKill, reading);
             let mut session = session.with_rules(rules);
@@ -2148,6 +2149,7 @@ mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let session = laden(&catalog, trader_fleet(), RuleSource::Engine);
             let rules = session
+                .setup
                 .rules
                 .with_override(RuleKey::DeadlyStellarKill, reading);
             let mut session = session.with_rules(rules);

@@ -110,7 +110,7 @@ impl Session {
         self.pilot.galaxy.set_nebula_explored(nebula, true);
         self.galaxy.set_overlay(self.pilot.galaxy.clone());
         self.emit(SessionEvent::GalaxyChanged);
-        if self.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
+        if self.setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
             self.pilot.story_fired.insert(nebula_hook(nebula));
             self.save_due = true;
         }
@@ -144,7 +144,7 @@ impl Session {
     /// every other: a new pilot's, by the engine's reading of
     /// [`RuleKey::NebulaNewPilot`] (see the module docs).
     pub(super) fn withdraw_new_pilot_explored(&mut self) {
-        if self.rules.source_for(RuleKey::NebulaNewPilot) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::NebulaNewPilot) == RuleSource::Engine {
             self.withdraw_raised(StoryEventKind::Explored);
         }
     }

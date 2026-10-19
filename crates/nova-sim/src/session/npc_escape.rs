@@ -255,7 +255,7 @@ impl Session {
         let Some(launched) = launched else {
             return;
         };
-        let cut = match self.rules.source_for(RuleKey::EscapeShipCut) {
+        let cut = match self.setup.rules.source_for(RuleKey::EscapeShipCut) {
             RuleSource::Engine => match launched {
                 Some(_) => self
                     .traffic

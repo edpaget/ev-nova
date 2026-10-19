@@ -188,7 +188,7 @@ impl Session {
             Some(dead) if site.destroyed => Some(dead),
             _ if site.destroyed
                 && self.rebuilt.dead(site.id)
-                && self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
+                && self.setup.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
             {
                 self.statics.fallback_frame
             }
@@ -214,7 +214,11 @@ impl Session {
             frame: self.rebuilt.shows_frame(site.id),
             type_width: self.rebuilt.type_width(site),
         };
-        landing_reach(site, shown, self.rules.source_for(RuleKey::LandingDistance))
+        landing_reach(
+            site,
+            shown,
+            self.setup.rules.source_for(RuleKey::LandingDistance),
+        )
     }
 
     /// The width each hypergate and wormhole shown takes its entry box
@@ -246,10 +250,14 @@ impl Session {
             self.combat.explode(site.position, explosion);
         }
         self.strength.remove(&stellar);
-        if wreck::destroys(&life, self.rules.source_for(RuleKey::DestroyInvincible)) {
+        if wreck::destroys(
+            &life,
+            self.setup.rules.source_for(RuleKey::DestroyInvincible),
+        ) {
             let countdown = wreck::countdown_on_destroy(&life);
             self.set_stellar_state(stellar, Some(countdown));
-            if !destroyed_before && self.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
+            if !destroyed_before
+                && self.setup.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
             {
                 self.run_on_destroy(stellar, &life.on_destroy, chance);
             }
@@ -410,7 +418,7 @@ impl Session {
     /// reading an invincible one starts whole, as `_StellarIsDestroyed`
     /// holds it.
     pub(super) fn destroy_from_the_start(&mut self) {
-        let reading = self.rules.source_for(RuleKey::DestroyInvincible);
+        let reading = self.setup.rules.source_for(RuleKey::DestroyInvincible);
         let ruined: Vec<_> = self
             .statics
             .lives

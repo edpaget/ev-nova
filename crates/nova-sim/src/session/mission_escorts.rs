@@ -686,7 +686,7 @@ mod tests {
         catalog.ship_records[1].inherent_ai = inherent;
         catalog.ship_records[1].fields.holds = 10;
         let mut session = accepted(&catalog);
-        session.rules = Rulebook::default().with_override(RuleKey::LostCargoShare, source);
+        session.setup.rules = Rulebook::default().with_override(RuleKey::LostCargoShare, source);
         take_off(&mut session, &catalog);
         assert_eq!(mission_escorts(&session).len(), 2);
         session.pilot.cargo = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
@@ -733,7 +733,8 @@ mod tests {
             (RuleSource::Bible, shared, 1),
         ] {
             let mut session = laden(1, RuleSource::Engine);
-            session.rules = session
+            session.setup.rules = session
+                .setup
                 .rules
                 .with_override(RuleKey::DeadlyStellarKill, reading);
             assert_eq!(slots(&session), [(2, 3), (3, 3)]);
@@ -1242,7 +1243,7 @@ mod tests {
             let mut catalog = ships_catalog(escorting(-6, 0));
             catalog.ship_records[1].escort_type = 0;
             let mut session = accepted(&catalog);
-            session.rules = Rulebook::default().with_override(RuleKey::FighterRecall, source);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::FighterRecall, source);
             take_off(&mut session, &catalog);
             assert!(
                 mission_escorts(&session)
@@ -1602,7 +1603,7 @@ mod tests {
         ] {
             let catalog = ships_catalog(escorting(-6, 0));
             let mut session = accepted(&catalog);
-            session.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
             session.pilot.escorts.push(hired());
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack);
@@ -1643,7 +1644,7 @@ mod tests {
         ] {
             let catalog = ships_catalog(escorting(-6, 0));
             let mut session = accepted(&catalog);
-            session.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack);
             jump_to(&mut session, &catalog, 131);
@@ -1655,7 +1656,8 @@ mod tests {
     fn a_class_command_keeps_only_its_classs_order_across_a_jump() {
         let catalog = ships_catalog(escorting(-6, 0));
         let mut session = accepted(&catalog);
-        session.rules = Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible);
+        session.setup.rules =
+            Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible);
         take_off(&mut session, &catalog);
         let class = mission_escorts(&session)[0].class;
         let other = EscortClass::ALL

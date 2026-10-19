@@ -96,7 +96,7 @@ impl Session {
     /// showed it, as [`RuleKey::UndisplayedShips`]' engine reading has it,
     /// or always by the other reading (see the module docs).
     pub(super) fn is_displayed(&self, ship: ShipRef, slot: Slot) -> bool {
-        self.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
+        self.setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
             || self.slot_shown.get(&slot) == Some(&ship)
     }
 
@@ -127,7 +127,7 @@ impl Session {
     /// shown or hidden, as [`RuleKey::UndisplayedShips`]' engine reading
     /// has it, or always by the other reading.
     pub(super) fn is_laid_out(&self, ship: ShipRef, slot: Slot) -> bool {
-        self.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
+        self.setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Bible
             || self.slot_placed.get(&slot) == Some(&ship)
     }
 

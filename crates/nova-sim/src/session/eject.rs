@@ -299,7 +299,7 @@ impl Session {
                 reserves.armor.now = f32::from(fields.armor);
             }
         }
-        if self.rules.source_for(RuleKey::EjectVelocity) == RuleSource::Engine {
+        if self.setup.rules.source_for(RuleKey::EjectVelocity) == RuleSource::Engine {
             let velocity = &mut self.player.velocity;
             velocity.x = velocity.y;
         }

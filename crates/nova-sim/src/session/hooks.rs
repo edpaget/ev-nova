@@ -93,7 +93,7 @@ impl Session {
     /// The rules the hooks follow, projected from the session's rule set
     /// ([`Session::with_rules`]).
     pub(super) fn hook_rules(&self) -> HookRules {
-        HookRules::from_rulebook(&self.rules)
+        HookRules::from_rulebook(&self.setup.rules)
     }
 
     /// Runs `script` on the session (see the module docs), drawing
@@ -189,7 +189,12 @@ impl Session {
             // `OnStart`: the `chär`'s statuses spread (see the `legal`
             // module). By the Bible, `Pilot::new` and the flight's
             // derivation already keep each with its own government.
-            if self.rules.source_for(crate::RuleKey::CharacterStatusSpread) == RuleSource::Engine {
+            if self
+                .setup
+                .rules
+                .source_for(crate::RuleKey::CharacterStatusSpread)
+                == RuleSource::Engine
+            {
                 crate::legal::spread_statuses(
                     &mut self.pilot,
                     self.galaxy.governed(),

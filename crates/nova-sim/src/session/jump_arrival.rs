@@ -47,7 +47,7 @@ impl Session {
         at: SystemId,
     ) -> ShipPlacement {
         let map = |id| self.galaxy.position(id).unwrap_or_default();
-        match self.rules.source_for(RuleKey::JumpArrival) {
+        match self.setup.rules.source_for(RuleKey::JumpArrival) {
             RuleSource::Engine => {
                 let (ship, speed) = top_speed_arrival(
                     map(departure),
