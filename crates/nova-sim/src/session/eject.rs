@@ -429,7 +429,9 @@ impl Session {
 
     /// Every NPC that targets, fights or inspects the player lets it go
     /// and decides again, as the pod's loop clears each +0x70 of 0
-    /// (@0x6f67d-0x6f6a9).
+    /// (@0x6f67d-0x6f6a9). The loop writes no +0x96, so each keeps its
+    /// provocation, as the high level's goal-0 drop of an attack with no
+    /// target does (@0x8e731).
     fn drop_the_player(&mut self) {
         let player = ShipRef::Player;
         for npc in self.traffic.npcs_mut() {
@@ -438,7 +440,6 @@ impl Session {
             }
             if npc.goal.quarry() == Some(player) || npc.goal.inspecting() == Some(player) {
                 npc.goal = Goal::Idle;
-                npc.provoked = 0.0;
             }
         }
     }
@@ -1392,12 +1393,13 @@ mod tests {
                 npc(attacker).goal,
                 npc(attacker).provoked
             ),
-            (None, Goal::Idle, 0.0)
+            (None, Goal::Idle, 5.0),
+            "the pod's loop writes +0x70 alone (@0x6f67d-0x6f6a9)"
         );
         assert_eq!(npc(aiming).target, None);
         assert_eq!(
             (npc(inspector).goal, npc(inspector).provoked),
-            (Goal::Idle, 0.0),
+            (Goal::Idle, 3.0),
             "the inspection given up"
         );
         assert_eq!(

@@ -1688,6 +1688,86 @@ mod tests {
         assert_eq!(spared.provoked, 5.0);
     }
 
+    /// The pirate (NPC 0) provoked by `provoked`, with a second ship of
+    /// its own class beside it, then bribed: the session, and the second
+    /// ship.
+    fn bribed_beside_another(catalog: &FakePilotCatalog, provoked: f32) -> (Session, NpcId) {
+        let mut session = pirate(catalog, PIRATES);
+        let mut other = session.npcs()[0].clone();
+        other.govt = None;
+        other.goal = Goal::Idle;
+        other.target = None;
+        other.state.position.x += 200.0;
+        let other = session.traffic.add_npc(other);
+        npc(&mut session).provoked = provoked;
+        npc(&mut session).target = Some(ShipRef::Npc(other));
+        hail(&mut session, catalog);
+        session
+            .answer(1, catalog, &HailOptions::default(), &mut Draws::of(&[99]))
+            .expect("open");
+        haggle(&mut session, catalog, Haggle::Accept);
+        (session, other)
+    }
+
+    /// `by` hits NPC 0 for no damage, answered.
+    fn hit_for_nothing(session: &mut Session, by: NpcId) {
+        session.strikes.push(Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: Some(ShipRef::Npc(by)),
+            damage: 0.0,
+            downed: None,
+            direct: true,
+            intended: true,
+            lock: false,
+            nominal: crate::combat::Nominal::default(),
+            weight: 0.0,
+            answered: true,
+        });
+    }
+
+    /// Whether NPC 0's distress call is on the line.
+    fn calls_for_help(session: &mut Session) -> bool {
+        session.traffic.take_on_line().iter().any(|work| {
+            matches!(
+                work,
+                crate::traffic::on_line::OnLine::Call(NpcId(0), crate::ai::CommCall::Distress, _)
+            )
+        })
+    }
+
+    #[test]
+    fn a_provoked_ship_bribed_then_hit_for_no_damage_by_an_npc_flees_it_and_calls_for_help() {
+        // `_DamageShip` sets +0x70 on any hit (@0x3bcf6) and adds to +0x96
+        // only above 0 (@0x3bcc0-0x3bcf0); `_WimpyTraderAI` then flees a
+        // live target while +0x96 is above 0, its leader not the player
+        // (@0x8b1ac-0x8b1d8: goal 3), and calls for help (@0x8b1f5).
+        let catalog = hailable();
+        let (mut session, attacker) = bribed_beside_another(&catalog, 5.0);
+        decide(&mut session, &catalog, 3, |npc| {
+            assert_eq!((npc.goal, npc.target), (Goal::JumpOut, None));
+            assert_eq!(npc.provoked, 5.0, "kept through the leave");
+        });
+        assert!(!calls_for_help(&mut session));
+        hit_for_nothing(&mut session, attacker);
+        decide(&mut session, &catalog, 1, |npc| {
+            assert_eq!(npc.goal, Goal::Flee(ShipRef::Npc(attacker)));
+            assert_eq!(npc.provoked, 5.0);
+        });
+        assert!(calls_for_help(&mut session), "its distress call");
+    }
+
+    #[test]
+    fn an_unprovoked_ship_bribed_then_hit_for_no_damage_keeps_leaving() {
+        let catalog = hailable();
+        let (mut session, attacker) = bribed_beside_another(&catalog, 0.0);
+        decide(&mut session, &catalog, 3, |_| {});
+        hit_for_nothing(&mut session, attacker);
+        decide(&mut session, &catalog, 1, |npc| {
+            assert_eq!((npc.goal, npc.provoked), (Goal::JumpOut, 0.0));
+        });
+        assert!(!calls_for_help(&mut session));
+    }
+
     #[test]
     fn a_bribe_paid_spares_the_player_for_the_rest_of_the_ships_stay() {
         let catalog = hailable();
