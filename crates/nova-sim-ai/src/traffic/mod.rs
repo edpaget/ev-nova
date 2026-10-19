@@ -1070,7 +1070,7 @@ impl Traffic {
             .zip(due)
             .map(|(npc, &due)| {
                 due.then(|| {
-                    let high = plunder::high_level(npc, &around);
+                    let high = plunder::high_level(npc, &around, rules.inertial_dampener);
                     let pursuit = if high == HighLevel::Fights {
                         pursuit::step(npc, &around, rules, &mut *chance)
                     } else {

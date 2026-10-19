@@ -11,7 +11,10 @@
 //!   left, it gives up (goal 0, sub 0, target and nav -1, @0x8e88f-0x8e8b9);
 //!   otherwise nav = target and, within [`dock_box`] of the victim on both
 //!   axes, inclusive, it docks (sub 0xf); within twice the box it closes
-//!   (sub 0xb); farther off it approaches (sub 9). A pirate's every-tick
+//!   (sub 0xb); farther off it approaches (sub 9). An inertialess ship's
+//!   box ([`Npc::flies_inertialess`]) is [`INERTIALESS_BOX`] times as wide
+//!   (@0x8e8f6-0x8e916). The original then takes the box as a 16-bit word
+//!   (`movswl` @0x8e91b), which isn't replicated. A pirate's every-tick
 //!   think finds a boarded victim boarded first (see
 //!   [`pirate`](crate::ai::pirate)), so the give-up never runs for one.
 //! - **Approach and close** (subs 9 and 0xb, [`DockSub::Approach`],
@@ -35,24 +38,28 @@
 //!     @0x86b3d-0x86ba0) and thrusts within its turn and
 //!     [`THRUST_SLACK`]; with the difference at most [`DAMP_BELOW`] on
 //!     either axis, it is cut to [`DAMPING`] of itself and the velocity set
-//!     to the victim's plus it (@0x86c08-0x86cb2).
+//!     to the victim's plus it (@0x86c08-0x86cb2). An inertialess ship
+//!     matching instead takes a tick's acceleration off its speed
+//!     ([`Npc::speed`]), down to none and not capped at its top speed, with
+//!     no turn, thrust or damping (@0x86aaa-0x86b38); its velocity follows
+//!     its heading at that speed as it flies.
 //!   - **Aligned** (@0x86cb7): it wants the victim's heading and takes its
 //!     velocity. Outside [`DOCKED_BOX`] on either axis it creeps a pixel a
-//!     tick towards it (@0x8700f-0x87095). Inside: while its AI wait is
-//!     above [`DOCK_WAIT`] it holds; above none, under goal 0xd it would
-//!     plunder ([`DockOutcome::Completed`], @0x86f3c-0x86f93: never reached
-//!     by a pirate, whose think turns a boarded victim's plunder into goal
-//!     4 first), under goal 4 nothing; at none, unless drifting (goal 0xe),
-//!     it starts the dock (@0x86fa4-0x8700a): the victim boarded, its AI
-//!     wait [`DOCK_WAIT`] + `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the
-//!     victim's ([`DockOutcome::Started`]).
+//!     tick towards it, its speed zeroed, inertialess or not
+//!     (@0x8700f-0x87095, @0x8702d). Inside, its speed is left alone:
+//!     while its AI wait is above [`DOCK_WAIT`] it holds; above none, under
+//!     goal 0xd it would plunder ([`DockOutcome::Completed`],
+//!     @0x86f3c-0x86f93: never reached by a pirate, whose think turns a
+//!     boarded victim's plunder into goal 4 first), under goal 4 nothing;
+//!     at none, unless drifting (goal 0xe), it starts the dock
+//!     (@0x86fa4-0x8700a): the victim boarded, its AI wait [`DOCK_WAIT`] +
+//!     `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the victim's
+//!     ([`DockOutcome::Started`]).
 //! - While its AI wait runs `_HandleShip` skips its turn and thrust
 //!   (@0x34a54-0x34a72): it moves on at the velocity the substate left it.
 //!
-//! Left out, each owned elsewhere: the inertialess branch of sub 0xf
-//! (@0x86aaa-0x86b38) and the inertialess box ×4 (@0x8e8f6-0x8e916) are
-//! rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit's;
-//! sub 0xb's formation branch (@0x87364-0x873a3) is
+//! Left out, each owned elsewhere: sub 0xb's formation branch
+//! (@0x87364-0x873a3) is
 //! rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's; the repair
 //! half of sub 0xf (the completion under goal 0xf, @0x86d84-0x86f37) is
 //! rdm:phase/combat-ai-fidelity/phase-19-left-out-of-phase-10's. Nothing
@@ -65,6 +72,7 @@ use crate::combat::ShipRef;
 use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::inertialess::InertialDampener;
 use crate::traffic::autopilot::{self, steer};
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
@@ -112,6 +120,9 @@ pub const CREEP: f32 = 1.0;
 pub const DOCK_WAIT: u32 = 100;
 /// `Rand(80)`: the spread of the dock's wait.
 pub const DOCK_WAIT_SPREAD: u16 = 80;
+/// How many times the docking box an inertialess ship's is (`leal
+/// (,%ebx,4)` @0x8e904).
+pub const INERTIALESS_BOX: i32 = 4;
 
 /// The docking a pirate keeps from tick to tick: the ship it docks with
 /// (its nav, +0x6c) and the substate it flies (+0xc8ca).
@@ -155,15 +166,24 @@ pub enum DockStep {
 }
 
 /// The high level of `npc`'s plunder of a disabled victim at `victim`,
-/// `boarded` saying whether the victim is boarded (see the module docs).
+/// `boarded` saying whether the victim is boarded, its box
+/// [`INERTIALESS_BOX`] times as wide when it flies inertialess, a
+/// dampener counting as `rule` says (see the module docs).
 #[must_use]
-pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool) -> DockStep {
+pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool, rule: InertialDampener) -> DockStep {
     if boarded && npc.ai_wait == 0 {
         return DockStep::GiveUp;
     }
+    let side = dock_box(npc.hull.class_turn);
+    // `_ShipIsInertialess` with no leader: a plunder is no formation.
+    let side = if npc.flies_inertialess(None, rule) {
+        side * INERTIALESS_BOX
+    } else {
+        side
+    };
     // f32: the box is converted back to a float for the test.
     #[allow(clippy::cast_precision_loss)]
-    let side = dock_box(npc.hull.class_turn) as f32;
+    let side = side as f32;
     let off = npc.state.position - victim;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
     DockStep::Sub(if within(side) {
@@ -208,9 +228,10 @@ pub fn fly(
     let Some(docking) = npc.docking else {
         return DockOutcome::Flying;
     };
+    let inertia = Inertia::of(npc, Some(victim), flight);
     let (controls, flown, outcome) = match docking.sub {
         DockSub::Dock => {
-            let (controls, outcome) = dock(npc, docking.ship, victim, handling, chance);
+            let (controls, outcome) = dock(npc, (docking.ship, victim), handling, inertia, chance);
             (controls, *handling, outcome)
         }
         sub => {
@@ -218,7 +239,6 @@ pub fn fly(
             (controls, flown, DockOutcome::Flying)
         }
     };
-    let inertia = Inertia::of(npc, Some(victim), flight);
     if npc.ai_wait > 0 {
         match inertia {
             Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
@@ -276,17 +296,27 @@ fn approach(
     (controls, flown)
 }
 
-/// Sub 0xf (see the module docs): the controls, and what became of the
-/// docking, its velocity and AI wait set as the substate sets them.
+/// Sub 0xf (see the module docs) of a docking with `ship` at `victim`,
+/// flown as `inertia` says: the controls, and what became of the docking,
+/// its velocity, speed and AI wait set as the substate sets them.
 fn dock(
     npc: &mut Npc,
-    ship: ShipRef,
-    victim: &ShipState,
+    (ship, victim): (ShipRef, &ShipState),
     handling: &Handling,
+    inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) -> (Controls, DockOutcome) {
     let gap = npc.state.velocity - victim.velocity;
     let matching = |axis: f32| f64::from(axis.abs()) >= MATCH_SLACK;
+    if (matching(gap.x) || matching(gap.y)) && matches!(inertia, Inertia::Inertialess { .. }) {
+        // A tick's acceleration off its speed, down to none and not capped
+        // at its top speed, in doubles (@0x86aee-0x86b33); no thrust, cap
+        // or heading (@0x86ac8-0x86acd).
+        #[allow(clippy::cast_possible_truncation)]
+        let speed = (f64::from(npc.speed) - f64::from(handling.accel)).max(0.0) as f32;
+        npc.speed = speed;
+        return (Controls::default(), DockOutcome::Flying);
+    }
     if matching(gap.x) || matching(gap.y) {
         let against = trig::intercept_angle(Vec2::ZERO, gap * 100.0);
         let wanted = (i32::from(against) + 180).rem_euclid(360);
@@ -320,6 +350,8 @@ fn dock(
     npc.state.velocity = victim.velocity;
     let off = npc.state.position - victim.position;
     if off.x.abs() > DOCKED_BOX || off.y.abs() > DOCKED_BOX {
+        // The creep zeroes +0x48 for any ship (@0x8702d).
+        npc.speed = 0.0;
         let towards = trig::intercept_angle(npc.state.position, victim.position);
         npc.state.position = npc.state.position + flight::facing(f32::from(towards)) * CREEP;
         return (controls, DockOutcome::Flying);
@@ -344,6 +376,7 @@ mod tests {
     use super::*;
     use crate::combat::NpcId;
     use crate::combat::hull::class_turn;
+    use crate::inertialess::InertialDampener;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use nova_sim_base::fixture::{Draws, FAST, Scripted};
@@ -395,6 +428,7 @@ mod tests {
                 &pirate(at(x, y, 0.0, 0.0, 0.0), DockSub::Approach),
                 Vec2::ZERO,
                 false,
+                InertialDampener::PlayerOnly,
             )
         };
         assert_eq!(step(210.0, -210.0), DockStep::Sub(DockSub::Dock));
@@ -408,15 +442,18 @@ mod tests {
     #[test]
     fn the_high_level_gives_up_on_a_boarded_victim_only_once_its_wait_is_out() {
         let mut ship = pirate(at(0.0, 0.0, 0.0, 0.0, 0.0), DockSub::Dock);
-        assert_eq!(high_level(&ship, Vec2::ZERO, true), DockStep::GiveUp);
+        assert_eq!(
+            high_level(&ship, Vec2::ZERO, true, InertialDampener::PlayerOnly),
+            DockStep::GiveUp
+        );
         ship.ai_wait = 1;
         assert_eq!(
-            high_level(&ship, Vec2::ZERO, true),
+            high_level(&ship, Vec2::ZERO, true, InertialDampener::PlayerOnly),
             DockStep::Sub(DockSub::Dock)
         );
         ship.ai_wait = 0;
         assert_eq!(
-            high_level(&ship, Vec2::ZERO, false),
+            high_level(&ship, Vec2::ZERO, false, InertialDampener::PlayerOnly),
             DockStep::Sub(DockSub::Dock)
         );
     }
@@ -655,6 +692,7 @@ mod tests {
                 &pirate(at(x, y, 0.0, 0.0, 0.0), DockSub::Approach),
                 victim,
                 false,
+                InertialDampener::PlayerOnly,
             )
         };
         assert_eq!(step(1210.0, -790.0), DockStep::Sub(DockSub::Dock));
@@ -815,6 +853,113 @@ mod tests {
             &[0],
         );
         assert_eq!(outcome, DockOutcome::Flying, "outside 3");
+    }
+
+    /// `ship` on an inertialess hull ([`FAST`]'s, `Flags2` 0x0040).
+    fn inertialess(mut ship: Npc) -> Npc {
+        ship.stats = ShipStats::new(
+            crate::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        ship
+    }
+
+    #[test]
+    fn an_inertialess_pirate_matching_sheds_a_ticks_acceleration_off_its_speed_with_no_turn_thrust_or_damping()
+     {
+        use crate::inertialess::{ADJUST_RATE, adjust_velocity};
+        use crate::traffic::ship_display::Thrust;
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // 2 apart going down, facing across: an inertial one would damp
+        // the gap and turn to 0.
+        let start = at(50.0, 0.0, 0.0, 2.0, 90.0);
+        let matched = |speed: f32| {
+            let mut ship = inertialess(pirate(start, DockSub::Dock));
+            ship.speed = speed;
+            let (ship, outcome) = flown(ship, &victim, &[]);
+            assert_eq!(outcome, DockOutcome::Flying);
+            assert_eq!(ship.state.heading, 90.0, "no turn");
+            assert_eq!(ship.display.drive.thrust, Thrust::None);
+            let velocity = adjust_velocity(
+                start.velocity,
+                90.0,
+                ship.speed,
+                HANDLING.accel * ADJUST_RATE,
+            );
+            assert_eq!(ship.state.velocity, velocity, "no damping");
+            ship.speed
+        };
+        assert_eq!(matched(1.0), 0.5);
+        assert_eq!(matched(0.1), 0.0, "floored");
+        assert_eq!(matched(7.0), 6.5, "not capped at its top speed of 4");
+        assert_eq!(matched(0.0), 0.0);
+    }
+
+    #[test]
+    fn aligned_outside_3_its_speed_is_zeroed_as_it_creeps() {
+        let victim = at(0.0, 0.0, 0.5, 0.0, 12.7);
+        for ship in [
+            pirate(at(0.0, 10.0, 0.5, 0.2, 10.0), DockSub::Dock),
+            inertialess(pirate(at(0.0, 10.0, 0.5, 0.2, 10.0), DockSub::Dock)),
+        ] {
+            let (crept, _) = flown(
+                Npc {
+                    speed: 2.0,
+                    ..ship.clone()
+                },
+                &victim,
+                &[],
+            );
+            assert_eq!(crept.speed, 0.0, "@0x8702d");
+            // Inside 3 the dock starts and leaves its speed alone
+            // (@0x86fa4-0x8700a).
+            let inside = Npc {
+                speed: 2.0,
+                state: at(3.0, -3.0, 0.5, 0.0, 0.0),
+                ..ship
+            };
+            let (docked, outcome) = flown(inside, &victim, &[0]);
+            assert!(matches!(outcome, DockOutcome::Started { .. }));
+            assert_eq!(docked.speed, 2.0);
+        }
+    }
+
+    #[test]
+    fn an_inertialess_pirate_docks_within_four_times_the_box_and_closes_within_eight() {
+        let step = |ship: &Npc, x: f32, y: f32| {
+            let ship = Npc {
+                state: at(x, y, 0.0, 0.0, 0.0),
+                ..ship.clone()
+            };
+            high_level(&ship, Vec2::ZERO, false, InertialDampener::PlayerOnly)
+        };
+        let raven = inertialess(pirate(ShipState::default(), DockSub::Approach));
+        assert_eq!(step(&raven, 840.0, -840.0), DockStep::Sub(DockSub::Dock));
+        assert_eq!(step(&raven, 841.0, 0.0), DockStep::Sub(DockSub::Close));
+        assert_eq!(step(&raven, 1680.0, 0.0), DockStep::Sub(DockSub::Close));
+        assert_eq!(step(&raven, 1681.0, 0.0), DockStep::Sub(DockSub::Approach));
+        let plain = pirate(ShipState::default(), DockSub::Approach);
+        assert_eq!(step(&plain, 210.0, 0.0), DockStep::Sub(DockSub::Dock));
+        assert_eq!(step(&plain, 211.0, 0.0), DockStep::Sub(DockSub::Close));
+        assert_eq!(step(&plain, 421.0, 0.0), DockStep::Sub(DockSub::Approach));
+        // A dampener counts by the Bible's reading.
+        let mut dampened = plain.clone();
+        dampened.stats.dampener = true;
+        assert_eq!(
+            step(&dampened, 840.0, 0.0),
+            DockStep::Sub(DockSub::Approach)
+        );
+        let ship = Npc {
+            state: at(840.0, 0.0, 0.0, 0.0, 0.0),
+            ..dampened
+        };
+        assert_eq!(
+            high_level(&ship, Vec2::ZERO, false, InertialDampener::AnyShip),
+            DockStep::Sub(DockSub::Dock)
+        );
     }
 
     #[test]

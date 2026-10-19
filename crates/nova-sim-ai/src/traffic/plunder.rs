@@ -57,6 +57,7 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::{self, FlightRules, ShipState};
+use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
 use crate::traffic::autopilot::TopSpeeds;
@@ -116,9 +117,10 @@ pub enum HighLevel {
 }
 
 /// What `npc`'s high level does this think among `around` (see the module
-/// docs).
+/// docs), counting a dampener as `rule` says
+/// ([`RuleKey::InertialDampener`](crate::RuleKey::InertialDampener)).
 #[must_use]
-pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
+pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> HighLevel {
     if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift) {
         return HighLevel::Skipped;
     }
@@ -137,7 +139,7 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
     };
     HighLevel::Docks {
         ship,
-        step: plunder_dock::high_level(npc, at.position, boarded),
+        step: plunder_dock::high_level(npc, at.position, boarded, rule),
     }
 }
 
