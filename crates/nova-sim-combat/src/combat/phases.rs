@@ -172,27 +172,51 @@ impl Combat {
         arena: Arena<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.field = arena.field;
-        self.note_slots(fighters);
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        let mut order: Vec<usize> = (0..fighters.len())
-            .filter(|&index| fighters[index].ship != ShipRef::Player)
+        let mut order: Vec<(Slot, ShipRef)> = fighters
+            .iter()
+            .filter(|fighter| fighter.ship != ShipRef::Player)
+            .map(|fighter| (fighter.slot, fighter.ship))
             .collect();
-        order.sort_by_key(|&index| fighters[index].slot);
-        let rule = arena.rules.disable;
+        order.sort_by_key(|&(slot, _)| slot);
         // The player's display ran before the collision passes.
         let mut shown = vec![ShipRef::Player];
-        for index in order {
-            let fighter = &mut fighters[index];
-            fighter.armament.reload();
-            regenerate(fighter, rule);
-            let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-            self.fire_one(&mut fighters[index], &targets, chance);
-            fighters[index].condition.count_down();
-            self.display(fighters, index, rule, &shown);
-            shown.push(fighters[index].ship);
+        for (_, ship) in order {
+            self.handle_npc(fighters, arena, ship, &mut shown, chance);
         }
+    }
+
+    /// Step 6 for one NPC, `ship` among `fighters`, as
+    /// [`Combat::handle_npcs`] runs it at its slot, the ships in `shown`
+    /// displayed before it this pass (the player first), to which it is
+    /// added once displayed: its reloads, regeneration and fire, its death
+    /// timer's tick, and its display, its wreck's shockwave striking at
+    /// once. The session runs it at each NPC's slot, right after that
+    /// NPC's flight (`nova_sim::Session::ship_loop`), keeping `shown`
+    /// across the calls. Nothing happens for a ship not among `fighters`.
+    pub fn handle_npc(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        ship: ShipRef,
+        shown: &mut Vec<ShipRef>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.field = arena.field;
+        self.note_slots(fighters);
+        let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
+            return;
+        };
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let rule = arena.rules.disable;
+        let fighter = &mut fighters[index];
+        fighter.armament.reload();
+        regenerate(fighter, rule);
+        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        self.fire_one(&mut fighters[index], &targets, chance);
+        fighters[index].condition.count_down();
+        self.display(fighters, index, rule, shown);
+        shown.push(ship);
     }
 
     /// Step 5, `_HandleShot` (@0x44385): first its loop visits the slots

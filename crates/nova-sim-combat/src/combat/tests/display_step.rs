@@ -216,3 +216,42 @@ fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
     );
     assert_eq!(combat.take_displays(), [], "taken");
 }
+
+#[test]
+fn stepping_each_npc_by_slot_matches_the_whole_loop() {
+    // The session steps each NPC at its own slot, after its flight
+    // (`nova_sim::Session::ship_loop`), keeping the ships shown: the same
+    // fight as the loop over every NPC.
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = arena(&arsenal, &govts);
+    let ships = || {
+        let mut wreck = wreck(WRECK, 200.0, 0.0, 0.0);
+        wreck.slot = Slot::Berth(5);
+        let lower = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+        let mut higher = holding(7, -40.0, 0.0, 100.0, 300.0, 300.0);
+        higher.shield_regen = 1.0;
+        [higher, lower, wreck]
+    };
+    let read = |ships: &[Ship]| {
+        ships
+            .iter()
+            .map(|ship| (ship.condition, ship.reserves, ship.state))
+            .collect::<Vec<_>>()
+    };
+    let mut whole = ships();
+    let mut loop_combat = Combat::default();
+    let mut fighters: Vec<Fighter> = whole.iter_mut().map(Ship::fighter).collect();
+    loop_combat.handle_npcs(&mut fighters, arena, &mut NeverFires);
+    drop(fighters);
+    let mut each = ships();
+    let mut each_combat = Combat::default();
+    let mut shown = vec![ShipRef::Player];
+    for ship in [A, WRECK, ShipRef::Npc(NpcId(7))] {
+        let mut fighters: Vec<Fighter> = each.iter_mut().map(Ship::fighter).collect();
+        each_combat.handle_npc(&mut fighters, arena, ship, &mut shown, &mut NeverFires);
+    }
+    assert_eq!(read(&each), read(&whole));
+    assert_eq!(each_combat, loop_combat);
+    assert_eq!(shown, [ShipRef::Player, A, WRECK, ShipRef::Npc(NpcId(7))]);
+    assert_eq!(each[2].condition, Condition::Destroyed, "it went off");
+}
