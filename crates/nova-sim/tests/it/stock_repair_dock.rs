@@ -9,80 +9,23 @@
 //!   boards the player, repairs it once its dock's wait is done, and
 //!   drifts off, keeping its drift through its type AI's think.
 
-use crate::common;
+use crate::common::{opened, player, stock_npc};
 
-use nova_data::GameData;
-use nova_sim::ai::PlayerSide;
 use nova_sim::combat::ShipRef;
 use nova_sim::combat::armament::Arsenal;
-use nova_sim::flight::ShipState;
 use nova_sim::geometry::Vec2;
 use nova_sim::govt::Governments;
 use nova_sim::hail::Help;
-use nova_sim::traffic::npc::{AiType, Npc};
+use nova_sim::traffic::npc::Npc;
 use nova_sim::traffic::plunder::PirateEvent;
 use nova_sim::traffic::plunder_dock::DockSub;
 use nova_sim::traffic::repair_dock::repair_box;
-use nova_sim::traffic::table::kind;
 use nova_sim::traffic::{Traffic, World};
-use nova_sim::{Condition, Goal, GovtId, NovaAi, PilotCatalog, Rulebook, ShipId};
+use nova_sim::{Condition, Goal, GovtId, NovaAi, Rulebook, ShipId};
 use nova_sim_base::fixture::Draws;
 
 const FEDERATION: GovtId = GovtId(128);
 const SHUTTLE: ShipId = ShipId(128);
-
-fn opened() -> Option<GameData> {
-    let dir = common::nova_data()?;
-    Some(GameData::open(&dir, None).expect("the stock data opens"))
-}
-
-/// NPC `id` in berth `id`, of stock ship type `ship` and `govt`, at `at`,
-/// as the traffic builds its kind, of its class's AI type.
-fn stock_npc(
-    data: &GameData,
-    arsenal: &Arsenal,
-    id: u32,
-    (ship, govt): (ShipId, GovtId),
-    at: Vec2,
-) -> Npc {
-    let record = data
-        .ships()
-        .into_iter()
-        .find(|record| record.id == ship)
-        .expect("the ship type reads");
-    let kind = kind(&record, &data.outfits(), arsenal);
-    let mut npc = nova_sim::traffic::fixture::npc(id, kind.stats);
-    npc.berth = id;
-    npc.ship = ship;
-    npc.hull = kind.hull;
-    npc.armament = kind.armament;
-    npc.rounds = kind.rounds;
-    npc.holds = kind.holds;
-    npc.govt = Some(govt);
-    npc.ai_type = AiType::from_raw(record.inherent_ai);
-    npc.state.position = at;
-    npc
-}
-
-/// The player at the centre, at rest facing up, in `condition`.
-fn player(condition: Condition) -> PlayerSide {
-    PlayerSide {
-        state: ShipState::default(),
-        condition,
-        reserves: nova_sim::Reserves::full(100.0, 100.0, 100.0),
-        hull: nova_sim::combat::hull::HullSpec::default(),
-        handling: nova_sim::stats::ShipStats::default().handling,
-        rating: 0,
-        yardstick: 2,
-        untargetable: false,
-        blessing: nova_sim::rank::Blessing::NONE,
-        ship: ShipId(128),
-        combat_govt: None,
-        target: None,
-        class: nova_sim::escort::EscortClass::Freighter,
-        boarded: false,
-    }
-}
 
 #[test]
 fn a_stock_ship_repairing_the_disabled_player_docks_boards_repairs_and_drifts() {

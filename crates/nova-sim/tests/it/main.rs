@@ -40,6 +40,7 @@ mod stock_pirates;
 mod stock_plunder;
 mod stock_pursuit;
 mod stock_ranks;
+mod stock_refuel_dock;
 mod stock_reinforcements;
 mod stock_repair_dock;
 mod stock_scan;
