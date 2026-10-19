@@ -453,11 +453,22 @@ struct Monitor {
     name: Option<&'static str>,
 }
 
-/// As [`session`], on `monitor`, returning the warnings too.
+/// As [`session`], on `monitor`, returning the warnings too, running on
+/// Windows.
 fn session_on(
     store: &MemorySettings,
     monitor: &Monitor,
     events: &[WindowEvent],
+) -> (Vec<Option<FullscreenKind>>, Vec<String>) {
+    session_on_os(store, monitor, events, Os::Windows)
+}
+
+/// As [`session_on`], running on `os`.
+fn session_on_os(
+    store: &MemorySettings,
+    monitor: &Monitor,
+    events: &[WindowEvent],
+    os: Os,
 ) -> (Vec<Option<FullscreenKind>>, Vec<String>) {
     let mut window = FakeWindow::new();
     window.modes = monitor
@@ -471,7 +482,7 @@ fn session_on(
     window.monitor = monitor.name.map(str::to_owned);
     let data = data();
     let mut app = App::new(&window, Rc::clone(&data), start_screen(data))
-        .with_os(Os::Windows)
+        .with_os(os)
         .with_settings(keeper(store));
     app.restore_window(&mut window);
     let mut gpu = RecordingGpu::new();
@@ -515,6 +526,35 @@ fn fhd() -> VideoMode {
         height: 1080,
         refresh_millihertz: 60_000,
     }
+}
+
+#[test]
+fn on_macos_a_saved_exclusive_mode_reopens_in_the_native_space_and_quits_leaving_it_alone() {
+    let saved_kind = FullscreenSetting::Exclusive {
+        mode: fhd(),
+        monitor: Some("DELL U2720Q".to_owned()),
+    };
+    let store = MemorySettings::new();
+    let (mut seed, _) = SettingsKeeper::open(store.clone());
+    seed.change(GameSettings {
+        fullscreen: true,
+        fullscreen_kind: saved_kind.clone(),
+        ..GameSettings::default()
+    })
+    .expect("seeds");
+    let dell = Monitor {
+        modes: vec![fhd()],
+        name: Some("DELL U2720Q"),
+    };
+    let focus = [WindowEvent::FocusLost, WindowEvent::FocusGained];
+    assert_eq!(
+        session_on_os(&store, &dell, &focus, Os::MacOs),
+        (vec![BORDERLESS], vec![]),
+        "no display mode change on focus or exit, and no warning"
+    );
+    let (kept, _) = SettingsKeeper::open(store.clone());
+    assert!(kept.settings().fullscreen);
+    assert_eq!(kept.settings().fullscreen_kind, saved_kind, "not migrated");
 }
 
 #[test]

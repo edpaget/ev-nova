@@ -24,8 +24,12 @@
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
 //! - [`settings`]: the player's settings, sound and Hyperspace Effects,
 //!   and the one keeper that reads and saves them all.
+//! - [`startup`]: starting the game: where the `Nova Files` are (the
+//!   argument, `NOVA_DATA`, the remembered directory, the usual places or
+//!   the open panel), and where startup errors and warnings go (stderr,
+//!   the startup log and, without a terminal, an alert).
 //! - [`platform`]: the thin winit adapter: event translation, the window
-//!   port over a real window, and the event-loop runner.
+//!   port over a real window, the event-loop runner and the dialogs.
 //!
 //! With the `dev-tools` feature (`mise run dev`), `devtools` draws the
 //! developer tools overlay with egui. Without it, egui is not linked.
@@ -46,3 +50,4 @@ pub mod platform;
 pub mod rulebook;
 pub mod saves;
 pub mod settings;
+pub mod startup;

@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::prefs_fixture;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::config::Os;
 use nova::platform;
 use nova::settings::{
     FullscreenSetting, GameSettings, ScalingSetting, SettingsKeeper, game_settings,
@@ -234,6 +235,7 @@ fn seeded() -> MemorySettings {
             smoke_trails: true,
             weapon_effects: true,
             frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         })
         .expect("seeds");
     store
@@ -249,23 +251,30 @@ struct Harness {
 
 impl Harness {
     /// The game started over `store`, as `main` starts it: the settings
-    /// read through it start the audio core and the router.
+    /// read through it start the audio core and the router. It runs as on
+    /// Windows, whatever the host, so its monitor offers exclusive modes.
     fn new(store: &MemorySettings) -> Self {
         Self::with_table(store, SoundTable::ORIGINAL)
     }
 
+    /// The game started over `store` as [`Harness::new`] starts it, but
+    /// running on `os`.
+    fn on_os(store: &MemorySettings, os: Os) -> Self {
+        Self::build(store, SoundTable::ORIGINAL, false, os)
+    }
+
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
-        Self::build(store, table, false)
+        Self::build(store, table, false, Os::Windows)
     }
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
     fn on_main_menu(store: &MemorySettings) -> Self {
-        Self::build(store, SoundTable::ORIGINAL, true)
+        Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
     }
 
-    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool) -> Self {
+    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool, os: Os) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
@@ -291,6 +300,7 @@ impl Harness {
         };
         Self {
             app: App::new(&window, data, crate::common::appeared(screen))
+                .with_os(os)
                 .with_audio(core)
                 .with_settings(keeper),
             window,
@@ -1035,6 +1045,47 @@ fn after_a_fallback_launch_the_stock_dialog_saves_borderless_or_the_mode_picked(
     let (relaunched, warnings) = Harness::launched(&store);
     assert_eq!(warnings, Vec::<String>::new());
     assert_eq!(relaunched.window.fullscreen, [fhd], "reopens in the mode");
+}
+
+#[test]
+fn on_macos_a_saved_exclusive_mode_opens_native_fullscreen_and_the_picker_offers_only_it() {
+    let store = seeded();
+    let (mut keeper, _) = SettingsKeeper::open(store.clone());
+    let saved_kind = FullscreenSetting::Exclusive {
+        mode: mode(1920, 1080, 60_000),
+        monitor: Some(MONITOR.to_owned()),
+    };
+    let settings = GameSettings {
+        fullscreen: true,
+        fullscreen_kind: saved_kind.clone(),
+        ..keeper.settings()
+    };
+    keeper.change(settings).expect("seeds");
+    let mut harness = Harness::on_os(&store, Os::MacOs);
+    harness.app.restore_window(&mut harness.window);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new(), "quiet");
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Borderless)],
+        "the native Space"
+    );
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    assert_eq!(
+        harness.dialog().display().entries(),
+        [FullscreenKind::Borderless]
+    );
+    assert_eq!(
+        harness.dialog().display().selected(),
+        FullscreenKind::Borderless
+    );
+    harness.press(Key::Enter);
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Borderless)]
+    );
+    let (kept, _) = SettingsKeeper::open(store.clone());
+    assert_eq!(kept.settings().fullscreen_kind, saved_kind, "not migrated");
 }
 
 const NATIVE: Upscaler = Upscaler::Native;

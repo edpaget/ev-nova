@@ -1,5 +1,6 @@
-//! Where the player's settings and pilots are saved: pure functions of the
-//! target operating system and the environment, which the caller reads.
+//! Where the player's settings and pilots are saved, and where the startup
+//! log is written: pure functions of the target operating system and the
+//! environment, which the caller reads.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -53,6 +54,26 @@ pub fn settings_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<P
 /// `$HOME/Library/Application Support/nova/Pilots`.
 pub fn pilots_dir(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     Some(nova_dir(os, env)?.join(PILOTS_DIR))
+}
+
+/// The startup log's name, in the `nova` logs directory.
+pub const LOG_FILE: &str = "nova.log";
+
+/// The file each launch writes its startup errors and warnings to on `os`,
+/// or `None` where there is none yet, or when the variables it needs are
+/// unset (or empty). On macOS: `$HOME/Library/Logs/nova/nova.log`, where
+/// Console.app finds it. Windows and Linux add theirs with their platform
+/// roadmaps.
+pub fn log_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    match os {
+        Os::MacOs => {
+            let home = env("HOME").filter(|home| !home.is_empty())?;
+            let mut path = PathBuf::from(home);
+            path.extend(["Library", "Logs", "nova", LOG_FILE]);
+            Some(path)
+        }
+        Os::Windows | Os::Other => None,
+    }
 }
 
 /// The `nova` directory under the platform's configuration directory.
@@ -177,6 +198,23 @@ mod tests {
             assert_eq!(pilots_dir(os, env(&[])), None, "{os:?}");
         }
         assert_eq!(PILOTS_DIR, "Pilots");
+    }
+
+    #[test]
+    fn the_mac_startup_log_is_under_library_logs() {
+        let mut expected = PathBuf::from("/Users/p");
+        expected.extend(["Library", "Logs", "nova", "nova.log"]);
+        let vars = env(&[("HOME", "/Users/p"), ("XDG_CONFIG_HOME", "/xdg")]);
+        assert_eq!(log_path(Os::MacOs, vars), Some(expected));
+        assert_eq!(log_path(Os::MacOs, env(&[])), None);
+        assert_eq!(log_path(Os::MacOs, env(&[("HOME", "")])), None);
+    }
+
+    #[test]
+    fn elsewhere_there_is_no_startup_log_yet() {
+        let vars = || env(&[("HOME", "/home/p"), ("APPDATA", "C:/Roaming")]);
+        assert_eq!(log_path(Os::Windows, vars()), None);
+        assert_eq!(log_path(Os::Other, vars()), None);
     }
 
     #[test]

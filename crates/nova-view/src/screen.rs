@@ -7,6 +7,7 @@ use nova_sim::SimDiagnostic;
 
 use crate::draw::DrawList;
 use crate::input::Input;
+use crate::menu_command::MenuCommand;
 use crate::preferences::Prefs;
 use crate::scaling::Scaling;
 use crate::sound::Sound;
@@ -243,6 +244,20 @@ pub trait Screen {
     fn set_widened_size(&mut self, size: (f32, f32)) {
         let _ = size;
     }
+    /// The platform's menu bar picked `command`: what it did, as an input's
+    /// [`ScreenAction`] says. The app routes it as it routes an input,
+    /// skipping the developer overlay. Does nothing by default.
+    fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
+        let _ = command;
+        ScreenAction::None
+    }
+    /// Whether the menu bar offers `command` now, or greys it. The app asks
+    /// after each event and tells the menu bar of each change. `true` by
+    /// default.
+    fn menu_enabled(&self, command: MenuCommand) -> bool {
+        let _ = command;
+        true
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +433,21 @@ mod tests {
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn a_screen_takes_no_menu_command_and_enables_every_one_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        for command in MenuCommand::ALL {
+            assert!(screen.menu_enabled(command), "{command:?}");
+            assert_eq!(screen.menu_command(command), ScreenAction::None);
+        }
+        assert!(!screen.take_quit());
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
     }
 
     #[test]

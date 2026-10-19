@@ -4,7 +4,7 @@
 use nova_sim::VenueOffer;
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
-use nova_view::{Input, Key, MouseButton, Point, Screen, ScreenAction, Showing};
+use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
@@ -12,7 +12,7 @@ use super::port_dialogs::{
 };
 use nova_view::menu::MenuChoice;
 
-use super::{AppScreen, ENTERED, LANDED, MenuAction, PREFERENCES_KEY, Side};
+use super::{AppScreen, ENTERED, LANDED, MenuAction, Side, chord_command};
 
 impl AppScreen {
     /// The spaceport's input, all of it: the outfitter opening tells the
@@ -324,8 +324,8 @@ impl AppScreen {
             return false;
         };
         let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
-        let taken =
-            (key == PREFERENCES_KEY && self.command_held) || (key == Key::Char('p') && away);
+        let chord = chord_command(key) == Some(MenuCommand::Preferences);
+        let taken = (chord && self.command_held) || (key == Key::Char('p') && away);
         if !taken || self.dialogs.is_none() {
             return false;
         }
@@ -374,58 +374,84 @@ impl AppScreen {
         }
     }
 
-    /// The input to the overlay open in front, if any: what it did, or
-    /// `None` with none open. A mission dialog's map over flight is in
-    /// front of the dialogs it opened from, and places itself; every other
-    /// overlay takes the pointer moved back by
-    /// [`AppScreen::overlay_offset`], as it is drawn moved on by it.
-    fn overlay_input(&mut self, input: &Input) -> Option<ScreenAction> {
+    /// The overlay open in front, if any: the one [`AppScreen::route`]
+    /// gives every input to. A mission dialog's map over flight is in
+    /// front of the mission dialogs it opened from.
+    fn overlay_in_front(&self) -> Option<Overlay> {
+        let open = [
+            (self.about.is_some(), Overlay::About),
+            (self.preferences.is_some(), Overlay::Preferences),
+            (self.player_info.is_some(), Overlay::PlayerInfo),
+            (self.haggle.is_some(), Overlay::Haggle),
+            (self.comm.is_some(), Overlay::Comm),
+            (self.flight_dialog_map_open(), Overlay::DialogMap),
+            (self.missions.is_some(), Overlay::Missions),
+            (self.offer.is_some(), Overlay::Offer),
+            (self.plunder.is_some(), Overlay::Plunder),
+            (self.assignment.is_some(), Overlay::Assignment),
+            (self.new_pilot.is_some(), Overlay::NewPilot),
+            (self.open_pilot.is_some(), Overlay::OpenPilot),
+            (self.load_note.is_some(), Overlay::LoadNote),
+            (self.question.is_some(), Overlay::Question),
+        ];
+        open.into_iter()
+            .find_map(|(is_open, overlay)| is_open.then_some(overlay))
+    }
+
+    /// What takes every input in front of the router's own keys (its
+    /// Preferences keys, I and the side's), if anything: the overlay open
+    /// in front, then the spaceport while it takes every key, then a map
+    /// whose Find is open. [`AppScreen::route`] gives the input to it,
+    /// and the menu bar greys what the router would take
+    /// (`menu_commands`), so the two read the same gates.
+    pub(super) fn front(&self) -> Option<Front> {
+        if let Some(overlay) = self.overlay_in_front() {
+            return Some(Front::Overlay(overlay));
+        }
+        if self.spaceport_takes_every_key() {
+            return Some(Front::Spaceport);
+        }
+        if self.map_takes_every_key() {
+            return Some(Front::Map);
+        }
+        None
+    }
+
+    /// The input to `front`: what it did. Every overlay but a mission
+    /// dialog's map over flight, which places itself, takes the pointer
+    /// moved back by [`AppScreen::overlay_offset`], as it is drawn moved on
+    /// by it.
+    fn front_input(&mut self, front: Front, input: &Input) -> ScreenAction {
+        let overlay = match front {
+            Front::Overlay(overlay) => overlay,
+            Front::Spaceport => return self.spaceport_input(input),
+            Front::Map => {
+                return match self.side {
+                    Side::Flight => self.flight_input(input),
+                    Side::Spaceport => self.spaceport_input(input),
+                    _ => self.galaxy.input(input),
+                };
+            }
+        };
         let offset = self.overlay_offset();
         // The frame moves only across.
         let moved = &input.translated(Point::new(-offset.x, 0.0));
-        if self.about.is_some() {
-            return Some(self.about_input(moved));
+        match overlay {
+            Overlay::About => self.about_input(moved),
+            Overlay::Preferences => self.preferences_input(moved),
+            Overlay::PlayerInfo => self.player_info_input(moved),
+            Overlay::Haggle => self.haggle_input(moved),
+            Overlay::Comm => self.comm_input(moved),
+            Overlay::DialogMap => self.flight_dialog_map_input(input),
+            Overlay::Missions => self.missions_input(moved),
+            Overlay::Offer => self.offer_input(moved),
+            Overlay::Plunder => self.plunder_input(moved),
+            Overlay::Assignment => self.assignment_input(moved),
+            Overlay::NewPilot => self.new_pilot_input(moved),
+            Overlay::OpenPilot => self.open_pilot_input(moved),
+            Overlay::LoadNote => self.load_note_input(moved),
+            Overlay::Question => self.question_input(moved),
         }
-        if self.preferences.is_some() {
-            return Some(self.preferences_input(moved));
-        }
-        if self.player_info.is_some() {
-            return Some(self.player_info_input(moved));
-        }
-        if self.haggle.is_some() {
-            return Some(self.haggle_input(moved));
-        }
-        if self.comm.is_some() {
-            return Some(self.comm_input(moved));
-        }
-        if self.flight_dialog_map_open() {
-            return Some(self.flight_dialog_map_input(input));
-        }
-        if self.missions.is_some() {
-            return Some(self.missions_input(moved));
-        }
-        if self.offer.is_some() {
-            return Some(self.offer_input(moved));
-        }
-        if self.plunder.is_some() {
-            return Some(self.plunder_input(moved));
-        }
-        if self.assignment.is_some() {
-            return Some(self.assignment_input(moved));
-        }
-        if self.new_pilot.is_some() {
-            return Some(self.new_pilot_input(moved));
-        }
-        if self.open_pilot.is_some() {
-            return Some(self.open_pilot_input(moved));
-        }
-        if self.load_note.is_some() {
-            return Some(self.load_note_input(moved));
-        }
-        if self.question.is_some() {
-            return Some(self.question_input(moved));
-        }
-        None
     }
 
     /// Routes one input, as [`Screen::input`] describes, first noting
@@ -440,26 +466,15 @@ impl AppScreen {
         // which the engine doesn't yet
         // (rdm:phase/main-screen-fidelity/phase-1-ask-before-quitting-play).
         if let Input::Key {
-            key: Key::Char('q'),
-            pressed: true,
-            ..
+            key, pressed: true, ..
         } = *input
             && self.command_held
+            && chord_command(key) == Some(MenuCommand::Quit)
         {
             return ScreenAction::Quit;
         }
-        if let Some(action) = self.overlay_input(input) {
-            return action;
-        }
-        if self.spaceport_takes_every_key() {
-            return self.spaceport_input(input);
-        }
-        if self.map_takes_every_key() {
-            return match self.side {
-                Side::Flight => self.flight_input(input),
-                Side::Spaceport => self.spaceport_input(input),
-                _ => self.galaxy.input(input),
-            };
+        if let Some(front) = self.front() {
+            return self.front_input(front, input);
         }
         if self.preferences_key(input) {
             return ScreenAction::None;
@@ -543,4 +558,38 @@ impl AppScreen {
             Input::Key { .. } | Input::Text(_) => return,
         };
     }
+}
+
+/// What takes every input in front of the router's own keys
+/// ([`AppScreen::front`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Front {
+    /// An overlay open over the side shown.
+    Overlay(Overlay),
+    /// The spaceport, while a ship's name is typed or a movie plays in
+    /// front.
+    Spaceport,
+    /// A map whose Find is open.
+    Map,
+}
+
+/// An overlay over the side shown, in the order the router looks for the
+/// one in front.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Overlay {
+    About,
+    Preferences,
+    PlayerInfo,
+    Haggle,
+    Comm,
+    /// A mission dialog's map over flight.
+    DialogMap,
+    Missions,
+    Offer,
+    Plunder,
+    Assignment,
+    NewPilot,
+    OpenPilot,
+    LoadNote,
+    Question,
 }

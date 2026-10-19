@@ -29,6 +29,8 @@
 //!   [`flight::CombatLooks`] port.
 //! - [`menu`]: the main menu (New Pilot, Open Pilot and Quit) and the
 //!   saved pilots' list.
+//! - [`menu_command`]: the commands a platform's menu bar sends the game
+//!   ([`MenuCommand`]): About, Preferences… and Quit.
 //! - [`fade`]: the black screen fades, the death's fade out and the main
 //!   screen's fade back in ([`fade::ScreenFade`]).
 //! - [`spaceport`]: the spaceport landed on, its landscape, name,
@@ -84,6 +86,7 @@ pub mod geometry;
 pub mod image;
 pub mod input;
 pub mod menu;
+pub mod menu_command;
 pub mod movie;
 pub mod navigator;
 pub mod oval;
@@ -108,6 +111,7 @@ pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
+pub use menu_command::MenuCommand;
 pub use navigator::Navigator;
 pub use preferences::Prefs;
 pub use scaling::{Enlargement, Scaling};

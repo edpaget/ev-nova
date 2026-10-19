@@ -1,10 +1,11 @@
 ev-nova nightly build
 =====================
 
-An unsigned tester build of the latest `main` of
-https://github.com/edpaget/ev-nova. This archive holds:
+A tester build of the latest `main` of https://github.com/edpaget/ev-nova.
+Each download holds:
 
-  nova        opens the game data in a window (ship browser, galaxy map)
+  nova        the game: opens the game data in a window
+              (Nova.app on macOS)
   nova-dump   writes the game data out as JSON, PNG and WAV files
   LICENSE     GPL-3.0-or-later; covers the code, not the game data
 
@@ -23,12 +24,31 @@ Running
 
 On Windows the programs are `nova.exe` and `nova-dump.exe`.
 
-macOS: the binaries need macOS 13 (Ventura) or later. They are unsigned,
-so Gatekeeper blocks them. In the extracted folder, run
+macOS
+-----
 
-  xattr -d com.apple.quarantine nova nova-dump
+The macOS download is a disk image (.dmg) holding Nova.app, nova-dump,
+README.txt and LICENSE. It is for Apple silicon Macs and needs macOS 13
+(Ventura) or later.
 
-or right-click each binary in Finder and choose Open.
+Open the .dmg and drag Nova.app onto the Applications folder beside it.
+It is named Nova.app, not EV Nova.app, so it never replaces the original
+game there. Double-click it to play: it opens the `Nova Files` it used
+last time, else those of an `EV Nova.app` in /Applications or
+~/Applications, and failing those it asks you to locate your EV Nova
+folder, and remembers your pick. It logs its startup to
+~/Library/Logs/nova/nova.log.
+
+Nova.app is ad-hoc signed but not notarized, so macOS blocks a downloaded
+copy the first time. Try to open it once, then choose Open Anyway in
+System Settings > Privacy & Security, or run
+
+  xattr -dr com.apple.quarantine /Applications/Nova.app
+
+nova-dump still runs from a terminal; copy it out of the .dmg and clear
+its quarantine the same way:
+
+  xattr -d com.apple.quarantine nova-dump
 
 Windows: SmartScreen may warn about an unknown publisher. Choose
 "More info", then "Run anyway".

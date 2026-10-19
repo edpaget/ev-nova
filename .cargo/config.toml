@@ -1,7 +1,7 @@
 # The oldest macOS the Apple builds run on: macOS 13 (Ventura). MetalFX,
 # which `nova-metalfx` links strongly (the macOS world upscaler), first
 # shipped in macOS 13. rustc reads this only for Apple targets, so it sets
-# both slices of the universal macOS build (aarch64 and x86_64) and leaves
-# the Windows and Linux builds alone.
+# the Apple silicon macOS build (aarch64) and leaves the Windows and Linux
+# builds alone.
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.0"

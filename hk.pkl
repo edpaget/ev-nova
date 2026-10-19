@@ -14,6 +14,7 @@ local ci = new Mapping<String, Step> {
 local crates = List(
     "nova",
     "nova-audio",
+    "nova-bundle",
     "nova-data",
     "nova-dump",
     "nova-render",

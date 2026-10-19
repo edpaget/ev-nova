@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use nova_view::view_shape::classic_offset;
 use nova_view::{
-    Diagnostic, DrawList, FullscreenKind, Input, Point, Prefs, Scaling, Screen, ScreenAction,
-    Showing, Sound, VideoMode, ViewShape,
+    Diagnostic, DrawList, FullscreenKind, Input, MenuCommand, Point, Prefs, Scaling, Screen,
+    ScreenAction, Showing, Sound, VideoMode, ViewShape,
 };
 
 use super::{
@@ -479,6 +479,19 @@ impl Screen for AppScreen {
         for flight in self.flights_mut() {
             flight.set_view_size(size);
         }
+    }
+
+    /// Quit and Preferences… as their Command chords, and About as I's
+    /// About text where nothing holds input or is in front (see
+    /// `menu_commands`).
+    fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
+        self.run_menu_command(command)
+    }
+
+    /// Quit always; Preferences… and About where the command would do
+    /// something (see `menu_commands`).
+    fn menu_enabled(&self, command: MenuCommand) -> bool {
+        self.menu_enabled_now(command)
     }
 }
 

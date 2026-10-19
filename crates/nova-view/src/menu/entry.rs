@@ -312,6 +312,14 @@ impl Entry {
         }
     }
 
+    /// Whether a Command chord's press made now is held for the handover
+    /// ([`Deferred::Command`]): outside the intro's text, until play runs.
+    /// The text, due or showing, takes it instead.
+    #[must_use]
+    pub fn holds_commands(&self) -> bool {
+        !matches!(self.stage, Stage::TextDue(_) | Stage::Text(_) | Stage::Done)
+    }
+
     /// Whether the main screen is drawn under the entry: through its fade
     /// out.
     #[must_use]
@@ -775,6 +783,37 @@ mod tests {
             [Deferred::Command(Key::Up), Deferred::Command(Key::Escape)],
             "as commands, never as keys down or up"
         );
+    }
+
+    /// Whether a Command chord typed into `entry` now is held.
+    fn chord_held(entry: &Entry) -> bool {
+        entry.clone().input(&key(Key::Char(','), true), true) == Verdict::Held
+    }
+
+    #[test]
+    fn it_says_it_holds_a_command_chord_in_each_stage_that_holds_one() {
+        let mut entry = unseen(&pictures(Some(128)));
+        let mut stages = Vec::new();
+        for _ in 0..12 {
+            stages.push((entry.showing(), entry.holds_commands()));
+            assert_eq!(entry.holds_commands(), chord_held(&entry), "{stages:?}");
+            if entry.take_text_due().is_some() {
+                stages.push((entry.showing(), entry.holds_commands()));
+                entry.text_opened(true);
+                stages.push((entry.showing(), entry.holds_commands()));
+                assert!(!entry.holds_commands(), "the text takes it");
+                assert_eq!(entry.holds_commands(), chord_held(&entry));
+                entry.text_closed();
+            }
+            entry.handed_over();
+            entry.tick(Duration::from_secs(2));
+        }
+        assert!(entry.done());
+        assert!(!entry.holds_commands(), "play runs");
+        assert!(!chord_held(&entry));
+        assert!(stages.contains(&(Showing::MainMenu, true)), "{stages:?}");
+        assert!(stages.contains(&(Showing::Intro, true)), "{stages:?}");
+        assert!(stages.contains(&(Showing::IntroText, false)), "{stages:?}");
     }
 
     #[test]

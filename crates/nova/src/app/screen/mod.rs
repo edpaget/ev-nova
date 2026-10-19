@@ -336,7 +336,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
     PrefsDialog, YesNoDialog,
 };
-use nova_view::{Color, Input, Key, Navigator, Point, Prefs, Sound};
+use nova_view::{Color, Input, Key, MenuCommand, Navigator, Point, Prefs, Sound};
 use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
@@ -346,6 +346,7 @@ mod flight;
 mod game;
 mod launch;
 mod menu;
+mod menu_commands;
 mod overlays;
 mod pilot_panel;
 mod port_dialogs;
@@ -369,6 +370,29 @@ pub const HINT_COLOR: Color = Color::DIM;
 /// The key that, with Command held, opens the Preferences on every side:
 /// the Mac's Command+comma.
 pub const PREFERENCES_KEY: Key = Key::Char(',');
+
+/// The key a menu command's Command chord presses: Q for Quit (Command-Q,
+/// see [`AppScreen::route`]) and [`PREFERENCES_KEY`] for Preferences…;
+/// About has none. The one table of the game's menu chords: the router's
+/// Command-Q, its Preferences key and the entry's held chords read it
+/// ([`chord_command`]), and the macOS menu bar's key equivalents are
+/// checked against it (`platform::menu_bar`).
+#[must_use]
+pub const fn menu_chord(command: MenuCommand) -> Option<Key> {
+    match command {
+        MenuCommand::Quit => Some(Key::Char('q')),
+        MenuCommand::Preferences => Some(PREFERENCES_KEY),
+        MenuCommand::About => None,
+    }
+}
+
+/// The menu command whose chord presses `key` ([`menu_chord`]), if any.
+#[must_use]
+pub fn chord_command(key: Key) -> Option<MenuCommand> {
+    MenuCommand::ALL
+        .into_iter()
+        .find(|&command| menu_chord(command) == Some(key))
+}
 
 /// The About text's `dësc`.
 pub const ABOUT_TEXT: i16 = 32767;

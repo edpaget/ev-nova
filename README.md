@@ -38,14 +38,15 @@ The [`nightly` prerelease](https://github.com/edpaget/ev-nova/releases/tag/night
 holds `nova` and `nova-dump` built from the latest commit on `main`:
 
 - `ev-nova-x86_64-unknown-linux-gnu.tar.gz`
-- `ev-nova-universal-apple-darwin.tar.gz` (Apple silicon and Intel, macOS 13
-  (Ventura) or later)
+- `ev-nova-aarch64-apple-darwin.dmg` (Nova.app for Apple silicon Macs, macOS
+  13 (Ventura) or later)
 - `ev-nova-x86_64-pc-windows-msvc.zip`
 
-These are unsigned tester builds, and they contain no game data. Each archive
-has a `README.txt` on running them. On macOS, Gatekeeper blocks unsigned
-binaries; in the extracted folder, run
-`xattr -d com.apple.quarantine nova nova-dump`.
+These are tester builds, and they contain no game data. Each download has a
+`README.txt` on running them. On macOS, `Nova.app` is ad-hoc signed but not
+notarized, so Gatekeeper blocks a downloaded copy the first time: choose Open
+Anyway in System Settings > Privacy & Security, or run
+`xattr -dr com.apple.quarantine /Applications/Nova.app`.
 
 ## Using your own data
 
