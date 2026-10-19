@@ -211,6 +211,15 @@ mod tests {
         let images = drawn(&held_out);
         assert!(images.contains(&(SHEET, 1930)), "{images:?}");
         assert!(!images.contains(&(RUNS, 1930)), "{images:?}");
+        // A shield flash at level none.
+        let shielded = self::sheet(&[1500]);
+        let faded = ShipDraw {
+            shield: Some(0),
+            ..ship(&shielded, &spec)
+        };
+        let images = drawn(&faded);
+        assert!(images.contains(&(SHEET, 1500)), "{images:?}");
+        assert!(!images.contains(&(RUNS, 1500)), "{images:?}");
     }
 
     #[test]
