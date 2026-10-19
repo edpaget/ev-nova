@@ -51,11 +51,21 @@
 //! position.
 //!
 //! **Ordering.** The original runs the block in `_HandleShip`, after the
-//! frame's collision passes and before its display pass; here it runs
-//! after the fight's tick (`Session::fight_tail`), reading each NPC as
-//! its step found it, on each of double time's passes as `_HandleShip`
-//! runs on each game-work pass. Every pod event is shown in the same
-//! frame, so the order crosses no boundary the player sees.
+//! NPC's death timer (@0x35083) and before its display (@0x444ad), on each
+//! game-work pass. So does the ship loop ([`Session::npc_escape`] from
+//! `Session::ship_loop`, rdm weapons-fidelity phase 47), on each of double
+//! time's passes: an escape fighter launched into a slot above its
+//! carrier's is reached later in the loop and drawn on its launch frame,
+//! and the carrier's final explosion that tick reaches it. The words the
+//! pass's stray beams stepped are settled just before
+//! (`Session::step_stray_words`), so the pods read the crew pods left, as
+//! the original steps a stray beam's word at its spawn. Only the NPC's
+//! own beam steps its word, and a dying NPC fires none, so no fixture
+//! reaches a word stepped in the pass that its pods then read.
+//!
+//! The separate parts (`Session::fight`) still run every NPC's block
+//! after the beams, reading each NPC as its step found it, the stray
+//! words stepped first; they are no game path.
 //!
 //! Left out: snd 372's priority 5 (`_PlaySoundDistance` @0x351fa,
 //! @0x35300), which the view doesn't play by yet
@@ -119,39 +129,58 @@ fn timers(was: Condition, dying: bool) -> (Option<i32>, Option<i32>) {
     (pods, dying.then(|| pods.unwrap_or(0)))
 }
 
+/// Whether an NPC's escape pods or its escape-ship roll may run this
+/// tick: it `was` dying with its timer above 0 before the fight's tick, or
+/// its own step finds it dying (`at_step`; see [`timers`]). The ship loop
+/// runs its dying block between its step and its display only then
+/// (`Session::ship_loop`).
+pub(super) fn escape_may_run(was: Condition, at_step: AtStep) -> bool {
+    timers(was, at_step.dying) != (None, None)
+}
+
 impl Session {
     /// Runs each dying NPC's escape pods and its escape-ship roll for
     /// this tick, against what each NPC `was` before the fight's tick and
     /// how its own step found it (`stepped`), drawing on `chance` (see the
-    /// module docs). An NPC that took no step this tick takes neither.
+    /// module docs), as the separate parts run them (`Session::fight`).
+    /// An NPC that took no step this tick takes neither.
     pub(super) fn npc_escapes(
         &mut self,
         was: &[NpcBefore],
         stepped: &[AtStep],
         chance: &mut dyn Chance,
     ) {
-        let frame = self.field().frame;
-        let ids: Vec<(NpcId, Condition, bool)> = self
+        let ids: Vec<(Condition, AtStep)> = self
             .traffic
             .npcs()
             .iter()
             .filter_map(|npc| {
                 let before = was.iter().find(|before| before.id == npc.id)?;
                 let at_step = stepped.iter().find(|at_step| at_step.id == npc.id)?;
-                Some((npc.id, before.condition, at_step.dying))
+                Some((before.condition, *at_step))
             })
             .collect();
-        for (id, before, dying) in ids {
-            if self.npc(id).is_none() {
-                continue;
-            }
-            let (pods, escape) = timers(before, dying);
-            if let Some(timer) = pods {
-                self.eject_pods(id, timer, frame);
-            }
-            if let Some(timer) = escape {
-                self.escape_roll(id, timer, chance);
-            }
+        for (before, at_step) in ids {
+            self.npc_escape(before, at_step, chance);
+        }
+    }
+
+    /// Runs one NPC's escape pods and escape-ship roll for this tick (see
+    /// the module docs), the NPC as its own step found it (`at_step`),
+    /// against its condition before the pass's fight (`was`), drawing on
+    /// `chance`. Nothing happens for an NPC no longer in the system.
+    pub(super) fn npc_escape(&mut self, was: Condition, at_step: AtStep, chance: &mut dyn Chance) {
+        let id = at_step.id;
+        if self.npc(id).is_none() {
+            return;
+        }
+        let frame = self.field().frame;
+        let (pods, escape) = timers(was, at_step.dying);
+        if let Some(timer) = pods {
+            self.eject_pods(id, timer, frame);
+        }
+        if let Some(timer) = escape {
+            self.escape_roll(id, timer, chance);
         }
     }
 
@@ -872,6 +901,104 @@ mod tests {
             assert_eq!(chance.rolls(), 0);
         }
         panic!("never broken up");
+    }
+
+    /// A session in flight whose one NPC is a carrier of `DeathDelay`
+    /// `death_delay` and mass 200 at berth `berth`, `condition`, its
+    /// armour gone, holding 2 escape fighters, facing 90 and targeting the
+    /// player; the catalog, the session and the carrier.
+    fn dying_carrier(
+        berth: u32,
+        death_delay: u32,
+        condition: Condition,
+    ) -> (FakePilotCatalog, Session, NpcId) {
+        let catalog = escaping_from(crate::session::tests::armed(), 0);
+        let mut session = crate::session::tests::facing_an_npc(&catalog, 180);
+        let carrier = &mut session.traffic.npcs_mut()[0];
+        carrier.berth = berth;
+        carrier.rounds = LauncherRounds::from([(BAY, 2)]);
+        carrier.hull.death_delay = death_delay;
+        carrier.hull.signed_death_delay = i32::try_from(death_delay).unwrap_or(i32::MAX);
+        carrier.hull.mass = 200.0;
+        carrier.reserves.armor.now = 0.0;
+        carrier.condition = condition;
+        carrier.target = Some(ShipRef::Player);
+        carrier.state.heading = 90.0;
+        let id = carrier.id;
+        (catalog, session, id)
+    }
+
+    /// Counting down, 50 ticks left: at or below half a `DeathDelay` of
+    /// 100, so its escape ship rolls.
+    const HALFWAY: Condition = Condition::Dying {
+        ticks_left: 50,
+        starting: false,
+    };
+
+    /// An advance pass of `session`, its NPCs keeping their goals, the
+    /// escape roll launching.
+    fn launch_pass(session: &mut Session, catalog: &FakePilotCatalog) {
+        let mut chance = Rolls::launching(0, 0);
+        let controls = crate::flight::Controls::default();
+        assert!(!session.game_work(controls, catalog, &Keep, Rules::default(), &mut chance));
+        assert_eq!(chance.rolls(), 1);
+    }
+
+    #[test]
+    fn an_escape_fighter_launched_above_its_carrier_is_drawn_on_its_launch_frame() {
+        // `_LaunchFighter` makes its slot active at once (@0x3c90b,
+        // @0x3d680), so the ship loop (@0x4445c-0x444c4) reaches berth 2
+        // after the carrier's: its `_HandleShip` moves it, unsteered, and
+        // its display shows it before the frame.
+        let (catalog, mut session, carrier) = dying_carrier(1, 100, HALFWAY);
+        launch_pass(&mut session, &catalog);
+        let fighter = &vipers(&session)[0];
+        assert_eq!(fighter.berth, 2);
+        let from = session.npc(carrier).expect("dying").state.position;
+        assert_eq!(fighter.state.position, from + fighter.state.velocity);
+        assert_eq!(fighter.state.heading, 90.0, "unsteered");
+        assert!(
+            session.draw_order().contains(&ShipRef::Npc(fighter.id)),
+            "{:?}",
+            session.draw_order()
+        );
+    }
+
+    #[test]
+    fn an_escape_fighter_launched_below_its_carrier_is_drawn_from_the_next_pass() {
+        // In berth 1, below the carrier's 2, the loop has passed it.
+        let (catalog, mut session, carrier) = dying_carrier(2, 100, HALFWAY);
+        launch_pass(&mut session, &catalog);
+        let fighter = vipers(&session)[0].clone();
+        assert_eq!(fighter.berth, 1);
+        let from = session.npc(carrier).expect("dying").state.position;
+        assert_eq!(fighter.state.position, from, "not moved");
+        assert!(!session.draw_order().contains(&ShipRef::Npc(fighter.id)));
+        let controls = crate::flight::Controls::default();
+        let mut chance = Rolls::launching(0, 0);
+        assert!(!session.game_work(controls, &catalog, &Keep, Rules::default(), &mut chance));
+        assert!(session.draw_order().contains(&ShipRef::Npc(fighter.id)));
+    }
+
+    #[test]
+    fn the_carriers_final_explosion_reaches_its_escape_fighter() {
+        // `DeathDelay` 0: the step finds it dying and rolls (@0x3547d), and
+        // its display then explodes it (@0x2d8ef-0x2da9c), its shockwave
+        // reaching the fighter in berth 2, launched before that display
+        // and not yet shown.
+        let (catalog, mut session, carrier) = dying_carrier(1, 0, Condition::Intact);
+        session.take_combat_events();
+        launch_pass(&mut session, &catalog);
+        assert!(session.npc(carrier).is_none(), "exploded");
+        let fighter = vipers(&session)[0].id;
+        let struck = session.take_combat_events().into_iter().any(|event| {
+            matches!(
+                event,
+                CombatEvent::Hit { ship, weapon: None, late: false, .. }
+                    if ship == ShipRef::Npc(fighter)
+            )
+        });
+        assert!(struck);
     }
 
     /// The test-support `fixture::place`, which only other crates' tests

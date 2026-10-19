@@ -2973,7 +2973,12 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(&start, &stepped, rules, chance);
+        // The words the pass's stray beams stepped, before the NPCs'
+        // escape pods read the crew pods left (see the `npc_escape`
+        // module).
+        self.step_stray_words(chance);
+        self.npc_escapes(start.npcs(), &stepped, chance);
+        self.fight_tail(rules, chance);
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,

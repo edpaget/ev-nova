@@ -30,15 +30,18 @@
 //!    resumed after that slot ([`Session::dispatch_npcs`]); then the comm
 //!    calls those fighters made answered. All before `_HandleShot`, so
 //!    the fighters move on their launch frame.
-//! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
-//!    locks, their hits settled and answered.
+//! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
+//!    life or each other shot's move and lock, landing at its visit,
+//!    their hits settled and answered.
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), its flight (the traffic's fly half, one
 //!    NPC at a time), reloads, regeneration, fire and death timer's tick,
-//!    then its display (@0x444ad), which starts its breakup's countdown
-//!    or explodes it, its shockwave reaching the later slots before
-//!    they move; then the session's work after the fly half and the
-//!    assistance ([`Session::ship_loop`]).
+//!    a dying NPC's escape pods and escape-ship roll (see the
+//!    `npc_escape` module), then its display (@0x444ad), which starts its
+//!    breakup's countdown or explodes it, its shockwave reaching the
+//!    later slots before they move; an escape fighter launched into a
+//!    later slot is reached in the same loop; then the session's work
+//!    after the fly half and the assistance ([`Session::ship_loop`]).
 //! 7. `_HandleBeams` (@0x4453d), its hits settled, then what the
 //!    pass leaves ([`Session::fight_tail`]), then the asteroids
 //!    (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids` @0x444f5, after
@@ -70,10 +73,16 @@
 //! - What the close strikes (the beams, the shockwaves) is answered by the
 //!   caller after the pass ([`Session::answer_strikes`]), before the frame
 //!   is drawn.
+//! - The session's part of an escort a shot's blast or lock takes out of
+//!   the player's fleet (its record, AI type and cargo share) settles
+//!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
+//!   `_DamageShip` settles it at the landing; the fight clears its leader
+//!   at the landing, which is all the later visits read.
 //! - The separate parts ([`Session::tick`], [`Session::tick_traffic`],
 //!   [`Session::tick_combat`]) keep the old order between the player, the
 //!   traffic and the fight, the fight's own phases in its new order, an
-//!   NPC's fighters put in the system at the tick's end; they
+//!   NPC's fighters put in the system and every dying NPC's escape pods
+//!   and escape-ship roll run at the tick's end; they
 //!   are no game path, and the tests that step through them are to step
 //!   through [`Session::game_work`] (rdm task
 //!   `retire-the-sessions-separate-pass-parts`).
@@ -98,7 +107,6 @@
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
-use super::npc_escape::AtStep;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, TrafficMarks};
 use crate::ai::Behaviour;
@@ -108,6 +116,7 @@ use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
+use crate::traffic::npc::NpcId;
 
 /// What a pass's fight reads of the session as it began: every NPC.
 pub(super) struct PassStart {
@@ -121,6 +130,19 @@ impl PassStart {
         Self {
             npcs: session.npcs_before(),
         }
+    }
+
+    /// Every NPC as the pass's fight began.
+    pub(super) fn npcs(&self) -> &[NpcBefore] {
+        &self.npcs
+    }
+
+    /// NPC `id`'s condition as the pass's fight began, if it was there.
+    pub(super) fn condition_of(&self, id: NpcId) -> Option<Condition> {
+        self.npcs
+            .iter()
+            .find(|before| before.id == id)
+            .map(|before| before.condition)
     }
 }
 
@@ -248,12 +270,12 @@ impl Session {
             Some(None) => Motion::Populated,
             None => Motion::Again,
         };
-        let stepped = self.ship_loop(motion, pass, rules, chance);
+        self.ship_loop(start, motion, pass, rules, chance);
         // `_HandleBeams` (@0x4453d), and what the pass leaves.
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(start, &stepped, rules, chance);
+        self.fight_tail(rules, chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
         // come after the collision passes (see the `asteroids` module).
         self.tick_asteroids(chance);
@@ -517,31 +539,27 @@ impl Session {
     }
 
     /// What a pass's fight leaves, settled once after its last phase, by
-    /// `rules`, drawing on `chance`, against the session as the pass
-    /// `start`ed: each NPC's exit cursors kept for its berth; the fighters launched from
-    /// bays put in the system (see the `fighters` module); each dying
-    /// NPC's escape pods and escape-ship roll, read as each NPC's own step
-    /// found it (`stepped`; see the `npc_escape` module); the fleet kept in
-    /// step; the escorts lost; the NPCs' self-repair; each NPC destroyed
-    /// taken out; the fighters orphaned; a target gone let go; the
-    /// stellars seen; the ships laid out; and the heading each ship is
-    /// drawn at noted, which its next tick's shots leave from.
-    pub(super) fn fight_tail(
-        &mut self,
-        start: &PassStart,
-        stepped: &[AtStep],
-        rules: Rules,
-        chance: &mut dyn Chance,
-    ) {
+    /// `rules`, drawing on `chance`: each NPC's exit cursors kept for its
+    /// berth; the fighters launched from bays put in the system (see the
+    /// `fighters` module); the words the pass's stray beams stepped; the
+    /// fleet kept in step; the escorts lost; the NPCs' self-repair; each
+    /// NPC destroyed taken out; the fighters orphaned; a target gone let
+    /// go; the stellars seen; the ships laid out; and the heading each
+    /// ship is drawn at noted, which its next tick's shots leave from.
+    /// Each dying NPC's escape pods and escape-ship roll ran before it, in
+    /// its own turn of the ship loop ([`Session::ship_loop`]) or, in the
+    /// separate parts, after the beams (`Session::fight`; see the
+    /// `npc_escape` module).
+    pub(super) fn fight_tail(&mut self, rules: Rules, chance: &mut dyn Chance) {
         self.traffic.keep_berth_exits();
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
-        // The words the pass's stray beams stepped, before the NPCs'
-        // escape pods read the crew pods left. The original steps at the
-        // beam's spawn; settling here, in the same tick before the frame
-        // is drawn, crosses no boundary (see the `stray_words` module).
+        // The words the pass's stray beams stepped (`_HandleBeams`' among
+        // them, after the ship loop). The original steps at the beam's
+        // spawn; settling here, in the same tick before the frame is
+        // drawn, crosses no boundary (see the `stray_words` module). None
+        // is left when nothing stepped one since the ship loop.
         self.step_stray_words(chance);
-        self.npc_escapes(&start.npcs, stepped, chance);
         self.sync_fleet();
         self.lose_escorts();
         self.lose_dying_mission_escorts();

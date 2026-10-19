@@ -7,8 +7,12 @@
 //! after `_AdjustInertialessShipVelocity` @0x3425f; the traffic's
 //! [`fly_npc`](crate::traffic::Traffic::fly_npc)), then takes its step:
 //! its reloads, regeneration (@0x34424), fire (@0x34ffd) and death timer
-//! (@0x35083), then its display, which may make its final explosion
-//! ([`Combat::handle_npc`]). So:
+//! (@0x35083); then, for a dying NPC, `_HandleShip`'s dying block
+//! (@0x35080-0x3557b): its escape pods and escape-ship roll (see the
+//! `npc_escape` module); then its display, which may make its final
+//! explosion ([`Combat::handle_npc`]; for a dying NPC
+//! [`Combat::step_npc`], the dying block, then [`Combat::display_npc`]).
+//! So:
 //!
 //! - **A final explosion's push** (`_DamageShip` @0x2da89) reaches each
 //!   ship of a later slot where it still stands, and that ship's own
@@ -20,6 +24,15 @@
 //! - **A ship whose flight ends it** (it lands, jumps, enters a gate or
 //!   docks) leaves at once: its slot takes no step, and no later slot's
 //!   fire or shockwave sees it.
+//! - **An escape ship's fighter** (`_LaunchFighter` @0x354ea, its slot
+//!   active at once @0x3c90b, @0x3d680) launched into a slot above its
+//!   carrier's is reached later in the same loop, as the loop reads each
+//!   next NPC afresh: it moves by its launch velocity alone, unsteered, as
+//!   `_AIDispatch` ran before the loop
+//!   ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)), takes
+//!   its step and is displayed, so it is drawn on its launch frame. One
+//!   launched below waits for the next pass. Its carrier's display comes
+//!   after the launch, so a final explosion on that tick reaches it.
 //!
 //! Each flight steers by the other ships where the pass found them, as the
 //! original's steering is `_AIDispatch`'s (`_LowLevelAIHandler`), before
@@ -29,10 +42,13 @@
 //! lands.
 //!
 //! [`Combat::handle_npc`]: crate::combat::Combat::handle_npc
+//! [`Combat::step_npc`]: crate::combat::Combat::step_npc
+//! [`Combat::display_npc`]: crate::combat::Combat::display_npc
 
 use std::collections::BTreeSet;
 
-use super::npc_escape::AtStep;
+use super::game_work::PassStart;
+use super::npc_escape::{AtStep, escape_may_run};
 use super::{Session, TrafficMarks};
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules, ShipRef};
@@ -55,14 +71,16 @@ impl Session {
     /// `_DoPlayGameWork`'s ship loop on `pass` by `rules`, the traffic
     /// moving as `motion` says, drawing on `chance` (see the module docs):
     /// every NPC's stray provocation eases (@0x35374-0x353b2); then, slot
-    /// by slot, each NPC flies and takes its step; then what the fly half
+    /// by slot, each NPC flies and takes its step, a dying one running its
+    /// escape pods and escape-ship roll against its condition as the pass
+    /// `start`ed (see the `npc_escape` module), the words the pass's stray
+    /// beams stepped settled first, between its step and its display;
+    /// then what the fly half
     /// leaves: its end, and the session's work after it; the ships laid
     /// out ([`Session::lay_out_displayed`]); every NPC's cloak fade steps
     /// ([`Traffic::step_fades`](crate::traffic::Traffic::step_fades)); and
     /// the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
-    /// Gives each NPC as its own step found it, in slot order, for its
-    /// escape-ship roll (see the `npc_escape` module).
     ///
     /// A fighter whose flight docks it goes aboard its carrier at its own
     /// slot ([`Session::dock_fighter`]), as `_LowLevelAIHandler` calls
@@ -86,11 +104,12 @@ impl Session {
     /// fall.
     pub(super) fn ship_loop(
         &mut self,
+        start: &PassStart,
         motion: Motion,
         pass: GamePass,
         rules: Rules,
         chance: &mut dyn Chance,
-    ) -> Vec<AtStep> {
+    ) {
         self.traffic.ease_stray();
         let again_marks = matches!(motion, Motion::Again)
             .then(|| self.mission_marks())
@@ -102,28 +121,36 @@ impl Session {
             }
             Motion::Again | Motion::Populated => None,
         };
-        let mut order: Vec<(u32, NpcId)> = self
-            .traffic
-            .npcs()
-            .iter()
-            .map(|npc| (npc.berth, npc.id))
-            .collect();
-        order.sort_unstable();
         let mut shown = vec![ShipRef::Player];
-        let mut found = Vec::new();
-        for (_, id) in order {
-            if let Some(fly) = fly.as_mut()
-                && let Some(outcome) = self
-                    .step_traffic(|traffic, world| traffic.fly_npc(fly, id, &world, &mut *chance))
-            {
-                self.dock_fighter(id, outcome);
+        let mut after = None;
+        while let Some((berth, id)) = self.next_in_loop(after) {
+            after = Some(berth);
+            if let Some(fly) = fly.as_mut() {
+                self.fly_in_loop(fly, id, chance);
             }
             let Some(npc) = self.npc(id) else {
                 continue;
             };
-            found.push(AtStep::of(npc));
+            let at_step = AtStep::of(npc);
+            let ship = ShipRef::Npc(id);
+            let was = start
+                .condition_of(id)
+                .filter(|&was| escape_may_run(was, at_step));
+            let Some(was) = was else {
+                self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+                    combat.handle_npc(fighters, arena, ship, &mut shown, chance);
+                });
+                continue;
+            };
+            // `_HandleShip`'s dying block (@0x35080-0x3557b) comes between
+            // its death timer (@0x35083) and its display (@0x444ad).
             self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-                combat.handle_npc(fighters, arena, ShipRef::Npc(id), &mut shown, chance);
+                combat.step_npc(fighters, arena, ship, chance);
+            });
+            self.step_stray_words(chance);
+            self.npc_escape(was, at_step, chance);
+            self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
+                combat.display_npc(fighters, arena, ship, &mut shown);
             });
         }
         if let Some(fly) = fly {
@@ -148,7 +175,36 @@ impl Session {
         self.lay_out_displayed();
         self.traffic.step_fades();
         self.traffic.after_firing(&self.arsenal);
-        found
+    }
+
+    /// The NPC in the lowest berth above `after` (any, with none), and
+    /// its berth, read afresh from the traffic: so the loop reaches a
+    /// fighter launched into a berth above the one it is at, and passes
+    /// one launched below.
+    fn next_in_loop(&self, after: Option<u32>) -> Option<(u32, NpcId)> {
+        self.traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.berth, npc.id))
+            .filter(|&(berth, _)| after.is_none_or(|after| berth > after))
+            .min()
+    }
+
+    /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
+    /// flight, a fighter its flight docks going aboard at once
+    /// ([`Session::dock_fighter`]); or, for one launched since the half
+    /// began, its move alone, unsteered
+    /// ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)).
+    fn fly_in_loop(&mut self, fly: &mut FlyPass, id: NpcId, chance: &mut dyn Chance) {
+        if !fly.order().contains(&id) {
+            self.step_traffic(|traffic, world| traffic.coast_npc(fly, id, &world));
+            return;
+        }
+        if let Some(outcome) =
+            self.step_traffic(|traffic, world| traffic.fly_npc(fly, id, &world, &mut *chance))
+        {
+            self.dock_fighter(id, outcome);
+        }
     }
 
     /// Begins the traffic's fly half of `half`, the NPCs in `still`
