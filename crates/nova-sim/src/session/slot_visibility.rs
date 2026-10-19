@@ -288,6 +288,31 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_held_disabled_is_laid_out_in_the_disabled_layer_whatever_its_condition() {
+        // `_HandleShipDisplay` asks `_IsDisabled` (@0x2b61f), which holds a
+        // Derelict government's ship at any armour.
+        let mut catalog = strangers();
+        catalog.govts = vec![crate::catalog::GovtRecord {
+            flags: crate::govt::DERELICT,
+            ..nova_sim_catalog::fixture::govt(131)
+        }];
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let id = session.npcs()[0].id;
+        session.npc_mut(id).expect("there").condition = crate::combat::hull::Condition::Intact;
+        session
+            .slot_sprites
+            .layers
+            .put(slot_of(&session.npcs()[0]), ShipLayer::Ships);
+        session.prepare_all_sprites();
+        assert!(
+            session
+                .draw_layers()
+                .contains(&(ShipRef::Npc(id), ShipLayer::Disabled))
+        );
+    }
+
+    #[test]
     fn a_derelict_is_laid_out_in_the_disabled_layer_as_it_comes_in() {
         let mut catalog = strangers();
         catalog.govts = vec![crate::catalog::GovtRecord {

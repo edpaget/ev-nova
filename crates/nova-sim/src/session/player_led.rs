@@ -1134,6 +1134,18 @@ mod tests {
         );
         let session = in_npc_order(session);
         assert!(!drawn(&session).contains(&None));
+        // Its slot's last display hid it: shown again, it waits for its
+        // next display, by either overlap.
+        for overlap in RuleSource::ALL {
+            let mut shown = session.clone().with_rules(
+                Rulebook::default()
+                    .with_override(RuleKey::HiddenShips, RuleSource::Bible)
+                    .with_override(RuleKey::ShipOverlap, overlap),
+            );
+            assert!(!drawn(&shown).contains(&None), "{overlap:?}");
+            combat_tick(&mut shown);
+            assert!(drawn(&shown).contains(&None), "{overlap:?}");
+        }
     }
 
     /// A hidden ship of type `ship` put at `berth` in place of whatever
