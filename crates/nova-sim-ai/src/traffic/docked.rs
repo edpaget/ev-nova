@@ -14,7 +14,7 @@
 //! On the engine, sub 0xf is:
 //!
 //! - a pirate's [`Npc::docking`] in [`DockSub::Dock`], whose
-//!   [`ship`](Docking::ship) is its nav (see
+//!   [`ship`](crate::traffic::plunder_dock::Docking::ship) is its nav (see
 //!   [`plunder_dock`](crate::traffic::plunder_dock));
 //! - a repairer's stand-in: [`Goal::Assist`] with [`Help::Repair`] within
 //!   its [`assist::reach`] of the player. `_AIMakeShipRepairPlayer`
@@ -24,8 +24,6 @@
 //! gives the repairer an [`Npc::docking`] in [`DockSub::Dock`] with the
 //! player; drop the repairer's stand-in here when it lands, as that phase
 //! drops it from the answer flag's `docking`.
-//!
-//! [`Docking`]: crate::traffic::plunder_dock::Docking
 
 use crate::ai::{Goal, Help};
 use crate::combat::ShipRef;
