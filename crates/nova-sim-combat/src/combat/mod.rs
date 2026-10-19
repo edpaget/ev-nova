@@ -189,19 +189,21 @@
 //!    slots of the shots the collision passes ended, and of the spent
 //!    ones, still held ([`Combat::shot_room`]).
 //! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots`]) visits the shot
-//!    slots in order ([`Combat::visit_slots`]), freeing each slot held
-//!    since its last pass at its visit. Each shot whose last move spent
-//!    its life comes to its end of life where it ended (@0x36195): it
-//!    detonates, blasting the ships about it with its
-//!    weapon's whole damage, or fizzles, and releases its sub-munitions at
-//!    the ship its damage is aimed at; its blasts meet the ships as the
-//!    hit pass does, land, and settle as in step 3. Then the shots fly a
-//!    tick, but the sub-munitions released into a slot the visits had
-//!    passed, homing ones steering at their target, breaking up or not,
-//!    unless it jams them, their firer cannot see it, or a `Seeker` 0x4000
-//!    lock fails, and confused ones circling by the [`Field`]'s frame
-//!    ([`projectile`]); each ship's jamming and sight are read as the hit
-//!    pass left them ([`Sight`]). Each keeps where its move began, for the
+//!    slots in order ([`Combat::handle_shots`]), freeing each slot held
+//!    since its last pass at its visit, and doing all of each slot's work
+//!    there, so every later visit reads what an earlier one landed. Each
+//!    shot whose last move spent its life comes to its end of life where
+//!    it ended (@0x36195): it releases its sub-munitions at the ship its
+//!    damage is aimed at, then detonates, blasting the ships about it
+//!    with its weapon's whole damage, or fizzles; its blast meets the
+//!    ships as the hit pass does, lands at once, and settles as in step 3.
+//!    Every other shot flies a tick at its visit (a sub-munition released
+//!    into a slot the visits had passed sits it out), homing ones
+//!    steering at their target, breaking up or not, unless it jams them,
+//!    their firer cannot see it, or a `Seeker` 0x4000 lock fails, and
+//!    confused ones circling by the [`Field`]'s frame ([`projectile`]);
+//!    each ship's jamming and sight are read as the hits so far left them
+//!    ([`Sight`]). Each keeps where its move began, for the
 //!    next tick's hit pass ([`Shot::moved_from`]). A shot of no life
 //!    (`Count` 0 or below) is dropped unmoved and unseen. A hit by a shot
 //!    turned on its firer is by no ship ([`Strike::by`]). Before it moves,
@@ -317,8 +319,8 @@
 //! steps 2 and 3 its collision passes (`_SWCollideSpriteLayer`
 //! @0x43e70-0x44010, `_CheckShotProximities` @0x44015), testing tick
 //! t−1's moves; step 4 `_AIDispatch`'s point defence (@0x4429d); step 5
-//! `_HandleShot` (@0x44385): the ends of life (@0x36195), the moves and
-//! the locks (@0x35855); step 6 `_HandleShip`'s countdown, regeneration
+//! `_HandleShot` (@0x44385): each slot's end of life (@0x36195), or its
+//! move and lock (@0x35855), at its visit; step 6 `_HandleShip`'s countdown, regeneration
 //! and fire (@0x33896, @0x34424, @0x34ffd, loop @0x44483), each NPC's
 //! display (@0x444ad) and `_HandleBeams`' moves; steps 7 and 8
 //! `_HandleBeams`' hits (@0x4453d). The player's display step (@0x43e29)
@@ -334,9 +336,6 @@
 //! What remains of the original's order crosses no boundary the player
 //! sees, and is not filed:
 //!
-//! - Step 5 runs every end of life and then every move, where
-//!   `_HandleShot` moves each shot at its own slot's visit; no end of life
-//!   reads where another shot is.
 //! - Step 4 runs after every NPC's decision, where `_AIDispatch`
 //!   interleaves them slot by slot.
 //!
@@ -421,8 +420,8 @@ use jamming::Jamming;
 pub use phases::Arena;
 use plunder::Plunderer;
 use projectile::{
-    BombLaunch, DecayStep, Guide, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight,
-    Source, Target,
+    BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
+    Target,
 };
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
@@ -1339,41 +1338,6 @@ impl Combat {
             .find(|strike| strike.ship == ship && !strike.lock);
         if let (Some(downed), Some(last)) = (downed, last) {
             last.downed = Some(downed);
-        }
-    }
-
-    /// Step 5's moves: each shot in flight but those `sitting_out` (the
-    /// sub-munitions released behind `_HandleShot`'s visit, see
-    /// [`Combat::visit_slots`]) flies a tick ([`Shot::step`]), homing
-    /// among `targets` with each ship's jamming and sight as the hit pass
-    /// left them ([`Sight`]), its draws made on `chance`. The loop has
-    /// already dropped each shot of no life. Each visit runs a spinning
-    /// shot's spin timer in its slot ([`ShotSlots::spin_pass`]).
-    fn fly(
-        &mut self,
-        fighters: &[Fighter],
-        targets: &[Target],
-        sitting_out: &[usize],
-        chance: &mut dyn Chance,
-    ) {
-        let sights: Vec<Sight> = fighters.iter().map(Fighter::sight).collect();
-        let guide = Guide {
-            sights: &sights,
-            frame: self.field.frame,
-            lock_angle: self.lock_angle,
-            bomb_heading_wrap: self.bomb_heading_wrap,
-            ..Guide::among(targets)
-        };
-        let slots = &mut self.slots;
-        for shot in &mut self.shots {
-            if !sitting_out.contains(&shot.slot) {
-                shot.step(&guide, chance);
-                // The visit runs a spinning shot's spin timer, which its
-                // slot keeps (`_HandleShot` @0x35879-0x358c4).
-                if shot.weapon.spins() {
-                    slots.spin_pass(shot.slot, shot.weapon.beam_width);
-                }
-            }
         }
     }
 
@@ -2382,7 +2346,7 @@ impl Combat {
     /// 4. the stellars ([`Combat::strike_stellars`]).
     ///
     /// A shot whose move spent it meets only the asteroids it touches, and
-    /// is kept for its end of life in `_HandleShot` ([`Combat::visit_slots`]).
+    /// is kept for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
     ///
     /// The pass meets each NPC where it stood as the last tick ran, as
     /// its last `_HandleShip` left it, and the player where it is now, as
@@ -2720,7 +2684,8 @@ impl Combat {
     /// ([`Combat::take_shoves`]), before the next movement, which crosses
     /// no boundary the player sees. The hits compound in the order they
     /// land: the hit pass's in its walk's order ([`collision`]), then
-    /// expiries, locks, then beams.
+    /// `_HandleShot`'s, the blasts and locks slot by slot
+    /// ([`Combat::handle_shots`]), then beams.
     ///
     /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
     /// at the ship's place, the escape pod included, whatever the tractor
@@ -2943,7 +2908,7 @@ impl Combat {
         let mut kept = Vec::with_capacity(self.shots.len());
         for shot in std::mem::take(&mut self.shots) {
             // A shot its move spent is never tested (`_CheckShotProximities`
-            // @0x371ea); it waits for its end of life (`Combat::visit_slots`).
+            // @0x371ea); it waits for its end of life (`Combat::handle_shots`).
             let met = shot
                 .moved_from
                 .filter(|_| !shot.expired())
@@ -2992,7 +2957,6 @@ impl Combat {
     /// fly, and the release is heard all the same, its sound coming before
     /// its loop. A sub-munition whose weapon places no shot
     /// ([`WeaponSpec::spawns_shot`](weapon::WeaponSpec::spawns_shot)) ends it at the first, so none fly.
-    /// Gives the slots the sub-munitions took.
     fn release(
         &mut self,
         parent: &Shot,
@@ -3000,21 +2964,20 @@ impl Combat {
         sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
-    ) -> Vec<usize> {
-        let mut placed = Vec::new();
+    ) {
         let Some(sub) = parent
             .weapon
             .submunitions
             .and_then(|subs| arsenal.weapon(subs.weapon))
         else {
-            return placed;
+            return;
         };
         // `_SpawnShotSubmunitions` spawns as the parent's source slot
         // (+0x2c): its ship's class and plunder as they are now.
         let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
         let shots = submunition::release(parent, sub, (target, turret_over));
         if shots.is_empty() {
-            return placed;
+            return;
         }
         let unflown = match sub.guidance {
             Guidance::Other(guidance) => Some(guidance),
@@ -3026,7 +2989,7 @@ impl Combat {
                 weapon: sub.id,
                 guidance,
             });
-            return placed;
+            return;
         }
         self.reports.fired(sub);
         self.events.push(CombatEvent::Fired {
@@ -3040,18 +3003,16 @@ impl Combat {
             if !sub.spawns_shot() {
                 break;
             }
-            let Some(seated_at) = self.seat(&mut shot) else {
+            if self.seat(&mut shot).is_none() {
                 break;
-            };
+            }
             shot.id = self.next_id();
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, chance);
             // Each seeks once seated, with its own roll and jam (@0x3f3cf).
             let shot = submunition::aim(parent, shot, n, sides, chance);
             self.insert_seated(&shot);
-            placed.push(seated_at);
         }
-        placed
     }
 
     /// Step 9, and every settling of a ship's condition (the hit pass's,
@@ -3570,9 +3531,10 @@ const LOCK_HIT: Hit = Hit {
 /// damage and is no crime ([`Strike::lock`]).
 ///
 /// The original locks in `_HandleShot`, after the move and before the
-/// next frame's collision passes test that move; here it is made on the
-/// move and lands at once, in step 5 ([`Combat::fly_shots`]), before the
-/// NPCs fire. The original's target sets +0x70 then, in `_DamageShip`'s
+/// next frame's collision passes test that move; here too it is made
+/// right after the shot's move and lands at its own visit, between the
+/// other slots' ends of life ([`Combat::handle_shots`]), before the NPCs
+/// fire. The original's target sets +0x70 then, in `_DamageShip`'s
 /// reaction block; the session answers the strike after the shot step
 /// (`nova_sim::Session::game_work`).
 fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
@@ -3732,6 +3694,7 @@ mod tests {
     mod hidden_shots;
     mod plunder_fire;
     mod shot_slots;
+    mod shot_visits;
     mod strike_terms;
     mod tick_phases;
     mod weapon_glow;

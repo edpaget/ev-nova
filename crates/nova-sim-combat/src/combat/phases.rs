@@ -8,8 +8,8 @@
 
 use super::collision::reread;
 use super::{
-    Combat, Field, Fighter, Firers, GamePass, Landed, Rules, Scenery, ShipRef, Sides, Target, lock,
-    regenerate, regenerate_player,
+    Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
+    regenerate_player,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
@@ -219,18 +219,21 @@ impl Combat {
         shown.push(ship);
     }
 
-    /// Step 5, `_HandleShot` (@0x44385): first its loop visits the slots
-    /// in order ([`Combat::visit_slots`]): each held slot is freed, and
-    /// each shot its last move spent comes to its end of life (@0x36195), its
-    /// blast meeting each NPC where it stood as the last tick ran and the
-    /// player where it is, as the collision passes do
-    /// (`Combat::hit_pass`); its hits land and each ship struck settles
-    /// its condition as in the collision passes. Then the shots fly among
-    /// `fighters`, drawing on `chance` ([`Combat::fly`]), all but the
-    /// sub-munitions released into a slot the loop had passed; the tick's
-    /// missile locks land ([`Strike::lock`](super::Strike::lock),
-    /// @0x35855), and each one-at-a-time shot holds its firer's reload
-    /// (`Combat::hold_reloads`, @0x35c09).
+    /// Step 5, `_HandleShot` (@0x44385) for each shot slot in turn
+    /// ([`Combat::handle_shots`]), among `fighters`, drawing on `chance`:
+    /// at each slot's visit a held slot is freed, a shot its last move
+    /// spent comes to its end of life (@0x36195), its sub-munitions
+    /// released and then its blast landed, and any other shot flies a tick
+    /// and lands its missile lock ([`Strike::lock`](super::Strike::lock),
+    /// @0x35855). Each ship struck settles its condition as in the
+    /// collision passes, so every later visit reads what the earlier ones
+    /// landed, an escort's cleared leader included. Then each
+    /// one-at-a-time shot holds its firer's reload (`Combat::hold_reloads`,
+    /// @0x35c09).
+    ///
+    /// A held slot, a shot point defence ended and hid at life 0, has no
+    /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
+    /// have already tested and let it go (`Combat::test_hidden`).
     pub fn fly_shots(
         &mut self,
         fighters: &mut [Fighter],
@@ -241,38 +244,8 @@ impl Combat {
         self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        let rule = arena.rules.disable;
-        let now = self.stand_where_they_stood(fighters);
-        let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let sides = Sides {
-            targets: &stood,
-            govts: arena.govts,
-            pass_through: self.pass_through,
-        };
-        let first_strike = self.strikes.len();
-        // Each held slot is freed at its visit, a shot point defence ended,
-        // hidden at life 0, with no end of life (@0x36195 → @0x35f0a →
-        // @0x3617c): the collision passes have already tested and let it
-        // go (`Combat::test_hidden`).
-        let visited = self.visit_slots(fighters, &sides, arena.arsenal, chance);
-        let expiries = visited.expiries;
-        self.land(fighters, expiries, rule);
-        for (fighter, position) in fighters.iter_mut().zip(now) {
-            fighter.state.position = position;
-        }
-        self.settle_struck(fighters, first_strike, rule);
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.fly(fighters, &targets, &visited.sitting_out, chance);
-        let sides = Sides {
-            targets: &targets,
-            ..sides
-        };
-        let locks: Vec<Landed> = self
-            .shots
-            .iter()
-            .filter_map(|shot| lock(shot, &sides))
-            .collect();
-        self.land(fighters, locks, rule);
+        let terms = (arena.govts, arena.arsenal);
+        self.handle_shots(fighters, terms, arena.rules.disable, chance);
         self.hold_reloads(fighters);
     }
 

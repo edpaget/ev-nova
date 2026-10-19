@@ -11,13 +11,13 @@ use super::*;
 use crate::combat::escort_loss::leave_fleet_if_disabled;
 use crate::combat::weapon::SUBS_SEEK_NEAREST;
 
-const E: ShipRef = ShipRef::Npc(NpcId(3));
-const X: ShipRef = ShipRef::Npc(NpcId(2));
+pub(super) const E: ShipRef = ShipRef::Npc(NpcId(3));
+pub(super) const X: ShipRef = ShipRef::Npc(NpcId(2));
 
 /// E, a ship of the player's fleet in the Led layer at (0, -100): its
 /// shield down and its armour 11 of 30, one point above the line a
 /// blaster's 4 mass takes it under.
-fn escort() -> Ship {
+pub(super) fn escort() -> Ship {
     let mut ship = Ship::at(3, 0.0, -100.0);
     ship.leader = Some(ShipRef::Player);
     ship.fleet = ShipRef::Player;
@@ -32,7 +32,7 @@ fn escort() -> Ship {
 }
 
 /// The player at (`x`, `y`), standing there for the contact passes.
-fn player_at(combat: &mut Combat, x: f32, y: f32) -> Ship {
+pub(super) fn player_at(combat: &mut Combat, x: f32, y: f32) -> Ship {
     combat.stood.insert(ShipRef::Player, Vec2::new(x, y));
     Ship {
         id: ShipRef::Player,
@@ -150,7 +150,7 @@ fn a_mission_escort_disabled_in_the_walk_still_lets_the_players_shots_pass() {
     assert_eq!(struck, [(E, Some(A))]);
 }
 
-fn mission_escort() -> Ship {
+pub(super) fn mission_escort() -> Ship {
     Ship {
         fleet_escort: false,
         ..escort()
@@ -196,7 +196,7 @@ fn a_seeking_sub_munition_of_a_proximity_hit_reads_the_escort_unled() {
 
 /// A shell of 40-pixel fuse releasing two unguided sub-munitions 148
 /// that seek the nearest ship (`Flags2` 0x0010).
-fn cluster_seeking() -> (WeaponRecord, Arsenal) {
+pub(super) fn cluster_seeking() -> (WeaponRecord, Arsenal) {
     let shell = WeaponRecord {
         reload: 1000,
         count: 3,
@@ -208,13 +208,18 @@ fn cluster_seeking() -> (WeaponRecord, Arsenal) {
         flags2: SUBS_SEEK_NEAREST,
         ..weapon(182)
     };
+    (shell, seekers_of(shell))
+}
+
+/// The arsenal of `shell` and the unguided sub-munition 148 it releases.
+pub(super) fn seekers_of(shell: WeaponRecord) -> Arsenal {
     let sub = WeaponRecord {
         guidance: 0,
         count: 50,
         speed: 500,
         ..weapon(148)
     };
-    (shell, Arsenal::new(&[shell, sub], Vec::new()))
+    Arsenal::new(&[shell, sub], Vec::new())
 }
 
 /// A beam of 200 pixels doing 4 mass damage, lasting 3 ticks.
