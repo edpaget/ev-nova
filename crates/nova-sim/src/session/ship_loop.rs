@@ -390,4 +390,16 @@ mod tests {
         assert_eq!(session.departed(), [(lander, Outcome::Landed(site.id))]);
         assert!(!hit(&session.take_combat_events(), lander));
     }
+
+    #[test]
+    fn nothing_flies_on_a_second_pass_before_the_system_is_set_up() {
+        // Before the advance pass populates the system, its ships move
+        // from the next pass.
+        let catalog = armed();
+        let mut session = Session::start(&catalog).expect("starts");
+        let at = Vec2::new(300.0, 0.0);
+        let drifting = place(&mut session, 1, at, Vec2::new(2.0, 0.0));
+        again(&mut session);
+        assert_eq!(state(&session, drifting).position, at);
+    }
 }

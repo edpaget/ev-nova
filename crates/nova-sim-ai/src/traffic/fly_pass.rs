@@ -474,4 +474,63 @@ mod tests {
         unpushed.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
         assert_ne!(flier(&pushed_after), flier(&unpushed), "by the push");
     }
+
+    /// A pirate plundering `victim` from 400 pixels off, flying at it at
+    /// 2 a tick, flown one fly half among `others` and the `player`: its
+    /// speed after.
+    fn plunderer_speed(
+        victim: ShipRef,
+        others: Vec<Npc>,
+        player: &crate::traffic::PlayerSide,
+    ) -> f32 {
+        let mut pirate = at(9, 0.0, 400.0);
+        pirate.state.velocity = Vec2::new(0.0, -2.0);
+        pirate.goal = Goal::Plunder {
+            ship: victim,
+            hopeless: false,
+        };
+        let mut npcs = others;
+        npcs.push(pirate);
+        let mut traffic = Traffic {
+            npcs,
+            ..Traffic::default()
+        };
+        let world = World {
+            player: Some(*player),
+            ..World::new(&[])
+        };
+        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        let pirate = traffic.npcs().iter().find(|npc| npc.id == NpcId(9));
+        pirate.expect("there").state.velocity.length()
+    }
+
+    #[test]
+    fn a_plunderer_brakes_by_a_victim_the_half_found_disabled() {
+        // `_LowLevelAIHandler` reads the victim's `_IsDisabled`: a pirate
+        // brakes beside a disabled victim, and flies on at one not.
+        let player = |condition| crate::traffic::PlayerSide {
+            condition,
+            ..crate::ai::fixture::player(0.0, 0.0)
+        };
+        let victim = |condition| {
+            let mut victim = at(1, 0.0, 0.0);
+            victim.condition = condition;
+            victim
+        };
+        let npc = ShipRef::Npc(NpcId(1));
+        let flying = plunderer_speed(
+            npc,
+            vec![victim(Condition::Intact)],
+            &player(Condition::Intact),
+        );
+        let braking = plunderer_speed(
+            npc,
+            vec![victim(Condition::Disabled)],
+            &player(Condition::Intact),
+        );
+        assert!(braking < flying, "{braking} {flying}");
+        let flying = plunderer_speed(ShipRef::Player, vec![], &player(Condition::Intact));
+        let braking = plunderer_speed(ShipRef::Player, vec![], &player(Condition::Disabled));
+        assert!(braking < flying, "the player: {braking} {flying}");
+    }
 }
