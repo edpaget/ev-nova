@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::prefs_fixture;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::config::Os;
 use nova::platform;
 use nova::settings::{
     FullscreenSetting, GameSettings, ScalingSetting, SettingsKeeper, game_settings,
@@ -247,23 +248,24 @@ struct Harness {
 
 impl Harness {
     /// The game started over `store`, as `main` starts it: the settings
-    /// read through it start the audio core and the router.
+    /// read through it start the audio core and the router. It runs as on
+    /// Windows, whatever the host, so its monitor offers exclusive modes.
     fn new(store: &MemorySettings) -> Self {
         Self::with_table(store, SoundTable::ORIGINAL)
     }
 
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
-        Self::build(store, table, false)
+        Self::build(store, table, false, Os::Windows)
     }
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
     fn on_main_menu(store: &MemorySettings) -> Self {
-        Self::build(store, SoundTable::ORIGINAL, true)
+        Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
     }
 
-    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool) -> Self {
+    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool, os: Os) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
@@ -289,6 +291,7 @@ impl Harness {
         };
         Self {
             app: App::new(&window, data, crate::common::appeared(screen))
+                .with_os(os)
                 .with_audio(core)
                 .with_settings(keeper),
             window,

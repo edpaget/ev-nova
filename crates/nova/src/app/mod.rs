@@ -1301,8 +1301,10 @@ mod tests {
         assert_eq!(broken.take_warnings(), Vec::<String>::new());
     }
 
+    /// The app over `window`, as on Windows whatever the host, so its
+    /// monitor offers exclusive modes.
     fn app(window: &FakeWindow) -> TestApp {
-        App::new(window, NoImages, RecordingScreen::default())
+        App::new(window, NoImages, RecordingScreen::default()).with_os(Os::Windows)
     }
 
     fn handle(app: &mut TestApp, window: &mut FakeWindow, event: WindowEvent) -> Control {
@@ -3358,7 +3360,7 @@ mod tests {
             reports: reports.to_vec(),
             ..DisplayScreen::default()
         };
-        App::new(window, NoImages, screen)
+        App::new(window, NoImages, screen).with_os(Os::Windows)
     }
 
     fn press_on(app: &mut DisplayApp, window: &mut FakeWindow, key: Key) {

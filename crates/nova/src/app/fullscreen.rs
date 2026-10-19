@@ -386,9 +386,10 @@ mod tests {
         Call::SetFullscreen(Some(FullscreenKind::Exclusive(mode)))
     }
 
-    /// Windowed in a 1024x768 window, its chosen kind `kind`.
+    /// Windowed in a 1024x768 window, its chosen kind `kind`, on Windows,
+    /// where exclusive modes are offered.
     fn set_to(kind: FullscreenSetting) -> Fullscreen {
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
+        let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         fullscreen.set_kind(kind);
         fullscreen
     }
@@ -735,7 +736,7 @@ mod tests {
     #[test]
     fn choosing_a_kind_while_windowed_enters_it_remembering_the_size() {
         let mut window = RecordingWindow::new((1600, 1200));
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1600, 1200));
+        let mut fullscreen = Fullscreen::new(Os::Windows, (1600, 1200));
         assert_eq!(
             fullscreen.choose(exclusive(qhd(), Some(MONITOR)), &mut window),
             None
@@ -752,7 +753,7 @@ mod tests {
     #[test]
     fn choosing_another_kind_while_fullscreen_switches_to_it_alone() {
         let mut window = RecordingWindow::new((1024, 768));
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
+        let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         fullscreen.toggle(&mut window);
         fullscreen.resized((3024, 1964));
         window.calls.clear();
