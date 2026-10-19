@@ -46,12 +46,14 @@
 //! # Fullscreen
 //!
 //! The game runs fullscreen borderless, or exclusive in a display mode the
-//! player picked ([`FullscreenSetting`]). The platform's fullscreen
-//! shortcut (Control+Command+F on macOS, Alt+Enter or F11 elsewhere)
-//! toggles between the window and the saved kind through the
-//! [`WindowPort`], whatever shows, and never reaches the screen or the
-//! overlay. The system can change the state itself, and says so with
-//! [`WindowEvent::FullscreenChanged`]. Leaving, either way, gives the
+//! player picked ([`FullscreenSetting`]). Off macOS the platform's
+//! fullscreen shortcut (Alt+Enter or F11) toggles between the window and
+//! the saved kind through the [`WindowPort`], whatever shows, and never
+//! reaches the screen or the overlay. The system can change the state
+//! itself, and says so with [`WindowEvent::FullscreenChanged`]: on macOS
+//! that is the only way it changes, through the View menu's Enter Full
+//! Screen (Control+Command+F, which the menu bar takes before the
+//! window), Globe+F or the green button. Leaving, either way, gives the
 //! window back its size from before, and keeps the kind. Each change is
 //! saved as [`GameSettings::fullscreen`] through the settings keeper, if
 //! any, and [`App::restore_window`] opens the game the way the player left
@@ -59,8 +61,10 @@
 //!
 //! - **The picker.** Each time the Preferences dialog opens, the app
 //!   offers it the modes the window's monitor lists
-//!   ([`listed_modes`]), the kind fullscreen runs in, and the kind chosen
-//!   ([`Screen::offer_display`]). A kind the player picks there
+//!   ([`listed_modes`](nova_view::listed_modes)), the kind fullscreen
+//!   runs in, and the kind chosen ([`Screen::offer_display`]). On macOS
+//!   it offers no modes and borderless, the native Space, as both kinds:
+//!   a saved exclusive kind opens borderless there, quietly. A kind the player picks there
 //!   ([`Screen::take_display_choice`]) is entered once the event is
 //!   handled, and saved, with the monitor's name, as
 //!   [`GameSettings::fullscreen_kind`].
@@ -140,14 +144,16 @@ use nova_render::{Gpu, ImageError, ImageSource, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
 use nova_view::view_shape::widened_size;
 use nova_view::{
-    DrawList, FullscreenKind, ImageKey, Input, Key, MonitorMode, MouseButton, Point, Screen,
-    ScreenAction, ViewShape, listed_modes,
+    DrawList, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode, MouseButton, Point,
+    Screen, ScreenAction, ViewShape,
 };
 
 mod fullscreen;
+mod menu;
 mod scaling;
 pub mod screen;
 
+pub use menu::{MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};
 
 use crate::config::Os;
@@ -264,6 +270,8 @@ pub enum WindowEvent {
     },
     /// The user asked to close the window.
     CloseRequested,
+    /// An item of the platform's menu bar was picked (see `menu`).
+    Menu(MenuCommand),
 }
 
 /// Whether the app goes on after an event.
@@ -351,8 +359,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         }
     }
 
-    /// The app reading `os`'s fullscreen shortcut, rather than the one of
-    /// the system it was built for.
+    /// The app behaving as on `os`, rather than the system it was built
+    /// for, in fullscreen: it reads `os`'s fullscreen shortcut (none on
+    /// macOS, whose View menu takes Control+Command+F), and offers
+    /// exclusive fullscreen only off macOS. On [`Os::MacOs`] the
+    /// Preferences picker lists no modes, and a saved exclusive kind is
+    /// entered borderless, the native Space; other systems offer the
+    /// monitor's exclusive modes.
     #[must_use]
     pub fn with_os(mut self, os: Os) -> Self {
         self.fullscreen.set_os(os);
@@ -406,12 +419,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Offers the Preferences dialog, once each time it opens, the modes
     /// the window's monitor lists, the kind fullscreen runs in, and the
     /// kind chosen, the saved one even when this session fell back from it
-    /// ([`Screen::offer_display`]).
+    /// ([`Screen::offer_display`]). On macOS, no modes and borderless.
     fn offer_display(&mut self, window: &impl WindowPort) {
         let open = self.screen.now_showing() == Some(Showing::Preferences);
         if open && !self.display_offered {
-            let modes = listed_modes(&window.video_modes());
-            let chosen = self.fullscreen.kind().kind();
+            let modes = self.fullscreen.listed_modes(window);
+            let chosen = self.fullscreen.chosen_kind();
             self.screen
                 .offer_display(&modes, self.fullscreen.live_kind(), chosen);
         }
@@ -775,6 +788,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 })
             }
             WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
+            WindowEvent::Menu(command) => game(self.route_menu(command)),
         }
     }
 
@@ -972,6 +986,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             self.cursor_synced = true;
         }
         let action = self.screen.input(&input);
+        self.after_input(action)
+    }
+
+    /// What follows the screen's answer to an input, `action`: the
+    /// viewport refitted to its shape, the audio fed, its warnings kept,
+    /// and an exit when it quits, now or through [`Screen::take_quit`].
+    fn after_input(&mut self, action: ScreenAction) -> Control {
         self.refit_shape();
         self.forget_sync_unless_drawing();
         self.feed_audio();
@@ -1214,6 +1235,7 @@ mod tests {
     type TestApp = App<NoImages, RecordingScreen>;
 
     mod display_shapes;
+    mod menu;
     mod pointer_release;
 
     /// Bytes written, kept where the test can read them.
@@ -1301,8 +1323,10 @@ mod tests {
         assert_eq!(broken.take_warnings(), Vec::<String>::new());
     }
 
+    /// The app over `window`, as on Windows whatever the host, so its
+    /// monitor offers exclusive modes.
     fn app(window: &FakeWindow) -> TestApp {
-        App::new(window, NoImages, RecordingScreen::default())
+        App::new(window, NoImages, RecordingScreen::default()).with_os(Os::Windows)
     }
 
     fn handle(app: &mut TestApp, window: &mut FakeWindow, event: WindowEvent) -> Control {
@@ -2554,6 +2578,8 @@ mod tests {
         },
         hyperspace_effects: true,
         quicktime_movies: true,
+        smoke_trails: true,
+        weapon_effects: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
     };
@@ -2631,7 +2657,10 @@ mod tests {
                 fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
                 frame_upscaler: crate::settings::ScalingSetting::default(),
+                nova_files: None,
             }
         );
         let saved: serde_json::Value =
@@ -2881,7 +2910,12 @@ mod tests {
 
     use crate::config::Os;
 
-    const MAC_SHORTCUT: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
+    /// The Windows shortcut, Alt+Enter.
+    const SHORTCUT: [Key; 2] = [Key::Alt, Key::Enter];
+
+    /// macOS's Control+Command+F, which its View menu's key equivalent
+    /// takes before the window.
+    const MAC_FULL_SCREEN: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
 
     const BORDERLESS: Option<FullscreenKind> = Some(FullscreenKind::Borderless);
 
@@ -2939,27 +2973,78 @@ mod tests {
     #[test]
     fn the_shortcut_goes_fullscreen_and_never_reaches_the_screen() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
-        let mut app = app(&window).with_os(Os::MacOs);
+        let mut app = app(&window).with_os(Os::Windows);
         let mut gpu = RecordingGpu::new();
-        for key in MAC_SHORTCUT {
+        for key in SHORTCUT {
             let handled = app.handle_routed(self::key(key, true), &mut window, &mut gpu);
             assert_eq!(handled, handled_game(), "{key:?}");
         }
-        handle(&mut app, &mut window, WindowEvent::Text('f'));
-        handle(&mut app, &mut window, key(Key::Char('f'), false));
+        handle(&mut app, &mut window, WindowEvent::Text('\r'));
+        handle(&mut app, &mut window, key(Key::Enter, false));
         assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(
             app.screen().inputs,
-            [key_input(Key::Control, true), key_input(Key::Command, true)],
-            "the modifiers only"
+            [key_input(Key::Alt, true)],
+            "the modifier only"
         );
-        handle(&mut app, &mut window, key(Key::Command, false));
+        handle(&mut app, &mut window, key(Key::Alt, false));
         handle(&mut app, &mut window, WindowEvent::Text('g'));
         assert_eq!(
-            app.screen().inputs[2..],
-            [key_input(Key::Command, false), Input::Text('g')],
+            app.screen().inputs[1..],
+            [key_input(Key::Alt, false), Input::Text('g')],
             "later text arrives"
         );
+    }
+
+    #[test]
+    fn on_macos_control_command_f_is_the_games_keys_and_toggles_nothing() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window).with_os(Os::MacOs);
+        let mut gpu = RecordingGpu::new();
+        for key in MAC_FULL_SCREEN {
+            app.handle_routed(self::key(key, true), &mut window, &mut gpu);
+        }
+        handle(&mut app, &mut window, WindowEvent::Text('f'));
+        for key in MAC_FULL_SCREEN.iter().rev() {
+            app.handle_routed(self::key(*key, false), &mut window, &mut gpu);
+        }
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN, "the View menu's to take");
+        assert_eq!(
+            app.screen().inputs,
+            [
+                key_input(Key::Control, true),
+                key_input(Key::Command, true),
+                key_input(Key::Char('f'), true),
+                Input::Text('f'),
+                key_input(Key::Char('f'), false),
+                key_input(Key::Command, false),
+                key_input(Key::Control, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn on_macos_a_system_toggle_is_saved_each_way_and_gives_back_the_windows_size() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = app(&window)
+            .with_os(Os::MacOs)
+            .with_settings(keeper(&store));
+        let resized = |size_px| WindowEvent::Resized {
+            size_px,
+            scale_factor: 2.0,
+        };
+        handle(&mut app, &mut window, resized((1280, 960)));
+        // The View menu's item, Globe+F and the green button all arrive
+        // as the system's report.
+        handle(&mut app, &mut window, reported(true));
+        assert!(saved_fullscreen(&store));
+        handle(&mut app, &mut window, resized((3024, 1964)));
+        handle(&mut app, &mut window, reported(false));
+        assert!(!saved_fullscreen(&store));
+        assert_eq!(store.writes(), 2);
+        assert_eq!(window.size_requests, [(1280, 960)]);
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN, "the system did it");
     }
 
     fn handled_game() -> Handled {
@@ -2984,13 +3069,13 @@ mod tests {
         let mut window = FakeWindow::new((2048, 1536), 2.0);
         let store = MemorySettings::new();
         let mut app = app(&window)
-            .with_os(Os::MacOs)
+            .with_os(Os::Windows)
             .with_settings(keeper(&store));
-        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        chord(&mut app, &mut window, &SHORTCUT);
         assert!(saved_fullscreen(&store));
         assert_eq!(store.writes(), 1);
         window.size_px = (3024, 1964);
-        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        chord(&mut app, &mut window, &SHORTCUT);
         assert!(!saved_fullscreen(&store));
         assert_eq!(store.writes(), 2);
         assert_eq!(window.fullscreen, [BORDERLESS, None]);
@@ -3029,9 +3114,9 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let store = MemorySettings::new();
         let mut app = app(&window)
-            .with_os(Os::MacOs)
+            .with_os(Os::Windows)
             .with_settings(keeper(&store));
-        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        chord(&mut app, &mut window, &SHORTCUT);
         for frame in 1..=5 {
             handle(&mut app, &mut window, reported(true));
             let elapsed = Duration::from_millis(16 * frame);
@@ -3358,7 +3443,7 @@ mod tests {
             reports: reports.to_vec(),
             ..DisplayScreen::default()
         };
-        App::new(window, NoImages, screen)
+        App::new(window, NoImages, screen).with_os(Os::Windows)
     }
 
     fn press_on(app: &mut DisplayApp, window: &mut FakeWindow, key: Key) {
@@ -3405,6 +3490,22 @@ mod tests {
                 FullscreenKind::Exclusive(fhd())
             ),
             "offered again, with no modes from a monitor listing none"
+        );
+    }
+
+    #[test]
+    fn opening_preferences_on_macos_offers_no_modes_and_borderless() {
+        let mut window = on_monitor();
+        let mut app = display_app(&window, &[]).with_os(Os::MacOs);
+        app.fullscreen.set_kind(fhd_on(DELL));
+        press_on(&mut app, &mut window, Key::Char('p'));
+        assert_eq!(
+            app.screen().offers,
+            [(
+                vec![],
+                FullscreenKind::Borderless,
+                FullscreenKind::Borderless
+            )]
         );
     }
 

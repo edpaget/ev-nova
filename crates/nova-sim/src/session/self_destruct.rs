@@ -350,10 +350,20 @@ mod tests {
         let mut session = flying(&catalog);
         hold(&mut session, 1);
         assert_eq!(session.self_destruct.count(), Some(149));
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.self_destruct.count(), Some(148));
         hold(&mut session, 1);
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.self_destruct.count(), Some(146));
     }
 }

@@ -646,7 +646,7 @@ mod tests {
                 ai.react(npc, &on_it, &around),
                 Reaction {
                     target: Some(ShipRef::Npc(NpcId(1))),
-                    provoked: 12.0,
+                    provoked: 24.0,
                     goal: None,
                 },
                 "{:?}",

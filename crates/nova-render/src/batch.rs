@@ -633,6 +633,13 @@ fn or_levels(tint: Color) -> [u8; 3] {
     [tint.r, tint.g, tint.b].map(|c| ((u32::from(c) * alpha * 32 + FULL / 2) / FULL) as u8)
 }
 
+/// The opacity, in 32nds, that `tint` asks a [`Blend::OrCrossfade`] sprite
+/// to be drawn at: `round(a × 32 / 255)` for its alpha `a`, exact for
+/// every alpha a fade gives (`round(k × 255 / 32)`).
+fn crossfade_opacity(tint: Color) -> u8 {
+    ((u32::from(tint.a) * 32 + 127) / 255) as u8
+}
+
 /// Whether `a` and `b` share any area; rectangles that only touch along
 /// an edge do not.
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -641,10 +648,12 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 
 /// Appends a quad, extending the last batch when it is the same page's
 /// and blends the same way. An [`Blend::Or`] quad's tint becomes its
-/// levels as fractions of 32 (alpha 1), and it starts a new batch when it
-/// overlaps a quad already in the last one: every quad of an OR batch
-/// reads the same copy of what is beneath, so a later overlapping one
-/// would not see the earlier.
+/// levels as fractions of 32 (alpha 1), and an [`Blend::OrCrossfade`]
+/// quad's alpha its opacity as a fraction of 32 ([`crossfade_opacity`]).
+/// Either starts a new batch when it overlaps a quad already in the last
+/// one ([`Blend::reads_backdrop`]): every quad of such a batch reads the
+/// same copy of what is beneath, so a later overlapping one would not see
+/// the earlier.
 fn push_quad(
     batches: &mut Vec<Batch>,
     entry: &AtlasEntry,
@@ -652,11 +661,16 @@ fn push_quad(
     (tint, colorize): (Color, [f32; 4]),
     blend: Blend,
 ) {
-    let tint = if blend == Blend::Or {
-        let [r, g, b] = or_levels(tint).map(|n| f32::from(n) / 32.0);
-        [r, g, b, 1.0]
-    } else {
-        rgba(tint)
+    let tint = match blend {
+        Blend::Or => {
+            let [r, g, b] = or_levels(tint).map(|n| f32::from(n) / 32.0);
+            [r, g, b, 1.0]
+        }
+        Blend::OrCrossfade => {
+            let [r, g, b, _] = rgba(tint);
+            [r, g, b, f32::from(crossfade_opacity(tint)) / 32.0]
+        }
+        Blend::Normal | Blend::Additive | Blend::Max => rgba(tint),
     };
     let quad = QuadInstance {
         dest,
@@ -671,7 +685,7 @@ fn push_quad(
     }) = batches.last_mut()
         && *page == entry.page
         && *last == blend
-        && !(blend == Blend::Or && quads.iter().any(|q| overlaps(q.dest, dest)))
+        && !(blend.reads_backdrop() && quads.iter().any(|q| overlaps(q.dest, dest)))
     {
         quads.push(quad);
         return;
@@ -1427,6 +1441,50 @@ mod tests {
             let frame = render_one(&list, &viewport());
             assert_eq!(sprite_blends(&frame), [(Blend::Or, 2)], "{side}");
         }
+    }
+
+    #[test]
+    fn a_crossfade_quads_alpha_is_its_opacity_in_exact_32nds() {
+        // The alphas a fade gives: `see_through(t)` and `Pod::tint` are
+        // round(k × 255 / 32), as `lights_tint(k)` is.
+        let sprite = ImageKey::sprite(200, 0);
+        for k in 0..=32_u8 {
+            let mut list = DrawList::new();
+            let tint = Color {
+                r: 200,
+                ..lights_tint(k)
+            };
+            list.crossfade_sprite(sprite, at(10.0, 10.0), tint);
+            let frame = render_one(&list, &viewport());
+            assert_eq!(
+                tints(&frame),
+                [[200.0 / 255.0, 1.0, 1.0, f32::from(k) / 32.0]],
+                "k {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_crossfade_sprites_split_and_never_share_an_or_batch() {
+        let sprite = ImageKey::sprite(200, 0);
+        let mut list = DrawList::new();
+        list.crossfade_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .crossfade_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .crossfade_sprite(sprite, at(40.0, 10.0), Color::WHITE)
+            .or_sprite(sprite, at(60.0, 10.0), Color::WHITE)
+            .crossfade_sprite(sprite, at(80.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [
+                (Blend::OrCrossfade, 1),
+                (Blend::OrCrossfade, 2),
+                (Blend::Or, 1),
+                (Blend::OrCrossfade, 1),
+            ]
+        );
     }
 
     #[test]

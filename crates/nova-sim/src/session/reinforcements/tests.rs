@@ -695,7 +695,32 @@ fn double_times_second_pass_counts_the_clock_down_again() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     session.call_for_reinforcements(warship, false, None);
-    session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+    session.tick_again(
+        Controls::default(),
+        &crate::ai::NovaAi::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+    assert_eq!(timer(&session), i32::from(TIME) - 1);
+}
+
+#[test]
+fn an_advance_pass_counts_the_clock_down_once() {
+    // `_HandleReinforcements` (@0x44504) runs once in each pass of
+    // `_DoPlayGameWork`: on the advance pass in the traffic's motion, and
+    // not again after its asteroids, as the second pass ticks it.
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false, None);
+    let rescued = session.game_work(
+        Controls::default(),
+        &catalog,
+        &crate::ai::NovaAi::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+    assert!(!rescued);
     assert_eq!(timer(&session), i32::from(TIME) - 1);
 }
 

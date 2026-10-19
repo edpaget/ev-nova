@@ -562,7 +562,12 @@ pub(super) mod tests {
             let mut events = session.take_combat_events();
             session.tick(Controls::default());
             fight(&mut session);
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             events.extend(session.take_combat_events());
             assert_eq!(exploded(&events).len(), 1, "{events:?}");
             let Some(Ending::Holding { ticks_left }) = session.player_end else {
@@ -634,7 +639,12 @@ pub(super) mod tests {
             let mut session = among(&catalog, &[on_the_player], 1, rules);
             session.pilot.ship = crate::combat::hull::ESCAPE_POD_SHIP;
             session.pod = Some(1);
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             assert!(session.rescue_due, "its countdown ran out");
             assert_eq!(session.pod, Some(0), "not killed");
             assert_ne!(session.condition, Condition::Destroyed);
@@ -653,7 +663,12 @@ pub(super) mod tests {
             let at = session.npcs()[0].state.position;
             session.sites = vec![deadly_at(140, at.x, at.y)];
             session.listed = session.sites.clone();
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             assert_eq!(session.npcs(), []);
         }
     }

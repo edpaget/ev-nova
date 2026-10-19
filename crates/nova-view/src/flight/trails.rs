@@ -22,10 +22,11 @@
 //!   never read by the drawing (see [`effects`](super::effects)): every
 //!   particle is opaque, then fades over its last 32 ticks.
 //!
-//! Left out: the `SmokeTrails` preference gate (@0x35d64-0x35d6d), which
-//! the engine has no preference for yet
-//! (rdm:phase/weapons-fidelity/phase-35-left-out-of-phase-24); and the
-//! frozen frame (@0x35d73), which the engine never has.
+//! - The Smoke Trails preference off (the original's inverted
+//!   `SmokeTrails` byte set) skips the trail (@0x35d64-0x35d6d): the
+//!   flight view's `smoke_trails` flag, which its shot looks' step reads.
+//!
+//! Left out: the frozen frame (@0x35d73), which the engine never has.
 
 use std::collections::BTreeMap;
 

@@ -321,6 +321,7 @@ mod tests {
             session.tick_combat(Rules::default(), &mut NeverFires);
             session.tick_again(
                 crate::flight::Controls::default(),
+                &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
             );

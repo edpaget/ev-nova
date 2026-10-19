@@ -16,6 +16,13 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The ship loop splits an NPC's step from its display only when its
+    # pods or escape may run (`escape_may_run`); splitting every NPC's is
+    # the same fight (`an_npcs_step_then_its_display_match_handling_it`),
+    # its `npc_escape` runs nothing for a ship not dying, and the stray
+    # words it steps early are only another ship's or the player's, which
+    # nothing reads before the frame.
+    "nova-sim/src/session/npc_escape\\.rs:[0-9]+:[0-9]+: replace escape_may_run -> bool with true$",
     # The jump arrival's reverse bearing, (bearing + 180) mod 360: `_Accel`
     # reads it through `_TableSin` and `_TableCos`, which take any whole
     # degree mod 360 (`trig::table_radians`), so bearing + 180 + 360 and
@@ -190,15 +197,37 @@ exclude_re = [
     # is a one-line `Ok(None)`.
     "no_resource_fork",
     # nova's `main` only wires the real adapters together and runs the event
-    # loop, which needs a display; `cli::data_dir` and the app it starts are
+    # loop, which needs a display; `startup::run` (the startup sequence it
+    # hands the adapters to), `cli::data_dir` and the app it starts are
     # tested on their own.
     "replace main -> ExitCode",
     # The winit event-loop glue: opening the window and its surface (or
-    # recording why it could not), and forwarding each event to
-    # `App::handle` (including acting on its `Control`). It needs a real
-    # window and display. The decisions it forwards to (`translate`,
-    # `App::handle`, `gpu_failure`, `exit::exit`) are mutated and tested.
-    "impl ApplicationHandler for Runner<S>>::(resumed|window_event)",
+    # recording why it could not), installing the macOS menu bar, and
+    # forwarding each window event and menu pick to `App::handle`
+    # (including acting on its `Control`) and the screen's offers to the
+    # menu bar, and starting the startup warnings' sheet once the loop
+    # waits. It needs a real window, display and, for the menu bar and the
+    # sheet, `NSApplication` on the main thread. The decisions it forwards
+    # to (`translate`, `App::handle`, `MenuSync`, `gpu_failure`,
+    # `exit::exit`, `Report::take_alert`) are mutated and tested, and
+    # `MenuBar::install` / `set_enabled` run on the main thread in
+    # nova-appkit's `tests/it`.
+    "impl ApplicationHandler<MenuCommand> for Runner<S>>::(resumed|window_event|user_event|about_to_wait)",
+    "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu) with \\(\\)$",
+    "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Option<String> with ",
+    # The startup dialogs (`platform/dialogs.rs`): rfd's open panel, error
+    # alert and warnings sheet, which need a display and `NSApplication`
+    # (and a person to dismiss them). The decisions around them (when to
+    # ask, what a pick resolves to, when to alert, the alert's text) are
+    # the startup core's, mutated and tested over mock ports. The
+    # non-macOS no-ops are never built on the macOS development host.
+    "nova/src/platform/dialogs\\.rs:.*replace (<impl NovaFilesDialog for Dialogs>::pick|<impl FatalAlert for Dialogs>::show_fatal|show_warnings)",
+    # `StdTerminal` reads whether the process's real stderr is a terminal:
+    # a hermetic test can't choose that (nextest pipes it, `--no-capture`
+    # doesn't). `Report` decides through the `Terminal` port and is tested
+    # with both answers.
+    "nova/src/startup/report\\.rs:.*replace <impl Terminal for StdTerminal>::stderr_is_terminal -> bool with ",
+    "nova/src/platform/menu_bar\\.rs:.*replace <impl MenuPort for MenuBar>::set_enabled with \\(\\)$",
     # The developer tools' window glue (the `dev-tools` feature): egui-winit's
     # input state over a real winit window, which tests cannot build. Each
     # forwards to tested parts: the panel (`DevPanel`), the painter
@@ -260,6 +289,9 @@ exclude_re = [
     # output device, which no gating test may open; everything it hands
     # on to is mutated and tested on kira's device-free `MockBackend`.
     "KiraAudio::open",
+    # The trait's default `menu_enabled` is `true` already: replacing it
+    # with `true` changes nothing.
+    "nova-view/src/screen\\.rs:.*replace Screen::menu_enabled -> bool with true$",
     # The trait's default `take_warnings` and `take_diagnostics` are
     # `Vec::new()`; replacing either with `vec![]` builds the same empty
     # list, so it cannot be observed.
@@ -474,6 +506,17 @@ exclude_re = [
     # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
     # texel shows.
     "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
+    # A shot's slot is distinct among the shots in flight (it is the
+    # first not taken), so `insert_seated`'s insertion point never meets
+    # an equal slot, and `<` and `<=` find the same place.
+    "nova-sim-combat/src/combat/shot_slots\\.rs:.*replace < with <= in Combat::insert_seated$",
+    # `_HandleShot`'s walk: one visit past the last slot held or holding a
+    # shot finds neither, and a sub-munition never takes the visited slot,
+    # which its parent still holds as it releases.
+    "nova-sim-combat/src/combat/expiry\\.rs:.*replace < with <= in Combat::visit_slots$",
+    # A berth holds one ship, so a fighter just put in the system never
+    # shares its carrier's: `>` and `>=` pick the same fighters above it.
+    "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",
     # The fold steps only with a direction (`fold.dir == 0` is the other
     # arm), so its tests of `dir > 0` and `dir < 0` read the same as
     # `>= 0` and `<= 0` there.

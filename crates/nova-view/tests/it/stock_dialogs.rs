@@ -27,9 +27,9 @@ use nova_view::ui::note::{
     TEXT_ITEM as NOTE_TEXT_ITEM,
 };
 use nova_view::ui::prefs::{
-    HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM,
-    PREFS_DIALOG, SCALING_ITEM, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM, VOLUME_UP_ITEM,
-    VOLUME_VALUE_ITEM,
+    HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, NOTICE_AREA,
+    OK_ITEM, PREFS_DIALOG, SCALING_ITEM, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM,
+    VOLUME_UP_ITEM, VOLUME_VALUE_ITEM,
 };
 use nova_view::ui::{
     ButtonImages, ButtonSkin, ButtonStyle, DescDialog, DescriptionSource, Dialog, DialogEvent,
@@ -437,6 +437,10 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         assert!(prefs.hyperspace_effects().enabled(), "{}", path.display());
         assert_eq!(prefs.quicktime_movies().label(), "QuickTime Movies");
         assert!(prefs.quicktime_movies().enabled(), "{}", path.display());
+        assert_eq!(prefs.smoke_trails().label(), "Smoke Trails");
+        assert!(prefs.smoke_trails().enabled(), "{}", path.display());
+        assert_eq!(prefs.weapon_effects().label(), "Weapon Effects");
+        assert!(prefs.weapon_effects().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -447,11 +451,12 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         );
         assert!(dialog.bounds().contains(music.min) && dialog.bounds().contains(music.max));
         // Nothing else is drawn where the music volume is.
-        for toggle in prefs
-            .inert()
-            .iter()
-            .chain([prefs.hyperspace_effects(), prefs.quicktime_movies()])
-        {
+        for toggle in prefs.inert().iter().chain([
+            prefs.hyperspace_effects(),
+            prefs.quicktime_movies(),
+            prefs.smoke_trails(),
+            prefs.weapon_effects(),
+        ]) {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
                 || rect.min.x >= music.max.x
@@ -461,9 +466,9 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         }
         assert_eq!(
             prefs.inert().len(),
-            7,
-            "{name}: QuickTime Movies works, Run in a window is the display picker \
-             and Share Processor Time the Scaling list"
+            5,
+            "{name}: QuickTime Movies, Smoke Trails and Weapon Effects work, Run in a \
+             window is the display picker and Share Processor Time the Scaling list"
         );
         assert!(
             prefs.inert().iter().all(|toggle| {
@@ -489,6 +494,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 prefs.sound(),
                 prefs.hyperspace_effects(),
                 prefs.quicktime_movies(),
+                prefs.smoke_trails(),
+                prefs.weapon_effects(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([prefs.effects_volume().rects().bounds(), music, ok, keys])
@@ -548,6 +555,8 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
                 prefs.sound(),
                 prefs.hyperspace_effects(),
                 prefs.quicktime_movies(),
+                prefs.smoke_trails(),
+                prefs.weapon_effects(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
             .chain([
@@ -563,6 +572,62 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
                 || rect.max.y <= list.min.y
                 || rect.min.y >= list.max.y;
             assert!(apart, "{name}: {rect:?} under the Scaling list {list:?}");
+        }
+    }
+}
+
+/// The relaunch notice's area, under "Check For Updates", is clear of
+/// every part the dialog draws, inside the dialog, in each build.
+#[test]
+fn the_preferences_dialogs_relaunch_notice_has_its_area_to_itself() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PREFS_DIALOG)
+            .expect("converts");
+        let prefs = PrefsDialog::new(
+            &template,
+            Prefs::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let dialog = prefs.dialog();
+        let name = path.display();
+        let (left, top, right, bottom) = NOTICE_AREA;
+        let origin = dialog.bounds().min;
+        let notice = Bounds {
+            min: Point::new(origin.x + left, origin.y + top),
+            max: Point::new(origin.x + right, origin.y + bottom),
+        };
+        assert!(dialog.bounds().contains(notice.min) && dialog.bounds().contains(notice.max));
+        let ok = dialog.item_bounds(OK_ITEM).expect("OK");
+        let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
+        for rect in prefs
+            .inert()
+            .iter()
+            .chain([
+                prefs.music(),
+                prefs.sound(),
+                prefs.hyperspace_effects(),
+                prefs.quicktime_movies(),
+                prefs.smoke_trails(),
+                prefs.weapon_effects(),
+            ])
+            .map(nova_view::ui::toggle::Toggle::rect)
+            .chain([
+                prefs.effects_volume().rects().bounds(),
+                prefs.music_volume().rects().bounds(),
+                prefs.display().rects().bounds(),
+                prefs.scaling().rects().bounds(),
+                ok,
+                keys,
+            ])
+        {
+            let apart = rect.max.x <= notice.min.x
+                || rect.min.x >= notice.max.x
+                || rect.max.y <= notice.min.y
+                || rect.min.y >= notice.max.y;
+            assert!(apart, "{name}: {rect:?} under the notice {notice:?}");
         }
     }
 }

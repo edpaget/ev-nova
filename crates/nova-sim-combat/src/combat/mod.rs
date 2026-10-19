@@ -48,12 +48,15 @@
 //! [`Combat`] holds the shots and beams in flight. Each tick
 //! ([`Combat::tick`]) runs over every ship in the fight, each a
 //! [`Fighter`] with the ship it targets, by the fight's [`Rules`], in this
-//! order:
+//! order, each step one of the tick's public phases (see [`phases`]),
+//! which a session may run with its own work between them:
 //!
-//! 1. The player's point defence fires, then the player fires the weapons
-//!    its trigger holds that are ready, as `_HandlePlayer` calls them
-//!    (`_HandleShipPointDefense` @0x68c74, then `_FirePlayerWeapon`
-//!    @0x6ab55 and @0x6abc7) before the frame's collision passes
+//! 1. The player's point defence fires ([`Combat::defend_player`]), then
+//!    the player fires the weapons its trigger holds that are ready and
+//!    its reloads count down a tick ([`Combat::fire_player`]), as
+//!    `_HandlePlayer` runs them (`_HandleShipPointDefense` @0x68c74, then
+//!    `_FirePlayerWeapon` @0x6ab55 and @0x6abc7, then the countdown
+//!    @0x6ae25-0x6ae61) before the frame's collision passes
 //!    (`_DoPlayGameWork` @0x43e19). So point defence takes a free shot or
 //!    beam slot, and steps an exit cursor it shares with a gun, before the
 //!    trigger, and reads the ship before the trigger's recoil. Each weapon
@@ -69,13 +72,14 @@
 //!    rolls its weapon's `JamVuln` ([`jamming`]), and a `Seeker` 0x0008
 //!    homing one the [`Field`]'s `Interference` ([`Shot::roll_at_launch`]).
 //!    A fighter bay's launch is no shot but a [`Sortie`], which the session
-//!    takes ([`Combat::take_sorties`]) and puts in the system as a ship.
+//!    takes ([`Combat::take_sorties`]) and puts in the system as a ship:
+//!    the player's after its trigger, an NPC's after step 4.
 //!    The player fires each weapon its trigger picks as `_FirePlayerWeapon`
 //!    does ([`Armament::fire_player`]): its copies together, sounding once
 //!    a call at [`PLAYER_FIRE_PRIORITY`] or
 //!    [`PLAYER_SECONDARY_FIRE_PRIORITY`], and a `Recoil` above none pushing
 //!    it back. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns destroys
-//!    its firer, which breaks up in step 9. Under the original's caps
+//!    its firer, which breaks up at its display step (step 9). Under the original's caps
 //!    ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s engine
 //!    reading, not the default) a shot or beam finding its table full
 //!    ([`MAX_SHOTS`], [`MAX_BEAMS`]) fails quietly, still spent and heard.
@@ -88,15 +92,22 @@
 //!    [`PointDefenceRule`] which missiles are hostile only by the other
 //!    reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility), and
 //!    never of a ship.
-//! 2. The hit pass (`Combat::hit_pass`): each shot that moved in the
-//!    last tick is tested on that move, as the original's next frame tests
+//! 2. The hit pass (`Combat::hit_pass`, [`Combat::test_hits`]): each shot
+//!    that moved in the last tick is tested on that move, as the original's next frame tests
 //!    it before `_HandleShot` moves it again; a shot fired since has not
 //!    moved, and is not tested. The pass meets each NPC where it stood as
 //!    the last tick ran and the player where it is now, but for contact
 //!    and point defence's sprites, which meet the player where it stood
-//!    too. In the original's order:
-//!    - Each shot that touches a ship it may hit ([`sides`]) on its move
-//!      hits it, or else an asteroid it touched (see 2a).
+//!    too. In the original's order (see the `collision` module):
+//!    - The contact passes: for each shot layer in turn (the shots, the
+//!      homing missiles, then the turret shots drawn over the ships), the
+//!      ships are walked by layer, top first, and within a layer in the
+//!      order they are drawn, bottom first ([`Fighter::sprite`]; a hidden
+//!      ship is not walked); each ship meets the layer's shots in firing
+//!      order, and a shot that touches a ship it may hit ([`sides`]) hits
+//!      it. So of two ships a move touches, the one walked first takes
+//!      the shot. Then the layer's shots meet the asteroids they touched
+//!      (see 2a).
 //!    - A point-defence shot still in point defence's layer (fired at a
 //!      missile; one fired at a ship is in the shot layer, contact-tested
 //!      like any shot and meeting no missile,
@@ -106,17 +117,21 @@
 //!      whoever fired it and whatever it is aimed at, but one that touched
 //!      a ship on its move, whose hit comes first; a missile hit after its
 //!      durability is used up is shot down where the point-defence shot
-//!      is, and vanishes.
+//!      is, and vanishes from the shots in flight.
 //!    - Each shot whose proximity fuse a ship sets off at the end of its
 //!      move hits it, as
 //!      [`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse) reads it
 //!      ([`Shot::fused`]: by the engine, the first ship in the fight's
 //!      order within its reach, the hit at the shot), or else an asteroid
 //!      that set it off.
-//!    - Each shot whose move spent its life, which is not tested, comes to
-//!      its end of life where it ended: it detonates (blasting the same
-//!      way) or fizzles, and releases its sub-munitions at the ship its
-//!      damage is aimed at.
+//!    - Each shot whose move spent its life is tested against no ship,
+//!      fuse or stellar, but meets an asteroid it touched; met by none, it
+//!      waits in the table for its end of life in step 5.
+//!    - Each shot point defence ended, this pass's and the missiles the
+//!      last tick's point-defence beams downed, is kept hidden at life 0:
+//!      neither drawn nor counted, it meets no ship, but a stellar, if it
+//!      is planet-type, or an asteroid in its armed fuse's reach still
+//!      sets it off ([`hidden`]).
 //!    - Each planet-type shot left meets the stellars (see 2b).
 //!
 //!    A shot that hits damages the ship, less a point of mass and of energy
@@ -127,7 +142,7 @@
 //!    a touch until the shot's age reaches it and the fuse until its age is
 //!    past it. Each age read is the one its move left, as the pass comes
 //!    before the shots move again. Sub-munitions released here take their
-//!    first move in step 6.
+//!    first move in step 5.
 //!
 //!    2a. Each shot meets the asteroids the session hands the tick
 //!    ([`AsteroidTarget`](asteroid_hit::AsteroidTarget)), where the last
@@ -149,64 +164,93 @@
 //!    hands the tick ([`StellarTarget`]) is spent on it: it explodes where
 //!    it hit, with no blast and no sub-munitions, and takes its mass and
 //!    energy damage off the stellar's strength. A stellar below 0 is
-//!    skipped by the later shots. This comes after the ship hits and the
-//!    expiries, as the original's stellar check (`_CheckShotProximities`
+//!    skipped by the later shots. This comes after the ship hits, as the
+//!    original's stellar check (`_CheckShotProximities`
 //!    @0x44015) comes after its ship collision passes; beams never hit a
 //!    stellar. The session takes each hit as a [`StellarStrike`]
 //!    ([`Combat::take_stellar_strikes`]) and shoots down those it
 //!    destroyed.
-//! 3. The pass's hits land at once (`Combat::land`), in its order:
-//!    contacts, proximities, then expiries. Each ship struck settles its
-//!    condition as step 9 does, but for a breakup's countdown: it is
-//!    disabled, or starts breaking up, and the pass's last strike on it
-//!    says so. So an NPC downed by a shot fires nothing more that tick, as
-//!    `_HandleShip` reads `_IsDisabled` after the passes.
-//! 4. Every NPC's point defence fires, as `_AIDispatch` runs it in its
-//!    slot loop (@0x4429d, `_AIFireTurret` @0x80b0d); then each NPC fires
-//!    the weapons its trigger holds that are ready, as in step 1, as
-//!    `_HandleShip`'s loop fires the picks (@0x44483); both read the
-//!    conditions the hit pass left. So a missile an NPC fires is first met
-//!    by an NPC's point defence on the next tick. An NPC fires its pick as
-//!    `_FireAIShipWeapon` does
+//! 3. Each of the pass's hits lands as the walk finds it (`Combat::land`),
+//!    with its blast, as `_HandleShipHit` lands it before the walk's next
+//!    pair: so a later test in the pass reads the armour the hits before
+//!    it left, and a turret shot rolling over a fighter that an earlier
+//!    hit disabled hits it ([`Target::disabled`]). After the pass, each
+//!    ship struck settles its condition as step 9 does, but for a
+//!    breakup's countdown: it is disabled, or starts breaking up, and the
+//!    pass's last strike on it says so. So an NPC downed by a shot runs no
+//!    point defence and fires nothing more that tick, as `_AIDispatch` and
+//!    `_HandleShip` read `_IsDisabled` after the passes.
+//! 4. Every NPC's point defence fires and every NPC launches its fighters
+//!    ([`Combat::defend_npcs`]), as `_AIDispatch` runs them in its slot
+//!    loop (@0x44270-0x442ae), on the advance pass alone (@0x4402a): by
+//!    slot, each NPC's goal-4 launch (`_AILaunchFighter` @0x8e6fa), its
+//!    point defence (`_AIFireTurret` @0x80b0d), then the snipe's launch
+//!    (@0x8732f), each launch sounding at [`BAY_LAUNCH_PRIORITY`] (see
+//!    `ai_dispatch`). So a missile an NPC fires is first met by an NPC's
+//!    point defence on the next tick, and under the caps it finds the
+//!    slots of the shots the collision passes ended, and of the spent
+//!    ones, still held ([`Combat::shot_room`]).
+//! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots`]) visits the shot
+//!    slots in order ([`Combat::handle_shots`]), freeing each slot held
+//!    since its last pass at its visit, and doing all of each slot's work
+//!    there, so every later visit reads what an earlier one landed. Each
+//!    shot whose last move spent its life comes to its end of life where
+//!    it ended (@0x36195): it releases its sub-munitions at the ship its
+//!    damage is aimed at, then detonates, blasting the ships about it
+//!    with its weapon's whole damage, or fizzles; its blast meets the
+//!    ships as the hit pass does, lands at once, and settles as in step 3.
+//!    Every other shot flies a tick at its visit (a sub-munition released
+//!    into a slot the visits had passed sits it out), homing ones
+//!    steering at their target, breaking up or not, unless it jams them,
+//!    their firer cannot see it, or a `Seeker` 0x4000 lock fails, and
+//!    confused ones circling by the [`Field`]'s frame ([`projectile`]);
+//!    each ship's jamming and sight are read as the hits so far left them
+//!    ([`Sight`]). Each keeps where its move began, for the
+//!    next tick's hit pass ([`Shot::moved_from`]). A shot of no life
+//!    (`Count` 0 or below) is dropped unmoved and unseen. A hit by a shot
+//!    turned on its firer is by no ship ([`Strike::by`]). Before it moves,
+//!    any shot but point defence whose ship has gone (destroyed, or out of
+//!    the fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)), and hits
+//!    no ship from then on. A player's homing missile not lost, aimed at
+//!    an NPC outside the player's fleet, locks on it as its age passes
+//!    [`LOCK_AGE`](projectile::LOCK_AGE): a strike of no damage the NPC
+//!    answers ([`Strike::lock`]), landing at once (@0x35855). Each shot of
+//!    a weapon that fires one shot at a time (`Flags3` 0x0004) holds its
+//!    firer's reload for it at its `Reload` ([`Armament::hold`]).
+//! 6. `_HandleShip` (@0x44483, [`Combat::handle_npcs`]), each NPC in
+//!    turn by slot, as `_DoPlayGameWork`'s ship loop runs it
+//!    (@0x4445c-0x444c4; one NPC's, [`Combat::handle_npc`], which the
+//!    session runs right after that NPC's flight): its reloads count down a tick (@0x33896), its
+//!    shields and armour regenerate (step 10), then it fires the weapons
+//!    its trigger holds that are ready, as in step 1 (but no fighter
+//!    bay's launch, which step 4 made), reading the conditions the passes
+//!    and the ends of life left, and the ships as the slots before it
+//!    left them; then its death timer ticks and its display step runs
+//!    (step 9). Its shots first move in the next tick's
+//!    step 5. An NPC fires its pick as `_FireAIShipWeapon` does
 //!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
 //!    engine, and a recoil sets the firer's velocity, reported as a
-//!    [`Shove`].
-//! 5. Every reload timer counts down a tick.
-//! 6. Shots fly a tick, homing ones steering at their target, breaking up
-//!    or not, unless it jams them, their firer cannot see it, or a
-//!    `Seeker` 0x4000 lock fails, and confused ones circling by the
-//!    [`Field`]'s frame ([`projectile`]); each ship's jamming and sight
-//!    are read as the hit pass left them ([`Sight`]). Each keeps where its
-//!    move began, for the next tick's hit pass ([`Shot::moved_from`]). A
-//!    shot of no life (`Count` 0 or below) is dropped unmoved and unseen.
-//!    A hit by a shot turned on its firer is by no ship ([`Strike::by`]).
-//!    Each beam spends a tick of its life, or fades a tick at its end
-//!    ([`Beam::live`]), one that has ended going before it hits or is
-//!    drawn again. The rest follow their firers ([`Beam::follow`]), each
-//!    from its exit on the frame its firer is drawn on this tick, pointing
-//!    along that frame, at its target or at its missile, turned by its
-//!    jitter drawn on the tick's chance. A beam outlives its firer disabled
-//!    or breaking up, and stays where its firer last was once the firer is
-//!    destroyed or out of the fight; a beam whose target is destroyed or
-//!    gone, or whose missile is gone, goes with it. Before it moves, any
-//!    shot but point defence whose ship has gone (destroyed, or out of the
-//!    fight) is lost ([`Jam::Lost`](projectile::Jam::Lost)), and hits no
-//!    ship from then on. A player's homing missile not lost, aimed at an
-//!    NPC outside the player's fleet, locks on it as its age passes
-//!    [`LOCK_AGE`](projectile::LOCK_AGE): a strike of no damage the NPC
-//!    answers ([`Strike::lock`]). Each shot of a weapon that fires one shot
-//!    at a time (`Flags3` 0x0004) holds its firer's reload for it at its
-//!    `Reload` ([`Armament::hold`]).
-//!
-//!    6b. The [`Scenery`]'s stellar hazards: gravity pulls, then the deadly
-//!    stellars kill ([`stellar_hazards`]), before every beam step, so a
-//!    ship a deadly stellar kills is out of the beams, the shockwaves and
-//!    the death timer.
+//!    [`Shove`]. Then the [`Scenery`]'s stellar hazards: gravity pulls,
+//!    then the deadly stellars kill ([`stellar_hazards`], `_HandleGravity`
+//!    @0x44509 and `_HandleDeadlyStellars` @0x4450e, [`Combat::hazards`]),
+//!    before every beam step, so a ship a deadly stellar kills is out of
+//!    the beams. Then, in `_HandleBeams` (@0x4453d,
+//!    [`Combat::close_tick`]), each beam spends a tick of its life, or
+//!    fades a tick at its end ([`Beam::live`]), one that has ended going
+//!    before it hits or is drawn again. The rest follow their firers
+//!    ([`Beam::follow`]), each from its exit on the frame its firer is
+//!    drawn on this tick, pointing along that frame, at its target or at
+//!    its missile, turned by its jitter drawn on the tick's chance. A beam
+//!    outlives its firer disabled or breaking up, and stays where its
+//!    firer last was once the firer is destroyed or out of the fight; a
+//!    beam whose target is destroyed or gone, or whose missile is gone,
+//!    goes with it.
 //! 7. A point-defence beam hits the missile it is held on the same way as
-//!    a point-defence shot; a missile downed leaves the fight before the
-//!    next hit pass tests its move, as `_HandleBeams` runs last in the
+//!    a point-defence shot; a missile downed leaves the shots in flight
+//!    before the next hit pass tests its move, kept hidden for that pass's
+//!    stellars and asteroids ([`hidden`]), as `_HandleBeams` runs last in the
 //!    frame (@0x4453d).
-//! 8. The tick's missile locks land, then the beams' hits. A beam damages
+//! 8. The beams' hits land. A beam damages
 //!    the nearest ship it may hit in its cone, or the first its segment
 //!    meets, as the fight's rules say ([`beam`]), every tick until its
 //!    life is over, and ends where it hit.
@@ -233,57 +277,83 @@
 //!    `Ionization` in its `IonizeColor` ([`ion`]): a shot's direct hit and
 //!    a beam's tick wholly, however decayed, a blast by its share over its
 //!    circle; the escape pod too, which nothing else here touches.
-//! 9. Conditions follow the damage: a ship with no armour left (of the
-//!    armour it holds) starts breaking up, and any other that holds armour
-//!    is disabled, or not, as the [`DisableRule`](hull::DisableRule) says;
-//!    a ship that holds none is never disabled. A ship held disabled
-//!    ([`Fighter::held_disabled`], a rescue mission's ship not yet
-//!    boarded, as `_IsDisabled` reads it @0x2d24-0x2d69) is kept disabled
-//!    at any armour, and is never newly disabled, so it reports no
-//!    [`CombatEvent::Disabled`]; once it is no longer held, its armour
-//!    decides again, with no event as it comes back intact. A ship
-//!    breaking up counts down the original's death timer, its
-//!    `DeathDelay` (three times it for the player), set on the breakup's
-//!    first tick, on which nothing is taken off (a breakup the hit pass
-//!    began included), and is destroyed once it is down to 2; a timer that
-//!    never rises above 0 goes as the fight's [`Breakup`](hull::Breakup)
-//!    says (see `update_condition`, `_HandleShipDisplay`
-//!    @0x2d80d-0x2d85a).
+//! 9. Conditions follow the damage, settled after each step that lands
+//!    hits, for each ship struck: a ship with no armour left (of the
+//!    armour it holds) starts breaking up, its death timer unset, and any
+//!    other that holds armour is disabled, or not, as the
+//!    [`DisableRule`](hull::DisableRule) says; a ship that holds none is
+//!    never disabled. A ship held disabled ([`Fighter::held_disabled`], a
+//!    rescue mission's ship not yet boarded, as `_IsDisabled` reads it
+//!    @0x2d24-0x2d69) is kept disabled at any armour, and is never newly
+//!    disabled, so it reports no [`CombatEvent::Disabled`]; once it is no
+//!    longer held, its armour decides again, with no event as it comes
+//!    back intact.
 //!
-//!    9b. Each ship destroyed this tick that is heavy enough sends out a
-//!    shockwave ([`shockwave`]): every ship within its explosion's size,
-//!    breaking up or not, takes its damage, never destroyed or newly
-//!    disabled by it, and is pushed away from the wreck. The session takes
-//!    each push as a [`Shove`] ([`Combat::take_shoves`]) and sets the
-//!    ship's velocity. Each intact or disabled ship hit then settles its
-//!    condition as in step 9.
+//!    Each ship's display step (`_HandleShipDisplay`, the `display`
+//!    module) runs the countdown: the player's before the hit pass
+//!    ([`Combat::display_player`], @0x43e29), each NPC's after its own
+//!    step 6 (@0x444ad). It settles the ship's condition from its armour
+//!    (catching armour lost with no hit), sets an unset timer to its
+//!    `DeathDelay` (three times it for the player), and destroys a ship
+//!    whose timer is down to 2; a timer that never rises above 0 goes as
+//!    the fight's [`Breakup`](hull::Breakup) says. The timer ticks at the
+//!    ship's own step before its display (@0x6d7e6, @0x35083). So a
+//!    breakup begun after a ship's display (a hit on the player, a beam)
+//!    starts at its next display.
+//!
+//!    9b. Each ship destroyed at its display that is heavy enough sends
+//!    out a shockwave at once ([`shockwave`]): every ship within its
+//!    explosion's size, breaking up or not, takes its damage, never
+//!    destroyed or newly disabled by it, and is pushed away from the
+//!    wreck. The session takes each push as a [`Shove`]
+//!    ([`Combat::take_shoves`]) and sets the ship's velocity. Each intact
+//!    or disabled ship hit then settles its condition as in step 9.
 //! 10. Shields and armour regenerate only on an intact ship, each up to
-//!     what it holds: a disabled or breaking-up one regenerates neither
-//!     (`_HandleShip` @0x34424, `_HandlePlayer` @0x6cf86-0x6cff3).
+//!     what it holds: a disabled or breaking-up one regenerates neither.
+//!     Each ship regenerates at its own step, before the beams' hits: the
+//!     player after its trigger ([`Combat::regenerate_player`],
+//!     `_HandlePlayer` @0x6cf86-0x6d093), each NPC at its own
+//!     `_HandleShip` in step 6 (@0x34424).
+//!
+//! After step 10 each ship's place is kept: the next tick's hit pass meets
+//! each NPC there (`Combat::hit_pass`).
 //!
 //! **Frame to tick.** Tick t is the original's frame t
-//! (`_DoPlayGameWork` @0x43e19-0x4453d, drawn after it returns,
+//! (`_DoPlayGameWork` @0x43de5-0x4453d, drawn after it returns,
 //! `_PrepareAllSprites` @0x45834): step 1 is its `_HandlePlayer` point
-//! defence and trigger (@0x68c74, then @0x6ab55); steps 2 and 3 its
-//! collision passes
-//! (`_SWCollideSpriteLayer` @0x43e70-0x44010, `_CheckShotProximities`
-//! @0x44015), testing tick t−1's moves, and `_HandleShot`'s ends of life
-//! (@0x36195); step 4 `_AIDispatch`'s point defence (@0x4429d) and
-//! `_HandleShip`'s fire (@0x44483); step 6 `_HandleShot`'s moves
-//! (@0x44385); steps 7 and 8 `_HandleBeams` (@0x4453d). So a shot that
-//! meets a ship is drawn over it, or at its last point, for a frame before
-//! its hit, as the original draws it. The session's traffic tick runs
-//! before the fight, where the original's AI and ships come after the
-//! passes (rdm:phase/weapons-fidelity/phase-28-npc-answers-hits-in-the-frame-they-land).
-//! Within the hit pass, shots go in the order they are kept, where the
-//! original goes in sprite-collision or slot order; the locks land with
-//! the beams, after the NPCs fire, where `_HandleShot` makes them before
-//! `_HandleShip`, though a lock does no damage and its answer is taken
-//! after the tick; neither crosses a boundary the player sees.
+//! defence, trigger and reload countdown (@0x68c74, @0x6ab55, @0x6ae25);
+//! steps 2 and 3 its collision passes (`_SWCollideSpriteLayer`
+//! @0x43e70-0x44010, `_CheckShotProximities` @0x44015), testing tick
+//! t−1's moves; step 4 `_AIDispatch`'s point defence (@0x4429d); step 5
+//! `_HandleShot` (@0x44385): each slot's end of life (@0x36195), or its
+//! move and lock (@0x35855), at its visit; step 6 `_HandleShip`'s countdown, regeneration
+//! and fire (@0x33896, @0x34424, @0x34ffd, loop @0x44483), each NPC's
+//! display (@0x444ad) and `_HandleBeams`' moves; steps 7 and 8
+//! `_HandleBeams`' hits (@0x4453d). The player's display step (@0x43e29)
+//! comes between steps 1 and 2. So a shot that meets a ship is
+//! drawn over it, or at its last point, for a frame before its hit, as
+//! the original draws it, and an NPC's shot is drawn where it left for a
+//! frame before it moves.
 //!
+//! The session (`nova_sim::Session::game_work`) runs the player's move
+//! after step 1, the traffic's AI between steps 3 and 4, and the NPCs'
+//! motion between steps 5 and 6, as `_DoPlayGameWork` does.
+//!
+//! What remains of the original's order crosses no boundary the player
+//! sees, and is not filed:
+//!
+//! - Step 4 runs after every NPC's decision, where `_AIDispatch`
+//!   interleaves them slot by slot.
+//!
+//! The ships within the hit pass are walked in the layers the last tick's
+//! layout left, which puts a ship the beams or the late steps disabled in
+//! its new layer a frame early (weapons-fidelity phase 39, item 3). See
+//! the `collision` module.
+
 //! A tick runs on a [`GamePass`] ([`Combat::tick_on`]): double time's second
-//! pass runs every step but the beams', which only spend their life on
-//! it, and the advance pass in double time doubles the beams' damage.
+//! pass runs every step but the NPCs' point defence, which it skips, and
+//! the beams', which only spend their life on it, and the advance pass in
+//! double time doubles the beams' damage.
 //!
 //! Each hit on a ship (a shot's, a beam's, a blast's, a shockwave's) is
 //! kept as a [`Strike`] by the ship whose it was, with the shield and
@@ -300,22 +370,30 @@
 //! shots, their targets, durability and generations live only in flight,
 //! and a stellar's strength is the session's, which saves none either.
 
+mod ai_dispatch;
 pub mod ai_fire;
 pub mod aim;
 pub mod armament;
 pub mod asteroid_hit;
 pub mod beam;
+mod collision;
 pub mod damage;
 pub mod defence;
+mod display;
+mod escort_loss;
 pub mod exits;
+mod expiry;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flags;
+pub mod hidden;
 pub mod hull;
 pub mod impact;
 pub mod ion;
 pub mod ion_tint;
 pub mod jamming;
+mod lineup;
+pub mod phases;
 pub mod plunder;
 pub mod projectile;
 pub mod report;
@@ -323,7 +401,10 @@ pub mod ship_frames;
 pub mod ship_lights;
 pub mod shockwave;
 pub mod shot_layer;
+pub mod shot_slots;
 pub mod sides;
+mod source_slot;
+pub mod spin_timer;
 pub mod stellar;
 pub mod stellar_hazards;
 pub mod submunition;
@@ -336,22 +417,27 @@ use aim::Pointing;
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use asteroid_hit::{AsteroidFuse, AsteroidTarget};
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
+pub use collision::SpriteRank;
 use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
-use exits::{Compression, ExitCursors, ExitPoints};
+pub use display::Displayed;
+pub use escort_loss::EscortLoss;
+use exits::{Compression, ExitCursors, ExitPoints, StrayWord};
 use hull::{
-    Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
-    never_breaks_up,
+    Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
 };
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
+use lineup::Lineup;
+pub use phases::Arena;
 use plunder::Plunderer;
 use projectile::{
-    BombLaunch, DecayStep, Fuse, Guide, Jam, LockAngle, Meeting, ProximityFuse, Shot, ShotId,
-    ShotLayer, Sight, Source, Target,
+    BombLaunch, DecayStep, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight, Source,
+    Target,
 };
 use report::{Reports, SimDiagnostic};
+use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
@@ -366,6 +452,7 @@ use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
+use crate::ship_layer::Slot;
 use crate::speed_cap::SpeedCap;
 
 /// An NPC's number in its system, unique while the player stays there:
@@ -479,8 +566,10 @@ pub enum CombatEvent {
     /// A ship's weapon glow lit (`Flags2` 0x0200, ship +0xc8e8 = 32.0):
     /// the view shows its `shän` `WeapImageID` sprite at full and lets it
     /// fade by its `WeapDecay`. The player's call that fired a glow weapon
-    /// lights it (`_FirePlayerWeapon` @0x62c78-0x62c98, a fighter bay's
-    /// launch too, @0x62c61-0x62c6e), and an NPC's pick that spawned one
+    /// lights it (`_FirePlayerWeapon` @0x62c78-0x62c98); a fighter bay's
+    /// call only once a fighter it launched is put in the system
+    /// (@0x62c61-0x62c6e), which the session decides and lights through
+    /// [`Combat::light_glow`]; and an NPC's pick that spawned one
     /// (`_FireAIShipWeapon` @0x88dc0-0x88de4), once a call; and each
     /// live beam of one, on every advance-pass tick, for its firer
     /// (`_HandleBeams` @0x30b1f-0x30b37), but a point-defence beam's at a
@@ -656,8 +745,9 @@ pub struct Strike {
     pub ship: ShipRef,
     /// The ship whose shot, beam, blast or shockwave it was, or that
     /// boarded it; none for a shot no ship launched (`_DamageShip`'s
-    /// source -1), such as one turned on its firer, whose hit provokes no
-    /// one, is no crime and credits no kill.
+    /// source -1), such as one turned on its firer, whose hit draws no
+    /// target (it still provokes its victim and the victim's lead, see
+    /// `nova_sim::ai::react::victim`), is no crime and credits no kill.
     pub by: Option<ShipRef>,
     /// The shield and armour it took.
     pub damage: f32,
@@ -666,10 +756,12 @@ pub struct Strike {
     pub downed: Option<Downed>,
     /// Whether it was a direct hit, which the ship hit may answer: the
     /// original's `_DamageShip` arg +0x20 ("real"). A shot's or beam's hit
-    /// is (`_HandleShipHit` @0x36c43, `_HandleBeams` @0x314be), and a
-    /// boarding; a blast's, whether it went off on a hit or as its shot
-    /// expired (@0x36e80, @0x360cb), and a death shockwave's
-    /// ([`shockwave`]) are not. So only a direct hit raises a grudge,
+    /// is (`_HandleShipHit` @0x36c43, `_HandleBeams` @0x314be); a
+    /// blast's, whether it went off on a hit or as its shot expired
+    /// (@0x36e80, @0x360cb), and a death shockwave's ([`shockwave`]) are
+    /// not, nor is a boarding's Good Samaritan call
+    /// (`nova_sim::Session::board`), which is answered but never passes
+    /// `_DamageShip`, and which the ship boarded never answers. So only a direct hit raises a grudge,
     /// cloaks or uncloaks its ship and provokes an AI (the reaction block
     /// @0x3b44d and the decloak @0x3bf1f skip the rest), though the player
     /// is convicted of what any hit does (@0x3ad4f-0x3ae53).
@@ -679,7 +771,8 @@ pub struct Strike {
     /// at ([`Shot::aimed_at`], shot +0x2a, @0x36bc5-0x36c37); a beam's on
     /// the ship it was fired at ([`Beam::aimed_at`], beam +0x18), or, for
     /// one fired at nothing, its firer's target at the hit (+0x70,
-    /// @0x31463-0x315b4); a boarding always is. No blast or shockwave is.
+    /// @0x31463-0x315b4); a boarding's call always is. No blast or
+    /// shockwave is.
     /// Only an intended strike by the player calls the Good Samaritans
     /// (@0x3bed2, see `nova_sim::ai::react::answer`).
     pub intended: bool,
@@ -711,7 +804,9 @@ pub struct Strike {
     /// the session's settle step works it out (see
     /// `nova_sim::ai::answer_flag`). The fight leaves it unset. Only an
     /// answered strike draws a reaction, a grudge, cloak-when-hit or a
-    /// Good Samaritan.
+    /// Good Samaritan. Every answered hit is [`direct`](Strike::direct)
+    /// (@0x3b44d); the boarding's call alone is answered but not direct,
+    /// drawing the Good Samaritans and no reaction.
     pub answered: bool,
 }
 
@@ -774,6 +869,12 @@ pub struct Fighter<'a> {
     /// that escorts the player, else the lead it escorts or the carrier
     /// it left; none for the player and a ship led by no one.
     pub leader: Option<ShipRef>,
+    /// Whether it is a ship of the player's fleet: led by the player with
+    /// no mission mark (`_DamageShip` @0x3af8f-0x3afa5). The hit that
+    /// leaves it disabled clears its leader in place, so the rest of the
+    /// tick reads it unled (see the `escort_loss` module). Never the
+    /// player's own.
+    pub fleet_escort: bool,
     /// Its `düde`'s `Booty`, or `None` when it has no `düde` (the player
     /// has none).
     pub booty: Option<u16>,
@@ -891,6 +992,17 @@ pub struct Fighter<'a> {
     /// (`_DoPlayGameWork` @0x43e19-0x43e29, @0x44483-0x444ad; see
     /// [`exits`]).
     pub drawn_heading: f32,
+    /// Where its slot sprite stands as the collision passes walk the
+    /// ships: its layer and its entry there ([`SpriteRank`]), read once as
+    /// the pass begins, or none for a hidden ship, whose sprite
+    /// `_HandleShipDisplay` hides, so no contact pass meets it (@0x2cc6b,
+    /// `_SWCollideSpriteLayer` @0xacba3), though a proximity fuse still
+    /// can.
+    pub sprite: Option<SpriteRank>,
+    /// Its ship slot: the player's, or its berth in the ship table. A
+    /// sub-munition reads whatever ship holds its parent's source slot as
+    /// it spawns ([`Shot::firer_slot`]).
+    pub slot: Slot,
     /// Which stellar hazards it resists ([`stellar_hazards`]).
     pub resists: HazardResistance,
 }
@@ -939,9 +1051,9 @@ pub struct Field {
     pub interference: i16,
 }
 
-/// A hit that landed on a ship in the hit pass or in step 8, before it
+/// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
 /// is taken.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Landed {
     /// The ship hit.
     ship: ShipRef,
@@ -973,7 +1085,7 @@ struct Landed {
 
 /// How a hit that landed pushes its ship ([`impact`]): `_DamageShip`'s
 /// point and `Impact`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Push {
     /// Where it pushes the ship from (`_DamageShip`'s arg +0xc): where
     /// its shot met the ship, its blast's centre, or its beam's start.
@@ -1036,12 +1148,18 @@ pub struct Combat {
     beams: Vec<Beam>,
     events: Vec<CombatEvent>,
     strikes: Vec<Strike>,
+    /// The ships of the player's fleet lost as the strikes landed, each
+    /// with its strike's index ([`Combat::take_landed`]).
+    escort_losses: Vec<EscortLoss>,
     stellar_strikes: Vec<StellarStrike>,
+    /// The words outside the fight that stray beams stepped this tick,
+    /// with their firers ([`Combat::take_stray_steps`]).
+    stray_steps: Vec<(ShipRef, StrayWord)>,
     sorties: Vec<Sortie>,
     shoves: Vec<Shove>,
-    /// The ships destroyed this tick, in order, whose shockwaves are yet
-    /// to go off (step 9b).
-    wrecks: Vec<ShipRef>,
+    /// The display steps run since they were last taken
+    /// ([`Combat::take_displays`]).
+    displays: Vec<Displayed>,
     reports: Reports,
     /// The next shot's number.
     next_shot: u32,
@@ -1063,7 +1181,7 @@ pub struct Combat {
     /// How many exits a point-defence shot moves its cursor on
     /// ([`RuleKey::PdExitStep`](crate::RuleKey::PdExitStep)).
     pd_exit_step: RuleSource,
-    /// Whether a beam of `ExitType` -1 steps its ship's fold set
+    /// Whether a beam of stray `ExitType` steps the word it lands on
     /// ([`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit)).
     stray_beam_exit: RuleSource,
     /// How beams hit ([`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest),
@@ -1090,7 +1208,13 @@ pub struct Combat {
     /// ([`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse)).
     proximity_fuse: ProximityFuse,
     /// Where each ship stood as the last tick ran, which the next tick's
-    /// hit pass meets it at (see `Combat::hit_pass`).
+    /// hit pass and ends of life meet it at (see `Combat::hit_pass`). A
+    /// session that runs the traffic's motion between the fight's phases,
+    /// as `_DoPlayGameWork` does (`nova_sim::Session::game_work`), moves
+    /// no NPC between one tick's close and the next tick's hit pass, so
+    /// there each NPC's entry is where it is; the player's still differs,
+    /// as `_HandlePlayer` moves it before the passes. A session that runs
+    /// the traffic before the whole fight needs the NPCs' too.
     stood: BTreeMap<ShipRef, Vec2>,
     /// The slots of the asteroids broken since they were last taken, in
     /// the order they broke.
@@ -1112,13 +1236,39 @@ pub struct Combat {
     /// Which weapons an ionized ship can't fire
     /// ([`RuleKey::IonFireLockout`](crate::RuleKey::IonFireLockout)).
     ion_lockout: IonLockout,
-    /// The shots that left the table whose slots the original frees only
-    /// at its next `_HandleShot` (see [`Combat::shot_room`]): from the
-    /// late part of a tick (step 7) to the next tick's hit pass, the
-    /// missiles point-defence beams downed; through the hit pass, those
-    /// and the pass's own ends, as each is ended; none from the end of the
-    /// pass to step 7.
-    ended_shots: usize,
+    /// The original's shot slots ([`shot_slots`]). Each shot that leaves
+    /// the table holds its slot until the next `_HandleShot` visits it
+    /// (see [`Combat::shot_room`]): from the late part of a tick (step 7)
+    /// to the next tick's `_HandleShot` ([`Combat::fly_shots`]), the
+    /// missiles point-defence beams downed; from the collision passes on,
+    /// those and the passes' own ends, as each is ended. Those point
+    /// defence ended are also kept in `hidden` until a proximity pass
+    /// tests them, and hold their slots here alone.
+    slots: ShotSlots,
+    /// The order each shot layer is drawn and walked in
+    /// ([`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)): by the
+    /// engine, the order its slots entered it; by the other reading,
+    /// firing order.
+    shot_overlap: RuleSource,
+    /// Whether a shot that writes no miss roll carries its slot's leftover
+    /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
+    /// by the engine, it does.
+    reused_roll: RuleSource,
+    /// Whether a shot starts on its slot's leftover spin timer
+    /// ([`RuleKey::ReusedShotSlotSpin`](crate::RuleKey::ReusedShotSlotSpin)):
+    /// by the engine, it does.
+    reused_spin: RuleSource,
+    /// Each ship slot's record of the last ship in it, which a
+    /// sub-munition reads as it spawns ([`source_slot`]).
+    slot_ships: BTreeMap<Slot, source_slot::SlotShip>,
+    /// Whether a sub-munition reads its source slot's ship
+    /// ([`RuleKey::SubmunitionSourceSlot`](crate::RuleKey::SubmunitionSourceSlot)):
+    /// by the engine, it does.
+    source_slot: RuleSource,
+    /// The shots point defence ended at life 0, their sprites hidden,
+    /// kept for the next proximity pass's stellar and asteroid branches
+    /// (see [`hidden`]).
+    hidden: Vec<Shot>,
     /// The beams that ended in the last tick's step 6 and after: under the
     /// caps each still holds its slot through the next tick's firing (see
     /// [`Combat::beam_room`]).
@@ -1191,106 +1341,33 @@ impl Combat {
         scenery: Scenery<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.field = field;
         let hazards = scenery.hazards;
-        // A `dyn` source over the caller's, which may be unsized.
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        // Step 1: the player's point defence and trigger, as `_HandlePlayer`
-        // calls them (@0x68c74, then @0x6ab55) before the collision passes.
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.defend(
-            fighters,
-            &targets,
-            (rules.defence, govts),
-            chance,
-            Firers::Player,
-        );
-        self.fire(fighters, &targets, chance, Firers::Player);
-        // Its ionized weapons' hold decided ([`IonLockout`]).
-        let player_factor = IonLockout::player_factor(fighters);
-        // Steps 2 and 3: the last tick's moves tested, and the struck
-        // ships' conditions settled.
-        let begun = self.hit_pass(fighters, (govts, arsenal), rules.disable, scenery, chance);
-        // Step 4: the NPCs' point defence, as `_AIDispatch` runs it
-        // (@0x4429d), then their picks, as `_HandleShip` fires them
-        // (@0x44483), reading the conditions the pass left, as `_HandleShip`
-        // reads `_IsDisabled` after the passes.
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.defend(
-            fighters,
-            &targets,
-            (rules.defence, govts),
-            chance,
-            Firers::Npcs,
-        );
-        self.ion_lockout.hold_npcs(fighters);
-        self.fire(fighters, &targets, chance, Firers::Npcs);
-        // Step 5, the player's ionized weapons held ([`IonLockout`]).
-        self.ion_lockout.reload(fighters, player_factor);
-        // Step 6.
-        let beams_held = self.beams.len();
-        self.fly(fighters, &targets, chance);
-        // Step 6b, the ships it kills gone from the beams and step 8.
-        let targets: Vec<Target> = match hazards {
-            Some(hazards) => {
-                self.stellar_hazards(fighters, hazards);
-                fighters.iter().map(Fighter::as_target).collect()
-            }
-            None => targets,
-        };
-        let sides = Sides {
-            targets: &targets,
+        let arena = Arena {
+            pass,
+            arsenal,
             govts,
-            pass_through: self.pass_through,
+            rules,
+            field,
         };
-        self.move_beams(fighters, &targets, pass, chance);
-        if pass.beams_act() {
-            self.stamp_beam_firers(fighters);
+        self.displays.clear();
+        self.defend_player(fighters, arena, chance);
+        self.fire_player(fighters, arena, chance);
+        self.regenerate_player(fighters, arena);
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.ship == ShipRef::Player)
+        {
+            fighter.condition.count_down();
         }
-        let locks: Vec<Landed> = self
-            .shots
-            .iter()
-            .filter_map(|shot| lock(shot, &sides))
-            .collect();
-        self.hold_reloads(fighters);
-        // Steps 7 and 8.
-        self.ended_shots = 0;
-        if pass.beams_act() {
-            self.hold_on_missiles(pass.beam_damage());
+        self.display_player(fighters, arena);
+        self.test_hits(fighters, arena, scenery, chance);
+        self.defend_npcs(fighters, arena, None, false, chance);
+        self.fly_shots(fighters, arena, chance);
+        self.handle_npcs(fighters, arena, chance);
+        if let Some(hazards) = hazards {
+            self.hazards(fighters, hazards);
         }
-        let first_strike = self.strikes.len();
-        let mut hits = locks;
-        if pass.beams_act() {
-            hits.extend(self.beam_hits(fighters, &sides, pass.beam_damage()));
-        }
-        self.land(fighters, hits, rules.disable);
-        // Steps 9 to 10.
-        for fighter in fighters.iter_mut() {
-            let struck = self.strikes[first_strike..]
-                .iter()
-                .any(|strike| strike.ship == fighter.ship);
-            if struck {
-                truncate_downed_player(fighter, rules.disable);
-            }
-            // A breakup the hit pass began takes no tick off on its first
-            // tick (@0x2d834-0x2d850).
-            if begun.contains(&fighter.ship) {
-                continue;
-            }
-            let downed = self.update_condition(fighter, rules.disable);
-            self.mark_downed(first_strike, fighter.ship, downed);
-        }
-        self.shock(fighters, rules.disable);
-        for fighter in fighters.iter_mut() {
-            regenerate(fighter);
-        }
-        self.ended_beams = beams_held.saturating_sub(self.beams.len());
-        self.stood = fighters
-            .iter()
-            .map(|fighter| (fighter.ship, fighter.state.position))
-            .collect();
-        IonLockout::clear_shed(fighters);
+        self.close_tick(fighters, arena, chance);
     }
 
     /// Marks the last strike on `ship` since `first_strike`, but a missile
@@ -1302,28 +1379,6 @@ impl Combat {
             .find(|strike| strike.ship == ship && !strike.lock);
         if let (Some(downed), Some(last)) = (downed, last) {
             last.downed = Some(downed);
-        }
-    }
-
-    /// Step 6's shots: each shot of no life (`Count` 0 or below) is
-    /// dropped unmoved and unseen, as `_HandleShot` sends it straight to
-    /// its end of life with its sprite never shown (@0x355a8-0x355b3,
-    /// @0x35f0a), freeing its slot in the same pass, so it holds none
-    /// after; every other flies a tick ([`Shot::step`]), homing among
-    /// `targets` with each ship's jamming and sight as the hit pass left
-    /// them ([`Sight`]), its draws made on `chance`.
-    fn fly(&mut self, fighters: &[Fighter], targets: &[Target], chance: &mut dyn Chance) {
-        self.shots.retain(|shot| shot.weapon.lifetime > 0);
-        let sights: Vec<Sight> = fighters.iter().map(Fighter::sight).collect();
-        let guide = Guide {
-            sights: &sights,
-            frame: self.field.frame,
-            lock_angle: self.lock_angle,
-            bomb_heading_wrap: self.bomb_heading_wrap,
-            ..Guide::among(targets)
-        };
-        for shot in &mut self.shots {
-            shot.step(&guide, chance);
         }
     }
 
@@ -1384,99 +1439,102 @@ impl Combat {
         }
     }
 
-    /// Step 9b: the shockwave of each ship destroyed this tick, in the
-    /// order they were destroyed ([`shockwave`]). It reaches every ship
-    /// not destroyed, breaking up or not, within the wreck's
+    /// The shockwave of `wreck`'s final explosion, at its display step
+    /// ([`shockwave`], `_HandleShipDisplay` @0x2d8ef-0x2da9c), the ships in
+    /// `shown` displayed before it this pass. It reaches every ship not
+    /// destroyed, breaking up or not, within the wreck's
     /// [`HullSpec::death_size`] on each axis, the wreck spared; each takes
     /// [`shockwave::hit`] as a [`Strike`] by the wreck, neither direct nor
     /// intended, and is pushed by [`shockwave::IMPACT`] from the wreck
     /// ([`impact::push`]), reported as a [`Shove`]; an escape pod or a
-    /// later class ([`immune`]) is neither hit nor pushed. Then each intact or disabled ship hit settles its
-    /// condition as step 9 does, its strike marked when it is newly
-    /// disabled; a breaking-up one is not counted down again.
+    /// later class ([`immune`]) is neither hit nor pushed. Each intact or
+    /// disabled ship hit then settles its condition
+    /// ([`Combat::settle_condition`]), its strike marked when it is newly
+    /// disabled. A hit on a ship in `shown` flashes the next frame
+    /// ([`CombatEvent::Hit`]'s `late`): the player, for an NPC's wreck, and
+    /// every NPC in a lower slot.
     ///
-    /// The original runs the shockwave inside `_HandleShipDisplay` as each
-    /// ship's final explosion goes off (0x2d8ef-0x2da9c), so a ship later
-    /// in the table has already had its own condition and movement that
-    /// frame; here it comes after every ship's condition update, and its
-    /// push takes effect on the next movement. The difference stays within
-    /// the tick and crosses no boundary the player sees.
-    fn shock(&mut self, fighters: &mut [Fighter], rule: &dyn DisableRule) {
-        for wreck in std::mem::take(&mut self.wrecks) {
-            let Some((at, hull)) = fighters
+    /// The ship loop interleaves each NPC's move with the displays
+    /// (`nova_sim::Session::ship_loop`), so a ship of a later slot is
+    /// reached where it still stands and moves by the push in the same
+    /// frame; one of an earlier slot has moved, and moves by it the
+    /// next.
+    fn shock(
+        &mut self,
+        fighters: &mut [Fighter],
+        wreck: ShipRef,
+        shown: &[ShipRef],
+        rule: &dyn DisableRule,
+    ) {
+        let Some((at, hull)) = fighters
+            .iter()
+            .find(|fighter| fighter.ship == wreck)
+            .map(|fighter| (fighter.state.position, fighter.hull))
+        else {
+            return;
+        };
+        let blast = Blast {
+            at,
+            radius: hull.death_size(),
+            direct: None,
+            firer: Some(wreck),
+            spares_player: true,
+        };
+        let reached = blast.reaches(
+            fighters
                 .iter()
-                .find(|fighter| fighter.ship == wreck)
-                .map(|fighter| (fighter.state.position, fighter.hull))
-            else {
+                .filter(|fighter| *fighter.condition != Condition::Destroyed)
+                .map(|fighter| (fighter.ship, fighter.state.position)),
+        );
+        let damage = shockwave::damage(&hull);
+        for ship in reached {
+            let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
                 continue;
             };
-            let blast = Blast {
-                at,
-                radius: hull.death_size(),
-                direct: None,
-                firer: Some(wreck),
-                spares_player: true,
-            };
-            let reached = blast.reaches(
-                fighters
-                    .iter()
-                    .filter(|fighter| *fighter.condition != Condition::Destroyed)
-                    .map(|fighter| (fighter.ship, fighter.state.position)),
-            );
-            let damage = shockwave::damage(&hull);
-            let wreck_at = fighters.iter().position(|fighter| fighter.ship == wreck);
-            for ship in reached {
-                let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
-                    continue;
-                };
-                // A ship already shown this frame: the player, or one
-                // before the wreck in the table.
-                let late = ship == ShipRef::Player || wreck_at.is_some_and(|wreck| index < wreck);
-                let fighter = &mut fighters[index];
-                let condition = *fighter.condition;
-                let before = taken(fighter.reserves);
-                let hurt = !immune(fighter.ship_type);
-                if hurt {
-                    shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
-                }
-                if !hurt {
-                    continue;
-                }
-                // `_DamageShip` @0x2da89 passes no pass-through flag.
-                self.events.push(CombatEvent::Hit {
-                    ship,
-                    weapon: None,
-                    at,
-                    passes_shields: false,
-                    late,
-                });
-                let cap = self.speed_cap;
-                if let Some(velocity) =
-                    impact::push(&fighter.body(), at, shockwave::IMPACT, None, cap)
-                {
-                    self.shove(fighter, velocity);
-                }
-                let downed = if condition.standing() {
-                    self.update_condition(fighter, rule)
-                } else {
-                    None
-                };
-                self.strikes.push(Strike {
-                    ship,
-                    by: Some(wreck),
-                    damage: before - taken(fighter.reserves),
-                    downed,
-                    direct: false,
-                    intended: false,
-                    lock: false,
-                    nominal: Nominal {
-                        mass: damage,
-                        energy: damage,
-                    },
-                    weight: 0.0,
-                    answered: false,
-                });
+            let late = shown.contains(&ship);
+            let fighter = &mut fighters[index];
+            let condition = *fighter.condition;
+            let before = taken(fighter.reserves);
+            let hurt = !immune(fighter.ship_type);
+            if hurt {
+                shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
             }
+            if !hurt {
+                continue;
+            }
+            // `_DamageShip` @0x2da89 passes no pass-through flag.
+            self.events.push(CombatEvent::Hit {
+                ship,
+                weapon: None,
+                at,
+                passes_shields: false,
+                late,
+            });
+            let cap = self.speed_cap;
+            if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None, cap)
+            {
+                self.shove(fighter, velocity);
+            }
+            let downed = if condition.standing() {
+                self.settle_condition(fighter, rule)
+            } else {
+                None
+            };
+            self.strikes.push(Strike {
+                ship,
+                by: Some(wreck),
+                damage: before - taken(fighter.reserves),
+                downed,
+                direct: false,
+                intended: false,
+                lock: false,
+                nominal: Nominal {
+                    mass: damage,
+                    energy: damage,
+                },
+                weight: 0.0,
+                answered: false,
+            });
         }
     }
 
@@ -1622,33 +1680,28 @@ impl Combat {
         self.speed_cap = SpeedCap::from(source);
     }
 
-    /// Whether a shot `ship` fires now finds a free slot: always uncapped;
-    /// under the caps, while the shots in flight are fewer than
-    /// [`MAX_SHOTS`], counting for the player the shots that left the
-    /// table in the last tick's late part, the missiles point-defence
-    /// beams downed in step 7 (`ended_shots`). The original frees a shot's
-    /// slot only on the `_HandleShot` pass after it ends (life -1.0 or 0
-    /// then -2.0, @0x356c1, @0x30ab1, @0x3617c; free below -1.0,
-    /// @0x3e5be), and that pass comes after `_HandlePlayer` fires and
-    /// before `_HandleShip` (`_DoPlayGameWork` @0x43e19, @0x44385,
-    /// @0x44483).
+    /// Whether a shot fired now finds a free slot: always uncapped; under
+    /// the caps, while the shots in flight and those whose slots are still
+    /// held ([`ShotSlots::hold`]) leave one of [`MAX_SHOTS`] free
+    /// ([`ShotSlots::first_free`]). The original
+    /// frees a shot's slot only on the `_HandleShot` pass after it ends
+    /// (life -1.0 or 0 then -2.0, @0x356c1, @0x30ab1, @0x3617c; free below
+    /// -1.0, @0x3e5be), which comes after `_HandlePlayer` and `_AIDispatch`
+    /// and before `_HandleShip` (`_DoPlayGameWork` @0x43e19, @0x4429d,
+    /// @0x44385, @0x44483). So:
     ///
-    /// Every shot the next hit pass will end, a spent one among them,
-    /// still holds its place in the table as the player fires, so it needs
-    /// no count. A shot of no life is freed by the `_HandleShot` that
-    /// first visits it, before the next `_HandlePlayer`, so it holds none.
-    /// An NPC fires after the hit pass, which takes its ends out of the
-    /// table, as `_HandleShip` comes after `_HandleShot` frees them: it
-    /// counts none. An NPC's point defence runs in `_AIDispatch`, before
-    /// `_HandleShot`, and finds those slots still held in the original
-    /// (rdm:phase/weapons-fidelity/phase-28-npc-answers-hits-in-the-frame-they-land).
-    fn shot_room(&self, ship: ShipRef) -> bool {
-        let held = if ship == ShipRef::Player {
-            self.ended_shots
-        } else {
-            0
-        };
-        !self.capped || self.shots.len() + held < MAX_SHOTS
+    /// - the player's point defence and trigger find the missiles the last
+    ///   tick's point-defence beams downed still held;
+    /// - an NPC's point defence finds those and every shot the collision
+    ///   passes ended still held, and a spent shot still in the table;
+    /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots`]), finds
+    ///   them all freed, the spent shots' too, and a shot of no life is
+    ///   freed by the `_HandleShot` that first visits it, so it holds none.
+    ///
+    /// A shot point defence ended holds its slot once, here, while it is
+    /// kept hidden for the proximity pass ([`hidden`]).
+    fn shot_room(&self) -> bool {
+        self.first_free_slot().is_some()
     }
 
     /// Whether a beam fired now finds a free slot: always uncapped; under
@@ -1674,7 +1727,7 @@ impl Combat {
     /// ([`Shot::aimed_at`]), its mass and energy
     /// damage times [`AIMED_DAMAGE_SHARE`], added to that ship's total
     /// and truncated after each add. A shot whose last move spent its
-    /// life, waiting for its end of life in the next hit pass, counts for
+    /// life, waiting for its end of life in `_HandleShot`, counts for
     /// nothing, as the original skips a life of none or below
     /// (@0x3a1ad-0x3a1b5). Beams are not shots and count for
     /// nothing. The original keeps each total in 16 bits; here it is not
@@ -1682,10 +1735,11 @@ impl Combat {
     ///
     /// The original builds the totals once a frame, after the collision
     /// passes and before the AI runs (`_DoPlayGameWork` @0x44223, before
-    /// `_AIDispatch` @0x4429d); the session builds them from the shots in
-    /// flight as its traffic decides, before the fight's hit pass, so the
-    /// shots that pass will hit still count
-    /// (rdm:phase/weapons-fidelity/phase-28-npc-answers-hits-in-the-frame-they-land).
+    /// `_AIDispatch` @0x4429d), so no shot the passes hit counts. The
+    /// session's `nova_sim::Session::game_work` reads them there, after
+    /// [`Combat::test_hits`]; its separate parts, which run the traffic
+    /// before the fight, read them before the hit pass, so the shots that
+    /// pass will hit still count.
     #[must_use]
     pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
         let mut aimed = BTreeMap::new();
@@ -1827,11 +1881,13 @@ impl Combat {
                 ..Beam::launch(weapon, ship, fleet, &from, aiming)
             };
             beam.disable_only |= plunder::beam_disables(plunderer, aimed_at, targets);
-            self.beam_exit(muzzle, &mut beam, toward, chance);
+            if let Some(word) = self.beam_exit(muzzle, &mut beam, toward, chance) {
+                self.stray_steps.push((ship, word));
+            }
             self.beams.push(beam);
             false
         } else {
-            if !self.shot_room(ship) || !weapon.spawns_shot() {
+            if !self.shot_room() || !weapon.spawns_shot() {
                 return false;
             }
             let defended = quarry.and_then(|quarry| match quarry {
@@ -1866,11 +1922,9 @@ impl Combat {
                 // Every ship's, the player's (slot 0) too (@0x3f0a9-0x3f143).
                 layer: ShotLayer::spawned(weapon.guidance, true, muzzle.turret_over),
                 turret_over: muzzle.turret_over,
+                firer_slot: muzzle.firer_slot,
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
-            if let Some(Quarry::Ship(_)) = quarry {
-                shot.layer = ShotLayer::Shots;
-            }
             shot.disable_only |= plunder::shot_disables(plunderer, aimed_at, targets);
             shot.roll_at_launch(self.field.interference, chance);
             // A dropped bomb or rocket reads no heading, so it is never sent
@@ -1883,7 +1937,15 @@ impl Combat {
                 along
             };
             shot.velocity = projectile::launch_velocity(&weapon, &from, out, thrown);
-            self.shots.push(shot);
+            let Some(taken) = self.put_in_flight(shot) else {
+                return false;
+            };
+            // `_HandleShipPointDefense` moves a point-defence shot fired at
+            // a ship to the shot layer (@0x398bd), after `_SpawnShot` put it
+            // in its own: so at the shot layer's tail.
+            if let Some(Quarry::Ship(_)) = quarry {
+                self.move_to_layer(taken, ShotLayer::Shots);
+            }
             true
         }
     }
@@ -1897,14 +1959,18 @@ impl Combat {
     /// the centre. An `ExitType` of -1 indexes the word before the cursors,
     /// the fold set, and steps it as one by the engine (@0x450fa-0x4523d;
     /// [`exits::step_stray`]), the beam starting at the centre
-    /// (`_HandleBeams` @0x30469-0x3049f).
+    /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 5 lands on
+    /// +0xc908, outside the fight (the crew pods left, or the player's pod
+    /// countdown): by the engine it is returned for the caller to raise
+    /// for the firer ([`Combat::take_stray_steps`]), the beam starting at
+    /// the centre ([`StrayWord`]).
     fn beam_exit(
         &self,
         muzzle: &mut Muzzle,
         beam: &mut Beam,
         toward: Option<Vec2>,
         chance: &mut dyn Chance,
-    ) {
+    ) -> Option<StrayWord> {
         let weapon = &beam.weapon;
         if let Some(kind) = weapon.exit {
             let from = muzzle.from;
@@ -1920,9 +1986,13 @@ impl Combat {
                 beam.kind = Some(kind);
                 beam.exit = Some(exit);
             }
-        } else if weapon.steps_fold && self.stray_beam_exit == RuleSource::Engine {
-            exits::step_stray(muzzle.fold, chance);
+        } else if self.stray_beam_exit == RuleSource::Engine {
+            match weapon.stray {
+                Some(StrayWord::FoldSet) => exits::step_stray(muzzle.fold, chance),
+                other => return other,
+            }
         }
+        None
     }
 
     /// Where a shot of `launch` leaves `muzzle` from, and the side of the
@@ -1972,23 +2042,12 @@ impl Combat {
         (start, side)
     }
 
-    /// Steps 1 and 4, after point defence ([`Combat::defend`]): each of the
-    /// `firers` fires what its trigger holds, aimed at its target among
-    /// `targets` while that can be hit. The player fires in step 1, before
-    /// the hit pass, as `_HandlePlayer` calls `_FirePlayerWeapon` after
-    /// `_HandleShipPointDefense` ([`Combat::fire_player`]); the NPCs in step
-    /// 4, as `_HandleShip` fires their picks after `_AIDispatch` has run
-    /// their point defence.
-    /// An NPC launches its fighters with [`Trigger::bays`] and fires an
-    /// escort's formation trigger through [`Armament::fire`], its quadrant
-    /// turrets testing their blind spots as the original's AI picks them
-    /// (`_AIFireTurret` @0x80d0b), each launch sounding as
-    /// [`trigger_sound`] says, then fires its pick
-    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
-    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
-    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
-    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
-    /// destroys its firer ([`self_destruct`]).
+    /// Step 1, after point defence ([`Combat::defend`]): each of the
+    /// `firers` fires what its trigger holds ([`Combat::fire_one`]),
+    /// aimed at its target among `targets` while that can be hit. The
+    /// player fires in step 1, before the hit pass, as `_HandlePlayer`
+    /// calls `_FirePlayerWeapon` after `_HandleShipPointDefense`
+    /// ([`Combat::fire_player`]).
     fn fire(
         &mut self,
         fighters: &mut [Fighter],
@@ -2000,57 +2059,72 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| firers.take(fighter.ship))
         {
-            let target = fighter.target.and_then(|ship| {
-                targets
-                    .iter()
-                    .find(|target| target.ship == ship && target.condition.standing())
-            });
-            if fighter.ship == ShipRef::Player {
-                self.fire_player(fighter, target, targets, chance);
-                continue;
-            }
-            let (state, hull) = (fighter.state, fighter.hull);
-            let trigger = Trigger {
-                only: None,
-                ..fighter.trigger
-            };
-            let launches = fighter.armament.fire(
-                trigger,
-                *fighter.condition,
-                fighter.shooter(),
-                fighter.rounds,
-                &mut fighter.reserves.fuel,
-                chance,
-                &mut self.reports,
-                &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
-            );
-            let sound = |copy: usize| Some(trigger_sound(&launches[copy]));
-            self.launch_volley(fighter, &launches, sound, targets, chance);
-            let Some(pick) = fighter.trigger.only else {
-                continue;
-            };
-            let arc = self.quadrant_arc;
-            let volley = fighter.armament.fire_pick(
-                pick,
-                *fighter.condition,
-                fighter.shooter(),
-                fighter.rounds,
-                &mut fighter.reserves.fuel,
-                chance,
-                &mut self.reports,
-                self.ai_spend,
-                &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
-            );
-            let Some(volley) = volley else {
-                continue;
-            };
-            let sound = first_copy_sounds_at(AI_FIRE_PRIORITY);
-            self.launch_volley(fighter, &volley.launches, sound, targets, chance);
-            self.glow(fighter.ship, &volley.weapon);
-            let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
-            if let Some(velocity) = pushed {
-                self.shove(fighter, velocity);
-            }
+            self.fire_one(fighter, targets, chance);
+        }
+    }
+
+    /// `fighter` fires what its trigger holds, aimed at its target among
+    /// `targets` while that can be hit: the player as step 1 fires it
+    /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
+    /// (@0x34ffd, [`Combat::handle_npcs`]).
+    /// An NPC fires an escort's formation trigger through
+    /// [`Armament::fire`], its quadrant turrets testing their blind spots
+    /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
+    /// weapon sounding at [`AI_FIRE_PRIORITY`], then fires its pick
+    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
+    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
+    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
+    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
+    /// destroys its firer ([`self_destruct`]).
+    fn fire_one(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
+        let target = ai_dispatch::standing(fighter.target, targets);
+        if fighter.ship == ShipRef::Player {
+            self.pull_player_trigger(fighter, target, targets, chance);
+            return;
+        }
+        let (state, hull) = (fighter.state, fighter.hull);
+        let trigger = Trigger {
+            only: None,
+            ..fighter.trigger
+        };
+        let launches = fighter.armament.fire(
+            trigger,
+            *fighter.condition,
+            fighter.shooter(),
+            fighter.rounds,
+            &mut fighter.reserves.fuel,
+            chance,
+            &mut self.reports,
+            &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
+        );
+        // Each weapon launches at most once a call, its copies as one,
+        // and sounds as `_FireAIShipWeapon` does, once a call.
+        let sound = |_| Some(FireSound::at(AI_FIRE_PRIORITY));
+        self.launch_volley(fighter, &launches, sound, targets, chance);
+        let Some(pick) = fighter.trigger.only else {
+            return;
+        };
+        let arc = self.quadrant_arc;
+        let volley = fighter.armament.fire_pick(
+            pick,
+            *fighter.condition,
+            fighter.shooter(),
+            fighter.rounds,
+            &mut fighter.reserves.fuel,
+            chance,
+            &mut self.reports,
+            self.ai_spend,
+            &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+        );
+        let Some(volley) = volley else {
+            return;
+        };
+        let sound = first_copy_sounds_at(AI_FIRE_PRIORITY);
+        self.launch_volley(fighter, &volley.launches, sound, targets, chance);
+        self.glow(fighter.ship, &volley.weapon);
+        let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
+        if let Some(velocity) = pushed {
+            self.shove(fighter, velocity);
         }
     }
 
@@ -2070,6 +2144,9 @@ impl Combat {
     ///   quietly ([`Combat::launch`]) though it was spent and counted.
     /// - A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns destroys the
     ///   player ([`self_destruct`]).
+    /// - A glow weapon lights the player's weapon glow ([`Combat::glow`]),
+    ///   but a fighter bay, whose glow waits on its fighter being put in
+    ///   the system, which the session lights ([`Combat::light_glow`]).
     /// - A `Recoil` above none pushes the player back, opposite its heading,
     ///   by `Recoil` over its mass up to its class speed, once a call
     ///   (@0x62ea2-0x62f35, the signed `jle` @0x62eb5), reported as a
@@ -2080,7 +2157,7 @@ impl Combat {
     ///
     /// Each call reads the ship as the call before left it, as the
     /// original's does: a recoil moves the later weapons' shots on.
-    fn fire_player(
+    fn pull_player_trigger(
         &mut self,
         fighter: &mut Fighter,
         target: Option<&Target>,
@@ -2105,7 +2182,11 @@ impl Combat {
             };
             let sound = first_copy_sounds_at(player_fire_priority(&volley.weapon));
             self.launch_volley(fighter, &volley.launches, sound, targets, chance);
-            self.glow(fighter.ship, &volley.weapon);
+            // A bay's call glows only for a fighter put in the system,
+            // which the session decides (`Combat::light_glow`).
+            if volley.weapon.carried.is_none() {
+                self.glow(fighter.ship, &volley.weapon);
+            }
             let recoils = match self.forward_recoil {
                 RuleSource::Engine => volley.weapon.recoil > 0.0,
                 RuleSource::Bible => volley.weapon.recoils(),
@@ -2133,7 +2214,9 @@ impl Combat {
         let (state, hull) = (fighter.state, fighter.hull);
         let sides = (fighter.side(), fighter.ties(), Plunderer::of(fighter));
         let drawn = fighter.drawn_heading;
+        let firing_from = fighter.slot;
         let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+        muzzle.firer_slot = Some(firing_from);
         let mut destructs = false;
         for (copy, launch) in launches.iter().enumerate() {
             let aimed_at = aimed_at(launch, fighter.target);
@@ -2174,9 +2257,10 @@ impl Combat {
 
     /// Steps 1 and 4, before the firing ([`Combat::fire`]), as
     /// `_HandlePlayer` runs the player's (@0x68c74) before its trigger
-    /// (@0x6ab55) and `_AIDispatch` every NPC's (@0x4429d) before
-    /// `_HandleShip` fires any pick (@0x44483): the point defence of each of
-    /// the `firers` its trigger asks for
+    /// (@0x6ab55) and `_AIDispatch` every NPC's (@0x4429d, by slot among
+    /// its launches, `Combat::dispatch_npcs`) before `_HandleShip` fires any
+    /// pick (@0x44483): the point defence of each of the `firers` its
+    /// trigger asks for
     /// ([`Trigger::point_defence`](armament::Trigger::point_defence))
     /// fires at the missile it picks ([`defence::choose`]), asking `rule`
     /// which are hostile, with the relations in `govts`, only by the
@@ -2203,74 +2287,92 @@ impl Combat {
         for fighter in fighters.iter_mut().filter(|fighter| {
             firers.take(fighter.ship) && fighter.trigger.point_defence && !fighter.jumping
         }) {
-            let (state, hull) = (fighter.state, fighter.hull);
-            let side = fighter.side();
-            let ties = fighter.ties();
-            let plunderer = Plunderer::of(fighter);
-            let guard = fighter.guard();
-            let shots = &self.shots;
-            let candidates = &candidates;
-            let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
-            let room = self.shot_room(fighter.ship);
-            let fired = fighter.armament.fire_point_defence(
-                *fighter.condition,
-                fighter.shooter(),
-                fighter.rounds,
-                &mut fighter.reserves.fuel,
-                chance,
-                &mut self.reports,
-                room,
-                &mut |spec| {
-                    if let Some(missile) =
-                        defence::choose(side, &state, &hull, spec, shots, rule, govts)
-                    {
-                        return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
-                    }
-                    let ship = defence::choose_ship(guard, &state, &hull, spec, candidates)?;
-                    // A beam reads no launch heading (`Beam::launch`).
-                    let pointing = aim::led(spec, &ship.target).pointing;
-                    Some((pointing, Quarry::Ship(ship.target)))
-                },
-            );
-            if let Some((launch, quarry)) = fired {
-                // `_SpawnBeam`'s target, beam +0x18. A shot is aimed at none
-                // (`_SpawnShot(.., -1, ..)` @0x396e5), as its every step
-                // leaves a point-defence shot anyway (`Shot::step`).
-                let aimed_at = match quarry {
-                    Quarry::Ship(target) if launch.weapon.is_beam() => Some(target.ship),
-                    _ => None,
-                };
-                let drawn = fighter.drawn_heading;
-                let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
-                let shot = self.launch(
-                    (side, ties, plunderer),
-                    &mut muzzle,
-                    &launch,
-                    (Some(quarry), aimed_at),
-                    Some(FireSound::at(PD_FIRE_PRIORITY)),
-                    targets,
-                    chance,
-                );
-                if self_destructs(&launch, shot) {
-                    self_destruct(fighter);
+            self.defend_ship(fighter, &candidates, targets, (rule, govts), chance);
+        }
+    }
+
+    /// `fighter`'s point defence, as [`Combat::defend`] runs it for each
+    /// ship whose trigger asks: at the missile it picks, asking `rule`
+    /// which are hostile, with the relations in `govts`, only by the other
+    /// reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility);
+    /// with none, at the ship it picks among `candidates`, its exit's
+    /// toward point among `targets`; sounding at [`PD_FIRE_PRIORITY`].
+    fn defend_ship(
+        &mut self,
+        fighter: &mut Fighter,
+        candidates: &[Candidate],
+        targets: &[Target],
+        (rule, govts): (&dyn PointDefenceRule, &Governments),
+        chance: &mut dyn Chance,
+    ) {
+        let (state, hull) = (fighter.state, fighter.hull);
+        let side = fighter.side();
+        let ties = fighter.ties();
+        let plunderer = Plunderer::of(fighter);
+        let guard = fighter.guard();
+        let shots = &self.shots;
+        let rule = (self.pd_hostility == RuleSource::Bible).then_some(rule);
+        let room = self.shot_room();
+        let fired = fighter.armament.fire_point_defence(
+            *fighter.condition,
+            fighter.shooter(),
+            fighter.rounds,
+            &mut fighter.reserves.fuel,
+            chance,
+            &mut self.reports,
+            room,
+            &mut |spec| {
+                if let Some(missile) =
+                    defence::choose(side, &state, &hull, spec, shots, rule, govts)
+                {
+                    return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
                 }
+                let ship = defence::choose_ship(guard, &state, &hull, spec, candidates)?;
+                // A beam reads no launch heading (`Beam::launch`).
+                let pointing = aim::led(spec, &ship.target).pointing;
+                Some((pointing, Quarry::Ship(ship.target)))
+            },
+        );
+        if let Some((launch, quarry)) = fired {
+            // `_SpawnBeam`'s target, beam +0x18. A shot is aimed at none
+            // (`_SpawnShot(.., -1, ..)` @0x396e5), as its every step
+            // leaves a point-defence shot anyway (`Shot::step`).
+            let aimed_at = match quarry {
+                Quarry::Ship(target) if launch.weapon.is_beam() => Some(target.ship),
+                _ => None,
+            };
+            let drawn = fighter.drawn_heading;
+            let firing_from = fighter.slot;
+            let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+            muzzle.firer_slot = Some(firing_from);
+            let shot = self.launch(
+                (side, ties, plunderer),
+                &mut muzzle,
+                &launch,
+                (Some(quarry), aimed_at),
+                Some(FireSound::at(PD_FIRE_PRIORITY)),
+                targets,
+                chance,
+            );
+            if self_destructs(&launch, shot) {
+                self_destruct(fighter);
             }
         }
     }
 
-    /// Step 6's hold: each shot in flight of a weapon that fires one shot
+    /// Step 5's hold: each shot in flight of a weapon that fires one shot
     /// at a time (`Flags3` 0x0004) holds its firer's reload for that
     /// weapon at its whole `Reload` ([`Armament::hold`]), on every tick
     /// it moves, the move that spends it or brings it to its victim
     /// included, but not the tick it hits, as the hit pass has taken it
     /// out by then and `_HandleShot`'s end of life never reaches the hold
-    /// (@0x35c09). So its firer fires it again `Reload` ticks after its
-    /// last move. A shot no ship fired holds nothing.
+    /// (@0x35c09). A shot no ship fired holds nothing.
     ///
-    /// The original counts the player's reload down before `_HandleShot`
-    /// sets it and an NPC's after; here every reload counts down before
-    /// the hold, so an NPC fires a tick later than in the original, within
-    /// the fight's own order of firing and reloading.
+    /// The player counts its reload down before `_HandleShot` sets it
+    /// ([`Combat::fire_player`], @0x6ae25) and an NPC after
+    /// ([`Combat::handle_npcs`], @0x33896): so the player fires it again
+    /// `Reload` + 1 ticks after the tick of its last move, and an NPC
+    /// `Reload` − 1 ticks after it.
     fn hold_reloads(&mut self, fighters: &mut [Fighter]) {
         for shot in self.shots.iter().filter(|shot| shot.weapon.one_at_a_time()) {
             if !matches!(shot.source, Source::Ship(_)) {
@@ -2290,14 +2392,23 @@ impl Combat {
     /// frame tests it, before `_HandleShot` moves it again
     /// (`_DoPlayGameWork` @0x43e70-0x44015, @0x44385). A shot that has not
     /// moved yet is not tested, as its sprite is not shown. The tests go
-    /// in the original's order:
+    /// in the original's order ([`collision`]):
     ///
-    /// 1. contact with a ship, then with an asteroid (`rock_met`);
-    /// 2. the point-defence layer against the missiles
-    ///    ([`Combat::intercept`]);
-    /// 3. the proximity fuse, a ship then an asteroid;
-    /// 4. the end of life of each shot its move spent (@0x36195);
-    /// 5. the stellars ([`Combat::strike_stellars`]).
+    /// 1. the point-defence layer against the missiles
+    ///    ([`Combat::intercept`]), whose precheck stands in for the
+    ///    contact passes the original runs first;
+    /// 2. the contact passes, each shot layer against the ships, walked by
+    ///    layer and entry, then the asteroids; then point defence's layer
+    ///    against the asteroids;
+    /// 3. the proximity pass, a ship then an asteroid ([`Combat::resolve`]);
+    ///    then the shots point defence ended, kept hidden at life 0, which
+    ///    only a stellar or an asteroid sets off ([`hidden`],
+    ///    [`Combat::test_hidden`]): this pass's point-defence ends and the
+    ///    last tick's beam kills;
+    /// 4. the stellars ([`Combat::strike_stellars`]).
+    ///
+    /// A shot whose move spent it meets only the asteroids it touches, and
+    /// is kept for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
     ///
     /// The pass meets each NPC where it stood as the last tick ran, as
     /// its last `_HandleShip` left it, and the player where it is now, as
@@ -2312,17 +2423,18 @@ impl Combat {
     /// `arsenal`, its spread drawn on `chance`; the relations between
     /// governments are `govts`'.
     ///
-    /// The hits land at once ([`Combat::land`]), as `_DamageShip` takes
-    /// each, and each ship struck settles its condition as step 9 does
-    /// but for a breakup's countdown, its strike marked as downing it,
-    /// as `rule` says: so an NPC downed by a shot fires nothing more that
+    /// Each hit lands as the walk finds it ([`Combat::land`]), as
+    /// `_HandleShipHit` lands it before the walk's next pair, so a later
+    /// test reads the armour it left ([`Target::disabled`]). Each ship
+    /// struck then settles its condition as step 9 does but for a
+    /// breakup's countdown, its last strike marked as downing it, as
+    /// `rule` says: so an NPC downed by a shot fires nothing more that
     /// tick, as `_HandleShip`'s fire reads `_IsDisabled` after the passes.
-    /// Gives the ships whose breakup it began, whose first tick takes no
-    /// tick off (step 9).
-    ///
-    /// Within the pass, shots go in the order they are kept, where the
-    /// original goes in sprite-collision or slot order; that crosses no
-    /// boundary the player sees.
+    /// It keeps the ships whose breakup it began, whose first tick takes no
+    /// tick off (step 9, see `Combat::settle_struck`). The original
+    /// settles each in `_DamageShip`; nothing in the pass reads the
+    /// condition but whether a ship is destroyed, which no hit there
+    /// changes, so settling after it crosses no boundary.
     fn hit_pass(
         &mut self,
         fighters: &mut [Fighter],
@@ -2330,12 +2442,50 @@ impl Combat {
         rule: &dyn DisableRule,
         scenery: Scenery<'_>,
         chance: &mut dyn Chance,
-    ) -> Vec<ShipRef> {
+    ) {
         let Scenery {
             stellars,
             asteroids,
             hazards: _,
         } = scenery;
+        let now = self.stand_where_they_stood(fighters);
+        let player_stood = self.stood.get(&ShipRef::Player).copied();
+        let touchable_at: Vec<Vec2> = fighters
+            .iter()
+            .map(|fighter| match player_stood {
+                Some(position) if fighter.ship == ShipRef::Player => position,
+                _ => fighter.state.position,
+            })
+            .collect();
+        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.pass_through);
+        let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
+        let first_strike = self.strikes.len();
+        let mut gone = vec![false; self.shots.len()];
+        let ranks: Vec<_> = fighters.iter().map(|fighter| fighter.sprite).collect();
+        let walked = collision::walk_order(&ranks);
+        let entry = self.entry_order();
+        self.intercept(camera, (&lineup.seen_sides(), &walked), &entry, &mut gone);
+        let terms = collision::WalkTerms { arsenal, rule };
+        self.resolve(
+            (fighters, &mut lineup),
+            (&gone, &entry),
+            &terms,
+            chance,
+            &mut *asteroids,
+        );
+        let hits = self.test_hidden(fighters, &mut *stellars, asteroids);
+        self.land(fighters, hits, rule);
+        self.strike_stellars(stellars);
+        for (fighter, position) in fighters.iter_mut().zip(now) {
+            fighter.state.position = position;
+        }
+        self.settle_struck(fighters, first_strike, rule);
+    }
+
+    /// Puts each NPC among `fighters` where it stood as the last tick ran
+    /// (see [`Combat::hit_pass`]), one not in the last tick's fight where
+    /// it is, and gives where every fighter is now, to put them back.
+    fn stand_where_they_stood(&self, fighters: &mut [Fighter]) -> Vec<Vec2> {
         let now: Vec<Vec2> = fighters
             .iter()
             .map(|fighter| fighter.state.position)
@@ -2348,46 +2498,20 @@ impl Combat {
                 fighter.state.position = at;
             }
         }
-        let player_stood = self.stood.get(&ShipRef::Player).copied();
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let touchable: Vec<Target> = targets
-            .iter()
-            .map(|target| match player_stood {
-                Some(position) if target.ship == ShipRef::Player => Target {
-                    position,
-                    ..*target
-                },
-                _ => *target,
-            })
-            .collect();
-        let sides = Sides {
-            targets: &targets,
-            govts,
-            pass_through: self.pass_through,
-        };
-        let touch = Sides {
-            targets: &touchable,
-            ..sides
-        };
-        let camera = position_of(&touchable, ShipRef::Player).unwrap_or(Vec2::ZERO);
-        let first_strike = self.strikes.len();
-        let mut gone = vec![false; self.shots.len()];
-        self.intercept(camera, &touch, &mut gone);
-        let hits = self.resolve(
-            fighters,
-            (&sides, &touch),
-            &gone,
-            arsenal,
-            chance,
-            asteroids,
-        );
-        self.land(fighters, hits, rule);
-        self.strike_stellars(stellars);
-        for (fighter, position) in fighters.iter_mut().zip(now) {
-            fighter.state.position = position;
-        }
-        self.ended_shots = 0;
-        let mut begun = Vec::new();
+        now
+    }
+
+    /// Each ship among `fighters` struck since `first_strike` and still
+    /// standing settles its condition as step 9 does, as `rule` says
+    /// ([`Combat::settle_condition`]), its last strike marked as downing
+    /// it: a breakup it begins is left unset, for the ship's next display
+    /// step to start (see the `display` module).
+    fn settle_struck(
+        &mut self,
+        fighters: &mut [Fighter],
+        first_strike: usize,
+        rule: &dyn DisableRule,
+    ) {
         for fighter in fighters.iter_mut() {
             let struck = self.strikes[first_strike..]
                 .iter()
@@ -2396,13 +2520,9 @@ impl Combat {
                 continue;
             }
             truncate_downed_player(fighter, rule);
-            let downed = self.update_condition(fighter, rule);
+            let downed = self.settle_condition(fighter, rule);
             self.mark_downed(first_strike, fighter.ship, downed);
-            if downed == Some(Downed::BreakingUp) {
-                begun.push(fighter.ship);
-            }
         }
-        begun
     }
 
     /// The hit pass's point-defence layer: each point-defence shot in
@@ -2415,29 +2535,41 @@ impl Combat {
     /// it ([`defence::sprites_meet`]), and is spent on them: each it meets
     /// takes [`defence::pd_damage`], and one destroyed
     /// ([`Shot::take_pd_hit`]) is shot down where the point-defence shot
-    /// is, and vanishes. There is no other test: a lost missile, one
+    /// is, and vanishes from the shots in flight. There is no other test: a lost missile, one
     /// point defence cannot target (`Flags` 0x0080), a friendly one or one
     /// aimed elsewhere is met all the same (`_PointDefenseCollisionHandler`
     /// @0x37776-0x3785d). A missile shot down by an earlier shot this
-    /// pass, or that touches a ship among `touch` on its move
+    /// pass, or that touches a ship among `touch` on its move that the
+    /// contact passes walk, those of `walked`'s indices
     /// ([`touches_a_ship`], which the original's contact passes take
-    /// first, @0x43e75-0x43ffa), is not met; one whose move spent its life
+    /// first, @0x43e75-0x43ffa), is not met; one that touches only a
+    /// hidden ship is, as the contact passes never walk a hidden ship's
+    /// sprite (@0xacba3); one whose move spent its life
     /// still is, as the pass tests no life. What is spent or destroyed is
-    /// marked `gone`.
+    /// marked `gone`, and [`Combat::resolve`] keeps it hidden at life 0
+    /// for the proximity pass that follows ([`hidden`]).
     ///
-    /// The shots go in the order they are kept, the order they were fired,
-    /// each against every missile in that order. The original walks each
-    /// layer in the order its sprites entered it (`_SWAddSprite`
-    /// @0xac620), the same but for a reused slot whose sprite was already
-    /// in the layer, which keeps its place; the simulation has no slots,
-    /// and the order crosses no boundary the player sees.
-    fn intercept(&mut self, camera: Vec2, touch: &Sides, gone: &mut [bool]) {
-        for pd in 0..self.shots.len() {
+    /// The shots go in `entry`'s order, each layer in the order it keeps
+    /// them ([`Combat::entry_order`]), each against every missile in that
+    /// order, as `_SWCollideSpriteLayer` walks both layers from their
+    /// heads (@0xacb4b): by
+    /// [`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)'s engine
+    /// reading the order their slots entered them, a reused slot whose
+    /// sprite was already in the layer keeping its place (`_SWAddSprite`
+    /// @0xac620, `_PutSpriteInLayer` @0x768c); by the other, firing order.
+    fn intercept(
+        &mut self,
+        camera: Vec2,
+        (touch, walked): (&Sides, &[usize]),
+        entry: &[usize],
+        gone: &mut [bool],
+    ) {
+        for &pd in entry {
             let defender = &self.shots[pd];
             if defender.layer != ShotLayer::PointDefence || defender.moved_from.is_none() {
                 continue;
             }
-            for missile in 0..self.shots.len() {
+            for &missile in entry {
                 let shot = &self.shots[missile];
                 let Some(from) = shot.moved_from else {
                     continue;
@@ -2445,7 +2577,7 @@ impl Combat {
                 if gone[missile]
                     || shot.layer != ShotLayer::Homing
                     || !defence::sprites_meet(&self.shots[pd], shot, camera)
-                    || touches_a_ship(shot, from, touch)
+                    || touches_a_ship(shot, from, touch, walked)
                 {
                     continue;
                 }
@@ -2463,9 +2595,10 @@ impl Combat {
 
     /// Step 7: each point-defence beam hits the missile it is held on, its
     /// damage multiplied by `factor` ([`GamePass`]); a missile destroyed is
-    /// shot down and leaves the fight, counted among the shots whose slots
-    /// the original frees only at its next `_HandleShot` (@0x30ab1, see
-    /// [`Combat::shot_room`]), and the beams held on a missile no longer
+    /// shot down and leaves the shots in flight, counted among the shots
+    /// whose slots the original frees only at its next `_HandleShot`
+    /// (@0x30ab1, see [`Combat::shot_room`]); it is kept hidden at life 0
+    /// for the next tick's proximity pass ([`hidden`]). The beams held on a missile no longer
     /// in flight go. This comes after the shots fly, as `_HandleBeams`
     /// runs last in the frame (@0x4453d), so a beam downs a missile before
     /// the next hit pass tests its move.
@@ -2486,157 +2619,20 @@ impl Combat {
                 });
             }
         }
-        let mut downed = gone.iter();
-        self.shots
-            .retain(|_| !downed.next().is_some_and(|&gone| gone));
-        self.ended_shots += gone.iter().filter(|&&gone| gone).count();
+        let shots = std::mem::take(&mut self.shots);
+        for (shot, gone) in shots.into_iter().zip(gone) {
+            if gone {
+                self.slots.hold(shot.slot);
+                self.hide(shot);
+            } else {
+                self.shots.push(shot);
+            }
+        }
         let shots = &self.shots;
         self.beams.retain(|beam| match beam.aiming {
             Aiming::Shot(id) => shots.iter().any(|shot| shot.id == id),
             _ => true,
         });
-    }
-
-    /// The hit pass's ship and asteroid tests and its ends of life (see
-    /// [`Combat::hit_pass`]): the hits, blasts and expiries of the shots
-    /// that have moved, among `sides` and, for contact, `touch`, those
-    /// `gone` to point defence taken out first; each sub-munition's weapon
-    /// is read from `arsenal`, its spread drawn on `chance`. Gives the
-    /// hits on ships to land, in the original's pass order: contacts,
-    /// proximities, then expiries.
-    ///
-    /// Each shot is checked against the ships and `asteroids` in the
-    /// original's order (`_DoPlayGameWork` @0x43e70-0x43fd8, then
-    /// `_CheckShotProximities` @0x44015): a ship it touched, then an
-    /// asteroid it touched, then a ship that set its fuse off as
-    /// [`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse) says, then
-    /// an asteroid that set it off ([`asteroid_hit`]). The move that spends
-    /// a shot tests no ship and no asteroid's fuse (`_CheckShotProximities`
-    /// @0x371ea skips it before both); an asteroid it touches on that move
-    /// it still meets, as `_AsteroidCollisionHandler` tests no life.
-    fn resolve(
-        &mut self,
-        fighters: &[Fighter],
-        (sides, touch): (&Sides, &Sides),
-        gone: &[bool],
-        arsenal: &Arsenal,
-        chance: &mut dyn Chance,
-        asteroids: &mut [AsteroidTarget],
-    ) -> Vec<Landed> {
-        // The original's passes, in its frame's order: the contact passes
-        // (`_SWCollideSpriteLayer` @0x43e70-0x44010), then the proximity
-        // pass (`_CheckShotProximities` @0x44015), then each shot's end of
-        // life in `_HandleShot` (@0x44385), each hit with its blast.
-        let mut contacts: Vec<Landed> = Vec::new();
-        let mut proximities: Vec<Landed> = Vec::new();
-        let mut expiries: Vec<Landed> = Vec::new();
-        let mut kept = Vec::with_capacity(self.shots.len());
-        let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
-        let shots = std::mem::take(&mut self.shots);
-        let mut ended = 0;
-        for (mut shot, &gone) in shots.into_iter().zip(gone) {
-            let Some(from) = shot.moved_from else {
-                kept.push(shot);
-                continue;
-            };
-            if gone {
-                ended += 1;
-                continue;
-            }
-            let hit = Hit {
-                cant_kill: shot.disable_only,
-                ..Hit::of(&shot.weapon)
-            };
-            // The move that spends a shot is never tested: both passes
-            // skip a shot whose life is down to none (`_ShotCanHitShip`
-            // @0x447c2, `_CheckShotProximities` @0x371ea), and its end of
-            // life comes the next frame where it moved to (@0x36195).
-            let met = (!shot.expired())
-                .then(|| {
-                    shot.touched(from, touch)
-                        .or_else(|| shot.fused(from, sides, self.proximity_fuse))
-                })
-                .flatten();
-            let fuse = self.asteroid_fuse;
-            if let Some((index, at, how)) = rock_met(&shot, from, met, asteroids, fuse) {
-                let queue = match how {
-                    Fuse::Contact => &mut contacts,
-                    Fuse::Proximity => &mut proximities,
-                };
-                self.hit_asteroid(&shot, &mut asteroids[index], at, fighters, queue);
-                ended += 1;
-                continue;
-            }
-            let subs = if let Some(Meeting { ship, at, fuse }) = met {
-                let queue = match fuse {
-                    Fuse::Contact => &mut contacts,
-                    Fuse::Proximity => &mut proximities,
-                };
-                queue.push(Landed {
-                    ship,
-                    by: shot.attacker(),
-                    weapon: Some(shot.weapon.id),
-                    at,
-                    hit: hit.decayed(shot.decay_steps(self.decay)),
-                    direct: true,
-                    intended: shot.aimed_at == Some(ship),
-                    lock: false,
-                    weight: shot.weapon.reload,
-                    push: Push {
-                        from: at,
-                        impact: shot.weapon.impact,
-                        beam: false,
-                    },
-                    ion: Some(Dose::of(&shot.weapon, None)),
-                });
-                shot.position = at;
-                let blast = shot.blast(Some(ship));
-                self.explode_shot(&shot, &blast);
-                // Once a hit, where the shot is (`_HandleShipHit`
-                // @0x36b44-0x36bae); the ships its blast reaches spray none.
-                self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-                // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
-                queue.extend(blasted(&shot, &blast, hit, 0.0, sides.targets));
-                // Only the proximity pass releases sub-munitions
-                // (`spawnSubs` 1 @0x37678, 0 @0x37095).
-                (fuse == Fuse::Proximity).then_some(Some(ship))
-            } else if shot.expired() {
-                if shot.weapon.detonates() {
-                    let blast = shot.blast(None);
-                    self.explode_shot(&shot, &blast);
-                    // An expiry blast weighs its weapon's `Reload`
-                    // (`_HandleShot` @0x360a2).
-                    let weight = shot.weapon.reload;
-                    expiries.extend(blasted(&shot, &blast, hit, weight, sides.targets));
-                } else if shot.weapon.fizzles {
-                    self.events.push(CombatEvent::Fizzled { at: shot.position });
-                }
-                shot.weapon.subs_on_expiry().then_some(shot.aimed_at)
-            } else {
-                kept.push(shot);
-                continue;
-            };
-            ended += 1;
-            if let Some(target) = subs {
-                released.push((shot, target));
-            }
-        }
-        let mut hits = contacts;
-        hits.extend(proximities);
-        hits.extend(expiries);
-        self.ended_shots += ended;
-        self.shots = kept;
-        for (parent, target) in released {
-            // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):
-            // its plunder as it is now, not the parent's flag.
-            let owner = fighters
-                .iter()
-                .find(|fighter| fighter.ship == parent.firer)
-                .filter(|_| matches!(parent.source, Source::Ship(_)))
-                .map_or_else(Plunderer::default, Plunderer::of);
-            self.release(&parent, (target, owner), sides, arsenal, chance);
-        }
-        hits
     }
 
     /// `shot`'s explosion where `blast` goes off, if its weapon has one,
@@ -2661,65 +2657,69 @@ impl Combat {
         }
     }
 
-    /// Step 8: the hit each beam makes this tick among `sides`,
-    /// if any, each beam ending where it hit and exploding there; an
-    /// intended hit is on the ship it was fired at, or, for one fired at
-    /// nothing, its firer's target among `fighters`. Its mass and energy
-    /// damage are multiplied by `factor` ([`GamePass`]), cone hits and
-    /// segment hits alike; its `Impact` and `Ionization` never are.
-    fn beam_hits(&mut self, fighters: &[Fighter], sides: &Sides, factor: f32) -> Vec<Landed> {
+    /// Step 8: the hit beam `index` makes this tick among `sides`, if
+    /// any, the beam ending where it hit and exploding there; an intended
+    /// hit is on the ship it was fired at, or, for one fired at nothing,
+    /// its firer's target among `fighters`. Its mass and energy damage are
+    /// multiplied by `factor` ([`GamePass`]), cone hits and segment hits
+    /// alike; its `Impact` and `Ionization` never are. The caller lands it
+    /// before the next beam is tested, as `_HandleBeams` damages the ship
+    /// in its beam loop (@0x316a1).
+    fn beam_hit(
+        &mut self,
+        index: usize,
+        fighters: &[Fighter],
+        sides: &Sides,
+        factor: f32,
+    ) -> Option<Landed> {
         let beam_rules = self.beam_rules;
-        let mut hits = Vec::new();
-        for beam in &mut self.beams {
-            let Some((ship, at)) = beam.hit(sides, beam_rules) else {
-                continue;
-            };
-            beam.end = at;
-            let meant = beam.aimed_at.or_else(|| {
-                fighters
-                    .iter()
-                    .find(|fighter| fighter.ship == beam.firer)
-                    .and_then(|firer| firer.target)
-            });
-            let hit = Hit {
-                cant_kill: beam.disable_only,
-                ..Hit::of(&beam.weapon)
-            };
-            hits.push(Landed {
-                ship,
-                by: Some(beam.firer),
-                weapon: Some(beam.weapon.id),
+        let beam = &mut self.beams[index];
+        let (ship, at) = beam.hit(sides, beam_rules)?;
+        beam.end = at;
+        let beam = *beam;
+        let meant = beam.aimed_at.or_else(|| {
+            fighters
+                .iter()
+                .find(|fighter| fighter.ship == beam.firer)
+                .and_then(|firer| firer.target)
+        });
+        let hit = Hit {
+            cant_kill: beam.disable_only,
+            ..Hit::of(&beam.weapon)
+        };
+        if let Some(explosion) = beam.weapon.explosion {
+            self.events.push(CombatEvent::Exploded {
                 at,
-                hit: Hit {
-                    mass: hit.mass * factor,
-                    energy: hit.energy * factor,
-                    ..hit
-                },
-                direct: true,
-                intended: meant == Some(ship),
-                lock: false,
-                weight: BEAM_WEIGHT,
-                push: Push {
-                    from: beam.start,
-                    impact: beam.weapon.impact,
-                    beam: true,
-                },
-                ion: Some(Dose::of(&beam.weapon, None)),
+                explosion,
+                size: beam.weapon.blast_radius,
             });
-            if let Some(explosion) = beam.weapon.explosion {
-                self.events.push(CombatEvent::Exploded {
-                    at,
-                    explosion,
-                    size: beam.weapon.blast_radius,
-                });
-            }
-            if let Some(particles) = beam.weapon.hit_particles {
-                let variation = asteroid_hit::BEAM_HIT_PART_VARIATION;
-                let burst = asteroid_hit::hit_burst(at, &particles, variation);
-                self.events.push(CombatEvent::Particles(burst));
-            }
         }
-        hits
+        if let Some(particles) = beam.weapon.hit_particles {
+            let variation = asteroid_hit::BEAM_HIT_PART_VARIATION;
+            let burst = asteroid_hit::hit_burst(at, &particles, variation);
+            self.events.push(CombatEvent::Particles(burst));
+        }
+        Some(Landed {
+            ship,
+            by: Some(beam.firer),
+            weapon: Some(beam.weapon.id),
+            at,
+            hit: Hit {
+                mass: hit.mass * factor,
+                energy: hit.energy * factor,
+                ..hit
+            },
+            direct: true,
+            intended: meant == Some(ship),
+            lock: false,
+            weight: BEAM_WEIGHT,
+            push: Push {
+                from: beam.start,
+                impact: beam.weapon.impact,
+                beam: true,
+            },
+            ion: Some(Dose::of(&beam.weapon, None)),
+        })
     }
 
     /// Takes each of `hits` in turn off the ship it landed on among
@@ -2737,7 +2737,9 @@ impl Combat {
     /// velocities from the shoves after the fight's tick
     /// ([`Combat::take_shoves`]), before the next movement, which crosses
     /// no boundary the player sees. The hits compound in the order they
-    /// land: locks, contacts, proximities, expiries, then beams.
+    /// land: the hit pass's in its walk's order ([`collision`]), then
+    /// `_HandleShot`'s, the blasts and locks slot by slot
+    /// ([`Combat::handle_shots`]), then beams.
     ///
     /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
     /// at the ship's place, the escape pod included, whatever the tractor
@@ -2745,6 +2747,12 @@ impl Combat {
     /// direct hit and a beam tick and after it on a blast; nothing reads
     /// the charge between the two, nor before the handling's next step,
     /// so one place serves all, crossing no boundary the player sees.
+    ///
+    /// A ship of the player's fleet that a hit leaves disabled leaves its
+    /// leader as the hit lands (`_DamageShip` @0x3afdd,
+    /// [`escort_loss::leave_fleet_if_disabled`]), so every later test of
+    /// the tick reads it unled; the escape pod, which takes no hit, never
+    /// does.
     fn land(&mut self, fighters: &mut [Fighter], hits: Vec<Landed>, rule: &dyn DisableRule) {
         // A shot passes through the escape pod and every class after it
         // (`_ShotCanHitShip` @0x447b3-0x447d9), and a beam through the pod
@@ -2802,10 +2810,14 @@ impl Combat {
                 self.shove(fighter, velocity);
             }
             let before = taken(fighter.reserves);
-            let was_disabled = fighter.held_disabled
-                || *fighter.condition != Condition::Intact
-                || damage::disabled(fighter.reserves.armor, &fighter.hull, rule);
+            let was_disabled = fighter.disabled_now(rule);
             damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
+            if escort_loss::leave_fleet_if_disabled(fighter, rule) {
+                self.escort_losses.push(EscortLoss {
+                    ship: landed.ship,
+                    strike: self.strikes.len(),
+                });
+            }
             self.strikes.push(Strike {
                 ship: landed.ship,
                 by: landed.by,
@@ -2953,32 +2965,43 @@ impl Combat {
     fn strike_stellars(&mut self, stellars: &mut [StellarTarget]) {
         let mut kept = Vec::with_capacity(self.shots.len());
         for shot in std::mem::take(&mut self.shots) {
+            // A shot its move spent is never tested (`_CheckShotProximities`
+            // @0x371ea); it waits for its end of life (`Combat::handle_shots`).
             let met = shot
                 .moved_from
+                .filter(|_| !shot.expired())
                 .and_then(|was| stellar::met(&shot, was, stellars));
             let Some((index, at)) = met else {
                 kept.push(shot);
                 continue;
             };
-            if let Some(explosion) = shot.weapon.explosion {
-                self.events.push(CombatEvent::Exploded {
-                    at,
-                    explosion,
-                    size: shot.weapon.blast_radius,
-                });
-            }
-            self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-            let target = &mut stellars[index];
-            let damage = stellar::damage(&shot.weapon);
-            target.strength -= damage;
-            self.stellar_strikes.push(StellarStrike {
-                stellar: target.stellar,
-                by: shot.attacker(),
-                damage,
-                destroyed: stellar::shot_down(target.strength),
-            });
+            self.slots.hold(shot.slot);
+            self.strike_stellar(&shot, &mut stellars[index], at);
         }
         self.shots = kept;
+    }
+
+    /// `shot`'s hit on `target` at `at`, which spends it (see
+    /// [`Combat::strike_stellars`]): it explodes there with its hit
+    /// particles, with no blast and no sub-munitions, and takes its damage
+    /// off the stellar's strength.
+    fn strike_stellar(&mut self, shot: &Shot, target: &mut StellarTarget, at: Vec2) {
+        if let Some(explosion) = shot.weapon.explosion {
+            self.events.push(CombatEvent::Exploded {
+                at,
+                explosion,
+                size: shot.weapon.blast_radius,
+            });
+        }
+        self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
+        let damage = stellar::damage(&shot.weapon);
+        target.strength -= damage;
+        self.stellar_strikes.push(StellarStrike {
+            stellar: target.stellar,
+            by: shot.attacker(),
+            damage,
+            destroyed: stellar::shot_down(target.strength),
+        });
     }
 
     /// Puts in flight the sub-munitions `parent` releases at `target`
@@ -2995,7 +3018,7 @@ impl Combat {
     fn release(
         &mut self,
         parent: &Shot,
-        (target, owner): (Option<ShipRef>, Plunderer),
+        (target, fighters): (Option<ShipRef>, &[Fighter]),
         sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
@@ -3007,17 +3030,10 @@ impl Combat {
         else {
             return;
         };
-        // The firer's class as its slot holds it, or the bit the parent
-        // carried once the firer has left the fight.
-        let turret_over = sides
-            .targets
-            .iter()
-            .find(|ship| ship.ship == parent.firer)
-            .filter(|_| matches!(parent.source, Source::Ship(_)))
-            .map_or(parent.turret_over, |firer| {
-                arsenal.hull(firer.ship_type).turret_shots_over
-            });
-        let shots = submunition::release(parent, sub, (target, turret_over), sides, chance);
+        // `_SpawnShotSubmunitions` spawns as the parent's source slot
+        // (+0x2c): its ship's class and plunder as they are now.
+        let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
+        let shots = submunition::release(parent, sub, (target, turret_over));
         if shots.is_empty() {
             return;
         }
@@ -3040,53 +3056,43 @@ impl Combat {
             at: parent.position,
             sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         });
-        for mut shot in shots {
+        for (mut shot, n) in shots.into_iter().zip(0..) {
             // `_SpawnShot` failing ends the loop (@0x3f32d-0x3f331).
-            if !sub.spawns_shot() || self.capped && self.shots.len() + self.ended_shots >= MAX_SHOTS
-            {
+            if !sub.spawns_shot() {
+                break;
+            }
+            if self.seat(&mut shot).is_none() {
                 break;
             }
             shot.id = self.next_id();
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, chance);
-            self.shots.push(shot);
+            // Each seeks once seated, with its own roll and jam (@0x3f3cf).
+            let shot = submunition::aim(parent, shot, n, sides, chance);
+            self.insert_seated(&shot);
         }
     }
 
-    /// Step 9, and the hit pass's settling: `fighter`'s condition follows its damage, as `rule`
-    /// says, and a ship breaking up counts down to its destruction. How
-    /// it was downed, if it was this tick.
+    /// Step 9, and every settling of a ship's condition (the hit pass's,
+    /// the shots', a shockwave's, the display step's): `fighter`'s
+    /// condition follows its armour, as `rule` says. How it was downed,
+    /// if it was.
     ///
-    /// The countdown is the original's death timer (field 0x3c), as
-    /// `_HandleShipDisplay` reads it (@0x2d80d-0x2d85a):
-    ///
-    /// - On the breakup's first tick the timer is set to the ship's
-    ///   `DeathDelay`, times [`PLAYER_BREAKUP_FACTOR`] for the player
-    ///   (@0x2d834-0x2d850), and nothing else happens (both paths jump to
-    ///   0x2def0): the ship is `Dying` with `starting` set, and no tick is
-    ///   taken off.
-    /// - Each later tick takes 1 off a timer above 0 (the player's
-    ///   `_HandlePlayer` @0x6d7e6-0x6d7f8, an NPC's `_HandleShip`
-    ///   @0x35083-0x350a3, each before the display check), and the ship
-    ///   is destroyed once it is at [`EXPLOSION_BAND`] or below
-    ///   (@0x2d85a). So the player explodes 3d - 2 ticks after its
-    ///   breakup tick, and an NPC d - 2 ticks after, or 1 tick after for
-    ///   d = 2.
-    /// - A timer that never rises above 0 by the check (d <= 0, or d = 1
-    ///   for an NPC) goes as the fight's [`Breakup`] says: destroyed on
-    ///   the breakup tick (d <= 0) or the tick after (d = 1) by default;
-    ///   set again, `starting` again, every tick under
-    ///   [`Breakup::Stalls`], the original's reset (@0x2d80d-0x2d83d).
+    /// - Intact or disabled with no armour left, it starts breaking up
+    ///   ([`Condition::breaking_up`]): [`CombatEvent::BreakingUp`], and
+    ///   `Dying` with its timer unset, which its next display step sets
+    ///   (see the `display` module).
+    /// - Held disabled ([`Fighter::held_disabled`]), it is kept disabled.
+    /// - Otherwise it is disabled, or intact, as `rule` says, a ship that
+    ///   holds no armour never disabled; newly disabled, it raises
+    ///   [`CombatEvent::Disabled`].
+    /// - Breaking up or destroyed, it is left as it is: the countdown is
+    ///   the ship's own step's and its display's.
     ///
     /// Class 0x2ff, the escape pod, skips the whole dying block
     /// (`_HandleShipDisplay` @0x2d803, [`never_breaks_up`]): with its
-    /// armour gone its condition stays as it is, with no breakup, no
-    /// countdown and no explosion.
-    ///
-    /// Left out: `_HandleShip` skips the NPC decrement while
-    /// `_gameFrozen` is set (@0x35091-0x35099), and the engine has no
-    /// frozen game.
-    fn update_condition(
+    /// armour gone its condition stays as it is, with no breakup.
+    fn settle_condition(
         &mut self,
         fighter: &mut Fighter,
         rule: &dyn DisableRule,
@@ -3095,30 +3101,16 @@ impl Combat {
             return None;
         }
         let ship = fighter.ship;
-        let at = fighter.state.position;
-        let timer = if ship == ShipRef::Player {
-            fighter.hull.death_delay * PLAYER_BREAKUP_FACTOR
-        } else {
-            fighter.hull.death_delay
-        };
-        let starting = Condition::Dying {
-            ticks_left: timer,
-            starting: true,
-        };
+        if let Some(dying) = fighter.condition.breaking_up(fighter.reserves.armor) {
+            self.events.push(CombatEvent::BreakingUp {
+                ship,
+                at: fighter.state.position,
+                explosion: fighter.hull.breakup,
+            });
+            *fighter.condition = dying;
+            return Some(Downed::BreakingUp);
+        }
         match *fighter.condition {
-            Condition::Intact | Condition::Disabled if armour_gone(fighter.reserves.armor) => {
-                self.events.push(CombatEvent::BreakingUp {
-                    ship,
-                    at,
-                    explosion: fighter.hull.breakup,
-                });
-                if timer == 0 && self.breakup == Breakup::Explodes {
-                    self.destroy(fighter);
-                } else {
-                    *fighter.condition = starting;
-                }
-                Some(Downed::BreakingUp)
-            }
             Condition::Intact | Condition::Disabled if fighter.held_disabled => {
                 *fighter.condition = Condition::Disabled;
                 None
@@ -3137,28 +3129,13 @@ impl Combat {
                 };
                 downed
             }
-            Condition::Dying { ticks_left, .. } => {
-                let left = ticks_left.saturating_sub(1);
-                if left == 0 && self.breakup == Breakup::Stalls {
-                    *fighter.condition = starting;
-                } else if left <= EXPLOSION_BAND {
-                    self.destroy(fighter);
-                } else {
-                    *fighter.condition = Condition::Dying {
-                        ticks_left: left,
-                        starting: false,
-                    };
-                }
-                None
-            }
-            Condition::Destroyed => None,
+            Condition::Dying { .. } | Condition::Destroyed => None,
         }
     }
 
     /// Destroys `fighter`, raising its [`CombatEvent::Destroyed`].
     fn destroy(&mut self, fighter: &mut Fighter) {
         *fighter.condition = Condition::Destroyed;
-        self.wrecks.push(fighter.ship);
         self.events.push(CombatEvent::Destroyed {
             ship: fighter.ship,
             ship_type: fighter.ship_type,
@@ -3169,7 +3146,7 @@ impl Combat {
         });
     }
 
-    /// The shots in flight.
+    /// The shots in flight, in slot order ([`Shot::slot`]).
     #[must_use]
     pub fn shots(&self) -> &[Shot] {
         &self.shots
@@ -3196,9 +3173,28 @@ impl Combat {
     }
 
     /// The strikes made since they were last taken, in order; taking them
-    /// empties the list.
+    /// empties the list, and drops the escort losses noted with them
+    /// ([`Combat::take_landed`]).
     pub fn take_strikes(&mut self) -> Vec<Strike> {
-        std::mem::take(&mut self.strikes)
+        self.take_landed().0
+    }
+
+    /// The strikes made since they were last taken, in order, and the
+    /// ships of the player's fleet they lost, each with the index of the
+    /// strike that lost it, in order ([`EscortLoss`]); taking them empties
+    /// both lists.
+    pub fn take_landed(&mut self) -> (Vec<Strike>, Vec<EscortLoss>) {
+        (
+            std::mem::take(&mut self.strikes),
+            std::mem::take(&mut self.escort_losses),
+        )
+    }
+
+    /// The words outside the fight that beams of stray `ExitType` stepped
+    /// since they were last taken, each with its firer, in order, for the
+    /// session to step ([`StrayWord`]); taking them empties the list.
+    pub fn take_stray_steps(&mut self) -> Vec<(ShipRef, StrayWord)> {
+        std::mem::take(&mut self.stray_steps)
     }
 
     /// The hits on stellars made since they were last taken, in order;
@@ -3218,6 +3214,16 @@ impl Combat {
             explosion,
             size: 0.0,
         });
+    }
+
+    /// Lights `ship`'s weapon glow, shown the frame it is lit
+    /// ([`CombatEvent::WeaponGlow`]): the player's fighter bay's, once the
+    /// session has put a fighter it launched in the system, as
+    /// `_FirePlayerWeapon` reaches the glow from a bay only when
+    /// `_LaunchFighter` returns one (@0x62c61-0x62c6e, @0x62c78-0x62c98).
+    pub fn light_glow(&mut self, ship: ShipRef) {
+        self.events
+            .push(CombatEvent::WeaponGlow { ship, late: false });
     }
 
     /// Reports an escape pod `ship` ejected at `at`, moving at `velocity`
@@ -3262,8 +3268,9 @@ impl Combat {
     /// Clears the shots and beams, as the ship leaves the system.
     pub fn clear(&mut self) {
         self.shots.clear();
+        self.hidden.clear();
         self.beams.clear();
-        self.ended_shots = 0;
+        self.slots.clear();
         self.ended_beams = 0;
         self.stood.clear();
     }
@@ -3350,19 +3357,41 @@ impl Fighter<'_> {
         }
     }
 
-    /// What homing guidance reads of the ship as the tick begins: its
-    /// jamming, whether it is disabled as `_IsDisabled` reads it (not
-    /// intact, or held disabled), and its sight facts.
+    /// What homing guidance reads of the ship (`_ShipECM` and the cloak
+    /// test, @0x321b7-0x32335): its jamming, whether it is disabled as
+    /// `_IsDisabled` reads it (not intact, or held disabled), and its sight
+    /// facts. Read as the tick begins, and again after each landing on the
+    /// ship within a loop ([`Lineup::refresh`](lineup::Lineup::refresh)),
+    /// once `Combat::settle_struck` has settled its condition, so a later
+    /// visit's shot reads a ship an earlier landing disabled as jamming
+    /// nothing, as the original reads the live record after `_DamageShip`.
     fn sight(&self) -> Sight {
         Sight {
             ship: self.ship,
             jamming: self.jamming,
-            disabled: self.held_disabled || *self.condition != Condition::Intact,
+            disabled: self.disabled_as_tick_began(),
             cloaked: self.cloaked,
             emerging: self.emerging,
             scanner: self.cloak_scanner,
             has_cloak: self.has_cloak,
         }
+    }
+
+    /// Whether `_IsDisabled` (@0x2ce6-0x2e0d) held for the ship as the
+    /// tick began, its condition read for its armour: held disabled, or
+    /// not intact. [`Fighter::sight`] and [`Fighter::as_target`] read it,
+    /// and [`Fighter::disabled_now`] adds the armour the pass's hits left.
+    fn disabled_as_tick_began(&self) -> bool {
+        self.held_disabled || *self.condition != Condition::Intact
+    }
+
+    /// Whether `_IsDisabled` holds for the ship now (@0x2ce6-0x2e0d), as
+    /// `rule` says: held disabled, not intact, or its armour under the
+    /// line ([`damage::disabled`]). Unlike [`Fighter::as_target`]'s, it
+    /// reads the armour the hits landed so far have left, before its
+    /// condition settles.
+    fn disabled_now(&self, rule: &dyn DisableRule) -> bool {
+        self.disabled_as_tick_began() || damage::disabled(self.reserves.armor, &self.hull, rule)
     }
 
     /// The ship as shots and beams see it.
@@ -3378,7 +3407,9 @@ impl Fighter<'_> {
             sprite_x: self.hull.sprite_size.unwrap_or(beam::NO_SPRITE_WIDTH),
             sheet: self.hull.sprite_size.is_some(),
             condition: *self.condition,
+            disabled: self.disabled_as_tick_began(),
             miss_class: self.hull.miss_class,
+            slot: self.slot,
         }
     }
 }
@@ -3420,25 +3451,6 @@ fn first_copy_sounds_at(priority: u8) -> impl Fn(usize) -> Option<FireSound> {
     move |copy| (copy == 0).then_some(FireSound::at(priority))
 }
 
-/// How an NPC's `launch` through [`Armament::fire`] sounds: a fighter
-/// bay's at [`BAY_LAUNCH_PRIORITY`], with no looped test, as
-/// `_AILaunchFighter` sounds each `_LaunchFighter`; any other weapon's at
-/// [`AI_FIRE_PRIORITY`], as `_FireAIShipWeapon` sounds once a call. Each
-/// weapon launches at most once a call, its copies as one. The engine
-/// fires every ready turret of an escort's formation trigger, where the
-/// original fires `_AIFireTurret`'s one pick
-/// (rdm:phase/escort-fleet-fidelity/phase-1-formation-fire-unprovoked).
-fn trigger_sound(launch: &Launch) -> FireSound {
-    if launch.weapon.guidance_99() {
-        FireSound {
-            priority: BAY_LAUNCH_PRIORITY,
-            unless_playing: false,
-        }
-    } else {
-        FireSound::at(AI_FIRE_PRIORITY)
-    }
-}
-
 /// The ship `launch`'s damage is aimed at, its firer's `target`: none for
 /// a front-quadrant turret firing ahead (@0x88bf0).
 fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
@@ -3448,21 +3460,22 @@ fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
 
 /// Which ships defend and fire in a step of the tick, point defence
 /// first: the player in step 1, as `_HandlePlayer` runs its point defence
-/// and then its trigger before the collision passes, and the NPCs in step
-/// 4, after them, as `_AIDispatch` runs their point defence before
-/// `_HandleShip` fires their picks.
+/// and then its trigger before the collision passes. The NPCs' point
+/// defence runs in `_AIDispatch`'s slot loop (`Combat::dispatch_npcs`),
+/// and their picks at each one's own `_HandleShip`
+/// ([`Combat::handle_npcs`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Firers {
     /// The player alone.
     Player,
-    /// Every NPC.
-    Npcs,
 }
 
 impl Firers {
     /// Whether `ship` fires in this step.
     fn take(self, ship: ShipRef) -> bool {
-        (ship == ShipRef::Player) == (self == Self::Player)
+        match self {
+            Self::Player => ship == ShipRef::Player,
+        }
     }
 }
 
@@ -3487,6 +3500,8 @@ struct Muzzle<'a> {
     /// Whether its hull's turret shots are drawn over the ships
     /// ([`HullSpec::turret_shots_over`]).
     turret_over: bool,
+    /// The ship slot it fires from ([`Shot::firer_slot`]).
+    firer_slot: Option<Slot>,
 }
 
 impl<'a> Muzzle<'a> {
@@ -3508,6 +3523,7 @@ impl<'a> Muzzle<'a> {
             fold,
             miss_class: hull.miss_class,
             turret_over: hull.turret_shots_over,
+            firer_slot: None,
         }
     }
 }
@@ -3546,53 +3562,19 @@ fn truncate_downed_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
     }
 }
 
-/// The asteroid among `asteroids`, by its index, that `shot`, flown here
-/// from `from`, meets in place of `met`, its meeting with a ship if any,
-/// where and how, in the original's order (see [`Combat::resolve`]): an
-/// asteroid it touched, unless it touched a ship first; else, when no ship
-/// met it, one that set off its armed fuse as `fuse` says, where the shot
-/// is. A shot whose life is spent sets off no fuse (`_CheckShotProximities`
-/// @0x371ea), but an asteroid it touches it still meets, as
-/// `_AsteroidCollisionHandler` tests no life.
-fn rock_met(
-    shot: &Shot,
-    from: Vec2,
-    met: Option<Meeting>,
-    asteroids: &[AsteroidTarget],
-    fuse: AsteroidFuse,
-) -> Option<(usize, Vec2, Fuse)> {
-    if met.is_some_and(|met| met.fuse == Fuse::Contact) {
-        return None;
-    }
-    if let Some((index, at)) = asteroid_hit::touched(shot, from, asteroids) {
-        return Some((index, at, Fuse::Contact));
-    }
-    if met.is_some() || shot.expired() {
-        return None;
-    }
-    asteroid_hit::fused(shot, asteroids, fuse).map(|index| (index, shot.position, Fuse::Proximity))
-}
-
-/// Whether `armor` is gone: at or below none, on a ship that holds any.
-fn armour_gone(armor: Gauge) -> bool {
-    armor.now <= 0.0 && holds_armour(armor)
-}
-
-/// Whether a ship with `armor` holds any. A ship type with no armour at
-/// all (stock `shïp` 895, plug-in or test data) has none to lose, so it
-/// never breaks up, and the [`DisableRule`] is never asked of it, so it is
-/// never disabled either.
-fn holds_armour(armor: Gauge) -> bool {
-    armor.max > 0.0
-}
-
 /// Whether `shot` meets a ship by contact on its move here from `from`
-/// among `sides`: the original's contact passes, which run before point
-/// defence's (`_DoPlayGameWork` @0x43e75-0x44010), so point defence never
-/// meets it. A shot whose move spent its life is not tested, as in the
-/// hit pass ([`Combat::hit_pass`]).
-fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides) -> bool {
-    !shot.expired() && shot.touched(from, sides).is_some()
+/// among the ships of `sides` at `walked`'s indices, those the contact
+/// passes walk ([`collision::walk_order`]), a hidden ship not among them:
+/// the original's contact passes, which run before point defence's
+/// (`_DoPlayGameWork` @0x43e75-0x44010), so point defence never meets
+/// it. A shot whose move spent its life is not tested, as in the hit pass
+/// ([`Combat::hit_pass`]).
+fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides, walked: &[usize]) -> bool {
+    !shot.expired()
+        && walked.iter().any(|&ship| {
+            let target = &sides.targets[ship];
+            shot.touches(from, target).is_some() && sides.shot_can_hit(shot, target)
+        })
 }
 
 /// What a beam's hit weighs as a player's stray hit ([`Strike::weight`]):
@@ -3624,13 +3606,12 @@ const LOCK_HIT: Hit = Hit {
 /// damage and is no crime ([`Strike::lock`]).
 ///
 /// The original locks in `_HandleShot`, after the move and before the
-/// next frame's collision passes test that move; here it is made on the
-/// move in step 6 and lands with the beams in step 8, after the NPCs
-/// fire, where the original makes it before `_HandleShip`; a lock does
-/// no damage, and its answer is taken after the tick, so that crosses no
-/// boundary the player sees. The original's target sets +0x70 then, and
-/// its AI reads it the next frame; here the session answers the strike
-/// at its next traffic tick, a tick's lag with no frame drawn between.
+/// next frame's collision passes test that move; here too it is made
+/// right after the shot's move and lands at its own visit, between the
+/// other slots' ends of life ([`Combat::handle_shots`]), before the NPCs
+/// fire. The original's target sets +0x70 then, in `_DamageShip`'s
+/// reaction block; the session answers the strike after the shot step
+/// (`nova_sim::Session::game_work`).
 fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
     let players = shot.firer == ShipRef::Player && matches!(shot.source, Source::Ship(_));
     if shot.weapon.guidance != Guidance::Homing
@@ -3711,23 +3692,47 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
     )
 }
 
-/// Step 10: `fighter`'s shields and armour regenerate only while it is
-/// intact: a disabled, breaking-up or destroyed ship regenerates neither
-/// (`_HandleShip` @0x34424-0x34677 behind its frame-start `_IsDisabled`;
-/// `_HandlePlayer` @0x6cf86-0x6cff3 for the shield and @0x6d00a-0x6d093
-/// for the armour, which its repair inhibit also holds back through
-/// [`Fighter::armor_regen`]).
-///
-/// *Ordering against the original.* The original tests the condition its
-/// frame started with; the engine tests the one this tick's hits leave.
-/// So a ship disabled on a tick misses that tick's regeneration, and a
-/// player repaired on a tick gains it, one tick's rate either way, which
-/// no frame shows.
-fn regenerate(fighter: &mut Fighter) {
-    if *fighter.condition == Condition::Intact {
+/// An NPC's regeneration, at its own `_HandleShip` (@0x34424-0x34677,
+/// [`Combat::handle_npcs`]): `fighter`'s shields and armour regenerate
+/// only while `_IsDisabled` does not hold as its `_HandleShip` began
+/// (-0x13e), as `rule` says ([`Fighter::disabled_now`]: held disabled, not
+/// intact, or its armour under the line). So a disabled, breaking-up or
+/// destroyed ship regenerates neither. It comes before that frame's
+/// `_HandleBeams`, so a beam that disables the ship after it leaves it
+/// regenerated. A ship whose shield and armour are full has nothing to
+/// regenerate, and the rule is not asked of it.
+fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
+    let reserves = &fighter.reserves;
+    let short = below_full(reserves.shield) || below_full(reserves.armor);
+    if short && !fighter.disabled_now(rule) {
         recharge(&mut fighter.reserves.shield, fighter.shield_regen);
         recharge(&mut fighter.reserves.armor, fighter.armor_regen);
     }
+}
+
+/// The player's regeneration, in `_HandlePlayer` after its trigger
+/// (@0x6cf86-0x6d093, [`Combat::regenerate_player`]): `fighter`'s shields
+/// regenerate while it was intact as `_HandlePlayer` began (its flags
+/// -0x2cb and -0x2ca, @0x6cfa2; [`Fighter::disabled_as_tick_began`]); its
+/// armour only if `_IsDisabled` does not hold now either, as `rule` says
+/// (@0x6d035, [`Fighter::disabled_now`]), so armour taken to none since
+/// the frame began (a sabotage kill, a self-destruct) regenerates none.
+/// Its repair inhibit holds the armour back through
+/// [`Fighter::armor_regen`]. As the original tests the capacity first
+/// (@0x6cf99, @0x6d01d), a full gauge asks nothing.
+fn regenerate_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
+    let began_whole = !fighter.disabled_as_tick_began();
+    if began_whole && below_full(fighter.reserves.shield) {
+        recharge(&mut fighter.reserves.shield, fighter.shield_regen);
+    }
+    if began_whole && below_full(fighter.reserves.armor) && !fighter.disabled_now(rule) {
+        recharge(&mut fighter.reserves.armor, fighter.armor_regen);
+    }
+}
+
+/// Whether `gauge` is below what it holds, with something to regenerate.
+fn below_full(gauge: Gauge) -> bool {
+    gauge.now < gauge.max
 }
 
 /// Adds `rate` to `gauge` up to what it holds, never taking any away.
@@ -3747,20 +3752,30 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::defence::Side;
     use crate::combat::exits::{Compression, ExitCursors, ExitKind, ExitPoints};
-    use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, NovaDisable};
+    use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, EXPLOSION_BAND, NovaDisable};
     use crate::combat::weapon::{
         LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_ON_FIRER, WeaponSpec,
     };
+    use crate::ship_layer::ShipLayer;
     use crate::trig;
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::weapon;
 
+    mod ai_dispatch;
+    mod collision_walk;
+    mod display_step;
+    mod escort_lost_in_place;
     mod exit_steps;
     mod fold_stamp;
+    mod hidden_shots;
     mod ion_lockout_tick;
+    mod lineup;
     mod plunder_fire;
+    mod shot_slots;
+    mod shot_visits;
     mod stellar_hazards;
     mod strike_terms;
+    mod tick_phases;
     mod weapon_glow;
 
     /// A ship in a test fight, owning what a fighter borrows.
@@ -3771,6 +3786,7 @@ mod tests {
         fleet: ShipRef,
         govt: Option<GovtId>,
         leader: Option<ShipRef>,
+        fleet_escort: bool,
         booty: Option<u16>,
         target: Option<ShipRef>,
         state: ShipState,
@@ -3802,6 +3818,10 @@ mod tests {
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
         drawn_heading: Option<f32>,
+        /// Where its sprite stands for the collision walk.
+        sprite: Option<SpriteRank>,
+        /// Its ship slot: by default its berth, its NPC number.
+        slot: Slot,
         resists: HazardResistance,
     }
 
@@ -3813,6 +3833,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        bays_after: false,
         point_defence: true,
         keep: None,
     };
@@ -3828,6 +3849,7 @@ mod tests {
                 fleet: ShipRef::Npc(NpcId(id)),
                 govt: None,
                 leader: None,
+                fleet_escort: false,
                 booty: None,
                 target: None,
                 state: ShipState {
@@ -3862,6 +3884,12 @@ mod tests {
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
+                // As `_InitSprites` leaves the slots (`LayerEntries::new`).
+                sprite: Some(SpriteRank {
+                    layer: ShipLayer::Ships,
+                    entry: -1 - i64::from(id),
+                }),
+                slot: Slot::Berth(id),
                 resists: HazardResistance::default(),
             }
         }
@@ -3876,6 +3904,7 @@ mod tests {
                     only: None,
                     turrets_only: false,
                     bays: false,
+                    bays_after: false,
                     point_defence: true,
                     keep: None,
                 },
@@ -3890,6 +3919,7 @@ mod tests {
                 fleet: self.fleet,
                 govt: self.govt,
                 leader: self.leader,
+                fleet_escort: self.fleet_escort,
                 booty: self.booty,
                 state: self.state,
                 hull: self.hull,
@@ -3920,6 +3950,8 @@ mod tests {
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
+                sprite: self.sprite,
+                slot: self.slot,
                 resists: self.resists,
             }
         }
@@ -4040,6 +4072,20 @@ mod tests {
         combat
     }
 
+    /// The shots in flight after `ship`, firing `record`, fires a tick
+    /// among `others` and then, its trigger let go, lets them take their
+    /// first move, as an NPC's shot first moves in the tick after its pick
+    /// (`_HandleShot` @0x44385 before `_HandleShip` @0x44483).
+    fn launched_and_flown(ship: Ship, record: WeaponRecord, others: Vec<Ship>) -> Combat {
+        let mut combat = Combat::default();
+        let mut ships = vec![ship.armed(record)];
+        ships.extend(others);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = QUIET;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        combat
+    }
+
     #[test]
     fn every_shot_a_ship_fires_is_aimed_at_its_target() {
         let homing = WeaponRecord {
@@ -4058,7 +4104,7 @@ mod tests {
         }
         let combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), Vec::new());
         assert_eq!(combat.shots()[0].aimed_at, None, "no target");
-        let gone = launched_by(Ship::at(1, 0.0, 0.0).targeting(C), blaster(), Vec::new());
+        let gone = launched_and_flown(Ship::at(1, 0.0, 0.0).targeting(C), blaster(), Vec::new());
         assert_eq!(
             (gone.shots()[0].aimed_at, gone.shots()[0].jam),
             (None, Jam::Lost),
@@ -4279,16 +4325,20 @@ mod tests {
             (0.0, 1),
             "an NPC under 1"
         );
-        // An NPC's hold comes before its fire, and the reload step counts
-        // its 1.0 down.
-        assert_eq!(ion_held_reload(false, 1.0, engine), (0.0, 0), "an NPC at 1");
+        // An NPC's hold comes with its reload step, before its fire, and
+        // its 1.0 stays until its next step counts it down (@0x338f0).
+        assert_eq!(
+            ion_held_reload(false, 1.0, engine),
+            (ion::HELD_RELOAD, 0),
+            "an NPC at 1"
+        );
         let bible = RuleSource::Bible;
         assert_eq!(ion_held_reload(true, 1.0, bible), (0.0, 1), "unguided");
         assert_eq!(ion_held_reload(false, 1.0, bible), (0.0, 1), "unguided");
     }
 
     #[test]
-    fn a_shot_fired_this_tick_has_flown_a_tick() {
+    fn an_npcs_shot_waits_at_its_launch_point_the_tick_it_is_fired() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster())];
         ships[0].govt = Some(GovtId(140));
@@ -4307,12 +4357,14 @@ mod tests {
         assert_eq!(combat.take_events(), [], "taken");
         assert_eq!(combat.shots().len(), 1);
         assert_eq!(combat.shots()[0].govt(), Some(GovtId(140)), "its firer's");
-        assert!((combat.shots()[0].position.x - 15.0).abs() < 1e-4);
+        // `_HandleShip` fires it after `_HandleShot` has moved the shots
+        // (@0x44483 after @0x44385): it first moves the next tick.
+        assert_eq!(combat.shots()[0].position, Vec2::ZERO, "unmoved");
         assert_eq!(combat.beams(), []);
-        for _ in 1..13 {
+        for _ in 1..14 {
             tick(&mut combat, &mut [Ship::at(1, 0.0, 0.0)], &NovaDisable);
         }
-        // Its 13th move spent it: it is drawn at its last point for a
+        // Its 13th move, on the 14th tick, spent it: it is drawn at its last point for a
         // tick, and its end of life comes in the next tick's hit pass.
         assert_eq!(combat.shots().len(), 1, "spent, at its last point");
         assert!((combat.shots()[0].position.x - 195.0).abs() < 1e-3);
@@ -4944,7 +4996,12 @@ mod tests {
         };
         tick(&mut combat, &mut ships, &rule);
         let asked = rule.asked.take();
-        assert_eq!(asked.len(), 2, "not of the dying");
+        // Slot by slot (@0x4445c): A at its display, its condition
+        // settled; the tough ship at its `_HandleShip`'s regeneration,
+        // which reads `_IsDisabled` live (@0x34424), its armour short of
+        // full, then at its display; never the dying.
+        assert_eq!(asked.len(), 3, "not of the dying");
+        assert_eq!(asked[1].0, asked[2].0, "the tough ship's regeneration");
         assert_eq!(
             asked[1].0,
             Gauge {
@@ -5734,9 +5791,9 @@ mod tests {
             Ship::at(3, 100.0, 25.0),
         ];
         let mut events = Vec::new();
-        // Its sixth move meets the ship, and the seventh tick's hit pass
-        // tests it.
-        for _ in 0..7 {
+        // Fired on the first tick, its sixth move, on the seventh, meets
+        // the ship, and the eighth tick's hit pass tests it.
+        for _ in 0..8 {
             tick(&mut combat, &mut ships, &NovaDisable);
             events.extend(combat.take_events());
             ships[0].trigger = QUIET;
@@ -5874,8 +5931,9 @@ mod tests {
             dying,
             disabled,
         ];
-        // The sixth move meets ship 2, tested in the seventh tick.
-        for _ in 0..7 {
+        // The sixth move, on the seventh tick, meets ship 2, tested in the
+        // eighth.
+        for _ in 0..8 {
             tick(&mut combat, &mut ships, &NovaDisable);
             ships[0].trigger = QUIET;
         }
@@ -5907,9 +5965,9 @@ mod tests {
             ];
             tick(&mut combat, &mut ships, &NovaDisable);
             ships[0].trigger = QUIET;
-            // Its third move spends it; its end of life comes the tick
-            // after.
-            for _ in 0..3 {
+            // Its third move, on the fourth tick, spends it; its end of
+            // life comes the tick after.
+            for _ in 0..4 {
                 tick(&mut combat, &mut ships, &NovaDisable);
             }
             assert_eq!(combat.shots(), [], "{flags:#x}");
@@ -6063,7 +6121,7 @@ mod tests {
             Ship::at(3, 30.0, 35.0),
         ];
         let mut strikes = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick(&mut combat, &mut ships, &NovaDisable);
             ships[0].trigger = QUIET;
             strikes.extend(combat.take_strikes());
@@ -6299,7 +6357,9 @@ mod tests {
             tick(&mut combat, &mut ships, &NovaDisable);
             flown += 1;
         }
-        assert_eq!(flown, 91, "flew its life, and ended the tick after");
+        // Fired on the first of the ten ticks, it first moved on the
+        // second (`_HandleShot` before `_HandleShip`).
+        assert_eq!(flown, 92, "flew its life, and ended the tick after");
         assert_eq!(
             ships[2].reserves,
             Reserves::full(10.0, 30.0, 100.0),
@@ -6405,7 +6465,9 @@ mod tests {
         ships.remove(1);
         let mut strikes = Vec::new();
         let mut events = Vec::new();
-        for _ in 0..3 {
+        // Three moves, the first the tick after it is fired, then its end
+        // of life.
+        for _ in 0..4 {
             tick(&mut combat, &mut ships, &NovaDisable);
             strikes.extend(combat.take_strikes());
             events.extend(combat.take_events());
@@ -6429,7 +6491,7 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(shell).targeting(C),
             Ship::at(3, 0.0, 900.0),
         ];
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
             ships[0].trigger = QUIET;
         }
@@ -6451,7 +6513,7 @@ mod tests {
         tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         ships[0].trigger = QUIET;
         ships.remove(1);
-        for _ in 0..3 {
+        for _ in 0..4 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         }
         let subs = sub_shots(&combat);
@@ -6469,6 +6531,7 @@ mod tests {
         Ship {
             id: ShipRef::Player,
             fleet: ShipRef::Player,
+            slot: Slot::Player,
             ..Ship::at(0, 0.0, 0.0)
         }
         .armed(record)
@@ -6670,7 +6733,7 @@ mod tests {
             ships[0].trigger = QUIET;
         }
         combat.take_strikes();
-        combat.shots.push(Shot {
+        combat.put_in_flight(Shot {
             id: ShotId(99),
             position: Vec2::new(5000.0, 0.0),
             velocity: Vec2::new(10.0, 0.0),
@@ -6821,18 +6884,8 @@ mod tests {
             [0, 3, 6, 9, 12],
             "every Reload ticks"
         );
-        // Spent on tick 9, it holds the reload at 3 through it.
-        assert_eq!(
-            fire_ticks(&mut [firer(0x0004), at(900.0)], 27),
-            [0, 13, 26],
-            "Reload ticks after it is spent"
-        );
-        // It meets B, 60 pixels off, on tick 4.
-        assert_eq!(
-            fire_ticks(&mut [firer(0x0004), at(60.0)], 9),
-            [0, 8],
-            "Reload ticks after it hits"
-        );
+        // An NPC's one-at-a-time shot: see the `tick_phases` tests, as its
+        // reload counts down after `_HandleShot` holds it.
         let mut player = Ship {
             id: ShipRef::Player,
             fleet: ShipRef::Player,
@@ -7089,6 +7142,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: true,
             keep: None,
         };
@@ -7183,10 +7237,10 @@ mod tests {
             ..weapon(150)
         };
         let mut combat = Combat::default();
+        // The missile is 200 above A as the beam first fires: fired the
+        // tick before, it first moves after the NPCs' point defence
+        // (`_AIDispatch` @0x4429d before `_HandleShot` @0x44385).
         let mut ships = missile_attack(beam);
-        // B 5 further back, so its missile's lead-in move brings it to
-        // 200 above A as the beam first fires.
-        ships[1].state.position.y = -205.0;
         let mut seen = Vec::new();
         let mut events = Vec::new();
         missile_in_flight(&mut combat, &mut ships);
@@ -7275,7 +7329,7 @@ mod tests {
             age: 1,
             ..Shot::launch(WeaponSpec::new(&record), firer, firer, &from, 0.0)
         };
-        combat.shots.push(shot);
+        combat.put_in_flight(shot);
         shot.id
     }
 
@@ -7701,9 +7755,10 @@ mod tests {
             Ship::at(3, 500.0, 0.0),
         ];
         let mut events = Vec::new();
-        // Its third move spends it; the next tick's hit pass releases
-        // them where it ended, and they take their first move that tick.
-        for _ in 0..4 {
+        // Its third move, on the fourth tick, spends it; the next tick
+        // releases them where it ended, and they take their first move
+        // that tick.
+        for _ in 0..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
             events.extend(combat.take_events());
         }
@@ -7732,14 +7787,14 @@ mod tests {
         let (shell, arsenal) = cluster(0x0020);
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         }
         assert_eq!(sub_shots(&combat).len(), 0, "none on expiry");
         let (shell, _) = cluster(0);
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick(&mut combat, &mut ships, &NovaDisable);
         }
         assert_eq!(combat.shots(), [], "a sub-munition that cannot be read");
@@ -7759,7 +7814,8 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(fused), Ship::at(2, 40.0, 20.0)];
         let mut events = Vec::new();
-        for _ in 0..3 {
+        // Fired on the first tick, its second move is on the third.
+        for _ in 0..4 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
             events.extend(combat.take_events());
         }
@@ -7818,6 +7874,8 @@ mod tests {
         ];
         tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         ships[0].trigger = QUIET;
+        assert_eq!(combat.take_strikes(), [], "unmoved on the tick it is fired");
+        tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         assert_eq!(combat.take_strikes(), [], "not tested on the tick it moves");
         tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         let strikes = combat.take_strikes();
@@ -7840,7 +7898,8 @@ mod tests {
             let mut combat = Combat::default();
             let mut ships = [Ship::at(1, 0.0, 0.0).armed(record), Ship::at(2, 205.0, 0.0)];
             let mut strikes = Vec::new();
-            for tick in 1..=14 {
+            // Fired on tick 1, it first moves on tick 2.
+            for tick in 1..=15 {
                 tick_with(
                     &mut combat,
                     &mut ships,
@@ -7848,7 +7907,7 @@ mod tests {
                     Rules::default(),
                 );
                 ships[0].trigger = QUIET;
-                if tick == 12 {
+                if tick == 13 {
                     assert!((combat.shots()[0].position.x - 180.0).abs() < 1e-3);
                 }
                 strikes.extend(combat.take_strikes());
@@ -7856,7 +7915,7 @@ mod tests {
             assert_eq!(
                 combat.shots(),
                 [],
-                "spent on its 13th tick, gone on the 14th"
+                "spent on its 14th tick, gone on the 15th"
             );
             let direct: Vec<bool> = strikes.iter().map(|strike| strike.direct).collect();
             let expected: &[bool] = if blasted { &[false] } else { &[] };
@@ -7928,7 +7987,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            combat.shots.push(Shot {
+            combat.put_in_flight(Shot {
                 id: ShotId(n as u32),
                 ..shot
             });
@@ -7964,8 +8023,9 @@ mod tests {
 
     /// The layers of the turret sub-munitions a shell fired by ship 1 of
     /// class 128 releases, its class's turret shots `over` the ships or
-    /// not, the firer `leaving` the fight before the release or not.
-    fn released_layers(over: bool, leaving: bool) -> Vec<ShotLayer> {
+    /// not, the firer `leaving` the fight before the release or not, by
+    /// `source`'s reading of the source slot.
+    fn released_layers(over: bool, leaving: bool, source: RuleSource) -> Vec<ShotLayer> {
         let (shell, _) = cluster(0);
         let sub = WeaponRecord {
             guidance: 4,
@@ -7979,6 +8039,7 @@ mod tests {
         };
         let arsenal = Arsenal::new(&[shell, sub], vec![class]);
         let mut combat = Combat::default();
+        combat.set_submunition_source_slot(source);
         let mut ships = vec![Ship {
             hull: HullSpec {
                 turret_shots_over: true,
@@ -7991,7 +8052,7 @@ mod tests {
         if leaving {
             ships.clear();
         }
-        for _ in 0..3 {
+        for _ in 0..4 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         }
         sub_shots(&combat).iter().map(|shot| shot.layer).collect()
@@ -7999,11 +8060,20 @@ mod tests {
 
     #[test]
     fn a_sub_munition_takes_its_firers_class_or_the_bit_its_parent_carried() {
-        // The firer's class as the arsenal reads it.
-        assert_eq!(released_layers(true, false), [ShotLayer::OverShips; 2]);
-        assert_eq!(released_layers(false, false), [ShotLayer::Shots; 2]);
-        // Gone from the fight: the bit the shell carried, its hull's.
-        assert_eq!(released_layers(false, true), [ShotLayer::OverShips; 2]);
+        for source in RuleSource::ALL {
+            // The firer's class as the arsenal reads it.
+            let over = released_layers(true, false, source);
+            assert_eq!(over, [ShotLayer::OverShips; 2], "{source:?}");
+            let under = released_layers(false, false, source);
+            assert_eq!(under, [ShotLayer::Shots; 2], "{source:?}");
+        }
+        // Gone from the fight: by the engine the class its empty slot
+        // keeps (`_HandleShip` @0x3359a); by the other reading the bit the
+        // shell carried, its hull's.
+        let engine = released_layers(false, true, RuleSource::Engine);
+        assert_eq!(engine, [ShotLayer::Shots; 2]);
+        let other = released_layers(false, true, RuleSource::Bible);
+        assert_eq!(other, [ShotLayer::OverShips; 2]);
     }
 
     #[test]
@@ -8399,14 +8469,16 @@ mod tests {
         }
     }
 
-    /// Ship A at (10, 20), moving (1, 2) and facing right, its secondary
-    /// trigger on a fighter bay, 149, of ship 144, 10 degrees inaccurate,
-    /// holding 2 fighters, and targeting B, which is at (300, 0).
+    /// Ship A at (10, 20), moving (1, 2) and facing right, launching its
+    /// fighters as its AI does (`_AILaunchFighter` @0x8e6fa,
+    /// [`Trigger::bays`]) from a fighter bay, 149, of ship 144, 10 degrees
+    /// inaccurate, holding 2 fighters, and targeting B, which is at
+    /// (300, 0).
     fn carrier() -> [Ship; 2] {
         let mut carrier = Ship::at(1, 10.0, 20.0).armed(carrier_bay());
         carrier.state.velocity = Vec2::new(1.0, 2.0);
         carrier.trigger = Trigger {
-            secondary: Some(WeaponId(149)),
+            bays: true,
             ..Trigger::default()
         };
         carrier.rounds = LauncherRounds::from([(WeaponId(149), 2)]);
@@ -8584,6 +8656,9 @@ mod tests {
 
     #[test]
     fn on_a_launch_tick_the_kept_bay_fires_nothing_more() {
+        // The launch in `_AIDispatch` (@0x8e6fa) sets the bay's reload to
+        // 60; `_HandleShip` counts it down to 59 (@0x33896) before the
+        // pick, which finds it reloading.
         let mut combat = Combat::default();
         let mut ships = carrier();
         ships[0].trigger = Trigger {
@@ -8727,9 +8802,11 @@ mod tests {
     }
 
     /// Ship A at the centre fires `weapon` once to the right, among
-    /// `others`; then the fight goes on for `ticks` ticks in all, among
-    /// `stellars`, with `arsenal`. The events, and the strikes on
-    /// stellars, in order.
+    /// `others`; then the fight goes on for `ticks` ticks more, among
+    /// `stellars`, with `arsenal`, the shot taking its first move on the
+    /// first of them, as an NPC's shot first moves the tick after its pick
+    /// (`_HandleShot` @0x44385 before `_HandleShip` @0x44483). The events,
+    /// and the strikes on stellars, in order.
     fn shoot_once(
         weapon: WeaponRecord,
         others: Vec<Ship>,
@@ -8741,7 +8818,7 @@ mod tests {
         let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(weapon)];
         ships.extend(others);
         let (mut events, mut strikes) = (Vec::new(), Vec::new());
-        for _ in 0..ticks {
+        for _ in 0..=ticks {
             tick_by(&mut combat, &mut ships, arsenal, stellars);
             ships[0] = Ship::at(1, 0.0, 0.0);
             events.extend(combat.take_events());
@@ -8984,11 +9061,13 @@ mod tests {
             Ship::at(2, 0.0, 50.0).armed(planet_gun()),
         ];
         tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
-        // Their first moves, tested the next tick.
+        // Their first moves, the next tick, tested the tick after.
         for ship in &mut ships {
             ship.trigger = QUIET;
         }
-        tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
+        for _ in 0..2 {
+            tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
+        }
         (
             combat.take_stellar_strikes(),
             combat.shots().len(),
@@ -9196,9 +9275,11 @@ mod tests {
     /// Guns 3 pixels either side of the nose, 10 ahead.
     const NOSE_GUNS: [(i16, i16); 4] = [(3, 10), (-3, 10), (3, 10), (-3, 10)];
 
-    /// Where `shot` left from: a shot fired this tick has flown a tick.
+    /// Where `shot` left from, if it has moved at most once: an NPC's shot
+    /// fired this tick waits where it left, and the player's has flown a
+    /// tick from there.
     fn start(shot: &Shot) -> Vec2 {
-        shot.position - shot.velocity
+        shot.moved_from.unwrap_or(shot.position)
     }
 
     fn close_to(a: Vec2, b: Vec2) -> bool {
@@ -9439,7 +9520,8 @@ mod tests {
 
     /// The velocity and heading of the shot of `guidance` and `inaccuracy`
     /// that `ship`, moving (1, 2) and facing up, fires from a starboard
-    /// exit, after its first tick.
+    /// exit, after its first move: the player's on the tick it is fired,
+    /// an NPC's on the next.
     fn fired_broadside(ship: Ship, guidance: i16, inaccuracy: i16) -> (Vec2, f32) {
         let mut combat = Combat::default();
         let record = WeaponRecord {
@@ -9456,6 +9538,14 @@ mod tests {
             ..ship.armed(record).of(exits_at(0, [(3, 10); 4]))
         }];
         tick(&mut combat, &mut ships, &NovaDisable);
+        if combat
+            .shots()
+            .last()
+            .is_some_and(|shot| shot.moved_from.is_none())
+        {
+            ships[0].trigger = QUIET;
+            tick(&mut combat, &mut ships, &NovaDisable);
+        }
         let shot = combat.shots().last().expect("a shot");
         (shot.velocity, shot.heading)
     }
@@ -10815,9 +10905,10 @@ mod tests {
         }
     }
 
-    /// The velocity and heading, after its first tick, of the shot `ship`
+    /// The velocity and heading, after its first move, of the shot `ship`
     /// (moving `velocity`, facing right) fires with `record`, by `source`'s
-    /// reading of the bomb and rocket launch, on `draws`.
+    /// reading of the bomb and rocket launch, on `draws`: the player's
+    /// moves on the tick it is fired, an NPC's on the next.
     fn launched(
         ship: Ship,
         velocity: Vec2,
@@ -10834,11 +10925,16 @@ mod tests {
             },
             ..ship.armed(record)
         }];
-        tick_drawing(
-            &mut combat,
-            &mut ships,
-            &mut nova_sim_base::fixture::Draws::of(draws),
-        );
+        let mut draws = nova_sim_base::fixture::Draws::of(draws);
+        tick_drawing(&mut combat, &mut ships, &mut draws);
+        if combat
+            .shots()
+            .last()
+            .is_some_and(|shot| shot.moved_from.is_none())
+        {
+            ships[0].trigger = QUIET;
+            tick_drawing(&mut combat, &mut ships, &mut draws);
+        }
         let shot = combat.shots().last().expect("a shot");
         (shot.velocity, shot.heading)
     }
@@ -10983,6 +11079,9 @@ mod tests {
                 },
                 ..Ship::at(1, 0.0, 0.0).armed(dropping(5, 0))
             }];
+            // Thrown on the first tick, it first moves on the second.
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = QUIET;
             tick(&mut combat, &mut ships, &NovaDisable);
             assert_eq!(combat.shots()[0].heading, heading, "{wrap:?}");
         }
@@ -11666,7 +11765,7 @@ mod tests {
             interference: 100,
             ..Field::default()
         };
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick_in(
                 &mut combat,
                 &mut ships,
@@ -11682,8 +11781,8 @@ mod tests {
     }
 
     /// The heading of the missile `ships[0]` fires on the first tick,
-    /// after `ticks` ticks in `field`, drawing on `chance`, or `None` once
-    /// it is gone.
+    /// after `ticks` moves in `field`, the first on the tick after it is
+    /// fired, drawing on `chance`, or `None` once it is gone.
     fn missile_heading(
         ships: &mut [Ship],
         ticks: u32,
@@ -11691,7 +11790,7 @@ mod tests {
         chance: &mut dyn Chance,
     ) -> Option<f32> {
         let mut combat = Combat::default();
-        for _ in 0..ticks {
+        for _ in 0..=ticks {
             tick_in(&mut combat, ships, (&Arsenal::default(), field), chance);
             ships[0].trigger = QUIET;
         }
@@ -11755,7 +11854,8 @@ mod tests {
             ships[1].held_disabled = held;
             ships[1].reserves.armor.now = 1.0;
             ships[1].hull.death_delay = 90;
-            for _ in 1..16 {
+            // Its 15 moves, from the tick after it is fired.
+            for _ in 1..17 {
                 tick_in(&mut combat, &mut ships, field, &mut chance);
             }
             assert_ne!(ships[1].condition, Condition::Intact, "{condition:?}");
@@ -11776,7 +11876,7 @@ mod tests {
         let mut chance = Ranged::of(&[(101, 100)]);
         let mut aimed = BTreeMap::new();
         let mut strikes = Vec::new();
-        for tick in 1..=25 {
+        for tick in 1..=26 {
             tick_in(
                 &mut combat,
                 &mut ships,
@@ -11784,7 +11884,8 @@ mod tests {
                 &mut chance,
             );
             ships[0].trigger = QUIET;
-            if tick == 20 {
+            // Its 20th move, fired on tick 1.
+            if tick == 21 {
                 aimed = combat.targeted_damage();
             }
             strikes.extend(combat.take_strikes());
@@ -11882,7 +11983,8 @@ mod tests {
             frame,
             interference: 100,
         };
-        for frame in 0..15 {
+        // Fired on frame 0, it moves on frames 1 to 15.
+        for frame in 0..16 {
             tick_in(
                 &mut combat,
                 &mut ships,
@@ -11935,7 +12037,8 @@ mod tests {
                     .targeting(B),
                 Ship::at(2, b.x, b.y),
             ];
-            for _ in 0..16 {
+            // Its 16 moves, from the tick after it is fired.
+            for _ in 0..17 {
                 tick(&mut combat, &mut ships, &NovaDisable);
                 ships[0].trigger = QUIET;
             }
@@ -12104,8 +12207,10 @@ mod tests {
     }
 
     /// `firer` at the centre fires `record` once to the right, among
-    /// `others`; then the fight goes on for `ticks` ticks in all among
-    /// `rocks`, with `record` and its sub-munition, weapon 148, in the
+    /// `others`; then the fight goes on among `rocks` until the shot has
+    /// had `ticks` ticks of flight, the player's from the tick it fires and
+    /// an NPC's from the next (`_HandleShot` @0x44385 before `_HandleShip`
+    /// @0x44483), with `record` and its sub-munition, weapon 148, in the
     /// arsenal. The ships and the events, in order.
     fn shoot_rocks(
         combat: &mut Combat,
@@ -12127,7 +12232,8 @@ mod tests {
         let mut ships = vec![gun];
         ships.extend(others);
         let mut events = Vec::new();
-        for _ in 0..ticks {
+        let waits = u32::from(firer != ShipRef::Player);
+        for _ in 0..ticks + waits {
             tick_amid(combat, &mut ships, &arsenal, Rules::default(), rocks);
             ships[0].trigger = QUIET;
             events.extend(combat.take_events());
@@ -12330,7 +12436,8 @@ mod tests {
         escort.fleet = A;
         escort.leader = Some(A);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(fast_gun(0)), escort];
-        // Both meet it on the first tick; the second shot flies on.
+        // Both meet it on their first move, the tick after they are fired;
+        // the second shot flies on.
         tick_amid(
             &mut combat,
             &mut ships,
@@ -12341,13 +12448,15 @@ mod tests {
         for ship in &mut ships {
             ship.trigger = QUIET;
         }
-        tick_amid(
-            &mut combat,
-            &mut ships,
-            &arsenal,
-            Rules::default(),
-            &mut rocks,
-        );
+        for _ in 0..2 {
+            tick_amid(
+                &mut combat,
+                &mut ships,
+                &arsenal,
+                Rules::default(),
+                &mut rocks,
+            );
+        }
         assert_eq!(rocks[0].strength, -2, "the first shot's alone");
         assert_eq!(combat.shots().len(), 1, "the second flies on");
         assert_eq!(combat.take_broken_asteroids(), [5]);
@@ -12371,7 +12480,7 @@ mod tests {
             Ship::at(1, 0.0, 0.0).armed(fast_gun(0)),
             Ship::at(3, 0.0, 50.0).armed(fast_gun(0)),
         ];
-        for _ in 0..2 {
+        for _ in 0..3 {
             tick_amid(
                 &mut combat,
                 &mut ships,
@@ -12535,14 +12644,17 @@ mod tests {
             .collect()
     }
 
-    /// The events of `ticks` ticks after A at the centre fires `record`
-    /// once to the right among `others`.
+    /// The events of the tick A at the centre fires `record` once to the
+    /// right among `others`, and of `ticks` ticks more, its shot first
+    /// moving on the first of them, as an NPC's shot first moves the tick
+    /// after its pick (`_HandleShot` @0x44385 before `_HandleShip`
+    /// @0x44483).
     fn fight_once(record: WeaponRecord, others: Vec<Ship>, ticks: u32) -> Vec<CombatEvent> {
         let mut combat = Combat::default();
         let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(record)];
         ships.extend(others);
         let mut events = Vec::new();
-        for _ in 0..ticks {
+        for _ in 0..=ticks {
             tick(&mut combat, &mut ships, &NovaDisable);
             ships[0].trigger = QUIET;
             events.extend(combat.take_events());
@@ -12668,26 +12780,6 @@ mod tests {
             events.extend(combat.take_events());
         }
         assert_eq!(lateness(&events), [(ShipRef::Player, true)]);
-    }
-
-    #[test]
-    fn a_shockwave_shows_its_flash_the_next_frame_on_a_ship_before_its_wreck() {
-        for (wreck_first, late) in [(true, false), (false, true)] {
-            let mut combat = Combat::default();
-            let wreck = wreck(WRECK, 200.0, 0.0, 0.0);
-            let near = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
-            let mut ships = if wreck_first {
-                [wreck, near]
-            } else {
-                [near, wreck]
-            };
-            tick(&mut combat, &mut ships, &NovaDisable);
-            assert_eq!(
-                lateness(&combat.take_events()),
-                [(A, late)],
-                "wreck first: {wreck_first}"
-            );
-        }
     }
 
     #[test]
@@ -13351,7 +13443,7 @@ mod tests {
     }
 
     #[test]
-    fn a_release_in_the_hit_pass_counts_the_shots_it_ended_before_it() {
+    fn a_release_at_an_end_of_life_finds_the_slots_the_collision_passes_ended_freed() {
         let (shell, arsenal) = cluster(0);
         // A shot whose last move, its `age`th, ended at `at` from 10 to
         // the left, fired by A.
@@ -13361,8 +13453,9 @@ mod tests {
             age,
             ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
         };
-        // One ends on B, and one inside the stellar, which the pass
-        // tests after the releases.
+        // One ends on B, and one inside the stellar, in the collision
+        // passes; the shell's end of life comes after, in `_HandleShot`
+        // (@0x36195), which has freed their slots (@0x3617c) by then.
         let endings = [
             ("on a ship", flown(blaster(), Vec2::new(100.0, 0.0), 1)),
             (
@@ -13372,11 +13465,12 @@ mod tests {
         ];
         for (what, ending) in endings {
             // 125 others, the shot that ends, and the shell its last move
-            // spent: both still hold their slots as the shell releases.
-            for (capped, released) in [(false, 2), (true, 1)] {
+            // spent: the shell alone still holds its slot as it releases.
+            for capped in [false, true] {
+                let released = 2;
                 let mut combat = crowded(MAX_SHOTS - 3, capped);
-                combat.shots.push(ending);
-                combat.shots.push(flown(shell, Vec2::new(0.0, -3000.0), 3));
+                combat.put_in_flight(ending);
+                combat.put_in_flight(flown(shell, Vec2::new(0.0, -3000.0), 3));
                 let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 100.0, 0.0)];
                 let mut stellars = [stellar_at(0.0, 500.0, 20.0, 100)];
                 tick_by(&mut combat, &mut ships, &arsenal, &mut stellars);
@@ -13386,7 +13480,7 @@ mod tests {
     }
 
     #[test]
-    fn a_release_in_the_hit_pass_counts_the_asteroid_and_point_defence_ends_before_it() {
+    fn a_release_at_an_end_of_life_finds_the_asteroid_and_point_defence_ends_freed() {
         let (shell, arsenal) = cluster(0);
         let flown = |record: WeaponRecord, at: Vec2, age: u32| Shot {
             position: at,
@@ -13432,12 +13526,16 @@ mod tests {
             ("on an asteroid", on_a_rock),
             ("to point defence", defended),
         ] {
-            // The others, the shots that end, and the shell: all hold
-            // their slots as the shell releases, leaving one free.
-            for (capped, released) in [(false, 2), (true, 1)] {
+            // The others, the shots that end, and the shell: the shots
+            // the collision passes ended are freed before the shell's end
+            // of life, leaving room for both.
+            for capped in [false, true] {
+                let released = 2;
                 let mut combat = crowded(MAX_SHOTS - 2 - endings.len(), capped);
-                combat.shots.extend(endings.iter().copied());
-                combat.shots.push(spent_shell);
+                for ending in &endings {
+                    combat.put_in_flight(*ending);
+                }
+                combat.put_in_flight(spent_shell);
                 let mut ships = [Ship::at(1, 0.0, 1000.0)];
                 let mut rocks = [rock(0, 500.0, 0.0)];
                 tick_amid(
@@ -13478,8 +13576,8 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
         // Released as the shell's end of life comes, the tick after its
-        // third move.
-        for _ in 0..4 {
+        // third move, which is the fourth tick.
+        for _ in 0..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
             ships[0].trigger = QUIET;
         }
@@ -13511,10 +13609,10 @@ mod tests {
 
     /// A combat with `n` [`filler`] shots in flight, capped or not.
     fn crowded(n: usize, capped: bool) -> Combat {
-        let mut combat = Combat {
-            shots: filler(n),
-            ..Combat::default()
-        };
+        let mut combat = Combat::default();
+        for shot in filler(n) {
+            combat.put_in_flight(shot);
+        }
         if capped {
             combat.set_combat_caps(RuleSource::Engine);
         }
@@ -13560,7 +13658,10 @@ mod tests {
             let rounds = &ships[0].rounds;
             let left = rounds.slot(WeaponId(128)) + rounds.slot(WeaponId(138));
             assert_eq!(left, 9, "{id:?}: still spent");
-            assert_eq!(ships[0].armament.mounts()[0].reload, 9.0, "{id:?}");
+            // The player counts its reload down after its trigger
+            // (@0x6ae25), an NPC before its pick (@0x33896).
+            let reload = if id == ShipRef::Player { 9.0 } else { 10.0 };
+            assert_eq!(ships[0].armament.mounts()[0].reload, reload, "{id:?}");
         }
         let mut combat = crowded(MAX_SHOTS - 1, true);
         tick(&mut combat, &mut [player_with(blaster())], &NovaDisable);
@@ -13617,7 +13718,7 @@ mod tests {
             let mut combat = crowded(MAX_SHOTS - 2, capped);
             let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
             let mut events = Vec::new();
-            for _ in 0..4 {
+            for _ in 0..5 {
                 tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
                 ships[0].trigger = QUIET;
                 events.extend(combat.take_events());
@@ -13631,7 +13732,7 @@ mod tests {
         }
         let mut combat = crowded(MAX_SHOTS - 1, true);
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
             ships[0].trigger = QUIET;
         }
@@ -13698,7 +13799,10 @@ mod tests {
                     9,
                     "{ship:?}: spent"
                 );
-                assert_eq!(ships[0].armament.mounts()[0].reload, 9.0, "{ship:?}");
+                // The player counts its reload down after its trigger
+                // (@0x6ae25), an NPC before its pick (@0x33896).
+                let reload = if ship == ShipRef::Player { 9.0 } else { 10.0 };
+                assert_eq!(ships[0].armament.mounts()[0].reload, reload, "{ship:?}");
             }
         }
         let mut combat = Combat::default();
@@ -13759,7 +13863,7 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
         let mut events = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
             ships[0].trigger = QUIET;
             events.extend(combat.take_events());
@@ -13814,7 +13918,7 @@ mod tests {
         };
         for capped in [false, true] {
             let mut combat = crowded(MAX_SHOTS - 1, capped);
-            combat.shots.push(Shot::launch(ending, C, C, &far, 0.0));
+            combat.put_in_flight(Shot::launch(ending, C, C, &far, 0.0));
             // Its move spends it this tick, nothing firing: it is still in
             // flight, drawn at its last point.
             let mut ships = [player_with(blaster()), Ship::at(1, 0.0, 300.0)];
@@ -13839,7 +13943,7 @@ mod tests {
     }
 
     #[test]
-    fn under_the_caps_a_shot_ended_last_tick_holds_its_slot_from_the_players_point_defence() {
+    fn under_the_caps_a_spent_shot_holds_its_slot_from_every_ships_point_defence() {
         let ending = WeaponSpec::new(&WeaponRecord {
             count: 1,
             speed: 0,
@@ -13870,13 +13974,13 @@ mod tests {
                 };
                 // A shot of one tick takes the 128th, and its move spends
                 // it, nothing firing.
-                combat.shots.push(Shot::launch(ending, C, C, &far, 0.0));
+                combat.put_in_flight(Shot::launch(ending, C, C, &far, 0.0));
                 tick(&mut combat, &mut ships, &NovaDisable);
                 assert_eq!(combat.shots().len(), MAX_SHOTS, "spent");
                 combat.take_events();
-                // The player's point defence finds the spent shot still
-                // holding the 128th slot; an NPC's, after the hit pass has
-                // ended it, finds it free.
+                // Every ship's point defence finds the spent shot still
+                // holding the 128th slot: `_HandleShot` ends it (@0x36195)
+                // after `_HandlePlayer` and `_AIDispatch` (@0x4429d).
                 ships[0].trigger = defending;
                 tick(&mut combat, &mut ships, &NovaDisable);
                 let missiles = combat.shots().iter().filter(|shot| shot.firer == B);
@@ -13885,8 +13989,7 @@ mod tests {
                     .into_iter()
                     .filter(|&(weapon, _)| weapon == WeaponId(133))
                     .count();
-                let held = capped && defender == ShipRef::Player;
-                assert_eq!(pd, usize::from(!held), "{defender:?} {capped}");
+                assert_eq!(pd, usize::from(!capped), "{defender:?} {capped}");
             }
         }
     }
@@ -13976,9 +14079,10 @@ mod tests {
                 heard.iter().any(|&(weapon, _)| weapon == WeaponId(128)),
                 "{capped}: the blaster is heard: {heard:?}"
             );
+            // Counted down before the pick (@0x33896), not after.
             assert_eq!(
                 ships[0].armament.mounts()[1].reload,
-                9.0,
+                10.0,
                 "{capped}: and spent"
             );
         }
@@ -14029,12 +14133,17 @@ mod tests {
     #[test]
     fn clearing_the_fight_frees_the_slots_ended_shots_and_beams_hold() {
         let mut combat = crowded(1, true);
-        combat.ended_shots = 5;
+        for slot in 1..6 {
+            combat.slots.hold(slot);
+        }
         combat.ended_beams = 5;
         combat.stood.insert(B, Vec2::new(1.0, 2.0));
+        let ended = combat.shots[0];
+        combat.hide(ended);
         combat.clear();
-        assert_eq!((combat.ended_shots, combat.ended_beams), (0, 0));
+        assert_eq!((combat.slots.held().count(), combat.ended_beams), (0, 0));
         assert_eq!(combat.shots(), []);
+        assert_eq!(combat.hidden, [], "the shots point defence ended");
         assert_eq!(combat.stood, BTreeMap::new(), "where the ships stood");
     }
 
@@ -14068,8 +14177,9 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell), Ship::at(2, 100.0, 0.0)];
         let mut events = Vec::new();
-        // Its sixth move, from 75 to 90, comes within B's 16 pixels.
-        for _ in 0..6 {
+        // Its sixth move, from 75 to 90 on the seventh tick, comes within
+        // B's 16 pixels.
+        for _ in 0..7 {
             tick(&mut combat, &mut ships, &NovaDisable);
             ships[0].trigger = QUIET;
             events.extend(combat.take_events());
@@ -14118,7 +14228,8 @@ mod tests {
             let mut combat = Combat::default();
             let mut ships = [Ship::at(1, 0.0, 0.0).armed(record), Ship::at(3, 30.0, 35.0)];
             let mut events = Vec::new();
-            for _ in 0..3 {
+            // Fired on the first tick, it moves on the next two.
+            for _ in 0..4 {
                 tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
                 ships[0].trigger = QUIET;
                 events.extend(combat.take_events());
@@ -14169,7 +14280,7 @@ mod tests {
         let mut combat = Combat::default();
         tick(&mut combat, ships, &NovaDisable);
         moved(ships);
-        combat.shots.push(*shot);
+        combat.put_in_flight(*shot);
         tick(&mut combat, ships, &NovaDisable);
         combat
             .take_strikes()
@@ -14230,7 +14341,7 @@ mod tests {
         );
         // A ship not in the last tick's fight is met where it is.
         let mut combat = Combat::default();
-        combat.shots.push(touching);
+        combat.put_in_flight(touching);
         let mut ships = [Ship::at(2, 0.0, 0.0)];
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_strikes().len(), 1, "met where it is");
@@ -14459,7 +14570,7 @@ mod tests {
             };
             let mut ships = [defender];
             let mut combat = Combat::default();
-            combat.shots.push(Shot {
+            combat.put_in_flight(Shot {
                 target: Some(A),
                 aimed_at: Some(A),
                 ..Shot::launch(
@@ -14495,7 +14606,7 @@ mod tests {
             ..shell
         };
         let mut combat = Combat::default();
-        combat.shots.push(Shot {
+        combat.put_in_flight(Shot {
             target: Some(B),
             aimed_at: Some(B),
             ..flown_by_c(fused, Vec2::new(20.0, 0.0))
@@ -14644,7 +14755,7 @@ mod tests {
         for (source, hit) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
             let mut combat = Combat::default();
             combat.set_proximity_fuse(source);
-            combat.shots.push(Shot {
+            combat.put_in_flight(Shot {
                 moved_from: Some(Vec2::ZERO),
                 ..flown_by_c(fused, Vec2::new(80.0, 0.0))
             });

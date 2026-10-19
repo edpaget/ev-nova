@@ -110,6 +110,14 @@ pub fn place(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) {
     }
 }
 
+/// Takes NPC `id` out of `session` and puts a copy of it in its berth at
+/// `at`, at rest, if it is in the system: the copy's id. For a test that
+/// needs a ship come into a slot since the slot's last display, so boxed
+/// where the slot's last ship was ([`Session::hover_place`]).
+pub fn refill(session: &mut Session, id: NpcId, at: crate::geometry::Vec2) -> Option<NpcId> {
+    session.refill_berth(id, at)
+}
+
 /// Sets off a sabotage kill outfit on the player in `session` at once, as
 /// its sabotage clock does when it runs out: for a test that needs the
 /// player's jump given up and its ship breaking up without waiting on the

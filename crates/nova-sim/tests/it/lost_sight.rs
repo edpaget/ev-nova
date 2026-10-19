@@ -99,6 +99,9 @@ fn tick(traffic: &mut Traffic, govts: &Governments, draws: &mut Draws) {
     };
     let still = BTreeSet::from([NpcId(1)]);
     traffic.tick_holding(&ai, world, &[], &still, draws);
+    // Each cloak's fade steps at its ship's display, after the traffic's
+    // tick (see `Traffic::step_fades`).
+    traffic.step_fades();
 }
 
 fn hunter(traffic: &Traffic) -> &Npc {

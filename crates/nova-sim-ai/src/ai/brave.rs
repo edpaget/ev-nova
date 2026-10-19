@@ -488,11 +488,22 @@ mod tests {
             damage: 7.0,
             ..crate::combat::fixture::strike(n(1), n(2))
         };
+        // Hit by the ship it attacks, it keeps at it with no reaction
+        // (`_DamageShip`'s focus test, @0x3bbf3-0x3bcac).
+        assert_eq!(
+            BraveTrader::default().react(&npcs[0], &strike, &around),
+            crate::ai::Reaction::default()
+        );
+        let bible = Surroundings {
+            hit_focus: crate::rulebook::RuleSource::Bible,
+            ..around
+        };
         assert_eq!(
             BraveTrader::default()
-                .react(&npcs[0], &strike, &around)
+                .react(&npcs[0], &strike, &bible)
                 .target,
-            Some(n(2))
+            Some(n(2)),
+            "by the other reading"
         );
     }
 

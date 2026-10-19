@@ -51,7 +51,12 @@ fn a_pilot_desk_move_offers_the_new_stellars_spaceport_mission() {
 /// 130 of `Flags` `flags`, its offer `dësc` of `text` naming the movie
 /// "Offer.mov" played as `movie` says, with movies played through a
 /// new [`Reel`] and `prefs`.
-fn landed_filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<Reel>) {
+pub(super) fn landed_filmed(
+    flags: u16,
+    text: &str,
+    movie: u16,
+    prefs: Prefs,
+) -> (AppScreen, Rc<Reel>) {
     let (mut screen, reel) = filmed(flags, text, movie, prefs);
     create(&mut screen, "Ada");
     land_twice(&mut screen);

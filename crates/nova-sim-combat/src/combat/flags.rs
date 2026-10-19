@@ -103,7 +103,8 @@ use Status::{Implemented, Presentation, Unimplemented};
 /// Every documented bit: its field, the bit, which weapons it applies to,
 /// and what the simulation does with it.
 const TABLE: [(FlagField, u16, Scope, Status); 44] = [
-    // Spin the graphic.
+    // Spin the graphic: the fight runs each shot slot's spin timer
+    // (`WeaponSpec::spins`, `spin_timer`), and the view draws the frames.
     (Flags, 0x0001, Any, Presentation),
     // Fired by the second trigger.
     (Flags, 0x0002, Any, Implemented),
@@ -162,8 +163,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x0080, Any, Implemented),
     // AI ships won't use it (`Armament::has_ammo`).
     (Flags2, 0x0100, Any, Implemented),
-    // The weapon glow (`WeaponSpec::glows`, `CombatEvent::WeaponGlow`);
-    // the view draws it.
+    // The weapon glow (`WeaponSpec::glows`, `CombatEvent::WeaponGlow`),
+    // a player's bay's lit by the session for a fighter put in the
+    // system; the view draws it.
     (Flags2, 0x0200, Any, Presentation),
     // Planet-type weapon. Its shots hit destroyable stellars (`stellar`);
     // the ship side (planet-type ships, blasts sparing ships) is not done

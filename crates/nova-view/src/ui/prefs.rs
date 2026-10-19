@@ -1,7 +1,7 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
 //! and music on or off, each one's volume, Hyperspace Effects, QuickTime
-//! Movies, how the game runs fullscreen and how it is enlarged onto the
-//! window (its Scaling).
+//! Movies, Smoke Trails, Weapon Effects, how the game runs fullscreen and
+//! how it is enlarged onto the window (its Scaling).
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -15,6 +15,20 @@
 //!   fades to white and back; off, it does not.
 //! - Check box 9 ("QuickTime Movies") works as it stands: on, a `dësc`'s
 //!   movie plays; off, none does (`_PlayQTMovie` @0x5597c).
+//! - Check box 10 ("Smoke Trails") works as it stands: on, shots leave
+//!   their particle trails and smoke; off, none do. The original's
+//!   `Keys.nib` box stores the inverted `SmokeTrails` byte, and
+//!   `-[EVPrefsDialogController accept:]` makes it live as the dialog
+//!   closes (@0xcfed6-0xcfeec); the engine applies it at once, the game
+//!   paused under the dialog either way.
+//! - Check box 15 ("Weapon Effects") works as it stands: on, ships show
+//!   their weapon glow. The original reads it only at launch, so, opened
+//!   [`PrefsDialog::with_launch_weapon_effects`], the dialog draws the
+//!   original's notice, [`RELAUNCH_NOTICE`], while the box differs from
+//!   the value the game launched with (`settingsChange:` @0xd0b01,
+//!   @0xd0bf8-0xd0c40). The notice is drawn in the free area under
+//!   "Check For Updates" ([`NOTICE_AREA`]), where the classic dialog has
+//!   nothing.
 //! - The stock volume is the sound effects' volume. The music's is the
 //!   same four parts moved [`MUSIC_VOLUME_OFFSET`] down, into item 3's
 //!   empty area above the buttons, labelled "Music Volume:".
@@ -51,6 +65,7 @@ use std::time::Duration;
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
+use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::preferences::Prefs;
@@ -62,9 +77,13 @@ use crate::upscaler::Upscaler;
 use crate::video_mode::{FullscreenKind, VideoMode};
 
 use super::button::{ButtonSkin, ButtonStyle};
-use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, Role, outline};
+use super::dialog::{
+    Dialog, DialogEvent, DialogTemplate, ItemSpec, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
+    outline,
+};
 use super::mode_picker::ModePicker;
 use super::picker::Picker;
+use super::scroll_text::ScrollText;
 use super::toggle::Toggle;
 use super::volume::{VolumeControl, VolumeRects};
 
@@ -88,6 +107,12 @@ pub const HYPERSPACE_EFFECTS_ITEM: usize = 21;
 
 /// The QuickTime Movies toggle's item.
 pub const QUICKTIME_MOVIES_ITEM: usize = 9;
+
+/// The Smoke Trails toggle's item.
+pub const SMOKE_TRAILS_ITEM: usize = 10;
+
+/// The Weapon Effects toggle's item.
+pub const WEAPON_EFFECTS_ITEM: usize = 15;
 
 /// The display picker's item ("Run in a window" in the stock dialog).
 pub const DISPLAY_ITEM: usize = 11;
@@ -126,6 +151,21 @@ pub const HYPERSPACE_EFFECTS_LABEL: &str = "Hyperspace Effects";
 /// The QuickTime Movies toggle's label, the stock check box's title.
 pub const QUICKTIME_MOVIES_LABEL: &str = "QuickTime Movies";
 
+/// The Smoke Trails toggle's label, the stock check box's title.
+pub const SMOKE_TRAILS_LABEL: &str = "Smoke Trails";
+
+/// The Weapon Effects toggle's label, the stock check box's title.
+pub const WEAPON_EFFECTS_LABEL: &str = "Weapon Effects";
+
+/// The notice drawn while Weapon Effects differs from the value the game
+/// launched with: the original's `_relaunchStatus` text in `Keys.nib`.
+pub const RELAUNCH_NOTICE: &str = "(Changes will take effect the next time you run Nova)";
+
+/// Where the notice is drawn, dialog-local (left, top, right, bottom):
+/// under "Check For Updates" in the left column, an area `DITL` 4003
+/// leaves empty.
+pub const NOTICE_AREA: (f32, f32, f32, f32) = (11.0, 189.0, 165.0, 241.0);
+
 /// The sound effects volume's label.
 pub const EFFECTS_VOLUME_LABEL: &str = "Sound Volume:";
 
@@ -156,6 +196,10 @@ pub enum Focus {
     HyperspaceEffects,
     /// The QuickTime Movies toggle.
     QuickTimeMovies,
+    /// The Weapon Effects toggle.
+    WeaponEffects,
+    /// The Smoke Trails toggle.
+    SmokeTrails,
     /// The display picker.
     Display,
     /// The Scaling list.
@@ -174,7 +218,9 @@ impl Focus {
             Self::Music => Self::Sound,
             Self::Sound => Self::HyperspaceEffects,
             Self::HyperspaceEffects => Self::QuickTimeMovies,
-            Self::QuickTimeMovies => Self::Display,
+            Self::QuickTimeMovies => Self::WeaponEffects,
+            Self::WeaponEffects => Self::SmokeTrails,
+            Self::SmokeTrails => Self::Display,
             Self::Display => Self::Scaling,
             Self::Scaling => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
@@ -191,6 +237,8 @@ enum Target {
     Sound,
     HyperspaceEffects,
     QuickTimeMovies,
+    WeaponEffects,
+    SmokeTrails,
     Display,
     Scaling,
     EffectsVolume,
@@ -216,6 +264,8 @@ fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
         SOUND_ITEM,
         HYPERSPACE_EFFECTS_ITEM,
         QUICKTIME_MOVIES_ITEM,
+        SMOKE_TRAILS_ITEM,
+        WEAPON_EFFECTS_ITEM,
         DISPLAY_ITEM,
         SCALING_ITEM,
     ];
@@ -235,6 +285,24 @@ fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
             _ => None,
         })
         .collect()
+}
+
+/// [`RELAUNCH_NOTICE`], wrapped in [`NOTICE_AREA`] in the dialog's text
+/// style.
+fn relaunch_notice(dialog: &Dialog, metrics: &Rc<dyn TextMetrics>) -> ScrollText {
+    let (left, top, right, bottom) = NOTICE_AREA;
+    let area = Bounds {
+        min: Point::new(left, top),
+        max: Point::new(right, bottom),
+    };
+    ScrollText::new(
+        RELAUNCH_NOTICE,
+        Font::Geneva,
+        STATIC_TEXT_SIZE,
+        STATIC_TEXT_COLOR,
+        area.offset(dialog.bounds().min),
+        metrics,
+    )
 }
 
 /// The Scaling list, its choice held until the dialog closes.
@@ -270,6 +338,13 @@ pub struct PrefsDialog {
     music_volume: VolumeControl,
     hyperspace: Toggle,
     movies: Toggle,
+    smoke: Toggle,
+    weapons: Toggle,
+    /// The Weapon Effects the game launched with, when a change takes
+    /// effect only at the next launch ([`Self::with_launch_weapon_effects`]).
+    launch_weapon_effects: Option<bool>,
+    /// The notice drawn while Weapon Effects differs from its launch value.
+    notice: ScrollText,
     display: ModePicker,
     /// How the game runs fullscreen, as reported: the picker's choice is
     /// held until the dialog closes.
@@ -356,6 +431,17 @@ impl PrefsDialog {
             QUICKTIME_MOVIES_LABEL,
             prefs.quicktime_movies,
         );
+        let smoke = Toggle::new(
+            place(SMOKE_TRAILS_ITEM)?,
+            SMOKE_TRAILS_LABEL,
+            prefs.smoke_trails,
+        );
+        let weapons = Toggle::new(
+            place(WEAPON_EFFECTS_ITEM)?,
+            WEAPON_EFFECTS_LABEL,
+            prefs.weapon_effects,
+        );
+        let notice = relaunch_notice(&dialog, &metrics);
         let mut display = ModePicker::new(picker_row(&dialog, place(DISPLAY_ITEM)?));
         display.set_entries(&[], prefs.fullscreen);
         let scaling_row = picker_row(&dialog, place(SCALING_ITEM)?);
@@ -377,6 +463,10 @@ impl PrefsDialog {
             music_volume: VolumeControl::new(music_rects, MUSIC_VOLUME_LABEL, prefs.music_level),
             hyperspace,
             movies,
+            smoke,
+            weapons,
+            launch_weapon_effects: None,
+            notice,
             display,
             fullscreen,
             chosen: fullscreen,
@@ -407,6 +497,8 @@ impl PrefsDialog {
             },
             hyperspace_effects: self.hyperspace.on(),
             quicktime_movies: self.movies.on(),
+            smoke_trails: self.smoke.on(),
+            weapon_effects: self.weapons.on(),
             fullscreen: self.fullscreen,
             scaling: self.scaling,
         }
@@ -441,6 +533,24 @@ impl PrefsDialog {
         self
     }
 
+    /// The dialog for a game that launched with Weapon Effects `launch`,
+    /// where a change of it takes effect only at the next launch, as in the
+    /// original: it draws [`RELAUNCH_NOTICE`] while the box differs from
+    /// `launch`. Without it, the notice is never drawn.
+    #[must_use]
+    pub fn with_launch_weapon_effects(mut self, launch: bool) -> Self {
+        self.launch_weapon_effects = Some(launch);
+        self
+    }
+
+    /// Whether the relaunch notice is drawn: Weapon Effects differs from
+    /// the value the game launched with.
+    #[must_use]
+    pub fn relaunch_notice_shown(&self) -> bool {
+        self.launch_weapon_effects
+            .is_some_and(|launch| launch != self.weapons.on())
+    }
+
     /// The kind the player picked, once after the dialog closed on a pick
     /// ([`Screen::take_display_choice`]).
     pub fn take_display_choice(&mut self) -> Option<FullscreenKind> {
@@ -470,6 +580,8 @@ impl PrefsDialog {
             (_, Some(Focus::Sound)) => self.changed |= self.sound.input(input),
             (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
             (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.input(input),
+            (_, Some(Focus::WeaponEffects)) => self.changed |= self.weapons.input(input),
+            (_, Some(Focus::SmokeTrails)) => self.changed |= self.smoke.input(input),
             (_, Some(Focus::Display)) => self.stepped |= self.display.input(input),
             (_, Some(Focus::Scaling)) => self.scaling_list.input(input),
             (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.input(input),
@@ -494,6 +606,10 @@ impl PrefsDialog {
                 Target::HyperspaceEffects
             } else if self.movies.contains(at) {
                 Target::QuickTimeMovies
+            } else if self.weapons.contains(at) {
+                Target::WeaponEffects
+            } else if self.smoke.contains(at) {
+                Target::SmokeTrails
             } else if self.display.arrow_at(at).is_some() {
                 Target::Display
             } else if self.scaling_list.picker.arrow_at(at).is_some() {
@@ -511,6 +627,8 @@ impl PrefsDialog {
             Some(Target::Sound) => self.changed |= self.sound.input(input),
             Some(Target::HyperspaceEffects) => self.changed |= self.hyperspace.input(input),
             Some(Target::QuickTimeMovies) => self.changed |= self.movies.input(input),
+            Some(Target::WeaponEffects) => self.changed |= self.weapons.input(input),
+            Some(Target::SmokeTrails) => self.changed |= self.smoke.input(input),
             Some(Target::Display) => self.stepped |= self.display.input(input),
             Some(Target::Scaling) => self.scaling_list.input(input),
             Some(Target::EffectsVolume) => self.changed |= self.effects_volume.input(input),
@@ -589,6 +707,18 @@ impl PrefsDialog {
         &self.movies
     }
 
+    /// The Weapon Effects toggle.
+    #[must_use]
+    pub fn weapon_effects(&self) -> &Toggle {
+        &self.weapons
+    }
+
+    /// The Smoke Trails toggle.
+    #[must_use]
+    pub fn smoke_trails(&self) -> &Toggle {
+        &self.smoke
+    }
+
     /// The display picker.
     #[must_use]
     pub fn display(&self) -> &ModePicker {
@@ -627,7 +757,7 @@ impl Screen for PrefsDialog {
     /// - A click on the display picker's or the Scaling list's arrows
     ///   steps it.
     /// - Tab moves the focus (music, sound, Hyperspace Effects, QuickTime
-    ///   Movies, the display picker, the Scaling list, the sound volume,
+    ///   Movies, Weapon Effects, Smoke Trails, the display picker, the Scaling list, the sound volume,
     ///   the music volume, OK, and round). Space flips a focused toggle or
     ///   activates OK; the arrow keys step a focused volume, and Up and
     ///   Down the focused picker, repeats included.
@@ -652,8 +782,8 @@ impl Screen for PrefsDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The backdrop and its outline, OK and Key Settings, the greyed check
-    /// boxes, the four toggles, the display picker, the Scaling list,
-    /// then the two volumes.
+    /// boxes, the six toggles, the display picker, the Scaling list,
+    /// then the two volumes, and the relaunch notice while it shows.
     /// The focused part is outlined.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
@@ -670,11 +800,18 @@ impl Screen for PrefsDialog {
             .draw(focused(Focus::HyperspaceEffects), &self.metrics, list);
         self.movies
             .draw(focused(Focus::QuickTimeMovies), &self.metrics, list);
+        self.weapons
+            .draw(focused(Focus::WeaponEffects), &self.metrics, list);
+        self.smoke
+            .draw(focused(Focus::SmokeTrails), &self.metrics, list);
         self.display.draw(focused(Focus::Display), list);
         self.scaling_list.picker.draw(focused(Focus::Scaling), list);
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
+        if self.relaunch_notice_shown() {
+            self.notice.draw(list);
+        }
         if let (true, Some(ok)) = (focused(Focus::Ok), self.dialog.item_bounds(OK_ITEM)) {
             outline(list, ok, self.style.up);
         }
@@ -686,6 +823,8 @@ impl Screen for PrefsDialog {
         self.sound.cancel_pointer();
         self.hyperspace.cancel_pointer();
         self.movies.cancel_pointer();
+        self.weapons.cancel_pointer();
+        self.smoke.cancel_pointer();
         self.display.cancel_pointer();
         self.scaling_list.picker.cancel_pointer();
         self.effects_volume.cancel_pointer();
@@ -711,8 +850,9 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::dialog::{ItemTemplate, Placement};
+    use crate::ui::dialog::{ItemTemplate, Placement, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE};
     use crate::ui::mode_picker::PickerRects;
+    use crate::ui::scroll_text::ScrollText;
     use crate::ui::toggle::Toggle;
     use crate::ui::volume::{Arrow, draw_arrow};
     use crate::video_mode::{FullscreenKind, VideoMode};
@@ -917,17 +1057,15 @@ mod tests {
         assert_eq!(
             titles,
             [
-                "Smoke Trails",
                 "Ship Animations",
                 "Engine Glows",
                 "Running Lights",
-                "Weapon Effects",
                 "Parallax Starfield",
                 "Check For Updates",
             ]
         );
         assert!(inert.iter().all(|(_, enabled, on)| !enabled && !on));
-        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 121.0, 172.0, 139.0));
+        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 33.0, 172.0, 51.0));
     }
 
     #[test]
@@ -1096,6 +1234,8 @@ mod tests {
             SOUND_ITEM,
             HYPERSPACE_EFFECTS_ITEM,
             QUICKTIME_MOVIES_ITEM,
+            SMOKE_TRAILS_ITEM,
+            WEAPON_EFFECTS_ITEM,
             VOLUME_LABEL_ITEM,
             VOLUME_DOWN_ITEM,
         ] {
@@ -1176,6 +1316,8 @@ mod tests {
             dialog.music().rect().center(),
             dialog.sound().rect().center(),
             dialog.hyperspace_effects().rect().center(),
+            dialog.weapon_effects().rect().center(),
+            dialog.smoke_trails().rect().center(),
             dialog.effects_volume().rects().up.center(),
             dialog.music_volume().rects().up.center(),
             dialog.display().rects().down.center(),
@@ -1221,7 +1363,7 @@ mod tests {
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..10 {
+        for _ in 0..12 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -1232,6 +1374,8 @@ mod tests {
                 Focus::Sound,
                 Focus::HyperspaceEffects,
                 Focus::QuickTimeMovies,
+                Focus::WeaponEffects,
+                Focus::SmokeTrails,
                 Focus::Display,
                 Focus::Scaling,
                 Focus::EffectsVolume,
@@ -1266,7 +1410,7 @@ mod tests {
         let mut dialog = prefs();
         dialog.input(&key(Key::Up));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
-        for _ in 0..7 {
+        for _ in 0..9 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&key(Key::Up));
@@ -1302,7 +1446,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..9 {
+        for _ in 0..11 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -1336,7 +1480,7 @@ mod tests {
         assert_eq!(dialog.take_prefs(), Some(changed));
         assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
-        for _ in 0..7 {
+        for _ in 0..9 {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
@@ -1365,9 +1509,13 @@ mod tests {
         assert!(!hyperspace.hyperspace_effects);
         let movies = focused(4, key(Key::Space)).expect("Space on QuickTime Movies");
         assert!(!movies.quicktime_movies);
-        let effects = focused(7, key(Key::Up)).expect("Up on the sound volume");
+        let weapons = focused(5, key(Key::Space)).expect("Space on Weapon Effects");
+        assert!(!weapons.weapon_effects);
+        let smoke = focused(6, key(Key::Space)).expect("Space on Smoke Trails");
+        assert!(!smoke.smoke_trails);
+        let effects = focused(9, key(Key::Up)).expect("Up on the sound volume");
         assert_eq!(effects.sound.effects_level, 5);
-        let volume = focused(8, key(Key::Down)).expect("Down on the music volume");
+        let volume = focused(10, key(Key::Down)).expect("Down on the music volume");
         assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
@@ -1391,6 +1539,10 @@ mod tests {
         assert!(!hyperspace.expect("Hyperspace Effects").hyperspace_effects);
         let movies = clicked(|d| d.quicktime_movies().rect().center());
         assert!(!movies.expect("QuickTime Movies").quicktime_movies);
+        let weapons = clicked(|d| d.weapon_effects().rect().center());
+        assert!(!weapons.expect("Weapon Effects").weapon_effects);
+        let smoke = clicked(|d| d.smoke_trails().rect().center());
+        assert!(!smoke.expect("Smoke Trails").smoke_trails);
         let up = clicked(|d| d.effects_volume().rects().up.center());
         assert_eq!(up.expect("the sound volume").sound.effects_level, 5);
         let up = clicked(|d| d.music_volume().rects().up.center());
@@ -1469,7 +1621,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..9 {
+        for _ in 0..11 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.take_sounds(), [], "Tab to OK");
@@ -1507,6 +1659,12 @@ mod tests {
             .draw(false, &MonoMetrics, &mut expected);
         dialog
             .quicktime_movies()
+            .draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .weapon_effects()
+            .draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .smoke_trails()
             .draw(false, &MonoMetrics, &mut expected);
         dialog.display().draw(false, &mut expected);
         dialog.scaling().draw(false, &mut expected);
@@ -1547,7 +1705,7 @@ mod tests {
         assert_eq!(commands.len(), unfocused.len() + 4);
         let music: Vec<DrawCommand> = music.iter().cloned().collect();
         assert!(commands.windows(music.len()).any(|window| window == music));
-        for _ in 0..6 {
+        for _ in 0..8 {
             dialog.input(&key(Key::Tab));
         }
         let mut effects = DrawList::new();
@@ -1620,7 +1778,7 @@ mod tests {
 
     /// Tabs to the display picker.
     fn focus_display(dialog: &mut PrefsDialog) {
-        for _ in 0..5 {
+        for _ in 0..7 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Display));
@@ -1932,7 +2090,7 @@ mod tests {
 
     /// Tabs to the Scaling list.
     fn focus_scaling(dialog: &mut PrefsDialog) {
-        for _ in 0..6 {
+        for _ in 0..8 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Scaling));
@@ -1977,6 +2135,8 @@ mod tests {
                 dialog.sound(),
                 dialog.hyperspace_effects(),
                 dialog.quicktime_movies(),
+                dialog.weapon_effects(),
+                dialog.smoke_trails(),
             ])
             .map(Toggle::rect)
             .chain([
@@ -2172,6 +2332,214 @@ mod tests {
         dialog.cancel_pointer();
         dialog.input(&button(false, down));
         assert_eq!(dialog.scaling().selected(), NATIVE);
+    }
+
+    #[test]
+    fn the_smoke_trails_and_weapon_effects_boxes_are_enabled_and_show_the_prefs() {
+        let dialog = prefs();
+        assert_eq!((SMOKE_TRAILS_ITEM, WEAPON_EFFECTS_ITEM), (10, 15));
+        assert_eq!(
+            (SMOKE_TRAILS_LABEL, WEAPON_EFFECTS_LABEL),
+            ("Smoke Trails", "Weapon Effects")
+        );
+        let smoke = dialog.smoke_trails();
+        assert_eq!(smoke.rect(), placed(11.0, 121.0, 172.0, 139.0));
+        assert_eq!(smoke.label(), SMOKE_TRAILS_LABEL);
+        assert!(smoke.enabled() && smoke.on(), "on as given");
+        let weapons = dialog.weapon_effects();
+        assert_eq!(weapons.rect(), placed(11.0, 99.0, 172.0, 117.0));
+        assert_eq!(weapons.label(), WEAPON_EFFECTS_LABEL);
+        assert!(weapons.enabled() && weapons.on(), "on as given");
+        for (smoke_trails, weapon_effects) in [(false, true), (true, false), (false, false)] {
+            let given = Prefs {
+                smoke_trails,
+                weapon_effects,
+                ..start()
+            };
+            let dialog =
+                PrefsDialog::new(&template(), given, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+                    .expect("builds");
+            assert_eq!(dialog.smoke_trails().on(), smoke_trails);
+            assert_eq!(dialog.weapon_effects().on(), weapon_effects);
+            assert_eq!(dialog.prefs(), given);
+        }
+    }
+
+    #[test]
+    fn a_click_on_smoke_trails_or_weapon_effects_flips_it_and_reports_once() {
+        type Part = fn(&PrefsDialog) -> &Toggle;
+        let parts: [(Part, Prefs); 2] = [
+            (
+                PrefsDialog::smoke_trails,
+                Prefs {
+                    smoke_trails: false,
+                    ..start()
+                },
+            ),
+            (
+                PrefsDialog::weapon_effects,
+                Prefs {
+                    weapon_effects: false,
+                    ..start()
+                },
+            ),
+        ];
+        for (part, off) in parts {
+            let mut dialog = prefs();
+            let point = part(&dialog).rect().center();
+            click(&mut dialog, point);
+            assert_eq!(dialog.take_change(), Some(off));
+            assert_eq!(dialog.take_change(), None, "once");
+            click(&mut dialog, point);
+            assert_eq!(dialog.take_change(), Some(start()), "back on");
+            dialog.input(&button(true, point));
+            dialog.cancel_pointer();
+            dialog.input(&button(false, point));
+            assert_eq!(dialog.prefs(), start(), "a cancelled click does nothing");
+        }
+    }
+
+    #[test]
+    fn space_flips_the_focused_smoke_trails_or_weapon_effects_box_and_outlines_it() {
+        for (tabs, focus) in [(5, Focus::WeaponEffects), (6, Focus::SmokeTrails)] {
+            let mut dialog = prefs();
+            for _ in 0..tabs {
+                dialog.input(&key(Key::Tab));
+            }
+            assert_eq!(dialog.focus(), Some(focus));
+            let toggle = match focus {
+                Focus::WeaponEffects => dialog.weapon_effects(),
+                _ => dialog.smoke_trails(),
+            };
+            let mut outlined = DrawList::new();
+            toggle.draw(true, &MonoMetrics, &mut outlined);
+            let outlined: Vec<DrawCommand> = outlined.iter().cloned().collect();
+            assert!(
+                drawn(&dialog)
+                    .windows(outlined.len())
+                    .any(|w| w == outlined)
+            );
+            dialog.input(&held(Key::Space));
+            assert_eq!(dialog.prefs(), start(), "a repeat does nothing");
+            dialog.input(&key(Key::Space));
+            let reported = dialog.take_change().expect("flipped");
+            assert_eq!(
+                (reported.weapon_effects, reported.smoke_trails),
+                (focus != Focus::WeaponEffects, focus != Focus::SmokeTrails)
+            );
+        }
+    }
+
+    /// The notice's lines, as the dialog draws them.
+    fn notice_drawn(dialog: &PrefsDialog) -> bool {
+        let notice = ScrollText::new(
+            RELAUNCH_NOTICE,
+            crate::font::Font::Geneva,
+            STATIC_TEXT_SIZE,
+            STATIC_TEXT_COLOR,
+            placed(11.0, 189.0, 165.0, 241.0),
+            &MonoMetrics,
+        );
+        let mut expected = DrawList::new();
+        notice.draw(&mut expected);
+        let expected: Vec<DrawCommand> = expected.iter().cloned().collect();
+        assert!(!expected.is_empty());
+        drawn(dialog)
+            .windows(expected.len())
+            .any(|window| window == expected)
+    }
+
+    #[test]
+    fn the_relaunch_notice_shows_while_weapon_effects_differs_from_launch() {
+        assert_eq!(
+            RELAUNCH_NOTICE,
+            "(Changes will take effect the next time you run Nova)"
+        );
+        for launch in [true, false] {
+            let mut dialog = PrefsDialog::new(
+                &template(),
+                Prefs {
+                    weapon_effects: launch,
+                    ..start()
+                },
+                ButtonStyle::STOCK,
+                Rc::new(MonoMetrics),
+            )
+            .expect("builds")
+            .with_launch_weapon_effects(launch);
+            assert!(!notice_drawn(&dialog), "agrees with launch {launch}");
+            let point = dialog.weapon_effects().rect().center();
+            click(&mut dialog, point);
+            assert!(notice_drawn(&dialog), "differs from launch {launch}");
+            let other = dialog.smoke_trails().rect().center();
+            click(&mut dialog, other);
+            assert!(notice_drawn(&dialog), "Smoke Trails takes effect at once");
+            click(&mut dialog, point);
+            assert!(!notice_drawn(&dialog), "back to launch {launch}");
+        }
+        let opened_off = PrefsDialog::new(
+            &template(),
+            Prefs {
+                weapon_effects: false,
+                ..start()
+            },
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds")
+        .with_launch_weapon_effects(true);
+        assert!(
+            notice_drawn(&opened_off),
+            "changed earlier this run, the dialog opens with it"
+        );
+    }
+
+    #[test]
+    fn without_a_launch_value_the_notice_is_never_drawn() {
+        let mut dialog = prefs();
+        let point = dialog.weapon_effects().rect().center();
+        click(&mut dialog, point);
+        assert!(!dialog.prefs().weapon_effects);
+        assert!(!notice_drawn(&dialog));
+    }
+
+    #[test]
+    fn the_notice_sits_in_the_free_area_under_check_for_updates() {
+        let dialog = prefs().with_launch_weapon_effects(false);
+        let notice = placed(11.0, 189.0, 165.0, 241.0);
+        let ok = dialog.dialog().item_bounds(OK_ITEM).expect("OK");
+        let keys = dialog
+            .dialog()
+            .item_bounds(KEY_SETTINGS_ITEM)
+            .expect("Key Settings");
+        let parts = dialog
+            .inert()
+            .iter()
+            .chain([
+                dialog.music(),
+                dialog.sound(),
+                dialog.hyperspace_effects(),
+                dialog.quicktime_movies(),
+                dialog.weapon_effects(),
+                dialog.smoke_trails(),
+            ])
+            .map(Toggle::rect)
+            .chain([
+                dialog.display().rects().bounds(),
+                dialog.scaling().rects().bounds(),
+                dialog.effects_volume().rects().bounds(),
+                dialog.music_volume().rects().bounds(),
+                ok,
+                keys,
+            ]);
+        for rect in parts {
+            let apart = rect.max.x <= notice.min.x
+                || rect.min.x >= notice.max.x
+                || rect.max.y <= notice.min.y
+                || rect.min.y >= notice.max.y;
+            assert!(apart, "{rect:?} under the notice {notice:?}");
+        }
+        assert!(notice_drawn(&dialog));
     }
 
     #[test]

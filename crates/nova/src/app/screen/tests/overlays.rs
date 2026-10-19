@@ -347,6 +347,8 @@ fn quiet() -> Prefs {
         },
         hyperspace_effects: true,
         quicktime_movies: true,
+        smoke_trails: true,
+        weapon_effects: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
     }
@@ -600,6 +602,124 @@ fn a_change_in_the_dialog_reaches_flight_already_built() {
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(flight_effects(&screen));
+}
+
+fn flight_view(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
+    screen.flight_view().expect("flying")
+}
+
+#[test]
+fn flight_is_built_with_the_routers_smoke_trails_and_weapon_effects() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    assert!(flight_view(&screen).smoke_trails(), "on by default");
+    assert!(flight_view(&screen).weapon_effects(), "on by default");
+    for (smoke_trails, weapon_effects) in [(false, true), (true, false)] {
+        let mut screen = with_dialogs(data()).with_prefs(Prefs {
+            smoke_trails,
+            weapon_effects,
+            ..quiet()
+        });
+        fly(&mut screen);
+        assert_eq!(flight_view(&screen).smoke_trails(), smoke_trails);
+        assert_eq!(flight_view(&screen).weapon_effects(), weapon_effects);
+    }
+}
+
+#[test]
+fn a_smoke_trails_change_in_the_dialog_reaches_flight_already_built() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    open_prefs(&mut screen);
+    let point = prefs_dialog(&screen).smoke_trails().rect().center();
+    click_at(&mut screen, point);
+    assert!(!flight_view(&screen).smoke_trails());
+    assert_eq!(
+        screen.take_prefs(),
+        Some(Prefs {
+            smoke_trails: false,
+            ..Prefs::default()
+        }),
+        "reported, to be saved"
+    );
+    click_at(&mut screen, point);
+    assert!(flight_view(&screen).smoke_trails(), "back on");
+}
+
+#[test]
+fn by_the_engine_a_weapon_effects_change_waits_for_the_next_launch() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    open_prefs(&mut screen);
+    assert!(!prefs_dialog(&screen).relaunch_notice_shown());
+    let point = prefs_dialog(&screen).weapon_effects().rect().center();
+    click_at(&mut screen, point);
+    assert!(prefs_dialog(&screen).relaunch_notice_shown());
+    assert!(
+        flight_view(&screen).weapon_effects(),
+        "the running flight keeps the launch value"
+    );
+    assert_eq!(
+        screen.take_prefs(),
+        Some(Prefs {
+            weapon_effects: false,
+            ..Prefs::default()
+        }),
+        "reported, to be saved"
+    );
+    screen.input(&key(Key::Escape, true));
+    open_prefs(&mut screen);
+    assert!(
+        prefs_dialog(&screen).relaunch_notice_shown(),
+        "opened again, it still differs from launch"
+    );
+
+    let mut screen = with_dialogs(data());
+    open_prefs(&mut screen);
+    let point = prefs_dialog(&screen).weapon_effects().rect().center();
+    click_at(&mut screen, point);
+    screen.input(&key(Key::Escape, true));
+    fly(&mut screen);
+    assert!(
+        flight_view(&screen).weapon_effects(),
+        "a flight built later this run launches with it too"
+    );
+
+    let mut relaunched = with_dialogs(data()).with_prefs(Prefs {
+        weapon_effects: false,
+        ..Prefs::default()
+    });
+    fly(&mut relaunched);
+    assert!(
+        !flight_view(&relaunched).weapon_effects(),
+        "the next launch"
+    );
+}
+
+#[test]
+fn by_the_other_reading_a_weapon_effects_change_reaches_flight_at_once() {
+    let rules = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::WeaponEffectsNextLaunch,
+        nova_sim::RuleSource::Bible,
+    );
+    let mut screen = with_dialogs(data()).with_rules(rules);
+    fly(&mut screen);
+    open_prefs(&mut screen);
+    let point = prefs_dialog(&screen).weapon_effects().rect().center();
+    click_at(&mut screen, point);
+    assert!(!flight_view(&screen).weapon_effects());
+    assert!(!prefs_dialog(&screen).relaunch_notice_shown(), "no notice");
+
+    let mut screen = with_dialogs(data()).with_rules(rules);
+    open_prefs(&mut screen);
+    let point = prefs_dialog(&screen).weapon_effects().rect().center();
+    click_at(&mut screen, point);
+    screen.input(&key(Key::Escape, true));
+    fly(&mut screen);
+    assert!(
+        !flight_view(&screen).weapon_effects(),
+        "and a flight built later"
+    );
 }
 
 fn alert_quiet(screen: &AppScreen) -> bool {

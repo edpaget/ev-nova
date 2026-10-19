@@ -147,7 +147,9 @@ mod tests {
             sprite_x: 15.0,
             sheet: true,
             condition,
+            disabled: condition != Condition::Intact,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(id),
         }
     }
 

@@ -368,6 +368,23 @@ impl Harness {
         settings: AudioSettings,
         launch: bool,
     ) -> Self {
+        Self::assembled(data, store, settings, launch, true)
+    }
+
+    /// The app on the main menu, keeping pilots in `store`, its start-up
+    /// appear still under way: before any frame.
+    pub(crate) fn starting_up(store: &MemoryPilots) -> Self {
+        Self::assembled(game_data(), store, AudioSettings::default(), false, false)
+    }
+
+    /// [`Harness::built_on`], past the start-up appear when `appeared`.
+    fn assembled(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        settings: AudioSettings,
+        launch: bool,
+        appeared: bool,
+    ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let mut screen = start_screen(Rc::clone(&data))
@@ -380,8 +397,11 @@ impl Harness {
         let log = audio.log();
         let handle = audio.clone();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(settings);
+        if appeared {
+            screen = crate::common::appeared(screen);
+        }
         Self {
-            app: App::new(&FakeWindow, data, crate::common::appeared(screen)).with_audio(core),
+            app: App::new(&FakeWindow, data, screen).with_audio(core),
             gpu: RecordingGpu::new(),
             frames: 0,
             log,
@@ -486,7 +506,7 @@ impl Harness {
     }
 
     /// Sends the next redraw, 16 ms on, and says whether the app goes on.
-    fn redraw(&mut self) -> Control {
+    pub(crate) fn redraw(&mut self) -> Control {
         self.frames += 1;
         let elapsed = Duration::from_millis(16 * self.frames);
         self.handle(WindowEvent::Redraw { elapsed })

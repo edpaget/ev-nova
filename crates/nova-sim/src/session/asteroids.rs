@@ -6,9 +6,10 @@
 //!
 //! **The pass.** [`Session::tick_asteroids`] is one pass's asteroid work:
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
-//! (@0x444f5). [`Session::tick_combat`] runs it after the fight, landed
-//! or jumping, so it steps the field through a jump's lead-in, and
-//! [`Session::tick_again`] runs it after the second pass's fight. The
+//! (@0x444f5). [`Session::game_work`] and [`Session::tick_combat`] run
+//! it after the fight, landed or jumping, so it steps the field through a
+//! jump's lead-in, and [`Session::tick_again`] runs it after the second
+//! pass's fight. The
 //! original spawns and steps the field after the collision passes, which
 //! test the shots' last moves, as the fight's hit pass does here (see
 //! [`Combat`](crate::combat::Combat)): so a shot meets an asteroid where
@@ -489,6 +490,7 @@ mod tests {
         assert_eq!(session.asteroids().count(), 1);
         session.tick_again(
             Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut NeverFires,
         );
@@ -1273,7 +1275,12 @@ mod tests {
         assert_eq!(session.shots().len(), 1, "one still shot");
         let at = drifting_in(&mut session);
         session.set_double_time_key(true);
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         let rock = slot(&session, at);
         assert_eq!(rock.strength, 100, "30 off as the pass's shots met it");
         assert_eq!(rock.position, Vec2::new(-5.0, 0.0), "then stepped");

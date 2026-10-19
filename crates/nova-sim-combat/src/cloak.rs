@@ -11,7 +11,9 @@
 //!   0, or above [`CLOAKED_FALLING`] (8) with it below 0. Its 24 test
 //!   (@0xdd040) is subsumed.
 //! - **The fade** ([`Cloak::step`], `_HandleShipDisplay`
-//!   @0x2d088-0x2d164, once a frame): with a direction it moves by
+//!   @0x2d088-0x2d164, once a frame, right after the ship's own
+//!   `_HandleShip` and so after its pick; the traffic's `step_fades`,
+//!   which the session runs after the NPCs' step): with a direction it moves by
 //!   [`FADE_RATE`] (0.75) a tick that way, or [`FAST_FADE_RATE`] (1.5)
 //!   for a ship type whose `Flags2` has [`FAST_FADE`] (shïp +0x9ea bit
 //!   0x1, @0x2d0aa). Going down it stops at 0, and going up at

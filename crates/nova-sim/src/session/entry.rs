@@ -685,6 +685,14 @@ impl Session {
             jump_pending: self.jump.is_some(),
         };
         let resets = resets(how, &self.rules, facts);
+        if resets.has(Reset::Strikes) {
+            // The strikes still unanswered are dropped (`leave_behind`):
+            // their grudges are held first, against the system left, its
+            // NPCs and the player as they stand before the entry moves
+            // either.
+            let left = std::mem::take(&mut self.strikes);
+            self.hold_left_grudges(&left);
+        }
         // A way in that docks docks at a stellar of the system asked for.
         let dock = if resets.has(Reset::Dock) {
             Dock::At(asked, sites.clone())

@@ -292,6 +292,7 @@ mod tests {
     fn again(session: &mut Session) {
         session.tick_again(
             Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut NeverFires,
         );

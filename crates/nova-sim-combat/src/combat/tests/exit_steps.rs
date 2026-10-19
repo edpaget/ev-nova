@@ -6,6 +6,7 @@
 //! `Flags3` 0x0010 takes the exit nearest its missile.
 
 use super::*;
+use crate::combat::exits::StrayWord;
 
 /// A beam of `ExitType` -1 firing ahead for 10 ticks, 300 pixels long.
 fn stray_beam() -> WeaponRecord {
@@ -65,7 +66,7 @@ fn a_beam_of_exit_type_minus_1_steps_the_fold_set_and_starts_at_the_centre() {
 
 #[test]
 fn a_beam_of_an_exit_type_out_of_range_but_minus_1_steps_nothing_by_the_engine() {
-    for exit_type in [-2, 4] {
+    for exit_type in [-2, 4, 6] {
         for (hull, what) in [
             (beam_exits(), "beam exits"),
             (HullSpec::default(), "no exits"),
@@ -203,4 +204,70 @@ fn an_armament_takes_carried_cursors_and_fold_set_keeping_its_weapons() {
     assert_eq!(*carried.exit_cursors(), cursors);
     assert_eq!(carried.fold_set(), 3);
     assert_eq!(carried.mounts(), built.mounts(), "the same weapons");
+}
+
+/// A beam of `ExitType` 5, which lands on +0xc908.
+fn pod_beam() -> WeaponRecord {
+    WeaponRecord {
+        exit_type: 5,
+        ..exit_beam(0)
+    }
+}
+
+/// `ship` as the player.
+fn as_player(mut ship: Ship) -> Ship {
+    ship.id = ShipRef::Player;
+    ship.fleet = ShipRef::Player;
+    ship
+}
+
+#[test]
+fn a_beam_of_exit_type_5_raises_a_pod_step_for_its_firer_by_the_engine() {
+    for (ship, firer) in [
+        (Ship::at(1, 0.0, 0.0), ShipRef::Npc(NpcId(1))),
+        (as_player(Ship::at(1, 0.0, 0.0)), ShipRef::Player),
+    ] {
+        let mut combat = Combat::default();
+        combat.set_stray_beam_exit(RuleSource::Engine);
+        let ship = ship.armed(pod_beam()).facing(0.0).of(beam_exits());
+        let (beam, ship) = fired(&mut combat, ship);
+        assert!(close_to(beam.start, Vec2::ZERO), "{firer:?}: {beam:?}");
+        assert_eq!(ship.armament.fold_set(), 0, "{firer:?}");
+        assert_eq!(
+            combat.take_stray_steps(),
+            [(firer, StrayWord::Pods)],
+            "{firer:?}"
+        );
+        assert_eq!(combat.take_stray_steps(), [], "taking empties the list");
+    }
+}
+
+#[test]
+fn by_the_other_reading_a_beam_of_exit_type_5_raises_no_pod_step() {
+    let mut combat = Combat::default();
+    combat.set_stray_beam_exit(RuleSource::Bible);
+    let ship = Ship::at(1, 0.0, 0.0).armed(pod_beam()).facing(0.0);
+    fired(&mut combat, ship);
+    assert_eq!(combat.take_stray_steps(), []);
+}
+
+#[test]
+fn a_beam_of_exit_type_5_the_caps_refuse_raises_no_pod_step() {
+    let mut combat = Combat {
+        beams: held_beams(MAX_BEAMS),
+        ..Combat::default()
+    };
+    combat.set_combat_caps(RuleSource::Engine);
+    let mut ships = [Ship::at(1, 0.0, 0.0).armed(pod_beam()).facing(0.0)];
+    tick(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(combat.take_stray_steps(), []);
+}
+
+#[test]
+fn a_beam_of_exit_type_minus_1_raises_no_stray_step() {
+    let mut combat = Combat::default();
+    let ship = Ship::at(1, 0.0, 0.0).armed(stray_beam()).facing(0.0);
+    let (_, ship) = fired(&mut combat, ship);
+    assert_eq!(ship.armament.fold_set(), 1);
+    assert_eq!(combat.take_stray_steps(), []);
 }

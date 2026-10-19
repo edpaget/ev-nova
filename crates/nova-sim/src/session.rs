@@ -368,15 +368,20 @@ mod captured_mission_ship;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
+mod collision_order;
 mod comm_calls;
 mod control;
 mod course;
 mod crons;
 mod deadly_stellars;
+mod derelicts;
+mod display_step;
 mod double_time;
 mod edit;
 mod eject;
 mod entry;
+#[cfg(test)]
+mod escort_loss;
 mod escorts;
 mod events;
 #[cfg(test)]
@@ -385,6 +390,7 @@ mod explored;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
+mod game_work;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
@@ -400,6 +406,8 @@ mod ionization;
 mod jump_arrival;
 mod jump_collapse;
 mod kept_berths;
+mod launch_frame;
+mod lost_target;
 mod map;
 mod map_borders;
 mod map_click;
@@ -441,14 +449,19 @@ mod self_destruct;
 mod self_repair;
 mod ship_change;
 mod ship_display;
+mod ship_loop;
+mod shot_slots;
 #[cfg(test)]
 mod slot_search;
+mod slot_visibility;
+mod smoke_frame;
 mod spawn_availability;
 mod stale_sprites;
 mod status_cargo;
 mod steering;
 mod stellars;
 mod story;
+mod stray_words;
 mod swarm_formation;
 mod takeoff_grace;
 mod target_panel;
@@ -477,6 +490,7 @@ pub use missions::{AbortError, NotOffered, RefuseShown};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{Departure, ScriptEffectRules, Settled};
+pub use slot_visibility::HoverPlace;
 pub use takeoff_grace::TAKEOFF_GRACE_TICKS;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -505,7 +519,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
-    Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
+    Armament, Arsenal, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::asteroid_hit::AsteroidFuse;
 use crate::combat::beam::Beam;
@@ -518,7 +532,8 @@ use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
 use crate::combat::stellar_hazards::HazardResistance;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
+    Combat, CombatEvent, Downed, EscortLoss, Field, Fighter, GamePass, Rules, ShipRef, Shove,
+    SpriteRank, Strike,
 };
 use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
@@ -594,6 +609,8 @@ pub use crate::combat::hull::ESCAPE_POD_SHIP;
 struct FightTerms {
     /// Whether it is held disabled.
     held_disabled: bool,
+    /// Whether it is a ship of the player's fleet ([`Fighter::fleet_escort`]).
+    fleet_escort: bool,
     /// Whether it threatens the player ([`Fighter::threatens_player`]).
     threatens_player: bool,
     /// Its class's top speed, its `Speed` alone.
@@ -604,6 +621,9 @@ struct FightTerms {
     drawn_heading: f32,
     /// How strongly it jams ([`Fighter::jamming`]).
     jamming: Jamming,
+    /// Where its slot sprite stands for the collision passes
+    /// ([`Fighter::sprite`], [`Session::sprite_ranks`]).
+    sprite: Option<SpriteRank>,
     /// Which stellar hazards it resists ([`Fighter::resists`]).
     resists: HazardResistance,
 }
@@ -628,6 +648,7 @@ impl FightTerms {
         // A waiting ship's fire block is skipped (`_HandleShip`
         // @0x34a54-0x34a72).
         let trigger = crate::ai::fire::gated(npc);
+        let slot = player_led::slot_of(npc);
         let Npc {
             id,
             ship,
@@ -652,6 +673,7 @@ impl FightTerms {
             fleet,
             govt: *govt,
             leader,
+            fleet_escort: self.fleet_escort,
             booty: *booty,
             state: *state,
             hull: *hull,
@@ -682,6 +704,8 @@ impl FightTerms {
             armament,
             rounds,
             drawn_heading: self.drawn_heading,
+            sprite: self.sprite,
+            slot,
             resists: self.resists,
         }
     }
@@ -948,6 +972,13 @@ pub struct Session {
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
     /// it runs ([`crate::FateRow::saves`]).
     pod: Option<u32>,
+    /// Whether +0xc908 is 0 outside the pod, as a beam of `ExitType` 5
+    /// can leave it (see the `stray_words` module): a later such beam
+    /// steps it to 1 without a draw. Cleared wherever the original writes
+    /// -1 or 350: the eject, the rescue, a take-off or a gate's exit
+    /// (`_ResetPlayer` from `_HandlePlayerDockRequest` @0x6709b). Never
+    /// saved, as `_OpenPilotFile` writes -1 (@0x766b5).
+    pod_zeroed: bool,
     /// Whether the pod countdown has run out and the rescue is due (see
     /// the `rescue` module); never saved.
     rescue_due: bool,
@@ -1182,6 +1213,14 @@ pub struct Session {
     /// [`Session::framed_by`]): kept from the session's start, across
     /// every system entry and every ship leaving; never saved.
     slot_sprites: crate::ship_layer::SlotSprites,
+    /// The ship each slot last displayed and showed (see
+    /// [`Session::is_displayed`]); never carried into another session, as
+    /// every entry into flight displays every slot again.
+    slot_shown: BTreeMap<crate::ship_layer::Slot, ShipRef>,
+    /// The ship each slot last displayed, shown or hidden: the one its
+    /// laid-out place is of (see [`Session::hover_place`]); never carried
+    /// into another session, as `slot_shown`.
+    slot_placed: BTreeMap<crate::ship_layer::Slot, ShipRef>,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -1639,6 +1678,7 @@ impl Session {
             player_end: None,
             hold_expiry_due: false,
             pod: None,
+            pod_zeroed: false,
             rescue_due: false,
             rescue_desc_due: false,
             eject_held: false,
@@ -1717,6 +1757,8 @@ impl Session {
             touchdown: player.position,
             rules: Rulebook::default(),
             slot_sprites: crate::ship_layer::SlotSprites::default(),
+            slot_shown: BTreeMap::new(),
+            slot_placed: BTreeMap::new(),
             story: story::StoryRuntime::default(),
             lives: catalog
                 .stellar_lives()
@@ -1816,6 +1858,8 @@ impl Session {
         // `_PrepareAllSprites`' display of the player's lights before the
         // first frame (see the `ship_display` module).
         session.prepare_player_lights();
+        // `_EnterGameFromMainScreen` (@0x1a36c).
+        session.prepare_all_sprites();
         Ok(session)
     }
 
@@ -1909,6 +1953,14 @@ impl Session {
         ));
         self.combat
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
+        self.combat
+            .set_shot_overlap(rules.source_for(RuleKey::ShotOverlap));
+        self.combat
+            .set_submunition_source_slot(rules.source_for(RuleKey::SubmunitionSourceSlot));
+        self.combat
+            .set_reused_shot_slot_roll(rules.source_for(RuleKey::ReusedShotSlotRoll));
+        self.combat
+            .set_reused_shot_slot_spin(rules.source_for(RuleKey::ReusedShotSlotSpin));
         self.combat
             .set_ion_lockout(rules.source_for(RuleKey::IonFireLockout));
         self.traffic
@@ -2083,13 +2135,31 @@ impl Session {
     /// runs, the pod flies itself in place of the controls, the jump, the
     /// fuel and the dock approach (see the `eject` module's `pod_tick`).
     ///
-    /// This is the player's part of the advance pass; double time's
-    /// second pass runs it again ([`Session::tick_again`]).
+    /// This is the player's part of the advance pass, its fire left to
+    /// the fight ([`Session::tick_combat`]); double time's second pass
+    /// runs it again ([`Session::tick_again`]). Only
+    /// [`Session::game_work`] runs the player's fire before its move, as
+    /// `_HandlePlayer` does.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
             return;
         }
+        let frame = self.pass_head();
+        self.fly_player(
+            frame,
+            controls,
+            GamePass::Advance {
+                double_time: self.double_time,
+            },
+        );
+    }
+
+    /// The head of an advance pass in flight: the warp-ups and the
+    /// warp-out play a frame's worth, double time is latched, the
+    /// take-off grace counts down, a mission sound plays, and the frame
+    /// counter moves on. Gives the frame the pass runs on.
+    fn pass_head(&mut self) -> i16 {
         // The warp-ups and the warp-out play in real time, a frame's worth
         // on each advance pass, and the switch and the natural end read
         // them.
@@ -2104,25 +2174,33 @@ impl Session {
         let frame = self.frame;
         self.pass_frame = frame;
         self.frame = market::next_frame(frame);
-        self.fly_player(
-            frame,
-            controls,
-            GamePass::Advance {
-                double_time: self.double_time,
-            },
-        );
+        frame
     }
 
     /// The player's part of a game-work pass on `frame` under `controls`
     /// (`_HandlePlayer`, which runs on both passes; see the
     /// `double_time` module): everything [`Session::tick`] does after the
-    /// frame counter moves on. Only the advance pass steps the Red
-    /// Alert's blink, as `_HandleAlertSprite` runs on it alone.
+    /// frame counter moves on, its work before the move
+    /// ([`Session::before_move`]) then the move ([`Session::player_move`]).
     fn fly_player(&mut self, frame: i16, controls: Controls, pass: GamePass) {
+        self.before_move(frame, pass);
+        self.player_move(controls, pass);
+    }
+
+    /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
+    /// the tractor's hold on the player and the screen's white, at the very
+    /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
+    /// modules), then its lost-target check (see the `lost_target`
+    /// module), then the tribbles and perishables on a due frame, the Red
+    /// Alert's check, and its blink on the advance pass alone, as
+    /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
+    /// target brackets, and the cargo boxes scooped and aged.
+    fn before_move(&mut self, frame: i16, pass: GamePass) {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
         self.hold_player(pass);
         self.gamma_tick();
+        self.let_go_of_lost_target();
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
@@ -2142,14 +2220,22 @@ impl Session {
         self.brackets_tick();
         self.scoop_boxes();
         self.boxes_tick();
+    }
+
+    /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
+    /// flight while its countdown runs (see the `eject` module), else the
+    /// ship's motion ([`Session::move_player`]) and the dock approach.
+    fn player_move(&mut self, controls: Controls, pass: GamePass) {
         if self.pod.is_some() {
             self.pod_tick();
             return;
         }
         self.move_player(controls, pass);
-        // After the ship moves, as `_HandlePlayer` runs the approach
-        // (@0x6a965) after it moves the ship (@0x6864d); see the
-        // `clearance` module.
+        // After the ship moves, though `_HandlePlayer` runs the approach
+        // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
+        // the `clearance` module reads as the move, is
+        // `_WrapPlayerPosition` (filed as hud-fidelity-followups' dock
+        // approach phase).
         self.dock_approach();
     }
 
@@ -2365,13 +2451,17 @@ impl Session {
     /// and rolled on `chance`, its stationary warships placed by the
     /// first stellar shown, destroyed or not, and its `LinkSyst` fleets
     /// coming out of a gate shown that the governments allow, or by
-    /// hyperspace.
+    /// hyperspace. Then every slot is displayed
+    /// ([`Session::prepare_all_sprites`]), as the take-off
+    /// (`_HandlePlayerDockRequest` @0x6764e) and the entry into flight
+    /// (`_PlayGame` @0x45834) that populate the system display them.
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.populate_as(catalog, chance, None);
+        self.prepare_all_sprites();
     }
 
     /// Fills the system as [`Session::populate`] does, the active
@@ -2391,14 +2481,19 @@ impl Session {
     /// escort enters with no ionization: `_RespawnEscort` clears its
     /// charge (@0x3d543), and the display before the first frame clears
     /// its colour (`_PrepareAllSprites` @0x3a783, @0x2bf8a). It keeps its
-    /// afterburner (+0xbd); a loaded pilot's escorts roll theirs on
-    /// `chance`.
+    /// cloak, fade and direction (`_RespawnEscort` writes neither +0x64
+    /// nor +0xc8d8) and its afterburner (+0xbd); a loaded pilot's escorts
+    /// roll theirs on `chance`.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         entering: Option<Entrance>,
     ) {
+        // The strikes still unanswered are dropped with the system left:
+        // their grudges are held while its NPCs are still in the traffic.
+        let left = std::mem::take(&mut self.strikes);
+        self.hold_left_grudges(&left);
         let kept: BTreeSet<NpcId> = self.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.fleet_kept();
         self.give_back_aux_ships(&kept);
@@ -2437,10 +2532,11 @@ impl Session {
         if entering.is_none() {
             self.snap_mission_escorts();
         }
+        self.hold_derelicts();
         self.strikes.clear();
         self.aboard = None;
         self.talk = None;
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
@@ -2503,6 +2599,10 @@ impl Session {
     /// combat tick came between, first thing in the next traffic tick.
     /// The traffic ticks in the same [`World`] the gate exit's arrivals
     /// pass steps it in (`Session::step_traffic`).
+    ///
+    /// This runs the traffic before the fight ([`Session::tick_combat`]):
+    /// only [`Session::game_work`] runs its AI after the fight's collision
+    /// passes and its motion after the shots, as `_DoPlayGameWork` does.
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2518,25 +2618,72 @@ impl Session {
                     self.populate(catalog, chance);
                 }
             } else {
-                self.mission_ship_arrivals(catalog, None, chance);
-                self.unmark_inactive_mission_ships();
-                self.join_mission_escorts();
-                let strikes = std::mem::take(&mut self.strikes);
-                let last = self.last_npc();
-                let marks = self.mission_marks();
-                self.reform_on_swarm_change();
+                let (strikes, marks) = self.before_traffic_ai(catalog, chance);
                 self.step_traffic(|traffic, world| {
                     traffic.tick_in(behaviour, world, &strikes, chance);
                 });
-                self.announce_fleets(chance);
-                self.take_refuel();
-                self.mission_ships_left(&marks);
-                self.resolve_person_offers(last, &mut &mut *chance);
+                self.after_traffic_ai(chance);
                 self.dock_fighters();
-                self.orphan_fighters();
-                self.observe_watched();
+                self.after_traffic_motion(&marks, chance);
             }
         }
+        self.traffic_tail(chance);
+    }
+
+    /// The session's work before the traffic's AI, reading `catalog` and
+    /// drawing on `chance`: the mission ships' arrivals, the inactive ones
+    /// unmarked, the mission escorts joined; then the strikes left for the
+    /// traffic to answer, taken, and what the traffic's motion is read
+    /// against ([`TrafficMarks`]); then the escorts that attack with a
+    /// swarm leader leave the player's formation
+    /// ([`Session::reform_on_swarm_change`]).
+    fn before_traffic_ai(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> (Vec<Strike>, TrafficMarks) {
+        self.mission_ship_arrivals(catalog, None, chance);
+        self.unmark_inactive_mission_ships();
+        self.join_mission_escorts();
+        let strikes = std::mem::take(&mut self.strikes);
+        let marks = TrafficMarks {
+            last: self.last_npc(),
+            marks: self.mission_marks(),
+        };
+        self.reform_on_swarm_change();
+        (strikes, marks)
+    }
+
+    /// The session's work after the traffic's AI, drawing on `chance`: the
+    /// fleets announced, and the fuel the NPCs refuelling the player gave
+    /// it landed (see the `refuel_dock` module). The comm calls, scans and
+    /// the rest of the frame's work on the line are queued, and settle
+    /// later ([`Session::settle_line_queue`]): in [`Session::game_work`]
+    /// after `_AIDispatch`'s loop (`Session::dispatch_npcs`), and in the
+    /// separate parts in [`Session::tick_combat`].
+    fn after_traffic_ai(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.announce_fleets(chance);
+        self.take_refuel();
+    }
+
+    /// The session's work after the traffic's motion, read against
+    /// `marks`, drawing on `chance`: each mission ship that left raising
+    /// its fate, the persons' offers resolved, the fighters orphaned, and
+    /// the watched ships observed. The fighters that docked are taken
+    /// aboard before it ([`Session::dock_fighters`]), by the ship loop at
+    /// each one's own slot.
+    fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
+        self.mission_ships_left(&marks.marks);
+        self.resolve_person_offers(marks.last, &mut &mut *chance);
+        self.orphan_fighters();
+        self.observe_watched();
+    }
+
+    /// The end of a traffic tick, drawing on `chance`: the reinforcement
+    /// clock's tick, held while work is queued on the line (it runs as the
+    /// work settles, [`Session::settle_line_queue`]), the gates' sprites
+    /// unless landed, and a target lost let go.
+    fn traffic_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if self.traffic.holds_line_work() {
             self.reinforcements_held = true;
         } else {
@@ -2545,19 +2692,21 @@ impl Session {
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
     }
 
     /// The NPCs answer the fight's strikes since the last traffic tick
     /// now, as `behaviour` says ([`Traffic::answer`]): a ship the player
     /// hit in its gate is held there and seen, and a person turned on the
     /// player queues its quote. The original answers a hit inside
-    /// `_HandleShot` (@0x44385), before `_HandleShip`'s quotes and the
-    /// display pass, so the frame drawn after the fight shows the answer;
-    /// a flight calls this right after [`Session::tick_combat`], and
-    /// after double time's second pass ([`Session::tick_again`]), as
-    /// `_HandleShot` runs on both passes. Whatever
-    /// is left unanswered, [`Session::tick_traffic`] answers (as for a
+    /// `_DamageShip` as it lands, in the collision passes and `_HandleShot`
+    /// (@0x44385), before `_AIDispatch`, `_HandleShip`'s quotes and the
+    /// display pass, so the frame drawn after the pass shows the answer.
+    /// [`Session::game_work`] and [`Session::tick_again`] call this after
+    /// each of those phases; a flight calls it after each pass for what
+    /// the pass's close struck (the beams, the shockwaves), as after
+    /// [`Session::tick_combat`] for a caller of the separate parts. Whatever
+    /// is left unanswered, the next traffic tick answers (as for a
     /// caller that never calls this). While the ship is landed, or before
     /// the system is set up, nothing is answered; the world runs through a
     /// jump, so a hit in it is answered.
@@ -2577,7 +2726,7 @@ impl Session {
     /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
     /// ([`Session::gate_exit_pass`]) and double time's second pass (see
     /// the `double_time` module) step the traffic in it.
-    fn step_traffic(&mut self, f: impl FnOnce(&mut Traffic, World<'_>)) {
+    fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         let system_govt = self.galaxy.govt(self.pilot.system);
         let facts = control::Facts {
             pilot: &self.pilot,
@@ -2609,6 +2758,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            hit_focus: self.rules.source_for(RuleKey::HitFocus),
             npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
             odds_cache: self.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
@@ -2626,7 +2776,17 @@ impl Session {
             tractor_step: self.tractor_step(),
             weapons: &self.arsenal,
         };
-        f(&mut self.traffic, world);
+        let stepped = f(&mut self.traffic, world);
+        // The grudges the traffic decided as it answered strikes, in turn
+        // (`Traffic::take_grudges`). The original sets each inside
+        // `_DamageShip` as its hit lands; here it lands right after the
+        // traffic answers, which is after each phase that lands hits
+        // (`Session::answer_strikes`) or at the next traffic tick for the
+        // strikes a caller leaves, and so before any frame is drawn,
+        // dialog opened, landing or jump completed or pilot saved.
+        let grudges = self.traffic.take_grudges();
+        self.hold_grudges(&grudges);
+        stepped
     }
 
     /// The ship-table slots a spawn whose original leaves `reserve` free
@@ -2692,6 +2852,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            hit_focus: self.rules.source_for(RuleKey::HitFocus),
             npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
             odds_cache: self.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
@@ -2804,9 +2965,14 @@ impl Session {
         ))
     }
 
-    /// Advances the fight a tick among the player and the NPCs, each aimed
-    /// at its target, by `rules`, drawing each shot's inaccuracy and
-    /// spread on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
+    /// Advances the fight a tick among the player and the NPCs, its phases
+    /// in [`Combat::tick_on`]'s order with nothing of the session's between
+    /// them but each phase's settling (see the `game_work` module): this
+    /// is the fight's part of the separate parts, run after the traffic's
+    /// tick, where only [`Session::game_work`] runs the original's order
+    /// between the player, the fight and the traffic. Each ship is aimed
+    /// at its target, the fight going by `rules`, each shot's inaccuracy
+    /// and spread drawn on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
     /// the system, and the target is let go once it is breaking up or
     /// gone. While the ship is landed, it stands still. Through a jump,
     /// from its brake to its arrival, the fight goes on, but the player's
@@ -2816,8 +2982,9 @@ impl Session {
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
     /// as it is taken out (see the `story` module's findings). A rescue
-    /// mission's ship not yet boarded fights held disabled
-    /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
+    /// mission's ship not yet boarded, and a ship of a Derelict
+    /// government, fight held disabled (`Session::held_disabled`; see
+    /// the `mission_ships` and `derelicts` modules).
     /// The player is convicted of disabling and destroying an NPC, but
     /// not a mission's special ship (see `punish`). Each NPC that looked
     /// the player over in the traffic tick scans it with the frame's work
@@ -2828,10 +2995,10 @@ impl Session {
     /// original's does (see the `warp_stage` module). The stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
-    /// module). While the player's ship breaks up, the klaxon sounds
-    /// first among the tick's sounds (see `sound_the_klaxon`), and on the
-    /// player's explosion tick a [`SimSound::Halt`] of the klaxon and the
-    /// warp sounds follows it
+    /// module). While the player's ship breaks up, the klaxon sounds in
+    /// its display step, after its fire (see the `display_step` module),
+    /// and on the player's explosion tick a [`SimSound::Halt`] of the
+    /// klaxon and the warp sounds follows it
     /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). Every
     /// hit, blast and beam tick of a weapon with an `Impact`, a tractor
     /// beam's self-pull, and the shockwave of a heavy ship's final
@@ -2841,17 +3008,18 @@ impl Session {
     /// beam sets the lock of the ship it holds, the player's
     /// ([`Session::tractor`]) or an NPC's; an NPC whose warp out is under
     /// way is not pushed either. Before anything else, unless landed, the
-    /// sabotage clock ticks, and what it sets
-    /// off goes off (see the `sabotage` module), and the eject is checked
-    /// (see the `eject` module), both before the scans, the boarded flag
-    /// cleared first unless the player is disabled (see the
-    /// `pirate_plunder` module). Then the frame's work on the line, its
-    /// calls, scans, plunders, docks, repairs and refuel notes, settles in
-    /// slot order, with the reinforcement clock's tick held behind it,
-    /// jumping or not (see the `comm_calls` module). The player's
-    /// "Ship disabled." and "Ship destroyed." lines are spoken as the
-    /// fight's hits leave it (see the `player_downed` module), before the
-    /// eject on a breakup's first tick takes it into a new ship. After
+    /// boarded flag is cleared unless the player is disabled (see the
+    /// `pirate_plunder` module), and the sabotage clock ticks, and what it
+    /// sets off goes off (see the `sabotage` module). The eject is checked
+    /// in the player's display step, after its fire, and the self-destruct
+    /// counts down after it (see the `eject` and `self_destruct` modules).
+    /// Then the frame's work on the line, its calls, scans, plunders,
+    /// docks, repairs and refuel notes, settles in slot order, with the
+    /// reinforcement clock's tick held behind it, jumping or not (see the
+    /// `comm_calls` module). The player's "Ship disabled." and "Ship
+    /// destroyed." lines are spoken as the fight's hits leave it (see the
+    /// `player_downed` module), before the next pass's eject check takes
+    /// it into a new ship. After
     /// all of it, landed or jumping, the pass's asteroid work runs
     /// ([`Session::tick_asteroids`]), so the shots meet the asteroids
     /// where the last pass left them, as the frame before drew them, and
@@ -2872,7 +3040,6 @@ impl Session {
             return;
         }
         self.before_fight(rules, &mut &mut *chance);
-        self.settle_line_queue(rules.law, &mut &mut *chance);
         let pass = GamePass::Advance {
             double_time: self.double_time,
         };
@@ -2886,132 +3053,58 @@ impl Session {
     /// fight, on either pass (see the `double_time` module): the boarded
     /// flag's clear (see the `pirate_plunder` module), the repair
     /// inhibit's countdown and the disabled player's self-repair (see the
-    /// `player_repair` module), the sabotage clock's tick (see the
-    /// `sabotage` module), the eject check for a player who enters it
-    /// disabled or dying (see the `eject` module), drawing on `chance`,
-    /// then the self-destruct countdown, which reads whether the player
-    /// was dying as the work began (see the `self_destruct` module).
+    /// `player_repair` module) and the sabotage clock's tick (see the
+    /// `sabotage` module), drawing on `chance`. The eject check, and the
+    /// self-destruct countdown after it, come in the player's display
+    /// step, after its fire ([`Session::fight`]).
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        let dying_at_head = matches!(
-            self.condition,
-            Condition::Dying { .. } | Condition::Destroyed
-        );
         self.unboard_unless_disabled();
         self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
-        self.eject_before_fight(chance);
-        self.self_destruct_tick(dying_at_head);
     }
 
     /// The fight's part of a game-work pass on `pass` (see
-    /// [`Session::tick_combat`] after the scans, and the `double_time`
-    /// module): the fight's tick ([`Combat::tick_on`]) and everything that
-    /// follows from it.
+    /// [`Session::tick_combat`] after the scans): the fight's phases in
+    /// [`Combat::tick_on`]'s order, by `rules`, drawing on `chance`, each
+    /// phase that lands hits settled after it, and what the pass leaves
+    /// settled once after the last (see the `game_work` module).
     fn fight(&mut self, pass: GamePass, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        let player_was = self.condition;
-        let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
-        let (player_terms, terms) = self.fight_terms();
-        let field = self.field();
-        let mut stellars = self.stellar_targets();
-        let scanner = self.scanner();
-        let mut rocks = self.asteroid_targets();
-        let armor_regen = self.player_armor_regen();
-        // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
-        // (see the `afterburner` module).
-        let knockback = self.afterburner_knockback();
-        let hazards = self.stellar_hazards();
-        let pilot = &mut self.pilot;
-        let mut rounds = OutfitRounds {
-            owned: &mut pilot.outfits,
-            sources: &self.ammo_outfits,
-        };
-        let mut fighters = vec![Fighter {
-            ship: ShipRef::Player,
-            ship_type: pilot.ship,
-            fleet: ShipRef::Player,
-            govt: None,
-            leader: None,
-            booty: None,
-            state: self.player,
-            hull: self.hull,
-            shield_regen: self.stats.shield_regen,
-            armor_regen,
-            trigger: if self.pod.is_some() {
-                Trigger::default()
-            } else {
-                player_trigger(self.trigger, self.jump.is_some())
-            },
-            target: self.target.map(ShipRef::Npc),
-            reserves: &mut pilot.reserves,
-            condition: &mut self.condition,
-            held_disabled: false,
-            cloaked: false,
-            attacking: None,
-            threatens_player: false,
-            plundering: false,
-            emerging: false,
-            cloak_scanner: scanner.on_screen,
-            has_cloak: false,
-            jamming: player_terms.jamming,
-            class_speed: player_terms.class_speed,
-            top_speed: player_terms.top_speed,
-            jumping: self.jump.is_some(),
-            afterburner: knockback.shots,
-            afterburner_beam: knockback.beams,
-            tractor: &mut self.tractor,
-            ion_capacity: self.stats.ion.capacity(crate::flight::Flyer::Player),
-            ion: &mut self.ion,
-            armament: &mut self.armament,
-            rounds: &mut rounds,
-            drawn_heading: player_terms.drawn_heading,
-            docked: false,
-            resists: player_terms.resists,
-        }];
-        let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
-        fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
-        self.combat.tick_on(
-            pass,
-            &mut fighters,
-            &self.arsenal,
-            &self.govts,
-            rules,
-            field,
-            Scenery {
-                stellars: &mut stellars,
-                asteroids: &mut rocks,
-                hazards: Some(&hazards),
-            },
-            chance,
-        );
-        let player_killed = self.hold_stellar_kills();
-        self.traffic.after_firing(&self.arsenal);
-        self.traffic.keep_berth_exits();
-        // The lines are `_DamageShip`'s, said as each hit lands, so before
-        // the eject below can take the player into a new ship.
-        let strikes = self.combat.take_strikes();
-        let struck = struck_npcs(&strikes);
-        self.player_downed(player_was, player_killed, &strikes, &mut &mut *chance);
-        self.take_shoves();
-        self.eject_on_breakup(pass, &mut &mut *chance);
-        self.settle_player_explosion(player_was, player_killed.is_some());
-        self.raise_disabled(&was, &mut &mut *chance);
-        self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
-        let sorties = self.combat.take_sorties();
-        self.launch_fighters(&sorties, &mut &mut *chance);
-        self.npc_escapes(&was, &mut &mut *chance);
-        self.sync_fleet();
-        self.lose_escorts(&was, &struck);
-        self.lose_dying_mission_escorts();
-        self.self_repair(rules, &mut *chance);
-        self.take_out_the_killed(&mut &mut *chance);
-        self.orphan_fighters();
-        self.clear_lost_target();
-        self.strike_stellars(&stellars, rules.law, chance);
-        self.settle_asteroid_hits(&rocks, chance);
-        self.see_stellars();
-        self.lay_out_ships();
-        self.display_ships(&mut *chance);
-        self.note_drawn();
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let start = game_work::PassStart::of(self);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.defend_player(fighters, arena, chance);
+            combat.fire_player(fighters, arena, chance);
+            combat.regenerate_player(fighters, arena);
+        });
+        self.player_display_step(pass, rules, start.player_dying(), chance);
+        // The traffic tick's work on the line, after `_HandlePlayer`'s
+        // lines (the sabotage's, the eject's), as the AI loop's calls
+        // follow them (see the `comm_calls` module).
+        self.settle_line_queue(rules.law, chance);
+        self.collision_passes(pass, rules, chance);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.defend_npcs(fighters, arena, None, false, chance);
+        });
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.fly_shots(fighters, arena, chance);
+        });
+        // `_HandleShip`'s escape check reads each NPC as its step finds
+        // it (see the `npc_escape` module).
+        let stepped: Vec<npc_escape::AtStep> = self
+            .traffic
+            .npcs()
+            .iter()
+            .map(npc_escape::AtStep::of)
+            .collect();
+        self.handle_npcs(pass, rules, chance);
+        self.beams_phase(pass, rules, chance);
+        // The words the pass's stray beams stepped, before the NPCs'
+        // escape pods read the crew pods left (see the `npc_escape`
+        // module).
+        self.step_stray_words(chance);
+        self.npc_escapes(start.npcs(), &stepped, chance);
+        self.fight_tail(rules, chance);
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
@@ -3025,65 +3118,6 @@ impl Session {
                     .map(|npc| (ShipRef::Npc(npc.id), npc.state.heading)),
             )
             .collect();
-    }
-
-    /// The fight's end for the player, its ship's condition `was` before
-    /// it: an explosion this tick holds the game's end; the klaxon sounds
-    /// ([`Session::sound_the_klaxon`]); and an explosion halts
-    /// [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS). A
-    /// deadly stellar's kill, as `stellar_killed` says, is no explosion of
-    /// the ship's: it holds the game's end itself, and sounds and halts
-    /// nothing (see the `deadly_stellars` module).
-    fn settle_player_explosion(&mut self, was: Condition, stellar_killed: bool) {
-        let was_dying = matches!(was, Condition::Dying { .. });
-        let exploded = was != Condition::Destroyed
-            && !stellar_killed
-            && self.condition == Condition::Destroyed;
-        if exploded {
-            // Set only, never cleared here: double time's second pass
-            // keeps an explosion the advance pass saw (see
-            // `player_exploded_this_tick`).
-            self.player_exploded_this_tick = true;
-            self.player_end = Some(Ending::Holding {
-                ticks_left: HOLD_TICKS,
-            });
-        }
-        self.sound_the_klaxon(was_dying, exploded);
-        if exploded {
-            self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
-        }
-    }
-
-    /// Raises [`SimSound::Klaxon`] while the player's ship breaks up, as
-    /// `_HandlePlayer` plays `_klaxxonSnd` (@0x6f1e4-0x6f227) while the
-    /// death timer, after its decrement, is above 1.0: on every tick of
-    /// the countdown but the one it is set on (`starting`), and on the
-    /// explosion tick of a ship that `was_dying` before it and has
-    /// `exploded` on it, whose timer came down to 2.0. The original's `> 1.0` test always holds for a
-    /// countdown that is not starting: a timer at
-    /// [`EXPLOSION_BAND`](crate::combat::hull::EXPLOSION_BAND) or below
-    /// explodes, so one still counting down is at 3 or more. No klaxon
-    /// sounds on the breakup tick, nor on a stalled breakup's ticks, each
-    /// of which sets the timer again.
-    ///
-    /// It comes straight after the fight, ahead of every other sound of
-    /// the tick, so that on the explosion tick the
-    /// [`SimSound::Halt`] of [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)
-    /// that the fight raises next comes after it and wins,
-    /// as `_HandlePlayer` (@0x43e19) runs before `_HandleShipDisplay`
-    /// (@0x43e29). The view puts the session's sounds before the fight's,
-    /// so the explosion's booms come after it too.
-    fn sound_the_klaxon(&mut self, was_dying: bool, exploded: bool) {
-        let counting_down = matches!(
-            self.condition,
-            Condition::Dying {
-                starting: false,
-                ..
-            }
-        );
-        if counting_down || (exploded && was_dying) {
-            self.sounds.push(SimSound::Klaxon);
-        }
     }
 
     /// When and where the fight is fought this tick ([`Field`]): the frame
@@ -3135,20 +3169,30 @@ impl Session {
 
     /// What the fight needs of the player's ship and of each NPC, in
     /// order, that the ship does not carry: whether it is held disabled
-    /// ([`Session::mission_ship_held`]; the player never is), its class
+    /// ([`Session::held_disabled`]; the player never is), whether it is a
+    /// ship of the player's fleet, its class
     /// and top speeds, which every push is capped against, the heading it
     /// was last drawn at, its own for a ship new to the fight, how
     /// strongly it jams, and whether it threatens the player, as
     /// `_ExtendedIsThreatToPlayer` asks it, with the player's sight of it.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
+        let ranks = self.sprite_ranks();
+        let sprite = |ship: ShipRef| {
+            ranks
+                .iter()
+                .find(|&&(ranked, _)| ranked == ship)
+                .map(|&(_, rank)| rank)
+        };
         let player = FightTerms {
             held_disabled: false,
+            fleet_escort: false,
             threatens_player: false,
             class_speed: self.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
             drawn_heading: drawn(ShipRef::Player, self.player.heading),
             jamming: self.player_jamming(),
+            sprite: sprite(ShipRef::Player),
             resists: self.player_hazard_resistance(),
         };
         let led_speed = self.led_speed();
@@ -3157,13 +3201,15 @@ impl Session {
             .npcs()
             .iter()
             .map(|npc| FightTerms {
-                held_disabled: self.mission_ship_held(npc),
+                held_disabled: self.held_disabled(npc),
+                fleet_escort: self.fleet.contains(&Some(npc.id)),
                 threatens_player: npc
                     .threatens_player_extended(self.traffic.npcs(), self.sees(npc)),
                 class_speed: self.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
                 jamming: self.npc_jamming(npc),
+                sprite: sprite(ShipRef::Npc(npc.id)),
                 resists: self.npc_hazard_resistance(npc),
             })
             .collect();
@@ -3197,22 +3243,23 @@ impl Session {
 
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
     /// before it: weighing whether each is answered, rolling on `chance`
-    /// (see the `answer_flag` module), refilling the invincible, holding
-    /// persons' grudges, convicting the player by `law`, crediting kills
-    /// and letting each hit NPC's cloak take its hit; then keeps them for
-    /// the app.
+    /// (see the `answer_flag` module), refilling the invincible, convicting
+    /// the player by `law`, crediting kills by the fleet as it stood before
+    /// each of the escort `losses` the strikes made, and letting each hit
+    /// NPC's cloak take its hit; then keeps them for the traffic to answer
+    /// and the app. The persons' grudges are held as the traffic answers
+    /// them, in turn (`Session::step_traffic`).
     fn settle_strikes(
         &mut self,
-        mut strikes: Vec<Strike>,
+        (mut strikes, losses): (Vec<Strike>, Vec<EscortLoss>),
         was: &[NpcBefore],
         law: &dyn LegalCode,
         chance: &mut dyn Chance,
     ) {
         self.weigh_strikes(&mut strikes, chance);
         self.refill_invincible(&mut strikes);
-        self.hold_grudges(&strikes);
         self.punish(&strikes, was, law);
-        self.credit_kills(&strikes, was);
+        self.credit_kills(&strikes, &losses, was);
         self.cloak_hits(&strikes);
         self.strikes.extend(strikes);
     }
@@ -3328,10 +3375,15 @@ impl Session {
     /// [`rating`](crate::rating)): the shooter is the player or a ship of
     /// its fleet, its escorts and fighters, and the victim's government,
     /// from `was`, is not derelict. As the original's `_DamageShip`
-    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before a
-    /// shooter in the fleet can be lost or the victim taken out.
-    fn credit_kills(&mut self, strikes: &[Strike], was: &[NpcBefore]) {
-        for strike in strikes {
+    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before the
+    /// victim is taken out, and reads the shooter's leader as the hit
+    /// lands (@0x3ad72): a shooter now out of the fleet still counts for
+    /// a kill it scored before the strike that lost it, among `losses`
+    /// ([`EscortLoss`]), or by that strike itself (the crime block runs
+    /// before the escort block clears the leader, @0x3afdd), and not for
+    /// one after.
+    fn credit_kills(&mut self, strikes: &[Strike], losses: &[EscortLoss], was: &[NpcBefore]) {
+        for (index, strike) in strikes.iter().enumerate() {
             let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
                 continue;
             };
@@ -3345,11 +3397,17 @@ impl Session {
             let by_players_fleet = match strike.by {
                 None => false,
                 Some(ShipRef::Player) => true,
-                Some(ShipRef::Npc(by)) => self
-                    .traffic
-                    .npcs()
-                    .iter()
-                    .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player),
+                Some(ShipRef::Npc(by)) => {
+                    let lost_since = losses
+                        .iter()
+                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike >= index);
+                    lost_since
+                        || self
+                            .traffic
+                            .npcs()
+                            .iter()
+                            .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
+                }
             };
             if !rating::counts(by_players_fleet, self.govts.derelict(govt)) {
                 continue;
@@ -3359,22 +3417,6 @@ impl Session {
             };
             let strength = i64::from(self.arsenal.strength(victim.ship));
             self.pilot.combat_rating = rating::credit(self.pilot.combat_rating, strength);
-        }
-    }
-
-    /// Lets go of the target once it is no longer in the system (it was
-    /// destroyed, landed or jumped out, or the system was populated
-    /// afresh) or no longer targetable (it is breaking up, or cloaked and
-    /// the player cannot target cloaked ships), as the original does every
-    /// frame. A target of an untargetable type is kept: the original's
-    /// check (`_HandlePlayer` @0x686a4-0x686ee) never reads the bit.
-    fn clear_lost_target(&mut self) {
-        let cloaked_ok = self.scanner().targets;
-        if self
-            .target()
-            .is_none_or(|npc| !targeting::targetable(npc, cloaked_ok))
-        {
-            self.target = None;
         }
     }
 
@@ -4037,6 +4079,8 @@ impl Session {
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();
+        // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
+        self.prepare_all_sprites();
         Some(self.pilot.system)
     }
 
@@ -4467,9 +4511,11 @@ impl Session {
         };
         // A gate's exit joins the take-off's path before its seed
         // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
-        // (@0x6709b; see the `precalced` module).
+        // (@0x6709b; see the `precalced` module), whose `_ResetPlayer`
+        // writes -1 to +0xc908 (see the `stray_words` module).
         self.arm_strength_timer(chance);
         self.reset_precalced();
+        self.pod_zeroed = false;
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -4484,6 +4530,10 @@ impl Session {
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
+        // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
+        // out (`_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
+        // @0x64743).
+        self.prepare_all_sprites();
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -4690,8 +4740,11 @@ impl Session {
         self.take_off_fold();
         self.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
-        // setup (@0x6709b; see the `precalced` module).
+        // setup (@0x6709b; see the `precalced` module), whose
+        // `_ResetPlayer` writes -1 to +0xc908 (see the `stray_words`
+        // module).
         self.reset_precalced();
+        self.pod_zeroed = false;
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
@@ -5750,8 +5803,9 @@ impl Session {
     /// failed mission: the original passes its mark,
     /// `_HandlePlayerBoardAttempt` @0x6582b, and `_SlapWithPenalty`
     /// slaps only for none, @0x9c10), the
-    /// NPCs come to the target's help as for a hit by the player (a
-    /// strike of no damage, answered on the next traffic tick), but for
+    /// Good Samaritans come to the target's help as for a hit by the
+    /// player (a strike of no damage, not direct, answered on the next
+    /// traffic tick: the target and its lead draw no hit's reaction), but for
     /// a person with a `LinkMission`, whose boarding never calls the Good
     /// Samaritans, the target is marked boarded, and every other NPC
     /// after it lets it go and decides again (`_AIShipBoardedByPlayer`;
@@ -6344,7 +6398,7 @@ impl Session {
     fn leave(&mut self, id: NpcId) {
         self.drop_quarry(id);
         self.traffic.remove(id);
-        self.clear_lost_target();
+        self.let_go_of_gone_target();
     }
 
     /// Assigns the ship captured, as `choice` says, and gives what it
@@ -6518,6 +6572,14 @@ impl Session {
             f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
         reserves.fuel.now = drawn;
     }
+}
+
+/// What a traffic tick's motion is read against, as its AI began: the
+/// last NPC (for the persons' offers) and the mission ships' marks (for
+/// those that leave).
+struct TrafficMarks {
+    last: Option<NpcId>,
+    marks: Vec<(NpcId, crate::traffic::npc::MissionMark)>,
 }
 
 /// The NPCs `strikes` hit.
@@ -10808,7 +10870,12 @@ pub(super) mod tests {
     fn in_double_time_a_due_frame_steps_tribbles_twice() {
         let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 10)]);
         let again = |session: &mut Session| {
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
         };
         for _ in 0..14 {
             session.tick(Controls::default());
@@ -16382,6 +16449,7 @@ pub(super) mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        bays_after: false,
         point_defence: false,
         keep: None,
     };
@@ -16673,9 +16741,25 @@ pub(super) mod tests {
             person.quoted_at, None,
             "the attack's quote, not `_HandleShip`'s"
         );
-        // A shot still in flight that hits it while it is unseen says it
-        // again: `_DamageShip` asks the gate for each hit (@0x3be69), and
-        // the gate reads no "quoted" (+0xbc). Nothing else does.
+        // Attacking the player and facing it, it keeps its target as later
+        // hits land: `_DamageShip`'s focus test skips
+        // `_AIMakeShipAttackPlayer` (@0x3bbf3-0x3bcac), so it says nothing
+        // more.
+        let mut kept = session.clone();
+        let mut hits = 0;
+        for tick in 0..60 {
+            let shield = kept.npcs()[0].reserves.shield.now;
+            kept.tick_combat(Rules::default(), &mut NeverFires);
+            hits += usize::from(kept.npcs()[0].reserves.shield.now < shield);
+            kept.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            assert_eq!(quotes_said(&mut kept, &catalog), (vec![], false), "{tick}");
+        }
+        assert!(hits > 0, "a later hit");
+        // By the focus test's other reading a shot still in flight that
+        // hits it while it is unseen says it again: `_DamageShip` asks the
+        // gate for each hit it answers (@0x3be69), and the gate reads no
+        // "quoted" (+0xbc). Nothing else does.
+        session.rules = Rulebook::default().with_override(RuleKey::HitFocus, RuleSource::Bible);
         let mut again = 0;
         for tick in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;
@@ -17139,7 +17223,8 @@ pub(super) mod tests {
             .iter()
             .rfind(|shot| shot.firer == ship)
             .expect("a shot");
-        shot.position - shot.velocity - centre
+        // An NPC's shot waits where it left on the tick it is fired.
+        shot.moved_from.unwrap_or(shot.position) - centre
     }
 
     #[test]
@@ -17379,11 +17464,20 @@ pub(super) mod tests {
         rules: Rules,
         chance: &mut dyn Chance,
     ) -> f32 {
-        for _ in 0..ticks {
+        // `ticks` moves: the player's shot moves on the tick it is fired,
+        // an NPC's from the next.
+        let mut left = ticks;
+        let mut first = true;
+        while left > 0 {
             session.tick_combat(rules, chance);
             session.hold_trigger(Trigger::default());
             if let Some(npc) = session.traffic.npcs_mut().first_mut() {
                 npc.trigger = Trigger::default();
+            }
+            let waits = first && session.shots()[0].moved_from.is_none();
+            first = false;
+            if !waits {
+                left -= 1;
             }
         }
         session.shots()[0].heading
@@ -18419,9 +18513,9 @@ pub(super) mod tests {
             weight: 0.0,
             answered: true,
         };
-        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
+        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &[], &was);
         let by_the_police = session.pilot().combat_rating();
-        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(0)))], &was);
+        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(0)))], &[], &was);
         (by_the_police, session.pilot().combat_rating())
     }
 
@@ -18475,6 +18569,7 @@ pub(super) mod tests {
                 weight: 0.0,
                 answered: true,
             }],
+            &[],
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 2, "10 / 5");
@@ -18483,6 +18578,43 @@ pub(super) mod tests {
     #[test]
     fn a_kill_by_an_npc_outside_the_players_fleet_leaves_the_rating() {
         assert_eq!(rating_after_npc_kills(false), (0, 0));
+    }
+
+    #[test]
+    fn an_escort_lost_by_the_hit_that_kills_it_is_still_the_players_at_that_hit() {
+        // An escort's own blast breaks it up: `_DamageShip`'s crime block
+        // reads its leader (@0x3ad72) before the escort block clears it
+        // (@0x3afdd) in the same call, so the kill counts.
+        let catalog = boardable();
+        let rating_after = |losses: &[EscortLoss]| {
+            let mut session = alongside(&catalog);
+            let was = [NpcBefore {
+                id: NpcId(0),
+                condition: Condition::Disabled,
+                govt: Some(GovtId(140)),
+                marked: false,
+            }];
+            let own_blast = Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: Some(ShipRef::Npc(NpcId(0))),
+                damage: 9.0,
+                downed: Some(Downed::BreakingUp),
+                direct: false,
+                intended: false,
+                lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: false,
+            };
+            session.credit_kills(&[own_blast], losses, &was);
+            session.pilot().combat_rating()
+        };
+        let lost = EscortLoss {
+            ship: ShipRef::Npc(NpcId(0)),
+            strike: 0,
+        };
+        assert_eq!(rating_after(&[lost]), 2, "10 / 5");
+        assert_eq!(rating_after(&[]), 0, "never the player's");
     }
 
     #[test]
@@ -18514,11 +18646,13 @@ pub(super) mod tests {
                 strike(ShipRef::Player, Some(Downed::BreakingUp)),
                 strike(ShipRef::Npc(NpcId(9)), Some(Downed::BreakingUp)),
             ],
+            &[],
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 0);
         session.credit_kills(
             &[strike(ShipRef::Npc(NpcId(0)), Some(Downed::BreakingUp))],
+            &[],
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 2);
@@ -18654,20 +18788,23 @@ pub(super) mod tests {
         session.traffic.npcs_mut()[0].cloak = CLOAKED;
         session.watch_ship(NpcId(0));
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(fates(&session), [], "cloaked, and no scanner");
         assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        // The sighting (`_MissionHandler` @0x44214) reads the fade the last
+        // pass's display left (@0x444ad, @0x2d088): seen on the first pass
+        // that finds it uncloaked.
         let mut ticks = 1;
         while fates(&session).is_empty() {
-            assert!(
-                session.npcs()[0].cloak.is_cloaked(),
-                "seen at once uncloaked"
-            );
+            let cloaked = session.npcs()[0].cloak.is_cloaked();
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            assert_eq!(fates(&session).is_empty(), cloaked, "seen once uncloaked");
+            session.tick_combat(Rules::default(), &mut NeverFires);
             ticks += 1;
         }
         assert_eq!(
-            ticks, 32,
-            "fading out from 32 at 0.75 a tick, cloaked above 8"
+            ticks, 33,
+            "fading out from 32 at 0.75 a tick, cloaked above 8, seen the pass after"
         );
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
         assert!(session.story.watched.is_empty(), "forgotten once seen");
@@ -18852,14 +18989,16 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.target = Some(NpcId(0));
         session.traffic.npcs_mut()[0].cloak = CLOAKED;
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        // `_HandlePlayer`'s check, at the head of the pass (see the
+        // `lost_target` module).
+        session.tick(Controls::default());
         assert_eq!(session.target, None);
         assert_eq!(session.select_target(TargetPick::Nearest), None, "unpicked");
         let targets = scanning(crate::cloak::SCAN_TARGET);
         let mut session = holding_260(&targets);
         session.target = Some(NpcId(0));
         session.traffic.npcs_mut()[0].cloak = CLOAKED;
-        session.tick_traffic(&targets, &Peaceful, &mut NeverFires);
+        session.tick(Controls::default());
         assert_eq!(session.target, Some(NpcId(0)), "it can");
         session.target = None;
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
@@ -18978,7 +19117,7 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.target = Some(NpcId(0));
         untargetable_attacker(&mut session);
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        session.tick(Controls::default());
         assert_eq!(session.target, Some(NpcId(0)));
     }
 
@@ -19106,7 +19245,7 @@ pub(super) mod tests {
                 weight: 0.0,
                 answered: true,
             };
-            session.credit_kills(&[by_none], &was);
+            session.credit_kills(&[by_none], &[], &was);
             session.punish(&[by_none], &was, &witness);
         }
         assert_eq!(session.pilot().combat_rating(), rating);
@@ -20816,33 +20955,34 @@ pub(super) mod tests {
 
     #[test]
     fn the_player_breaking_up_raises_the_klaxon_from_the_tick_after_to_the_explosion() {
-        // DeathDelay 2: a timer of 6, exploding 4 ticks after the breakup.
+        // DeathDelay 2: a timer of 6, set at the display (@0x43e29) of the
+        // tick after the breakup, exploding 4 ticks after that.
         let catalog = deadly_in(2);
         let mut session = facing_an_npc(&catalog, 180);
-        let seen = from_the_breakup(&mut session, &catalog, 7);
+        let seen = from_the_breakup(&mut session, &catalog, 8);
         let klaxon = || vec![SimSound::Klaxon];
         let dying = |ticks_left| Condition::Dying {
             ticks_left,
             starting: false,
         };
+        let set = |ticks_left| Condition::Dying {
+            ticks_left,
+            starting: true,
+        };
         assert_eq!(
-            seen[..4],
+            seen[..5],
             [
-                (
-                    Condition::Dying {
-                        ticks_left: 6,
-                        starting: true
-                    },
-                    vec![SimSound::ShipDowned, SimSound::ShipDowned]
-                ),
+                (set(0), vec![SimSound::ShipDowned, SimSound::ShipDowned]),
+                (set(6), vec![]),
                 (dying(5), klaxon()),
                 (dying(4), klaxon()),
                 (dying(3), klaxon()),
             ],
             "none on the breakup tick, but the downed lines' beeps (see the \
-             `player_downed` module), then one each tick"
+             `player_downed` module), nor on the tick the timer is set, then \
+             one each tick (@0x6f1e4)"
         );
-        let (exploded, sounds) = &seen[4];
+        let (exploded, sounds) = &seen[5];
         assert_eq!(*exploded, Condition::Destroyed);
         assert_eq!(
             sounds.first(),
@@ -20850,7 +20990,7 @@ pub(super) mod tests {
             "first on the explosion's tick"
         );
         assert_eq!(
-            seen[5..],
+            seen[6..],
             [
                 (Condition::Destroyed, vec![]),
                 (Condition::Destroyed, vec![])
@@ -20889,17 +21029,22 @@ pub(super) mod tests {
         let by_default = facing_an_npc(&catalog, 180);
         let mut session = by_default.clone();
         assert_eq!(
-            from_the_breakup(&mut session, &catalog, 1),
-            [(
-                Condition::Destroyed,
-                vec![
-                    SimSound::ShipDowned,
-                    SimSound::ShipDowned,
-                    SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS)
-                ]
-            )],
-            "by default, destroyed as it breaks up, halting its sounds after \
-             the downed lines' beeps"
+            from_the_breakup(&mut session, &catalog, 2),
+            [
+                (
+                    Condition::Dying {
+                        ticks_left: 0,
+                        starting: true
+                    },
+                    vec![SimSound::ShipDowned, SimSound::ShipDowned]
+                ),
+                (
+                    Condition::Destroyed,
+                    vec![SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS)]
+                )
+            ],
+            "by default, destroyed at its next display (@0x43e29), which \
+             finds no timer to set, halting its sounds"
         );
         let mut session = by_default.with_rules(
             crate::rulebook::Rulebook::default()
@@ -21310,29 +21455,6 @@ pub(super) mod tests {
         assert_eq!(session.npcs()[0].condition, Condition::Disabled);
         assert_eq!(target_id(&session), Some(NpcId(0)), "a disabled target");
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
-    }
-
-    #[test]
-    fn the_target_is_cleared_as_soon_as_it_starts_breaking_up() {
-        let catalog = armed();
-        let mut session = facing_an_npc(&catalog, 180);
-        session.select_target(TargetPick::Next);
-        session.hold_trigger(FIRE);
-        for _ in 0..200 {
-            session.tick_combat(Rules::default(), &mut NeverFires);
-            let events = session.take_combat_events();
-            if events
-                .iter()
-                .any(|event| matches!(event, CombatEvent::BreakingUp { .. }))
-            {
-                assert_eq!(npc_ids(&session), [NpcId(0)], "still breaking up");
-                assert_eq!(target_id(&session), None);
-                assert_eq!(session.target, None);
-                return;
-            }
-            assert_eq!(target_id(&session), Some(NpcId(0)));
-        }
-        panic!("never broke up: {:?}", session.npcs());
     }
 
     #[test]
@@ -22526,6 +22648,84 @@ pub(super) mod tests {
         assert!(defended(&mut session), "firing once the jump is off");
     }
 
+    #[test]
+    fn a_sabotage_kill_in_the_pre_jump_goes_off_after_the_players_point_defence() {
+        // `_HandlePlayer` runs its point defence (@0x68c74), which rests
+        // while the jump is under way (`_HandleShipPointDefense`
+        // @0x392d6), before the sabotage block (@0x692e5), whose kill
+        // gives the pre-jump up; the trigger comes after both (@0x6ab55).
+        const KILL: i16 = 261;
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            frame: Some(QUAD_SPRITE),
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let mut catalog = arming(quad, slow, 0);
+        catalog
+            .outfits
+            .push(outfit(KILL, &[(crate::sabotage::SABOTAGE_KILL, 4100)]));
+        let defended = |sabotaged: bool| {
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            if sabotaged {
+                session.pilot.outfits.insert(OutfitId(KILL), 1);
+                session.reset_precalced();
+            }
+            // The NPC fires its missile, which the point defence first
+            // sees on the next pass.
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &Attacking,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            assert!(
+                session
+                    .shots()
+                    .iter()
+                    .any(|shot| shot.weapon.id == WeaponId(134)),
+                "a missile at it"
+            );
+            session.sabotage.set_counter(crate::sabotage::FUSE);
+            session.jump = Some(Jump::PreJump {
+                to: SystemId(129),
+                bearing: None,
+                warp: None,
+            });
+            session.take_combat_events();
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &Attacking,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            let events = session.take_combat_events();
+            (quad_fired(&events, ShipRef::Player), session.jump.is_some())
+        };
+        assert_eq!(
+            defended(false),
+            (false, true),
+            "resting through the pre-jump"
+        );
+        assert_eq!(
+            defended(true),
+            (false, false),
+            "rested, then the kill gave the pre-jump up"
+        );
+    }
+
     // Point defence against ships (`_HandleShipPointDefense`
     // @0x394ce-0x3969d).
 
@@ -22780,11 +22980,13 @@ pub(super) mod tests {
     fn an_npc_fights_with_its_attack_its_gate_wait_its_cloak_scanner_and_its_threat() {
         let terms = |threatens_player| FightTerms {
             held_disabled: false,
+            fleet_escort: false,
             threatens_player,
             class_speed: 0.0,
             top_speed: 0.0,
             drawn_heading: 0.0,
             jamming: Jamming([5, 0, 0, 9]),
+            sprite: None,
             resists: HazardResistance::default(),
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
@@ -23842,7 +24044,7 @@ pub(super) mod tests {
                 by: Some(ShipRef::Player),
                 damage: 0.0,
                 downed: None,
-                direct: true,
+                direct: false,
                 intended: true,
                 lock: false,
                 nominal: crate::combat::Nominal::default(),

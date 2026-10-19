@@ -59,6 +59,10 @@ run = "cargo nextest run -p nova --features dev-tools --target-dir target/dev-to
 description = "Run the viewer with the developer tools; backquote (`) shows and hides them. Pass the Nova Files folder after --, or set NOVA_DATA"
 run = "cargo run -p nova --features dev-tools --target-dir target/dev-run --locked --"
 
+[tasks.bundle]
+description = "macOS only: build Nova.app (Apple silicon, ad-hoc signed) into ev-nova-aarch64-apple-darwin.dmg; pass an output dir after -- (default target/bundle/out)"
+run = "cargo run -p nova-bundle --locked --"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"

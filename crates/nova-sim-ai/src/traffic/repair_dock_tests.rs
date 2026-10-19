@@ -312,7 +312,7 @@ fn an_npcs_hit_on_a_closing_repairer_makes_it_give_up_and_go_idle_still_provoked
         "its target intact, @0x8f702-0x8f732"
     );
     assert!(!gave_up.travel_set, "nav -1, @0x8f732");
-    assert_eq!(gave_up.provoked, 12.0, "still provoked");
+    assert_eq!(gave_up.provoked, 24.0, "still provoked");
     assert!(
         !recording.decided.borrow().contains(&HELPER),
         "it never thought"

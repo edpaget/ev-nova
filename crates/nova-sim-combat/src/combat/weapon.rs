@@ -48,7 +48,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::exits::ExitKind;
+use super::exits::{ExitKind, StrayWord};
 use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
 pub use crate::catalog::{BOOM_TYPES, EXTRA_EXPLOSIONS, Explosion, FIRST_BOOM};
 use crate::catalog::{FrameSize, ShipId, WeaponId, WeaponRecord};
@@ -273,6 +273,10 @@ pub struct WeaponSpec {
     pub blast_radius: f32,
     /// A beam's length, in pixels.
     pub beam_length: f32,
+    /// Its `BeamWidth` as it is: a spinning shot steps its frame once its
+    /// spin timer reaches it, every pass at 0 or less (`_HandleShot`
+    /// @0x358a7-0x358bb; see [`spin_timer`](super::spin_timer)).
+    pub beam_width: i16,
     /// Its `Falloff` as the original loads it ([`loaded_falloff`]): how
     /// fast a beam's corona fades, and how long a decaying beam fades for
     /// (see [`beam`](super::beam)).
@@ -345,10 +349,11 @@ pub struct WeaponSpec {
     /// The exit points it fires from, by its `ExitType`; none, the
     /// centre, for any but 0-3 (see [`exits`](super::exits)).
     pub exit: Option<ExitKind>,
-    /// Whether, as a beam, it steps its ship's fold set (+0xc8fc): its
-    /// `ExitType` is -1, which `_SpawnBeam` reads as the cursor before Gun's
-    /// (@0x450fa-0x4523d; see [`exits::step_stray`](super::exits::step_stray)).
-    pub steps_fold: bool,
+    /// The ship word it steps as a beam, when its `ExitType` lies outside
+    /// 0-3 on a word the engine models: -1 the fold set, 5 the pod word,
+    /// which `_SpawnBeam` reads as cursors around Gun's (@0x450fa-0x4523d;
+    /// see [`StrayWord`]).
+    pub stray: Option<StrayWord>,
     /// Whether it fires from the exit point nearest its target: its
     /// `Flags3` [`NEAREST_EXIT`].
     pub nearest_exit: bool,
@@ -434,6 +439,9 @@ pub const EXCLUSIVE_HOLD: f32 = 2.0;
 /// (`_ModifyShotStartPosition` @0x73d9-0x742c, `_SpawnBeam`
 /// @0x45126-0x451af; see [`exits`](super::exits)).
 pub const NEAREST_EXIT: u16 = 0x0010;
+/// `Flags`: its shots spin through their frames (`_HandleShot`
+/// @0x35879-0x3587e).
+pub const SPINS: u16 = 0x0001;
 /// `Flags3`: it uses ammo only at the end of a burst.
 pub const AMMO_AT_BURST_END: u16 = 0x0001;
 /// `Flags3`: one shot at a time: while a shot of it is in flight, its
@@ -552,6 +560,7 @@ impl WeaponSpec {
             prox_radius: ticks(record.prox_radius),
             blast_radius: ticks(record.blast_radius),
             beam_length: ticks(record.beam_length),
+            beam_width: record.beam_width,
             falloff: loaded_falloff(record.beam_length, record.falloff, record.li_density),
             burst_count: count(record.burst_count),
             burst_reload: ticks(record.burst_reload),
@@ -574,7 +583,7 @@ impl WeaponSpec {
             ionize_colour: ionize_colour(record.ionize_color),
             jam_vuln: record.jam_vuln,
             exit: ExitKind::from_raw(record.exit_type),
-            steps_fold: record.exit_type == -1,
+            stray: StrayWord::of(record.exit_type),
             nearest_exit: record.flags3 & NEAREST_EXIT != 0,
             broadside: if record.inaccuracy < 0 {
                 u32::from(record.inaccuracy.unsigned_abs())
@@ -591,6 +600,14 @@ impl WeaponSpec {
                 color: record.hit_part_color,
             }),
         }
+    }
+
+    /// Whether its shots spin through their frames: its `Flags` [`SPINS`]
+    /// (`_HandleShot` @0x35879-0x3587e), their spin timer stepping each
+    /// live visit ([`spin_timer`](super::spin_timer)).
+    #[must_use]
+    pub fn spins(&self) -> bool {
+        self.flags & SPINS != 0
     }
 
     /// Whether firing it lights its ship's weapon glow: its `Flags2`
@@ -1010,14 +1027,20 @@ mod tests {
                 ..light_blaster()
             });
             assert_eq!(spec.exit, exit, "{raw}");
-            assert_eq!(spec.steps_fold, raw == -1, "{raw}");
+            assert_eq!(spec.stray, StrayWord::of(raw), "{raw}");
         }
-        for (raw, steps) in [(-1, true), (-2, false), (i16::MIN, false)] {
+        for (raw, stray) in [
+            (-1, Some(StrayWord::FoldSet)),
+            (5, Some(StrayWord::Pods)),
+            (-2, None),
+            (6, None),
+            (i16::MIN, None),
+        ] {
             let spec = WeaponSpec::new(&WeaponRecord {
                 exit_type: raw,
                 ..light_blaster()
             });
-            assert_eq!((spec.exit, spec.steps_fold), (None, steps), "{raw}");
+            assert_eq!((spec.exit, spec.stray), (None, stray), "{raw}");
         }
         assert_eq!(NEAREST_EXIT, 0x0010);
         for (flags3, nearest) in [(0x0010, true), (0x0030, true), (0x0020, false), (0, false)] {
@@ -1725,6 +1748,26 @@ mod tests {
         assert!(!others.secondary() && !others.passes_shields());
         assert!(!others.spares_player() && !others.detonates());
         assert!(!others.ammo_at_burst_end());
+    }
+
+    #[test]
+    fn a_spinning_weapon_loads_its_flags_0x0001_and_its_beam_width() {
+        let spinning = WeaponSpec::new(&WeaponRecord {
+            flags: SPINS,
+            beam_width: 4,
+            ..weapon(128)
+        });
+        assert!(spinning.spins());
+        assert_eq!(spinning.beam_width, 4);
+        assert_eq!(SPINS, 0x0001);
+        assert!(!WeaponSpec::new(&weapon(128)).spins());
+        let others = WeaponSpec::new(&WeaponRecord {
+            flags: !SPINS,
+            beam_width: -2,
+            ..weapon(128)
+        });
+        assert!(!others.spins());
+        assert_eq!(others.beam_width, -2, "as it is, below none too");
     }
 
     #[test]

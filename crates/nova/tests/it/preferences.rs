@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::prefs_fixture;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::config::Os;
 use nova::platform;
 use nova::settings::{
     FullscreenSetting, GameSettings, ScalingSetting, SettingsKeeper, game_settings,
@@ -231,7 +232,10 @@ fn seeded() -> MemorySettings {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
             frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         })
         .expect("seeds");
     store
@@ -247,23 +251,30 @@ struct Harness {
 
 impl Harness {
     /// The game started over `store`, as `main` starts it: the settings
-    /// read through it start the audio core and the router.
+    /// read through it start the audio core and the router. It runs as on
+    /// Windows, whatever the host, so its monitor offers exclusive modes.
     fn new(store: &MemorySettings) -> Self {
         Self::with_table(store, SoundTable::ORIGINAL)
     }
 
+    /// The game started over `store` as [`Harness::new`] starts it, but
+    /// running on `os`.
+    fn on_os(store: &MemorySettings, os: Os) -> Self {
+        Self::build(store, SoundTable::ORIGINAL, false, os)
+    }
+
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
-        Self::build(store, table, false)
+        Self::build(store, table, false, Os::Windows)
     }
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
     fn on_main_menu(store: &MemorySettings) -> Self {
-        Self::build(store, SoundTable::ORIGINAL, true)
+        Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
     }
 
-    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool) -> Self {
+    fn build(store: &MemorySettings, table: SoundTable, main_menu: bool, os: Os) -> Self {
         let data = game_data();
         let (keeper, settings, warning) =
             game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
@@ -289,6 +300,7 @@ impl Harness {
         };
         Self {
             app: App::new(&window, data, crate::common::appeared(screen))
+                .with_os(os)
                 .with_audio(core)
                 .with_settings(keeper),
             window,
@@ -465,8 +477,9 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    // Past the display picker and the Scaling list to the music volume.
-    for _ in 0..8 {
+    // Past Weapon Effects, Smoke Trails, the display picker and the
+    // Scaling list to the music volume.
+    for _ in 0..10 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -548,8 +561,9 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    // Past the display picker and the Scaling list to the music volume.
-    for _ in 0..8 {
+    // Past Weapon Effects, Smoke Trails, the display picker and the
+    // Scaling list to the music volume.
+    for _ in 0..10 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -776,6 +790,51 @@ fn quicktime_movies_toggle_by_click_and_key_and_survive_a_restart() {
     assert_eq!(saved(&store)["quicktime_movies"], true);
 }
 
+/// The flight view under the harness.
+fn flight(harness: &Harness) -> &nova_view::flight::FlightView<Rc<GameData>> {
+    harness.app.screen().flight_view().expect("flying")
+}
+
+#[test]
+fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_waits_for_a_restart()
+ {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('f'));
+    harness.fly();
+    assert!(flight(&harness).smoke_trails() && flight(&harness).weapon_effects());
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    let smoke = harness.dialog().smoke_trails().rect().center();
+    harness.click(smoke);
+    assert!(!flight(&harness).smoke_trails(), "at once");
+    assert_eq!(saved(&store)["smoke_trails"], false);
+    let weapons = harness.dialog().weapon_effects().rect().center();
+    harness.click(weapons);
+    assert_eq!(saved(&store)["weapon_effects"], false);
+    assert_eq!(saved(&store)["smoke_trails"], false, "the rest kept");
+    assert!(harness.dialog().relaunch_notice_shown());
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text.starts_with("(Changes will")),
+        "the notice is drawn"
+    );
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert!(
+        flight(&harness).weapon_effects(),
+        "the running game keeps the glow until the next launch"
+    );
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('f'));
+    again.fly();
+    assert!(!flight(&again).weapon_effects(), "off after a restart");
+    assert!(!flight(&again).smoke_trails());
+}
+
 /// Where flight draws its hover cursor.
 fn cursor(harness: &Harness) -> Option<Point> {
     harness
@@ -836,7 +895,7 @@ fn the_picker_lists_the_monitors_modes_and_ok_enters_the_one_picked_and_saves_it
     );
 
     // Down on the focused picker, then a click on its down arrow.
-    for _ in 0..5 {
+    for _ in 0..7 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -927,7 +986,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..5 {
+        for _ in 0..7 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -988,6 +1047,47 @@ fn after_a_fallback_launch_the_stock_dialog_saves_borderless_or_the_mode_picked(
     assert_eq!(relaunched.window.fullscreen, [fhd], "reopens in the mode");
 }
 
+#[test]
+fn on_macos_a_saved_exclusive_mode_opens_native_fullscreen_and_the_picker_offers_only_it() {
+    let store = seeded();
+    let (mut keeper, _) = SettingsKeeper::open(store.clone());
+    let saved_kind = FullscreenSetting::Exclusive {
+        mode: mode(1920, 1080, 60_000),
+        monitor: Some(MONITOR.to_owned()),
+    };
+    let settings = GameSettings {
+        fullscreen: true,
+        fullscreen_kind: saved_kind.clone(),
+        ..keeper.settings()
+    };
+    keeper.change(settings).expect("seeds");
+    let mut harness = Harness::on_os(&store, Os::MacOs);
+    harness.app.restore_window(&mut harness.window);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new(), "quiet");
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Borderless)],
+        "the native Space"
+    );
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    assert_eq!(
+        harness.dialog().display().entries(),
+        [FullscreenKind::Borderless]
+    );
+    assert_eq!(
+        harness.dialog().display().selected(),
+        FullscreenKind::Borderless
+    );
+    harness.press(Key::Enter);
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Borderless)]
+    );
+    let (kept, _) = SettingsKeeper::open(store.clone());
+    assert_eq!(kept.settings().fullscreen_kind, saved_kind, "not migrated");
+}
+
 const NATIVE: Upscaler = Upscaler::Native;
 const SHARP: Upscaler = Upscaler::SharpBilinear;
 const METAL_FX: Upscaler = Upscaler::MetalFxSpatial;
@@ -1020,7 +1120,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..6 {
+        for _ in 0..8 {
             self.press(Key::Tab);
         }
         for _ in 0..times {

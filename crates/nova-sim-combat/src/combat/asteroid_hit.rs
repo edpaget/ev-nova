@@ -29,7 +29,10 @@
 //!   Bible's "proximity fuse ignores asteroids": the
 //!   [`AsteroidFuse`] reads it as
 //!   [`RuleKey::FuseIgnoresAsteroids`](crate::RuleKey::FuseIgnoresAsteroids)
-//!   says.
+//!   says. The branch tests no life, so a shot point defence ended at
+//!   life 0 is still set off, its fuse armed when `Count` is above
+//!   `ProxSafety` (`_CheckShotProximities` @0x371ea-0x371f6, see
+//!   [`hidden`](super::hidden)).
 //! - **The hit** (`_HandleAsteroidHit` @0x36637-0x369c7), in order: the
 //!   weapon's explosion where the shot is (@0x3667d); its hit particles
 //!   (@0x366a0-0x36701); for a player's shot with a `BlastRadius` from a

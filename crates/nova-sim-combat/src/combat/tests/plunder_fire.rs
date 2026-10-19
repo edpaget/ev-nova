@@ -248,7 +248,7 @@ fn a_sub_munition_reads_its_owners_plunder_as_it_is_released_not_its_parents_fla
         tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         ships[0].trigger = QUIET;
         ships[0].plundering = plundering_after;
-        for _ in 1..4 {
+        for _ in 1..5 {
             tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
         }
         let subs = sub_shots(&combat);

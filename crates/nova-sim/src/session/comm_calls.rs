@@ -71,11 +71,15 @@
 //! later slot's line replaces an earlier one's. The traffic queues all of
 //! it at each ship's berth (see `nova_sim::traffic::on_line`), the
 //! refuel note among it (see `nova_sim::traffic::refuel_dock`), and
-//! [`Session::settle_line_queue`] settles it in [`Session::tick_combat`],
-//! right after `_HandlePlayer`'s part of the frame (`before_fight`: the
-//! propulsion repair, the sabotage and the eject), so their lines come
-//! before every call, as the original's do, and the scans' law is at
-//! hand:
+//! [`Session::settle_line_queue`] settles it after `_HandlePlayer`'s part
+//! of the frame (the propulsion repair, the sabotage, and the eject in
+//! the player's display step), so their lines come before every call, as
+//! the original's do, and the scans' law is at hand: in
+//! [`Session::game_work`] after `_AIDispatch`'s loop
+//! (`Session::dispatch_npcs`), the fighters launched and thinking in it
+//! among the slots, and again after the ship loop for the docks and
+//! repairs the fly half made; in the separate parts in
+//! [`Session::tick_combat`], after the player's display step:
 //!
 //! - an earlier slot's scan line, stolen line, refuel or repair note
 //!   keeps a later slot's distress call and pre-scan hail off, and their
@@ -792,6 +796,99 @@ mod tests {
         assert!(!session.comm_line().free_for_calls(), "399 counted");
         session.tick_quotes(&catalog, &mut NeverFires);
         assert!(session.comm_line().free_for_calls(), "400 counted");
+    }
+
+    // The calls against the scans, in a pass of the game's work.
+
+    /// A pass of the game's work by `source`'s reading of
+    /// [`RuleKey::LaunchFrameAi`](crate::rulebook::RuleKey::LaunchFrameAi),
+    /// the player carrying mission 140's cargo, which the traders (of a
+    /// `SmugPenalty` of 5) scan for: `calling` sets up the NPCs whose calls
+    /// are made in the pass, in lower slots, then an interceptor of the
+    /// traders gives up inspecting the player, so it scans and finds the
+    /// cargo. The messages and sounds the pass raised.
+    fn scanned_while(
+        source: crate::rulebook::RuleSource,
+        calling: impl FnOnce(&mut Session) -> Calling,
+    ) -> (Vec<SimMessage>, Vec<SimSound>) {
+        use crate::rulebook::{RuleKey, Rulebook};
+        let mut catalog = calling_catalog();
+        catalog.govts[0].penalties.smuggle = 5;
+        let mut session = flying(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::LaunchFrameAi, source));
+        session.pilot.missions.put(0, carrying(140, 4));
+        let calls = calling(&mut session);
+        let scanner = add(&mut session, Some(TRADERS), CALLER);
+        let npc = session.npc_mut(scanner).expect("there");
+        npc.ai_type = AiType::Interceptor;
+        npc.goal = Goal::Inspect(ShipRef::Player);
+        let mut chance = crate::testkit::Ranged::of(&[(100, 0)]);
+        let rescued = session.game_work(
+            crate::flight::Controls::default(),
+            &catalog,
+            &calls,
+            crate::Rules::default(),
+            &mut chance,
+        );
+        assert!(!rescued);
+        (session.take_messages(), session.take_sounds())
+    }
+
+    /// The smuggling message of the interceptor's scan.
+    fn finds_smuggling(messages: &[SimMessage]) -> bool {
+        messages
+            .iter()
+            .any(|message| matches!(message, SimMessage::Smuggling { .. }))
+    }
+
+    #[test]
+    fn a_lower_slots_distress_call_in_a_scans_pass_is_said_before_the_scans_message() {
+        // The pass's calls and scans settle after `_AIDispatch`'s loop in
+        // slot order: the caller's slot is below the scanner's, and the
+        // scan's message does not ask the line, so it follows the call.
+        use crate::rulebook::RuleSource;
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let (messages, sounds) =
+                scanned_while(source, |session| fleeing(session, Some(TRADERS), CALLER).1);
+            assert_eq!(
+                messages.first(),
+                Some(&SimMessage::CallForHelp("Ship 129:  Help 20".to_owned())),
+                "{source:?}"
+            );
+            assert!(finds_smuggling(&messages), "{source:?}: {messages:?}");
+            assert_eq!(
+                sounds,
+                [SimSound::CallForHelp, SimSound::Smuggling],
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lower_slots_pre_scan_hail_in_a_scans_pass_is_said_before_the_scans_message() {
+        use crate::rulebook::RuleSource;
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let (messages, sounds) = scanned_while(source, |session| {
+                let police = add(session, Some(TRADERS), CALLER);
+                session.npc_mut(police).expect("there").ai_type = AiType::Interceptor;
+                session.count_down_comm_line();
+                let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
+                calling([(police, picks)])
+            });
+            assert_eq!(
+                messages.first(),
+                Some(&SimMessage::ScanHail(
+                    "Ship 129:  Ship 128, hold.".to_owned()
+                )),
+                "{source:?}"
+            );
+            assert!(finds_smuggling(&messages), "{source:?}: {messages:?}");
+            assert_eq!(
+                sounds,
+                [SimSound::ScanHail, SimSound::Smuggling],
+                "{source:?}"
+            );
+        }
     }
 
     // The calls and scans in slot order (see the module docs).

@@ -62,6 +62,54 @@ fn a_spinning_shot_of_flags_0x0004_starts_on_its_first_frame() {
     assert_eq!(effects.borrow().asked, Vec::<u32>::new());
 }
 
+#[test]
+fn a_spinning_shot_in_a_reused_slot_steps_on_the_timer_its_slot_left() {
+    // The blaster spins from its first frame, a step every 4 passes, and
+    // lives 3 ticks; the simulation runs its slot's timer, and the next
+    // shot in the slot starts on what it left (`_SpawnShot` never writes
+    // +0x1c, @0x3e550-0x3f143).
+    let mut catalog = with_blaster(|look| {
+        look.flags = SPINS | crate::flight::spin::FIRST_FRAME_START;
+        look.beam_width = 4;
+    });
+    catalog.weapons[0].flags |= SPINS;
+    catalog.weapons[0].beam_width = 4;
+    catalog.weapons[0].count = 3;
+    catalog.weapons[0].reload = 1000;
+    let mut view = fighting(catalog, &[]);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    assert_eq!(view.session().expect("flying").shots()[0].spin_timer, 0);
+    while !view.session().expect("flying").shots().is_empty() {
+        view.tick(TICK);
+    }
+    ticks(&mut view, 1100);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    let shot = view.session().expect("flying").shots()[0];
+    assert_eq!(shot.slot, 0, "the slot reused");
+    let timer = shot.spin_timer;
+    assert_ne!(timer, 0, "the slot's leftover");
+    let look = WeaponLook {
+        flags: SPINS | crate::flight::spin::FIRST_FRAME_START,
+        beam_width: 4,
+        ..WeaponLook::default()
+    };
+    let frames = NonZeroU16::new(36).expect("non-zero");
+    let (mut shown, mut expected, mut from_0) = (Vec::new(), Vec::new(), Vec::new());
+    while let Some(shot) = view.session().expect("flying").shots().first() {
+        let age = shot.age;
+        shown.extend(blaster_frames(&view));
+        expected.push(weapons::shot_frame(90.0, age, frames, &look, 0, timer));
+        from_0.push(weapons::shot_frame(90.0, age, frames, &look, 0, 0));
+        view.tick(TICK);
+    }
+    assert_eq!(shown, expected, "from timer {timer}");
+    assert_ne!(shown, from_0, "not as from 0");
+}
+
 /// Each frame's draw of the blaster's shot over `ticks` ticks from the
 /// tick it is fired, one shot alone: its tint and whether it is drawn by OR, or
 /// none once it is gone.
@@ -182,26 +230,106 @@ fn a_flying_shot_leaves_a_trail_of_particles_at_its_tail() {
     assert_eq!(newest.life, 20);
 }
 
-#[test]
-fn a_smoking_shot_leaves_puffs_that_landing_clears() {
-    let catalog = with_blaster(|look| {
+/// The puffs drawn from smoke set 1's `cicn`s.
+fn set_1_puffs(view: &View) -> usize {
+    sprites(&drawn(view))
+        .into_iter()
+        .filter(|(image, _)| {
+            image.kind == crate::image::ImageKind::Icon && (1008..1016).contains(&image.id)
+        })
+        .count()
+}
+
+/// The blaster smoking from set 1, with a particle trail, its shot living
+/// long enough to cross several smoke frames.
+fn smoking_trailing_blaster() -> FakeCatalog {
+    with_blaster(|look| {
         look.flags = crate::flight::smoke::SMALL_SMOKE;
         look.smoke_set = 1;
-    });
-    let mut view = fighting(catalog, &[]);
+        look.count = 40;
+        look.particles = 3;
+        look.part_vel = 100;
+        look.part_life = (20, 20);
+        look.part_color = 0x0010_40FF;
+    })
+}
+
+#[test]
+fn a_smoking_shot_leaves_a_puff_only_on_a_smoke_frame_and_trails_every_tick() {
+    let mut view = fighting(smoking_trailing_blaster(), &[]);
+    assert!(view.smoke_trails(), "on by default");
     view.input(&key(FIRE_KEY, true));
-    view.tick(TICK);
-    view.input(&key(FIRE_KEY, false));
-    view.tick(TICK);
-    let puffs = |view: &View| {
-        sprites(&drawn(view))
-            .into_iter()
-            .filter(|(image, _)| {
-                image.kind == crate::image::ImageKind::Icon && (1008..1016).contains(&image.id)
-            })
-            .count()
-    };
-    assert_eq!(puffs(&view), 2, "a puff a tick, from set 1's cicns");
+    let mut seen = Vec::new();
+    for tick in 0..6 {
+        let puffs = view.shot_looks.smoke().puffs().len();
+        let particles = view.effects().particles().len();
+        view.tick(TICK);
+        if tick == 0 {
+            view.input(&key(FIRE_KEY, false));
+        }
+        let session = view.session().expect("flying");
+        assert_eq!(session.shots().len(), 1, "one shot alone");
+        let smoke_frame = session.smoke_frame();
+        let puffed = view.shot_looks.smoke().puffs().len() - puffs;
+        let burst = view.effects().particles().len() - particles;
+        assert_eq!(burst, 3, "a burst every live tick: tick {tick}");
+        seen.push((smoke_frame, puffed));
+    }
+    let frames = seen.iter().filter(|(smoke_frame, _)| *smoke_frame).count();
+    assert_eq!(frames, 2, "a smoke frame in every 3: {seen:?}");
+    assert!(
+        seen.iter()
+            .all(|&(smoke_frame, puffed)| puffed == usize::from(smoke_frame)),
+        "a puff on each smoke frame and on no other: {seen:?}"
+    );
+    assert_eq!(set_1_puffs(&view), 2, "drawn from set 1's cicns");
+}
+
+#[test]
+fn with_smoke_trails_off_a_shot_sprays_no_trail_and_leaves_no_smoke() {
+    let mut view = fighting(smoking_trailing_blaster(), &[]).with_smoke_trails(false);
+    assert!(!view.smoke_trails());
+    view.input(&key(FIRE_KEY, true));
+    for tick in 0..4 {
+        view.tick(TICK);
+        if tick == 0 {
+            view.input(&key(FIRE_KEY, false));
+        }
+        assert_eq!(view.session().expect("flying").shots().len(), 1);
+        assert_eq!(view.effects().particles().len(), 0, "tick {tick}");
+        assert_eq!(view.shot_looks.smoke().puffs(), [], "tick {tick}");
+    }
+}
+
+#[test]
+fn turning_smoke_trails_off_stops_new_smoke_and_the_puffs_left_age_out() {
+    let mut view = fighting(smoking_trailing_blaster(), &[]);
+    view.input(&key(FIRE_KEY, true));
+    while view.shot_looks.smoke().puffs().is_empty() {
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+    }
+    let left = view.shot_looks.smoke().puffs().to_vec();
+    view.set_smoke_trails(false);
+    let particles = view.effects().particles().len();
+    for _ in 0..3 {
+        view.tick(TICK);
+    }
+    let puffs = view.shot_looks.smoke().puffs();
+    assert_eq!(puffs.len(), left.len(), "no new puff");
+    assert!(
+        puffs
+            .iter()
+            .zip(&left)
+            .all(|(now, then)| now.age == then.age + 0.75),
+        "still ageing: {puffs:?}"
+    );
+    assert!(
+        view.effects().particles().len() <= particles,
+        "no new burst"
+    );
+    ticks(&mut view, 40);
+    assert_eq!(view.shot_looks.smoke().puffs(), [], "freed");
 }
 
 #[test]
@@ -218,8 +346,10 @@ fn landing_and_arriving_free_the_smoke() {
     };
     let fire = |view: &mut View| {
         view.input(&key(FIRE_KEY, true));
-        view.tick(TICK);
-        view.input(&key(FIRE_KEY, false));
+        for _ in 0..3 {
+            view.tick(TICK);
+            view.input(&key(FIRE_KEY, false));
+        }
         assert!(!view.shot_looks.smoke().puffs().is_empty(), "smoking");
     };
     let mut catalog = smoking(armed(0, &[BLASTER]));
@@ -285,6 +415,44 @@ fn a_firing_ships_weapon_glow_is_added_at_32_then_falls_by_its_decay() {
     );
     ticks(&mut view, 20);
     assert_eq!(glow_layers(&view, 2300), [], "out");
+}
+
+#[test]
+fn with_weapon_effects_off_no_ship_draws_its_weapon_glow() {
+    let mut catalog = armed(0, &[BLASTER]);
+    catalog.weapons[0].flags2 = nova_sim::combat::weapon::GLOWS;
+    catalog.sheet = Ok(ShipSheet {
+        weapon: Some(layer(2300, 36)),
+        weap_decay: 6,
+        ..sheet()
+    });
+    assert!(
+        fighting(armed(0, &[BLASTER]), &[]).weapon_effects(),
+        "on by default"
+    );
+    let mut view = fighting(catalog, &[]).with_weapon_effects(false);
+    assert!(!view.weapon_effects());
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    assert_eq!(view.glows.drawn(ShipRef::Player), Some(32), "still lit");
+    assert_eq!(glow_layers(&view, 2300), [], "but not drawn");
+    view.set_weapon_effects(true);
+    assert_eq!(glow_layers(&view, 2300).len(), 1, "drawn once on");
+
+    let catalog = trafficked(&[130], 1, 129, 3);
+    let (_, chance) = scripted(&placed(850, 650, 90));
+    let mut view = FlightView::new(catalog)
+        .with_chance(chance)
+        .with_behaviour(Rc::new(Still))
+        .with_weapon_effects(false);
+    view.tick(TICK);
+    let npc = view.session().expect("flying").npcs()[0].clone();
+    view.glows
+        .step(&[(ShipRef::Npc(npc.id), false)], |_| Some(1.0));
+    assert_eq!(glow_layers(&view, 2301), [], "an NPC's neither");
+    view.set_weapon_effects(true);
+    assert_eq!(glow_layers(&view, 2301).len(), 1);
 }
 
 #[test]

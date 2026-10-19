@@ -30,10 +30,10 @@
 //!   factor +0xa8 to `trunc(32 - life)`, its channel factors left at 0
 //!   (`_SWCreateSprite` @0xa8d56-0xa8d71), so its draw proc
 //!   (`_BlitPixieRLETranslucentDrawProc`, 0xbb3fc) gives `(src x life) >>
-//!   5 | (dst x (32 - life)) >> 5` per channel: here a normal alpha blend
-//!   at life/32, the OR crossfade being
-//!   rdm:phase/weapons-fidelity/phase-35-left-out-of-phase-24's renderer
-//!   blend.
+//!   5 | (dst x (32 - life)) >> 5` per channel: the OR crossfade,
+//!   [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade) at alpha
+//!   life/32 ([`Pod::tint`]). An opaque pod is drawn plainly, as k = 32
+//!   is the same copy.
 //! - **Leaving the system** clears them ([`EscapePods::clear`]), as
 //!   `_killShots` frees them on landing, a gate and the arrival
 //!   (@0x39e75-0x39e84), and the view clears its effects then.
@@ -165,9 +165,15 @@ impl EscapePods {
             return;
         };
         for pod in &self.pods {
-            if let Some(tint) = pod.tint() {
-                let frame = ImageKey::sprite(sheet.image_id, pod.frame);
-                list.sprite(frame, camera.world_to_screen(pod.at), tint);
+            let Some(tint) = pod.tint() else {
+                continue;
+            };
+            let frame = ImageKey::sprite(sheet.image_id, pod.frame);
+            let at = camera.world_to_screen(pod.at);
+            if pod.life >= POD_FADE {
+                list.sprite(frame, at, tint);
+            } else {
+                list.crossfade_sprite(frame, at, tint);
             }
         }
     }
@@ -191,6 +197,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::draw::Blend;
     use crate::flight::catalog::EffectSheet;
 
     /// Draws its script, then the last outcome.
@@ -323,6 +330,30 @@ mod tests {
             &Looks::default(),
         );
         assert!(unread.into_iter().next().is_none(), "no sheet, no pod");
+    }
+
+    #[test]
+    fn a_fading_pod_is_crossfaded_by_or_and_an_opaque_one_drawn_plainly() {
+        let mut pods = spawned(&[20, 90, 5]);
+        let blends = |pods: &EscapePods| -> Vec<(Color, Blend)> {
+            let mut list = DrawList::new();
+            pods.draw(&mut list, &Camera::centred_on(Point::default()), &looks());
+            list.into_iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend)),
+                    _ => None,
+                })
+                .collect()
+        };
+        while pods.pods()[0].life > POD_FADE {
+            pods.step();
+        }
+        assert_eq!(blends(&pods), [(Color::WHITE, Blend::Normal)], "at 32");
+        pods.step();
+        let tint = pods.pods()[0].tint().expect("shown");
+        assert_eq!(pods.pods()[0].life, POD_FADE - 1);
+        assert_eq!(blends(&pods), [(tint, Blend::OrCrossfade)], "at 31");
+        assert_eq!(tint.a, 247, "31/32");
     }
 
     #[test]

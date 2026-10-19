@@ -980,7 +980,7 @@ mod tests {
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert!(hailed.is_err(), "{hailed:?}");
         assert!(asked.is_empty());
-        session.clear_lost_target();
+        session.let_go_of_lost_target();
         assert_eq!(
             session.target, None,
             "as the original lets it go (@0x686a4)"
@@ -1844,7 +1844,10 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
-            nominal: crate::combat::Nominal::default(),
+            nominal: crate::combat::Nominal {
+                mass: 5.0,
+                energy: 0.0,
+            },
             weight: 0.0,
             answered: true,
         });

@@ -15,10 +15,11 @@
 //! A layer draws its sprites in the order they entered it
 //! (`_SWAddSprite` @0xac620): [`stack`] keeps each layer in the order it
 //! is given, the session's for ships ([`ship_layer`](crate::ship_layer))
-//! and the order the shots are kept for shots. The original's shot slots,
-//! where a reused slot whose sprite was already in the layer keeps its
-//! place (`_PutSpriteInLayer` @0x768c), are not modelled; the engine
-//! keeps shots in firing order.
+//! and the fight's for shots
+//! ([`Combat::shots_drawn`](crate::combat::Combat::shots_drawn)): the
+//! order the original's shot slots entered each layer, a reused slot whose
+//! sprite was already in the layer keeping its place (`_PutSpriteInLayer`
+//! @0x768c; see [`shot_slots`](crate::combat::shot_slots)).
 //!
 //! The simulation decides the order; the view only draws the stack.
 

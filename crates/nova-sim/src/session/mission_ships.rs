@@ -2559,6 +2559,11 @@ pub(super) mod tests {
                 .with_override(crate::RuleKey::DeadlyStellarKill, reading);
             let id = session.npcs()[0].id;
             assert!(session.npcs()[0].mission.is_some(), "a mission ship");
+            // The other ships well clear, so the player's shots meet the
+            // target alone, whatever the collision walk's order.
+            for npc in session.traffic.npcs_mut().iter_mut().skip(1) {
+                npc.state.position = Vec2::new(20_000.0, 20_000.0);
+            }
             session.story_raised();
             disabled_then_killed(&mut session, id, &Gunner::Player);
             assert!(session.npc(id).is_none(), "{reading:?}: killed");
@@ -3161,6 +3166,7 @@ pub(super) mod tests {
         warped(&mut session, 0);
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut NeverFires,
         );
@@ -3769,17 +3775,21 @@ pub(super) mod tests {
         for npc in session.traffic.npcs_mut() {
             npc.cloak = full;
         }
+        // The sighting (`_MissionHandler` @0x44214) reads the fades the
+        // last pass's displays left (@0x444ad, @0x2d088).
         let mut ticks = 0;
         while !goals_met(&session) {
-            assert!(
-                session.npcs().iter().all(|npc| npc.cloak.is_cloaked()),
-                "met only once seen"
-            );
+            let cloaked = session.npcs().iter().all(|npc| npc.cloak.is_cloaked());
             tick(&mut session, &catalog);
             settle(&mut session, &catalog);
+            assert_eq!(!goals_met(&session), cloaked, "met only once seen");
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             ticks += 1;
         }
-        assert_eq!(ticks, 32, "each uncloaks on its think, and fades out");
+        assert_eq!(
+            ticks, 33,
+            "each uncloaks on its think, and fades out, seen the pass after"
+        );
     }
 
     #[test]

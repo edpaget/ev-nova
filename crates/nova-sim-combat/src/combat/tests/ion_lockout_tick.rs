@@ -2,7 +2,7 @@
 //! ship-handling-fidelity phase 23, see [`ion`]): the player's hold on
 //! the charge as its frame's ion block found it, decided after its fire;
 //! an NPC's on that charge plus the pass's doses, decided and applied
-//! before its fire.
+//! with its reload step, before its fire.
 
 use super::*;
 
@@ -87,9 +87,9 @@ fn an_npc_is_held_before_its_fire_on_the_fight_its_dose_lands() {
     assert_eq!(charge, 100.0, "dosed to a factor of 1");
     assert_eq!(last, 0, "held on the fight the dose lands");
     assert!(volleys.iter().all(|&(fired, _)| fired == 1), "{volleys:?}");
-    // The hold's 1.0 is counted down at the reload step, so it fires again
-    // on the first fight it isn't held.
-    assert_eq!(ships[0].armament.mounts()[0].reload, 0.0);
+    // The hold's 1.0 stays until the NPC's next reload step counts it
+    // down (@0x338f0), so it fires again on the first fight it isn't held.
+    assert_eq!(ships[0].armament.mounts()[0].reload, ion::HELD_RELOAD);
     ships[0].ion.charge = 0.0;
     tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(fired(&combat.take_events(), A), 1, "freed");

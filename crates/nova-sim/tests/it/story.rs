@@ -66,6 +66,7 @@ impl CombatCatalog for Home {
             flags3: 0,
             decay: 0,
             beam_length: 0,
+            beam_width: 0,
             falloff: 0,
             li_density: 0,
             burst_count: 0,
@@ -346,6 +347,7 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
         only: None,
         turrets_only: false,
         bays: false,
+        bays_after: false,
         point_defence: false,
         keep: None,
     });

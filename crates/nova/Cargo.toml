@@ -31,6 +31,12 @@ egui-wgpu = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
+# The macOS menu bar, built behind nova-appkit's safe API, and the open
+# panel and alerts startup shows without a terminal, from rfd.
+[target.'cfg(target_os = "macos")'.dependencies]
+nova-appkit.workspace = true
+rfd.workspace = true
+
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`
 # mock.
@@ -57,3 +63,12 @@ dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
 
 [lints]
 workspace = true
+
+# Nova.app's identity, which nova-bundle reads through `cargo metadata` into
+# its Info.plist (the version is this package's). The bundle file is
+# `Nova.app`, so it never replaces an `EV Nova.app` (the original game) in
+# /Applications, but the app menu and Finder name it `name`.
+[package.metadata.bundle]
+identifier = "io.github.edpaget.ev-nova"
+name = "EV Nova"
+category = "public.app-category.role-playing-games"

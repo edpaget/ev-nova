@@ -98,11 +98,12 @@ struct Pass {
 ///
 /// Every frame is drawn into an offscreen scene texture in
 /// [`SCENE_FORMAT`], then copied to the target by one blit. An OR batch
-/// ([`Blend::Or`]) reads what is beneath it, which a pass cannot do with
-/// its own attachment, so each one ends the pass: the rectangle the core
-/// says it covers ([`Frame::pixels_covered`]) is copied from the canvas to
-/// its backdrop, and a new pass draws the batch with a shader that ORs
-/// into the backdrop's texel.
+/// ([`Blend::Or`]) or an OR crossfade batch ([`Blend::OrCrossfade`])
+/// reads what is beneath it ([`Blend::reads_backdrop`]), which a pass
+/// cannot do with its own attachment, so each one ends the pass: the
+/// rectangle the core says it covers ([`Frame::pixels_covered`]) is copied
+/// from the canvas to its backdrop, and a new pass draws the batch with a
+/// shader that ORs into, or crossfades by OR with, the backdrop's texel.
 ///
 /// A world drawn into a texture of its own ([`WorldSpace::Texture`]) is
 /// drawn first, into a world canvas of the logical size; the scene is
@@ -115,6 +116,7 @@ pub struct WgpuRenderer {
     sprite_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     or_pipeline: wgpu::RenderPipeline,
+    crossfade_pipeline: wgpu::RenderPipeline,
     max_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
@@ -217,6 +219,7 @@ impl WgpuRenderer {
         let sprite_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Normal);
         let additive_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Additive);
         let or_pipeline = sprite_pipeline_with(&or_layout, "or_fs", Blend::Or);
+        let fade_pipeline = sprite_pipeline_with(&or_layout, "crossfade_fs", Blend::OrCrossfade);
         let max_pipeline = sprite_pipeline_with(&sprite_layout, "max_fs", Blend::Max);
         let solid_pipeline = pipeline(
             device,
@@ -248,6 +251,7 @@ impl WgpuRenderer {
             sprite_pipeline,
             additive_pipeline,
             or_pipeline,
+            crossfade_pipeline: fade_pipeline,
             max_pipeline,
             solid_pipeline,
             blit_pipeline,
@@ -531,10 +535,11 @@ impl WgpuRenderer {
                         Blend::Additive => &self.additive_pipeline,
                         Blend::Or => &self.or_pipeline,
                         Blend::Max => &self.max_pipeline,
+                        Blend::OrCrossfade => &self.crossfade_pipeline,
                     });
                     pass.set_bind_group(0, &self.globals_group, &[]);
                     pass.set_bind_group(1, &page.bind_group, &[]);
-                    if *blend == Blend::Or {
+                    if blend.reads_backdrop() {
                         pass.set_bind_group(2, &target.canvas.backdrop_group, &[]);
                     }
                     pass.set_vertex_buffer(0, instance_buffer.slice(..));
@@ -926,11 +931,8 @@ impl<'a> Layout<'a> {
     /// no pixel in its layer.
     fn push(&mut self, frame: &'a Frame, index: usize, passes: &mut Vec<Pass>) {
         let batch = &frame.batches[index];
-        if let Batch::Sprites {
-            blend: Blend::Or,
-            quads,
-            ..
-        } = batch
+        if let Batch::Sprites { blend, quads, .. } = batch
+            && blend.reads_backdrop()
         {
             let Some(rect) = frame.pixels_covered(frame.layer(index), quads) else {
                 return;
@@ -1057,7 +1059,7 @@ fn set_viewport(pass: &mut wgpu::RenderPass<'_>, rect: PixelRect) {
 fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
     match blend {
         Blend::Normal => Some(wgpu::BlendState::ALPHA_BLENDING),
-        Blend::Or => None,
+        Blend::Or | Blend::OrCrossfade => None,
         Blend::Additive => Some(wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -1327,6 +1329,41 @@ mod tests {
             })
         );
         assert_eq!(layout.draws.len(), 6);
+    }
+
+    #[test]
+    fn lay_out_breaks_the_pass_at_each_crossfade_batch_as_at_an_or_batch() {
+        let frame = frame_of(vec![
+            sprites(Blend::Normal, vec![quad(0.0)]),
+            sprites(Blend::OrCrossfade, vec![quad(1.0), quad(3.0)]),
+            sprites(Blend::Normal, vec![quad(6.0)]),
+        ]);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(DrawLayer::Overlay, quads);
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            layout.passes,
+            [
+                Pass {
+                    backdrop: None,
+                    draws: 0..1
+                },
+                Pass {
+                    backdrop: covered(&[quad(1.0), quad(3.0)]),
+                    draws: 1..3
+                },
+            ]
+        );
+        assert!(covered(&[quad(1.0), quad(3.0)]).is_some());
+        assert_eq!(
+            layout.draws[1],
+            Draw::Sprites {
+                page: PageId(0),
+                blend: Blend::OrCrossfade,
+                instances: 1..3,
+            }
+        );
     }
 
     #[test]
@@ -1709,6 +1746,11 @@ mod tests {
             Some(wgpu::BlendState::ALPHA_BLENDING)
         );
         assert_eq!(blend_state(Blend::Or), None);
+        assert_eq!(
+            blend_state(Blend::OrCrossfade),
+            None,
+            "its shader combines it with the backdrop"
+        );
         assert_eq!(
             blend_state(Blend::Additive),
             Some(wgpu::BlendState {

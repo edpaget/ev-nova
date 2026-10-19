@@ -33,10 +33,9 @@
 //! `_BlitPixieTranslucentCopy` @0xc1110) draws additive level n as
 //! `(src × n) >> 5 | dst`, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`](crate::draw::lights_tint)`(n)`, and translucency t as
-//! `(src × (32 − t)) >> 5 | (dst × t) >> 5`, a crossfade by OR. The view
-//! draws the crossfade as a normal blend at (32 − t)/32, as the cloak's
-//! translucency is drawn: rdm:phase/weapons-fidelity/phase-35-left-out-of-phase-24
-//! has the renderer blend. No stock weapon takes the plain fade.
+//! `(src × (32 − t)) >> 5 | (dst × t) >> 5`, a crossfade by OR, which the
+//! view draws as [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade)
+//! at alpha (32 − t)/32. No stock weapon takes the plain fade.
 //!
 //! Left out: the 8-bit depth, where a translucent shot takes the plain
 //! path (@0x35a21, @0x35ae5, @0x35bd3): the engine draws at 16-bit only.

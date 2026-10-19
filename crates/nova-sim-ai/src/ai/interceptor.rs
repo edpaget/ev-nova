@@ -693,6 +693,7 @@ mod tests {
         let sites = sites();
         let mut hunter = police();
         hunter.goal = Goal::Attack(P);
+        hunter.target = Some(P);
         hunter.armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
                 speed: 1000,
@@ -718,14 +719,28 @@ mod tests {
             Trigger::default()
         );
         let hit = Strike {
-            damage: 3.0,
+            nominal: crate::combat::Nominal {
+                mass: 3.0,
+                energy: 0.0,
+            },
             ..crate::combat::fixture::strike(n(1), P)
+        };
+        // Hit by the player it attacks, it keeps at it with no reaction
+        // (`_DamageShip`'s focus test, @0x3bbf3-0x3bcac).
+        assert_eq!(
+            Interceptor::default().react(&npcs[0], &hit, &around),
+            crate::ai::Reaction::default()
+        );
+        let bible = Surroundings {
+            hit_focus: RuleSource::Bible,
+            ..around
         };
         assert_eq!(
             Interceptor::default()
-                .react(&npcs[0], &hit, &around)
+                .react(&npcs[0], &hit, &bible)
                 .provoked,
-            3.0
+            3.0,
+            "by the other reading"
         );
     }
 

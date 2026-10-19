@@ -149,7 +149,7 @@ fn a_point_defence_beam_at_a_missile_glows_never_on_its_ticks() {
 }
 
 #[test]
-fn an_npcs_bay_launch_glows_never_and_the_players_glows() {
+fn a_bay_launch_glows_never_in_the_fight() {
     let bay = glowing(carrier_bay());
     let mut combat = Combat::default();
     let mut ships = carrier();
@@ -158,19 +158,31 @@ fn an_npcs_bay_launch_glows_never_and_the_players_glows() {
     assert_eq!(combat.take_sorties().len(), 1, "launched");
     assert_eq!(glows(&combat.take_events()), [], "_AILaunchFighter");
 
-    // `_FirePlayerWeapon` reaches the glow from `_LaunchFighter`
-    // (@0x62c61-0x62c6e).
+    // `_FirePlayerWeapon` reaches the glow from a bay only once
+    // `_LaunchFighter` put the fighter in the system (@0x62c61-0x62c6e),
+    // which the session decides: it lights the glow (`Combat::light_glow`).
     let mut combat = Combat::default();
     let [carrier, other] = carrier();
     let mut player = Ship {
         id: ShipRef::Player,
         fleet: ShipRef::Player,
+        trigger: Trigger {
+            secondary: Some(WeaponId(149)),
+            ..Trigger::default()
+        },
         ..carrier
     };
     player.armament = Armament::new([(WeaponSpec::new(&bay), 1)]);
     let mut ships = [player, other];
     tick(&mut combat, &mut ships, &NovaDisable);
     assert_eq!(combat.take_sorties().len(), 1, "launched");
+    assert_eq!(glows(&combat.take_events()), [], "the session's to light");
+}
+
+#[test]
+fn lighting_a_glow_raises_it_that_frame() {
+    let mut combat = Combat::default();
+    combat.light_glow(ShipRef::Player);
     assert_eq!(glows(&combat.take_events()), [(ShipRef::Player, false)]);
 }
 

@@ -32,17 +32,22 @@
 //! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
 //! | Entry test | @0x3bb20-0x3bb74 | a fighter-class attacker (ship class +0xe, [`EscortClass::Fighter`]), the player's ship included, on a ship that isn't one, has a target and attacks (`_IsShipAttacking` @0x82f6a, goal 4: [`Goal::attacking`]), is not answered |
 //!
-//! Left out, for want of what they read (see
-//! rdm:phase/weapons-fidelity/phase-37-left-out-of-phase-26):
+//! Left out, for want of what they read (weapons-fidelity phase 37
+//! records each; the plunder docking of the table above, once among
+//! them, is built):
 //!
 //! - **Defence ships** (+0x8c, the stellar a ship defends): a self-hit by
 //!   one (@0x3b408-0x3b4c8; either way a ship hitting itself never
-//!   answers), fleetmates (@0x3b68e-0x3b6ec).
+//!   answers), fleetmates (@0x3b68e-0x3b6ec). Noted on rdm task
+//!   planet-domination, with the reaction block's defence-ship branches.
 //! - **The jump-out stage** (+0x50 above 0): the entry gate's test
 //!   (@0x3b46a), arriving (@0x3b97e, dead code after the gate) and a
-//!   victim whose leader jumps out (@0x3bab7-0x3bae4).
+//!   victim whose leader jumps out (@0x3bab7-0x3bae4). They read the
+//!   jump-out stage of roadmap ship-handling-fidelity's phase 8, and are
+//!   rdm phase weapons-fidelity-cross-roadmap/phase-1-damage-ship-jump-out-stage.
 //! - **The nag ship**'s damage rewrite (@0x3a8bb-0x3a954) and its test in
-//!   `_IsShipMyEnemy` (@0x819a4).
+//!   `_IsShipMyEnemy` (@0x819a4): the engine has no nag ship. Recorded
+//!   only.
 //!
 //! Each draw is made only on its own path; the 1-in-4 answer is matched,
 //! not the order of the draws. Nothing in the flag, the entry test or the

@@ -150,7 +150,12 @@ fn first_link(data: &GameData, system: SystemId) -> SystemId {
 fn pass(session: &mut Session, controls: Controls) {
     session.tick(controls);
     if session.double_time() {
-        session.tick_again(controls, Rules::default(), &mut NeverFires);
+        session.tick_again(
+            controls,
+            &nova_sim::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 }
 

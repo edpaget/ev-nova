@@ -89,7 +89,7 @@ fn opening_with(store: &MemoryPilots, data: Rc<GameData>, rules: Rulebook) -> Ap
 }
 
 /// The router with dialogs on [`intro_data`], over `store`.
-fn intro_menu(store: &MemoryPilots) -> AppScreen {
+pub(super) fn intro_menu(store: &MemoryPilots) -> AppScreen {
     opening_with(store, intro_data(), Rulebook::default())
 }
 

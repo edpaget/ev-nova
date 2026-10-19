@@ -22,11 +22,11 @@
 //! - [`FateRow::saves`] (whether the pilot may be saved, and so whether
 //!   the player is dying for phase 7's strict-play delete): phase 6.
 //!
-//! Condition changes stay where they are, in the fight's
-//! `update_condition`; a fate is only read off them, so it adds no
-//! second transition path. [`PlayerFate::BreakingUp`]'s timer is the
-//! original's countdown there (phase 2): 3 x the `DeathDelay` for the
-//! player, set on the breakup's first tick. After the explosion tick the
+//! Condition changes stay where they are, in the fight's settling and
+//! display step; a fate is only read off them, so it adds no second
+//! transition path. [`PlayerFate::BreakingUp`]'s timer is the original's
+//! countdown there (phase 2): 3 x the `DeathDelay` for the player, set at
+//! the player's display step, 0 while it is unset. After the explosion tick the
 //! session keeps how far the game's end has got, an [`Ending`], which the
 //! fate of a destroyed player reads.
 

@@ -2,6 +2,7 @@
 //!
 //! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
 //!   hyperspace jumps play their white fades, whether `dësc` movies play,
+//!   whether shots trail and smoke, whether ships show their weapon glow,
 //!   whether the game runs fullscreen, and how ([`FullscreenSetting`]),
 //!   and the Scaling chosen ([`ScalingSetting`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
@@ -13,11 +14,20 @@
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
-//! `show_map_borders`, `fullscreen`, `fullscreen_kind` and
-//! `frame_upscaler`; files saved before the last six existed load
-//! unchanged, with the hyperspace effects, the movies and the map's
-//! borders on, the game windowed and, when fullscreen, borderless, and
-//! the world drawn natively.
+//! `smoke_trails`, `weapon_effects`, `show_map_borders`, `fullscreen`,
+//! `fullscreen_kind`, `frame_upscaler` and `nova_files`; files saved
+//! before the last nine existed load unchanged, with the hyperspace
+//! effects, the movies, the smoke trails, the weapon effects and the map's
+//! borders on, the game windowed and, when fullscreen, borderless, the
+//! world drawn natively, and no `Nova Files` remembered.
+//!
+//! `smoke_trails` is true when trails are drawn, the Preferences box's
+//! sense. The original's own `SmokeTrails` key is inverted, an "off"
+//! switch its `Keys.nib` box negates; both default to trails drawn.
+//!
+//! `nova_files` is the `Nova Files` directory the player picked when the
+//! game found none (`crate::startup`), a string, absent (or `null`) when
+//! none is remembered. A path whose name is not UTF-8 is never saved.
 //!
 //! `frame_upscaler` holds the player's Scaling, under the key phase 6 named
 //! when it held only the per-frame upscaler: `"native"`,
@@ -39,6 +49,8 @@
 //! @0xced57-0xced93). The Preferences dialog never carries it, as
 //! `_SavePrefs` never writes it: the map's close saves it
 //! (`nova_view::flight::FlightView::take_map_borders_save`).
+
+use std::path::PathBuf;
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
 use nova_view::{FullscreenKind, Prefs, Scaling, VideoMode};
@@ -142,18 +154,27 @@ pub struct GameSettings {
     /// Whether a `dësc`'s movie plays: the original's QuickTime Movies
     /// preference.
     pub quicktime_movies: bool,
+    /// Whether shots leave their particle trails and smoke: the original's
+    /// Smoke Trails preference, as its box shows it.
+    pub smoke_trails: bool,
+    /// Whether ships show their weapon glow: the original's Weapon Effects
+    /// preference.
+    pub weapon_effects: bool,
     /// Whether the galaxy map shades government borders: the original's
     /// `ShowMapBorders`.
     pub map_borders: bool,
     /// The Scaling the player chose, as saved, under the key phase 6
     /// named for the frame upscaler it then held.
     pub frame_upscaler: ScalingSetting,
+    /// The `Nova Files` directory the player picked when the game found
+    /// none, tried before the usual places on the next launch.
+    pub nova_files: Option<PathBuf>,
 }
 
 impl Default for GameSettings {
     /// The default sound settings, with the hyperspace effects, the
-    /// movies and the map's borders on, in a window, the world drawn
-    /// natively.
+    /// movies, the smoke trails, the weapon effects and the map's borders
+    /// on, in a window, the world drawn natively.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
@@ -161,8 +182,11 @@ impl Default for GameSettings {
             fullscreen: false,
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
+            smoke_trails: true,
+            weapon_effects: true,
             map_borders: true,
             frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         }
     }
 }
@@ -177,6 +201,8 @@ impl GameSettings {
             sound: self.audio.prefs(),
             hyperspace_effects: self.hyperspace_effects,
             quicktime_movies: self.quicktime_movies,
+            smoke_trails: self.smoke_trails,
+            weapon_effects: self.weapon_effects,
             fullscreen: self.fullscreen_kind.kind(),
             scaling: self.frame_upscaler.known().unwrap_or_default(),
         }
@@ -185,7 +211,7 @@ impl GameSettings {
     /// The settings `prefs` choose, from these, keeping a volume already
     /// at its chosen level as [`AudioSettings::with_prefs`] does, and the
     /// settings the prefs don't set: the map's borders, fullscreen, both
-    /// whether and how, and the Scaling. A fullscreen kind or a scaling
+    /// whether and how, the Scaling and the remembered `Nova Files`. A fullscreen kind or a scaling
     /// the dialog chooses is the app's to apply and save, as it applies
     /// it, so a change of another preference never overwrites a stored
     /// scaling this device could not use.
@@ -195,6 +221,8 @@ impl GameSettings {
             audio: self.audio.with_prefs(prefs.sound),
             hyperspace_effects: prefs.hyperspace_effects,
             quicktime_movies: prefs.quicktime_movies,
+            smoke_trails: prefs.smoke_trails,
+            weapon_effects: prefs.weapon_effects,
             ..self
         }
     }
@@ -216,8 +244,12 @@ struct Saved {
     fullscreen: bool,
     fullscreen_kind: SavedKind,
     quicktime_movies: bool,
+    smoke_trails: bool,
+    weapon_effects: bool,
     show_map_borders: bool,
     frame_upscaler: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nova_files: Option<String>,
     #[serde(flatten)]
     others: Others,
 }
@@ -292,8 +324,15 @@ impl From<GameSettings> for Saved {
             fullscreen: settings.fullscreen,
             fullscreen_kind: settings.fullscreen_kind.into(),
             quicktime_movies: settings.quicktime_movies,
+            smoke_trails: settings.smoke_trails,
+            weapon_effects: settings.weapon_effects,
             show_map_borders: settings.map_borders,
             frame_upscaler: settings.frame_upscaler.0,
+            // A name that isn't UTF-8 can't be a JSON string: it is left
+            // out, and the next launch looks again.
+            nova_files: settings
+                .nova_files
+                .and_then(|dir| dir.into_os_string().into_string().ok()),
             others: Others::new(),
         }
     }
@@ -316,8 +355,11 @@ impl From<Saved> for GameSettings {
             fullscreen: saved.fullscreen,
             fullscreen_kind: saved.fullscreen_kind.into(),
             quicktime_movies: saved.quicktime_movies,
+            smoke_trails: saved.smoke_trails,
+            weapon_effects: saved.weapon_effects,
             map_borders: saved.show_map_borders,
             frame_upscaler: ScalingSetting(saved.frame_upscaler),
+            nova_files: saved.nova_files.map(PathBuf::from),
         }
     }
 }
@@ -465,7 +507,10 @@ mod tests {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
             frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         }
     }
 
@@ -484,7 +529,10 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
                 frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             }
         );
     }
@@ -553,7 +601,10 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
                 frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -577,7 +628,10 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
                 frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             }
         );
     }
@@ -783,6 +837,90 @@ mod tests {
     }
 
     #[test]
+    fn smoke_trails_and_weapon_effects_start_on_and_a_file_without_them_has_them_on() {
+        let defaults = GameSettings::default();
+        assert!(defaults.smoke_trails && defaults.weapon_effects);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        assert!(
+            keeper.settings().smoke_trails,
+            "SmokeTrails' default, NO, negated"
+        );
+        assert!(
+            keeper.settings().weapon_effects,
+            "WeaponEffects' default, YES"
+        );
+    }
+
+    #[test]
+    fn smoke_trails_and_weapon_effects_off_are_saved_and_read_back() {
+        for (smoke_trails, weapon_effects) in [(false, true), (true, false), (false, false)] {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            let settings = GameSettings {
+                smoke_trails,
+                weapon_effects,
+                ..GameSettings::default()
+            };
+            keeper.change(settings.clone()).expect("saves");
+            assert_eq!(json(&store)["smoke_trails"], smoke_trails);
+            assert_eq!(json(&store)["weapon_effects"], weapon_effects);
+            let (restarted, warning) = SettingsKeeper::open(store);
+            assert_eq!((restarted.settings(), warning), (settings, None));
+        }
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(
+            r#"{"smoke_trails": false, "weapon_effects": false}"#,
+        ));
+        assert_eq!(warning, None);
+        assert!(!keeper.settings().smoke_trails && !keeper.settings().weapon_effects);
+    }
+
+    #[test]
+    fn the_prefs_carry_smoke_trails_and_weapon_effects_both_ways() {
+        let off = GameSettings {
+            smoke_trails: false,
+            weapon_effects: false,
+            ..GameSettings::default()
+        };
+        assert!(!off.prefs().smoke_trails && !off.prefs().weapon_effects);
+        for (smoke_trails, weapon_effects) in [(false, true), (true, false)] {
+            let chosen = off.clone().with_prefs(Prefs {
+                smoke_trails,
+                weapon_effects,
+                ..Prefs::default()
+            });
+            assert_eq!(
+                (chosen.smoke_trails, chosen.weapon_effects),
+                (smoke_trails, weapon_effects)
+            );
+        }
+    }
+
+    #[test]
+    fn saving_an_audio_change_keeps_smoke_trails_and_weapon_effects_and_back() {
+        let store = MemorySettings::holding(r#"{"smoke_trails": false, "weapon_effects": false}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                audio: quiet(),
+                ..keeper.settings()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["smoke_trails"], false);
+        assert_eq!(json(&store)["weapon_effects"], false);
+        assert_eq!(json(&store)["sound"], false);
+        keeper
+            .change(GameSettings {
+                smoke_trails: true,
+                ..keeper.settings()
+            })
+            .expect("saves");
+        assert_eq!(json(&store)["sound"], false, "the audio kept");
+        assert_eq!(json(&store)["smoke_trails"], true);
+    }
+
+    #[test]
     fn the_map_borders_start_on_and_a_file_without_them_has_them_on() {
         assert!(GameSettings::default().map_borders);
         let (keeper, warning) =
@@ -821,6 +959,98 @@ mod tests {
         });
         assert!(!changed.map_borders, "the Preferences dialog never has it");
         assert!(!changed.hyperspace_effects);
+    }
+
+    fn remembering(dir: &str) -> GameSettings {
+        GameSettings {
+            nova_files: Some(PathBuf::from(dir)),
+            ..GameSettings::default()
+        }
+    }
+
+    #[test]
+    fn no_nova_files_are_remembered_at_first_or_in_a_file_without_them() {
+        assert_eq!(GameSettings::default().nova_files, None);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"sound": false}"#));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().nova_files, None);
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(
+            r#"{"sound": false, "nova_files": null}"#,
+        ));
+        assert_eq!(warning, None);
+        assert_eq!(keeper.settings().nova_files, None);
+    }
+
+    #[test]
+    fn remembered_nova_files_are_saved_as_a_string_and_read_back() {
+        let store = MemorySettings::holding(r#"{"rules": "bible", "music": false}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                nova_files: Some(PathBuf::from("/Games/EV Nova/Nova Files")),
+                ..keeper.settings()
+            })
+            .expect("saves");
+        let saved = json(&store);
+        assert_eq!(saved["nova_files"], "/Games/EV Nova/Nova Files");
+        assert_eq!(saved["rules"], "bible", "the other keys survive");
+        assert_eq!(saved["music"], false);
+        let (restarted, _) = SettingsKeeper::open(store);
+        assert_eq!(
+            restarted.settings().nova_files,
+            Some(PathBuf::from("/Games/EV Nova/Nova Files"))
+        );
+    }
+
+    #[test]
+    fn forgotten_nova_files_leave_the_key_out() {
+        let store = MemorySettings::holding(r#"{"nova_files": "/gone", "rules": "bible"}"#);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        assert_eq!(keeper.settings().nova_files, Some(PathBuf::from("/gone")));
+        keeper
+            .change(GameSettings {
+                nova_files: None,
+                ..keeper.settings()
+            })
+            .expect("saves");
+        let saved = json(&store);
+        assert_eq!(saved.get("nova_files"), None);
+        assert_eq!(saved["rules"], "bible");
+    }
+
+    #[test]
+    fn remembered_nova_files_of_the_wrong_type_are_not_usable() {
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"nova_files": 3}"#));
+        assert!(warning.is_some());
+        assert_eq!(keeper.settings().nova_files, None);
+    }
+
+    #[test]
+    fn the_prefs_keep_the_remembered_nova_files() {
+        let changed = remembering("/Nova Files").with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        assert_eq!(changed.nova_files, Some(PathBuf::from("/Nova Files")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_utf8_is_never_saved() {
+        use std::os::unix::ffi::OsStrExt;
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let dir = PathBuf::from(std::ffi::OsStr::from_bytes(b"/Nova \xff Files"));
+        keeper
+            .change(GameSettings {
+                nova_files: Some(dir),
+                map_borders: false,
+                ..GameSettings::default()
+            })
+            .expect("saves without panicking");
+        assert_eq!(json(&store).get("nova_files"), None);
     }
 
     fn upscaler_named(name: &str) -> ScalingSetting {
@@ -1001,6 +1231,8 @@ mod tests {
                 "fullscreen": false,
                 "fullscreen_kind": "borderless",
                 "quicktime_movies": true,
+                "smoke_trails": true,
+                "weapon_effects": true,
                 "show_map_borders": true,
                 "frame_upscaler": "native",
             })
@@ -1063,7 +1295,10 @@ mod tests {
                 fullscreen_kind: FullscreenSetting::Borderless,
                 quicktime_movies: true,
                 map_borders: true,
+                smoke_trails: true,
+                weapon_effects: true,
                 frame_upscaler: ScalingSetting::default(),
+                nova_files: None,
             })
             .expect("saves");
         keeper
@@ -1113,6 +1348,8 @@ mod tests {
                 sound: quiet().prefs(),
                 hyperspace_effects: false,
                 quicktime_movies: true,
+                smoke_trails: true,
+                weapon_effects: true,
                 fullscreen: FullscreenKind::Borderless,
                 scaling: Scaling::Native,
             }
@@ -1184,7 +1421,10 @@ mod tests {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
             frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         };
         assert_eq!((settings, warning), (expected.clone(), None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");

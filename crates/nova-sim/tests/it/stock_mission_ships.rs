@@ -16,7 +16,8 @@ use nova_data::GameData;
 use nova_sim::catalog::{DudeId, ShipId, TrafficCatalog};
 use nova_sim::mission::ShipSystem;
 use nova_sim::{
-    MissionId, NeverFires, NovaAi, Pilot, PilotCatalog, Session, SetExpr, SystemId, is_landable,
+    MissionId, NeverFires, NovaAi, NpcId, Pilot, PilotCatalog, Session, SetExpr, SystemId,
+    is_landable,
 };
 
 /// `mïsn` 183, "Capture Vell-os": six ships of `düde` 130 (the Lone Big
@@ -463,9 +464,8 @@ const TAKE_SAMPLE: i16 = 155;
 const WRAITH: ShipId = ShipId(185);
 
 /// A new pilot that started mïsn 155 by `S`, in flight in its ships'
-/// system, `rules` read, with the Wraith there disabled under the player,
-/// targeted: the session, and the mission's slot.
-fn over_the_wraith(data: &GameData, rules: nova_sim::Rulebook) -> (Session, u8) {
+/// system, `rules` read: the session, the mission's slot and the Wraith.
+fn in_the_wraiths_system(data: &GameData, rules: nova_sim::Rulebook) -> (Session, u8, NpcId) {
     let mut session = docked_new_pilot(data);
     session.run_set(
         &SetExpr::parse(&format!("S{TAKE_SAMPLE}")).expect("parses"),
@@ -488,7 +488,7 @@ fn over_the_wraith(data: &GameData, rules: nova_sim::Rulebook) -> (Session, u8) 
     else {
         panic!("mïsn 155's ships come in one system");
     };
-    let mut session = in_flight(data, session.pilot(), system).with_rules(rules);
+    let session = in_flight(data, session.pilot(), system).with_rules(rules);
     let wraith = session
         .npcs()
         .iter()
@@ -496,9 +496,42 @@ fn over_the_wraith(data: &GameData, rules: nova_sim::Rulebook) -> (Session, u8) 
         .map(|npc| (npc.id, npc.ship))
         .expect("its special ship is in the system");
     assert_eq!(wraith.1, WRAITH, "the Wraith (Adult)");
-    nova_sim::fixture::disable(&mut session, wraith.0);
-    nova_sim::fixture::put_player_over(&mut session, wraith.0);
+    (session, slot, wraith.0)
+}
+
+/// [`in_the_wraiths_system`], with the Wraith disabled under the player,
+/// targeted: the session, and the mission's slot.
+fn over_the_wraith(data: &GameData, rules: nova_sim::Rulebook) -> (Session, u8) {
+    let (mut session, slot, wraith) = in_the_wraiths_system(data, rules);
+    // The Wraith comes in disabled already, its government (159) Derelict
+    // (`_IsDisabled` @0x2cf1-0x2d14); this only empties its shield and
+    // armour.
+    nova_sim::fixture::disable(&mut session, wraith);
+    nova_sim::fixture::put_player_over(&mut session, wraith);
     (session, slot)
+}
+
+/// mïsn 155's Wraith (`düde` 186, government 159 of `Flags` 0x0800) comes
+/// in at full armour and disabled, as `_IsDisabled` holds a Derelict
+/// government's ship whatever its armour (@0x2cf1-0x2d14).
+#[test]
+#[allow(clippy::float_cmp)]
+fn mission_155s_wraith_comes_in_disabled_at_full_armour() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let (session, _, wraith) = in_the_wraiths_system(&data, nova_sim::Rulebook::default());
+    let npc = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.id == wraith)
+        .expect("there");
+    assert_eq!(
+        npc.reserves.armor.now, npc.reserves.armor.max,
+        "full armour"
+    );
+    assert_eq!(npc.condition, nova_sim::Condition::Disabled);
 }
 
 /// The original tests a ship's `Crew` only when it has no mission mark

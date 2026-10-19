@@ -273,6 +273,7 @@ mod tests {
         session.tick(Controls::default());
         session.tick_again(
             Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,
         );
@@ -701,7 +702,12 @@ mod tests {
             if npc_fired(&mut session) {
                 fired.push((tick, 1));
             }
-            session.tick_again(Controls::default(), rules(), &mut crate::chance::NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                rules(),
+                &mut crate::chance::NeverFires,
+            );
             if npc_fired(&mut session) {
                 fired.push((tick, 2));
             }
@@ -736,6 +742,7 @@ mod tests {
         // hold reads the 0.5, so the gun is held.
         session.tick_again(
             Controls::default(),
+            &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,
         );
@@ -785,12 +792,23 @@ mod tests {
 
     #[test]
     fn an_npcs_seeker_0x0020_gun_is_held_from_a_factor_of_1_of_its_class_ionize_max() {
-        // Its hold comes before its fire, so even its first shot is held,
-        // and the reload step counts the hold's 1.0 down.
-        assert_eq!(npc_fired_ticks(100.0), (vec![], 0.0), "factor 1: held");
-        assert_eq!(npc_fired_ticks(250.0), (vec![], 0.0), "factor 2.5: held");
-        assert_eq!(npc_fired_ticks(99.0), (vec![1, 3], 1.0), "0.99: fires");
-        assert_eq!(npc_fired_ticks(0.0), (vec![1, 3], 1.0), "uncharged");
+        // Its hold comes with its reload step, before its fire, so even its
+        // first shot is held, and the hold's 1.0 stays until its next step
+        // counts it down (@0x338f0).
+        assert_eq!(
+            npc_fired_ticks(100.0),
+            (vec![], crate::combat::ion::HELD_RELOAD),
+            "factor 1: held"
+        );
+        assert_eq!(
+            npc_fired_ticks(250.0),
+            (vec![], crate::combat::ion::HELD_RELOAD),
+            "factor 2.5: held"
+        );
+        // A gun that fires counts its reload down before it fires
+        // (@0x33896 before @0x34ffd), so it ends the tick at its `Reload`.
+        assert_eq!(npc_fired_ticks(99.0), (vec![1, 3], 2.0), "0.99: fires");
+        assert_eq!(npc_fired_ticks(0.0), (vec![1, 3], 2.0), "uncharged");
     }
 
     // The dissipator.

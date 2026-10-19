@@ -126,7 +126,14 @@ impl AppScreen {
                     Rc::clone(&dialogs.metrics),
                 )
             })
-            .map(|dialog| dialog.with_scaling(&self.scaling));
+            .map(|dialog| dialog.with_scaling(&self.scaling))
+            .map(|dialog| {
+                if self.weapon_effects_wait() {
+                    dialog.with_launch_weapon_effects(self.launch_weapon_effects)
+                } else {
+                    dialog
+                }
+            });
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -199,8 +206,11 @@ impl AppScreen {
             self.prefs = prefs;
             self.prefs_change = Some(prefs);
             self.movies.set_on(prefs.quicktime_movies);
+            let weapon_effects = self.flight_weapon_effects();
             for flight in self.flights_mut() {
                 flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                flight.set_smoke_trails(prefs.smoke_trails);
+                flight.set_weapon_effects(weapon_effects);
                 flight.set_sound_prefs(prefs.sound);
             }
         }
