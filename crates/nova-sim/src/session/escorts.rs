@@ -1424,8 +1424,8 @@ mod tests {
     }
 
     /// The carried direction, not just the fade, comes through: an escort
-    /// fading in arrives still fading in, which its first think's uncloak
-    /// leaves alone (`_DoShipUncloak` acts only on a cloaked ship).
+    /// fading in when the player jumps arrives with the same fade and
+    /// direction.
     #[test]
     fn an_escort_fading_in_when_the_player_jumps_arrives_fading_in() {
         let catalog = fleeted();
@@ -1437,6 +1437,31 @@ mod tests {
         let before = cloak_first_escort(&mut session, fading);
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         assert_cloak_kept(&session, before, fading);
+    }
+
+    /// An escort's first think in the new system works from the cloak it
+    /// carried, and nothing between its placing and that think resets it:
+    /// the fixture warship has no cloaking device, so its think
+    /// (`_AIHandleCloaking` @0x833e1) uncloaks it, and its fade then steps
+    /// once out from full, leaving it still cloaked.
+    #[test]
+    fn a_cloaked_escort_uncloaks_on_its_first_think_in_the_new_system() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        cloak_first_escort(&mut session, FULLY_CLOAKED);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        let first = session.fleet[0].expect("placed");
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        assert_eq!(session.fleet[0], Some(first), "the same escort");
+        let cloak = session.npc(first).expect("there").cloak;
+        assert_eq!(
+            cloak,
+            Cloak {
+                fade: crate::cloak::FADE_FULL - crate::cloak::FADE_RATE,
+                direction: -1,
+            }
+        );
+        assert!(cloak.is_cloaked());
     }
 
     #[test]
