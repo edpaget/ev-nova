@@ -747,4 +747,31 @@ mod tests {
             "its velocity follows its speed"
         );
     }
+
+    #[test]
+    fn an_immobile_ship_launched_after_the_half_began_stays_put() {
+        // `_HandleShip` zeroes an immobile ship's velocity and skips its
+        // move (@0x34209-0x3423b).
+        let sites = sites();
+        let world = World::new(&sites);
+        let (mut traffic, pass, id) = launched_mid_half(&world, false);
+        let fighter = traffic
+            .npcs
+            .iter_mut()
+            .find(|npc| npc.id == id)
+            .expect("here");
+        fighter.immobile = true;
+        traffic.coast_npc(&pass, id, &world);
+        let coasted = traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("here");
+        let still = ShipState {
+            position: Vec2::new(100.0, 100.0),
+            velocity: Vec2::ZERO,
+            heading: 45.0,
+        };
+        assert_eq!(coasted.state, still, "unmoved, its velocity gone");
+    }
 }
