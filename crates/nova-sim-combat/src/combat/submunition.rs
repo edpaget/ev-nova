@@ -48,10 +48,10 @@
 //! - Each takes its sprite layer by its own guidance, as `_SpawnShot`
 //!   places it ([`ShotLayer::spawned`], @0x3f328): a turret (4) over the
 //!   ships when its parent's source is a ship whose class has `Flags3`
-//!   0x0040. The original reads whatever ship the source slot holds as it
-//!   spawns; the fight reads the firer's class while it is in the fight,
-//!   and the bit its parent carried ([`Shot::turret_over`]) once it is
-//!   gone.
+//!   0x0040, read of whatever ship its parent's source slot
+//!   ([`Shot::firer_slot`]) holds as it spawns, or that slot's last ship
+//!   (see the fight's `source_slot` module): the caller gives the bit
+//!   (`turret_over`).
 //! - The release plays the sub-munition's `Sound` once at the parent, at
 //!   [`SUBMUNITION_PRIORITY`](super::SUBMUNITION_PRIORITY) (see
 //!   [`Combat`](super::Combat)).
@@ -95,6 +95,7 @@ pub fn release(
     let unaimed = Shot {
         generation: parent.generation + 1,
         source: parent.source,
+        firer_slot: parent.firer_slot,
         ..Shot::launch(*sub, parent.firer, parent.fleet, &launcher, parent.heading)
     };
     let (target, heading) = if parent.weapon.guidance == Guidance::PointDefence {

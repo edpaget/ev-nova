@@ -363,6 +363,7 @@ impl Session {
             drawn_heading: player_terms.drawn_heading,
             docked: false,
             sprite: player_terms.sprite,
+            slot: crate::ship_layer::Slot::Player,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));

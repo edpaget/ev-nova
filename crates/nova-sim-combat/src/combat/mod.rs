@@ -370,6 +370,7 @@ pub mod shockwave;
 pub mod shot_layer;
 pub mod shot_slots;
 pub mod sides;
+mod source_slot;
 pub mod stellar;
 pub mod submunition;
 pub mod weapon;
@@ -412,6 +413,7 @@ use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
+use crate::ship_layer::Slot;
 use crate::speed_cap::SpeedCap;
 
 /// An NPC's number in its system, unique while the player stays there:
@@ -934,6 +936,10 @@ pub struct Fighter<'a> {
     /// `_SWCollideSpriteLayer` @0xacba3), though a proximity fuse still
     /// can.
     pub sprite: Option<SpriteRank>,
+    /// Its ship slot: the player's, or its berth in the ship table. A
+    /// sub-munition reads whatever ship holds its parent's source slot as
+    /// it spawns ([`Shot::firer_slot`]).
+    pub slot: Slot,
 }
 
 /// The rules a fight is fought by: when a ship is disabled, which
@@ -1177,6 +1183,13 @@ pub struct Combat {
     /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
     /// by the engine, it does.
     reused_roll: RuleSource,
+    /// Each ship slot's record of the last ship in it, which a
+    /// sub-munition reads as it spawns ([`source_slot`]).
+    slot_ships: BTreeMap<Slot, source_slot::SlotShip>,
+    /// Whether a sub-munition reads its source slot's ship
+    /// ([`RuleKey::SubmunitionSourceSlot`](crate::RuleKey::SubmunitionSourceSlot)):
+    /// by the engine, it does.
+    source_slot: RuleSource,
     /// The shots point defence ended at life 0, their sprites hidden,
     /// kept for the next proximity pass's stellar and asteroid branches
     /// (see [`hidden`]).
@@ -1912,6 +1925,7 @@ impl Combat {
                 // Every ship's, the player's (slot 0) too (@0x3f0a9-0x3f143).
                 layer: ShotLayer::spawned(weapon.guidance, true, muzzle.turret_over),
                 turret_over: muzzle.turret_over,
+                firer_slot: muzzle.firer_slot,
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
             shot.disable_only |= plunder::shot_disables(plunderer, aimed_at, targets);
@@ -2193,7 +2207,9 @@ impl Combat {
         let (state, hull) = (fighter.state, fighter.hull);
         let sides = (fighter.side(), fighter.ties(), Plunderer::of(fighter));
         let drawn = fighter.drawn_heading;
+        let firing_from = fighter.slot;
         let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+        muzzle.firer_slot = Some(firing_from);
         let mut destructs = false;
         for (copy, launch) in launches.iter().enumerate() {
             let aimed_at = aimed_at(launch, fighter.target);
@@ -2301,7 +2317,9 @@ impl Combat {
                     _ => None,
                 };
                 let drawn = fighter.drawn_heading;
+                let firing_from = fighter.slot;
                 let mut muzzle = Muzzle::new(state, &hull, drawn, fighter.armament.exits_mut());
+                muzzle.firer_slot = Some(firing_from);
                 let shot = self.launch(
                     (side, ties, plunderer),
                     &mut muzzle,
@@ -2967,7 +2985,7 @@ impl Combat {
     fn release(
         &mut self,
         parent: &Shot,
-        (target, owner): (Option<ShipRef>, Plunderer),
+        (target, fighters): (Option<ShipRef>, &[Fighter]),
         sides: &Sides,
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
@@ -2980,16 +2998,9 @@ impl Combat {
         else {
             return placed;
         };
-        // The firer's class as its slot holds it, or the bit the parent
-        // carried once the firer has left the fight.
-        let turret_over = sides
-            .targets
-            .iter()
-            .find(|ship| ship.ship == parent.firer)
-            .filter(|_| matches!(parent.source, Source::Ship(_)))
-            .map_or(parent.turret_over, |firer| {
-                arsenal.hull(firer.ship_type).turret_shots_over
-            });
+        // `_SpawnShotSubmunitions` spawns as the parent's source slot
+        // (+0x2c): its ship's class and plunder as they are now.
+        let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
         let shots = submunition::release(parent, sub, (target, turret_over), sides, chance);
         if shots.is_empty() {
             return placed;
@@ -3472,6 +3483,8 @@ struct Muzzle<'a> {
     /// Whether its hull's turret shots are drawn over the ships
     /// ([`HullSpec::turret_shots_over`]).
     turret_over: bool,
+    /// The ship slot it fires from ([`Shot::firer_slot`]).
+    firer_slot: Option<Slot>,
 }
 
 impl<'a> Muzzle<'a> {
@@ -3496,6 +3509,7 @@ impl<'a> Muzzle<'a> {
             fold,
             miss_class: hull.miss_class,
             turret_over: hull.turret_shots_over,
+            firer_slot: None,
         }
     }
 }
@@ -3768,6 +3782,8 @@ mod tests {
         drawn_heading: Option<f32>,
         /// Where its sprite stands for the collision walk.
         sprite: Option<SpriteRank>,
+        /// Its ship slot: by default its berth, its NPC number.
+        slot: Slot,
     }
 
     /// A trigger holding no weapon, its point defence running, as a test
@@ -3829,6 +3845,7 @@ mod tests {
                     layer: ShipLayer::Ships,
                     entry: -1 - i64::from(id),
                 }),
+                slot: Slot::Berth(id),
             }
         }
 
@@ -3885,6 +3902,7 @@ mod tests {
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
                 sprite: self.sprite,
+                slot: self.slot,
             }
         }
     }
@@ -6408,6 +6426,7 @@ mod tests {
         Ship {
             id: ShipRef::Player,
             fleet: ShipRef::Player,
+            slot: Slot::Player,
             ..Ship::at(0, 0.0, 0.0)
         }
         .armed(record)
@@ -7898,8 +7917,9 @@ mod tests {
 
     /// The layers of the turret sub-munitions a shell fired by ship 1 of
     /// class 128 releases, its class's turret shots `over` the ships or
-    /// not, the firer `leaving` the fight before the release or not.
-    fn released_layers(over: bool, leaving: bool) -> Vec<ShotLayer> {
+    /// not, the firer `leaving` the fight before the release or not, by
+    /// `source`'s reading of the source slot.
+    fn released_layers(over: bool, leaving: bool, source: RuleSource) -> Vec<ShotLayer> {
         let (shell, _) = cluster(0);
         let sub = WeaponRecord {
             guidance: 4,
@@ -7913,6 +7933,7 @@ mod tests {
         };
         let arsenal = Arsenal::new(&[shell, sub], vec![class]);
         let mut combat = Combat::default();
+        combat.set_submunition_source_slot(source);
         let mut ships = vec![Ship {
             hull: HullSpec {
                 turret_shots_over: true,
@@ -7933,11 +7954,20 @@ mod tests {
 
     #[test]
     fn a_sub_munition_takes_its_firers_class_or_the_bit_its_parent_carried() {
-        // The firer's class as the arsenal reads it.
-        assert_eq!(released_layers(true, false), [ShotLayer::OverShips; 2]);
-        assert_eq!(released_layers(false, false), [ShotLayer::Shots; 2]);
-        // Gone from the fight: the bit the shell carried, its hull's.
-        assert_eq!(released_layers(false, true), [ShotLayer::OverShips; 2]);
+        for source in RuleSource::ALL {
+            // The firer's class as the arsenal reads it.
+            let over = released_layers(true, false, source);
+            assert_eq!(over, [ShotLayer::OverShips; 2], "{source:?}");
+            let under = released_layers(false, false, source);
+            assert_eq!(under, [ShotLayer::Shots; 2], "{source:?}");
+        }
+        // Gone from the fight: by the engine the class its empty slot
+        // keeps (`_HandleShip` @0x3359a); by the other reading the bit the
+        // shell carried, its hull's.
+        let engine = released_layers(false, true, RuleSource::Engine);
+        assert_eq!(engine, [ShotLayer::Shots; 2]);
+        let other = released_layers(false, true, RuleSource::Bible);
+        assert_eq!(other, [ShotLayer::OverShips; 2]);
     }
 
     #[test]

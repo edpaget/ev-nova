@@ -101,6 +101,7 @@ use crate::cloak::{self, Observer};
 use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::ship_layer::Slot;
 use crate::trig;
 
 /// A freefall bomb's share of its firer's velocity at launch.
@@ -554,6 +555,11 @@ pub struct Shot {
     /// [`Combat`](super::Combat) gives it as it puts it in flight: the
     /// shots in flight are kept in slot order.
     pub slot: usize,
+    /// The ship slot its firer fired from, which a sub-munition takes from
+    /// its parent (the original's source slot, shot +0x2c): none for a
+    /// shot no ship fired. As it spawns, a sub-munition reads whatever
+    /// ship holds that slot then (see [`submunition`](super::submunition)).
+    pub firer_slot: Option<Slot>,
 }
 
 /// How a freefall bomb (5) or a rocket (6) leaves its ship. `_SpawnShot`
@@ -708,6 +714,7 @@ impl Shot {
             jam_rolls: [0; JAMMING_TYPES],
             moved_from: None,
             slot: 0,
+            firer_slot: None,
         }
     }
 

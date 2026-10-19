@@ -89,6 +89,10 @@ pub(super) fn fly(
     shot.age = 1;
     shot.miss_roll = roll;
     shot.layer = layer;
+    shot.firer_slot = Some(match firer {
+        ShipRef::Player => Slot::Player,
+        ShipRef::Npc(NpcId(berth)) => Slot::Berth(berth),
+    });
     combat.put_in_flight(shot);
 }
 

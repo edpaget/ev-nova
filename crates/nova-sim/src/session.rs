@@ -606,6 +606,7 @@ impl FightTerms {
         // A waiting ship's fire block is skipped (`_HandleShip`
         // @0x34a54-0x34a72).
         let trigger = crate::ai::fire::gated(npc);
+        let slot = player_led::slot_of(npc);
         let Npc {
             id,
             ship,
@@ -659,6 +660,7 @@ impl FightTerms {
             rounds,
             drawn_heading: self.drawn_heading,
             sprite: self.sprite,
+            slot,
         }
     }
 }
@@ -1843,6 +1845,10 @@ impl Session {
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
         self.combat
             .set_shot_overlap(rules.source_for(RuleKey::ShotOverlap));
+        self.combat
+            .set_submunition_source_slot(rules.source_for(RuleKey::SubmunitionSourceSlot));
+        self.combat
+            .set_reused_shot_slot_roll(rules.source_for(RuleKey::ReusedShotSlotRoll));
         self.traffic
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic

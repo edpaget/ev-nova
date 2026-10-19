@@ -1439,6 +1439,10 @@ impl Combatant {
                     ShipRef::Npc(id) => -1 - i64::from(id.0),
                 },
             }),
+            slot: match self.id {
+                ShipRef::Player => nova_sim::ship_layer::Slot::Player,
+                ShipRef::Npc(id) => nova_sim::ship_layer::Slot::Berth(id.0),
+            },
         }
     }
 }

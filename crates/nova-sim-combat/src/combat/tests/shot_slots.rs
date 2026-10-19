@@ -498,3 +498,163 @@ fn a_sub_munition_after_a_shot_of_no_roll_or_in_a_slot_never_used_carries_none()
     let subs = sub_shots(&combat);
     assert_eq!((subs[0].slot, subs[0].miss_roll), (1, None), "never used");
 }
+
+/// A shell releasing one turret (4) of weapon 148, and the arsenal with
+/// it, class 128 without `Flags3` 0x0040 and class 129 with it.
+fn turret_cluster() -> (WeaponRecord, Arsenal) {
+    let (shell, _) = one_sub();
+    let sub = WeaponRecord {
+        guidance: 4,
+        count: 50,
+        speed: 500,
+        ..weapon(148)
+    };
+    let class = |id: i16, flags3: u16| crate::catalog::HullRecord {
+        flags3,
+        ..nova_sim_catalog::fixture::hull(id)
+    };
+    let classes = vec![class(128, 0), class(129, 0x0040)];
+    (shell, Arsenal::new(&[shell, sub], classes))
+}
+
+/// NPC `id` of `class` at berth 3, far off.
+fn at_berth_3(id: u32, class: i16) -> Ship {
+    Ship {
+        class: ShipId(class),
+        slot: Slot::Berth(3),
+        ..Ship::at(id, 4000.0, 4000.0)
+    }
+}
+
+/// C's spent `shell` from berth 3, carrying `over` and aimed at B.
+fn shell_from_berth_3(shell: WeaponRecord, over: bool) -> Shot {
+    Shot {
+        firer_slot: Some(Slot::Berth(3)),
+        turret_over: over,
+        aimed_at: Some(B),
+        firer: C,
+        fleet: C,
+        ..spent_shell(shell)
+    }
+}
+
+/// `_HandleShot`'s pass among `ships`, sub-munitions read from `arsenal`.
+fn handle_among(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+    let govts = Governments::default();
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    };
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.fly_shots(&mut fighters, arena, &mut NeverFires);
+}
+
+/// The one sub-munition of a shell C fired from berth 3 as a ship of
+/// `firer` class, carrying its bit, released once `now` holds berth 3
+/// (none: empty), with B far off, by `source`'s reading.
+fn released_from_berth_3(firer: i16, now: Option<Ship>, source: RuleSource) -> (Shot, Combat) {
+    let (shell, arsenal) = turret_cluster();
+    let mut combat = Combat::default();
+    combat.set_submunition_source_slot(source);
+    let mut fired_by = [at_berth_3(3, firer)];
+    let over = arsenal.hull(ShipId(firer)).turret_shots_over;
+    combat.note_slots(&fired_by.iter_mut().map(Ship::fighter).collect::<Vec<_>>());
+    combat.put_in_flight(shell_from_berth_3(shell, over));
+    let mut ships: Vec<Ship> = now.into_iter().collect();
+    ships.push(Ship::at(2, -4000.0, 4000.0));
+    handle_among(&mut combat, &mut ships, &arsenal);
+    let sub = *sub_shots(&combat)[0];
+    (sub, combat)
+}
+
+#[test]
+fn a_sub_munition_takes_its_layer_from_the_ship_now_in_its_source_slot() {
+    // `_SpawnShot` reads class +0x9ec of whatever ship the source slot
+    // holds as the sub-munition spawns (@0x3f0d6-0x3f109).
+    for (firer, now, engine, other) in [
+        (128, 129, ShotLayer::OverShips, ShotLayer::Shots),
+        (129, 128, ShotLayer::Shots, ShotLayer::OverShips),
+    ] {
+        let taken = || Some(at_berth_3(9, now));
+        let (sub, _) = released_from_berth_3(firer, taken(), RuleSource::Engine);
+        assert_eq!(sub.layer, engine, "{firer} then {now}");
+        let (sub, _) = released_from_berth_3(firer, taken(), RuleSource::Bible);
+        assert_eq!(sub.layer, other, "{firer} then {now}: the parent's bit");
+    }
+}
+
+#[test]
+fn a_sub_munition_is_disable_only_when_the_ship_now_in_its_source_slot_plunders() {
+    // The ship now at berth 3 plunders B (`_AIShipIsPlunderingShip`
+    // @0x3e826-0x3e899); C, which fired, did not.
+    let plunderer = || {
+        Some(Ship {
+            plundering: true,
+            target: Some(B),
+            ..at_berth_3(9, 128)
+        })
+    };
+    let (sub, _) = released_from_berth_3(128, plunderer(), RuleSource::Engine);
+    assert!(sub.disable_only, "the slot's ship plunders");
+    let (sub, _) = released_from_berth_3(128, plunderer(), RuleSource::Bible);
+    assert!(!sub.disable_only, "the firer, gone, did not");
+}
+
+#[test]
+fn a_sub_munition_from_an_empty_slot_reads_its_last_ship() {
+    // C fired from berth 3 as a class-128 ship; a class-129 ship came and
+    // went; the empty slot keeps its record (`_HandleShip` @0x3359a).
+    let (shell, arsenal) = turret_cluster();
+    for (source, layer) in [
+        (RuleSource::Engine, ShotLayer::OverShips),
+        (RuleSource::Bible, ShotLayer::Shots),
+    ] {
+        let mut combat = Combat::default();
+        combat.set_submunition_source_slot(source);
+        for (id, class) in [(4, 128), (5, 129)] {
+            let mut ship = [at_berth_3(id, class)];
+            combat.note_slots(&ship.iter_mut().map(Ship::fighter).collect::<Vec<_>>());
+        }
+        combat.put_in_flight(shell_from_berth_3(shell, false));
+        handle_among(&mut combat, &mut [Ship::at(2, -4000.0, 4000.0)], &arsenal);
+        assert_eq!(sub_shots(&combat)[0].layer, layer, "{source:?}");
+    }
+}
+
+#[test]
+fn a_sub_munitions_own_sub_munitions_read_the_same_slot() {
+    // The new shot's source is its parent's (+0x2c, @0x3e7c4-0x3e7c8).
+    let (sub, _) = released_from_berth_3(128, None, RuleSource::Engine);
+    assert_eq!(sub.firer_slot, Some(Slot::Berth(3)));
+    let (shell, _) = turret_cluster();
+    let parent = shell_from_berth_3(shell, false);
+    let arsenal_sub = WeaponSpec::new(&WeaponRecord {
+        count: 50,
+        ..weapon(148)
+    });
+    let sides = crate::combat::fixture::among(&[]);
+    let grandchildren = submunition::release(
+        &sub_of(&parent),
+        &arsenal_sub,
+        (None, false),
+        &sides,
+        &mut NeverFires,
+    );
+    assert!(
+        grandchildren
+            .iter()
+            .all(|shot| shot.firer_slot == Some(Slot::Berth(3)))
+    );
+}
+
+/// `parent` as one of its own sub-munitions, a generation on, spent and
+/// releasing in turn.
+fn sub_of(parent: &Shot) -> Shot {
+    Shot {
+        generation: parent.generation + 1,
+        ..*parent
+    }
+}

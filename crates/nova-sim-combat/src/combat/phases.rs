@@ -41,6 +41,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
@@ -61,6 +62,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
@@ -80,6 +82,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let terms = (arena.govts, arena.arsenal);
@@ -106,6 +109,7 @@ impl Combat {
             return;
         }
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
@@ -125,6 +129,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         count_down(fighters, Firers::Npcs);
@@ -151,6 +156,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let rule = arena.rules.disable;
@@ -206,6 +212,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
+        self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let pass = arena.pass;

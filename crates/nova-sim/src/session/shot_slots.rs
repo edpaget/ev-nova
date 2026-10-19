@@ -21,12 +21,14 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{FIRE, armed};
+    use super::super::tests::{FIRE, armed, facing_an_npc};
     use super::super::*;
+    use crate::catalog::WeaponRecord;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
     use crate::combat::shot_layer::ShotLayer;
     use crate::rulebook::{RuleSource, Rulebook};
+    use nova_sim_catalog::fixture::weapon;
 
     #[test]
     fn the_shots_are_drawn_in_the_fights_order() {
@@ -56,5 +58,89 @@ mod tests {
         let other = Rulebook::default().with_override(RuleKey::ShotOverlap, RuleSource::Bible);
         assert_eq!(session(other).combat, firing);
         assert_eq!(session(Rulebook::default()).combat, Combat::default());
+    }
+
+    #[test]
+    fn the_rulebook_says_what_a_sub_munition_reads_of_its_slots() {
+        let catalog = armed();
+        let session = |rules: Rulebook| Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut firer = Combat::default();
+        firer.set_submunition_source_slot(RuleSource::Bible);
+        assert_ne!(firer, Combat::default());
+        let other =
+            Rulebook::default().with_override(RuleKey::SubmunitionSourceSlot, RuleSource::Bible);
+        assert_eq!(session(other).combat, firer);
+        let mut no_roll = Combat::default();
+        no_roll.set_reused_shot_slot_roll(RuleSource::Bible);
+        assert_ne!(no_roll, Combat::default());
+        let other =
+            Rulebook::default().with_override(RuleKey::ReusedShotSlotRoll, RuleSource::Bible);
+        assert_eq!(session(other).combat, no_roll);
+    }
+
+    /// [`armed`] with its ships firing a shell that releases one turret
+    /// (4) sub-munition at the end of its life, and a class 131 like the
+    /// traffic's 129 but of `Flags3` 0x0040.
+    fn shell_catalog() -> crate::testkit::FakePilotCatalog {
+        let mut catalog = armed();
+        let shell = WeaponRecord {
+            reload: 1000,
+            count: 3,
+            speed: 1000,
+            energy_dmg: 1,
+            sub_count: 1,
+            sub_type: Some(WeaponId(148)),
+            ..weapon(128)
+        };
+        let sub = WeaponRecord {
+            guidance: 4,
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        };
+        catalog.weapons = vec![shell, sub];
+        let mut over = catalog.hulls[1].clone();
+        over.id = ShipId(131);
+        over.flags3 = 0x0040;
+        catalog.hulls.push(over);
+        catalog
+    }
+
+    #[test]
+    fn a_sub_munition_takes_its_layer_from_the_ship_that_took_its_firers_berth() {
+        // The NPC at berth 1 fires its shell and leaves; a ship of class
+        // 131 takes berth 1 before the shell's end of life, and its turret
+        // sub-munition goes over the ships by that class (`_SpawnShot`
+        // @0x3f0d6-0x3f109). By the other reading, the parent's bit.
+        let catalog = shell_catalog();
+        for (source, layer) in [
+            (RuleSource::Engine, ShotLayer::OverShips),
+            (RuleSource::Bible, ShotLayer::Shots),
+        ] {
+            let rules = Rulebook::default().with_override(RuleKey::SubmunitionSourceSlot, source);
+            let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.trigger = FIRE;
+            npc.target = Some(ShipRef::Player);
+            let berth = npc.berth;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert_eq!(session.shots().len(), 1, "the shell");
+            let mut next = session.npcs()[0].clone();
+            next.ship = ShipId(131);
+            next.trigger = Trigger::default();
+            session.traffic.remove(next.id);
+            let id = session.traffic.add_npc(next);
+            assert_eq!(session.npc(id).map(|npc| npc.berth), Some(berth));
+            for _ in 0..5 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            let subs: Vec<&Shot> = session
+                .shots()
+                .iter()
+                .filter(|shot| shot.weapon.id == WeaponId(148))
+                .collect();
+            assert_eq!(subs.len(), 1, "{source:?}");
+            assert_eq!(subs[0].layer, layer, "{source:?}");
+        }
     }
 }

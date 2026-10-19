@@ -4,7 +4,7 @@
 //! or fizzles where it ended and releases its sub-munitions before its
 //! slot is freed (@0x3617c).
 
-use super::{Combat, Fighter, Landed, Plunderer, Sides, Source, blasted};
+use super::{Combat, Fighter, Landed, Sides, blasted};
 use crate::chance::Chance;
 use crate::combat::CombatEvent;
 use crate::combat::armament::Arsenal;
@@ -116,14 +116,7 @@ impl Combat {
             self.events.push(CombatEvent::Fizzled { at: shot.position });
         }
         if shot.weapon.subs_on_expiry() {
-            // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):
-            // its plunder as it is now, not the parent's flag.
-            let owner = fighters
-                .iter()
-                .find(|fighter| fighter.ship == shot.firer)
-                .filter(|_| matches!(shot.source, Source::Ship(_)))
-                .map_or_else(Plunderer::default, Plunderer::of);
-            placed = self.release(shot, (shot.aimed_at, owner), sides, arsenal, chance);
+            placed = self.release(shot, (shot.aimed_at, fighters), sides, arsenal, chance);
         }
         (expiries, placed)
     }

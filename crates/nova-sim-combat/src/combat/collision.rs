@@ -113,8 +113,7 @@ use super::asteroid_hit::{self, AsteroidTarget};
 use super::damage::Hit;
 use super::hull::DisableRule;
 use super::ion::Dose;
-use super::plunder::Plunderer;
-use super::projectile::{Shot, ShotLayer, Source, Target};
+use super::projectile::{Shot, ShotLayer, Target};
 use super::sides::{PassThrough, Sides};
 use super::{Arsenal, Combat, Fighter, Landed, Push, ShipRef, blasted};
 use crate::chance::Chance;
@@ -346,17 +345,10 @@ impl Combat {
         }
         self.keep_unspent(shots, &spent);
         for (parent, target) in released {
-            // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):
-            // its plunder as it is now, not the parent's flag.
-            let owner = fighters
-                .iter()
-                .find(|fighter| fighter.ship == parent.firer)
-                .filter(|_| matches!(parent.source, Source::Ship(_)))
-                .map_or_else(Plunderer::default, Plunderer::of);
             let sides = lineup.sides();
             self.release(
                 &parent,
-                (Some(target), owner),
+                (Some(target), &*fighters),
                 &sides,
                 terms.arsenal,
                 chance,
