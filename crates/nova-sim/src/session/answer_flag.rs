@@ -119,6 +119,54 @@ mod tests {
         }
     }
 
+    /// Makes NPC 0 the escort of a new idle lead of its government, of
+    /// `ai_type`, 3000 off; then fires at NPC 0, the player's target, until
+    /// the shot lands, and the NPCs answer. Gives the lead as it is then.
+    fn lead_of_the_escort_shot(ai_type: AiType) -> crate::traffic::npc::Npc {
+        let catalog = lawful();
+        let mut session = facing_an_npc(&catalog, 180);
+        let mut lead = session.npcs()[0].clone();
+        lead.govt = Some(GovtId(140));
+        lead.ai_type = ai_type;
+        lead.goal = Goal::Idle;
+        lead.state.position.x += 3000.0;
+        let lead = session.traffic.add_npc(lead);
+        session.traffic.npcs_mut()[0].leader = Some(lead);
+        session.target = Some(NpcId(0));
+        session.hold_trigger(FIRE);
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.hold_trigger(Trigger::default());
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                break;
+            }
+        }
+        assert!(session.npcs()[0].reserves.shield.now < 30.0, "never hit");
+        session.answer_strikes(&NovaAi::default());
+        session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == lead)
+            .expect("the lead")
+            .clone()
+    }
+
+    #[test]
+    fn the_warship_lead_of_an_escort_the_player_shoots_answers_as_a_good_samaritan() {
+        // `_DamageShip`'s lead part (@0x3bd1b-0x3bd79) then the call
+        // `_DoGoodSamaritan(victim, player)` (@0x3bed2-0x3bef4).
+        let lead = lead_of_the_escort_shot(AiType::Warship);
+        assert_eq!(lead.target, Some(ShipRef::Player));
+        assert_eq!(lead.goal, Goal::Attack(ShipRef::Player));
+        let trader = lead_of_the_escort_shot(AiType::WimpyTrader);
+        assert_eq!(trader.target, Some(ShipRef::Player), "a trader lead");
+        assert_ne!(
+            trader.goal,
+            Goal::Attack(ShipRef::Player),
+            "a trader is no Samaritan"
+        );
+    }
+
     #[test]
     fn a_players_stray_hits_build_stray_provocation_that_eases_each_tick() {
         let catalog = armed();
