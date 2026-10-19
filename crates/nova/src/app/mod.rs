@@ -353,8 +353,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         }
     }
 
-    /// The app reading `os`'s fullscreen shortcut, rather than the one of
-    /// the system it was built for.
+    /// The app behaving as on `os`, rather than the system it was built
+    /// for, in fullscreen: it reads `os`'s fullscreen shortcut, and offers
+    /// exclusive fullscreen only off macOS. On [`Os::MacOs`] the
+    /// Preferences picker lists no modes, and a saved exclusive kind is
+    /// entered borderless, the native Space; other systems offer the
+    /// monitor's exclusive modes.
     #[must_use]
     pub fn with_os(mut self, os: Os) -> Self {
         self.fullscreen.set_os(os);
