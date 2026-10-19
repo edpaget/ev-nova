@@ -84,6 +84,7 @@ mod tests {
     use crate::combat::fixture::strike;
     use crate::combat::{ShipRef, Strike};
     use crate::geometry::Vec2;
+    use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -203,5 +204,71 @@ mod tests {
         assert_eq!(ships[0].goal, Goal::Attack(ShipRef::Player));
         assert_eq!(ships[0].target, Some(ShipRef::Player));
         assert_eq!(ships[0].provoked, 24.0, "the player's hit alone");
+    }
+
+    /// The grudges [`NovaAi`]'s traffic queues answering `strikes` in one
+    /// call, the player 100 above the centre, read by `focus`; then
+    /// whether taking them emptied the queue.
+    fn grudges(focus: RuleSource, npcs: Vec<Npc>, strikes: &[Strike]) -> Vec<NpcId> {
+        let mut traffic = Traffic::with_interval(1);
+        traffic.npcs = npcs;
+        let world = World {
+            player: Some(crate::ai::fixture::player(0.0, -100.0)),
+            hit_focus: focus,
+            ..World::new(&[])
+        };
+        traffic.answer(&NovaAi::default(), &world, strikes);
+        let taken = traffic.take_grudges();
+        assert_eq!(traffic.take_grudges(), [], "taken");
+        taken
+    }
+
+    #[test]
+    fn each_answered_hit_of_the_players_queues_its_victims_grudge() {
+        let idle = || vec![ship(1, 0.0, 0.0), ship(2, 60.0, 0.0)];
+        let by_player = strike(n(1), ShipRef::Player);
+        for focus in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                grudges(focus, idle(), &[by_player]),
+                [NpcId(1)],
+                "{focus:?}"
+            );
+            assert_eq!(
+                grudges(focus, idle(), &[strike(n(1), n(2))]),
+                [],
+                "{focus:?}: an NPC's hit"
+            );
+            let unanswered = Strike {
+                answered: false,
+                ..by_player
+            };
+            assert_eq!(grudges(focus, idle(), &[unanswered]), [], "{focus:?}");
+            let on_player = strike(ShipRef::Player, ShipRef::Player);
+            assert_eq!(grudges(focus, idle(), &[on_player]), [], "{focus:?}");
+        }
+    }
+
+    #[test]
+    fn a_hit_the_ship_keeps_its_target_against_holds_no_grudge_by_the_engine() {
+        // Attacking X 150 above, dead ahead: the player 100 above is kept
+        // (10000 > 0.25 × 22500), skipping the grudge (@0x3bcac).
+        let hunting = || vec![hunter(1, 0.0, 0.0, n(3)), ship(3, 0.0, -150.0)];
+        let by_player = strike(n(1), ShipRef::Player);
+        assert_eq!(grudges(RuleSource::Engine, hunting(), &[by_player]), []);
+        assert_eq!(
+            grudges(RuleSource::Bible, hunting(), &[by_player]),
+            [NpcId(1)],
+            "every answered hit by the other reading"
+        );
+        // Idle, the player's first hit turns it on the player and holds
+        // the grudge; its second, the player now its faced target, is kept.
+        assert_eq!(
+            grudges(
+                RuleSource::Engine,
+                vec![ship(1, 0.0, 0.0)],
+                &[by_player, by_player]
+            ),
+            [NpcId(1)]
+        );
     }
 }
