@@ -2614,6 +2614,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            hit_focus: self.rules.source_for(RuleKey::HitFocus),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2690,6 +2691,7 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            hit_focus: self.rules.source_for(RuleKey::HitFocus),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -16372,9 +16374,25 @@ pub(super) mod tests {
             person.quoted_at, None,
             "the attack's quote, not `_HandleShip`'s"
         );
-        // A shot still in flight that hits it while it is unseen says it
-        // again: `_DamageShip` asks the gate for each hit (@0x3be69), and
-        // the gate reads no "quoted" (+0xbc). Nothing else does.
+        // Attacking the player and facing it, it keeps its target as later
+        // hits land: `_DamageShip`'s focus test skips
+        // `_AIMakeShipAttackPlayer` (@0x3bbf3-0x3bcac), so it says nothing
+        // more.
+        let mut kept = session.clone();
+        let mut hits = 0;
+        for tick in 0..60 {
+            let shield = kept.npcs()[0].reserves.shield.now;
+            kept.tick_combat(Rules::default(), &mut NeverFires);
+            hits += usize::from(kept.npcs()[0].reserves.shield.now < shield);
+            kept.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+            assert_eq!(quotes_said(&mut kept, &catalog), (vec![], false), "{tick}");
+        }
+        assert!(hits > 0, "a later hit");
+        // By the focus test's other reading a shot still in flight that
+        // hits it while it is unseen says it again: `_DamageShip` asks the
+        // gate for each hit it answers (@0x3be69), and the gate reads no
+        // "quoted" (+0xbc). Nothing else does.
+        session.rules = Rulebook::default().with_override(RuleKey::HitFocus, RuleSource::Bible);
         let mut again = 0;
         for tick in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;

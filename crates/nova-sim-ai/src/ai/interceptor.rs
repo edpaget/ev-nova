@@ -497,11 +497,22 @@ mod tests {
             damage: 3.0,
             ..crate::combat::fixture::strike(n(1), P)
         };
+        // Hit by the player it attacks, it keeps at it with no reaction
+        // (`_DamageShip`'s focus test, @0x3bbf3-0x3bcac).
+        assert_eq!(
+            Interceptor::default().react(&npcs[0], &hit, &around),
+            crate::ai::Reaction::default()
+        );
+        let bible = Surroundings {
+            hit_focus: RuleSource::Bible,
+            ..around
+        };
         assert_eq!(
             Interceptor::default()
-                .react(&npcs[0], &hit, &around)
+                .react(&npcs[0], &hit, &bible)
                 .provoked,
-            3.0
+            3.0,
+            "by the other reading"
         );
     }
 

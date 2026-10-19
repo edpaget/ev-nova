@@ -456,6 +456,10 @@ pub struct World<'a> {
     /// by the other reading
     /// ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
     pub snipe_brake_lead: RuleSource,
+    /// Which hit lets a ship keep its own target
+    /// ([`Surroundings::hit_focus`],
+    /// [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)).
+    pub hit_focus: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -532,6 +536,7 @@ impl<'a> World<'a> {
             spawn_reserve: SPAWN_RESERVE,
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
+            hit_focus: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
@@ -590,6 +595,7 @@ impl<'a> World<'a> {
             cloak_scanner: self.cloak_scanner,
             iff_marked: self.iff_marked,
             fighter_room: true,
+            hit_focus: self.hit_focus,
         }
     }
 }
@@ -5817,6 +5823,19 @@ mod tests {
             ..World::new(&[])
         };
         assert_eq!(world.around(&[]).mining_rock, Some(rock));
+    }
+
+    #[test]
+    fn the_world_carries_its_hit_focus_to_what_its_npcs_see() {
+        assert_eq!(World::new(&[]).hit_focus, RuleSource::Engine);
+        assert_eq!(Surroundings::new(&[], &[]).hit_focus, RuleSource::Engine);
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let world = World {
+                hit_focus: source,
+                ..World::new(&[])
+            };
+            assert_eq!(world.around(&[]).hit_focus, source);
+        }
     }
 
     #[test]

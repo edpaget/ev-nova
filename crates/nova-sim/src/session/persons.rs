@@ -871,6 +871,19 @@ mod tests {
     }
 
     #[test]
+    fn the_traffic_steps_in_a_world_holding_the_rulebooks_hit_focus() {
+        let catalog = duel(GRUDGE, 0);
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::HitFocus, source);
+            let mut session = facing_ace(&catalog, ada(&catalog)).with_rules(rules);
+            assert_eq!(session.world().hit_focus, source);
+            let mut stepped = None;
+            session.step_traffic(|_, world| stepped = Some(world.hit_focus));
+            assert_eq!(stepped, Some(source));
+        }
+    }
+
+    #[test]
     fn an_unanswered_player_hit_holds_no_grudge() {
         // The grudge (@0x3be83-0x3beb3) is inside the reaction block, which
         // a clear answer flag skips.

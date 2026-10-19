@@ -948,10 +948,20 @@ mod tests {
     /// How the escort, `npcs[0]`, answers `strike` among `npcs`, the
     /// player at the centre.
     fn reacts(npcs: &[Npc], strike: &crate::combat::Strike) -> crate::ai::Reaction {
+        reacts_by(RuleSource::Engine, npcs, strike)
+    }
+
+    /// [`reacts`] with the focus test read by `focus`.
+    fn reacts_by(
+        focus: RuleSource,
+        npcs: &[Npc],
+        strike: &crate::combat::Strike,
+    ) -> crate::ai::Reaction {
         let govts = govts(0, 0);
         let around = Surroundings {
             player: Some(player(0.0, 0.0)),
             govts: &govts,
+            hit_focus: focus,
             ..Surroundings::new(&[], npcs)
         };
         ENGINE.react(&npcs[0], strike, &around)
@@ -999,10 +1009,30 @@ mod tests {
     }
 
     #[test]
-    fn an_escort_attacking_a_nearer_target_ahead_of_it_lets_a_hit_be() {
-        // The focus skip (@0x3bc25-0x3bcac), under the engine's reading
-        // (rdm:phase/weapons-fidelity/phase-37-left-out-of-phase-26 owns
-        // the original's).
+    fn an_escort_attacking_a_target_ahead_of_it_lets_a_hit_be_unless_the_attacker_is_near() {
+        // The focus skip (@0x3bc25-0x3bcac) reads no AI type: an escort
+        // keeps its target unless dist²(attacker) is at most 0.25 ×
+        // dist²(target).
+        let mut fighting = having(
+            escort(Some(EscortOrder::Attack)),
+            Goal::Attack(n(3)),
+            Some(n(3)),
+        );
+        fighting.state.heading = 0.0;
+        let npcs = [fighting, pirate(2, 100.0, 0.0), pirate(3, 0.0, -60.0)];
+        let strike = crate::combat::fixture::strike(n(1), n(2));
+        assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
+        let mut near = npcs.clone();
+        near[1].state.position = crate::geometry::Vec2::new(29.0, 0.0);
+        assert_eq!(
+            reacts(&near, &strike).target,
+            Some(n(2)),
+            "its attacker within half its target's distance"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_an_escort_attacking_a_nearer_target_ahead_of_it_lets_a_hit_be() {
         let mut fighting = having(
             escort(Some(EscortOrder::Attack)),
             Goal::Attack(n(3)),
@@ -1011,14 +1041,11 @@ mod tests {
         fighting.state.heading = 0.0;
         let npcs = [fighting, pirate(2, 100.0, 0.0), pirate(3, 0.0, -10.0)];
         let strike = crate::combat::fixture::strike(n(1), n(2));
-        assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
+        let bible = |npcs: &[Npc]| reacts_by(RuleSource::Bible, npcs, &strike);
+        assert_eq!(bible(&npcs), crate::ai::Reaction::default());
         let mut far = npcs.clone();
         far[2].state.position = crate::geometry::Vec2::new(0.0, -60.0);
-        assert_eq!(
-            reacts(&far, &strike).target,
-            Some(n(2)),
-            "its target too far"
-        );
+        assert_eq!(bible(&far).target, Some(n(2)), "its target too far");
     }
 
     /// The escort as the player's fighter, out of its bay.

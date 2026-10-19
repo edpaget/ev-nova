@@ -294,8 +294,11 @@ mod tests {
         // `_DoGoodSamaritan` never takes AI 5 or 6 (@0x8289f-0x828bb).
         let attacking = fighter(Goal::Attack(n(3)), Some(n(3)));
         let npcs = [carrier(Goal::Attack(n(3))), attacking.clone(), trader()];
+        // The focus test's other reading, so the fighter, attacking,
+        // answers every hit (the focus is `react`'s, tested there).
         let around = Surroundings {
             player: Some(player(50.0, -100.0)),
+            hit_focus: crate::rulebook::RuleSource::Bible,
             ..Surroundings::new(&[], &npcs)
         };
         let react = |strike| CarriedAi::default().react(&attacking, &strike, &around);

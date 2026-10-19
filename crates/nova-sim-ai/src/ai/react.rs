@@ -9,10 +9,20 @@
 //! [`answer_flag`](crate::ai::answer_flag)).
 //!
 //! - **The victim**, and the lead of an escort hit, add the damage to
-//!   their provocation and take the attacker as their target, unless they
-//!   already attack another ship nearer than half the attacker's distance
-//!   ([`FOCUS`] of its distance squared) while facing within
-//!   [`FOCUS_ANGLE`] of it: then the hit changes nothing. The player's
+//!   their provocation and take the attacker as their target, unless the
+//!   victim [keeps its target](keeps_target): attacking a ship it faces
+//!   within [`FOCUS_DEGREES`] of the heading it last wanted (+0x68), with
+//!   the attacker not nearer than half that ship's distance (dist² above
+//!   [`FOCUS`] × its target's, `_DamageShip` @0x3bbf3-0x3bcac). Then the
+//!   hit changes nothing for it or its lead: the original jumps to the
+//!   Good Samaritan call (0x3bed2), past +0x96 and the target, the lead's
+//!   part (@0x3bcfa-0x3bd79), the turn on the player, the wait cut and
+//!   the grudge. A ship hit by the very ship it attacks, facing it, so
+//!   keeps at it quietly. The lead has no focus test of its own. Which
+//!   test applies is
+//!   [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)'s
+//!   ([`Surroundings::hit_focus`]): the other reading is the engine's
+//!   before weapons-fidelity phase 37. The player's
 //!   hit on the victim itself also turns it on the player at once
 //!   ([`victim`], `_AIMakeShipAttackPlayer` @0x3be69), whatever it was
 //!   doing; its lead takes the target alone. A ship still
@@ -72,9 +82,11 @@
 use crate::ai::{Goal, Reaction, Surroundings};
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::{ShipRef, Strike};
+use crate::geometry::Vec2;
 use crate::govt::{DERELICT, IGNORED_WHEN_ATTACKED, NOSY};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc};
+use crate::trig;
 
 /// The share of the attacker's distance squared within which a ship
 /// keeps attacking its own target (0.25 @0x3bc3b).
@@ -82,6 +94,10 @@ pub const FOCUS: f32 = 0.25;
 /// How far off its nose, in degrees, a ship keeping its own target must
 /// have it.
 pub const FOCUS_ANGLE: f32 = 44.0;
+/// How far, in whole degrees, the heading a ship struck faces may be off
+/// the one it last wanted for it to keep its target (0x2c, `jg`
+/// @0x3bc3f).
+pub const FOCUS_DEGREES: i16 = 44;
 
 /// How `npc` answers `strike` among `around`, the Good Samaritans being
 /// those `piracy_police` says (see the module docs): as the
@@ -122,7 +138,7 @@ pub fn answer(
 /// carrier's, which are never Good Samaritans (`_DoGoodSamaritan` takes
 /// AI 3 and 4 alone, @0x8289f-0x828bb).
 ///
-/// Unless it [keeps to its own target](ignores), it takes the attacker as
+/// Unless the ship struck [keeps its target](keeps_target), it takes the attacker as
 /// its target and the damage as provocation; a hit by no ship does
 /// nothing, as does a strike not direct ([`Strike::direct`]): the
 /// boarding's call, which never passes `_DamageShip`. The player's hit on
@@ -144,7 +160,11 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
     let Some(by) = strike.by else {
         return Reaction::default();
     };
-    if ignores(npc, by, around) {
+    let hit = match strike.ship {
+        ShipRef::Npc(id) if id != npc.id => around.npc(id).unwrap_or(npc),
+        _ => npc,
+    };
+    if keeps_target(npc, hit, by, around) {
         return Reaction::default();
     }
     let on_itself = strike.ship == ShipRef::Npc(npc.id);
@@ -166,23 +186,78 @@ fn hits(npc: &Npc, strike: &Strike, around: &Surroundings) -> bool {
     }
 }
 
-/// Whether `npc`, hit (or its escort hit) by `attacker`, lets it be: it
-/// keeps to its own nearer target ahead of it. Kin is not read: the
-/// answer flag held it back already ([`answer_flag`](crate::ai::answer_flag)).
-/// Its mode is not read: `_DamageShip` skips a reaction only while +0x50
-/// is above 0 (@0x3b4b0-0x3b4c2), a ship jumping out, never one coming in
-/// (see the module docs).
-fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
-    let squared = |ship: ShipRef| {
-        around.state_of(ship).map(|state| {
-            let off = state.position - npc.state.position;
-            (off.x * off.x + off.y * off.y, state.position)
-        })
+/// Whether `answering`, struck itself (`hit` is `answering`) or the lead
+/// of `hit`, the escort struck, keeps its target against `attacker` among
+/// `around`, so the hit changes nothing for it (see the module docs), by
+/// [`Surroundings::hit_focus`]
+/// ([`RuleKey::HitFocus`](crate::RuleKey::HitFocus)). Kin is not read:
+/// the answer flag held it back already
+/// ([`answer_flag`](crate::ai::answer_flag)). Its mode is not read:
+/// `_DamageShip` skips a reaction only while +0x50 is above 0
+/// (@0x3b4b0-0x3b4c2), a ship jumping out, never one coming in.
+///
+/// - By the engine (`_DamageShip` @0x3bbf3-0x3bcac), `hit` is tested,
+///   whichever ship answers: it keeps its target when it attacks a live
+///   one T ([`Goal::attacking`], `_IsShipAttacking` @0x82f6a), faces
+///   within [`FOCUS_DEGREES`] of the heading it last wanted
+///   (`_AngularDifference(trunc(+0x44), +0x68)`), and dist²(`attacker`) >
+///   [`FOCUS`] × dist²(T). +0x68 is the last body's heading of its frame
+///   for its goal ([`Pursuit::frame`](crate::ai::pursuit::Pursuit::frame)),
+///   which at the collision passes is the previous tick's, as in the
+///   original; with no such frame, the whole-degree bearing to T stands
+///   in. The original reads T's slot whatever is in it; a dead or departed
+///   T is not kept here.
+/// - By the other reading, the engine's before weapons-fidelity phase 37,
+///   `answering` tests itself: it keeps its target when T is nearer than
+///   half the attacker's distance (dist²(T) < [`FOCUS`] × dist²(attacker))
+///   and within [`FOCUS_ANGLE`] of its float heading by bearing.
+#[must_use]
+pub fn keeps_target(answering: &Npc, hit: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
+    match around.hit_focus {
+        RuleSource::Engine => focused(hit, attacker, around),
+        RuleSource::Bible => ignores(answering, attacker, around),
+    }
+}
+
+/// The distance squared from `npc` to `ship` among `around`, and where
+/// `ship` is; none for a ship not there.
+fn squared(npc: &Npc, ship: ShipRef, around: &Surroundings) -> Option<(f32, Vec2)> {
+    around.state_of(ship).map(|state| {
+        let off = state.position - npc.state.position;
+        (off.x * off.x + off.y * off.y, state.position)
+    })
+}
+
+/// The original's focus test of `hit`, the ship struck by `attacker`
+/// (see [`keeps_target`]).
+fn focused(hit: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
+    let Some(own) = hit.goal.attacking().filter(|&own| around.live(own)) else {
+        return false;
     };
+    let (Some((target, at)), Some((by, _))) =
+        (squared(hit, own, around), squared(hit, attacker, around))
+    else {
+        return false;
+    };
+    let wanted = hit
+        .pursuit
+        .frame
+        .filter(|frame| frame.goal == hit.goal)
+        .and_then(|frame| frame.last())
+        .map_or_else(
+            || trig::intercept_angle(hit.state.position, at),
+            |body| body.heading,
+        );
+    trig::angular_difference(trig::whole(hit.state.heading), wanted) <= FOCUS_DEGREES
+        && by > FOCUS * target
+}
+
+/// The other reading's focus test of `npc` itself (see [`keeps_target`]).
+fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
     let Some(own) = npc.goal.attacking().filter(|&own| around.live(own)) else {
         return false;
     };
-    match (squared(own), squared(attacker)) {
+    match (squared(npc, own, around), squared(npc, attacker, around)) {
         (Some((near, at)), Some((far, _))) => {
             near < FOCUS * far
                 && angle_off(npc.state.heading, bearing(npc.state.position, at)) <= FOCUS_ANGLE
@@ -305,6 +380,23 @@ mod tests {
         answer(&npcs[who], hit, &around, police)
     }
 
+    /// [`answered`] with the focus test read by `focus`
+    /// ([`Surroundings::hit_focus`]).
+    fn focused_by(
+        focus: RuleSource,
+        govts: &Governments,
+        npcs: &[Npc],
+        who: usize,
+        hit: &Strike,
+    ) -> Reaction {
+        let around = Surroundings {
+            govts,
+            hit_focus: focus,
+            ..Surroundings::new(&[], npcs)
+        };
+        answer(&npcs[who], hit, &around, RuleSource::Engine)
+    }
+
     const TAKES: fn(ShipRef) -> Reaction = |attacker| Reaction {
         target: Some(attacker),
         provoked: 12.0,
@@ -345,9 +437,32 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_keeping_its_own_nearer_target_does_not_turn_on_the_player() {
+    fn a_ship_keeping_its_own_target_does_not_turn_on_the_player() {
         // The focus skip jumps past `_AIMakeShipAttackPlayer` to 0x3bed2
-        // (@0x3bcac), under the engine's reading of the focus test.
+        // (@0x3bcac): the player 6 right keeps it (36 > 0.25 × 100), 4
+        // right does not (16).
+        let govts = relations(0, 0);
+        let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        hunter.goal = Goal::Attack(n(2));
+        let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
+        quarry.state.position = Vec2::new(0.0, -10.0);
+        let npcs = [hunter, quarry];
+        let hit = strike(n(1), ShipRef::Player);
+        let with_player_at = |x: f32| {
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(crate::ai::fixture::player(x, 0.0)),
+                ..Surroundings::new(&[], &npcs)
+            };
+            victim(&npcs[0], &hit, &around)
+        };
+        assert_eq!(with_player_at(6.0), Reaction::default());
+        assert_eq!(with_player_at(100.0), Reaction::default());
+        assert_eq!(with_player_at(4.0), TURNS, "the player too near");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_keeping_its_own_nearer_target_does_not_turn_on_the_player() {
         let govts = relations(0, 0);
         let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
         hunter.goal = Goal::Attack(n(2));
@@ -357,6 +472,7 @@ mod tests {
         let around = Surroundings {
             govts: &govts,
             player: Some(crate::ai::fixture::player(100.0, 0.0)),
+            hit_focus: RuleSource::Bible,
             ..Surroundings::new(&[], &npcs)
         };
         let hit = strike(n(1), ShipRef::Player);
@@ -537,9 +653,234 @@ mod tests {
         }
     }
 
+    /// A hunter (1) facing up and attacking a quarry (2) 50 above it, hit
+    /// by a pirate (3) `x` to its right.
+    fn hunted(x: f32) -> [Npc; 3] {
+        let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        hunter.goal = Goal::Attack(n(2));
+        let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
+        quarry.state.position = Vec2::new(0.0, -50.0);
+        [hunter, quarry, ship(3, Some(PIRATES), AiType::Warship, x)]
+    }
+
     #[test]
-    fn a_ship_keeps_a_target_nearer_than_half_the_attackers_distance_ahead_of_it() {
+    fn a_ship_attacking_keeps_its_target_unless_the_attacker_is_nearer_than_half_its_distance() {
+        // `_DamageShip` keeps the target when dist²(attacker) > 0.25 ×
+        // dist²(target) (`ucomiss; ja 0x3bed2`, @0x3bc41-0x3bcac): with the
+        // target at 50 (0.25 × 2500 = 625), the attacker must come in to 25.
         let govts = relations(0, 0);
+        let hit = strike(n(1), n(3));
+        let engine = |npcs: &[Npc]| focused_by(RuleSource::Engine, &govts, npcs, 0, &hit);
+        assert_eq!(engine(&hunted(100.0)), Reaction::default(), "far off");
+        assert_eq!(engine(&hunted(25.1)), Reaction::default(), "kept");
+        assert_eq!(engine(&hunted(25.0)), TAKES(n(3)), "at the edge");
+        assert_eq!(engine(&hunted(24.9)), TAKES(n(3)), "reacts");
+        assert_eq!(
+            answered(&govts, &hunted(100.0), 0, &hit),
+            Reaction::default()
+        );
+        assert_eq!(
+            focused_by(RuleSource::Bible, &govts, &hunted(100.0), 0, &hit),
+            TAKES(n(3)),
+            "by the other reading its target is not near enough"
+        );
+        assert_eq!(
+            focused_by(RuleSource::Bible, &govts, &hunted(24.9), 0, &hit),
+            TAKES(n(3))
+        );
+        let mut gone = hunted(100.0);
+        gone[0].goal = Goal::Attack(n(9));
+        assert_eq!(engine(&gone), TAKES(n(3)), "its target gone");
+        let mut shifted = hunted(100.0);
+        for npc in &mut shifted {
+            npc.state.position = npc.state.position + Vec2::new(300.0, -200.0);
+        }
+        assert_eq!(engine(&shifted), Reaction::default(), "measured from it");
+        let mut near = hunted(24.9);
+        for npc in &mut near {
+            npc.state.position = npc.state.position + Vec2::new(300.0, -200.0);
+        }
+        assert_eq!(engine(&near), TAKES(n(3)), "measured from it, near");
+    }
+
+    #[test]
+    fn a_ship_hit_by_the_ship_it_attacks_keeps_at_it_quietly() {
+        // A == T, so A > 0.25 T: no +0x96, no target, no wait cut.
+        let govts = relations(0, 0);
+        let mut npcs = hunted(0.0);
+        npcs[0].goal = Goal::Attack(n(3));
+        npcs[2].state.position = Vec2::new(0.0, -50.0);
+        let hit = strike(n(1), n(3));
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit),
+            Reaction::default()
+        );
+        assert_eq!(
+            focused_by(RuleSource::Bible, &govts, &npcs, 0, &hit),
+            TAKES(n(3))
+        );
+    }
+
+    #[test]
+    fn the_lead_of_an_escort_hit_follows_the_escorts_focus() {
+        // The lead's part (@0x3bcfa-0x3bd79) has no focus test of its own:
+        // the victim's test gates it.
+        let govts = relations(0, 0);
+        // An idle lead (1); its escort (2) 50 right attacks a quarry (4)
+        // 50 above itself; the attacker (3) 100 right of the escort.
+        let mut escort = ship(2, Some(POLICE), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        escort.goal = Goal::Attack(n(4));
+        let mut quarry = ship(4, Some(PIRATES), AiType::Warship, 50.0);
+        quarry.state.position = Vec2::new(50.0, -50.0);
+        let npcs = [
+            ship(1, Some(POLICE), AiType::Warship, 0.0),
+            escort,
+            ship(3, Some(PIRATES), AiType::Warship, 150.0),
+            quarry,
+        ];
+        let hit = strike(n(2), n(3));
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit),
+            Reaction::default(),
+            "the lead"
+        );
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &npcs, 1, &hit),
+            Reaction::default(),
+            "the escort"
+        );
+        assert_eq!(
+            focused_by(RuleSource::Bible, &govts, &npcs, 0, &hit),
+            TAKES(n(3)),
+            "by the other reading the idle lead tests itself"
+        );
+        // The lead attacking a quarry 10 above itself; its escort idle.
+        let mut turned = npcs.clone();
+        turned[0].goal = Goal::Attack(n(4));
+        turned[1].goal = Goal::Idle;
+        turned[3].state.position = Vec2::new(0.0, -10.0);
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &turned, 0, &hit),
+            TAKES(n(3)),
+            "the escort keeps nothing"
+        );
+        assert_eq!(
+            focused_by(RuleSource::Bible, &govts, &turned, 0, &hit),
+            Reaction::default(),
+            "by the other reading the lead keeps its own"
+        );
+    }
+
+    /// A frame of `goal` whose last body wants `heading`.
+    fn wanting(goal: Goal, heading: i16) -> crate::ai::pursuit::Frame {
+        use crate::ai::fire::Manoeuvre;
+        use crate::ai::pursuit::{Body, Frame};
+        Frame {
+            goal,
+            bodies: [
+                Some(Body {
+                    manoeuvre: Manoeuvre::Approach,
+                    heading: 180,
+                }),
+                Some(Body {
+                    manoeuvre: Manoeuvre::Dogfight,
+                    heading,
+                }),
+            ],
+        }
+    }
+
+    #[test]
+    fn the_facing_is_read_against_the_heading_its_last_frame_wanted() {
+        // +0x68, the heading the low level last wanted (@0x3bc25-0x3bc3f),
+        // is the frame's last body's; with no frame for its goal, the
+        // bearing to its target stands in.
+        let govts = relations(0, 0);
+        let hit = strike(n(1), n(3));
+        let with_frame = |frame| {
+            let mut npcs = hunted(100.0);
+            npcs[0].pursuit.frame = Some(frame);
+            focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit)
+        };
+        let attacking = Goal::Attack(n(2));
+        assert_eq!(with_frame(wanting(attacking, 44)), Reaction::default());
+        assert_eq!(with_frame(wanting(attacking, 316)), Reaction::default());
+        assert_eq!(with_frame(wanting(attacking, 45)), TAKES(n(3)), "45 off");
+        assert_eq!(with_frame(wanting(attacking, 315)), TAKES(n(3)));
+        assert_eq!(with_frame(wanting(attacking, 90)), TAKES(n(3)));
+        assert_eq!(
+            with_frame(wanting(Goal::Attack(n(9)), 90)),
+            Reaction::default(),
+            "a stale frame: the bearing, 0, stands in"
+        );
+        let mut aside = hunted(100.0);
+        aside[1].state.position = Vec2::new(-50.0, -50.0);
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &aside, 0, &hit),
+            TAKES(n(3)),
+            "no frame, its target 45 off the bearing"
+        );
+        aside[0].pursuit.frame = Some(wanting(attacking, 0));
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &aside, 0, &hit),
+            Reaction::default(),
+            "the frame wants it dead ahead"
+        );
+    }
+
+    #[test]
+    fn the_facing_reads_its_heading_in_whole_degrees() {
+        // `_AngularDifference(trunc(+0x44), +0x68)` <= 0x2c.
+        let govts = relations(0, 0);
+        let hit = strike(n(1), n(3));
+        let heading = |degrees: f32| {
+            let mut npcs = hunted(100.0);
+            npcs[0].state.heading = degrees;
+            focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit)
+        };
+        assert_eq!(heading(44.9), Reaction::default());
+        assert_eq!(heading(45.0), TAKES(n(3)));
+        assert_eq!(heading(316.0), Reaction::default());
+        assert_eq!(heading(315.9), TAKES(n(3)));
+    }
+
+    #[test]
+    fn the_focus_holds_back_only_a_ship_attacking() {
+        // `_IsShipAttacking` (@0x3bc18 → @0x82f6a): goal 4.
+        let govts = relations(0, 0);
+        let hit = strike(n(1), n(3));
+        for goal in [
+            Goal::Plunder {
+                ship: n(2),
+                hopeless: false,
+            },
+            Goal::Flee(n(2)),
+            Goal::Idle,
+        ] {
+            let mut npcs = hunted(100.0);
+            npcs[0].goal = goal;
+            assert_eq!(
+                focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit),
+                TAKES(n(3)),
+                "{goal:?}"
+            );
+        }
+        let mut sniping = hunted(100.0);
+        sniping[0].goal = Goal::Snipe(n(2));
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &sniping, 0, &hit),
+            Reaction::default()
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_keeps_a_target_nearer_than_half_the_attackers_distance_ahead_of_it()
+     {
+        let govts = relations(0, 0);
+        let bible = |govts: &Governments, npcs: &[Npc], who: usize, hit: &Strike| {
+            focused_by(RuleSource::Bible, govts, npcs, who, hit)
+        };
         // The ship faces up; its target 50 above, the attacker 100 right.
         let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
         hunter.goal = Goal::Attack(n(2));
@@ -548,24 +889,20 @@ mod tests {
         let attacker = ship(3, Some(PIRATES), AiType::Warship, 100.0);
         let npcs = [hunter, quarry, attacker];
         let hit = strike(n(1), n(3));
-        assert_eq!(
-            answered(&govts, &npcs, 0, &hit),
-            Reaction::default(),
-            "kept"
-        );
+        assert_eq!(bible(&govts, &npcs, 0, &hit), Reaction::default(), "kept");
         let mut farther = npcs.clone();
         farther[1].state.position = Vec2::new(0.0, -50.0);
-        assert_eq!(answered(&govts, &farther, 0, &hit), TAKES(n(3)));
+        assert_eq!(bible(&govts, &farther, 0, &hit), TAKES(n(3)));
         // Near enough, but 45 degrees off the nose; then 1.
         let mut aside = npcs.clone();
         aside[1].state.position = Vec2::new(-30.0, -30.0);
-        assert_eq!(answered(&govts, &aside, 0, &hit), TAKES(n(3)));
+        assert_eq!(bible(&govts, &aside, 0, &hit), TAKES(n(3)));
         aside[0].state.heading = 316.0;
-        assert_eq!(answered(&govts, &aside, 0, &hit), Reaction::default());
+        assert_eq!(bible(&govts, &aside, 0, &hit), Reaction::default());
         let mut gone = npcs.clone();
         gone[0].goal = Goal::Attack(n(9));
         assert_eq!(
-            answered(&govts, &gone, 0, &hit),
+            bible(&govts, &gone, 0, &hit),
             TAKES(n(3)),
             "its target gone"
         );
@@ -580,15 +917,15 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            answered(&govts, &shift(&npcs), 0, &hit),
+            bible(&govts, &shift(&npcs), 0, &hit),
             Reaction::default(),
             "measured from where it is"
         );
-        assert_eq!(answered(&govts, &shift(&farther), 0, &hit), TAKES(n(3)));
+        assert_eq!(bible(&govts, &shift(&farther), 0, &hit), TAKES(n(3)));
         let mut by_its_target = npcs.clone();
         by_its_target[0].goal = Goal::Attack(n(3));
         assert_eq!(
-            answered(&govts, &by_its_target, 0, &hit),
+            bible(&govts, &by_its_target, 0, &hit),
             TAKES(n(3)),
             "hit by the ship it attacks"
         );
@@ -599,7 +936,7 @@ mod tests {
             hopeless: false,
         };
         assert_eq!(
-            answered(&govts, &plundering, 0, &hit),
+            bible(&govts, &plundering, 0, &hit),
             TAKES(n(3)),
             "a plunder (goal 0xd) is no attack to `_IsShipAttacking` (@0x3bc18)"
         );

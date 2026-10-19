@@ -557,6 +557,12 @@ pub struct Surroundings<'a> {
     /// and its bay stays ready, so the snipe's own `_AILaunchFighter` makes
     /// the bay its pick after its passes (see [`fire`]).
     pub fighter_room: bool,
+    /// Which hit lets a ship keep its own target
+    /// ([`react::keeps_target`],
+    /// [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)): the original's
+    /// test of the ship struck by the engine, the engine's test before
+    /// weapons-fidelity phase 37 by the other reading.
+    pub hit_focus: RuleSource,
 }
 
 /// No government marked by an IFF scrambler.
@@ -565,8 +571,8 @@ pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
-    /// cloak scanner, no government marked by an IFF scrambler and room
-    /// for a fighter.
+    /// cloak scanner, no government marked by an IFF scrambler, room for
+    /// a fighter and the engine's [`hit_focus`](Surroundings::hit_focus).
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -582,6 +588,7 @@ impl<'a> Surroundings<'a> {
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
             fighter_room: true,
+            hit_focus: RuleSource::Engine,
         }
     }
 
