@@ -7,7 +7,13 @@
 //!   has a sprite (spöb +0, written @0x32fc8 by
 //!   `_HandleStellarSystemVisibility` for each stellar it shows, a
 //!   destroyed one with its dead graphic) and is deadly (byte +0x35
-//!   bit 0, [`is_deadly`]).
+//!   bit 0, [`is_deadly`]). Nothing clears spöb +0, so a stellar hidden
+//!   since it was last shown still holds the pool slot it last took: it
+//!   touches by that slot's sprite, the stellar that owns it now or, with
+//!   none, an invisible graphic type 0 frame at the slot's last screen
+//!   place, as [`RuleKey::StaleStellarSprite`] reads (see
+//!   `nova_sim::story::sprite_pool` and the session's `stale_sprites`
+//!   module). A stellar never shown holds none.
 //! - **Which ships.** Every active ship, the player included, that is not
 //!   breaking up (`_IsDying`) and does not resist ([`resists_deadly`],
 //!   `_ShipResistsDeadlyStellars` @0x7bbe-0x7c59): a class of `Flags3`
@@ -19,9 +25,9 @@
 //! - **Touching** ([`touches`]): the original compares the two sprites'
 //!   pixel masks (`_SWRLECollision` @0x39d97). The engine has no masks, so
 //!   it tests discs, as a shot at a stellar or an asteroid does: a ship is
-//!   its hull's hit radius, and a stellar half the larger side of the
-//!   frame it is drawn with, its dead frame once destroyed
-//!   ([`drawn_radius`]). A stellar with no frame touches nothing.
+//!   its hull's hit radius, and a sprite half the larger side of the
+//!   frame it holds ([`drawn_radius`]), centred on its rect. A sprite with
+//!   no frame touches nothing.
 //!
 //! What a kill does to the ship is the session's (`nova_sim::Session`'s
 //! deadly-stellar step), under [`RuleKey::DeadlyStellarKill`]
