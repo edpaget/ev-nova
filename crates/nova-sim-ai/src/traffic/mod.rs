@@ -152,6 +152,7 @@ pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
 pub mod inertialess;
+pub mod kept_berths;
 pub mod leave_flight;
 #[cfg(test)]
 mod lost_sight_tests;
@@ -690,7 +691,8 @@ pub struct Traffic {
     /// a ship comes in (`_SpawnPerson` @0x40cef, and -1 for a ship with
     /// no person, `_GenericRandomShipSpawn` @0x3cb48), kept as it dies or
     /// leaves, and across systems, and cleared by a capture
-    /// ([`Traffic::forget_berth_person`]). `<OSN>` reads it.
+    /// ([`Traffic::forget_berth_person`]). `<OSN>` reads it. Handed on to
+    /// the next traffic ([`kept_berths`]).
     berth_persons: BTreeMap<u32, String>,
     /// The pick (+0x72) of the ship last at each berth, which a new ship
     /// there takes ([`berth_picks`]): written as each ship's pick changes,
@@ -702,11 +704,12 @@ pub struct Traffic {
     berth_exits: BerthExits,
     /// The search timer (+0xc90c) of the ship last at each berth, which a
     /// new ship there takes ([`berth_search`]): written as each ship's
-    /// timer changes, kept as it dies or leaves, and across systems.
+    /// timer changes, kept as it dies or leaves, across systems, and
+    /// handed on to the next traffic ([`kept_berths`]).
     berth_search: BerthSearch,
     /// The odds each berth caches (+0xc914), refreshed one berth a tick
-    /// ([`odds_cache`]): kept as its ship dies or leaves, and across
-    /// systems.
+    /// ([`odds_cache`]): kept as its ship dies or leaves, across systems,
+    /// and handed on to the next traffic ([`kept_berths`]).
     odds: OddsCache,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the

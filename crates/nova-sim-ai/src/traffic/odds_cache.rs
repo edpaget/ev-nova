@@ -41,10 +41,11 @@
 //! can give, is never walked: the original's table has no such slot. Its
 //! ship stays at -1.
 //!
-//! The cache lives as long as the [`Traffic`] holding it, as the berths'
-//! picks do: across systems, but not across a new traffic. The original
-//! keeps it through a pilot load or a new game until the app quits,
-//! recorded in rdm phase combat-ai-fidelity/phase-23-left-out-of-phase-16.
+//! The cache lasts as long as the app, as the original's table does
+//! through a pilot load or a new game until the app quits: across
+//! systems, and handed on from each [`Traffic`] to the next, across a
+//! traffic Reset and a new session (see
+//! [`kept_berths`](super::kept_berths)).
 //!
 //! Which odds the readers read, the cache's or fresh ones, is
 //! [`RuleKey::OddsCache`](crate::RuleKey::OddsCache)'s

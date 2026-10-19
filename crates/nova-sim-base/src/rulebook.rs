@@ -237,7 +237,7 @@
 //! | [`EscapeShipCut`](RuleKey::EscapeShipCut) | `escape_ship_cut` | the shield roll and velocity halving of a dying NPC's last launch land on the ship in slot 1, or on the player when no fighter launched (`_HandleShip` @0x354ea-0x35553; see `nova_sim::npc_escape`) | on the fighter launched; nothing when none is\* |
 //! | [`NpcJumpFuel`](RuleKey::NpcJumpFuel) | `npc_jump_fuel` | an NPC whose class's `Fuel` is above 99 and that no other ship tractors can jump with an empty tank; only a ship whose person starts with zero fuel (`përs` `Flags2` 0x0001) needs 100 fuel now (`_AIShipHasFuelForJump` @0x7f48f-0x7f500; see `nova_sim::ai::leave`) | every NPC also needs 100 fuel now\* |
 //! | [`OddsCache`](RuleKey::OddsCache) | `odds_cache` | each reader of a ship's odds (the warship's and interceptor's odds retreat, `_WarshipAI` @0x8bd22, `_InterceptorAI` @0x8d1cd; the call for reinforcements, `_AICallForReinforcements` @0x7f60d, @0x7f69b) reads its slot's cached odds (+0xc914): -1 from its spawn until `_DoPlayGameWork`'s odds pass reaches it, refreshing one slot a frame after the thinks (@0x442b0-0x44336, @0x44542-0x44553; see `nova_sim_ai::traffic::odds_cache`) | each reader works the odds out fresh at its read\* |
-//! | [`ReusedSlotSearch`](RuleKey::ReusedSlotSearch) | `reused_slot_search` | a ship brought into a ship-table slot takes the search timer (+0xc90c) the slot's last ship left, as only `_HighLevelAIHandler`'s lost-sight block writes it and the table is an uncleared `NewPtr` (`_InitArrays` @0x1b7a1): a search broken off is counted down with no roll, and a never-used slot's 0 drops a lost target at once (@0x8d830, @0x8d85f-0x8d8a6; see `nova_sim_ai::traffic::berth_search`) | every ship starts with no timer, its first loss of sight rolling a 100-199 frame search\* |
+//! | [`ReusedSlotSearch`](RuleKey::ReusedSlotSearch) | `reused_slot_search` | a ship brought into a ship-table slot takes the search timer (+0xc90c) the slot's last ship left, in any system, pilot or game since launch, as only `_HighLevelAIHandler`'s lost-sight block writes it and the table is an uncleared `NewPtr` (`_InitArrays` @0x1b7a1): a search broken off is counted down with no roll, and a never-used slot's 0 drops a lost target at once (@0x8d830, @0x8d85f-0x8d8a6; see `nova_sim_ai::traffic::berth_search`) | every ship starts with no timer, its first loss of sight rolling a 100-199 frame search\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -3107,9 +3107,11 @@ rule_keys! {
     /// starts with (see `nova_sim_ai::traffic::berth_search`). By the
     /// engine, as only `_HighLevelAIHandler`'s lost-sight block writes it
     /// (@0x8d852, @0x8d876, @0x8d89c, @0x8d8ae) and the table is an
-    /// uncleared `NewPtr(0x325000)` (`_InitArrays` @0x1b7a1): the timer
-    /// the slot's last ship left, a search it broke off counted down with
-    /// no roll, and a never-used slot's 0, which drops a lost target on
+    /// uncleared `NewPtr(0x325000)` (`_InitArrays` @0x1b7a1) kept until
+    /// the app quits: the timer the slot's last ship left, in any system,
+    /// pilot or game since launch (see
+    /// `nova_sim_ai::traffic::kept_berths`), a search it broke off counted
+    /// down with no roll, and a never-used slot's 0, which drops a lost target on
     /// the first frame out of sight (@0x8d830, @0x8d85f-0x8d8a6). By the
     /// other reading every ship starts with no timer, so its first loss of
     /// sight rolls a search of 100-199 frames. The Bible says nothing of

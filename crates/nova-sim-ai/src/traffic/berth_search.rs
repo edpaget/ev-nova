@@ -24,11 +24,11 @@
 //! other reading. A search under way reaches the new ship as a count
 //! carried ([`SearchTimer::carried`]): the new ship isn't searching.
 //!
-//! It lives as long as the [`Traffic`] holding it, as its berths' picks
-//! and exit cursors do: across systems, but not across a new traffic.
-//! The original keeps a slot's timer through a pilot load or a new game
-//! until the app quits; that is
-//! rdm:phase/combat-ai-fidelity/phase-23-left-out-of-phase-16's step 3.
+//! It lasts as long as the app, as the original keeps a slot's timer
+//! through a pilot load or a new game until the app quits: across
+//! systems, and handed on from each [`Traffic`] to the next, across a
+//! traffic Reset and a new session, each new traffic keeping its own
+//! reading (see [`kept_berths`](super::kept_berths)).
 
 use crate::ai::lost_sight::SearchTimer;
 use crate::rulebook::RuleSource;
@@ -64,6 +64,12 @@ impl BerthSearch {
     /// Takes new ships' timers by `reading`.
     pub fn set_reading(&mut self, reading: RuleSource) {
         self.0.set_reading(reading);
+    }
+
+    /// Takes `other`'s timer for every berth in place of its own, keeping
+    /// its own reading (see [`kept_berths`](super::kept_berths)).
+    pub fn take_timers_of(&mut self, other: Self) {
+        self.0.take_words_of(other.0);
     }
 
     /// The reading new ships' timers are taken by.

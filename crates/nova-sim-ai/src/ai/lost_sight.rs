@@ -58,8 +58,6 @@
 //!   inspects and re-picks over its attacker (`_InterceptorAI` spares
 //!   state 7 its provocation, @0x8cc0d), where the engine's turns on it:
 //!   rdm:phase/combat-ai-fidelity/phase-27-left-out-of-phase-21.
-//! - The slot's timer lasting the app's life, through a pilot load or a
-//!   new game: rdm:phase/combat-ai-fidelity/phase-23-left-out-of-phase-16.
 //! - The warp-stage writes of the trader's leave (+0x50, +0xa4), the
 //!   warp stage's (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
 //! - The NPC target picks' own sight of a cloaked ship
