@@ -336,6 +336,7 @@ pub mod aim;
 pub mod armament;
 pub mod asteroid_hit;
 pub mod beam;
+mod collision;
 pub mod damage;
 pub mod defence;
 pub mod exits;
@@ -365,6 +366,7 @@ use aim::Pointing;
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use asteroid_hit::{AsteroidFuse, AsteroidTarget};
 use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
+pub use collision::SpriteRank;
 use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 use exits::{Compression, ExitCursors, ExitPoints, StrayWord, drawn_frame, frame_angle};
@@ -910,6 +912,13 @@ pub struct Fighter<'a> {
     /// (`_DoPlayGameWork` @0x43e19-0x43e29, @0x44483-0x444ad; see
     /// [`exits`]).
     pub drawn_heading: f32,
+    /// Where its slot sprite stands as the collision passes walk the
+    /// ships: its layer and its entry there ([`SpriteRank`]), read once as
+    /// the pass begins, or none for a hidden ship, whose sprite
+    /// `_HandleShipDisplay` hides, so no contact pass meets it (@0x2cc6b,
+    /// `_SWCollideSpriteLayer` @0xacba3), though a proximity fuse still
+    /// can.
+    pub sprite: Option<SpriteRank>,
 }
 
 /// The rules a fight is fought by: when a ship is disabled, which
@@ -3712,6 +3721,7 @@ mod tests {
     use crate::combat::weapon::{
         LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_ON_FIRER, WeaponSpec,
     };
+    use crate::ship_layer::ShipLayer;
     use crate::trig;
     use nova_sim_base::fixture::Ranged;
     use nova_sim_catalog::fixture::weapon;
@@ -3760,6 +3770,8 @@ mod tests {
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
         drawn_heading: Option<f32>,
+        /// Where its sprite stands for the collision walk.
+        sprite: Option<SpriteRank>,
     }
 
     /// A trigger holding no weapon, its point defence running, as a test
@@ -3816,6 +3828,11 @@ mod tests {
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
+                // As `_InitSprites` leaves the slots (`LayerEntries::new`).
+                sprite: Some(SpriteRank {
+                    layer: ShipLayer::Ships,
+                    entry: -1 - i64::from(id),
+                }),
             }
         }
 
@@ -3871,6 +3888,7 @@ mod tests {
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
+                sprite: self.sprite,
             }
         }
     }

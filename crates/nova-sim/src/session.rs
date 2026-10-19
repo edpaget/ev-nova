@@ -362,6 +362,7 @@ mod buoys;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
+mod collision_order;
 mod comm_calls;
 mod control;
 mod course;
@@ -492,7 +493,8 @@ use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, ShipRef, Shove, Strike,
+    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, ShipRef, Shove, SpriteRank,
+    Strike,
 };
 use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
@@ -578,6 +580,9 @@ struct FightTerms {
     drawn_heading: f32,
     /// How strongly it jams ([`Fighter::jamming`]).
     jamming: Jamming,
+    /// Where its slot sprite stands for the collision passes
+    /// ([`Fighter::sprite`], [`Session::sprite_ranks`]).
+    sprite: Option<SpriteRank>,
 }
 
 impl FightTerms {
@@ -652,6 +657,7 @@ impl FightTerms {
             armament,
             rounds,
             drawn_heading: self.drawn_heading,
+            sprite: self.sprite,
         }
     }
 }
@@ -3016,6 +3022,13 @@ impl Session {
     /// `_ExtendedIsThreatToPlayer` asks it, with the player's sight of it.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn = |ship: ShipRef, heading: f32| self.drawn.get(&ship).copied().unwrap_or(heading);
+        let ranks = self.sprite_ranks();
+        let sprite = |ship: ShipRef| {
+            ranks
+                .iter()
+                .find(|&&(ranked, _)| ranked == ship)
+                .map(|&(_, rank)| rank)
+        };
         let player = FightTerms {
             held_disabled: false,
             threatens_player: false,
@@ -3023,6 +3036,7 @@ impl Session {
             top_speed: self.top_speed(),
             drawn_heading: drawn(ShipRef::Player, self.player.heading),
             jamming: self.player_jamming(),
+            sprite: sprite(ShipRef::Player),
         };
         let led_speed = self.led_speed();
         let npcs = self
@@ -3037,6 +3051,7 @@ impl Session {
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
                 jamming: self.npc_jamming(npc),
+                sprite: sprite(ShipRef::Npc(npc.id)),
             })
             .collect();
         (player, npcs)
@@ -22510,6 +22525,7 @@ pub(super) mod tests {
             top_speed: 0.0,
             drawn_heading: 0.0,
             jamming: Jamming([5, 0, 0, 9]),
+            sprite: None,
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;

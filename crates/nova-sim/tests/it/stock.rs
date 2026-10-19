@@ -1430,6 +1430,15 @@ impl Combatant {
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,
             docked: false,
+            // As `_InitSprites` leaves the slots: the player on top, then
+            // each berth by its number.
+            sprite: Some(nova_sim::combat::SpriteRank {
+                layer: nova_sim::ShipLayer::Ships,
+                entry: match self.id {
+                    ShipRef::Player => 0,
+                    ShipRef::Npc(id) => -1 - i64::from(id.0),
+                },
+            }),
         }
     }
 }

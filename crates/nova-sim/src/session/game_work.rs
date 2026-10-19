@@ -362,6 +362,7 @@ impl Session {
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
             docked: false,
+            sprite: player_terms.sprite,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
