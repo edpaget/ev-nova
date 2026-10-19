@@ -73,7 +73,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         pursuit: Pursuit::default(),
         ai_wait: 0,
         docking: None,
-        lost_sight: None,
+        lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
         marines: ClassMarines::default(),
         pods_left: 0,

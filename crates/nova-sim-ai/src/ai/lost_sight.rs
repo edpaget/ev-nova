@@ -28,6 +28,11 @@
 //!   an unset timer is set to `Rand(100)+100` (@0x8d83b-0x8d852),
 //!   a set one counts down a tick (@0x8d85f-0x8d876), and one run out drops
 //!   the target (target -1, state and sub 0, timer -1, @0x8d884-0x8d8a6).
+//!   A timer the ship took from its slot ([`SearchTimer::Carried`]: no
+//!   spawn writes +0xc90c, see
+//!   [`berth_search`](crate::traffic::berth_search)) counts down the same
+//!   way with no roll, so a never-used slot's 0 drops the target on the
+//!   first tick out of sight.
 //!   Each path ends the handler for the frame (the jump to @0x8fb47,
 //!   [`ends_high_level`]), so the state-4 block's call for reinforcements
 //!   and the flee drop do not run; `_LowLevelAIHandler` still flies sub
@@ -47,14 +52,14 @@
 //!
 //! # Not modelled
 //!
-//! - The timer a ship slot carries over: the original never clears
-//!   +0xc90c at a spawn, so a ship takes its slot's last occupant's
-//!   timer; and a trader that can't jump keeps its target in state 6
+//! - A trader that can't jump keeps its target in state 6
 //!   (@0x8d803-0x8d80f), where the engine's trader targets only its
 //!   goal's quarry. And `_InterceptorAI`'s re-pick while inspecting
 //!   (@0x8d404-0x8d43a), which needs a government and inspects its pick
-//!   rather than attacking it. All in
+//!   rather than attacking it. Both in
 //!   rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
+//! - The slot's timer lasting the app's life, through a pilot load or a
+//!   new game: rdm:phase/combat-ai-fidelity/phase-23-left-out-of-phase-16.
 //! - The warp-stage writes of the trader's leave (+0x50, +0xa4), the
 //!   warp stage's (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
 //! - The NPC target picks' own sight of a cloaked ship
@@ -70,6 +75,37 @@ use crate::traffic::npc::Npc;
 
 /// The fewest ticks a search lasts (`Rand(100)+100`, @0x8d84b).
 pub const SEARCH_TICKS: u32 = 100;
+
+/// A ship's search timer, the original's +0xc90c ([`Npc::lost_sight`]).
+///
+/// Only the lost-sight block writes it, and no spawn does: a ship takes the
+/// timer its slot's last ship left (see
+/// [`berth_search`](crate::traffic::berth_search)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchTimer {
+    /// No timer, the original's -1: a loss of sight rolls a search.
+    #[default]
+    Unset,
+    /// A count the ship took from its slot without searching: a never-used
+    /// slot's 0 (the zero fill of `_NewPtr`, `_InitArrays` @0x1b7a1), or
+    /// the ticks left of the search its last ship broke off. A loss of
+    /// sight counts it down with no roll, so 0 gives up at once.
+    Carried(u32),
+    /// A search under way, with this many ticks left.
+    Searching(u32),
+}
+
+impl SearchTimer {
+    /// The timer a new ship brought into the slot holds: the same count,
+    /// but no search under way.
+    #[must_use]
+    pub fn carried(self) -> Self {
+        match self {
+            Self::Searching(left) => Self::Carried(left),
+            timer => timer,
+        }
+    }
+}
 
 /// The lost-sight block's write of the search timer +0xc90c, when it ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,19 +162,19 @@ pub fn after_think(
     }
     // Each frame of the search writes +0x6c = -1 (@0x8d833).
     match npc.lost_sight {
-        None => Decision {
+        SearchTimer::Unset => Decision {
             lost_sight: Some(LostSight::Searching(
                 SEARCH_TICKS + chance.below(SEARCH_TICKS),
             )),
             travel: TravelWrite::Clear,
             ..decision
         },
-        Some(left) if left > 1 => Decision {
+        SearchTimer::Carried(left) | SearchTimer::Searching(left) if left > 1 => Decision {
             lost_sight: Some(LostSight::Searching(left - 1)),
             travel: TravelWrite::Clear,
             ..decision
         },
-        Some(_) => Decision {
+        SearchTimer::Carried(_) | SearchTimer::Searching(_) => Decision {
             goal: Goal::Idle,
             clears_target: true,
             lost_sight: Some(LostSight::GaveUp),
@@ -159,13 +195,15 @@ pub fn ends_high_level(decision: &Decision) -> bool {
 }
 
 /// Whether `npc` searches now: its goal an attack, snipe or plunder
-/// (state 4 or 0xd) and its search timer set. It flies sub 1, a stop.
+/// (state 4 or 0xd) and a search under way. It flies sub 1, a stop. A
+/// timer carried from its slot is no search: the original's ship flies
+/// its fight until a loss of sight runs the block.
 #[must_use]
 pub fn searching(npc: &Npc) -> bool {
     matches!(
         npc.goal,
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. }
-    ) && npc.lost_sight.is_some()
+    ) && matches!(npc.lost_sight, SearchTimer::Searching(_))
 }
 
 /// `decision`, an interceptor's think, through `_InterceptorAI`'s
@@ -203,7 +241,7 @@ mod tests {
     }
 
     /// NPC 1 of `ai_type` at the centre, its timer `timer`.
-    fn hunter(ai_type: AiType, timer: Option<u32>) -> Npc {
+    fn hunter(ai_type: AiType, timer: SearchTimer) -> Npc {
         let mut npc = ship(1, TRADERS, ai_type, 0.0, 0.0);
         npc.lost_sight = timer;
         npc
@@ -246,7 +284,7 @@ mod tests {
 
     #[test]
     fn a_warship_that_loses_sight_starts_a_100_to_199_tick_search() {
-        let warship = hunter(AiType::Warship, None);
+        let warship = hunter(AiType::Warship, SearchTimer::Unset);
         let mut low = Draws::of(&[0]);
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut low);
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)));
@@ -261,14 +299,14 @@ mod tests {
 
     #[test]
     fn a_search_under_way_counts_down_without_a_draw() {
-        let warship = hunter(AiType::Warship, Some(5));
+        let warship = hunter(AiType::Warship, SearchTimer::Searching(5));
         let mut chance = Draws::of(&[]);
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(4)));
         assert_eq!(decision.goal, Goal::Attack(n(2)));
         assert_eq!(decision.travel, TravelWrite::Clear);
         assert!(chance.asked.is_empty());
-        let warship = hunter(AiType::Warship, Some(2));
+        let warship = hunter(AiType::Warship, SearchTimer::Searching(2));
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(1)));
     }
@@ -276,7 +314,7 @@ mod tests {
     #[test]
     fn the_search_gives_up_when_the_timer_runs_out() {
         for timer in [1, 0] {
-            let warship = hunter(AiType::Warship, Some(timer));
+            let warship = hunter(AiType::Warship, SearchTimer::Searching(timer));
             let mut chance = Draws::of(&[]);
             let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
             assert_eq!(decision.goal, Goal::Idle, "timer {timer}");
@@ -289,7 +327,7 @@ mod tests {
 
     #[test]
     fn a_target_seen_again_clears_the_search() {
-        let warship = hunter(AiType::Warship, Some(50));
+        let warship = hunter(AiType::Warship, SearchTimer::Searching(50));
         let mut chance = Draws::of(&[]);
         let decision = through(
             &warship,
@@ -313,7 +351,7 @@ mod tests {
 
     #[test]
     fn snipes_and_plunders_search_too_and_flights_and_inspections_do_not() {
-        let warship = hunter(AiType::Warship, Some(5));
+        let warship = hunter(AiType::Warship, SearchTimer::Searching(5));
         let plunder = Goal::Plunder {
             ship: n(2),
             hopeless: true,
@@ -335,7 +373,7 @@ mod tests {
 
     #[test]
     fn a_ship_whose_ai_wait_runs_skips_the_block() {
-        let mut warship = hunter(AiType::Warship, Some(5));
+        let mut warship = hunter(AiType::Warship, SearchTimer::Searching(5));
         warship.ai_wait = 3;
         let decision = lost(&warship, of(Goal::Attack(n(2))), &mut Draws::of(&[]));
         assert_eq!(decision, of(Goal::Attack(n(2))), "@0x8d4b9-0x8d4d2");
@@ -343,7 +381,7 @@ mod tests {
 
     #[test]
     fn the_think_s_other_words_stand_through_the_search() {
-        let warship = hunter(AiType::Warship, Some(5));
+        let warship = hunter(AiType::Warship, SearchTimer::Searching(5));
         let decision = Decision {
             turns_on_player: true,
             calls_reinforcements: true,
@@ -364,7 +402,7 @@ mod tests {
     #[test]
     fn a_trader_that_loses_sight_leaves_when_it_can_jump_and_waits_when_it_cannot() {
         for ai_type in [AiType::WimpyTrader, AiType::BraveTrader] {
-            let mut trader = hunter(ai_type, Some(5));
+            let mut trader = hunter(ai_type, SearchTimer::Searching(5));
             trader.class_fuel = 100;
             let mut chance = Draws::of(&[]);
             let decision = lost(&trader, of(Goal::Attack(n(2))), &mut chance);
@@ -396,11 +434,11 @@ mod tests {
 
     #[test]
     fn a_trader_type_the_player_leads_or_a_carrier_launched_searches_instead() {
-        let mut led = hunter(AiType::WimpyTrader, None);
+        let mut led = hunter(AiType::WimpyTrader, SearchTimer::Unset);
         led.leader = Some(NpcId(3));
         let decision = lost(&led, of(Goal::Attack(n(2))), &mut Draws::of(&[0]));
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)), "led");
-        let mut fighter = hunter(AiType::BraveTrader, None);
+        let mut fighter = hunter(AiType::BraveTrader, SearchTimer::Unset);
         fighter.carrier = Some(Carrier {
             ship: n(3),
             window: 100.0,
@@ -412,7 +450,7 @@ mod tests {
             Some(LostSight::Searching(100)),
             "carried"
         );
-        let interceptor = hunter(AiType::Interceptor, None);
+        let interceptor = hunter(AiType::Interceptor, SearchTimer::Unset);
         let decision = lost(&interceptor, of(Goal::Attack(n(2))), &mut Draws::of(&[0]));
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)));
     }
@@ -431,7 +469,7 @@ mod tests {
 
     #[test]
     fn searching_holds_only_in_state_4_or_0xd_with_the_timer_set() {
-        let mut npc = hunter(AiType::Warship, Some(3));
+        let mut npc = hunter(AiType::Warship, SearchTimer::Searching(3));
         let plunder = Goal::Plunder {
             ship: n(2),
             hopeless: false,
@@ -450,15 +488,59 @@ mod tests {
             assert!(!searching(&npc), "{goal:?}");
         }
         npc.goal = Goal::Attack(n(2));
-        npc.lost_sight = None;
+        npc.lost_sight = SearchTimer::Unset;
         assert!(!searching(&npc), "no timer");
+    }
+
+    #[test]
+    fn a_carried_timer_counts_down_as_a_search_does() {
+        let warship = hunter(AiType::Warship, SearchTimer::Carried(5));
+        let mut chance = Draws::of(&[]);
+        let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
+        assert_eq!(decision.lost_sight, Some(LostSight::Searching(4)));
+        assert_eq!(decision.goal, Goal::Attack(n(2)));
+        assert_eq!(decision.travel, TravelWrite::Clear);
+        assert!(chance.asked.is_empty(), "no roll");
+    }
+
+    #[test]
+    fn a_fresh_slots_zero_timer_gives_up_at_once() {
+        // A never-used slot's +0xc90c reads 0.0 (`_NewPtr` @0x1b7a1), not
+        // below 0 at @0x8d830: counted down, it drops the target.
+        let warship = hunter(AiType::Warship, SearchTimer::Carried(0));
+        let mut chance = Draws::of(&[]);
+        let decision = lost(&warship, of(Goal::Attack(n(2))), &mut chance);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+        assert_eq!(decision.lost_sight, Some(LostSight::GaveUp));
+        assert!(chance.asked.is_empty(), "no roll");
+    }
+
+    #[test]
+    fn a_carried_timer_is_no_search() {
+        let mut npc = hunter(AiType::Warship, SearchTimer::Carried(30));
+        npc.goal = Goal::Attack(n(2));
+        assert!(!searching(&npc), "a carried timer");
+        npc.lost_sight = SearchTimer::Searching(30);
+        assert!(searching(&npc));
+    }
+
+    #[test]
+    fn a_timer_carried_to_a_new_ship_is_no_search_under_way() {
+        assert_eq!(
+            SearchTimer::Searching(40).carried(),
+            SearchTimer::Carried(40)
+        );
+        assert_eq!(SearchTimer::Carried(7).carried(), SearchTimer::Carried(7));
+        assert_eq!(SearchTimer::Unset.carried(), SearchTimer::Unset);
+        assert_eq!(SearchTimer::default(), SearchTimer::Unset);
     }
 
     /// `decision` of an interceptor at the centre through its tail, with
     /// `quarry`.
     fn inspected(quarry: Npc, decision: Decision) -> Decision {
         let (sites, govts) = (sites(), govts(0, 0));
-        let npcs = [hunter(AiType::Interceptor, None), quarry];
+        let npcs = [hunter(AiType::Interceptor, SearchTimer::Unset), quarry];
         let around = around(&sites, &npcs, &govts, (0.0, 2000.0), 0);
         after_inspection(&npcs[0], decision, &around)
     }

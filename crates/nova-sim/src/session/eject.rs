@@ -410,7 +410,7 @@ impl Session {
             pursuit: Pursuit::default(),
             ai_wait: 0,
             docking: None,
-            lost_sight: None,
+            lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting

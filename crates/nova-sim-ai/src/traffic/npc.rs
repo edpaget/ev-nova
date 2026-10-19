@@ -2,6 +2,7 @@
 //! doing, and what it fights with.
 
 use crate::ai::Goal;
+use crate::ai::lost_sight::SearchTimer;
 use crate::ai::plunder_contents::ClassMarines;
 use crate::ai::pursuit::Pursuit;
 use crate::bay::Carrier;
@@ -483,15 +484,15 @@ pub struct Npc {
     /// once its plunder runs, and with any goal but an attack or a plunder.
     /// Never saved.
     pub docking: Option<Docking>,
-    /// The ticks left of its search for a target it lost sight of (the
-    /// original's timer +0xc90c), `None` for the original's -1: written
-    /// only by `_HighLevelAIHandler`'s lost-sight block (see
-    /// [`lost_sight`](crate::ai::lost_sight)). None at every spawn and
-    /// launch, the engine's reading: the original never clears it, so a
-    /// slot carries its last occupant's timer
-    /// (rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13).
+    /// Its search timer for a target it lost sight of (the original's
+    /// +0xc90c): written only by `_HighLevelAIHandler`'s lost-sight block
+    /// (see [`lost_sight`](crate::ai::lost_sight)). No spawn or launch
+    /// writes it, so a ship brought into a berth takes the timer the
+    /// berth's last ship left, a never-used berth's 0, as
+    /// [`RuleKey::ReusedSlotSearch`](crate::RuleKey::ReusedSlotSearch)
+    /// reads it (see [`berth_search`](crate::traffic::berth_search)).
     /// Never saved.
-    pub lost_sight: Option<u32>,
+    pub lost_sight: SearchTimer,
     /// The berth ([`Npc::berth`]) of its swarm leader, the original's
     /// +0xc906, `None` for -1: the lowest berth of a swarming class fighting
     /// its target, kept while it stays so (see

@@ -1813,7 +1813,7 @@ mod tests {
         assert_eq!(searching.lost_sight, Some(LostSight::Searching(100)));
         assert!(!searching.calls_reinforcements, "the jump to @0x8fb47");
         let mut gave_up = npcs[0].clone();
-        gave_up.lost_sight = Some(1);
+        gave_up.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(1);
         let dropped = ai.decision(&gave_up, &around, &mut Draws::of(&[]));
         assert_eq!(dropped.goal, Goal::Idle);
         assert_eq!(dropped.lost_sight, Some(LostSight::GaveUp));

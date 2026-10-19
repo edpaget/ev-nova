@@ -341,7 +341,7 @@ impl Session {
             pursuit: Pursuit::default(),
             ai_wait: 0,
             docking: None,
-            lost_sight: None,
+            lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn

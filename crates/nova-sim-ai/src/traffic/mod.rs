@@ -138,6 +138,7 @@ pub mod autopilot;
 pub mod berth_exits;
 pub mod berth_kept;
 pub mod berth_picks;
+pub mod berth_search;
 pub mod board_wait;
 #[cfg(test)]
 mod comm_call_tests;
@@ -177,7 +178,7 @@ pub mod table;
 pub mod weigh;
 
 use crate::ai::interceptor::within_reach;
-use crate::ai::lost_sight::{self, LostSight};
+use crate::ai::lost_sight::{self, LostSight, SearchTimer};
 use crate::ai::pursuit::{self, Pursuit, PursuitRules};
 use crate::ai::swarm::{self, SwarmLead};
 use crate::ai::{
@@ -204,6 +205,7 @@ use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
+use berth_search::BerthSearch;
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use odds_cache::OddsCache;
@@ -689,6 +691,10 @@ pub struct Traffic {
     /// which a new ship there takes ([`berth_exits`]): written after each
     /// fight, kept as it dies or leaves, and across systems.
     berth_exits: BerthExits,
+    /// The search timer (+0xc90c) of the ship last at each berth, which a
+    /// new ship there takes ([`berth_search`]): written as each ship's
+    /// timer changes, kept as it dies or leaves, and across systems.
+    berth_search: BerthSearch,
     /// The odds each berth caches (+0xc914), refreshed one berth a tick
     /// ([`odds_cache`]): kept as its ship dies or leaves, and across
     /// systems.
@@ -760,6 +766,7 @@ impl Traffic {
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
             berth_exits: BerthExits::default(),
+            berth_search: BerthSearch::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
         }
@@ -1863,6 +1870,8 @@ impl Traffic {
         };
         // Nor the exit cursors (+0xc8fe-+0xc905): they are the berth's.
         *npc.armament.exit_cursors_mut() = self.berth_cursors(berth);
+        // Nor the search timer (+0xc90c): it is the berth's.
+        npc.lost_sight = self.berth_search.seed(berth);
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -2012,9 +2021,10 @@ impl Traffic {
             } = decision;
             if let Some(write) = lost_sight {
                 npc.lost_sight = match write {
-                    LostSight::Searching(left) => Some(left),
-                    LostSight::Seen | LostSight::GaveUp => None,
+                    LostSight::Searching(left) => SearchTimer::Searching(left),
+                    LostSight::Seen | LostSight::GaveUp => SearchTimer::Unset,
                 };
+                self.berth_search.write(npc.berth, npc.lost_sight);
             }
             let mut scans = false;
             if let Goal::Inspect(ship) = npc.goal
@@ -2286,7 +2296,9 @@ impl Traffic {
                 pursuit: Pursuit::default(),
                 ai_wait: 0,
                 docking: None,
-                lost_sight: None,
+                // No spawn writes the search timer (+0xc90c): it is the
+                // berth's.
+                lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,

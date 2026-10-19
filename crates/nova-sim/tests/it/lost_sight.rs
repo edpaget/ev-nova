@@ -3,16 +3,20 @@
 //! target cloaks stops and holds its attack for its search, 100-199
 //! ticks, then drops the target, and takes the fight up again if the
 //! target reappears first; a trader whose target cloaks leaves, or stops
-//! when it can't jump.
+//! when it can't jump. A warship takes its berth's last search timer
+//! (`nova_sim::traffic::berth_search`): a fresh berth's 0 drops a lost
+//! target at once, and a search its last ship broke off goes on.
 
 use std::collections::BTreeSet;
 
+use nova_sim::ai::lost_sight::SearchTimer;
 use nova_sim::catalog::{GovtId, GovtRecord};
 use nova_sim::cloak::{CLOAK_RETREATING, Cloak, FADE_FULL};
 use nova_sim::combat::ShipRef;
 use nova_sim::combat::armament::Armament;
 use nova_sim::combat::weapon::WeaponSpec;
 use nova_sim::geometry::Vec2;
+use nova_sim::rulebook::RuleSource;
 use nova_sim::stats::ShipStats;
 use nova_sim::traffic::npc::AiType;
 use nova_sim::{Goal, Governments, NovaAi, Npc, NpcId, Rulebook, Traffic, World};
@@ -40,10 +44,8 @@ fn govts() -> Governments {
     ])
 }
 
-/// A hunter of `ai_type` at the centre, attacking NPC 2, and NPC 2, its
-/// quarry, 400 above, fleeing it cloaked: it has a cloak that its ship
-/// type turns on while it retreats, fully faded in.
-fn traffic(ai_type: AiType) -> Traffic {
+/// A hunter of `ai_type` at the centre, attacking NPC 2.
+fn hunter_of(ai_type: AiType) -> Npc {
     let mut hunter = nova_sim::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
     hunter.ai_type = ai_type;
     hunter.govt = Some(GovtId(128));
@@ -53,6 +55,16 @@ fn traffic(ai_type: AiType) -> Traffic {
     hunter.armament = Armament::new([(WeaponSpec::new(&weapon(127)), 1)]);
     hunter.hull.strength = 100.0;
     hunter.aggression = 2;
+    hunter
+}
+
+/// A hunter of `ai_type` at the centre, attacking NPC 2, and NPC 2, its
+/// quarry, 400 above, fleeing it cloaked: it has a cloak that its ship
+/// type turns on while it retreats, fully faded in. Each is new to its
+/// berth, read by `reading`
+/// ([`RuleKey::ReusedSlotSearch`](nova_sim::RuleKey::ReusedSlotSearch)).
+fn traffic_reading(ai_type: AiType, reading: RuleSource) -> Traffic {
+    let hunter = hunter_of(ai_type);
     let mut quarry = nova_sim::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
     quarry.govt = Some(GovtId(129));
     quarry.hull.strength = 100.0;
@@ -67,9 +79,15 @@ fn traffic(ai_type: AiType) -> Traffic {
         direction: 0,
     };
     let mut traffic = Traffic::with_interval(1);
+    traffic.set_reused_slot_search(reading);
     assert_eq!(ShipRef::Npc(traffic.add_npc(hunter)), HUNTER);
     assert_eq!(ShipRef::Npc(traffic.add_npc(quarry)), QUARRY);
     traffic
+}
+
+/// [`traffic_reading`] by the engine's reading.
+fn traffic(ai_type: AiType) -> Traffic {
+    traffic_reading(ai_type, RuleSource::Engine)
 }
 
 /// `traffic` one tick on, the quarry kept in place.
@@ -88,37 +106,103 @@ fn hunter(traffic: &Traffic) -> &Npc {
 }
 
 #[test]
-fn a_warship_whose_target_cloaks_holds_for_its_search_then_drops_it() {
+fn by_the_other_reading_a_fresh_warship_searches_100_to_199_ticks() {
+    let govts = govts();
+    let mut traffic = traffic_reading(AiType::Warship, RuleSource::Bible);
+    assert_eq!(hunter(&traffic).lost_sight, SearchTimer::Unset);
+    let mut draws = Draws::of(&[99]);
+    tick(&mut traffic, &govts, &mut draws);
+    assert_eq!(hunter(&traffic).lost_sight, SearchTimer::Searching(199));
+    assert_eq!(draws.asked, [100], "one roll of the search's length");
+}
+
+#[test]
+fn a_warship_in_a_fresh_berth_drops_a_cloaked_target_at_once() {
     let govts = govts();
     let mut traffic = traffic(AiType::Warship);
+    assert_eq!(hunter(&traffic).lost_sight, SearchTimer::Carried(0));
+    let mut draws = Draws::of(&[]);
+    tick(&mut traffic, &govts, &mut draws);
+    let hunter = hunter(&traffic);
+    assert_eq!(hunter.goal, Goal::Idle, "the first tick out of sight");
+    assert_eq!(hunter.target, None);
+    assert_eq!(hunter.lost_sight, SearchTimer::Unset);
+    assert!(draws.asked.is_empty(), "no roll");
+}
+
+#[test]
+fn a_warship_takes_up_its_berths_last_search_count() {
+    let govts = govts();
+    let mut traffic = traffic(AiType::Warship);
+    traffic.npcs_mut()[0].lost_sight = SearchTimer::Unset;
+    let mut draws = Draws::of(&[0]);
+    for _ in 0..10 {
+        tick(&mut traffic, &govts, &mut draws);
+    }
+    assert_eq!(hunter(&traffic).lost_sight, SearchTimer::Searching(91));
+    let berth = hunter(&traffic).berth;
+    traffic.remove(NpcId(0));
+    let id = traffic.add_npc(hunter_of(AiType::Warship));
+    // The quarry flees the second hunter now, its cloak kept on.
+    for ship in traffic.npcs_mut() {
+        if ShipRef::Npc(ship.id) == QUARRY {
+            ship.goal = Goal::Flee(ShipRef::Npc(id));
+            ship.target = Some(ShipRef::Npc(id));
+        }
+    }
+    let second = |traffic: &Traffic| {
+        traffic
+            .npcs()
+            .iter()
+            .find(|ship| ship.id == id)
+            .cloned()
+            .expect("the second hunter")
+    };
+    assert_eq!(second(&traffic).berth, berth, "the berth the first left");
+    assert_eq!(second(&traffic).lost_sight, SearchTimer::Carried(91));
+    for tick_index in 1..=90 {
+        tick(&mut traffic, &govts, &mut draws);
+        let hunter = second(&traffic);
+        assert_eq!(hunter.goal, Goal::Attack(QUARRY), "tick {tick_index}");
+        assert_eq!(hunter.lost_sight, SearchTimer::Searching(91 - tick_index));
+    }
+    tick(&mut traffic, &govts, &mut draws);
+    assert_eq!(second(&traffic).goal, Goal::Idle, "the 91st tick");
+    assert_eq!(draws.asked, [100], "the first ship's roll alone");
+}
+
+#[test]
+fn a_warship_whose_target_cloaks_holds_for_its_search_then_drops_it() {
+    let govts = govts();
+    let mut traffic = traffic_reading(AiType::Warship, RuleSource::Bible);
     let mut draws = Draws::of(&[0; 4]);
     for tick_index in 0..100 {
         tick(&mut traffic, &govts, &mut draws);
         let hunter = hunter(&traffic);
         assert_eq!(hunter.goal, Goal::Attack(QUARRY), "tick {tick_index}");
-        assert_eq!(hunter.lost_sight, Some(100 - tick_index));
+        assert_eq!(hunter.lost_sight, SearchTimer::Searching(100 - tick_index));
         assert_eq!(hunter.state.position, Vec2::ZERO, "it does not close in");
     }
     tick(&mut traffic, &govts, &mut draws);
     let hunter = hunter(&traffic);
     assert_eq!(hunter.goal, Goal::Idle, "the 101st tick");
     assert_eq!(hunter.target, None);
-    assert_eq!(hunter.lost_sight, None);
+    assert_eq!(hunter.lost_sight, SearchTimer::Unset);
     assert_eq!(draws.asked, [100], "one roll of the search's length");
 }
 
 #[test]
 fn a_warship_whose_target_reappears_mid_search_resumes_the_attack() {
     let govts = govts();
-    let mut traffic = traffic(AiType::Warship);
+    let mut traffic = traffic_reading(AiType::Warship, RuleSource::Bible);
     let mut draws = Draws::of(&[0; 4]);
     for _ in 0..10 {
         tick(&mut traffic, &govts, &mut draws);
     }
-    assert_eq!(hunter(&traffic).lost_sight, Some(91));
+    assert_eq!(hunter(&traffic).lost_sight, SearchTimer::Searching(91));
     traffic.npcs_mut()[1].cloak_gear.device = false;
     let mut ticks = 0;
-    while hunter(&traffic).lost_sight.is_some() {
+    while hunter(&traffic).lost_sight != SearchTimer::Unset {
         tick(&mut traffic, &govts, &mut draws);
         ticks += 1;
         assert!(ticks < 60, "it never saw its target again");
@@ -147,7 +231,11 @@ fn brave_trader_with(class_fuel: i16) -> Goal {
     traffic.npcs_mut()[0].class_fuel = class_fuel;
     tick(&mut traffic, &govts, &mut Draws::of(&[]));
     let hunter = hunter(&traffic);
-    assert_eq!(hunter.lost_sight, None, "a trader's timer is untouched");
+    assert_eq!(
+        hunter.lost_sight,
+        SearchTimer::Carried(0),
+        "a trader's timer is untouched"
+    );
     hunter.goal
 }
 

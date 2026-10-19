@@ -425,6 +425,8 @@ mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
+#[cfg(test)]
+mod slot_search;
 mod status_cargo;
 mod steering;
 mod stellars;
@@ -1837,6 +1839,8 @@ impl Session {
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic
             .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
+        self.traffic
+            .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
         self.rules = rules;
         self
     }
