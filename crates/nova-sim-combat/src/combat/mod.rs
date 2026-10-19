@@ -313,6 +313,7 @@ pub mod plunder;
 pub mod projectile;
 pub mod report;
 pub mod ship_frames;
+pub mod ship_lights;
 pub mod shockwave;
 pub mod shot_layer;
 pub mod sides;

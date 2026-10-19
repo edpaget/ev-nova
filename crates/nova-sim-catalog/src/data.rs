@@ -1300,6 +1300,8 @@ fn ship_display(anim: &ShipAnim) -> ShipDisplay {
         anim_delay: anim.anim_delay,
         alt_sets: anim.alt_set_count,
         alt_image: anim.alt_image_id > 0,
+        blink: blink_of(anim),
+        lights_image: anim.light_image_id > 0,
     }
 }
 
@@ -4005,6 +4007,8 @@ mod tests {
                 anim_delay: 5,
                 alt_sets: 0,
                 alt_image: false,
+                blink: Blink::STEADY,
+                lights_image: false,
             })
         );
         // shän 380's: `Flags` 0x58, one base set, six alt sets of `rlëD`
@@ -4018,6 +4022,24 @@ mod tests {
         let display = data.hulls()[0].display.expect("a shän");
         assert_eq!((display.flags, display.base_sets), (0x0058, 1));
         assert_eq!((display.alt_sets, display.alt_image), (6, true));
+        assert!(!display.lights_image);
+        // A lights image (`LightImageID` 0x1E) blinking the stock triangle.
+        let mut bytes = anim(24, 24);
+        put_i16s(&mut bytes, 0x1E, &[1400]);
+        put_i16s(&mut bytes, 0x36, &[2, 10, 75, 32, 75]);
+        let data = store(&[(Ship::TYPE, 128, armed()), (ShipAnim::TYPE, 128, bytes)]);
+        let display = data.hulls()[0].display.expect("a shän");
+        assert!(display.lights_image);
+        assert_eq!(
+            display.blink,
+            Blink {
+                mode: 2,
+                a: 10,
+                b: 75,
+                c: 32,
+                d: 75
+            }
+        );
         let data = store(&[(Ship::TYPE, 128, armed())]);
         assert_eq!(data.hulls()[0].display, None, "no shän");
     }

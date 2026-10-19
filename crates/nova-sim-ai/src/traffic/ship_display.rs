@@ -77,12 +77,12 @@ use crate::chance::Chance;
 use crate::combat::armament::Fold;
 use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
-    BANKS, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, SPEED_MULT, ShipFrames, UNFOLDS_TO_FIRE,
+    BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, SPEED_MULT, ShipFrames,
+    UNFOLDS_TO_FIRE,
 };
 use crate::flight::Flyer;
 use crate::flight::{Controls, FlightRules, Turn, heading_of, shortest_turn};
 use crate::handling::Handling;
-use crate::rulebook::RuleSource;
 use crate::traffic::Traffic;
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::{Mode, Npc};
@@ -434,14 +434,14 @@ pub fn settle_spawn(npc: &mut Npc, derelict: bool, chance: &mut (impl Chance + ?
     }
 }
 
-/// `_HandleShipDisplay`'s frame for `npc`, its alt layer stepping as
-/// `double_step` says, what its spawn owes made first: its glow of 0 when
-/// its government is `derelict`, and its rolls on `chance` (see the module
-/// docs).
+/// `_HandleShipDisplay`'s frame for `npc` by `rules`, what its spawn owes
+/// made first: its glow of 0 when its government is `derelict`, and its
+/// rolls on `chance`; then its sets and its lights, random lights rolling
+/// on `chance` (see the module docs).
 pub fn display(
     npc: &mut Npc,
     derelict: bool,
-    double_step: RuleSource,
+    rules: DisplayRules,
     chance: &mut (impl Chance + ?Sized),
 ) {
     settle_spawn(npc, derelict, chance);
@@ -451,28 +451,31 @@ pub fn display(
         key_aboard: npc
             .armament
             .key_ship_aboard(npc.hull.key_carried, &npc.rounds),
-        double_step,
+        rules,
     };
     let fold = npc.armament.fold_mut();
-    npc.display.drawn = npc.display.frames.step(&spec, fold, moment);
+    let frames = &mut npc.display.frames;
+    let mut drawn = frames.step(&spec, fold, moment);
+    drawn.lights = frames.light(&spec, &moment, |sides| chance.roll(sides));
+    npc.display.drawn = drawn;
     let capacity = npc.stats.ion.capacity(Flyer::Npc);
     npc.display.ion_tint = ion_tint::display(&mut npc.ion, capacity, chance);
 }
 
 impl Traffic {
-    /// Every NPC's display this frame ([`display`]), after the flight and
-    /// the fight: its alt layer stepping as `double_step` says, a ship of
-    /// a government `derelict` says is derelict glowing 0 from its spawn,
-    /// its spawn's rolls made on `chance`.
+    /// Every NPC's display this frame ([`display`]) by `rules`, after the
+    /// flight and the fight: a ship of a government `derelict` says is
+    /// derelict glowing 0 from its spawn, its spawn's rolls and its random
+    /// lights rolled on `chance`.
     pub fn display_ships(
         &mut self,
         derelict: impl Fn(Option<GovtId>) -> bool,
-        double_step: RuleSource,
+        rules: DisplayRules,
         chance: &mut (impl Chance + ?Sized),
     ) {
         for npc in &mut self.npcs {
             let derelict = derelict(npc.govt);
-            display(npc, derelict, double_step, &mut *chance);
+            display(npc, derelict, rules, &mut *chance);
         }
     }
 }
@@ -875,10 +878,20 @@ mod tests {
         for (derelict, glow) in [(true, 0), (false, 32)] {
             let mut ship = folding(0, 1);
             ship.display = spawned;
-            display(&mut ship, derelict, RuleSource::Engine, &mut Draws::of(&[]));
+            display(
+                &mut ship,
+                derelict,
+                DisplayRules::ENGINE,
+                &mut Draws::of(&[]),
+            );
             assert_eq!(ship.display.glow, glow, "{derelict}");
             ship.display.glow = 9;
-            display(&mut ship, derelict, RuleSource::Engine, &mut Draws::of(&[]));
+            display(
+                &mut ship,
+                derelict,
+                DisplayRules::ENGINE,
+                &mut Draws::of(&[]),
+            );
             assert_eq!(ship.display.glow, 9, "{derelict}: once");
         }
         let jumping = Spawn {
@@ -903,13 +916,13 @@ mod tests {
             derelict_glow: false,
         };
         let mut draws = Draws::of(&[2, 3]);
-        display(&mut ship, false, RuleSource::Engine, &mut draws);
+        display(&mut ship, false, DisplayRules::ENGINE, &mut draws);
         assert_eq!(draws.asked, [4, 5], "Rand(BaseSets), Rand(AnimDelay)");
         assert_eq!(ship.display.frames.bank, 0.0, "no bank or fold to roll");
         assert_eq!(ship.display.frames.anim_timer, 4.0, "3, then a frame");
         assert_eq!(ship.display.drawn.set, 2);
         assert_eq!(ship.display.rolls, Rolls::default());
-        display(&mut ship, false, RuleSource::Engine, &mut draws);
+        display(&mut ship, false, DisplayRules::ENGINE, &mut draws);
         assert_eq!(draws.asked.len(), 2, "once");
         let owed = Rolls {
             anim: true,
@@ -953,11 +966,11 @@ mod tests {
     fn the_display_reads_its_condition_and_key_ship() {
         let mut ship = folding(KEY_CARRIED, 2);
         ship.hull.key_carried = Some(ShipId(140));
-        display(&mut ship, false, RuleSource::Engine, &mut Draws::of(&[]));
+        display(&mut ship, false, DisplayRules::ENGINE, &mut Draws::of(&[]));
         assert_eq!(ship.display.drawn.set, 0, "no bay aboard");
         let mut still = folding(ANIMATED | 0x0010, 3);
         still.condition = Condition::Disabled;
-        display(&mut still, false, RuleSource::Engine, &mut Draws::of(&[]));
+        display(&mut still, false, DisplayRules::ENGINE, &mut Draws::of(&[]));
         assert_eq!(still.display.frames.anim_timer, 0.0, "disabled, still");
     }
 

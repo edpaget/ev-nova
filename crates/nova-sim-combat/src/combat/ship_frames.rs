@@ -72,8 +72,11 @@
 
 use std::num::NonZeroU16;
 
+use nova_sim_base::blink::Blink;
+
 use super::armament::Fold;
 use super::exits::{DEFAULT_FRAMES, compression, drawn_frame};
+use super::ship_lights::ShipLights;
 use crate::catalog::{ShipDisplay, ShipExits};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -197,6 +200,12 @@ pub struct FrameSpec {
     pub frames: NonZeroU16,
     /// Its frame-angle table, with `Flags` 0x0100.
     pub table: Option<FrameTable>,
+    /// Its `BlinkMode` and `BlinkValA`-`D`, raw.
+    pub blink: Blink,
+    /// Whether it has a lights sprite (`LightImageID` above 0), without
+    /// which no lights block runs (see
+    /// [`ship_lights`](super::ship_lights)).
+    pub lights: bool,
 }
 
 impl Default for FrameSpec {
@@ -214,6 +223,8 @@ impl FrameSpec {
         alt_sets: 0,
         frames: NonZeroU16::new(DEFAULT_FRAMES).expect("36"),
         table: None,
+        blink: Blink::STEADY,
+        lights: false,
     };
 
     /// The display `display` and `exits` give (see the module docs); none
@@ -243,6 +254,8 @@ impl FrameSpec {
             alt_sets,
             frames,
             table,
+            blink: display.blink,
+            lights: display.lights_image,
         }
     }
 
@@ -316,6 +329,29 @@ impl FrameSpec {
     }
 }
 
+/// The rulebook readings a ship's display runs by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayRules {
+    /// How often its alt block moves the animation timer, as
+    /// [`RuleKey::ShipAnimationDoubleStep`](crate::RuleKey::ShipAnimationDoubleStep)
+    /// says: again by the engine, not again after the set block moved it
+    /// by the other reading.
+    pub double_step: RuleSource,
+    /// Whether lights out writes the intensity 0 into its lights state, as
+    /// [`RuleKey::LightsOutZeroesBlink`](crate::RuleKey::LightsOutZeroesBlink)
+    /// says: by the engine, or only hides the layer by the other reading
+    /// (see [`ship_lights`](super::ship_lights)).
+    pub lights_zeroed: RuleSource,
+}
+
+impl DisplayRules {
+    /// Every reading the engine's.
+    pub const ENGINE: Self = Self {
+        double_step: RuleSource::Engine,
+        lights_zeroed: RuleSource::Engine,
+    };
+}
+
 /// What a ship's display reads this frame beside its own state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Moment {
@@ -324,14 +360,11 @@ pub struct Moment {
     /// Whether its class's `KeyCarried` ship is aboard
     /// (`_KeyCarriedShipTypeOnboard`, @0x2ba12).
     pub key_aboard: bool,
-    /// How often its alt block moves the animation timer, as
-    /// [`RuleKey::ShipAnimationDoubleStep`](crate::RuleKey::ShipAnimationDoubleStep)
-    /// says: again by the engine, not again after the set block moved it
-    /// by the other reading.
-    pub double_step: RuleSource,
+    /// The readings it runs by.
+    pub rules: DisplayRules,
 }
 
-/// The sets a ship is drawn on this frame.
+/// The sets a ship is drawn on this frame, and its lights' level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Drawn {
     /// The hull's set, which its glow, lights, weapon and shield layers
@@ -339,6 +372,10 @@ pub struct Drawn {
     pub set: u16,
     /// The alt layer's set, while the alt layer is drawn.
     pub alt_set: Option<u16>,
+    /// The level its lights layer is drawn at, if drawn: its lights
+    /// block's ([`ShipFrames::light`]), which [`ShipFrames::step`] leaves
+    /// to its caller.
+    pub lights: Option<u8>,
 }
 
 /// A ship's display state, each field the original's (see the module
@@ -358,6 +395,8 @@ pub struct ShipFrames {
     pub anim_set: i16,
     /// The alt set, +0xc8f4.
     pub alt_set: i16,
+    /// Its running lights' state ([`ShipLights`]).
+    pub lights: ShipLights,
 }
 
 impl ShipFrames {
@@ -391,7 +430,7 @@ impl ShipFrames {
         let alt_drawn =
             spec.alt_sets > 0 && !(spec.has(ALT_HIDDEN_WHILE_DISABLED) && moment.disabled);
         let alt_set = alt_drawn.then(|| {
-            let again = !animated || moment.double_step == RuleSource::Engine;
+            let again = !animated || moment.rules.double_step == RuleSource::Engine;
             if !still && again {
                 self.anim_timer += SPEED_MULT;
             }
@@ -411,7 +450,11 @@ impl ShipFrames {
             }
             u16::try_from(self.alt_set).unwrap_or(0)
         });
-        Drawn { set, alt_set }
+        Drawn {
+            set,
+            alt_set,
+            lights: None,
+        }
     }
 
     /// The 0x0002 block (@0x2b894-0x2b9f1): `fold`'s set steps toward its
@@ -494,8 +537,19 @@ mod tests {
     const MOMENT: Moment = Moment {
         disabled: false,
         key_aboard: false,
-        double_step: RuleSource::Engine,
+        rules: DisplayRules::ENGINE,
     };
+
+    /// The moment, the double step read by `reading`.
+    fn double_step(reading: RuleSource) -> Moment {
+        Moment {
+            rules: DisplayRules {
+                double_step: reading,
+                ..DisplayRules::ENGINE
+            },
+            ..MOMENT
+        }
+    }
 
     fn disabled() -> Moment {
         Moment {
@@ -520,6 +574,14 @@ mod tests {
             anim_delay: 5,
             alt_sets: 3,
             alt_image: false,
+            blink: Blink {
+                mode: 1,
+                a: 4,
+                b: 1,
+                c: 2,
+                d: 20,
+            },
+            lights_image: true,
         };
         let exits = ShipExits {
             frames: 0,
@@ -532,6 +594,7 @@ mod tests {
         assert_eq!(spec.alt_sets, 0, "no alt image: no alt sprite");
         assert_eq!(spec.frames.get(), 36, "0 reads as 36");
         assert_eq!(spec.table, None);
+        assert_eq!((spec.blink, spec.lights), (display.blink, true));
         assert_eq!(spec.unfolds_to_fire(), Some(6));
         assert_eq!(spec.last_set(), 5);
         let alt = ShipDisplay {
@@ -553,6 +616,11 @@ mod tests {
         let none = ShipDisplay { alt_sets: 0, ..alt };
         assert_eq!(FrameSpec::new(Some(&none), None).alt_sets, 0, "no alt sets");
         assert_eq!(FrameSpec::new(None, Some(&exits)), FrameSpec::NONE);
+        assert_eq!(
+            (FrameSpec::NONE.blink, FrameSpec::NONE.lights),
+            (Blink::STEADY, false),
+            "no shän: no lights sprite"
+        );
         assert_eq!(
             spec_of(0x0002).unfolds_to_fire(),
             None,
@@ -794,10 +862,7 @@ mod tests {
         assert_eq!(drawn, expected, "every AnimDelay + 1 frames");
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let mut ship = ShipFrames::default();
-            let moment = Moment {
-                double_step: reading,
-                ..MOMENT
-            };
+            let moment = double_step(reading);
             assert_eq!(alts(&mut ship, &spec, 12, moment), expected, "{reading:?}");
         }
         // Round to 0 at its alt sets.
@@ -833,10 +898,7 @@ mod tests {
             "the timer moves 2 a frame: past 3 it loses 3, a step 3 in 5 frames"
         );
         let mut ship = ShipFrames::default();
-        let bible = Moment {
-            double_step: RuleSource::Bible,
-            ..MOMENT
-        };
+        let bible = double_step(RuleSource::Bible);
         let once: Vec<(u16, Option<u16>)> = (0..8)
             .map(|_| {
                 let drawn = ship.step(&spec, &mut fold, bible);

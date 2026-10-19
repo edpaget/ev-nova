@@ -11,7 +11,7 @@ use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
 use crate::combat::armament::NEVER_FIRED;
-use crate::combat::ship_frames::{ANIMATED, BANKS, FOLDS, FrameSpec, REFOLD_TICKS};
+use crate::combat::ship_frames::{ANIMATED, BANKS, DisplayRules, FOLDS, FrameSpec, REFOLD_TICKS};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -195,11 +195,88 @@ fn the_display_steps_every_ship_after_the_fight() {
     let mut draws = Draws::of(&[3, 2]);
     traffic.display_ships(
         |govt| govt == Some(GovtId(140)),
-        RuleSource::Engine,
+        DisplayRules::ENGINE,
         &mut draws,
     );
     let shown = traffic.npcs()[0].display;
     assert_eq!(draws.asked, [6, 5], "its rolls");
     assert_eq!(shown.drawn.set, 3);
     assert_eq!(shown.glow, 0, "a derelict government's");
+}
+
+/// The stock triangle, which 51 of the 106 stock 0x0040 ships with lights
+/// blink.
+const TRIANGLE: nova_sim_base::blink::Blink = nova_sim_base::blink::Blink {
+    mode: 2,
+    a: 10,
+    b: 75,
+    c: 32,
+    d: 75,
+};
+
+/// An idle NPC of class `flags` with a lights sprite blinking the stock
+/// triangle.
+fn lit(flags: u16) -> Npc {
+    let mut ship = idle(flags);
+    ship.hull.frames.blink = TRIANGLE;
+    ship.hull.frames.lights = true;
+    ship
+}
+
+/// The lights levels `traffic`'s NPC is drawn at over `n` displays, by
+/// `rules`, disabled when `disabled`.
+fn lights(traffic: &mut Traffic, n: usize, disabled: bool, rules: DisplayRules) -> Vec<Option<u8>> {
+    traffic.npcs[0].condition = if disabled {
+        crate::combat::hull::Condition::Disabled
+    } else {
+        crate::combat::hull::Condition::Intact
+    };
+    (0..n)
+        .map(|_| {
+            traffic.display_ships(|_| false, rules, &mut Draws::of(&[]));
+            traffic.npcs()[0].display.drawn.lights
+        })
+        .collect()
+}
+
+#[test]
+fn a_repaired_0x0040_npcs_lights_climb_back_from_nothing_by_the_engine() {
+    let rules = DisplayRules::ENGINE;
+    let mut traffic = holding(lit(0x0040));
+    let before = lights(&mut traffic, 30, false, rules);
+    assert_eq!(before[29], Some(22), "rising from rest");
+    assert_eq!(lights(&mut traffic, 10, true, rules), [None; 10], "out");
+    let after = lights(&mut traffic, 43, false, rules);
+    assert_eq!(after[0], None, "0.75: dark for a step");
+    assert_eq!(after[1], Some(1));
+    assert_eq!(after[41], Some(31), "at its top 41 steps later");
+}
+
+#[test]
+fn by_the_other_reading_a_repaired_npcs_lights_go_on_as_if_never_out() {
+    let rules = DisplayRules {
+        lights_zeroed: RuleSource::Bible,
+        ..DisplayRules::ENGINE
+    };
+    let mut traffic = holding(lit(0x0040));
+    let mut never = holding(lit(0x0040));
+    let shown: Vec<Option<u8>> = [(30, false), (10, true), (43, false)]
+        .into_iter()
+        .flat_map(|(n, disabled)| lights(&mut traffic, n, disabled, rules))
+        .collect();
+    let lit_throughout = lights(&mut never, 83, false, rules);
+    let hidden: Vec<Option<u8>> = lit_throughout
+        .iter()
+        .enumerate()
+        .map(|(i, level)| if (30..40).contains(&i) { None } else { *level })
+        .collect();
+    assert_eq!(shown, hidden);
+}
+
+#[test]
+fn a_disabled_ship_of_no_0x0040_keeps_its_lights() {
+    let mut traffic = holding(lit(0));
+    let lit_throughout = lights(&mut traffic, 30, true, DisplayRules::ENGINE);
+    assert_eq!(lit_throughout[29], Some(22));
+    assert!(lit_throughout[1..].iter().all(Option::is_some));
 }

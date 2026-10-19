@@ -14,6 +14,7 @@ pub use nova_data::{
     RankId, ShipId, SoundId, StellarId, SystemId, WeaponId,
 };
 
+use crate::blink::Blink;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -1460,6 +1461,11 @@ pub struct ShipDisplay {
     pub alt_sets: i16,
     /// Whether it names an alt image: `AltImageID` above 0.
     pub alt_image: bool,
+    /// Its `BlinkMode` and `BlinkValA`-`D`, raw.
+    pub blink: Blink,
+    /// Whether it names a lights image: `LightImageID` above 0, without
+    /// which `_HandleShipDisplay` runs no lights block (@0x2b681-0x2b6a2).
+    pub lights_image: bool,
 }
 
 /// An escort's class, which the escort menu groups it by.

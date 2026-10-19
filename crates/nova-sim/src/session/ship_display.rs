@@ -59,7 +59,7 @@ use crate::RuleKey;
 use crate::combat::armament::{Fold, OutfitRounds};
 use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
-    BANKS, Drawn, FOLDS, FrameSpec, Moment, ShipFrames, UNFOLDS_TO_FIRE,
+    BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, ShipFrames, UNFOLDS_TO_FIRE,
 };
 use crate::flight::{Turn, shortest_turn};
 use crate::rulebook::RuleSource;
@@ -235,7 +235,7 @@ impl Session {
     /// pass's fight (see the module docs), the NPCs' spawn rolls made on
     /// `chance`.
     pub(super) fn display_ships(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let double_step = self.rules.source_for(RuleKey::ShipAnimationDoubleStep);
+        let rules = self.display_rules();
         let spec = self.hull.frames;
         let rounds = OutfitRounds {
             owned: &mut self.pilot.outfits,
@@ -246,15 +246,27 @@ impl Session {
             key_aboard: self
                 .armament
                 .key_ship_aboard(self.hull.key_carried, &rounds),
-            double_step,
+            rules,
         };
         let fold = self.armament.fold_mut();
-        self.ship_display.drawn = self.ship_display.frames.step(&spec, fold, moment);
+        let frames = &mut self.ship_display.frames;
+        let mut drawn = frames.step(&spec, fold, moment);
+        drawn.lights = frames.light(&spec, &moment, |sides| chance.roll(sides));
+        self.ship_display.drawn = drawn;
         let capacity = self.ion_capacity();
         self.ship_display.ion_tint = ion_tint::display(&mut self.ion, capacity, &mut *chance);
         let govts = &self.govts;
         self.traffic
-            .display_ships(|govt| govts.derelict(govt), double_step, chance);
+            .display_ships(|govt| govts.derelict(govt), rules, chance);
+    }
+
+    /// The readings every ship's display runs by, from the session's
+    /// rulebook.
+    fn display_rules(&self) -> DisplayRules {
+        DisplayRules {
+            double_step: self.rules.source_for(RuleKey::ShipAnimationDoubleStep),
+            lights_zeroed: self.rules.source_for(RuleKey::LightsOutZeroesBlink),
+        }
     }
 
     /// The sets the player's ship was last drawn on: its hull's, and its
@@ -655,13 +667,94 @@ mod tests {
         npc.armament.fold_mut().dir = -1;
         npc.display.frames.anim_set = 2;
         npc.display.glow = 20;
+        let lights = crate::combat::ship_lights::ShipLights {
+            intensity: 12.5,
+            count: 1,
+            timer: 3.0,
+        };
+        npc.display.frames.lights = lights;
         session.populate(&catalog, &mut NeverFires);
         let id = session.fleet[0].expect("placed");
         let escort = session.npc(id).expect("in the system");
         let fold = escort.armament.fold();
         assert_eq!((fold.set, fold.dir), (1, -1), "kept");
         assert_eq!(escort.display.frames.anim_set, 2);
+        assert_eq!(escort.display.frames.lights, lights, "its lights too");
         assert_eq!(escort.display.glow, 0, "cleared again");
+    }
+
+    /// The test catalog, the player's ship 128 of `shän` `Flags` `flags`
+    /// with a lights sprite blinking the stock triangle.
+    fn lit(flags: u16) -> FakePilotCatalog {
+        let mut catalog = displaying(flags, 1);
+        let display = catalog.hulls[0].display.as_mut().expect("a shän");
+        display.blink = crate::blink::Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        display.lights_image = true;
+        catalog
+    }
+
+    /// The player's lights levels over `n` steps, disabled throughout
+    /// when `disabled`.
+    fn player_lights(session: &mut Session, n: usize, disabled: bool) -> Vec<Option<u8>> {
+        if !disabled {
+            session.condition = crate::combat::hull::Condition::Intact;
+        }
+        let rules = if disabled {
+            crate::session::tests::DISABLING
+        } else {
+            Rules::default()
+        };
+        (0..n)
+            .map(|_| {
+                session.tick(Controls::default());
+                session.tick_combat(rules, &mut NeverFires);
+                session.player_drawn().lights
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_players_lights_go_out_disabled_and_climb_back_from_nothing() {
+        let catalog = lit(0x0040);
+        let mut session = Session::start(&catalog).expect("starts");
+        let before = player_lights(&mut session, 30, false);
+        assert_eq!(before[29], Some(22), "rising from rest");
+        assert_eq!(player_lights(&mut session, 5, true), [None; 5]);
+        let after = player_lights(&mut session, 42, false);
+        assert_eq!(after[0], None, "dark for a step");
+        assert_eq!(after[1], Some(1));
+        assert_eq!(after[41], Some(31));
+        // By the other reading, hidden only.
+        let rules =
+            Rulebook::default().with_override(RuleKey::LightsOutZeroesBlink, RuleSource::Bible);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        player_lights(&mut session, 30, false);
+        player_lights(&mut session, 5, true);
+        let after = player_lights(&mut session, 1, false);
+        assert_eq!(after, [Some(27)], "as if never out: 0.75 x 36");
+    }
+
+    #[test]
+    fn the_players_lights_carry_through_a_landing_and_a_jump() {
+        let catalog = lit(0);
+        let mut session = Session::start(&catalog).expect("starts");
+        player_lights(&mut session, 20, false);
+        let lights = session.ship_display.frames.lights;
+        assert_ne!(lights, crate::combat::ship_lights::ShipLights::default());
+        land_now(&mut session).expect("lands");
+        session.take_off(&catalog, &mut NeverFires);
+        assert_eq!(session.ship_display.frames.lights, lights, "a landing");
+        assert_eq!(
+            crate::testkit::jump(&mut session, &catalog, 131),
+            Some(SystemId(131))
+        );
+        assert_eq!(session.ship_display.frames.lights, lights, "a jump");
     }
 
     #[test]

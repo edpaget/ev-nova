@@ -270,6 +270,13 @@ impl Session {
             return;
         };
         self.board_class(&record, &BTreeMap::new());
+        // The lights' intensity and count, not their timer (@0x1d534-0x1d539;
+        // see `nova_sim::combat::ship_lights`).
+        let lights = &mut self.ship_display.frames.lights;
+        *lights = crate::combat::ship_lights::ShipLights {
+            timer: lights.timer,
+            ..crate::combat::ship_lights::ShipLights::default()
+        };
         self.condition = Condition::Intact;
         self.pod = None;
         self.target = None;
@@ -711,6 +718,24 @@ mod tests {
         assert_eq!(session.self_destruct.count(), Some(149));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(session.self_destruct.count(), None, "_ResetPlayer @0x1d764");
+    }
+
+    #[test]
+    fn the_rescue_zeroes_the_players_lights_but_keeps_their_timer() {
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        session.ship_display.frames.lights = crate::combat::ship_lights::ShipLights {
+            intensity: 32.0,
+            count: 2,
+            timer: 7.0,
+        };
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        let lights = session.ship_display.frames.lights;
+        assert_eq!(
+            (lights.intensity, lights.count, lights.timer),
+            (0.0, 0, 7.0),
+            "_ResetPlayer @0x1d534-0x1d539 writes +0x60 and +0xc8d6 alone"
+        );
     }
 
     #[test]
