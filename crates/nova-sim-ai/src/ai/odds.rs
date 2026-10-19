@@ -280,6 +280,20 @@ pub fn cached_odds(npc: &Npc, around: &Surroundings) -> f32 {
     }
 }
 
+/// [`cached_odds`] for a reader that may hold a think's copy of the cache:
+/// by the engine's reading of
+/// [`RuleKey::OddsCache`](crate::RuleKey::OddsCache), `think_odds`, as the
+/// think read them, when given (the odds pass may have refreshed the
+/// slot since), else the cache now; by the other reading [`odds_against`]
+/// `npc` among `around` now.
+#[must_use]
+pub fn cached_odds_at(npc: &Npc, around: &Surroundings, think_odds: Option<f32>) -> f32 {
+    match (around.odds_cache, think_odds) {
+        (RuleSource::Engine, Some(odds)) => odds,
+        _ => cached_odds(npc, around),
+    }
+}
+
 /// Whether `npc`'s chase of `target` among `around` is hopeless (see the
 /// module docs).
 #[must_use]
@@ -404,6 +418,38 @@ mod tests {
             1.5,
             "its enemy's 150 over 100"
         );
+    }
+
+    #[test]
+    fn by_the_engine_a_thinks_odds_stand_in_for_the_cache_and_by_the_other_reading_fresh() {
+        let mut me = ship(1, 140, 100.0);
+        me.odds = 0.25;
+        let npcs = [me, ship(2, 142, 150.0)];
+        let govts = govts();
+        let cached = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            cached_odds_at(&npcs[0], &cached, Some(0.75)),
+            0.75,
+            "as the think read them"
+        );
+        assert_eq!(
+            cached_odds_at(&npcs[0], &cached, None),
+            0.25,
+            "as the pass left it"
+        );
+        let fresh = Surroundings {
+            odds_cache: RuleSource::Bible,
+            ..cached
+        };
+        assert_eq!(
+            cached_odds_at(&npcs[0], &fresh, Some(0.75)),
+            1.5,
+            "its enemy's 150 over 100, the think's odds ignored"
+        );
+        assert_eq!(cached_odds_at(&npcs[0], &fresh, None), 1.5);
     }
 
     /// The player at the centre, of `strength`, its shields full.

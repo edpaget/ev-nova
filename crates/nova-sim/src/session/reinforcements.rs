@@ -60,7 +60,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::Session;
-use crate::ai::odds::odds_against;
+use crate::ai::odds::cached_odds_at;
 use crate::ai::reinforcements::{
     self, Called, Clock, Coming, Event, Inhibitors, ReinforcementFacts,
 };
@@ -160,8 +160,9 @@ impl Session {
     /// think read them, for a call a think made (the odds pass ran after
     /// the think, before this answer), else its cached odds now, as
     /// battle help's call between frames reads them. By the other reading
-    /// they are worked out fresh now. A ship not in the system calls
-    /// nothing.
+    /// they are worked out fresh now ([`cached_odds_at`],
+    /// which the session only hands the think's odds). A ship not in the
+    /// system calls nothing.
     pub(super) fn call_for_reinforcements(
         &mut self,
         id: NpcId,
@@ -180,10 +181,7 @@ impl Session {
                 has_govt: npc.govt.is_some(),
                 fleet,
                 clock: self.clock_here(),
-                odds: match self.rules.source_for(RuleKey::OddsCache) {
-                    RuleSource::Engine => think_odds.unwrap_or(npc.odds),
-                    RuleSource::Bible => odds_against(npc, &around),
-                },
+                odds: cached_odds_at(npc, &around, think_odds),
                 allied: self.govts.allies(npc.govt, fleet_govt),
                 fleet_max_odds: self.govts.max_odds(fleet_govt),
                 force,
