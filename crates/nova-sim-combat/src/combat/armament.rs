@@ -238,7 +238,9 @@ pub struct Trigger {
     /// The fighter bays again, after its point defence: the snipe's own
     /// `_AILaunchFighter` after its turret (@0x8732f), a plunderer's only
     /// launch, and a goal-4 sniper's second when its first found no ship
-    /// slot. The player's trigger never sets it.
+    /// slot or left a bay ready (a bay of `Reload` 0, or the next bay once
+    /// the first is empty: [`Armament::bay_after_launch`]). The player's
+    /// trigger never sets it.
     pub bays_after: bool,
     /// This tick the ship's point defence runs: the player's every tick,
     /// an NPC's when its AI asks for a turret (`_AIFireTurret` @0x80b0d).

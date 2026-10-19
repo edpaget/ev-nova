@@ -214,3 +214,39 @@ fn within_a_tick_every_launch_is_heard_before_every_pick() {
         [(B, BAY, Some(5)), (A, WeaponId(128), Some(4))]
     );
 }
+
+#[test]
+fn a_reload_zero_bay_launches_on_both_calls_of_one_tick() {
+    // `_AILaunchFighter` sets the reload to `Reload` / count (@0x81473-0x81491),
+    // so a bay of `Reload` 0 is ready again for the snipe's own call
+    // (@0x8732f) after the high level's (@0x8e6fa). The fight already
+    // launches on both calls, from the one armament (rdm weapons-fidelity
+    // phase 41 pins it): this test was green when written.
+    let launching = Trigger {
+        bays: true,
+        bays_after: true,
+        ..Trigger::default()
+    };
+    let mut zero = carrying(1, 0.0, launching);
+    zero.armament = Armament::new([(
+        WeaponSpec::new(&WeaponRecord {
+            reload: 0,
+            ..carrier_bay()
+        }),
+        1,
+    )]);
+    let mut ships = [zero];
+    let mut combat = Combat::default();
+    tick(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(
+        fired(&combat.take_events()),
+        [(A, BAY, Some(5)), (A, BAY, Some(5))]
+    );
+    assert_eq!(combat.take_sorties().len(), 2);
+    assert_eq!(ships[0].rounds.slot(BAY), 0, "two rounds spent");
+    let mut ships = [carrying(1, 0.0, launching)];
+    let mut combat = Combat::default();
+    tick(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(combat.take_sorties().len(), 1, "the stock bay then reloads");
+    assert_eq!(ships[0].rounds.slot(BAY), 1);
+}
