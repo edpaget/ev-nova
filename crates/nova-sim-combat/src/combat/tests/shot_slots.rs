@@ -46,7 +46,7 @@ fn slots(combat: &Combat) -> Vec<usize> {
 fn a_shot_takes_the_first_free_slot_and_the_shots_are_kept_in_slot_order() {
     let mut combat = Combat::default();
     for _ in 0..3 {
-        assert!(combat.put_in_flight(idle()));
+        assert!(combat.put_in_flight(idle()).is_some());
     }
     assert_eq!(slots(&combat), [0, 1, 2]);
     let ended = combat.shots.remove(1);
@@ -110,4 +110,100 @@ fn a_spent_shots_slot_is_held_through_the_npcs_point_defence_and_freed_by_handle
     combat.fly_shots(&mut fighters, arena, &mut NeverFires);
     assert!(!combat.slots.is_held(1), "freed at its visit");
     assert_eq!(combat.first_free_slot(), Some(1));
+}
+
+/// A shot of C's in `layer`, numbered `id` in firing order.
+fn in_layer(layer: ShotLayer, id: u32) -> Shot {
+    Shot {
+        layer,
+        id: ShotId(id),
+        ..idle()
+    }
+}
+
+/// A combat whose shot layers overlap as `source` reads them.
+fn overlapping(source: RuleSource) -> Combat {
+    let mut combat = Combat::default();
+    combat.set_shot_overlap(source);
+    combat
+}
+
+/// The numbers of the shots in the order they are drawn.
+fn drawn(combat: &Combat) -> Vec<u32> {
+    combat.shots_drawn().iter().map(|shot| shot.id.0).collect()
+}
+
+/// Ends and frees the shot in `slot`, as `_HandleShot`'s visit does.
+fn end_and_free(combat: &mut Combat, slot: usize) {
+    combat.shots.retain(|shot| shot.slot != slot);
+}
+
+#[test]
+fn a_reused_slot_whose_sprite_is_in_the_layer_keeps_its_place() {
+    // X (0) takes slot 0 and Y (1) slot 1, both moved to the homing
+    // layer's tail; X ends, and Z (2) takes slot 0, already in the layer
+    // (@0x768c): drawn under Y, though fired after it.
+    for (source, order) in [(RuleSource::Engine, [2, 1]), (RuleSource::Bible, [1, 2])] {
+        let mut combat = overlapping(source);
+        combat.put_in_flight(in_layer(ShotLayer::Homing, 0));
+        combat.put_in_flight(in_layer(ShotLayer::Homing, 1));
+        end_and_free(&mut combat, 0);
+        combat.put_in_flight(in_layer(ShotLayer::Homing, 2));
+        assert_eq!(combat.shots()[0].id, ShotId(2), "slot 0");
+        assert_eq!(drawn(&combat), order, "{source:?}");
+    }
+}
+
+#[test]
+fn a_reused_slot_from_another_layer_goes_to_the_tail() {
+    for source in RuleSource::ALL {
+        let mut combat = overlapping(source);
+        combat.put_in_flight(in_layer(ShotLayer::Shots, 0));
+        combat.put_in_flight(in_layer(ShotLayer::Homing, 1));
+        end_and_free(&mut combat, 0);
+        combat.put_in_flight(in_layer(ShotLayer::Homing, 2));
+        assert_eq!(drawn(&combat), [1, 2], "{source:?}");
+    }
+}
+
+#[test]
+fn the_layers_are_drawn_bottom_first() {
+    for source in RuleSource::ALL {
+        let mut combat = overlapping(source);
+        combat.put_in_flight(in_layer(ShotLayer::OverShips, 0));
+        combat.put_in_flight(in_layer(ShotLayer::Shots, 1));
+        combat.put_in_flight(in_layer(ShotLayer::PointDefence, 2));
+        combat.put_in_flight(in_layer(ShotLayer::Homing, 3));
+        assert_eq!(drawn(&combat), [2, 3, 1, 0], "{source:?}");
+    }
+}
+
+#[test]
+fn a_point_defence_shot_fired_at_a_ship_goes_to_the_shot_layers_tail() {
+    // Guns in slots 0..2; slot 0's ends. The point-defence shot at the
+    // fighter takes slot 0, is put in point defence's layer and then moved
+    // to the shot layer (`_HandleShipPointDefense` @0x398bd): at its tail,
+    // over slots 1 and 2, where a gun in slot 0 would be under them.
+    for source in RuleSource::ALL {
+        let mut combat = overlapping(source);
+        for id in 0..3 {
+            combat.put_in_flight(in_layer(ShotLayer::Shots, id));
+        }
+        end_and_free(&mut combat, 0);
+        combat.next_shot = 10;
+        let mut ships = fighter_attack(quad(), 0.0, -200.0);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let fired = pd_shots(&combat);
+        assert_eq!(fired.len(), 1, "{:?}", combat.shots());
+        assert_eq!((fired[0].slot, fired[0].layer), (0, ShotLayer::Shots));
+        let pd = fired[0].id.0;
+        assert_eq!(drawn(&combat), [1, 2, pd], "{source:?}");
+    }
+    let mut combat = Combat::default();
+    for id in 0..3 {
+        combat.put_in_flight(in_layer(ShotLayer::Shots, id));
+    }
+    end_and_free(&mut combat, 0);
+    combat.put_in_flight(in_layer(ShotLayer::Shots, 3));
+    assert_eq!(drawn(&combat), [3, 1, 2], "a gun keeps slot 0's place");
 }

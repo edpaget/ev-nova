@@ -890,7 +890,8 @@ impl<C> FlightView<C> {
             .filter(|&shown| shown > 0.0)
     }
 
-    /// The shots in flight, each where it is drawn: `alpha` of the way
+    /// The shots in flight in the order they are drawn
+    /// ([`Session::shots_drawn`]), each where it is drawn: `alpha` of the way
     /// from where it was a step ago, as the ships are; each with the
     /// index its spin started on ([`SpinStarts`](crate::flight::spin::SpinStarts))
     /// and its murk where the session holds it, seen from the player's
@@ -905,8 +906,8 @@ impl<C> FlightView<C> {
         let viewer = session.player().position;
         let murk = session.effective_murk();
         session
-            .shots()
-            .iter()
+            .shots_drawn()
+            .into_iter()
             .map(|shot| ShotShown {
                 id: shot.id,
                 spin_start: self.shot_looks.spin_starts.start(shot.id),

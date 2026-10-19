@@ -424,6 +424,7 @@ mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
+mod shot_slots;
 mod status_cargo;
 mod steering;
 mod stellars;
@@ -1840,6 +1841,8 @@ impl Session {
         ));
         self.combat
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
+        self.combat
+            .set_shot_overlap(rules.source_for(RuleKey::ShotOverlap));
         self.traffic
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic

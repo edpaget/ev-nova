@@ -24,7 +24,9 @@
 //! (`_SpawnShotSubmunitions` @0x3f328), so it takes its layer by its own
 //! guidance the same way. `_HandleShipPointDefense` moves a point-defence
 //! shot fired at a ship to 0x3b52f0 (@0x398a7-0x398c2), where nothing
-//! moves it back. No layer choice plays a sound.
+//! moves it back: after `_SpawnShot` put it in 0x3b53bc, so it always
+//! enters 0x3b52f0 at its tail ([`shot_slots`](super::shot_slots)). No
+//! layer choice plays a sound.
 
 use super::weapon::Guidance;
 

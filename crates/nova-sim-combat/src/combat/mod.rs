@@ -1169,6 +1169,11 @@ pub struct Combat {
     /// defence ended are also kept in `hidden` until a proximity pass
     /// tests them, and hold their slots here alone.
     slots: ShotSlots,
+    /// The order each shot layer is drawn and walked in
+    /// ([`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)): by the
+    /// engine, the order its slots entered it; by the other reading,
+    /// firing order.
+    shot_overlap: RuleSource,
     /// The shots point defence ended at life 0, their sprites hidden,
     /// kept for the next proximity pass's stellar and asteroid branches
     /// (see [`hidden`]).
@@ -1605,15 +1610,62 @@ impl Combat {
     /// (@0x3e5ab-0x3e5ce), keeping the shots in slot order: its slot's
     /// sprite is put in its layer ([`ShotSlots::put`]). Whether it found
     /// a slot.
-    fn put_in_flight(&mut self, mut shot: Shot) -> bool {
-        let Some(free) = self.first_free_slot() else {
-            return false;
-        };
+    fn put_in_flight(&mut self, mut shot: Shot) -> Option<usize> {
+        let free = self.first_free_slot()?;
         shot.slot = free;
         self.slots.put(free, shot.layer);
         let at = self.shots.partition_point(|flying| flying.slot < free);
         self.shots.insert(at, shot);
-        true
+        Some(free)
+    }
+
+    /// Moves the shot in flight in `slot` to `layer`, as
+    /// `_PutSpriteInLayer` does ([`ShotSlots::put`]).
+    fn move_to_layer(&mut self, slot: usize, layer: ShotLayer) {
+        self.slots.put(slot, layer);
+        for shot in self.shots.iter_mut().filter(|shot| shot.slot == slot) {
+            shot.layer = layer;
+        }
+    }
+
+    /// The indices of the shots in flight in the order each layer keeps
+    /// them, layer by layer, bottom first: by
+    /// [`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)'s engine
+    /// reading, the order their slots entered the layer
+    /// ([`ShotSlots::rank`]); by the other, firing order.
+    fn entry_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.shots.len()).collect();
+        let by_entry = self.shot_overlap == RuleSource::Engine;
+        order.sort_by_key(|&index| {
+            let shot = &self.shots[index];
+            let entry = if by_entry {
+                self.slots
+                    .rank(shot.slot)
+                    .map_or(i64::MAX, |(_, entry)| entry)
+            } else {
+                i64::from(shot.id.0)
+            };
+            (shot.layer, entry)
+        });
+        order
+    }
+
+    /// The shots in flight in the order they are drawn, bottom first: by
+    /// layer ([`SpriteLayer`](crate::sprite_layer::SpriteLayer)), each
+    /// layer in the order it keeps them (see [`shot_slots`]).
+    #[must_use]
+    pub fn shots_drawn(&self) -> Vec<&Shot> {
+        self.entry_order()
+            .into_iter()
+            .map(|index| &self.shots[index])
+            .collect()
+    }
+
+    /// Has each shot layer drawn and walked in the order `source` reads
+    /// ([`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)): by default,
+    /// the engine's, the order its slots entered it.
+    pub fn set_shot_overlap(&mut self, source: RuleSource) {
+        self.shot_overlap = source;
     }
 
     /// Whether a beam fired now finds a free slot: always uncapped; under
@@ -1836,9 +1888,6 @@ impl Combat {
                 turret_over: muzzle.turret_over,
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
-            if let Some(Quarry::Ship(_)) = quarry {
-                shot.layer = ShotLayer::Shots;
-            }
             shot.disable_only |= plunder::shot_disables(plunderer, aimed_at, targets);
             shot.roll_at_launch(self.field.interference, chance);
             // A dropped bomb or rocket reads no heading, so it is never sent
@@ -1851,7 +1900,16 @@ impl Combat {
                 along
             };
             shot.velocity = projectile::launch_velocity(&weapon, &from, out, thrown);
-            self.put_in_flight(shot)
+            let Some(taken) = self.put_in_flight(shot) else {
+                return false;
+            };
+            // `_HandleShipPointDefense` moves a point-defence shot fired at
+            // a ship to the shot layer (@0x398bd), after `_SpawnShot` put it
+            // in its own: so at the shot layer's tail.
+            if let Some(Quarry::Ship(_)) = quarry {
+                self.move_to_layer(taken, ShotLayer::Shots);
+            }
+            true
         }
     }
 
