@@ -492,6 +492,22 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
 }
 
 #[test]
+fn a_flight_hands_its_kept_berths_to_its_session_and_back() {
+    let mut traffic = nova_sim::Traffic::new();
+    traffic.set_berth_person(2, "Ace");
+    let kept = traffic.kept_berths();
+    let view = flight().with_kept_berths(kept.clone());
+    assert_eq!(view.session().expect("flying").kept_berths(), kept);
+    assert_eq!(view.kept_berths(), Some(kept.clone()));
+    let failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    })
+    .with_kept_berths(kept);
+    assert_eq!(failed.kept_berths(), None);
+}
+
+#[test]
 fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
     let mut sprites = SlotSprites::default();
     sprites.layers.put(

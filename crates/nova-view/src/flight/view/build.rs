@@ -15,8 +15,8 @@ use nova_sim::{
     StartError, TrafficCatalog,
 };
 use nova_sim::{
-    ControlBits, Hailed, HireTerms, MissionInfo, MissionInfoPress, OfferPrompt, PersonRules,
-    PlayerInfo, ship_layer::SlotSprites,
+    ControlBits, Hailed, HireTerms, KeptBerths, MissionInfo, MissionInfoPress, OfferPrompt,
+    PersonRules, PlayerInfo, ship_layer::SlotSprites,
 };
 
 use crate::flight::cadence::HudCadence;
@@ -288,6 +288,24 @@ impl<
     #[must_use]
     pub fn slot_sprites(&self) -> Option<&SlotSprites> {
         self.session.as_ref().ok().map(Session::slot_sprites)
+    }
+
+    /// The flight with its traffic's berths starting from `kept`, what an
+    /// earlier flight of the same run left ([`Session::with_kept_berths`]).
+    #[must_use]
+    pub fn with_kept_berths(self, kept: KeptBerths) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_kept_berths(kept)),
+            ..self
+        }
+    }
+
+    /// What the flight's traffic's berths keep for the next flight
+    /// ([`Session::kept_berths`]), or `None` when its session never
+    /// started.
+    #[must_use]
+    pub fn kept_berths(&self) -> Option<KeptBerths> {
+        self.session.as_ref().ok().map(Session::kept_berths)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
