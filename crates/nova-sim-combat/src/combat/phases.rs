@@ -1,13 +1,14 @@
 //! The fight's tick as phases of `_DoPlayGameWork`, which its session runs
 //! between its own work: the player's point defence, the player's
-//! trigger, the collision passes, the NPCs' point defence and launches,
-//! `_HandleShot`, the NPCs' picks, then `_HandleBeams` and the late steps
+//! trigger and its regeneration, the collision passes, the NPCs' point
+//! defence and launches, `_HandleShot`, each NPC's `_HandleShip` by slot,
+//! then `_HandleBeams` and the late steps
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
 use super::{
-    Combat, Field, Fighter, Firers, GamePass, Landed, Rules, Scenery, Sides, Target, lock,
-    regenerate, truncate_downed_player,
+    Combat, Field, Fighter, Firers, GamePass, Landed, Rules, Scenery, ShipRef, Sides, Target, lock,
+    regenerate, regenerate_player, truncate_downed_player,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
@@ -124,12 +125,29 @@ impl Combat {
         self.dispatch_npcs(fighters, &targets, defence, chance);
     }
 
-    /// Step 6's picks, `_HandleShip`'s (@0x44483): each NPC's reloads
+    /// The player's shields and armour regenerate, as `_HandlePlayer` runs
+    /// it after its trigger and before its move (@0x6cf86-0x6d093), by
+    /// `arena`'s rules: so before that frame's `_HandleBeams` (see
+    /// `regenerate_player`).
+    pub fn regenerate_player(&mut self, fighters: &mut [Fighter], arena: Arena<'_>) {
+        let rule = arena.rules.disable;
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.ship == ShipRef::Player)
+        {
+            regenerate_player(fighter, rule);
+        }
+    }
+
+    /// Step 6, `_HandleShip` for each NPC, as `_DoPlayGameWork`'s ship
+    /// loop runs it (@0x4445c-0x444c4), by [`Fighter::slot`]: its reloads
     /// count down a tick (@0x33896-0x338ce), after `_HandleShot` has held
-    /// them (`Combat::hold_reloads`), then it fires the weapons its trigger
-    /// holds that are ready (`_FireAIShipWeapon` @0x34ffd, @0x3500a),
-    /// drawing on `chance`.
-    pub fn fire_npcs(
+    /// them (`Combat::hold_reloads`); its shields and armour regenerate
+    /// (@0x34424-0x34677, `regenerate`); then it fires the weapons its
+    /// trigger holds that are ready (`_FireAIShipWeapon` @0x34ffd,
+    /// @0x3500a), at the ships as the slots before it left them, drawing
+    /// on `chance`.
+    pub fn handle_npcs(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
@@ -139,9 +157,18 @@ impl Combat {
         self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        count_down(fighters, Firers::Npcs);
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        self.fire(fighters, &targets, chance, Firers::Npcs);
+        let mut order: Vec<usize> = (0..fighters.len())
+            .filter(|&index| fighters[index].ship != ShipRef::Player)
+            .collect();
+        order.sort_by_key(|&index| fighters[index].slot);
+        let rule = arena.rules.disable;
+        for index in order {
+            let fighter = &mut fighters[index];
+            fighter.armament.reload();
+            regenerate(fighter, rule);
+            let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+            self.fire_one(&mut fighters[index], &targets, chance);
+        }
     }
 
     /// Step 5, `_HandleShot` (@0x44385): first its loop visits the slots
@@ -202,16 +229,16 @@ impl Combat {
     }
 
     /// `_HandleBeams` (@0x4453d), step 6's beams and the late steps 7 to
-    /// 10: the beams follow their firers among `fighters`, drawing on
+    /// 9: the beams follow their firers among `fighters`, drawing on
     /// `chance`, point-defence beams hit their missiles, the beams' hits
-    /// land, conditions follow the damage, the shockwaves go off, shields
-    /// and armour regenerate, and where each ship stands is kept for the
-    /// next tick's collision passes.
+    /// land, conditions follow the damage, the shockwaves go off, and
+    /// where each ship stands is kept for the next tick's collision
+    /// passes. Each ship has regenerated already, at its own step
+    /// ([`Combat::regenerate_player`], [`Combat::handle_npcs`]).
     ///
     /// The original starts a breakup's countdown in `_HandleShipDisplay`,
-    /// and regenerates in `_HandlePlayer` and `_HandleShip`, before
-    /// `_HandleBeams`; here both come after the beams' hits (filed as
-    /// weapons-fidelity's phase 39).
+    /// before `_HandleBeams`; here it comes after the beams' hits
+    /// (weapons-fidelity's phase 39).
     pub fn close_tick(
         &mut self,
         fighters: &mut [Fighter],
@@ -260,9 +287,6 @@ impl Combat {
             self.mark_downed(first_strike, fighter.ship, downed);
         }
         self.shock(fighters, rule);
-        for fighter in fighters.iter_mut() {
-            regenerate(fighter);
-        }
         self.ended_beams = beams_held.saturating_sub(self.beams.len());
         self.stood = fighters
             .iter()

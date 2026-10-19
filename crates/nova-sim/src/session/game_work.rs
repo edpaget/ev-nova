@@ -8,8 +8,8 @@
 //!    player's work before the move; its self-repair (@0x68b3d), point
 //!    defence (@0x68c74), sabotage (@0x692e5), trigger (@0x6ab55) and
 //!    reloads' countdown (@0x6ae25), its recoil (@0x62f35) and its bays'
-//!    fighters (@0x62c61) settled before it moves
-//!    ([`Session::player_fires`]).
+//!    fighters (@0x62c61) settled, and its regeneration (@0x6cf86), before
+//!    it moves ([`Session::player_fires`]).
 //! 2. The move, the turn, thrust and position step (@0x6c770-0x6d4eb),
 //!    or the escape pod's flight; the rescue, which ends the pass
 //!    (@0x68ddd); then the eject check (@0x6f22c).
@@ -26,7 +26,8 @@
 //! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
 //!    locks, their hits settled and answered.
 //! 6. `_HandleShip` (@0x44483): the traffic's fly half and the session's
-//!    work after it, the assistance, then each NPC's fire.
+//!    work after it, the assistance, then each NPC's reloads,
+//!    regeneration and fire, slot by slot ([`Session::handle_npcs`]).
 //! 7. `_HandleBeams` (@0x4453d) and the fight's late steps, then what the
 //!    pass leaves ([`Session::fight_tail`]), then the asteroids
 //!    (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids` @0x444f5, after
@@ -217,7 +218,7 @@ impl Session {
         } else {
             self.move_traffic_again(chance);
         }
-        self.npcs_fire(pass, rules, chance);
+        self.handle_npcs(pass, rules, chance);
         // `_HandleBeams` (@0x4453d), and what the pass leaves.
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
@@ -242,7 +243,9 @@ impl Session {
     /// launched put in the system (`_LaunchFighter` @0x62c61), all before
     /// it moves. So it fires from where it stood, along the heading and at
     /// the velocity the last pass left, and a sabotage that downs it still
-    /// lets its point defence fire that pass.
+    /// lets its point defence fire that pass. Last, its shields and armour
+    /// regenerate (@0x6cf86-0x6d093, [`Combat::regenerate_player`]), after
+    /// its trigger and before its position step (@0x6d4b0).
     pub(super) fn player_fires(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         self.player_repair_tick(rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
@@ -255,18 +258,22 @@ impl Session {
         self.take_shoves();
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, _| {
+            combat.regenerate_player(fighters, arena);
+        });
     }
 
-    /// `_HandleShip`'s fire on `pass` by `rules`, drawing on `chance`:
+    /// `_HandleShip`'s fight on `pass` by `rules`, drawing on `chance`:
     /// every NPC's stray provocation eases (@0x35374-0x353b2), after the
-    /// collision passes and the shots and before the beams, then each
-    /// NPC's reloads count down and it fires its pick
-    /// ([`Combat::fire_npcs`]), and the pick fired is cleared or kept
+    /// collision passes and the shots and before the beams, then, slot by
+    /// slot, each NPC's reloads count down, it regenerates and it fires
+    /// its pick ([`Combat::handle_npcs`]), and the pick fired is cleared
+    /// or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
-    pub(super) fn npcs_fire(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
+    pub(super) fn handle_npcs(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         self.traffic.ease_stray();
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fire_npcs(fighters, arena, chance);
+            combat.handle_npcs(fighters, arena, chance);
         });
         self.traffic.after_firing(&self.arsenal);
     }
@@ -831,6 +838,50 @@ mod tests {
         jumping.begin_jump().expect("jumps");
         assert!(jumping.in_warp_lead_in());
         runs_the_parts(jumping, &catalog);
+    }
+
+    /// [`armed`] with weapon 128 a 200-pixel beam lasting 3 ticks, firing
+    /// every 10, doing 5 energy damage.
+    fn beam_armed() -> FakePilotCatalog {
+        FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                guidance: 0,
+                count: 3,
+                reload: 10,
+                speed: 0,
+                beam_length: 200,
+                mass_dmg: 0,
+                energy_dmg: 5,
+                ..blaster()
+            }],
+            ..armed()
+        }
+    }
+
+    #[test]
+    fn each_ship_regenerates_before_the_passs_beams() {
+        // `_HandlePlayer` regenerates the player's shield (@0x6cf86) and
+        // each NPC's own `_HandleShip` its (@0x34424, the ship loop
+        // @0x4445c), both before `_HandleBeams` (@0x4453d) lands the
+        // beams fired this pass: 0.5 short, up to full, less 5.
+        let catalog = beam_armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.stats.shield_regen = 1.0;
+        let full = session.reserves().shield.max;
+        session.pilot.reserves.shield.now = full - 0.5;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.stats.shield_regen = 1.0;
+        let npc_full = npc.reserves.shield.max;
+        npc.reserves.shield.now = npc_full - 0.5;
+        session.hold_trigger(FIRE);
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::session::tests::Firing,
+        );
+        assert_eq!(session.npcs()[0].reserves.shield.now, npc_full - 5.0);
+        assert_eq!(session.reserves().shield.now, full - 5.0);
     }
 
     #[test]

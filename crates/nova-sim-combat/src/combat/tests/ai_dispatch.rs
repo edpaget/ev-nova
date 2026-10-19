@@ -160,7 +160,7 @@ fn the_npcs_launch_in_their_point_defence_phase_and_never_with_their_picks() {
     };
     {
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.fire_npcs(&mut fighters, on, &mut NeverFires);
+        combat.handle_npcs(&mut fighters, on, &mut NeverFires);
     }
     assert_eq!(combat.take_sorties(), [], "no launch with the picks");
     assert_eq!(fired(&combat.take_events()), []);

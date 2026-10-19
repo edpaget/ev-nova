@@ -213,11 +213,14 @@
 //!    answers ([`Strike::lock`]), landing at once (@0x35855). Each shot of
 //!    a weapon that fires one shot at a time (`Flags3` 0x0004) holds its
 //!    firer's reload for it at its `Reload` ([`Armament::hold`]).
-//! 6. `_HandleShip`'s fire (@0x44483, [`Combat::fire_npcs`]): each NPC's
-//!    reloads count down a tick (@0x33896), then it fires the weapons its
-//!    trigger holds that are ready, as in step 1 (but no fighter bay's
-//!    launch, which step 4 made), reading the conditions the passes and
-//!    the ends of life left. Its shots first move in the next tick's
+//! 6. `_HandleShip` (@0x44483, [`Combat::handle_npcs`]), each NPC in
+//!    turn by slot, as `_DoPlayGameWork`'s ship loop runs it
+//!    (@0x4445c-0x444c4): its reloads count down a tick (@0x33896), its
+//!    shields and armour regenerate (step 10), then it fires the weapons
+//!    its trigger holds that are ready, as in step 1 (but no fighter
+//!    bay's launch, which step 4 made), reading the conditions the passes
+//!    and the ends of life left, and the ships as the slots before it
+//!    left them. Its shots first move in the next tick's
 //!    step 5. An NPC fires its pick as `_FireAIShipWeapon` does
 //!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
 //!    engine, and a recoil sets the firer's velocity, reported as a
@@ -289,8 +292,11 @@
 //!    ship's velocity. Each intact or disabled ship hit then settles its
 //!    condition as in step 9.
 //! 10. Shields and armour regenerate only on an intact ship, each up to
-//!     what it holds: a disabled or breaking-up one regenerates neither
-//!     (`_HandleShip` @0x34424, `_HandlePlayer` @0x6cf86-0x6cff3).
+//!     what it holds: a disabled or breaking-up one regenerates neither.
+//!     Each ship regenerates at its own step, before the beams' hits: the
+//!     player after its trigger ([`Combat::regenerate_player`],
+//!     `_HandlePlayer` @0x6cf86-0x6d093), each NPC at its own
+//!     `_HandleShip` in step 6 (@0x34424).
 //!
 //! After step 10 each ship's place is kept: the next tick's hit pass meets
 //! each NPC there (`Combat::hit_pass`).
@@ -323,9 +329,8 @@
 //! - Step 4 runs after every NPC's decision, where `_AIDispatch`
 //!   interleaves them slot by slot.
 //!
-//! When a breakup's countdown starts, and when ships regenerate, differ
-//! from the original's `_HandleShipDisplay` and `_HandleShip` per-slot
-//! loop (filed as weapons-fidelity's phase 39). The ships within the hit
+//! When a breakup's countdown starts differs from the original's
+//! `_HandleShipDisplay` per-slot loop (weapons-fidelity's phase 39). The ships within the hit
 //! pass are walked in the layers the last tick's layout left, which puts
 //! a ship the beams or the late steps disabled in its new layer a frame
 //! early (weapons-fidelity phase 39, item 3). See the `collision` module.
@@ -1291,10 +1296,11 @@ impl Combat {
         };
         self.defend_player(fighters, arena, chance);
         self.fire_player(fighters, arena, chance);
+        self.regenerate_player(fighters, arena);
         self.test_hits(fighters, arena, scenery, chance);
         self.defend_npcs(fighters, arena, chance);
         self.fly_shots(fighters, arena, chance);
-        self.fire_npcs(fighters, arena, chance);
+        self.handle_npcs(fighters, arena, chance);
         self.close_tick(fighters, arena, chance);
     }
 
@@ -1981,23 +1987,12 @@ impl Combat {
         (start, side)
     }
 
-    /// Steps 1 and 6, after point defence ([`Combat::defend`]): each of the
-    /// `firers` fires what its trigger holds, aimed at its target among
-    /// `targets` while that can be hit. The player fires in step 1, before
-    /// the hit pass, as `_HandlePlayer` calls `_FirePlayerWeapon` after
-    /// `_HandleShipPointDefense` ([`Combat::fire_player`]); the NPCs in step
-    /// 6, as `_HandleShip` fires their picks after `_AIDispatch` has run
-    /// their point defence and `_HandleShot` has moved the shots
-    /// ([`Combat::fire_npcs`]).
-    /// An NPC fires an escort's formation trigger through
-    /// [`Armament::fire`], its quadrant turrets testing their blind spots
-    /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
-    /// weapon sounding at [`AI_FIRE_PRIORITY`], then fires its pick
-    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
-    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
-    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
-    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
-    /// destroys its firer ([`self_destruct`]).
+    /// Step 1, after point defence ([`Combat::defend`]): each of the
+    /// `firers` fires what its trigger holds ([`Combat::fire_one`]),
+    /// aimed at its target among `targets` while that can be hit. The
+    /// player fires in step 1, before the hit pass, as `_HandlePlayer`
+    /// calls `_FirePlayerWeapon` after `_HandleShipPointDefense`
+    /// ([`Combat::fire_player`]).
     fn fire(
         &mut self,
         fighters: &mut [Fighter],
@@ -2009,55 +2004,72 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| firers.take(fighter.ship))
         {
-            let target = ai_dispatch::standing(fighter.target, targets);
-            if fighter.ship == ShipRef::Player {
-                self.pull_player_trigger(fighter, target, targets, chance);
-                continue;
-            }
-            let (state, hull) = (fighter.state, fighter.hull);
-            let trigger = Trigger {
-                only: None,
-                ..fighter.trigger
-            };
-            let launches = fighter.armament.fire(
-                trigger,
-                *fighter.condition,
-                fighter.shooter(),
-                fighter.rounds,
-                &mut fighter.reserves.fuel,
-                chance,
-                &mut self.reports,
-                &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
-            );
-            // Each weapon launches at most once a call, its copies as one,
-            // and sounds as `_FireAIShipWeapon` does, once a call.
-            let sound = |_| Some(FireSound::at(AI_FIRE_PRIORITY));
-            self.launch_volley(fighter, &launches, sound, targets, chance);
-            let Some(pick) = fighter.trigger.only else {
-                continue;
-            };
-            let arc = self.quadrant_arc;
-            let volley = fighter.armament.fire_pick(
-                pick,
-                *fighter.condition,
-                fighter.shooter(),
-                fighter.rounds,
-                &mut fighter.reserves.fuel,
-                chance,
-                &mut self.reports,
-                self.ai_spend,
-                &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
-            );
-            let Some(volley) = volley else {
-                continue;
-            };
-            let sound = first_copy_sounds_at(AI_FIRE_PRIORITY);
-            self.launch_volley(fighter, &volley.launches, sound, targets, chance);
-            self.glow(fighter.ship, &volley.weapon);
-            let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
-            if let Some(velocity) = pushed {
-                self.shove(fighter, velocity);
-            }
+            self.fire_one(fighter, targets, chance);
+        }
+    }
+
+    /// `fighter` fires what its trigger holds, aimed at its target among
+    /// `targets` while that can be hit: the player as step 1 fires it
+    /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
+    /// (@0x34ffd, [`Combat::handle_npcs`]).
+    /// An NPC fires an escort's formation trigger through
+    /// [`Armament::fire`], its quadrant turrets testing their blind spots
+    /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
+    /// weapon sounding at [`AI_FIRE_PRIORITY`], then fires its pick
+    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
+    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
+    /// [`AI_FIRE_PRIORITY`]; a recoil sets its velocity, reported as a
+    /// [`Shove`]. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
+    /// destroys its firer ([`self_destruct`]).
+    fn fire_one(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
+        let target = ai_dispatch::standing(fighter.target, targets);
+        if fighter.ship == ShipRef::Player {
+            self.pull_player_trigger(fighter, target, targets, chance);
+            return;
+        }
+        let (state, hull) = (fighter.state, fighter.hull);
+        let trigger = Trigger {
+            only: None,
+            ..fighter.trigger
+        };
+        let launches = fighter.armament.fire(
+            trigger,
+            *fighter.condition,
+            fighter.shooter(),
+            fighter.rounds,
+            &mut fighter.reserves.fuel,
+            chance,
+            &mut self.reports,
+            &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
+        );
+        // Each weapon launches at most once a call, its copies as one,
+        // and sounds as `_FireAIShipWeapon` does, once a call.
+        let sound = |_| Some(FireSound::at(AI_FIRE_PRIORITY));
+        self.launch_volley(fighter, &launches, sound, targets, chance);
+        let Some(pick) = fighter.trigger.only else {
+            return;
+        };
+        let arc = self.quadrant_arc;
+        let volley = fighter.armament.fire_pick(
+            pick,
+            *fighter.condition,
+            fighter.shooter(),
+            fighter.rounds,
+            &mut fighter.reserves.fuel,
+            chance,
+            &mut self.reports,
+            self.ai_spend,
+            &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+        );
+        let Some(volley) = volley else {
+            return;
+        };
+        let sound = first_copy_sounds_at(AI_FIRE_PRIORITY);
+        self.launch_volley(fighter, &volley.launches, sound, targets, chance);
+        self.glow(fighter.ship, &volley.weapon);
+        let pushed = ai_fire::recoil(&state, &hull, fighter.class_speed, &volley.weapon);
+        if let Some(velocity) = pushed {
+            self.shove(fighter, velocity);
         }
     }
 
@@ -2303,7 +2315,7 @@ impl Combat {
     ///
     /// The player counts its reload down before `_HandleShot` sets it
     /// ([`Combat::fire_player`], @0x6ae25) and an NPC after
-    /// ([`Combat::fire_npcs`], @0x33896): so the player fires it again
+    /// ([`Combat::handle_npcs`], @0x33896): so the player fires it again
     /// `Reload` + 1 ticks after the tick of its last move, and an NPC
     /// `Reload` − 1 ticks after it.
     fn hold_reloads(&mut self, fighters: &mut [Fighter]) {
@@ -3392,21 +3404,22 @@ fn aimed_at(launch: &Launch, target: Option<ShipRef>) -> Option<ShipRef> {
 
 /// Which ships defend and fire in a step of the tick, point defence
 /// first: the player in step 1, as `_HandlePlayer` runs its point defence
-/// and then its trigger before the collision passes, and the NPCs in
-/// steps 4 and 6, after them, as `_AIDispatch` runs their point defence
-/// before `_HandleShot`, and `_HandleShip` fires their picks after it.
+/// and then its trigger before the collision passes. The NPCs' point
+/// defence runs in `_AIDispatch`'s slot loop (`Combat::dispatch_npcs`),
+/// and their picks at each one's own `_HandleShip`
+/// ([`Combat::handle_npcs`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Firers {
     /// The player alone.
     Player,
-    /// Every NPC.
-    Npcs,
 }
 
 impl Firers {
     /// Whether `ship` fires in this step.
     fn take(self, ship: ShipRef) -> bool {
-        (ship == ShipRef::Player) == (self == Self::Player)
+        match self {
+            Self::Player => ship == ShipRef::Player,
+        }
     }
 }
 
@@ -3638,23 +3651,47 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
     )
 }
 
-/// Step 10: `fighter`'s shields and armour regenerate only while it is
-/// intact: a disabled, breaking-up or destroyed ship regenerates neither
-/// (`_HandleShip` @0x34424-0x34677 behind its frame-start `_IsDisabled`;
-/// `_HandlePlayer` @0x6cf86-0x6cff3 for the shield and @0x6d00a-0x6d093
-/// for the armour, which its repair inhibit also holds back through
-/// [`Fighter::armor_regen`]).
-///
-/// *Ordering against the original.* The original tests the condition its
-/// frame started with; the engine tests the one this tick's hits leave.
-/// So a ship disabled on a tick misses that tick's regeneration, and a
-/// player repaired on a tick gains it, one tick's rate either way, which
-/// no frame shows.
-fn regenerate(fighter: &mut Fighter) {
-    if *fighter.condition == Condition::Intact {
+/// An NPC's regeneration, at its own `_HandleShip` (@0x34424-0x34677,
+/// [`Combat::handle_npcs`]): `fighter`'s shields and armour regenerate
+/// only while `_IsDisabled` does not hold as its `_HandleShip` began
+/// (-0x13e), as `rule` says ([`Fighter::disabled_now`]: held disabled, not
+/// intact, or its armour under the line). So a disabled, breaking-up or
+/// destroyed ship regenerates neither. It comes before that frame's
+/// `_HandleBeams`, so a beam that disables the ship after it leaves it
+/// regenerated. A ship whose shield and armour are full has nothing to
+/// regenerate, and the rule is not asked of it.
+fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
+    let reserves = &fighter.reserves;
+    let short = below_full(reserves.shield) || below_full(reserves.armor);
+    if short && !fighter.disabled_now(rule) {
         recharge(&mut fighter.reserves.shield, fighter.shield_regen);
         recharge(&mut fighter.reserves.armor, fighter.armor_regen);
     }
+}
+
+/// The player's regeneration, in `_HandlePlayer` after its trigger
+/// (@0x6cf86-0x6d093, [`Combat::regenerate_player`]): `fighter`'s shields
+/// regenerate while it was intact as `_HandlePlayer` began (its flags
+/// -0x2cb and -0x2ca, @0x6cfa2; [`Fighter::disabled_as_tick_began`]); its
+/// armour only if `_IsDisabled` does not hold now either, as `rule` says
+/// (@0x6d035, [`Fighter::disabled_now`]), so armour taken to none since
+/// the frame began (a sabotage kill, a self-destruct) regenerates none.
+/// Its repair inhibit holds the armour back through
+/// [`Fighter::armor_regen`]. As the original tests the capacity first
+/// (@0x6cf99, @0x6d01d), a full gauge asks nothing.
+fn regenerate_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
+    let began_whole = !fighter.disabled_as_tick_began();
+    if began_whole && below_full(fighter.reserves.shield) {
+        recharge(&mut fighter.reserves.shield, fighter.shield_regen);
+    }
+    if began_whole && below_full(fighter.reserves.armor) && !fighter.disabled_now(rule) {
+        recharge(&mut fighter.reserves.armor, fighter.armor_regen);
+    }
+}
+
+/// Whether `gauge` is below what it holds, with something to regenerate.
+fn below_full(gauge: Gauge) -> bool {
+    gauge.now < gauge.max
 }
 
 /// Adds `rate` to `gauge` up to what it holds, never taking any away.
@@ -4847,7 +4884,13 @@ mod tests {
         };
         tick(&mut combat, &mut ships, &rule);
         let asked = rule.asked.take();
-        assert_eq!(asked.len(), 2, "not of the dying");
+        // Of the tough ship at its `_HandleShip`'s regeneration, which
+        // reads `_IsDisabled` live (@0x34424), its armour short of full;
+        // then of A and the tough ship as their conditions settle; never
+        // of the dying.
+        assert_eq!(asked.len(), 3, "not of the dying");
+        assert_eq!(asked[0].0, asked[2].0, "the tough ship's regeneration");
+        let asked = &asked[1..];
         assert_eq!(
             asked[1].0,
             Gauge {

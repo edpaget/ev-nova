@@ -210,7 +210,7 @@ fn a_lock_lands_in_the_shot_step() {
                 .filter(|strike| strike.lock)
                 .map(|_| tick_no),
         );
-        combat.fire_npcs(&mut fighters, arena, &mut NeverFires);
+        combat.handle_npcs(&mut fighters, arena, &mut NeverFires);
         combat.close_tick(&mut fighters, arena, &mut NeverFires);
         let closed = combat.take_strikes();
         assert!(
@@ -481,4 +481,69 @@ fn a_lock_meets_its_target_where_it_is_not_where_it_stood() {
         combat.take_events();
     }
     panic!("never locked");
+}
+
+/// A's laser of `laser_mass` mass and 5 energy damage on `struck`, 100 to
+/// its right, the struck ship's shield at `shield` of 100 regenerating 1 a
+/// tick and its armour at `armor` of 30 regenerating 1 a tick.
+fn beamed(struck: ShipRef, laser_mass: i16, shield: f32, armor: f32) -> [Ship; 2] {
+    let mut b = Ship::at(2, 100.0, 0.0);
+    b.id = struck;
+    b.fleet = struck;
+    b.reserves.shield = Gauge {
+        now: shield,
+        max: 100.0,
+    };
+    b.reserves.armor.now = armor;
+    b.shield_regen = 1.0;
+    b.armor_regen = 1.0;
+    let laser = WeaponRecord {
+        mass_dmg: laser_mass,
+        ..laser()
+    };
+    [Ship::at(1, 0.0, 0.0).armed(laser), b]
+}
+
+#[test]
+fn an_npc_regenerates_before_the_ticks_beam_hits() {
+    // `_HandleShip` regenerates B's shield (@0x34424-0x34605) before
+    // `_HandleBeams` (@0x4453d) lands A's beam: 99.5 + 1 up to 100, less
+    // 5. Regenerating after the hit would leave 94.5 + 1.
+    let mut ships = beamed(B, 0, 99.5, 30.0);
+    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    assert_eq!(ships[1].reserves.shield.now, 95.0);
+}
+
+#[test]
+fn the_player_regenerates_before_the_ticks_beam_hits() {
+    // `_HandlePlayer` regenerates the player's shield (@0x6cf86-0x6cff3)
+    // before `_HandleBeams` (@0x4453d).
+    let mut ships = beamed(ShipRef::Player, 0, 99.5, 30.0);
+    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    assert_eq!(ships[1].reserves.shield.now, 95.0);
+}
+
+#[test]
+fn an_npc_intact_at_its_step_regenerates_though_a_beam_disables_it_after() {
+    // B is intact at its `_HandleShip` (the frame-start `_IsDisabled`
+    // @0x34424), so its armour regenerates, 25 + 1, before the beam takes
+    // 20 and disables it.
+    let mut ships = beamed(B, 20, 0.0, 25.0);
+    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    assert_eq!(ships[1].condition, Condition::Disabled);
+    assert_eq!(ships[1].reserves.armor.now, 6.0);
+}
+
+#[test]
+fn a_player_whose_armour_is_gone_before_its_regeneration_regenerates_its_shield_alone() {
+    // `_HandlePlayer` gates the shield on its frame-start flags alone
+    // (@0x6cfa2) but the armour on a live `_IsDisabled` too (@0x6d035):
+    // armour taken to none since the frame began (a sabotage kill, a
+    // self-destruct) regenerates nothing, and the display step breaks it
+    // up.
+    let mut ships = beamed(ShipRef::Player, 0, 50.0, 0.0);
+    ships[0].trigger = QUIET;
+    tick(&mut Combat::default(), &mut ships, &NovaDisable);
+    assert_eq!(ships[1].reserves.shield.now, 51.0, "its shield");
+    assert_eq!(ships[1].reserves.armor.now, 0.0, "no armour");
 }

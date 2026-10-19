@@ -2898,6 +2898,7 @@ impl Session {
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_player(fighters, arena, chance);
             combat.fire_player(fighters, arena, chance);
+            combat.regenerate_player(fighters, arena);
         });
         self.collision_passes(pass, rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
@@ -2906,7 +2907,7 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fly_shots(fighters, arena, chance);
         });
-        self.npcs_fire(pass, rules, chance);
+        self.handle_npcs(pass, rules, chance);
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
