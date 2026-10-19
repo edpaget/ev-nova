@@ -28,8 +28,8 @@ macOS
 -----
 
 The macOS download is a disk image (.dmg) holding Nova.app, nova-dump,
-README.txt and LICENSE. It needs macOS 13 (Ventura) or later, on Apple
-silicon or Intel.
+README.txt and LICENSE. It is for Apple silicon Macs and needs macOS 13
+(Ventura) or later.
 
 Open the .dmg and drag Nova.app onto the Applications folder beside it.
 It is named Nova.app, not EV Nova.app, so it never replaces the original
