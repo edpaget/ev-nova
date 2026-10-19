@@ -111,7 +111,7 @@ pub const ANIMATED: u16 = 0x0008;
 /// `Flags` 0x0010: its animation stops while it is disabled.
 pub const STILL_WHILE_DISABLED: u16 = 0x0010;
 /// `Flags` 0x0020: its alt layer stops while it is disabled, held as it
-/// was last drawn (see the module docs; the Bible says hidden).
+/// was last drawn (see the module docs).
 pub const ALT_HIDDEN_WHILE_DISABLED: u16 = 0x0020;
 /// `Flags` 0x0040: its running lights go out while it is disabled
 /// (@0x2c56c-0x2c593).
