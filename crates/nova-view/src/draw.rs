@@ -113,6 +113,29 @@ pub enum Blend {
     /// leave the destination exactly; an opaque black texel darkens it to
     /// `d5 × (32 − k) >> 5`.
     OrCrossfade,
+    /// The original's translucent copy with its source and destination
+    /// factors set apart: `_BlitPixieRLETranslucent` (0xc1568) with
+    /// `_BlitPixieTranslucentCopy` (0xc1110), which compute
+    /// `((src_c × n_c) >> 5) | ((dst_c × m) >> 5)` per 5-bit channel. A
+    /// fully cloaked ship's hull at translucency 0x1e (+0xa8) with its
+    /// channel factors at 2 draws so, at n = 2 − 30 + 32 = 4 and m = 30
+    /// (`_HandleShipDisplay` @0x2d1d6-0x2d22a; see
+    /// [`cloak_fade`](crate::flight::cloak_fade)). [`Blend::OrCrossfade`]
+    /// ties m to 32 − n, so it cannot.
+    ///
+    /// # The tint
+    ///
+    /// Its colour channels are the source factors and its alpha the
+    /// destination factor, each in 32nds: `n_c = round(c × 32 / 255)`,
+    /// `m = round(a × 32 / 255)`, exact for [`translucent_tint`].
+    ///
+    /// # The bit depth
+    ///
+    /// As [`Blend::OrCrossfade`]'s, with n per channel in place of k and m
+    /// in place of 32 − k: the source is the texel's straight colour in 5
+    /// bits, the destination is quantised to 5 bits, and a transparent
+    /// texel (a skipped RLE pixel) leaves the destination exactly.
+    OrTranslucent,
 }
 
 impl Blend {
@@ -121,7 +144,7 @@ impl Blend {
     /// copy of the scene, so a later overlapping quad starts a new batch.
     #[must_use]
     pub fn reads_backdrop(self) -> bool {
-        matches!(self, Self::Or | Self::OrCrossfade)
+        matches!(self, Self::Or | Self::OrCrossfade | Self::OrTranslucent)
     }
 }
 
@@ -425,6 +448,16 @@ impl DrawList {
         })
     }
 
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::OrTranslucent`].
+    pub fn translucent_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::OrTranslucent,
+        })
+    }
+
     /// Appends a [`DrawCommand::Colorized`] combined by `blend`.
     pub fn colorized_sprite(
         &mut self,
@@ -645,6 +678,17 @@ pub fn lights_tint(level: u8) -> Color {
     Color::rgba(255, 255, 255, ((level * 255 + full / 2) / full) as u8)
 }
 
+/// The tint of a [`Blend::OrTranslucent`] sprite whose source factor is
+/// `source` and destination factor `destination`, each in 32nds and held
+/// to 32: white at `source` 32nds, at `destination` 32nds of full alpha.
+#[must_use]
+pub fn translucent_tint(source: u8, destination: u8) -> Color {
+    let full = u16::from(FULL);
+    let scale = |n: u8| ((u16::from(n).min(full) * 255 + full / 2) / full) as u8;
+    let n = scale(source);
+    Color::rgba(n, n, n, scale(destination))
+}
+
 /// Fills `area` with `color`. There is no rectangle command: a horizontal
 /// line as thick as the area, along its middle, is one.
 pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
@@ -672,6 +716,14 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    #[test]
+    fn a_translucent_tint_carries_its_source_factor_in_colour_and_its_destination_in_alpha() {
+        assert_eq!(translucent_tint(4, 30), Color::rgba(32, 32, 32, 239));
+        assert_eq!(translucent_tint(32, 32), Color::WHITE);
+        assert_eq!(translucent_tint(40, 0), Color::rgba(255, 255, 255, 0));
+        assert!(Blend::OrTranslucent.reads_backdrop());
     }
 
     #[test]
