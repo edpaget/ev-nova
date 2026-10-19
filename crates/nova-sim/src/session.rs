@@ -2351,7 +2351,7 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
-            tractor_step: self.tractor_step(),
+            // No tractor's step: the entry flies no ship.
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
