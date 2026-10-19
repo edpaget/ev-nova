@@ -20,7 +20,10 @@
 //! 4. The player's display step ([`Combat::display_player`]): its
 //!    condition settles from its armour, its breakup's countdown starts,
 //!    or its final explosion goes off, with its shockwave.
-//! 5. An explosion holds the game's end, and halts
+//! 5. The player laid out in the layer its display read
+//!    ([`Session::lay_out_displayed`], `_HandleShipDisplay`'s layer block
+//!    @0x2bd24-0x2bdad), just before the collision passes walk it.
+//! 6. An explosion holds the game's end, and halts
 //!    [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)
 //!    after the klaxon (@0x2d86d-0x2d8ea).
 //!
@@ -59,6 +62,7 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
             Combat::display_player(combat, fighters, arena);
         });
+        self.lay_out_displayed();
         if !was_destroyed && self.condition == Condition::Destroyed {
             self.settle_player_explosion();
         }

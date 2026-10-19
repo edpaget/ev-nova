@@ -282,6 +282,7 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.handle_npcs(fighters, arena, chance);
         });
+        self.lay_out_displayed();
         self.traffic.after_firing(&self.arsenal);
     }
 

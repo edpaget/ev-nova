@@ -89,10 +89,6 @@
 //!   a shot touching two meets the first in their entry order; the engine
 //!   takes the first along the move:
 //!   rdm:phase/asteroids/phase-9-asteroid-contact-before-point-defence.
-//! - **A ship's layer as of its own display.** The session lays the ships
-//!   out at the end of its tick, after the beams and the late steps, so a
-//!   ship disabled there is walked in its new layer a frame early:
-//!   rdm:phase/weapons-fidelity/phase-39-left-out-of-phase-28, item 3.
 //! - **An escort's leader cleared as its hit lands**, which the rest of
 //!   the frame's rules read (`_DamageShip` @0x3ae58-0x3afdd); **a Derelict
 //!   government's ships disabled at any armour** (`_IsDisabled`
