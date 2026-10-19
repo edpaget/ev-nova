@@ -3848,19 +3848,20 @@ impl Session {
     /// [`WARP_UP_HALTS`](crate::sound::WARP_UP_HALTS), once for a whole
     /// chain, then raises [`SimSound::Arrived`]: the warp end's order
     /// (`_HandlePlayer` @0x6c6b7, @0x6c6d2, then the warp-out @0x6c706).
-    /// The original's fallback end halts them and plays the warp-out a
-    /// frame before it switches systems; its natural end switches once
-    /// they have finished. The engine has no separate fallback frame: it
-    /// does both in the arrival's tick, the halt first. No frame, dialog
-    /// or save falls between them, so the player can't see the
-    /// difference.
+    /// The original's fallback end halts them and plays the warp-out on
+    /// its own pass, a pass before it switches systems; the engine does
+    /// the same (see the `warp_stage` module), so an arrival after the
+    /// fallback's pass halts nothing. Its natural end switches once they
+    /// have finished.
     ///
     /// Which end it is is read before the halt: the natural end, with
-    /// both warp-ups finished ([`warp::WarpUps`]), plays the warp-out only
-    /// when it is not still playing ([`warp::WarpOut`]; `ST_IsSoundPlaying`
-    /// @0x6bbe1-0x6bbe9), so a skipped one raises no [`SimSound::Arrived`]
-    /// and leaves the last one's countdown running. The fallback end, a
-    /// warp-up still playing, plays it unasked (@0x6c6d7-0x6c706).
+    /// both warp-ups finished ([`warp::WarpUps`]) or halted by the
+    /// fallback's pass, plays the warp-out only when it is not still
+    /// playing ([`warp::WarpOut`]; `ST_IsSoundPlaying` @0x6bbe1-0x6bbe9),
+    /// so a skipped one raises no [`SimSound::Arrived`] and leaves the
+    /// last one's countdown running. An arrival with a warp-up still
+    /// playing, no fallback pass first, plays it unasked
+    /// (@0x6c6d7-0x6c706).
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -3882,8 +3883,12 @@ impl Session {
         // plays (@0x6c706); on the natural end they have already finished
         // and the halt does nothing. Raised whatever the session's
         // countdown says, as the countdown stands still under a dialog
-        // while the sound plays on.
-        self.halt_sounds(&crate::sound::WARP_UP_HALTS);
+        // while the sound plays on. After the fallback's pass, which has
+        // raised it already, the arrival is the natural end on the flag it
+        // set (@0x6bbb8-0x6bc0d) and halts nothing.
+        if !self.take_fell_back() {
+            self.halt_sounds(&crate::sound::WARP_UP_HALTS);
+        }
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days

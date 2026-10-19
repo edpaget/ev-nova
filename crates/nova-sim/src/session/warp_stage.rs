@@ -16,8 +16,10 @@
 //!    [`drag_by`]);
 //! 4. the warp end ([`warp::warp_end`], @0x6bb5e-0x6c70b): its natural
 //!    end marks the jump's end due ([`Session::warp_end_due`]); its
-//!    fallback end halts the warp-ups and plays the warp-out, which
-//!    [`Session::arrive`] does, and arms the natural end of the next pass;
+//!    fallback end halts the warp-ups and plays the warp-out on its own
+//!    pass (@0x6c6a8-0x6c706), and arms the natural end of the next pass,
+//!    whose arrival ([`Session::arrive`]) halts nothing and plays the
+//!    warp-out only if it is not still playing (@0x6bbe1);
 //! 5. the turn to the bearing, the player's turn block (@0x6c899), as the
 //!    stage sets the auto-turn (@0x6b0d3) with the bearing as +0x68;
 //! 6. **the move-off** (@0x6d097-0x6d343): once it faces within
@@ -94,9 +96,10 @@ pub(super) struct PlayerWarp {
     stage: f32,
     /// `_warpSoundDone` (*0xdee3c).
     sound_done: bool,
-    /// Whether the warp end's fallback has halted the warp-ups, for the
-    /// natural end's reads; [`Session::arrive`] raises the halt.
-    halted: bool,
+    /// Whether the warp end's fallback has halted the warp-ups and played
+    /// the warp-out (@0x6c6b7-0x6c706), so [`Session::arrive`], the
+    /// natural end a pass later, halts nothing.
+    fell_back: bool,
     /// Whether the jump's end is due.
     end_due: bool,
     /// `_hyperGamma`.
@@ -111,7 +114,7 @@ impl Default for PlayerWarp {
         Self {
             stage: 0.0,
             sound_done: false,
-            halted: false,
+            fell_back: false,
             end_due: false,
             gamma: -1.0,
             effects: true,
@@ -199,11 +202,18 @@ impl Session {
     /// plays ([`Session::sound_warp_up`]). The caller stamps the clock.
     pub(super) fn start_warp(&mut self) {
         self.warp.stage = 2.0;
-        self.warp.halted = false;
+        self.warp.fell_back = false;
         self.warp.end_due = false;
         // The pilot is past the tutorial (`_HandlePlayer` @0x6b603).
         self.tutorial.jumped();
         self.sound_warp_up();
+    }
+
+    /// Whether the warp end's fallback has halted the warp-ups and played
+    /// the warp-out on an earlier pass, clearing the mark as the arrival
+    /// reads it.
+    pub(super) fn take_fell_back(&mut self) -> bool {
+        std::mem::take(&mut self.warp.fell_back)
     }
 
     /// The warp-up's start clears `_warpSoundDone` (@0x6b695), which a
@@ -384,8 +394,7 @@ impl Session {
     /// One pass of the warp end ([`warp::warp_end`]).
     fn warp_end_tick(&mut self) {
         let since = mac_ticks(self.warp_clock().unwrap_or(0));
-        let playing =
-            !self.warp.halted && (self.warp_ups.playing(false) || self.warp_ups.playing(true));
+        let playing = self.warp_ups.playing(false) || self.warp_ups.playing(true);
         match warp::warp_end(
             self.warp.stage,
             since,
@@ -408,7 +417,13 @@ impl Session {
                     self.jump = Some(Jump::Hyperspace { to, warp });
                 }
             }
-            WarpEnd::Fallback => self.warp.halted = true,
+            WarpEnd::Fallback => {
+                // 128 then 129 halted (@0x6c6a8-0x6c6d2), then the
+                // warp-out played unasked (@0x6c6fc-0x6c706).
+                self.halt_sounds(&crate::sound::WARP_UP_HALTS);
+                self.sound_warp_out();
+                self.warp.fell_back = true;
+            }
         }
     }
 
@@ -788,8 +803,14 @@ mod tests {
         let rate = warp::warp_up_rate(warp::warp_factor(0));
         assert_eq!(rate, 50_412);
         assert_eq!(session.take_sounds(), [SimSound::JumpBegan { rate }]);
-        // 364 × 65536 / 50412 = 473 Mac ticks: 237 ticks.
-        for _ in 0..236 {
+        // 364 × 65536 / 50412 = 473 Mac ticks: 237 ticks. The jump given
+        // up early, as a script's move does, so the warp end's fallback
+        // (clock 141) doesn't halt it.
+        for _ in 0..10 {
+            tick(&mut session);
+        }
+        session.jump = None;
+        for _ in 10..236 {
             tick(&mut session);
         }
         assert!(session.warp_ups.playing(false));
@@ -799,26 +820,93 @@ mod tests {
 
     // The warp's end.
 
+    /// A warp-out of 60 Mac ticks, 30 of the engine's: long enough to
+    /// play on from the fallback's pass to the arrival.
+    const WARP_OUT_60: warp::SoundLength = warp::SoundLength {
+        frames: 22_050,
+        rate: 22_050,
+    };
+
+    /// `catalog()` with a warp-out of [`WARP_OUT_60`].
+    fn with_a_warp_out() -> FakePilotCatalog {
+        FakePilotCatalog {
+            warp_out_sound: Some(WARP_OUT_60),
+            ..catalog()
+        }
+    }
+
+    /// The sounds of each pass up to the clock reading `clock`.
+    fn sounds_to(session: &mut Session, clock: u32) -> Vec<SimSound> {
+        let mut sounds = Vec::new();
+        while session.warp_clock().is_some_and(|now| now < clock) {
+            tick(session);
+            sounds.extend(session.take_sounds());
+        }
+        assert_eq!(session.warp_clock(), Some(clock));
+        sounds
+    }
+
     #[test]
     fn a_shuttle_jump_ends_a_pass_after_its_fallback_past_d_over_w() {
         // w 1.3, d 364: the fallback at t > 280 Mac ticks, clock 141, the
         // warp-up playing on to 473; the end on the pass after.
-        let catalog = catalog();
+        let catalog = with_a_warp_out();
         let mut session = jumping(&catalog);
-        tick_to(&mut session, 141);
+        session.take_sounds();
+        let mut before = sounds_to(&mut session, 140);
+        assert!(
+            session.warp_ups.playing(false),
+            "playing up to the fallback"
+        );
+        assert!(before.is_empty(), "{before:?}");
+        before = sounds_to(&mut session, 141);
         assert!(!session.warp_end_due(), "the fallback's pass");
-        assert!(session.warp_ups.playing(false));
+        assert_eq!(
+            before,
+            [SimSound::Halt(&WARP_UP_HALTS), SimSound::Arrived],
+            "the fallback's halt and warp-out (@0x6c6a8-0x6c706)"
+        );
+        assert!(!session.warp_ups.playing(false), "halted");
+        assert!(session.warp_out.playing(), "130 plays");
         tick(&mut session);
         assert!(session.warp_end_due(), "the pass after");
         assert!(session.warp_stage() > 30.0);
+        assert!(session.take_sounds().is_empty(), "the pass after");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        let arrival = session.take_sounds();
+        assert!(
+            !arrival.contains(&SimSound::Halt(&WARP_UP_HALTS)),
+            "the natural end halts nothing: {arrival:?}"
+        );
+        assert!(
+            !arrival.contains(&SimSound::Arrived),
+            "130 still plays (@0x6bbe1): {arrival:?}"
+        );
+        assert!(!session.warp_end_due());
+    }
+
+    #[test]
+    fn without_a_warp_out_the_arrival_after_a_fallback_plays_it_again() {
+        // 130 missing never counts, so the natural end's @0x6bbe1 check
+        // finds it over and plays it again, as silently.
+        let catalog = catalog();
+        let mut session = jumping(&catalog);
+        session.take_sounds();
+        assert_eq!(
+            sounds_to(&mut session, 141),
+            [SimSound::Halt(&WARP_UP_HALTS), SimSound::Arrived],
+            "the fallback's pass"
+        );
+        assert!(!session.warp_out.playing());
+        tick(&mut session);
+        assert!(session.warp_end_due());
         session.take_sounds();
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(
-            session.take_sounds()[..2],
-            [SimSound::Halt(&WARP_UP_HALTS), SimSound::Arrived],
-            "the fallback's halt and warp-out"
+            session.take_sounds()[..1],
+            [SimSound::Arrived],
+            "the natural end's warp-out, no halt"
         );
-        assert!(!session.warp_end_due());
     }
 
     #[test]
@@ -828,13 +916,17 @@ mod tests {
         let catalog = flagged(0x0001);
         let mut session = jumping(&catalog);
         assert_eq!(session.player_warp_factor(), warp::warp_factor(0x0001));
-        tick_to(&mut session, 165);
+        session.take_sounds();
+        let before = sounds_to(&mut session, 165);
         assert!(session.warp_ups.playing(false));
         assert!(!session.warp_end_due());
         tick(&mut session);
         assert!(!session.warp_ups.playing(false));
         assert!(session.warp_end_due(), "the natural end");
-        session.take_sounds();
+        assert!(
+            before.is_empty() && session.take_sounds().is_empty(),
+            "the natural end sounds only at the arrival: {before:?}"
+        );
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(
             session.take_sounds()[..2],
@@ -874,14 +966,29 @@ mod tests {
         // w 1.3, d 252: t > 193.8 first at clock 97 (t 194). The fallback
         // fires on frame 97's advance pass and sets `_warpSoundDone`, so
         // the natural end comes on the next pass, that frame's second.
-        let mut session = jumping_in_double_time(&catalog());
+        let catalog = with_a_warp_out();
+        let mut session = jumping_in_double_time(&catalog);
         frames(&mut session, 96);
         assert!(!session.warp_end_due(), "frame 96");
+        session.take_sounds();
         tick(&mut session);
         assert!(!session.warp_end_due(), "the fallback's pass");
-        assert!(session.warp_ups.playing(true));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Halt(&WARP_UP_HALTS), SimSound::Arrived],
+            "the fallback's halt and warp-out"
+        );
+        assert!(!session.warp_ups.playing(true), "halted");
         again(&mut session);
         assert!(session.warp_end_due(), "the next pass, frame 97's second");
+        session.take_sounds();
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        let arrival = session.take_sounds();
+        assert!(
+            !arrival.contains(&SimSound::Halt(&WARP_UP_HALTS))
+                && !arrival.contains(&SimSound::Arrived),
+            "neither again: {arrival:?}"
+        );
     }
 
     #[test]

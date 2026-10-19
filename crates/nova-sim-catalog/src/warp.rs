@@ -379,8 +379,8 @@ pub enum WarpEnd {
     /// The natural end (@0x6bbb8-0x6bc0d): the system switch, now.
     Natural,
     /// The fallback end (@0x6c62a-0x6c70b): the warp-ups halted and the
-    /// warp-out played; the switch comes on the next frame, by its natural
-    /// end, as the halted warp-ups arm it.
+    /// warp-out played on this pass; the switch comes on the next pass, by
+    /// its natural end on `_warpSoundDone` (@0x6bbb8-0x6bbd9).
     Fallback,
 }
 
@@ -453,8 +453,10 @@ pub fn npc_warped_out(since: u32, factor: f32, duration: u32) -> bool {
 /// still under a dialog or the map, where the sound plays on; and a
 /// warp-up still playing as the ship lands is taken as over.
 ///
-/// A jump's arrival halts both ([`SimSound::Halt`] of [`WARP_UP_HALTS`]),
-/// as the original's warp end does (`_HandlePlayer` @0x6c69d-0x6c6d2); a
+/// A jump's warp end halts both ([`SimSound::Halt`] of [`WARP_UP_HALTS`]),
+/// as the original's does (`_HandlePlayer` @0x6c69d-0x6c6d2): its fallback
+/// end on the fallback's own pass, so the arrival a pass later finds them
+/// over, or else the arrival (`nova_sim::Session::arrive`); a
 /// hypergate or wormhole exit keeps them playing, as the original's do
 /// (@0x63e57, @0x6443d); a relocation's dock ends them for the session
 /// only, raising no halt.

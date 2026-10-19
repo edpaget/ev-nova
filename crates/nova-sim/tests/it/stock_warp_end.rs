@@ -10,15 +10,20 @@
 //!   else a pass after t > d / w (@0x6c637-0x6c697). Of the stock factors
 //!   only w 0.91 (Enterprise) reaches its natural end; 1.3 (Shuttle), 1.69
 //!   (Star Liner) and 2.08 (Cargo Drone) end by the fallback with the
-//!   warp-up still playing, and the arrival halts it.
+//!   warp-up still playing: the fallback's pass halts it and plays the
+//!   warp-out (@0x6c6a8-0x6c706), and the arrival a pass later, the
+//!   natural end on the flag the fallback set, halts nothing and finds the
+//!   warp-out still playing (@0x6bbe1), so it raises neither again.
 //! - The fallback's end comes "a pass after" by the passes `_DoPlayGameWork`
 //!   runs (`_PlayGame` @0x45f20-0x45f31): in single time the next frame's,
 //!   but in double time the same frame's second pass, on the same warp
 //!   clock, so the double-time fallbacks end one advance pass sooner than
 //!   counting frames would give (Shuttle 97, not 98).
-//! - The natural end's warp-out skip (@0x6bbe1-0x6bc08) is unreachable with
-//!   stock sounds: the shortest stock pitched warp-up (229) outlasts the
-//!   warp-out (151), and it starts after the arrival that started 130.
+//! - The natural end's warp-out skip (@0x6bbe1-0x6bc08) is reached with
+//!   stock sounds only by the arrival after a fallback, a pass after the
+//!   fallback started 130: on a warp that ends naturally, the shortest
+//!   stock pitched warp-up (229) outlasts the warp-out (151), and it starts
+//!   after the arrival that started 130.
 
 use crate::common;
 
@@ -168,9 +173,21 @@ fn out_and_jump(session: &mut Session, next: SystemId, double: bool) {
     session.begin_jump().expect("jumps");
 }
 
+/// The warp of one stock jump, from its warp-up's pass to its end.
+struct Warp {
+    /// The warp-up's rate.
+    rate: u32,
+    /// The advance passes from the warp-up's to the one the warp is due
+    /// to end on.
+    passes: u32,
+    /// The sounds each of those passes raised, the first pass's first
+    /// (both halves of a double-time frame together).
+    sounds: Vec<Vec<SimSound>>,
+}
+
 /// Passes `session` until its warp-up sounds, then counts the advance
-/// passes until the warp is due to end: the warp-up's rate and the count.
-fn passes_to_end(session: &mut Session, double: bool) -> (u32, u32) {
+/// passes until the warp is due to end, keeping the sounds of each.
+fn passes_to_end(session: &mut Session, double: bool) -> Warp {
     let mut rate = None;
     for _ in 0..10_000 {
         let sounds = session.take_sounds();
@@ -185,11 +202,16 @@ fn passes_to_end(session: &mut Session, double: bool) -> (u32, u32) {
         pass(session, Controls::default());
     }
     let rate = rate.expect("the warp-up sounds");
+    let mut sounds = Vec::new();
     for passes in 1..10_000 {
         pass(session, Controls::default());
+        sounds.push(session.take_sounds());
         if session.warp_end_due() {
-            let _ = session.take_sounds();
-            return (rate, passes);
+            return Warp {
+                rate,
+                passes,
+                sounds,
+            };
         }
     }
     panic!("the warp never ended");
@@ -231,7 +253,11 @@ fn the_stock_warp_up_lasts_its_pitched_length_against_the_warp_end() {
         let mut session = flying_in(&data, expected.ship);
         let next = first_link(&data, session.system());
         out_and_jump(&mut session, next, expected.double);
-        let (rate, passes) = passes_to_end(&mut session, expected.double);
+        let Warp {
+            rate,
+            passes,
+            sounds: raised,
+        } = passes_to_end(&mut session, expected.double);
         let flags = data
             .get::<Ship>(expected.ship.0)
             .expect("present")
@@ -249,15 +275,28 @@ fn the_stock_warp_up_lasts_its_pitched_length_against_the_warp_end() {
         } else {
             assert!(passes * 2 < expected.pitched, "{label}: still playing");
         }
+        let warp_end = [HALT, SimSound::Arrived];
+        // The fallback's pass: the one before the end in single time, the
+        // same frame's advance half in double time.
+        let fallback = if expected.double { passes } else { passes - 1 };
+        for (pass, sounds) in (1..).zip(&raised) {
+            if !expected.natural && pass == fallback {
+                assert_eq!(sounds[..], warp_end, "{label}: the fallback's pass");
+            } else {
+                assert!(
+                    !sounds.contains(&HALT) && !sounds.contains(&SimSound::Arrived),
+                    "{label}: pass {pass}: {sounds:?}"
+                );
+            }
+        }
         assert!(session.arrive(&data, &mut NeverFires).is_some(), "{label}");
         let sounds = session.take_sounds();
         if expected.natural {
             assert!(sounds.contains(&SimSound::Arrived), "{label}: {sounds:?}");
         } else {
-            assert_eq!(
-                sounds.get(..2),
-                Some(&[HALT, SimSound::Arrived][..]),
-                "{label}"
+            assert!(
+                !sounds.contains(&HALT) && !sounds.contains(&SimSound::Arrived),
+                "{label}: 130 still plays: {sounds:?}"
             );
         }
     }

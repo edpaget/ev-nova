@@ -426,6 +426,11 @@ mod tests {
         );
     }
 
+    /// Frames of a jump that stay short of the warp end's fallback, which
+    /// halts the warp-ups (see the `warp_stage` module): the stage passes
+    /// 30 no sooner than 15 double-time frames in.
+    const BEFORE_THE_FALLBACK: u32 = 10;
+
     /// Gives up `session`'s jump as a script's move in flight does (`N130`,
     /// [`Reset::Jump`](super::super::entry::Reset::Jump)): no halt and no
     /// arrival. Then puts the ship back out at rest facing up, bound for
@@ -486,10 +491,16 @@ mod tests {
             session.set_double_time_key(double_time);
             session.begin_jump().expect("jumps");
             assert_eq!(session.take_sounds(), [warp_up(&session, double_time)]);
-            for _ in 0..frames - 1 {
+            // Given up before the warp end's fallback could halt it
+            // (stage 30 at the earliest), the warp-up plays on.
+            for _ in 0..BEFORE_THE_FALLBACK {
                 frame(&mut session);
             }
             given_up_by_a_move(&mut session, &catalog);
+            for _ in BEFORE_THE_FALLBACK..frames - 1 {
+                frame(&mut session);
+            }
+            session.take_sounds();
             session.begin_jump().expect("jumps");
             assert_eq!(session.take_sounds(), [], "{double_time}: still playing");
             assert_eq!(session.warp_clock(), Some(0), "the clock starts");
@@ -623,7 +634,13 @@ mod tests {
         session.set_double_time_key(false);
         assert!(session.double_time(), "held by 129");
         assert_eq!(warp_up_frames(&session, 120), 78);
-        for frame in 1..78 {
+        for frame in 1..BEFORE_THE_FALLBACK {
+            session.tick(Controls::default());
+            assert!(session.double_time(), "frame {frame}");
+        }
+        // Given up before the warp end's fallback halts 129.
+        given_up_by_a_move(&mut session, &catalog);
+        for frame in BEFORE_THE_FALLBACK..78 {
             session.tick(Controls::default());
             assert!(session.double_time(), "frame {frame}");
         }
@@ -655,7 +672,15 @@ mod tests {
         // 128 lasts 350 Mac ticks, pitched by w 1.3 to 455: 228 frames
         // from the jump.
         assert_eq!(warp_up_frames(&session, 350), 228);
-        for _ in 1..227 {
+        for _ in 1..BEFORE_THE_FALLBACK {
+            session.tick(Controls::default());
+        }
+        // Given up before the warp end's fallback halts 128, facing the
+        // aim the jump left.
+        given_up_by_a_move(&mut session, &catalog);
+        session.player.heading = f32::from(aim);
+        assert_eq!(session.aim, aim, "kept");
+        for _ in BEFORE_THE_FALLBACK..227 {
             session.tick(Controls::default());
         }
         assert!(!session.double_time(), "128 plays on");

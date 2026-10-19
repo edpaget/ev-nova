@@ -45,11 +45,11 @@ pub enum SimSound {
     /// wormhole @0x6443d play it too). A jump's warp end first halts the
     /// warp-ups, a [`SimSound::Halt`] of [`WARP_UP_HALTS`] just before it
     /// (@0x6c6b7, @0x6c6d2); a gate or wormhole exit halts nothing. The
-    /// original's fallback end starts it a frame before the system switch
-    /// (@0x6c706); that lag isn't visible to the player. A jump's natural
-    /// end, both warp-ups finished, raises none while the last warp-out
-    /// still plays (@0x6bbe1-0x6bbe9; see
-    /// [`WarpOut`](crate::warp::WarpOut)).
+    /// fallback end raises both on its own pass, a pass before the system
+    /// switch (@0x6c706; see `nova_sim`'s `warp_stage` module); the arrival
+    /// after it is the natural end. A jump's natural end, both warp-ups
+    /// finished or halted, raises none while the last warp-out still plays
+    /// (@0x6bbe1-0x6bbe9; see [`WarpOut`](crate::warp::WarpOut)).
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
@@ -226,8 +226,9 @@ pub enum SimSound {
     /// of it, on any channel. A halted warp-up is over for the session's
     /// still-playing skip and the double-time switch too. The player's final explosion raises it with
     /// [`PLAYER_EXPLOSION_HALTS`]; the eject, a sabotage kill outfit going
-    /// off, a disabled player's jump collapse and a jump's arrival with
-    /// [`WARP_UP_HALTS`], 128 and 129.
+    /// off, a disabled player's jump collapse and a jump's warp end (its
+    /// fallback's pass, or else its arrival) with [`WARP_UP_HALTS`], 128
+    /// and 129.
     Halt(&'static [SoundId]),
     /// The player ejected from its disabled or dying ship, into the escape
     /// pod or an escape ship: `_escapePodSnd`, `snd ` 372 "Eject"
@@ -301,7 +302,10 @@ pub enum SimSound {
 /// a disabled player's jump collapse halts them before its
 /// [`SimSound::JumpCollapsed`] (@0x68a5c, @0x68a7f), and a jump's warp
 /// end halts them before its [`SimSound::Arrived`] (`_HandlePlayer`
-/// @0x6c6b7, @0x6c6d2, the warp-out @0x6c706).
+/// @0x6c6b7, @0x6c6d2, the warp-out @0x6c706): its fallback end on the
+/// fallback's own pass, a pass before the arrival, which then halts
+/// nothing; a jump's arrival with no fallback pass first, at the
+/// arrival.
 pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
 
 /// The sounds the player's final explosion halts, in order:

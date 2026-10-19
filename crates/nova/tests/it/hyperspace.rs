@@ -1023,6 +1023,11 @@ fn escape_closes_flights_map_and_then_leaves_flight() {
     assert_eq!(harness.showing(), Showing::ShipBrowser);
 }
 
+/// The fixture has no `snd `s, so the warp ends by its fallback, which
+/// plays the warp-out on its own pass, and the arrival a pass later, the
+/// natural end, plays it again: a missing 130 never counts as playing
+/// (`_HandlePlayer` @0x6bbe1), so the original's second `PlaySound` is as
+/// silent as its first.
 #[test]
 fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     let audio = RecordingAudio::new();
@@ -1047,7 +1052,7 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
             )
         })
         .collect();
-    assert_eq!(plays, [warp_up(), warp_out()]);
+    assert_eq!(plays, [warp_up(), warp_out(), warp_out()]);
 }
 
 /// The warp-up, `snd ` 128, pitched by the fixture ship's warp factor,
@@ -1072,10 +1077,12 @@ fn warp_out() -> AudioCommand {
 
 /// The fixture has no `snd `s, so the warp-up's length is the engine's
 /// stand-in, 350 Mac ticks, pitched by w 1.3 to 455, past the fallback
-/// end's d / w = 269: it still plays as the ship arrives, as stock 128
-/// does for a w of 1.3. The arrival halts it, 128 then 129, before the
-/// warp-out, as `_HandlePlayer`'s fallback end does (@0x6c6b7, @0x6c6d2,
-/// then 130 @0x6c706).
+/// end's d / w = 269: it still plays as the fallback fires, as stock 128
+/// does for a w of 1.3. The fallback's pass halts it, 128 then 129, before
+/// the warp-out, as `_HandlePlayer`'s fallback end does (@0x6c6b7,
+/// @0x6c6d2, then 130 @0x6c706). The arrival a pass later is the natural
+/// end: it halts nothing, and finds the missing 130 not playing
+/// (@0x6bbe1), so plays it again.
 #[test]
 fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     let audio = RecordingAudio::new();
@@ -1104,7 +1111,10 @@ fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     let halt = |id| AudioCommand::Halt {
         sound: nova_data::SoundId(id),
     };
-    assert_eq!(commands, [warp_up(), halt(128), halt(129), warp_out()]);
+    assert_eq!(
+        commands,
+        [warp_up(), halt(128), halt(129), warp_out(), warp_out()]
+    );
 }
 
 /// Fires every time, recording each percent it is asked.
