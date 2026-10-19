@@ -146,6 +146,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_killed_ship_is_left_at_minus_1000_armour() {
+        assert_eq!(KILLED_ARMOR, -1000.0);
+    }
+
+    #[test]
     fn a_stellar_is_drawn_half_its_larger_side_across_its_dead_frame_once_destroyed() {
         let live = Some((100, 60));
         let dead = Some((30, 50));
