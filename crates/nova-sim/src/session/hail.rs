@@ -2141,6 +2141,11 @@ mod tests {
             .push((9000, vec!["Your mother was a tug.".to_owned()]));
         let options = HailOptions::default().with(Rc::new(Taunt));
         let mut session = targeting(&catalog);
+        // Armed, as a warship out of ammunition takes no target (@0x89ff4).
+        npc(&mut session).armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
+            1,
+        )]);
         crate::testkit::count_waiting(npc(&mut session), 50);
         let mut chance = Draws::of(&opening(0));
         let view = session
@@ -2157,6 +2162,28 @@ mod tests {
         assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(pirate.ai_wait, 50, "the wait outlives goal 0x16");
         assert!(pirate.wait_running());
+        // Through the session's traffic, it holds still through the wait,
+        // its fire gated (`_HandleShip` @0x34a54-0x34a72)...
+        let at = pirate.state;
+        for tick in 1..50 {
+            decide(&mut session, &catalog, 1, |pirate| {
+                assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player), "tick {tick}");
+                assert_eq!(pirate.state, at, "still on tick {tick}");
+                assert!(
+                    !crate::ai::fire::gated(pirate).primary,
+                    "it fires nothing on tick {tick}"
+                );
+            });
+        }
+        decide(&mut session, &catalog, 1, |pirate| {
+            assert_eq!(pirate.state, at, "still on the wait's last tick");
+            assert_eq!(pirate.ai_wait, 0, "the wait is out");
+        });
+        // ...then, the next tick, turns to its fight with the player below.
+        decide(&mut session, &catalog, 1, |pirate| {
+            assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
+            assert_ne!(pirate.state.heading, at.heading, "it turns to fight");
+        });
     }
 
     #[test]
