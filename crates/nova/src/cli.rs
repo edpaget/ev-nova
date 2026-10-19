@@ -1,4 +1,5 @@
-//! The command line: which `Nova Files` directory to load.
+//! The command line: which `Nova Files` directory to load, if the player
+//! named one.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -8,13 +9,18 @@ use std::path::PathBuf;
 #[error("usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory)")]
 pub struct Usage;
 
-/// The `Nova Files` directory: the one positional argument if given (the
-/// arguments exclude the program name), else `nova_data`, the value of
-/// `NOVA_DATA`.
-pub fn data_dir(args: &[OsString], nova_data: Option<OsString>) -> Result<PathBuf, Usage> {
+/// The `Nova Files` directory the player named: the one positional
+/// argument if given (the arguments exclude the program name), else
+/// `nova_data`, the value of `NOVA_DATA`; `None` when neither is, and the
+/// lookup goes on (`crate::startup::locate`).
+///
+/// # Errors
+///
+/// [`Usage`] for more than one argument.
+pub fn data_dir(args: &[OsString], nova_data: Option<OsString>) -> Result<Option<PathBuf>, Usage> {
     match args {
-        [dir] => Ok(PathBuf::from(dir)),
-        [] => nova_data.map(PathBuf::from).ok_or(Usage),
+        [dir] => Ok(Some(PathBuf::from(dir))),
+        [] => Ok(nova_data.map(PathBuf::from)),
         _ => Err(Usage),
     }
 }
@@ -33,7 +39,7 @@ mod tests {
     fn the_positional_argument_wins() {
         assert_eq!(
             data_dir(&args(&["/games/Nova Files"]), Some("/env".into())),
-            Ok(PathBuf::from("/games/Nova Files"))
+            Ok(Some(PathBuf::from("/games/Nova Files")))
         );
     }
 
@@ -41,13 +47,17 @@ mod tests {
     fn nova_data_is_the_fallback() {
         assert_eq!(
             data_dir(&args(&[]), Some("/env/Nova Files".into())),
-            Ok(PathBuf::from("/env/Nova Files"))
+            Ok(Some(PathBuf::from("/env/Nova Files")))
         );
     }
 
     #[test]
-    fn neither_is_a_usage_error() {
-        assert_eq!(data_dir(&args(&[]), None), Err(Usage));
+    fn neither_leaves_the_lookup_to_go_on() {
+        assert_eq!(data_dir(&args(&[]), None), Ok(None));
+    }
+
+    #[test]
+    fn the_usage_line_names_the_argument_and_the_variable() {
         assert_eq!(
             Usage.to_string(),
             "usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory)"

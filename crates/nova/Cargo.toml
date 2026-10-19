@@ -31,9 +31,11 @@ egui-wgpu = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
-# The macOS menu bar, built behind nova-appkit's safe API.
+# The macOS menu bar, built behind nova-appkit's safe API, and the open
+# panel and alerts startup shows without a terminal, from rfd.
 [target.'cfg(target_os = "macos")'.dependencies]
 nova-appkit.workspace = true
+rfd.workspace = true
 
 [dev-dependencies]
 # The app and integration tests record Audio commands with the `recording`

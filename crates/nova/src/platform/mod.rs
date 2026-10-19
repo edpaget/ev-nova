@@ -1,5 +1,6 @@
 //! The winit adapter: translates winit's events into the app's, puts a
-//! [`WindowPort`] over a real window and runs the event loop.
+//! [`WindowPort`] over a real window and runs the event loop. Beside it,
+//! [`dialogs`] holds the startup dialogs: the open panel and the alerts.
 //!
 //! Translation is pure and unit-tested; the window and the runner only
 //! forward to the app. A key press that types a character becomes two
@@ -11,11 +12,13 @@
 //! of every resize, occlusion and redraw, and the app acts only on a
 //! change.
 
+pub mod dialogs;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 mod runner;
 mod window;
 
+pub use dialogs::Dialogs;
 pub use runner::{Runner, event_loop};
 pub use window::WinitWindow;
 

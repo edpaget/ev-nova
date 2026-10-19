@@ -13,14 +13,21 @@
 //! about the game data; the runner prints the warnings the app keeps, such as a
 //! failed save.
 //!
+//! With [`Runner::with_report`], the warnings of the window's opening (a
+//! saved mode or Scaling it cannot restore, a menu bar it cannot install)
+//! go to the startup [`Report`] instead, and once the window is up and the
+//! loop is waiting, the report's warnings alert, if any, is shown as a sheet
+//! over the window (`dialogs::show_warnings`). Later warnings are the
+//! game's, not startup's, and stay on stderr.
+//!
 //! With the `dev-tools` feature and `Runner::with_dev_tools`, it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first, over the pilot flying (`App::pilot_desk_frame`),
 //! and submits the frame with the panel painted over it, and the raw
 //! window events the app says the overlay wants go to egui.
 
+use std::cell::RefCell;
 use std::io::Write;
-#[cfg(feature = "dev-tools")]
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,7 +52,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use super::window::WinitWindow;
-use super::{text_event, window_events};
+use super::{dialogs, text_event, window_events};
 #[cfg(target_os = "macos")]
 use crate::app::MenuSync;
 use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
@@ -53,6 +60,7 @@ use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
 use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
 use crate::settings::GameKeeper;
+use crate::startup::Report;
 
 /// The window, its GPU surface and the app, once the window is open.
 struct Running<S> {
@@ -85,6 +93,9 @@ pub struct Runner<S> {
     /// Where the menu bar sends its picks, until it is installed.
     #[cfg(target_os = "macos")]
     menu_proxy: Option<EventLoopProxy<MenuCommand>>,
+    /// The startup report, shared with `main`, which reports the run's
+    /// end through it.
+    report: Option<Rc<RefCell<Report>>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -103,7 +114,17 @@ impl<S: ImageSource> Runner<S> {
             diagnostics: None,
             #[cfg(target_os = "macos")]
             menu_proxy: None,
+            report: None,
         }
+    }
+
+    /// The runner with the startup `report`: the window's opening warnings
+    /// go to it, and its warnings alert is shown over the window once it
+    /// is up.
+    #[must_use]
+    pub fn with_report(mut self, report: Rc<RefCell<Report>>) -> Self {
+        self.report = Some(report);
+        self
     }
 
     /// The runner with the macOS menu bar: once the window opens, it
@@ -151,6 +172,15 @@ impl<S: ImageSource> Runner<S> {
     /// exits as soon as that happens.
     pub fn open_failure(&self) -> Option<&OpenFailure> {
         self.failure.as_ref()
+    }
+}
+
+/// Reports the startup warning `line` to `report`, or prints it without
+/// one.
+fn startup_warning(report: Option<&Rc<RefCell<Report>>>, line: &str) {
+    match report {
+        Some(report) => report.borrow_mut().warn(line),
+        None => eprintln!("{line}"),
     }
 }
 
@@ -238,7 +268,7 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
                 app.restore_window(&mut window);
                 app.restore_scaling(&mut gpu);
                 for warning in app.take_warnings() {
-                    eprintln!("{warning}");
+                    startup_warning(self.report.as_ref(), &warning);
                 }
                 #[cfg(feature = "dev-tools")]
                 let (app, dev_tools) = match self.dev_catalog.take() {
@@ -259,8 +289,10 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
                     window,
                 };
                 #[cfg(target_os = "macos")]
-                if let Some(proxy) = self.menu_proxy.take() {
-                    running.install_menu(proxy);
+                if let Some(proxy) = self.menu_proxy.take()
+                    && let Some(warning) = running.install_menu(proxy)
+                {
+                    startup_warning(self.report.as_ref(), &warning);
                 }
                 running.sync_menu();
                 self.running = Some(running);
@@ -311,6 +343,17 @@ impl<S: ImageSource> ApplicationHandler<MenuCommand> for Runner<S> {
         running.after_events(event_loop, exit);
     }
 
+    /// Once the window is up and the application running: the startup
+    /// warnings, if any, as a sheet over the window. The report gives them
+    /// once, and only without a terminal.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let (Some(running), Some(report)) = (&self.running, &self.report)
+            && let Some(body) = report.borrow_mut().take_alert()
+        {
+            dialogs::show_warnings(&running.window.0, &body);
+        }
+    }
+
     /// A menu bar pick: the app takes it as [`WindowEvent::Menu`].
     fn user_event(&mut self, event_loop: &ActiveEventLoop, command: MenuCommand) {
         let Some(running) = &mut self.running else {
@@ -339,16 +382,20 @@ impl<S: ImageSource> Running<S> {
     }
 
     /// Installs the menu bar, its picks sent through `proxy`. One that
-    /// can't be installed is a warning, and the game runs without it.
+    /// can't be installed is a warning, given back, and the game runs
+    /// without it.
     #[cfg(target_os = "macos")]
-    fn install_menu(&mut self, proxy: EventLoopProxy<MenuCommand>) {
+    fn install_menu(&mut self, proxy: EventLoopProxy<MenuCommand>) -> Option<String> {
         let installed = nova_appkit::MenuBar::install("EV Nova", move |command| {
             // A closed loop drops the pick: the app is exiting.
             let _ = proxy.send_event(super::menu_bar::menu_command(command));
         });
         match installed {
-            Ok(bar) => self.menu = Some((bar, MenuSync::new())),
-            Err(error) => eprintln!("nova: no menu bar: {error}"),
+            Ok(bar) => {
+                self.menu = Some((bar, MenuSync::new()));
+                None
+            }
+            Err(error) => Some(format!("nova: no menu bar: {error}")),
         }
     }
 
@@ -504,9 +551,35 @@ mod tests {
             quicktime_movies: true,
             map_borders: true,
             frame_upscaler: crate::settings::ScalingSetting::default(),
+            nova_files: None,
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);
+    }
+
+    struct NoTerminal;
+
+    impl crate::startup::Terminal for NoTerminal {
+        fn stderr_is_terminal(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn the_runner_reports_its_startup_warnings_through_the_report_it_keeps() {
+        let runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
+        assert!(runner.report.is_none(), "printed unless given a report");
+        let report = Rc::new(RefCell::new(Report::new(
+            &NoTerminal,
+            None,
+            Box::new(io::sink()),
+        )));
+        let runner = runner.with_report(Rc::clone(&report));
+        startup_warning(runner.report.as_ref(), "nova: no menu bar: none");
+        assert_eq!(
+            report.borrow_mut().take_alert(),
+            Some("nova: no menu bar: none".to_owned())
+        );
     }
 
     #[test]

@@ -2656,6 +2656,7 @@ mod tests {
                 quicktime_movies: true,
                 map_borders: true,
                 frame_upscaler: crate::settings::ScalingSetting::default(),
+                nova_files: None,
             }
         );
         let saved: serde_json::Value =

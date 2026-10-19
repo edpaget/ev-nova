@@ -233,6 +233,7 @@ fn seeded() -> MemorySettings {
             quicktime_movies: true,
             map_borders: true,
             frame_upscaler: ScalingSetting::default(),
+            nova_files: None,
         })
         .expect("seeds");
     store

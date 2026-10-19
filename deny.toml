@@ -20,13 +20,15 @@ deny = [
     { crate = "objc2-metal-fx", wrappers = ["nova-metalfx"], reason = "MetalFX's unsafe bindings are reached only through nova-metalfx's safe API" },
     # The macOS menu bar is built only through nova-appkit's safe API, and
     # that only by the game itself (a macOS-only dependency of nova). The
-    # ban on AppKit's bindings is about workspace crates: winit, whose
-    # windowing binds AppKit, is the one third-party crate in the default
-    # build that already depends on them. (Cargo.lock also lists
+    # ban on AppKit's bindings is about workspace crates: two third-party
+    # crates in the default build bind AppKit themselves, winit for the
+    # windowing and rfd for the startup dialogs (the open panel and the
+    # alerts, a macOS-only dependency of nova). (Cargo.lock also lists
     # objc2-link-presentation as depending on them, but only through a
     # feature the default build leaves off, so it is not in this graph.)
     { crate = "nova-appkit", wrappers = ["nova"], reason = "only the game installs the macOS menu bar" },
-    { crate = "objc2-app-kit", wrappers = ["nova-appkit", "winit"], reason = "AppKit's unsafe bindings are reached, among workspace crates, only through nova-appkit's safe API" },
+    { crate = "objc2-app-kit", wrappers = ["nova-appkit", "rfd", "winit"], reason = "AppKit's unsafe bindings are reached, among workspace crates, only through nova-appkit's safe API" },
+    { crate = "rfd", wrappers = ["nova"], reason = "only the game asks for its data and shows startup errors in a dialog" },
     # The layered nova-sim crates (roadmap nova-sim-layered-crates). Each
     # entry's `wrappers` lists the only crates allowed to depend on it
     # directly: the nova-sim crates above it (and, for the nova-sim facade,

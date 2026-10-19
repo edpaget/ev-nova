@@ -42,6 +42,10 @@ wgpu = "30.0.1"
 glyphon = "0.12.0"
 winit = "0.30.13"
 pollster = "1.0.1"
+# The open panel that asks for the Nova Files and the startup alerts
+# (nova's macOS-only dependency). Its default features are Linux's portal
+# and Wayland backends, which the macOS build does not need.
+rfd = { version = "0.17.2", default-features = false }
 bytemuck = { version = "1.25", features = ["derive"] }
 # The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu
 # 0.36 is built on wgpu 30 and egui-winit 0.36 on winit 0.30, so the three

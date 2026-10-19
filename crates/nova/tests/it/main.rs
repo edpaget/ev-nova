@@ -36,6 +36,7 @@ mod preferences;
 mod recharge;
 mod ship_browser;
 mod shipyard;
+mod startup;
 mod stock_app;
 mod system_view;
 mod trade;
