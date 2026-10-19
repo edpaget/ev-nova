@@ -70,12 +70,13 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use crate::ai::{Behaviour, Goal, Surroundings};
-    use crate::brackets::Standing;
+    use crate::brackets::{FlyIn, Standing};
+    use crate::catalog::{WeaponId, WeaponRecord};
     use crate::chance::{Chance, NeverFires};
     use crate::combat::{CombatEvent, Rules};
     use crate::flight::Controls;
     use crate::session::Session;
-    use crate::session::tests::{FIRE, armed, facing_an_npc};
+    use crate::session::tests::{FIRE, armed, arming, blaster, facing_an_npc};
     use crate::targeting::TargetPick;
     use crate::testkit::FakePilotCatalog;
     use crate::traffic::npc::{Npc, NpcId};
@@ -170,6 +171,57 @@ mod tests {
             &mut NeverFires,
         );
         assert_eq!(session.target, None);
+    }
+
+    #[test]
+    fn the_next_pass_fires_no_homing_shot_at_a_target_that_broke_up() {
+        // The check runs at `_HandlePlayer`'s head, before its trigger
+        // (@0x68655-0x686fd): the next pass's homing shot locks on and
+        // aims at nothing, and no brackets are left round the wreck.
+        let homing = WeaponRecord {
+            id: WeaponId(130),
+            guidance: 1,
+            reload: 1,
+            ..blaster()
+        };
+        let catalog = arming(homing, blaster(), 0);
+        let mut session = facing_an_npc(&catalog, 180);
+        break_up_the_target(&mut session, &catalog);
+        assert_eq!(session.target, Some(NpcId(0)), "held through the pass");
+        let before: Vec<_> = session.shots().iter().map(|shot| shot.id).collect();
+        pass(&mut session, &catalog);
+        let fired: Vec<_> = session
+            .shots()
+            .iter()
+            .filter(|shot| !before.contains(&shot.id))
+            .collect();
+        assert!(!fired.is_empty(), "the held trigger fires");
+        for shot in fired {
+            assert_eq!(shot.target, None, "no lock: {shot:?}");
+            assert_eq!(shot.aimed_at, None, "aimed at none: {shot:?}");
+        }
+        assert_eq!(session.target, None);
+        assert_eq!(session.target_brackets(), None);
+    }
+
+    #[test]
+    fn a_target_that_cloaks_mid_fly_in_settles_its_brackets_at_the_next_pass_head() {
+        // The check runs before `_HandleWeapTargetSprites`' step: the next
+        // pass settles the brackets rather than flying them in further.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.select_target(TargetPick::Next);
+        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
+            fade: 15.5,
+            direction: 1,
+        };
+        pass(&mut session, &catalog);
+        assert!(session.npcs()[0].cloak.is_cloaked(), "cloaked");
+        assert!(session.target_fly_in.expand() > 0.0, "still flying in");
+        pass(&mut session, &catalog);
+        assert_eq!(session.target, None);
+        assert_eq!(session.target_brackets(), None);
+        assert_eq!(session.target_fly_in, FlyIn::default(), "settled");
     }
 
     #[test]
