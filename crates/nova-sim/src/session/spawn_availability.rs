@@ -394,6 +394,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn by_the_engine_a_landings_refresh_brings_a_dude_ship_type_set_in_flight_to_the_take_off() {
+        let catalog = gated_dude();
+        let land_and_settle = |session: &mut Session| {
+            crate::testkit::land_now(session).expect("lands");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+        };
+        // Set in flight: the landing's refresh (@0xa175f, @0xa1af2) sees it.
+        let mut session = Session::start(&catalog).expect("starts");
+        session.set_control_bit(bit(7), true);
+        land_and_settle(&mut session);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(session.npcs().len(), 1, "the landing refreshed");
+        // Set once landed: the take-off comes before the next refresh.
+        let mut session = Session::start(&catalog).expect("starts");
+        land_and_settle(&mut session);
+        session.set_control_bit(bit(7), true);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(session.npcs().len(), 0, "set since the landing's refresh");
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(session.npcs().len(), 1, "the arrival refreshed");
+    }
+
     /// Brings the first person who may appear, and no slot's.
     #[derive(Debug)]
     struct FirstComes;
