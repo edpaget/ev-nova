@@ -18748,6 +18748,8 @@ pub(super) mod tests {
         decloaks_when_hit: false,
         on_radar: false,
         flags2: 0,
+        shield_usage: 0,
+        zeroes_shields: false,
         scanner: crate::cloak::Scanner::NONE,
     };
 

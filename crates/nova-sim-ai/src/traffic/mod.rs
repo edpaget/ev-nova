@@ -477,12 +477,14 @@ fn starting_mode(entry: Entry) -> Mode {
     }
 }
 
-/// The cloak a new ship starts with ([`Traffic::add`]): fading in when
-/// set up `cloaked` ([`NewShip::cloaked`]), else none.
-fn starting_cloak(cloaked: bool) -> Cloak {
+/// The cloak a new ship of `gear` starts with ([`Traffic::add`]): fading
+/// in when set up `cloaked` ([`NewShip::cloaked`]), else none. Cloaking
+/// is `_DoShipCloak` (`_SetupShipsInSystem` @0x43121), so a cloak that
+/// zeroes shields takes its `shield` ([`cloak::cloak_ship`]).
+fn starting_cloak(cloaked: bool, gear: cloak::CloakGear, shield: &mut f32) -> Cloak {
     let mut cloak = Cloak::default();
     if cloaked {
-        cloak.cloak();
+        cloak::cloak_ship(&mut cloak, gear, shield);
     }
     cloak
 }
@@ -1634,7 +1636,12 @@ impl Traffic {
                 retreating: matches!(npc.goal, Goal::Flee(_)),
                 attacking: attacking.map(|state| state.position - npc.state.position),
             };
-            cloak::think(&mut npc.cloak, npc.cloak_gear, situation);
+            cloak::think(
+                &mut npc.cloak,
+                npc.cloak_gear,
+                situation,
+                &mut npc.reserves.shield.now,
+            );
         }
     }
 
@@ -1644,12 +1651,16 @@ impl Traffic {
     /// the way the fade goes ([`cloak::think`]), and whether a ship is
     /// cloaked turns on its fade, so it reads as it did before the think.
     /// The fade steps at the ship's display step
-    /// ([`Traffic::step_fades`]).
+    /// ([`Traffic::step_fades`]). Then each that was cloaked pays its
+    /// cloak's shield upkeep ([`cloak::drain_shield`], @0x341af-0x34204),
+    /// even one the hold just uncloaked.
     fn hold_cloaks(&mut self) {
         for npc in &mut self.npcs {
             if npc.cloak.is_cloaked() {
                 let able = npc.can_cloak();
                 cloak::hold(&mut npc.cloak, able);
+                let usage = npc.cloak_gear.shield_usage;
+                cloak::drain_shield(&mut npc.reserves.shield.now, usage, true);
             }
         }
     }
@@ -2443,7 +2454,8 @@ impl Traffic {
                 placed.push(None);
                 continue;
             };
-            let (reserves, condition) = starting_reserves(kind, person, ship.derelict);
+            let (mut reserves, condition) = starting_reserves(kind, person, ship.derelict);
+            let cloak = starting_cloak(ship.cloaked, kind.cloak, &mut reserves.shield.now);
             let traits = person
                 .map(|person| NpcPerson::of(&person.record, grudges.contains(&person.record.id)));
             let id = NpcId(self.next_id);
@@ -2518,7 +2530,7 @@ impl Traffic {
                 person: traits,
                 mission: ship.mission,
                 aux: ship.aux,
-                cloak: starting_cloak(ship.cloaked),
+                cloak,
                 cloak_gear: kind.cloak,
                 led_out: false,
                 emerges_from: ship.entry.gate(),
@@ -6214,6 +6226,8 @@ mod tests {
         decloaks_when_hit: true,
         on_radar: true,
         flags2: 0x5282,
+        shield_usage: 0,
+        zeroes_shields: false,
         scanner: crate::cloak::Scanner::NONE,
     };
 
@@ -6458,6 +6472,72 @@ mod tests {
             able.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
             assert_eq!(able.npcs()[0].cloak.direction, 0, "{mode:?}, no think");
         }
+    }
+
+    /// The Zephyr's cloak, paying shield usage 8 (Cloaking Organ 268).
+    const ORGAN: CloakGear = CloakGear {
+        shield_usage: 8,
+        ..ZEPHYR
+    };
+
+    #[test]
+    fn a_cloaked_ship_pays_its_cloaks_shield_each_frame_even_the_one_it_must_uncloak() {
+        let paid = 100.0 - 8.0 * crate::cloak::CLOAK_UPKEEP_RATE;
+        for (fuel, mode) in [
+            (100.0, Mode::JumpingIn { tick: 0 }),
+            (0.0, Mode::JumpingIn { tick: 0 }),
+        ] {
+            let mut traffic = with_mission_ship(ORGAN, false, 0.0);
+            let npc = &mut traffic.npcs[0];
+            npc.cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            npc.mode = mode;
+            npc.reserves.fuel.now = fuel;
+            npc.reserves.shield.now = 100.0;
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            assert_eq!(traffic.npcs()[0].reserves.shield.now, paid, "fuel {fuel}");
+        }
+        let mut seen = with_mission_ship(ORGAN, false, 0.0);
+        seen.npcs[0].reserves.shield.now = 100.0;
+        seen.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(seen.npcs()[0].reserves.shield.now, 100.0, "not cloaked");
+    }
+
+    #[test]
+    fn a_cloaked_ship_whose_shield_cannot_pay_its_cloak_uncloaks_on_its_think() {
+        let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
+        for (gear, shield, direction) in [(ORGAN, 0.0, -1), (ORGAN, 50.0, 0), (ZEPHYR, 0.0, 0)] {
+            let mut traffic = with_mission_ship(gear, false, 0.0);
+            let npc = &mut traffic.npcs[0];
+            npc.cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            npc.reserves.shield.now = shield;
+            traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+            assert_eq!(
+                traffic.npcs()[0].cloak.direction,
+                direction,
+                "usage {}, shield {shield}",
+                gear.shield_usage
+            );
+        }
+    }
+
+    #[test]
+    fn a_ship_set_up_cloaked_with_a_zeroing_cloak_starts_without_its_shield() {
+        let zeroing = CloakGear {
+            zeroes_shields: true,
+            ..ZEPHYR
+        };
+        let traffic = with_mission_ship(zeroing, true, 0.0);
+        assert_eq!(traffic.npcs()[0].reserves.shield.now, 0.0);
+        let uncloaked = with_mission_ship(zeroing, false, 0.0);
+        assert!(uncloaked.npcs()[0].reserves.shield.now > 0.0);
+        let kept = with_mission_ship(ZEPHYR, true, 0.0);
+        assert!(kept.npcs()[0].reserves.shield.now > 0.0);
     }
 
     // The escort-strength timer.

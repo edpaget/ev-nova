@@ -410,7 +410,45 @@ fn cloak_gear(data: &GameData, id: i16) -> nova_sim::cloak::CloakGear {
         .find(|ship| ship.id == ShipId(id))
         .expect("the ship");
     let items = ship.defaults.iter().copied().collect();
-    nova_sim::cloak::CloakGear::of(ship.fields.flags2, &items, &data.outfits())
+    let outfits = data.outfits();
+    nova_sim::cloak::CloakGear::of(ship.fields.flags2, &items, &outfits)
+        .with_upkeep(&ship.defaults, &outfits)
+}
+
+#[test]
+fn the_polaris_hulls_pay_their_cloaking_organs_shield_and_keep_it_cloaking() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    // Cloaking Organ 268 (`ModVal` 0x080b) costs 8 shield, 269 4, and
+    // neither zeroes the shield (`_CloakShieldUsage` @0x4033,
+    // `_CloakZeroesShields` @0x3e9d).
+    let mut usages = Vec::new();
+    for ship in data.ships() {
+        let organ = ship
+            .defaults
+            .iter()
+            .find(|&&(id, count)| count > 0 && (id.0 == 268 || id.0 == 269));
+        if let Some(&(organ, _)) = organ {
+            let gear = cloak_gear(&data, ship.id.0);
+            assert!(!gear.zeroes_shields, "{:?}", ship.id);
+            usages.push((ship.id.0, organ.0, gear.shield_usage));
+        }
+    }
+    let eight = [186, 256, 257, 260, 261, 263, 320, 323, 375, 376];
+    let four = [
+        258, 259, 262, 265, 266, 267, 269, 270, 271, 272, 319, 322, 325, 326, 327, 328, 329, 330,
+        407, 408, 409, 410, 411,
+    ];
+    let mut expected: Vec<(i16, i16, u8)> = eight
+        .iter()
+        .map(|&id| (id, 268, 8))
+        .chain(four.iter().map(|&id| (id, 269, 4)))
+        .collect();
+    expected.sort_unstable();
+    usages.sort_unstable();
+    assert_eq!(usages, expected);
 }
 
 #[test]
@@ -433,6 +471,8 @@ fn the_zephyrs_of_603_and_604_carry_a_cloak_and_no_stock_outfit_scans_for_one() 
                 decloaks_when_hit: true,
                 on_radar: true,
                 flags2: 0x5282,
+                shield_usage: 8,
+                zeroes_shields: false,
                 scanner: nova_sim::cloak::Scanner::default(),
             },
             "{id}"

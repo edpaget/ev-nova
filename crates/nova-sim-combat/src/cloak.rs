@@ -78,6 +78,22 @@
 //! it is fully faded or still fading in (`_DamageShip` @0x3bf1f-0x3bf4f,
 //! [`hit`]).
 //!
+//! # Upkeep
+//!
+//! A cloak's first `ModType` 17 mod among a ship type's default items, in
+//! slot order ([`CloakGear::with_upkeep`]), sets its shield usage
+//! (`_CloakShieldUsage` @0x4033, `ModVal` >> 8 & 0xf) and whether
+//! cloaking zeroes the shield (`_CloakZeroesShields` @0x3e9d, bit
+//! [`CLOAK_ZEROES_SHIELDS`]). `_DoShipCloak` on a ship not yet cloaked
+//! zeroes the shield of a zeroing cloak ([`cloak_ship`], @0xdf1f-0xdf3d),
+//! however it cloaks: a think, a hit, or set up cloaked. A think uncloaks
+//! a ship whose cloak costs shield with none left, before the AI-cloak
+//! conditions (@0x83449-0x83452); and every frame a ship cloaked at its
+//! start pays usage x [`CLOAK_UPKEEP_RATE`] while its shield is at least
+//! its usage ([`drain_shield`], `_HandleShip` @0x341af-0x34204), after
+//! the hold, so even a ship the hold uncloaks pays that frame. Stock: the
+//! Polaris Cloaking Organs 268 (usage 8) and 269 (4) zero nothing.
+//!
 //! # Not modelled
 //!
 //! The other AI-cloak conditions, which no stock mission ship carries:
@@ -86,9 +102,13 @@
 //! state 0x10 substate 0x13 and 0x1000's state 0x10 case (a miner on an
 //! asteroid); `_AIForceBurstReload` as a ship cloaks when hit (the
 //! Zephyr's weapons have no burst); the think's 30-59 frame delay after a
-//! ship's hyperspace glide (`_HandleShip` @0x34d74); a cloak's fuel and
-//! shield usage forcing an uncloak (@0x83422-0x83452) and
-//! `_CloakZeroesShields`; the player's own cloak, so raising the cloak
+//! ship's hyperspace glide (`_HandleShip` @0x34d74); a cloak's fuel
+//! upkeep (the uncloak @0x83422-0x8343a and the drain @0x34164-0x341ac),
+//! which no NPC pays (`_CloakFuelUsage` @0x3e25 is 0 for one,
+//! @0x3e31-0x3e39); `_DoShipCloak`'s `_statusRedraw[1]` (@0xdf35-0xdf4b),
+//! player-only, as the HUD is drawn every frame; the player's own cloak,
+//! with its usages read from its owned outfits (@0x3e3b, @0x3eb0,
+//! @0x4046), so raising the cloak
 //! sounds (rdm:phase/cloaking-fidelity/phase-8-cloaking-device) and its
 //! own full fade (@0x2d199-0x2d1a1); area cloaks; NPCs' own sight of
 //! cloaked ships for their targeting (cloaking-fidelity 4; point defence
@@ -165,6 +185,13 @@ pub const MOD_CLOAK: i16 = 17;
 pub const MOD_SCANNER: i16 = 30;
 /// A cloak's `ModVal` bit: it shows on the radar while cloaked.
 pub const CLOAK_ON_RADAR: i16 = 0x0002;
+/// A cloak's `ModVal` bit: cloaking zeroes the shield
+/// (`_CloakZeroesShields` @0x3edb).
+pub const CLOAK_ZEROES_SHIELDS: i16 = 0x0004;
+/// What a cloak's shield usage costs a tick while cloaked, per unit of
+/// usage (the double at 0xdd600, `_HandleShip` @0x341af-0x34204; its
+/// frame-time factor, 0x3b511c, the engine's tick models).
+pub const CLOAK_UPKEEP_RATE: f32 = 0.03333;
 /// A cloak's `ModVal` bit: a hit uncloaks it.
 pub const CLOAK_DECLOAKS_WHEN_HIT: i16 = 0x0008;
 /// A scanner's `ModVal` bit: cloaked ships show on the radar.
@@ -355,6 +382,14 @@ pub struct CloakGear {
     /// Its `Flags2`, whose AI-cloak bits, [`FAST_FADE`] and
     /// [`UNTARGETABLE`] it reads.
     pub flags2: u16,
+    /// The shield its cloak costs, a tick, while cloaked
+    /// (`_CloakShieldUsage` @0x4033: `(ModVal >> 8) & 0xf` of the first
+    /// cloak, see [`CloakGear::with_upkeep`]), times
+    /// [`CLOAK_UPKEEP_RATE`].
+    pub shield_usage: u8,
+    /// Whether cloaking zeroes its shield (`_CloakZeroesShields` @0x3e9d:
+    /// the first cloak's `ModVal` bit [`CLOAK_ZEROES_SHIELDS`]).
+    pub zeroes_shields: bool,
     /// What the cloak scanners among its default items give: an NPC's
     /// own scanner (`_ShipCanTargetUntargetableShips` @0x2402 and
     /// `_ShipCanTargetCloakedShips` @0x24d9 read its ship type's default
@@ -379,6 +414,32 @@ impl CloakGear {
             gear.on_radar |= mod_val & CLOAK_ON_RADAR != 0;
         }
         gear
+    }
+
+    /// The gear with its cloak's upkeep read from `slots`, a ship type's
+    /// default items in slot order: the first slot holding any (count
+    /// above 0) whose outfit has a cloak mod, and that outfit's first
+    /// cloak mod, decides (`_CloakShieldUsage` @0x40a7-0x40ef,
+    /// `_CloakZeroesShields` @0x3f02-0x3f5c). An NPC's cloak costs no fuel
+    /// (`_CloakFuelUsage` @0x3e31-0x3e39).
+    #[must_use]
+    pub fn with_upkeep(self, slots: &[(OutfitId, u16)], outfits: &[OutfitRecord]) -> Self {
+        let first = slots
+            .iter()
+            .filter(|&&(_, count)| count > 0)
+            .filter_map(|&(id, _)| outfits.iter().find(|record| record.id == id))
+            .flat_map(|record| record.mods)
+            .find(|&(kind, _)| kind == MOD_CLOAK);
+        let Some((_, mod_val)) = first else {
+            return self;
+        };
+        Self {
+            // Masked to a nibble, so it fits.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            shield_usage: ((mod_val >> 8) & 0xf) as u8,
+            zeroes_shields: mod_val & CLOAK_ZEROES_SHIELDS != 0,
+            ..self
+        }
     }
 
     /// Whether its fade moves at [`FAST_FADE_RATE`].
@@ -511,10 +572,32 @@ pub struct Situation {
     pub attacking: Option<Vec2>,
 }
 
-/// `cloak` after a think of a ship of `gear` in `situation`
-/// (`_AIHandleCloaking`, see the module docs).
-pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation) {
+/// `cloak` and `shield` after `_DoShipCloak` on a ship of `gear`
+/// (@0xde73): [`Cloak::cloak`], then, when it was not cloaked before and
+/// the gear [`zeroes_shields`](CloakGear::zeroes_shields), a shield above
+/// 0 goes to 0 (@0xdf1f-0xdf3d), even for a ship already fading in.
+/// Returns [`Cloak::cloak`]'s sound condition.
+pub fn cloak_ship(cloak: &mut Cloak, gear: CloakGear, shield: &mut f32) -> bool {
+    let was_cloaked = cloak.is_cloaked();
+    let sounds = cloak.cloak();
+    if !was_cloaked && gear.zeroes_shields {
+        // A shield at or below 0 stays as it is (@0xdf1f's `> 0` test),
+        // so only one above 0 changes.
+        *shield = shield.min(0.0);
+    }
+    sounds
+}
+
+/// `cloak` and `shield` after a think of a ship of `gear` in `situation`
+/// (`_AIHandleCloaking`, see the module docs): a ship whose cloak costs
+/// shield with none left uncloaks before the conditions are asked
+/// (@0x83449-0x83452).
+pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation, shield: &mut f32) {
     if !gear.device || situation.disabled {
+        cloak.uncloak();
+        return;
+    }
+    if gear.shield_usage > 0 && *shield <= 0.0 {
         cloak.uncloak();
         return;
     }
@@ -525,9 +608,22 @@ pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation) {
             .attacking
             .is_some_and(|off| off.x.abs() > PRESS_RANGE || off.y.abs() > PRESS_RANGE);
     if retreating || pressing {
-        cloak.cloak();
+        cloak_ship(cloak, gear, shield);
     } else {
         cloak.uncloak();
+    }
+}
+
+/// `shield` after a frame's cloak upkeep (`_HandleShip`
+/// @0x341af-0x34204) on a ship `cloaked` at the frame's start whose cloak
+/// costs `usage`: while the shield is at least `usage`, it pays
+/// `usage` x [`CLOAK_UPKEEP_RATE`]. The original floors the result at 0,
+/// which a shield at least `usage` never reaches; so the drain alone
+/// never empties it.
+pub fn drain_shield(shield: &mut f32, usage: u8, cloaked: bool) {
+    let usage = f32::from(usage);
+    if cloaked && usage > 0.0 && *shield >= usage {
+        *shield -= usage * CLOAK_UPKEEP_RATE;
     }
 }
 
@@ -539,16 +635,22 @@ pub fn hold(cloak: &mut Cloak, can_cloak: bool) {
     }
 }
 
-/// `cloak` after a weapon's hit on a ship of `gear` that `can_cloak`,
+/// `cloak` and `shield` after a weapon's hit on a ship of `gear` that `can_cloak`,
 /// `attacking` the ship that hit it or not (see the module docs); and
 /// whether cloak-when-hit's conditions held, whether or not the ship was
 /// cloaked already. `_DamageShip` forces the ship's burst reload on those
 /// conditions alone (`_AIForceBurstReload` @0x3bbd5), before it cloaks
 /// (@0x3bbdd).
-pub fn hit(cloak: &mut Cloak, gear: CloakGear, can_cloak: bool, attacking: bool) -> bool {
+pub fn hit(
+    cloak: &mut Cloak,
+    gear: CloakGear,
+    can_cloak: bool,
+    attacking: bool,
+    shield: &mut f32,
+) -> bool {
     let cloaks = gear.has(CLOAK_WHEN_HIT) && can_cloak && !attacking;
     if cloaks {
-        cloak.cloak();
+        cloak_ship(cloak, gear, shield);
     }
     if gear.decloaks_when_hit && (cloak.full() || cloak.direction > 0) {
         cloak.uncloak();
@@ -842,8 +944,11 @@ mod tests {
                 decloaks_when_hit: true,
                 on_radar: true,
                 flags2: 0x5282,
+                shield_usage: 0,
+                zeroes_shields: false,
                 scanner: Scanner::default(),
-            }
+            },
+            "the upkeep needs the slot order (`with_upkeep`)"
         );
         assert!(!zephyr.fast());
         let plain = CloakGear::of(0x0001, &one(300), &[cloak_outfit(0)]);
@@ -1046,6 +1151,8 @@ mod tests {
         decloaks_when_hit: true,
         on_radar: true,
         flags2: 0x5282,
+        shield_usage: 0,
+        zeroes_shields: false,
         scanner: Scanner::NONE,
     };
 
@@ -1056,17 +1163,22 @@ mod tests {
             ..Situation::default()
         };
         let mut none = CLOAKED;
-        think(&mut none, CloakGear::default(), retreating);
+        think(&mut none, CloakGear::default(), retreating, &mut 0.0);
         assert_eq!(none, at(FADE_FULL, -1));
         let mut disabled = CLOAKED;
         let downed = Situation {
             disabled: true,
             ..retreating
         };
-        think(&mut disabled, ZEPHYR, downed);
+        think(&mut disabled, ZEPHYR, downed, &mut 0.0);
         assert_eq!(disabled, at(FADE_FULL, -1));
         let mut seen = Cloak::default();
-        think(&mut seen, CloakGear::default(), Situation::default());
+        think(
+            &mut seen,
+            CloakGear::default(),
+            Situation::default(),
+            &mut 0.0,
+        );
         assert_eq!(seen, Cloak::default());
     }
 
@@ -1077,17 +1189,17 @@ mod tests {
             ..Situation::default()
         };
         let mut cloak = Cloak::default();
-        think(&mut cloak, ZEPHYR, retreating);
+        think(&mut cloak, ZEPHYR, retreating, &mut 0.0);
         assert_eq!(cloak, at(0.0, 1));
         let mut without = Cloak::default();
         let other = CloakGear {
             flags2: ZEPHYR.flags2 & !CLOAK_RETREATING,
             ..ZEPHYR
         };
-        think(&mut without, other, retreating);
+        think(&mut without, other, retreating, &mut 0.0);
         assert_eq!(without, Cloak::default(), "no bit, no cloak");
         let mut cloaked = at(20.0, 0);
-        think(&mut cloaked, ZEPHYR, Situation::default());
+        think(&mut cloaked, ZEPHYR, Situation::default(), &mut 0.0);
         assert_eq!(cloaked, at(20.0, -1), "no longer retreating");
     }
 
@@ -1099,23 +1211,23 @@ mod tests {
         };
         for (x, y) in [(166.0, 0.0), (0.0, -166.0), (-300.0, 300.0)] {
             let mut cloak = CLOAKED;
-            think(&mut cloak, ZEPHYR, pressing(x, y));
+            think(&mut cloak, ZEPHYR, pressing(x, y), &mut 0.0);
             assert_eq!(cloak, CLOAKED, "{x} {y}");
         }
         for (x, y) in [(165.0, -165.0), (0.0, 0.0)] {
             let mut cloak = CLOAKED;
-            think(&mut cloak, ZEPHYR, pressing(x, y));
+            think(&mut cloak, ZEPHYR, pressing(x, y), &mut 0.0);
             assert_eq!(cloak, at(FADE_FULL, -1), "{x} {y}: close in to fight");
         }
         let mut seen = Cloak::default();
-        think(&mut seen, ZEPHYR, pressing(500.0, 0.0));
+        think(&mut seen, ZEPHYR, pressing(500.0, 0.0), &mut 0.0);
         assert_eq!(seen, Cloak::default(), "only a cloaked ship keeps it");
         let mut plain = CLOAKED;
         let other = CloakGear {
             flags2: 0,
             ..ZEPHYR
         };
-        think(&mut plain, other, pressing(500.0, 0.0));
+        think(&mut plain, other, pressing(500.0, 0.0), &mut 0.0);
         assert_eq!(plain, at(FADE_FULL, -1), "no bit");
     }
 
@@ -1125,12 +1237,12 @@ mod tests {
         cloak.cloak();
         let mut ticks = 0;
         while !cloak.is_cloaked() {
-            think(&mut cloak, ZEPHYR, Situation::default());
+            think(&mut cloak, ZEPHYR, Situation::default(), &mut 0.0);
             cloak.step(ZEPHYR.fast());
             ticks += 1;
         }
         assert_eq!(cloak.direction, 1, "an early uncloak does nothing");
-        think(&mut cloak, ZEPHYR, Situation::default());
+        think(&mut cloak, ZEPHYR, Situation::default(), &mut 0.0);
         assert_eq!(cloak.direction, -1);
         let mut cloaked = 0;
         while cloak.is_cloaked() {
@@ -1156,17 +1268,17 @@ mod tests {
             ..ZEPHYR
         };
         let mut cloak = Cloak::default();
-        hit(&mut cloak, plain, true, false);
+        hit(&mut cloak, plain, true, false, &mut 0.0);
         assert_eq!(cloak, at(0.0, 1));
         let mut fighting = Cloak::default();
-        hit(&mut fighting, plain, true, true);
+        hit(&mut fighting, plain, true, true, &mut 0.0);
         assert_eq!(fighting, Cloak::default(), "it attacks the ship");
         let mut unable = Cloak::default();
-        hit(&mut unable, plain, false, false);
+        hit(&mut unable, plain, false, false, &mut 0.0);
         assert_eq!(unable, Cloak::default(), "it cannot cloak");
         let mut no_bit = Cloak::default();
         let other = CloakGear { flags2: 0, ..plain };
-        hit(&mut no_bit, other, true, false);
+        hit(&mut no_bit, other, true, false, &mut 0.0);
         assert_eq!(no_bit, Cloak::default());
     }
 
@@ -1181,18 +1293,27 @@ mod tests {
         };
         for start in [Cloak::default(), CLOAKED, at(20.0, 1), at(20.0, -1)] {
             let mut cloak = start;
-            assert!(hit(&mut cloak, plain, true, false), "{start:?}");
+            assert!(hit(&mut cloak, plain, true, false, &mut 0.0), "{start:?}");
             let mut cloak = start;
-            assert!(!hit(&mut cloak, plain, true, true), "{start:?}: attacking");
+            assert!(
+                !hit(&mut cloak, plain, true, true, &mut 0.0),
+                "{start:?}: attacking"
+            );
             let mut cloak = start;
-            assert!(!hit(&mut cloak, plain, false, false), "{start:?}: unable");
+            assert!(
+                !hit(&mut cloak, plain, false, false, &mut 0.0),
+                "{start:?}: unable"
+            );
             let mut cloak = start;
             let other = CloakGear { flags2: 0, ..plain };
-            assert!(!hit(&mut cloak, other, true, false), "{start:?}: no bit");
+            assert!(
+                !hit(&mut cloak, other, true, false, &mut 0.0),
+                "{start:?}: no bit"
+            );
         }
         let mut cloak = Cloak::default();
         assert!(
-            hit(&mut cloak, ZEPHYR, true, false),
+            hit(&mut cloak, ZEPHYR, true, false, &mut 0.0),
             "a decloaking cloak too"
         );
     }
@@ -1204,20 +1325,20 @@ mod tests {
             ..ZEPHYR
         };
         let mut full = CLOAKED;
-        hit(&mut full, gear, true, true);
+        hit(&mut full, gear, true, true, &mut 0.0);
         assert_eq!(full, at(FADE_FULL, -1));
         let mut rising = at(20.0, 1);
-        hit(&mut rising, gear, true, true);
+        hit(&mut rising, gear, true, true, &mut 0.0);
         assert_eq!(rising, at(20.0, -1));
         let mut holding = at(20.0, 0);
-        hit(&mut holding, gear, true, true);
+        hit(&mut holding, gear, true, true, &mut 0.0);
         assert_eq!(holding, at(20.0, 0), "neither full nor fading in");
         let mut kept = CLOAKED;
         let tough = CloakGear {
             decloaks_when_hit: false,
             ..gear
         };
-        hit(&mut kept, tough, true, true);
+        hit(&mut kept, tough, true, true, &mut 0.0);
         assert_eq!(kept, CLOAKED);
     }
 
@@ -1226,7 +1347,7 @@ mod tests {
         // It cloaks, then its decloak finds it fading in but not yet
         // cloaked, which does nothing.
         let mut cloak = Cloak::default();
-        hit(&mut cloak, ZEPHYR, true, false);
+        hit(&mut cloak, ZEPHYR, true, false, &mut 0.0);
         assert_eq!(cloak, at(0.0, 1));
     }
 
@@ -1310,5 +1431,191 @@ mod tests {
             on_screen(VIEW, Vec2::ZERO, 0.0, 0.0),
             "a ship with no sprite"
         );
+    }
+
+    fn slots(items: &[(i16, u16)]) -> Vec<(OutfitId, u16)> {
+        items.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
+    }
+
+    #[test]
+    fn a_ship_types_cloak_upkeep_is_its_first_cloak_in_slot_order() {
+        let outfits = [
+            outfit(268, &[(MOD_CLOAK, 0x080b)]),
+            outfit(269, &[(1, 1), (MOD_CLOAK, 0x0404 | 0x00f0)]),
+            outfit(270, &[(MOD_CLOAK, 0x0300), (MOD_CLOAK, 0x0504)]),
+        ];
+        let gear = |items: &[(i16, u16)]| CloakGear::default().with_upkeep(&slots(items), &outfits);
+        assert_eq!(
+            (
+                gear(&[(268, 1)]).shield_usage,
+                gear(&[(268, 1)]).zeroes_shields
+            ),
+            (8, false)
+        );
+        assert_eq!(
+            (
+                gear(&[(269, 1)]).shield_usage,
+                gear(&[(269, 1)]).zeroes_shields
+            ),
+            (4, true),
+            "the nibble alone, past a non-cloak mod"
+        );
+        assert_eq!(
+            (
+                gear(&[(268, 1), (269, 1)]).shield_usage,
+                gear(&[(268, 1), (269, 1)]).zeroes_shields
+            ),
+            (8, false),
+            "the earlier slot decides"
+        );
+        assert_eq!(
+            (
+                gear(&[(269, 1), (268, 1)]).shield_usage,
+                gear(&[(269, 1), (268, 1)]).zeroes_shields
+            ),
+            (4, true),
+            "slot order, not outfit order"
+        );
+        assert_eq!(
+            gear(&[(269, 0), (268, 1)]).shield_usage,
+            8,
+            "a count-0 slot is skipped"
+        );
+        assert_eq!(
+            (
+                gear(&[(270, 1)]).shield_usage,
+                gear(&[(270, 1)]).zeroes_shields
+            ),
+            (3, false),
+            "the outfit's first cloak mod"
+        );
+        assert_eq!(gear(&[]), CloakGear::default());
+        assert_eq!(gear(&[(999, 1)]), CloakGear::default());
+    }
+
+    fn zeroing() -> CloakGear {
+        CloakGear {
+            device: true,
+            zeroes_shields: true,
+            ..CloakGear::default()
+        }
+    }
+
+    #[test]
+    fn cloaking_with_a_zeroing_cloak_zeroes_the_shield_unless_already_cloaked() {
+        let mut cloak = Cloak::default();
+        let mut shield = 50.0;
+        assert!(
+            cloak_ship(&mut cloak, zeroing(), &mut shield),
+            "the sound condition"
+        );
+        assert_eq!((cloak, shield), (at(0.0, 1), 0.0));
+
+        let mut fading_in = at(10.0, 1);
+        let mut shield = 50.0;
+        assert!(!cloak_ship(&mut fading_in, zeroing(), &mut shield));
+        assert_eq!(shield, 0.0, "fading in, not yet cloaked");
+
+        let mut cloaked = at(FADE_FULL, 0);
+        let mut shield = 50.0;
+        cloak_ship(&mut cloaked, zeroing(), &mut shield);
+        assert_eq!(shield, 50.0, "already cloaked");
+
+        let mut cloak = Cloak::default();
+        let mut shield = 50.0;
+        cloak_ship(
+            &mut cloak,
+            CloakGear {
+                device: true,
+                ..CloakGear::default()
+            },
+            &mut shield,
+        );
+        assert_eq!((cloak, shield), (at(0.0, 1), 50.0), "no zeroing bit");
+    }
+
+    #[test]
+    fn a_think_uncloaks_a_ship_whose_shield_cannot_pay_its_cloak() {
+        let gear = CloakGear {
+            device: true,
+            shield_usage: 8,
+            flags2: CLOAK_RETREATING,
+            ..CloakGear::default()
+        };
+        let retreating = Situation {
+            retreating: true,
+            ..Situation::default()
+        };
+        let after = |gear, mut shield: f32| {
+            let mut cloak = at(FADE_FULL, 0);
+            think(&mut cloak, gear, retreating, &mut shield);
+            cloak.direction
+        };
+        assert_eq!(after(gear, 0.0), -1, "shield at 0");
+        assert_eq!(after(gear, -1.0), -1, "shield below 0");
+        assert_eq!(after(gear, 0.5), 0, "shield left: the conditions hold it");
+        let free = CloakGear {
+            shield_usage: 0,
+            ..gear
+        };
+        assert_eq!(after(free, 0.0), 0, "no usage: the conditions hold it");
+    }
+
+    #[test]
+    fn a_think_cloaking_a_zeroing_cloak_zeroes_the_shield() {
+        let gear = CloakGear {
+            flags2: CLOAK_RETREATING,
+            ..zeroing()
+        };
+        let mut cloak = Cloak::default();
+        let situation = Situation {
+            retreating: true,
+            ..Situation::default()
+        };
+        let mut shield = 40.0;
+        think(&mut cloak, gear, situation, &mut shield);
+        assert_eq!((cloak, shield), (at(0.0, 1), 0.0));
+    }
+
+    #[test]
+    fn cloaking_when_hit_with_a_zeroing_cloak_zeroes_the_shield() {
+        let gear = CloakGear {
+            flags2: CLOAK_WHEN_HIT,
+            ..zeroing()
+        };
+        let mut cloak = Cloak::default();
+        let mut shield = 30.0;
+        assert!(hit(&mut cloak, gear, true, false, &mut shield));
+        assert_eq!((cloak, shield), (at(0.0, 1), 0.0));
+        let mut cloak = Cloak::default();
+        let mut shield = 30.0;
+        assert!(!hit(&mut cloak, gear, true, true, &mut shield));
+        assert_eq!(shield, 30.0, "no cloak, no zeroing");
+    }
+
+    #[test]
+    fn a_cloaked_ship_pays_its_shield_usage_a_tick_while_it_can() {
+        let mut shield = 100.0;
+        drain_shield(&mut shield, 8, true);
+        assert_eq!(shield, 100.0 - 8.0 * CLOAK_UPKEEP_RATE);
+        let mut shield = 8.0;
+        drain_shield(&mut shield, 8, true);
+        assert_eq!(
+            shield,
+            8.0 - 8.0 * CLOAK_UPKEEP_RATE,
+            "shield equal to usage pays"
+        );
+        let mut shield = 7.9;
+        drain_shield(&mut shield, 8, true);
+        assert_eq!(shield, 7.9, "below usage: no drain");
+        let mut shield = 100.0;
+        drain_shield(&mut shield, 8, false);
+        assert_eq!(shield, 100.0, "not cloaked");
+        drain_shield(&mut shield, 0, true);
+        assert_eq!(shield, 100.0, "no usage");
+        let mut shield = 0.1;
+        drain_shield(&mut shield, 15, true);
+        assert_eq!(shield, 0.1);
+        assert_eq!(CLOAK_UPKEEP_RATE, 0.03333);
     }
 }

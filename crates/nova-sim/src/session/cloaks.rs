@@ -171,7 +171,11 @@ impl Session {
             // is skipped.
             let holds =
                 !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
-            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds) {
+            // The fight has already taken the hit's damage, as `_DamageShip`
+            // does (@0x3ac11-0x3acbd) before it cloaks (@0x3bbdd), so a cloak
+            // that zeroes shields zeroes what the hit left.
+            let shield = &mut npc.reserves.shield.now;
+            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds, shield) {
                 npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
             }
         }
@@ -220,6 +224,29 @@ mod tests {
         npc.cloak = CLOAKED;
         session.cloak_hits(&[unanswered]);
         assert_eq!(session.npcs()[0].cloak.direction, -1);
+    }
+
+    #[test]
+    fn a_hit_that_cloaks_a_ship_with_a_zeroing_cloak_zeroes_its_shield() {
+        use crate::cloak::{CLOAK_WHEN_HIT, CloakGear};
+        use crate::combat::ShipRef;
+        use crate::combat::fixture::strike;
+        use crate::traffic::npc::NpcId;
+        let catalog = armed();
+        for (zeroes_shields, left) in [(true, 0.0), (false, 40.0)] {
+            let mut session = facing_an_npc(&catalog, 180);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.cloak_gear = CloakGear {
+                flags2: CLOAK_WHEN_HIT,
+                zeroes_shields,
+                ..CAN_CLOAK
+            };
+            npc.reserves.shield.now = 40.0;
+            session.cloak_hits(&[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)]);
+            let npc = &session.npcs()[0];
+            assert_eq!(npc.cloak.direction, 1);
+            assert_eq!(npc.reserves.shield.now, left, "zeroes {zeroes_shields}");
+        }
     }
 
     /// [`armed`] whose blaster (128, its class's) bursts 15 shots and
