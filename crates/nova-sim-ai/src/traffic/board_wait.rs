@@ -563,6 +563,33 @@ mod tests {
     }
 
     #[test]
+    fn a_pirate_entering_its_wait_drops_its_pursuit_though_its_wait_runs() {
+        // The loop sets sub 0 (@0x8c6f5-0x8c71c), and goal 0x16's block
+        // runs ahead of the wait's return (@0x8d462-0x8d4b9): no kept
+        // rush or frame survives into the wait.
+        let mut fighting = ship(1, 1, plunder(n(9)));
+        fighting.pursuit = Pursuit {
+            kept: Some(Kept::Rush),
+            frame: Some(Frame {
+                goal: plunder(n(9)),
+                bodies: [
+                    Some(Body {
+                        manoeuvre: Manoeuvre::Snipe,
+                        heading: 0,
+                    }),
+                    None,
+                ],
+            }),
+        };
+        let mut traffic = traffic_of(vec![fighting, ship(2, 2, plunder(n(9))), victim()]);
+        tick(&mut traffic, &Waiter);
+        let waiting = &traffic.npcs()[0];
+        assert_eq!(waiting.goal, Goal::CountWait);
+        assert_eq!(waiting.ai_wait, BOARD_WAIT - 1);
+        assert_eq!(waiting.pursuit, Pursuit::default());
+    }
+
+    #[test]
     fn a_count_wait_holds_120_ticks_and_the_pirate_decides_afresh_on_the_next() {
         // The tick that set it has counted one off.
         let mut traffic = traffic_of(vec![waiting(1, BOARD_WAIT - 1)]);
