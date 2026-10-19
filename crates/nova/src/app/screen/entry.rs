@@ -170,6 +170,13 @@ impl AppScreen {
             .is_some_and(|entering| entering.core.holds_commands())
     }
 
+    /// Whether play is being entered and the entry takes a Command chord
+    /// typed now without holding it: the intro's text, due or showing,
+    /// takes it as it takes every key.
+    pub(super) fn entry_takes_commands(&self) -> bool {
+        self.entry.is_some() && !self.entry_holds_commands()
+    }
+
     /// The window's close while play is entered: `Some(false)`, staying
     /// open, once the entry has held or dropped it; `None` with no entry.
     pub(super) fn entry_close(&mut self) -> Option<bool> {

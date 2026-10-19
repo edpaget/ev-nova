@@ -244,6 +244,48 @@ fn entering() -> AppScreen {
     screen
 }
 
+/// Play being entered with a new pilot whose intro has a text, its
+/// pictures passed with Space, the text open and fading in from black.
+/// (The entry's text, once due, opens in the same tick, and the entry
+/// is dropped in the tick its play runs, so neither stage is seen.)
+fn intro_text_fading_in() -> AppScreen {
+    let mut screen = super::entry::intro_menu(&MemoryPilots::new());
+    create_held(&mut screen, "Ada");
+    choose(&mut screen, MenuChoice::EnterShip);
+    screen.tick(DEATH_FADE_FOR);
+    for _ in 0..2 {
+        screen.tick(DEATH_FADE_FOR);
+        screen.input(&key(Key::Space, true));
+        screen.input(&key(Key::Space, false));
+        screen.tick(DEATH_FADE_FOR);
+    }
+    assert_eq!(screen.showing(), Showing::IntroText);
+    assert!(screen.intro_text().is_some());
+    screen
+}
+
+/// [`intro_text_fading_in`], the fade ended: the text takes every input.
+fn intro_text() -> AppScreen {
+    let mut screen = intro_text_fading_in();
+    screen.tick(DEATH_FADE_FOR);
+    assert!(screen.intro_text().is_some());
+    screen
+}
+
+/// [`intro_text`] closed with Return, the screen fading to black.
+fn after_intro_text() -> AppScreen {
+    let mut screen = intro_text();
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert!(screen.intro_text().is_none());
+    assert_eq!(screen.showing(), Showing::IntroText, "fading to black");
+    screen
+}
+
+/// The names of the states whose intro text takes Command-Q, as it
+/// takes every key.
+const TEXT_TAKES_QUIT: [&str; 2] = ["the intro's text, fading in", "the intro's text"];
+
 fn handed_over(screen: &mut AppScreen) {
     screen.tick(Duration::from_secs(1));
     screen.tick(Duration::from_secs(1));
@@ -275,7 +317,7 @@ fn without_dialogs() -> AppScreen {
     menu(&MemoryPilots::new())
 }
 
-fn states() -> [State; 20] {
+fn states() -> [State; 23] {
     let state = |name, make, then, preferences, about| State {
         name,
         make,
@@ -299,6 +341,21 @@ fn states() -> [State; 20] {
         state("the start-up appear", starting_up, appear_ends, true, false),
         state("the return's appear", returning, appear_ends, true, false),
         state("the entry", entering, handed_over, true, false),
+        state(
+            "the intro's text, fading in",
+            intro_text_fading_in,
+            through_entry,
+            false,
+            false,
+        ),
+        state("the intro's text", intro_text, through_entry, false, false),
+        state(
+            "the fade after the intro's text",
+            after_intro_text,
+            through_entry,
+            true,
+            false,
+        ),
         state("a keyed click", keyed_click, click_ends, true, false),
         state("Quit's delay", quitting, nothing, false, false),
         state("no dialogs", without_dialogs, nothing, false, false),
@@ -326,7 +383,7 @@ fn quit_does_what_command_q_does_everywhere() {
         let held = matches!(
             state.name,
             "the start-up appear, not ended" | "a keyed click, not ended"
-        );
+        ) || TEXT_TAKES_QUIT.contains(&state.name);
         assert_eq!(
             outcome.quit || outcome.quitting,
             !held,

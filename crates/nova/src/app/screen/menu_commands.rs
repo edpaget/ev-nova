@@ -12,7 +12,11 @@
 //!   picked with the mouse, Command's press and release around them. The
 //!   router's notion of Command stays the physical one either way.
 //! - **About** opens the About text over the side shown, as I does, where
-//!   nothing holds input and nothing is in front ([`AppScreen::front`]).
+//!   nothing holds input and nothing is in front ([`AppScreen::front`],
+//!   or the intro's text while play is entered, which takes every input
+//!   before the router's own keys). So no entry offers it: one that
+//!   doesn't hold input shows its text, and an About opened under the
+//!   entry's draw would show only once flight runs.
 //!   The original's `abou` command (`_AppEventHandler` @0xccb83, the
 //!   `abou` compare @0xccc1d, its branch @0xcccb0) is gated by nothing in
 //!   the game; it shows Ambrosia's About box, which the engine doesn't
@@ -21,8 +25,9 @@
 //!
 //! The menu bar greys a command where it would do nothing: Quit never;
 //! Preferences… while dialogs are missing, a quit is pending, or nothing
-//! holds input and something in front takes it; About likewise, and
-//! also while anything holds input.
+//! holds input and something in front takes it (the intro's text takes
+//! Command-comma and opens nothing); About likewise, and also while
+//! anything holds input.
 
 use nova_view::{Input, Key, MenuCommand, Screen, ScreenAction};
 
@@ -75,10 +80,10 @@ impl AppScreen {
             return false;
         }
         let holds = self.holds_input();
-        let taken = self.front().is_none();
+        let in_front = self.front().is_some() || self.entry_takes_commands();
         match command {
-            MenuCommand::Preferences => holds || taken,
-            MenuCommand::About => !holds && taken,
+            MenuCommand::Preferences => holds || !in_front,
+            MenuCommand::About => !holds && !in_front,
             MenuCommand::Quit => true,
         }
     }
