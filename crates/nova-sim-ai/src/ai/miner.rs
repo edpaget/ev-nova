@@ -18,7 +18,7 @@
 //!   [`call_for_help`](crate::ai::call_for_help)).
 //! - **[`MINES`]**, unless already leaving (state 2, [`Goal::JumpOut`]):
 //!   with asteroid slot 0 live ([`Surroundings::mining_rock`]) state 16,
-//!   [`Goal::Mine`]; without, state 6, [`Goal::Idle`], its target and
+//!   [`Goal::Mine`]; without, state 6, [`Goal::Wait`], its target and
 //!   travel stellar cleared (@0x8b2a1-0x8b2d1).
 //! - **[`SCOOPS`]** with an asteroid scoop ([`Npc::can_scoop`], +0xc3):
 //!   a hold as full as its `Holds` ([`NpcHold::total`](crate::traffic::npc::NpcHold::total)
@@ -39,8 +39,13 @@
 //!   one kept (+0x92 = +0x6c, @0x8b3a1-0x8b3ae, [`Decision::visits`]).
 //!   Otherwise it leaves (state 2) when it can jump
 //!   ([`leave::can_jump`], the inlined `_AIShipHasFuelForJump`
-//!   @0x8b3ba-0x8b41f), or stops (state 6, @0x8b452). The first test's state 6 comes before this one,
-//!   so an Asteroid Miner that can't scoop lands even after fleeing.
+//!   @0x8b3ba-0x8b41f), or stops (state 6, [`Goal::Wait`], @0x8b452). The
+//!   first test's state 6 comes before this one, so an Asteroid Miner
+//!   that can't scoop lands even after fleeing.
+//!
+//! Its own think reads goals 0x16, 2 and 3 alone, so it never tells state
+//! 6 from 0: the stop shows only to a hail, which finds a waiting ship busy
+//! (`_AIIsShipBusy` @0x82fac-0x82fe4, see [`hail`](crate::hail)).
 //!
 //! No `PlaySound` or `_beepSnd` call is anywhere in it; the distress
 //! call's beep is `_AICallForHelp`'s.
@@ -135,7 +140,7 @@ pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
         if around.mining_rock.is_some() {
             state = Goal::Mine;
         } else {
-            state = Goal::Idle;
+            state = Goal::Wait;
             nav = None;
         }
     }
@@ -185,7 +190,7 @@ fn shuttle(npc: &Npc, around: &Surroundings, state: Goal, nav: Option<StellarId>
     match nav {
         Some(stellar) if !matches!(state, Goal::JumpOut | Goal::Flee(_)) => Goal::Land(stellar),
         _ if leave::can_jump(npc, around.jump_fuel) => Goal::JumpOut,
-        _ => Goal::Idle,
+        _ => Goal::Wait,
     }
 }
 
@@ -255,7 +260,7 @@ mod tests {
     fn a_mining_miner_stops_and_waits_without_asteroids_and_mines_slot_0_when_live() {
         let mut zephyr = miner(MINES, false);
         zephyr.goal = Goal::Land(StellarId(129));
-        assert_eq!(deciding(&zephyr, &stellars(), None), Goal::Idle, "state 6");
+        assert_eq!(deciding(&zephyr, &stellars(), None), Goal::Wait, "state 6");
         assert_eq!(deciding(&zephyr, &stellars(), Some(rock())), Goal::Mine);
         let npcs = [zephyr.clone()];
         let around = Surroundings::new(&[], &npcs);
@@ -428,7 +433,7 @@ mod tests {
             "an empty tank, by its class's Fuel"
         );
         shuttle.class_fuel = 99;
-        assert_eq!(deciding(&shuttle, &[], None), Goal::Idle, "state 6");
+        assert_eq!(deciding(&shuttle, &[], None), Goal::Wait, "state 6");
     }
 
     #[test]
@@ -442,7 +447,7 @@ mod tests {
             )
         });
         shuttle.reserves.fuel.now = JUMP_FUEL - 1.0;
-        assert_eq!(deciding(&shuttle, &[], None), Goal::Idle);
+        assert_eq!(deciding(&shuttle, &[], None), Goal::Wait);
         shuttle.reserves.fuel.now = JUMP_FUEL;
         assert_eq!(deciding(&shuttle, &[], None), Goal::JumpOut);
     }
@@ -460,7 +465,7 @@ mod tests {
             shuttle.class_fuel = 0;
             assert_eq!(
                 deciding(&shuttle, &stellars(), None),
-                Goal::Idle,
+                Goal::Wait,
                 "{goal:?}"
             );
         }
@@ -637,7 +642,7 @@ mod tests {
             .iter()
             .find(|npc| npc.id == zephyr)
             .expect("it stays");
-        assert_eq!(at_rest.goal, Goal::Idle);
+        assert_eq!(at_rest.goal, Goal::Wait, "state 6");
         assert!(at_rest.state.velocity.length() < 0.5, "{:?}", at_rest.state);
     }
 }

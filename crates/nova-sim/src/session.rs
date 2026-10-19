@@ -23247,7 +23247,7 @@ pub(super) mod tests {
             missile_at_an_escort(&catalog, Some(crate::escort::EscortOrder::Hold));
         assert!(session.npcs()[1].escorts_player());
         assert!(shot_down_by(&mut session, &catalog, &ai));
-        assert_eq!(session.npcs()[1].goal, Goal::Idle, "holding");
+        assert_eq!(session.npcs()[1].goal, Goal::Wait, "holding");
     }
 
     // Boarding and capture.

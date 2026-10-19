@@ -242,16 +242,21 @@ pub enum Goal {
     /// run its idle block (see [`idle`]). It comes to a stop where it is.
     #[default]
     Idle,
-    /// Stop and wait: the original's state 6 (`_IsShipWaiting` @0x82f96),
-    /// which the idle blocks write when a ship that would leave can't jump
-    /// (see [`idle_block`]), the interceptor's patrol when its pick is
-    /// destroyed, and the warship's while its fighters are out (see
-    /// [`wait`]). `_HighLevelAIHandler` flies it as a stop (+0x50 = 0, sub 1,
-    /// @0x8f101-0x8f112). It is sticky for the traders and the interceptor:
-    /// their idle blocks need state 0, so only provocation, or a hunter's
-    /// government's word, lifts it. It fights nothing and scoops nothing,
-    /// and `_ExtendedIsThreatToPlayer` doesn't spare it (6 is none of its
-    /// states).
+    /// Stop and wait: the original's state 6, which the idle blocks write
+    /// when a ship that would leave can't jump (see [`idle_block`]), the
+    /// interceptor's patrol when its pick is destroyed, the warship's while
+    /// its fighters are out (see [`wait`]), a trader that loses sight of
+    /// its target and can't jump (see [`lost_sight`]), a miner that can't
+    /// mine or jump (`_MinerAI` @0x8b2d1, @0x8b452, see [`miner`]), and an
+    /// escort holding position (`_EscortAI` @0x83e6b, see [`escort`]).
+    /// `_HighLevelAIHandler` flies it as a stop (+0x50 = 0, sub 1,
+    /// @0x8f101-0x8f112), and a hail finds it busy (`_AIIsShipBusy`
+    /// @0x82fac-0x82fe4; see [`hail`](crate::hail)). It is sticky for the
+    /// traders and the interceptor: their idle blocks need state 0, so only
+    /// provocation, or a hunter's government's word, lifts it. It fights
+    /// nothing and scoops nothing, and `_ExtendedIsThreatToPlayer` doesn't
+    /// spare it (6 is none of its states). `_AIMakeShipWait` (@0x82c63) and
+    /// `_IsShipWaiting` (@0x82f96) are never called.
     Wait,
     /// Land on this stellar, and leave the system that way. A stellar
     /// that is a hypergate or wormhole is entered instead, as

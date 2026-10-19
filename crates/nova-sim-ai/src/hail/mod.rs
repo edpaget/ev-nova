@@ -166,8 +166,8 @@ pub struct Hail<'a> {
     /// What its government and type make of hails.
     pub dispositions: Dispositions,
     /// Whether it is busy: fighting, assisting, keeping formation, holding
-    /// ([`Goal::Hold`], goal 10 to `_AIIsShipBusy` @0x82fac-0x82fe4), or
-    /// under attack.
+    /// ([`Goal::Hold`], goal 10 to `_AIIsShipBusy` @0x82fac-0x82fe4),
+    /// waiting ([`Goal::Wait`], goal 6), or under attack.
     pub busy: bool,
     /// Whether it is already assisting the player.
     pub assisting_player: bool,
@@ -243,7 +243,9 @@ impl<'a> Hail<'a> {
     /// conversation `talk`, the player needing `need`, of `mission` when
     /// it is a mission ship ([`Hail::mission`]). It is busy while
     /// it attacks, snipes at, flees from, plunders or assists a ship, keeps
-    /// formation (goals 10 and 12), waits or drifts as a pirate (goals 0x16
+    /// formation (goals 10 and 12), stops and waits (goal 6, which
+    /// `_AIIsShipBusy` @0x82fac-0x82fe4 finds busy as it finds every goal
+    /// but 0, 1, 2, 7 and 0x14), waits or drifts as a pirate (goals 0x16
     /// and 0xe), or an
     /// NPC attacks or snipes at it
     /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
@@ -291,7 +293,11 @@ impl<'a> Hail<'a> {
                 || assisting_player
                 || matches!(
                     npc.goal,
-                    Goal::Formation { .. } | Goal::Hold | Goal::CountWait | Goal::Drift
+                    Goal::Formation { .. }
+                        | Goal::Hold
+                        | Goal::Wait
+                        | Goal::CountWait
+                        | Goal::Drift
                 )
                 || attacked,
             assisting_player,
@@ -909,6 +915,26 @@ mod tests {
             hailing(&hunting, &plain, 0, &talk()).attitude,
             Attitude::Hostile
         );
+    }
+
+    #[test]
+    fn a_waiting_ship_is_busy() {
+        // Goal 6 is none of `_AIIsShipBusy`'s 0, 1, 2, 7 and 0x14
+        // (@0x82fac-0x82fe4).
+        let npcs = [flying(1, Goal::Wait)];
+        assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
+    }
+
+    #[test]
+    fn a_waiting_miner_is_busy_when_hailed() {
+        // A miner of `Flags3` 0x0001 with no asteroid in slot 0 stops and
+        // waits (state 6, `_MinerAI` @0x8b2d1).
+        let mut zephyr = flying(1, Goal::Idle);
+        zephyr.miner = crate::ai::miner::MINES;
+        let alone = [zephyr.clone()];
+        zephyr.goal = crate::ai::miner::decide(&zephyr, &Surroundings::new(&[], &alone));
+        let npcs = [zephyr];
+        assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
     }
 
     #[test]

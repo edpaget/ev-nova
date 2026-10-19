@@ -73,8 +73,6 @@
 //!   -1): the same decision with more draws, so not modelled.
 //! - The interceptor's +0x92 = -2 (@0x8d01e): no reader for AI type 4.
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
-//! - Owned by rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12:
-//!   state 6 written outside the idle block.
 
 use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, travel};
 use crate::catalog::StellarId;

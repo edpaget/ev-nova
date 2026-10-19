@@ -611,7 +611,12 @@ impl Session {
     }
 
     /// Escort NPC `id` leaves the fleet, as [`Session::dismiss`] says but
-    /// making no save due; whether it was in the fleet.
+    /// making no save due; whether it was in the fleet. A holding escort
+    /// ([`Goal::Wait`]) takes goal 0, as `_EscortAI` writes goal and sub 0
+    /// for a ship of AI type above 4 whose leader is gone
+    /// (@0x83917-0x8397b): `_DamageShip`'s leader clear (@0x3afdd) keeps
+    /// its type. Without it, a disabled holding escort the fleet lost and
+    /// later repaired would wait for good.
     pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
         let Some(index) = self.fleet.iter().position(|&placed| placed == Some(id)) else {
             return false;
@@ -622,6 +627,9 @@ impl Session {
         }
         if let Some(npc) = self.npc_mut(id) {
             npc.escort = None;
+            if npc.goal == Goal::Wait {
+                npc.goal = Goal::Idle;
+            }
         }
         self.reform();
         true
@@ -1984,7 +1992,7 @@ mod tests {
             fly(&mut session, &catalog, weaving(tick));
         }
         let warship = escort_npcs(&session)[0];
-        assert_eq!(warship.goal, Goal::Idle);
+        assert_eq!(warship.goal, Goal::Wait, "the hold's goal 6");
         assert!(
             (warship.state.position - held).length() < 1.0,
             "it stayed put"
@@ -2013,7 +2021,7 @@ mod tests {
         assert!(
             escort_npcs(&session)
                 .iter()
-                .all(|npc| npc.goal == Goal::Idle)
+                .all(|npc| npc.goal == Goal::Wait)
         );
         session.command_escorts(EscortGroup::All, EscortCommand::Recall);
         assert_eq!(orders(&session), [None, None]);
@@ -2538,6 +2546,24 @@ mod tests {
             Some(PersonId(700)),
             "its link kept"
         );
+    }
+
+    #[test]
+    fn a_holding_escort_that_leaves_the_fleet_takes_goal_0() {
+        // Its leader gone, `_EscortAI` writes goal 0 and sub 0 for a ship
+        // of AI type above 4 (@0x83917-0x8397b), which `_DamageShip`'s
+        // leader clear (@0x3afdd) leaves it.
+        let catalog = with_ace();
+        for (goal, left) in [
+            (Goal::Wait, Goal::Idle),
+            (Goal::Attack(ShipRef::Player), Goal::Attack(ShipRef::Player)),
+        ] {
+            let mut session = flying_ace(&catalog);
+            let ace = session.fleet[0].expect("placed");
+            session.npc_mut(ace).expect("here").goal = goal;
+            assert!(session.unfleet(ace));
+            assert_eq!(session.npc(ace).expect("here").goal, left, "{goal:?}");
+        }
     }
 
     #[test]
