@@ -43,7 +43,7 @@
 //!     above [`DOCK_WAIT`] it holds; above none, under goal 0xd it would
 //!     plunder ([`DockOutcome::Completed`], @0x86f3c-0x86f93: never reached
 //!     by a pirate, whose think turns a boarded victim's plunder into goal
-//!     4 first), under goal 0xf it repairs the player
+//!     4 first), under goal 0xf it repairs its nav, the player or an NPC
 //!     ([`DockOutcome::Repaired`], @0x86d84-0x86f37, see
 //!     [`repair_dock`](crate::traffic::repair_dock)), under goal 4 or 9
 //!     nothing; at none, unless drifting (goal 0xe),
@@ -58,7 +58,7 @@
 //! rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit's;
 //! sub 0xb's formation branch (@0x87364-0x873a3) is
 //! rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. A ship
-//! repairing the player flies these substates too, by its own high level
+//! repairing the player, or an NPC, flies these substates too, by its own high level
 //! ([`repair_dock::high_level`](crate::traffic::repair_dock::high_level)),
 //! and a ship refuelling another flies subs 0xb and 1, the stop
 //! ([`DockSub::Stop`], [`refuel_dock`](crate::traffic::refuel_dock)).

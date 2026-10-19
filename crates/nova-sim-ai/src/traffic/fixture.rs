@@ -119,14 +119,16 @@ pub fn calls_on_line(work: &[OnLine]) -> Vec<(NpcId, CommCall, f32)> {
 pub mod assisting {
     use std::cell::RefCell;
 
-    use crate::ai::{Behaviour, Goal, PlayerSide, Surroundings};
+    use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings, react};
     use crate::chance::Chance;
+    use crate::combat::Strike;
     use crate::combat::hull::Condition;
     use crate::traffic::World;
     use crate::traffic::npc::{Npc, NpcId};
 
     /// Logs each ship it decides for, keeping its goal, or waiting (state 6)
-    /// when it has none.
+    /// when it has none; answers a hit as every AI type's victim does
+    /// ([`react::victim`]).
     #[derive(Debug, Default)]
     pub struct Recording {
         /// The ships decided for, in order.
@@ -141,6 +143,10 @@ pub mod assisting {
             } else {
                 npc.goal
             }
+        }
+
+        fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+            react::victim(npc, strike, around)
         }
     }
 

@@ -71,6 +71,7 @@ impl Session {
             PirateEvent::PlayerDockedWith { .. } => self.player_boarded = true,
             PirateEvent::PlunderPlayer { pirate } => self.plundered_by(pirate, chance),
             PirateEvent::PlayerRepaired { helper, ship } => self.repaired_by(helper, ship),
+            PirateEvent::NpcRepaired { ship, .. } => self.npc_repaired(ship),
             PirateEvent::Plundered { line, taken, .. } => {
                 if let Some(line) = line {
                     self.say_stolen_cargo(line.tons, line.credits);

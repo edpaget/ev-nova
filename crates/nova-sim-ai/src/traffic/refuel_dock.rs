@@ -41,6 +41,11 @@
 //! a full tank is done too
 //! ([`RuleKey::RefuelCap`](crate::RuleKey::RefuelCap)).
 //!
+//! An NPC's hit on a refueller retargets it at its attacker
+//! (`_DamageShip` @0x3bcf6) with no goal write, so it then boxes on and
+//! refuels that ship, silently; the player's hit turns it on the player
+//! (goal 4, see [`react`](crate::ai::react)).
+//!
 //! The refuel's high level runs on each of its thinks though an
 //! assister decides nothing, provoked or not, as the repair's does
 //! ([`repair_dock`](crate::traffic::repair_dock)). The ships refuelling run

@@ -29,7 +29,11 @@
 //!   victim (`_AIPlunderShipContents` @0x84872-0x8488d); and the player's
 //!   boarding's or capture's drop of the ships after its ship
 //!   (`_AIShipBoardedByPlayer` @0x897e6-0x8980f, `_AIShipCapturedByPlayer`
-//!   @0x896c5-0x896fa).
+//!   @0x896c5-0x896fa); and every victim the player's hit turns on it
+//!   (`_AIMakeShipAttackPlayer` @0x89d47, from `_DamageShip` @0x3be69;
+//!   the traffic's reaction), an assister included. The
+//!   `_AIMakeShipStopRefuelling` that follows it (@0x3bec7, its -1
+//!   @0x833ba) never acts, as it needs goal 9 or 0xf and finds goal 4.
 //! - **Kept**: the head drop (@0x8c32a-0x8c330), the disabled-warship drop
 //!   (@0x8c839-0x8c842), an attack, and every goal the think keeps.
 //!
@@ -49,9 +53,7 @@
 //! escort's +0x6c, its leader's slot, and `_AIDispatch`'s disabled-ship
 //! reset (@0x8feda-0x8ff13), which
 //! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-4-escort-travel-stellar-into-pirate-think
-//! owns; the player's hit on an assister (`_AIMakeShipStopRefuelling`
-//! @0x833ba), rdm:phase/combat-ai-fidelity/phase-26-assister-hit's; and the
-//! session's writes that replace a `Land` goal without a decision, which
+//! owns; and the session's writes that replace a `Land` goal without a decision, which
 //! [`take`] never sees.
 
 use crate::ai::Goal;

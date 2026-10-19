@@ -321,3 +321,37 @@ fn the_refuel_cap_reading_ends_a_full_tanks_refuel() {
     assert_eq!(uncapped.take_fuel_given(), 1.0, "past the tank");
     assert_eq!(ship(&uncapped, HELPER).goal, Goal::Assist(Help::Refuel));
 }
+
+#[test]
+fn an_npcs_hit_turns_a_refueller_onto_its_attacker_which_it_boxes_on_and_refuels() {
+    let helper = refueller(HELPER.0, 1, (10.0, 0.0), (0.0, 0.0), 0.0);
+    let mut attacker = npc(2, ShipStats::new(FAST, &[]));
+    attacker.berth = 2;
+    attacker.reserves.fuel = Gauge {
+        now: 99.5,
+        max: 300.0,
+    };
+    let mut traffic = traffic_of(vec![helper, attacker]);
+    let recording = Recording::default();
+    let world = world(40.0, 300.0, RuleSource::Engine);
+    traffic.tick_in(
+        &recording,
+        world,
+        &[crate::combat::fixture::strike(
+            ShipRef::Npc(HELPER),
+            ShipRef::Npc(NpcId(2)),
+        )],
+        &mut Scripted::default(),
+    );
+    let turned = ship(&traffic, HELPER);
+    assert_eq!(turned.goal, Goal::Assist(Help::Refuel), "no goal write");
+    assert_eq!(turned.target, Some(ShipRef::Npc(NpcId(2))), "@0x3bcf6");
+    assert_eq!(turned.provoked, 12.0);
+    assert_eq!(ship(&traffic, NpcId(2)).reserves.fuel.now, 100.5);
+    assert_eq!(traffic.take_fuel_given(), 0.0, "none to the player");
+    tick(&mut traffic, &recording, &world);
+    assert_eq!(ship(&traffic, NpcId(2)).reserves.fuel.now, 100.5, "done");
+    assert_eq!(traffic.take_on_line(), [], "silent");
+    assert_eq!(ship(&traffic, HELPER).goal, Goal::Idle);
+    assert_eq!(ship(&traffic, HELPER).target, None);
+}

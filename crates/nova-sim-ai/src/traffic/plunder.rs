@@ -100,6 +100,16 @@ pub enum PirateEvent {
         /// Its ship type, whose `CommName` the line names.
         ship: ShipId,
     },
+    /// A ship docked with a disabled NPC repaired it (`_LowLevelAIHandler`
+    /// @0x86d84-0x86dcf with an NPC nav; see [`repair_dock`]): the session
+    /// unboards the NPC and raises its armour until it is no longer
+    /// disabled, silently (@0x86dd4 skips the line and sound).
+    NpcRepaired {
+        /// The repairer.
+        helper: NpcId,
+        /// The ship it repaired.
+        ship: NpcId,
+    },
     /// A pirate plunders the player: the session takes its cargo and
     /// credits, says the line and fails its missions.
     PlunderPlayer {
@@ -129,7 +139,7 @@ impl PirateEvent {
             Self::PlayerDockedWith { pirate }
             | Self::PlunderPlayer { pirate }
             | Self::Plundered { pirate, .. } => pirate,
-            Self::PlayerRepaired { helper, .. } => helper,
+            Self::PlayerRepaired { helper, .. } | Self::NpcRepaired { helper, .. } => helper,
         }
     }
 }
@@ -173,12 +183,10 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
         };
     }
     if npc.goal == Goal::Assist(Help::Repair) {
-        return repair_dock::high_level(npc, around).map_or(HighLevel::Skipped, |step| {
-            HighLevel::Docks {
-                ship: ShipRef::Player,
-                step,
-            }
-        });
+        return match (repair_dock::high_level(npc, around), npc.target) {
+            (Some(step), Some(ship)) => HighLevel::Docks { ship, step },
+            _ => HighLevel::Skipped,
+        };
     }
     let Goal::Plunder { ship, .. } = npc.goal else {
         return HighLevel::Fights;

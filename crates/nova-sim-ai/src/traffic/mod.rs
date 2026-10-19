@@ -83,7 +83,7 @@
 //!    entering a gate or one assisting the player runs too);
 //!    then each NPC's high level, a
 //!    docking or its fight, none while its AI wait runs, and each drift's
-//!    step, [`plunder::drift`]; a ship repairing the player flies its high
+//!    step, [`plunder::drift`]; a ship repairing a ship flies its high
 //!    level, its docking with the ship it targets, though it decides
 //!    nothing, [`repair_dock`], and so does one refuelling a ship,
 //!    its refuel run in berth order after every other high level,
@@ -107,7 +107,8 @@
 //!    assists, or escorts in formation), a fighter docking its carrier,
 //!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
 //!    started boarding the victim, a repairer's dock done repairing the
-//!    player ([`PirateEvent::PlayerRepaired`]), and a tick off each flying ship's AI
+//!    player ([`PirateEvent::PlayerRepaired`]) or an NPC
+//!    ([`PirateEvent::NpcRepaired`]), and a tick off each flying ship's AI
 //!    wait, a pirate's count wait's included ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
@@ -1334,7 +1335,7 @@ impl Traffic {
     ) -> Vec<Outcome> {
         let speeds = self.top_speeds(world);
         let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
-        let mut repaired: Vec<(NpcId, ShipId)> = Vec::new();
+        let mut repaired: Vec<(NpcId, ShipId, ShipRef)> = Vec::new();
         let disabled: BTreeSet<NpcId> = self
             .npcs
             .iter()
@@ -1382,8 +1383,11 @@ impl Traffic {
                         return Outcome::Flying;
                     }
                     Some(DockOutcome::Repaired) => {
+                        // Its nav, the ship it repaired, before the
+                        // completion clears it (@0x86d84, @0x86f31).
+                        let nav = npc.docking.map_or(ShipRef::Player, |docking| docking.ship);
                         repair_dock::complete(npc);
-                        repaired.push((npc.id, npc.ship));
+                        repaired.push((npc.id, npc.ship, nav));
                         return Outcome::Flying;
                     }
                     Some(_) => return Outcome::Flying,
@@ -1408,8 +1412,14 @@ impl Traffic {
             })
             .collect();
         self.dock_starts(&docked);
-        for (helper, ship) in repaired {
-            self.queue_pirate(PirateEvent::PlayerRepaired { helper, ship });
+        for (helper, ship, nav) in repaired {
+            self.queue_pirate(match nav {
+                ShipRef::Player => PirateEvent::PlayerRepaired { helper, ship },
+                ShipRef::Npc(repaired) => PirateEvent::NpcRepaired {
+                    helper,
+                    ship: repaired,
+                },
+            });
         }
         outcomes
     }
@@ -1748,6 +1758,12 @@ impl Traffic {
                     self.turn_with_quote(id, view);
                 }
                 let npc = &mut self.npcs[at];
+                if attacks_player {
+                    // `_AIMakeShipAttackPlayer`'s +0x6c = -1 (@0x89d47),
+                    // whatever the ship was doing: a ship held at its gate
+                    // loses its gate there too (`Npc::hold_at_gate`).
+                    npc.travel_set = false;
+                }
                 if on_itself {
                     autopilot::cut_wait(npc);
                 }

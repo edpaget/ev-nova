@@ -1,4 +1,5 @@
-//! A ship docking with the disabled player to repair it: goal 0xf's block
+//! A ship docking with the disabled player to repair it, or with the
+//! disabled NPC a hit turned it on: goal 0xf's block
 //! of `_HighLevelAIHandler` (@0x8f6d4-0x8f82f in the `EV Nova` executable,
 //! [`high_level`]) and the repair half of `_LowLevelAIHandler`'s sub 0xf
 //! (@0x86d4f-0x86f37, [`complete`]). The docking itself, its substates
@@ -6,23 +7,28 @@
 //!
 //! - **The high level** ([`high_level`]), on each think while its AI wait
 //!   is out (@0x8d4b9-0x8d4d2 returns for every goal but 10 and 0xe while
-//!   it runs). With no target nothing changes (@0x8f6e9). With the player
-//!   gone or no longer disabled (@0x8f702-0x8f715) it gives up: goal 0,
-//!   sub 0, target and nav -1 (@0x8f717-0x8f732). Otherwise nav = the
-//!   player (@0x8f74c) and, within [`repair_box`] of it on both axes,
+//!   it runs). With no target nothing changes (@0x8f6e9). Its target is
+//!   any ship: the player it was asked to repair, or the NPC an NPC's hit
+//!   turned it on (`_DamageShip` @0x3bcf6). With that ship gone or not
+//!   disabled (@0x8f702-0x8f715, `_IsDisabled`: disabled or breaking up)
+//!   it gives up: goal 0, sub 0, target and nav -1 (@0x8f717-0x8f732), so
+//!   a hit by an intact ship ends the help. Otherwise nav = the target
+//!   (@0x8f74c) and, within [`repair_box`] of it on both axes,
 //!   inclusive, it docks (sub 0xf, @0x8f815); otherwise it closes (sub 0xb,
 //!   @0x8f823). There is no approach (sub 9): the box is 2-way, not the
 //!   plunder's 3-way one.
 //! - **The dock** is the plunder's sub 0xf: inside 3 pixels with no wait
-//!   left, the player is boarded and the wait is `Rand(80)` + 100
-//!   (@0x86fa4-0x8700a).
+//!   left, the ship (the player or an NPC) is boarded and the wait is
+//!   `Rand(80)` + 100 (@0x86fa4-0x8700a).
 //! - **The completion** ([`complete`]): docked, with its wait above none and
 //!   at most [`DOCK_WAIT`](plunder_dock::DOCK_WAIT) (@0x86d54-0x86d6d), the
-//!   player is unboarded (@0x86d92), its armour raised [`REPAIR_STEP`] at a
-//!   time while it is disabled (@0x86d9c-0x86dcf), and "`CommName`:  Repairs
-//!   complete, `ship name`." said for 240 ticks with `snd ` 151
-//!   (@0x86ddf-0x86ef4): the session's, from
-//!   [`PirateEvent::PlayerRepaired`](crate::traffic::plunder::PirateEvent::PlayerRepaired).
+//!   ship is unboarded (@0x86d92), its armour raised [`REPAIR_STEP`] at a
+//!   time while it is disabled (@0x86d9c-0x86dcf), and, for the player
+//!   alone (@0x86dd4), "`CommName`:  Repairs complete, `ship name`." said
+//!   for 240 ticks with `snd ` 151 (@0x86ddf-0x86ef4): the session's, from
+//!   [`PirateEvent::PlayerRepaired`](crate::traffic::plunder::PirateEvent::PlayerRepaired),
+//!   or silently for an NPC, from
+//!   [`PirateEvent::NpcRepaired`](crate::traffic::plunder::PirateEvent::NpcRepaired).
 //!   The repairer then drifts (goal 0xe) with a wait of [`REPAIR_HOLD`],
 //!   its target, nav and substate cleared (@0x86f09-0x86f31).
 //!
@@ -40,14 +46,16 @@
 //! Left out: the ×4 box for an inertialess repairer (@0x8f781-0x8f797),
 //! which needs sub 0xf's inertialess branch,
 //! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-3-inertialess-repair-box.
-//! Not built, as unreachable: the completion's path for an NPC nav and
-//! goal 0xf against an NPC target, as only `_AIMakeShipRepairPlayer`
-//! (@0x82df2) sets goal 0xf, always at the player. The `_statusRedraw`
-//! writes and +0x8c -1 are recorded only. The original's armour loop has
+//! Only `_AIMakeShipRepairPlayer` (@0x82df2) sets goal 0xf, always at the
+//! player; the NPC target comes from a hit's retarget, which names the
+//! strike's maker whatever its state, so a shot from a ship since disabled
+//! turns the repairer on a disabled NPC. The `_statusRedraw` writes and
+//! +0x8c -1 are recorded only. The original's armour loop has
 //! no cap; the session's stops at the armour's most, so a disable rule
 //! that never lets the ship fly still ends.
 
 use crate::ai::{Goal, Surroundings};
+use crate::combat::hull::Condition;
 use crate::hail::Help;
 use crate::traffic::npc::Npc;
 #[cfg(doc)]
@@ -74,18 +82,18 @@ pub fn repair_box(class_turn: f32) -> i32 {
     side
 }
 
-/// The high level of `npc`'s repair of the player among `around` (see the
-/// module docs): none when it is no repair or has no target.
+/// The high level of `npc`'s repair of the ship it targets among `around`
+/// (see the module docs): none when it is no repair or has no target.
 #[must_use]
 pub fn high_level(npc: &Npc, around: &Surroundings) -> Option<DockStep> {
     if npc.goal != Goal::Assist(Help::Repair) {
         return None;
     }
-    npc.target?;
+    let ship = npc.target?;
     let Some(at) = around
-        .player
-        .filter(|player| player.condition.disabled())
-        .map(|player| player.state.position)
+        .state_of(ship)
+        .filter(|_| around.condition_of(ship).is_some_and(Condition::disabled))
+        .map(|state| state.position)
     else {
         return Some(DockStep::GiveUp);
     };
@@ -119,12 +127,12 @@ mod tests {
     use super::*;
     use crate::ai::PlayerSide;
     use crate::combat::ShipRef;
-    use crate::combat::hull::Condition;
     use crate::combat::hull::class_turn;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::World;
     use crate::traffic::fixture::npc;
+    use crate::traffic::npc::NpcId;
     use crate::traffic::plunder_dock::Docking;
     use nova_sim_base::fixture::FAST;
 
@@ -206,6 +214,74 @@ mod tests {
         assert_eq!(
             step(&ship, Some(&player(0.0, 0.0, Condition::Disabled))),
             Some(DockStep::Sub(DockSub::Dock))
+        );
+    }
+
+    /// The high level of `ship`, its target NPC 2 at (`x`, `y`) in
+    /// `condition`, with the player disabled at the centre.
+    fn step_at_npc(ship: &Npc, x: f32, y: f32, condition: Condition) -> Option<DockStep> {
+        let mut ship = ship.clone();
+        ship.target = Some(ShipRef::Npc(NpcId(2)));
+        let mut other = npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = Vec2::new(x, y);
+        other.condition = condition;
+        let npcs = [ship, other];
+        let world = World {
+            player: Some(player(0.0, 0.0, Condition::Disabled)),
+            ..World::new(&[])
+        };
+        high_level(&npcs[0], &world.around(&npcs))
+    }
+
+    #[test]
+    fn a_repair_whose_target_is_an_intact_npc_gives_up() {
+        let ship = repairer(0.0, 0.0);
+        assert_eq!(
+            step_at_npc(&ship, 0.0, 0.0, Condition::Intact),
+            Some(DockStep::GiveUp)
+        );
+        assert_eq!(
+            step_at_npc(&ship, 0.0, 0.0, Condition::Destroyed),
+            Some(DockStep::GiveUp)
+        );
+        let mut gone = ship;
+        gone.target = Some(ShipRef::Npc(NpcId(7)));
+        let world = World {
+            player: Some(player(0.0, 0.0, Condition::Disabled)),
+            ..World::new(&[])
+        };
+        let npcs = [gone];
+        assert_eq!(
+            high_level(&npcs[0], &world.around(&npcs)),
+            Some(DockStep::GiveUp),
+            "a ship gone, @0x8f702"
+        );
+    }
+
+    #[test]
+    fn a_repair_whose_target_is_a_disabled_npc_docks_or_closes_on_it() {
+        let ship = repairer(1000.0, 0.0);
+        assert_eq!(
+            step_at_npc(&ship, 1260.0, -260.0, Condition::Disabled),
+            Some(DockStep::Sub(DockSub::Dock)),
+            "the box measured from the NPC, not the player"
+        );
+        assert_eq!(
+            step_at_npc(&ship, 1260.5, 0.0, Condition::Disabled),
+            Some(DockStep::Sub(DockSub::Close))
+        );
+        assert_eq!(
+            step_at_npc(
+                &ship,
+                1000.0,
+                0.0,
+                Condition::Dying {
+                    ticks_left: 5,
+                    starting: false
+                }
+            ),
+            Some(DockStep::Sub(DockSub::Dock)),
+            "breaking up reads as `_IsDisabled`"
         );
     }
 

@@ -1,10 +1,12 @@
-//! Tests of a ship repairing the player as the traffic's tick flies it (see
+//! Tests of a ship repairing the player, or an NPC, as the traffic's tick flies it (see
 //! [`repair_dock`](crate::traffic::repair_dock)): its high level, the dock
 //! it shares with the plunder, the completion and the drift after.
+#![allow(clippy::float_cmp)]
 
 use super::Traffic;
 use crate::ai::Goal;
 use crate::combat::ShipRef;
+use crate::combat::fixture::strike;
 use crate::combat::hull::Condition;
 use crate::flight::FlightRules;
 use crate::geometry::Vec2;
@@ -257,4 +259,168 @@ fn a_repairer_flies_its_high_level_only_on_its_due_ticks() {
         Some(DockSub::Close),
         "tick 1 is due"
     );
+}
+
+/// NPC 2 at (`x`, `y`) in `condition`.
+fn other(x: f32, y: f32, condition: Condition) -> Npc {
+    let mut ship = npc(2, ShipStats::new(FAST, &[]));
+    ship.berth = 2;
+    ship.state.position = Vec2::new(x, y);
+    ship.condition = condition;
+    ship
+}
+
+/// `traffic` a tick on with the player in `condition`, answering
+/// `strikes`, rolling `rolls`.
+fn tick_struck(
+    traffic: &mut Traffic,
+    behaviour: &(impl crate::ai::Behaviour + ?Sized),
+    condition: Condition,
+    strikes: &[crate::combat::Strike],
+    rolls: &[u16],
+) {
+    traffic.tick_in(
+        behaviour,
+        world(condition),
+        strikes,
+        &mut Scripted::rolling(rolls),
+    );
+}
+
+#[test]
+fn an_npcs_hit_on_a_closing_repairer_makes_it_give_up_and_go_idle_still_provoked() {
+    let mut traffic = repairing(1000.0, 0.0);
+    traffic.npcs[0].travel_set = true;
+    traffic.npcs.push(other(3000.0, 0.0, Condition::Intact));
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    assert_eq!(
+        helper(&traffic).docking.map(|docking| docking.sub),
+        Some(DockSub::Close)
+    );
+    tick_struck(
+        &mut traffic,
+        &recording,
+        Condition::Disabled,
+        &[strike(ShipRef::Npc(HELPER), ShipRef::Npc(NpcId(2)))],
+        &[],
+    );
+    let gave_up = helper(&traffic);
+    assert_eq!(
+        (gave_up.goal, gave_up.target, gave_up.docking),
+        (Goal::Idle, None, None),
+        "its target intact, @0x8f702-0x8f732"
+    );
+    assert!(!gave_up.travel_set, "nav -1, @0x8f732");
+    assert_eq!(gave_up.provoked, 12.0, "still provoked");
+    assert!(
+        !recording.decided.borrow().contains(&HELPER),
+        "it never thought"
+    );
+    // The wimpy trader's next think reads target -1 as unprovoked
+    // (`provoked_by` needs a live ship): no flight.
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    let next = helper(&traffic).goal;
+    tick_struck(
+        &mut traffic,
+        &crate::ai::nova::NovaAi::default(),
+        Condition::Disabled,
+        &[],
+        &[0; 8],
+    );
+    assert!(
+        !matches!(helper(&traffic).goal, Goal::Flee(_)),
+        "{:?} after {:?}",
+        helper(&traffic).goal,
+        next
+    );
+}
+
+#[test]
+fn a_repairer_hit_by_a_disabled_npc_docks_with_it_boards_it_and_repairs_it_silently() {
+    let mut traffic = repairing(2.0, 0.0);
+    traffic.npcs.push(other(0.0, 0.0, Condition::Disabled));
+    let recording = Recording::default();
+    // A shot fired before NPC 2 was disabled still names it (the
+    // reaction reads no attacker condition, @0x3b408-0x3b46e).
+    tick_struck(
+        &mut traffic,
+        &recording,
+        Condition::Intact,
+        &[strike(ShipRef::Npc(HELPER), ShipRef::Npc(NpcId(2)))],
+        &[0],
+    );
+    assert_eq!(
+        traffic.take_pirate_events(),
+        [],
+        "an NPC's board is no event"
+    );
+    let docked = helper(&traffic);
+    assert_eq!(docked.target, Some(ShipRef::Npc(NpcId(2))));
+    assert_eq!(
+        docked.docking,
+        Some(Docking {
+            ship: ShipRef::Npc(NpcId(2)),
+            sub: DockSub::Dock
+        })
+    );
+    assert!(
+        traffic.npcs()[1].boarded,
+        "the dock start boards it, @0x86fc7"
+    );
+    tick(&mut traffic, &recording, Condition::Intact, &[]);
+    assert_eq!(
+        traffic.take_pirate_events(),
+        [PirateEvent::NpcRepaired {
+            helper: HELPER,
+            ship: NpcId(2)
+        }],
+        "no PlayerRepaired"
+    );
+    let done = helper(&traffic);
+    assert_eq!(done.goal, Goal::Drift);
+    assert_eq!((done.target, done.docking), (None, None));
+}
+
+#[test]
+fn the_players_hit_on_a_docked_repairer_turns_it_without_repairing_and_it_leaves_after_the_cut_wait()
+ {
+    let mut traffic = repairing(2.0, 0.0);
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Disabled, &[79]);
+    assert_eq!(helper(&traffic).ai_wait, 178, "docked");
+    let _ = traffic.take_pirate_events();
+    tick_struck(
+        &mut traffic,
+        &recording,
+        Condition::Disabled,
+        &[strike(ShipRef::Npc(HELPER), ShipRef::Player)],
+        &[],
+    );
+    let turned = helper(&traffic);
+    assert_eq!(turned.goal, Goal::Attack(ShipRef::Player));
+    assert_eq!(
+        turned.ai_wait,
+        crate::traffic::autopilot::HIT_WAIT - 1,
+        "cut to 20, then a tick off"
+    );
+    let mut ticks = 1;
+    while helper(&traffic).ai_wait > 0 {
+        assert_eq!(
+            helper(&traffic).docking.map(|docking| docking.sub),
+            Some(DockSub::Dock),
+            "held docked, tick {ticks}"
+        );
+        tick(&mut traffic, &recording, Condition::Disabled, &[]);
+        assert_eq!(traffic.take_pirate_events(), [], "no repair, tick {ticks}");
+        ticks += 1;
+    }
+    assert_eq!(ticks, crate::traffic::autopilot::HIT_WAIT);
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    assert_eq!(
+        helper(&traffic).docking,
+        None,
+        "goal 4's high level drops it"
+    );
+    assert_eq!(traffic.take_pirate_events(), []);
 }
