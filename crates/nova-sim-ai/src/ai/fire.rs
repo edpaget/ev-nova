@@ -83,7 +83,10 @@
 //!   [`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead)'s other
 //!   reading, its last gun), else the bearing; rushing, the bearing;
 //!   breaking off, its break heading; fleeing close, the bearing from its
-//!   attacker to itself.
+//!   attacker to itself. Each lead reads its weapon's global record
+//!   ([`Surroundings::weapons`], `0x3b517c[index × 0xc8]`, @0x85e4c-0x85e59,
+//!   @0x2b06a-0x2b075), whether or not the ship carries it, as a reused
+//!   slot's pick may name one it doesn't.
 //! - **A gun** (guidance -1, 0 and 6; a homing weapon only while no other
 //!   gun of the target's planet-type has its ammunition, @0x7ffaa-0x8001c,
 //!   @0x80243): none at a target the shooter does not see
@@ -149,6 +152,9 @@
 //! # Not modelled
 //!
 //! - The difficulty reload multiplier against the player.
+//! - A lead's weapon of no record: the original indexes the global table
+//!   with it anyway and reads whatever memory is there (@0x85e4c-0x85e59,
+//!   @0x2b06a-0x2b075). Here it leads with nothing, the table bearing.
 //! - A full turret's (3 and 4) blind-spot angle, which `_AIFireTurret`
 //!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
 //!   @0x80c5b), else uninitialised stack: here the bearing.
@@ -280,27 +286,22 @@ fn forward(spec: &WeaponSpec) -> bool {
     )
 }
 
-/// The spec of `weapon` among `npc`'s own mounts, if it carries it.
-fn carried(npc: &Npc, weapon: WeaponId) -> Option<&WeaponSpec> {
-    npc.armament
-        .mounts()
-        .iter()
-        .find(|mount| mount.spec.id == weapon)
-        .map(|mount| &mount.spec)
-}
-
 /// The whole-degree heading a dogfighter wants at a ship at `at`, holding
 /// `pick` as its pick (+0x72) before its passes (@0x85e3c-0x85f0d): the
 /// lead for a pick of guidance -1 or 6, the table bearing for any other,
 /// and with no pick the lead for its last gun
-/// ([`Armament::last_gun`], +0xc8da), or the bearing with none. A weapon
-/// it does not carry leads with nothing here (see the module docs).
+/// ([`Armament::last_gun`], +0xc8da), or the bearing with none. Each
+/// weapon is read from `weapons`, the global records, as the original
+/// reads `0x3b517c[pick × 0xc8]` (@0x85e4c-0x85e59, @0x2b06a-0x2b075),
+/// whether or not the ship carries it; one with no record leads with
+/// nothing (see the module docs).
 #[must_use]
-pub fn dogfight_lead(npc: &Npc, at: &ShipState, pick: Option<WeaponId>) -> i16 {
+pub fn dogfight_lead(npc: &Npc, at: &ShipState, pick: Option<WeaponId>, weapons: &Arsenal) -> i16 {
     let weapon = match pick {
-        Some(pick) => carried(npc, pick)
+        Some(pick) => weapons
+            .weapon(pick)
             .filter(|spec| matches!(spec.guidance, Guidance::Unguided | Guidance::Rocket)),
-        None => npc.armament.last_gun().and_then(|gun| carried(npc, gun)),
+        None => npc.armament.last_gun().and_then(|gun| weapons.weapon(gun)),
     };
     lead(npc, at, weapon)
 }
@@ -312,13 +313,15 @@ pub fn dogfight_lead(npc: &Npc, at: &ShipState, pick: Option<WeaponId>) -> i16 {
 /// (`_CalcLeadAngle` gets +0x72, @0x86822-0x86858, the bearing with no
 /// pick, as `_CalcLeadAngle` returns at once for -1, @0x2b05b), or for
 /// that last gun by the other reading; with none, the table bearing
-/// (@0x8685f-0x86883).
+/// (@0x8685f-0x86883). The weapon is read from `weapons`, the global
+/// records (@0x2b067-0x2b075), whether or not the ship carries it.
 #[must_use]
 pub fn approach_lead(
     npc: &Npc,
     at: &ShipState,
     pick: Option<WeaponId>,
     reading: RuleSource,
+    weapons: &Arsenal,
 ) -> i16 {
     let Some(last) = npc.armament.last_gun() else {
         return lead(npc, at, None);
@@ -327,7 +330,7 @@ pub fn approach_lead(
         RuleSource::Engine => pick,
         RuleSource::Bible => Some(last),
     };
-    lead(npc, at, weapon.and_then(|weapon| carried(npc, weapon)))
+    lead(npc, at, weapon.and_then(|weapon| weapons.weapon(weapon)))
 }
 
 /// The pick `npc` holds as its low level starts among `around`: the bay
@@ -600,6 +603,7 @@ fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
             &at,
             disabled_not_dying(around, ship),
             swarm::lead(npc, around),
+            around.weapons,
         )
         .is_some_and(|frame| frame.iter().any(|body| body.manoeuvre == Manoeuvre::Snipe))
     })
@@ -662,7 +666,13 @@ fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
         return false;
     };
     let swarm = swarm::lead(npc, around);
-    let Some(frame) = pursuit::frame_of(npc, &at, disabled_not_dying(around, ship), swarm) else {
+    let Some(frame) = pursuit::frame_of(
+        npc,
+        &at,
+        disabled_not_dying(around, ship),
+        swarm,
+        around.weapons,
+    ) else {
         return false;
     };
     frame.iter().any(|body| match body.manoeuvre {
@@ -844,6 +854,7 @@ fn sight<'a>(
         &sight.at,
         disabled_not_dying(around, ship),
         swarm::lead(npc, around),
+        around.weapons,
     )?;
     Some((sight, frame))
 }
@@ -1766,19 +1777,35 @@ mod tests {
     /// a tick), a rocket (129), a turret (130, 20 a tick), a missile (131)
     /// and a beam (132), with `goal`.
     fn leading(goal: Goal) -> Npc {
-        let mut npc = shooter(
-            &[
-                gun(128, 1, 1),
-                guided(129, 6),
-                WeaponRecord {
-                    speed: 2000,
-                    ..guided(130, 4)
-                },
-                missile(131),
-                guided(132, 0),
-            ],
-            goal,
-        );
+        let mut npc = shooter(&leading_records(), goal);
+        npc.state.velocity = Vec2::new(-1.0, 0.0);
+        npc
+    }
+
+    /// The weapons [`leading`]'s shooter carries.
+    fn leading_records() -> [WeaponRecord; 5] {
+        [
+            gun(128, 1, 1),
+            guided(129, 6),
+            WeaponRecord {
+                speed: 2000,
+                ..guided(130, 4)
+            },
+            missile(131),
+            guided(132, 0),
+        ]
+    }
+
+    /// The global weapon records of [`leading`]'s weapons.
+    fn records() -> Arsenal {
+        Arsenal::new(&leading_records(), Vec::new())
+    }
+
+    /// [`leading`]'s shooter carrying nothing, which a reused slot's pick
+    /// can name a weapon it doesn't carry (see
+    /// [`berth_picks`](crate::traffic::berth_picks)).
+    fn unarmed(goal: Goal) -> Npc {
+        let mut npc = shooter(&[], goal);
         npc.state.velocity = Vec2::new(-1.0, 0.0);
         npc
     }
@@ -1816,19 +1843,26 @@ mod tests {
     fn a_dogfighter_leads_with_a_gun_or_rocket_pick() {
         let npc = leading(ATTACK);
         assert_eq!(trig::table_arctan(-50.0, 100.0), 26);
-        assert_eq!(dogfight_lead(&npc, &crossing(), id(128)), 26);
+        assert_eq!(dogfight_lead(&npc, &crossing(), id(128), &records()), 26);
         let rocket = lead_for(&npc, 129);
         assert_ne!(rocket, 0);
-        assert_eq!(dogfight_lead(&npc, &crossing(), id(129)), rocket);
+        assert_eq!(
+            dogfight_lead(&npc, &crossing(), id(129), &records()),
+            rocket
+        );
     }
 
     #[test]
     fn a_dogfighter_with_no_pick_leads_with_its_last_gun_or_takes_the_bearing() {
         let npc = leading(ATTACK);
-        assert_eq!(dogfight_lead(&npc, &crossing(), None), 0, "no last gun");
+        assert_eq!(
+            dogfight_lead(&npc, &crossing(), None, &records()),
+            0,
+            "no last gun"
+        );
         let fired = having_fired(npc, 128);
         assert_eq!(fired.armament.last_gun(), id(128));
-        assert_eq!(dogfight_lead(&fired, &crossing(), None), 26);
+        assert_eq!(dogfight_lead(&fired, &crossing(), None, &records()), 26);
     }
 
     #[test]
@@ -1836,9 +1870,77 @@ mod tests {
         // Its last gun is not read while it holds a pick (@0x85e43-0x85e6e).
         let npc = having_fired(leading(ATTACK), 128);
         for pick in [130, 131, 132] {
-            assert_eq!(dogfight_lead(&npc, &crossing(), id(pick)), 0, "{pick}");
+            assert_eq!(
+                dogfight_lead(&npc, &crossing(), id(pick), &records()),
+                0,
+                "{pick}"
+            );
         }
         assert_ne!(lead_for(&npc, 130), 0, "though a turret leads");
+    }
+
+    #[test]
+    fn a_dogfighter_leads_with_a_pick_it_does_not_carry_by_its_weapon_record() {
+        // The guidance test reads the global record by the pick's index
+        // (`0x3b517c[+0x72 × 0xc8] + 6`, @0x85e4c-0x85e59), and
+        // `_CalcLeadAngle` its speed (@0x2b06a-0x2b075).
+        let npc = unarmed(ATTACK);
+        assert_eq!(dogfight_lead(&npc, &crossing(), id(128), &records()), 26);
+        let rocket = lead(&npc, &crossing(), records().weapon(WeaponId(129)));
+        assert_ne!(rocket, 0);
+        assert_eq!(
+            dogfight_lead(&npc, &crossing(), id(129), &records()),
+            rocket
+        );
+    }
+
+    #[test]
+    fn a_dogfighter_takes_the_bearing_for_a_pick_it_does_not_carry_of_guidance_other_than_unguided_or_rocket()
+     {
+        let npc = unarmed(ATTACK);
+        for pick in [130, 131, 132] {
+            assert_eq!(
+                dogfight_lead(&npc, &crossing(), id(pick), &records()),
+                0,
+                "{pick}"
+            );
+        }
+        assert_ne!(
+            lead(&npc, &crossing(), records().weapon(WeaponId(130))),
+            0,
+            "though the turret's record leads"
+        );
+    }
+
+    #[test]
+    fn a_dogfighter_with_no_pick_leads_with_its_last_gun_by_its_weapon_record() {
+        // A last gun is read through the global record too (`_CalcLeadAngle`
+        // @0x2b067-0x2b075), never the ship's mount: a record faster than
+        // the mount leads less.
+        let fired = having_fired(leading(ATTACK), 128);
+        let faster = Arsenal::new(
+            &[WeaponRecord {
+                speed: 2000,
+                ..gun(128, 1, 1)
+            }],
+            Vec::new(),
+        );
+        let by_record = lead(&fired, &crossing(), faster.weapon(WeaponId(128)));
+        assert_ne!(by_record, 26);
+        assert_eq!(dogfight_lead(&fired, &crossing(), None, &faster), by_record);
+    }
+
+    #[test]
+    fn a_pick_of_no_weapon_record_takes_the_bearing() {
+        // The original indexes the table with it anyway and reads whatever
+        // is there (@0x85e4c-0x85e59, @0x2b06a-0x2b075): not modelled.
+        let npc = having_fired(leading(ATTACK), 128);
+        let none = Arsenal::default();
+        assert_eq!(dogfight_lead(&npc, &crossing(), id(128), &none), 0);
+        assert_eq!(dogfight_lead(&npc, &crossing(), None, &none), 0);
+        for reading in RuleSource::ALL {
+            assert_eq!(approach_lead(&npc, &crossing(), id(128), reading, &none), 0);
+        }
     }
 
     #[test]
@@ -1847,21 +1949,74 @@ mod tests {
         let npc = leading(ATTACK);
         let at = crossing();
         for reading in RuleSource::ALL {
-            assert_eq!(approach_lead(&npc, &at, id(128), reading), 0, "no last gun");
+            assert_eq!(
+                approach_lead(&npc, &at, id(128), reading, &records()),
+                0,
+                "no last gun"
+            );
         }
         let fired = having_fired(npc, 128);
         let turret = lead_for(&fired, 130);
         assert_ne!(turret, 26);
         assert_eq!(
-            approach_lead(&fired, &at, id(130), RuleSource::Engine),
+            approach_lead(&fired, &at, id(130), RuleSource::Engine, &records()),
             turret
         );
-        assert_eq!(approach_lead(&fired, &at, id(130), RuleSource::Bible), 26);
+        assert_eq!(
+            approach_lead(&fired, &at, id(130), RuleSource::Bible, &records()),
+            26
+        );
         // `_CalcLeadAngle` takes the bearing for a pick of -1 (@0x2b05b) or
         // one outside its gate.
-        assert_eq!(approach_lead(&fired, &at, None, RuleSource::Engine), 0);
-        assert_eq!(approach_lead(&fired, &at, id(131), RuleSource::Engine), 0);
-        assert_eq!(approach_lead(&fired, &at, None, RuleSource::Bible), 26);
+        assert_eq!(
+            approach_lead(&fired, &at, None, RuleSource::Engine, &records()),
+            0
+        );
+        assert_eq!(
+            approach_lead(&fired, &at, id(131), RuleSource::Engine, &records()),
+            0
+        );
+        assert_eq!(
+            approach_lead(&fired, &at, None, RuleSource::Bible, &records()),
+            26
+        );
+    }
+
+    #[test]
+    fn an_approacher_leads_with_a_pick_it_does_not_carry_by_both_readings() {
+        // A gunner carrying its gun alone, its last gun, holding the turret
+        // 130 it doesn't carry: by the engine it leads with 130's record.
+        let mut gunner = shooter(&[gun(128, 1, 1)], ATTACK);
+        gunner.state.velocity = Vec2::new(-1.0, 0.0);
+        let gunner = having_fired(gunner, 128);
+        let turret = lead(&gunner, &crossing(), records().weapon(WeaponId(130)));
+        assert_ne!(turret, 0);
+        assert_ne!(turret, 26);
+        assert_eq!(
+            approach_lead(
+                &gunner,
+                &crossing(),
+                id(130),
+                RuleSource::Engine,
+                &records()
+            ),
+            turret
+        );
+        // By the other reading, its last gun's record: one faster than its
+        // mount leads less.
+        let faster = Arsenal::new(
+            &[WeaponRecord {
+                speed: 2000,
+                ..gun(128, 1, 1)
+            }],
+            Vec::new(),
+        );
+        let by_record = lead(&gunner, &crossing(), faster.weapon(WeaponId(128)));
+        assert_ne!(by_record, 26);
+        assert_eq!(
+            approach_lead(&gunner, &crossing(), id(130), RuleSource::Bible, &faster),
+            by_record
+        );
     }
 
     #[test]
@@ -1886,8 +2041,10 @@ mod tests {
         let mut player = player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0);
         player.state.velocity = Vec2::new(4.0, 0.0);
         let npcs = [npc.clone()];
+        let records = crate::ai::fixture::records_of(&npcs);
         let around = Surroundings {
             player: Some(player),
+            weapons: &records,
             ..Surroundings::new(&[], &npcs)
         };
         let mut stepped = npc.clone();
@@ -2404,8 +2561,10 @@ mod tests {
         player.state.velocity = Vec2::new(4.0, 0.0);
         let wanted = |npc: &Npc| {
             let npcs = [npc.clone()];
+            let records = crate::ai::fixture::records_of(&npcs);
             let around = Surroundings {
                 player: Some(player),
+                weapons: &records,
                 ..Surroundings::new(&[], &npcs)
             };
             let kept = pursuit::step(

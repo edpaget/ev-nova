@@ -233,6 +233,7 @@ mod tests {
             speeds,
             rules,
             crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }

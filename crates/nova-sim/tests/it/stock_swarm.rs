@@ -120,8 +120,10 @@ fn a_stock_fed_anaconda_follows_the_fed_viper_below_it_in_the_ship_table() {
     let mut traffic = Traffic::with_interval(1);
     traffic.add_npc(federal(&data, VIPER, Vec2::new(0.0, 800.0)));
     traffic.add_npc(federal(&data, ANACONDA, Vec2::new(300.0, 800.0)));
+    let arsenal = Arsenal::read(&data);
     let world = World {
         player: Some(player()),
+        weapons: &arsenal,
         ..World::new(&[])
     };
     traffic.tick_in(&AttacksPlayer, world, &[], &mut Ranged::of(&[]));

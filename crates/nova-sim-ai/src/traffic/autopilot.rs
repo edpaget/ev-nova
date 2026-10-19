@@ -205,7 +205,7 @@ use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
-use crate::combat::armament::Trigger;
+use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
@@ -339,15 +339,17 @@ impl TopSpeeds {
 /// `readings` of the disputed rules (a moving sniper with a last gun
 /// turning as [`Readings::snipe_lead`] says, a fleeing ship jumping out as
 /// [`Readings::jump_fuel`] says), the wait a leaderless ship takes after
-/// it rolled on `chance`.
+/// it rolled on `chance`. A fight's frame its step has not worked out
+/// leads by `weapons`, the global weapon records
+/// ([`pursuit::frame_of`]).
 ///
 /// An [`immobile`](Npc::immobile) ship's velocity is set to none before
 /// it flies and its move is undone after, as `_HandleShip` zeroes it and
 /// skips the move (@0x34209-0x3423b) before the AI and the thrust run.
 // Each is a separate input of the tick: the ship, the system's stellars
 // and gate widths, its quarry, whether it is disabled and its swarm lead,
-// its top speeds, the flight rules, the disputed rules' readings and the
-// dice.
+// its top speeds, the flight rules, the disputed rules' readings, the
+// weapon records and the dice.
 #[allow(clippy::too_many_arguments)]
 pub fn fly(
     npc: &mut Npc,
@@ -359,9 +361,10 @@ pub fn fly(
     speeds: TopSpeeds,
     flight: FlightRules,
     readings: Readings,
+    weapons: &Arsenal,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    let rules = (flight, readings);
+    let rules = (flight, readings, weapons);
     let quarry = (other, other_disabled, swarm);
     if !npc.immobile {
         return fly_mobile(npc, sites, type_widths, quarry, speeds, rules, chance);
@@ -375,14 +378,14 @@ pub fn fly(
 
 /// [`fly`] for a ship that may move, at its quarry `(other,
 /// other_disabled, swarm)`, under the flight rules and the disputed rules'
-/// readings `(flight, readings)`.
+/// readings, leading by the weapon records `(flight, readings, weapons)`.
 fn fly_mobile(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     (other, other_disabled, swarm): (Option<&ShipState>, bool, Option<SwarmLead>),
     speeds: TopSpeeds,
-    (flight, readings): (FlightRules, Readings),
+    (flight, readings, weapons): (FlightRules, Readings, &Arsenal),
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let snipe_lead = readings.snipe_lead;
@@ -438,14 +441,14 @@ fn fly_mobile(
         Goal::Plunder { .. } if other_disabled => brake(&state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
-                if let Some(body) = pursuit::frame_of(npc, target, other_disabled, swarm)
+                if let Some(body) = pursuit::frame_of(npc, target, other_disabled, swarm, weapons)
                     .and_then(|frame| frame.last())
                 {
                     let flown = Flown {
                         handling: &handling,
                         inertia,
                     };
-                    fight(npc, target, body, flown, (flight, snipe_lead));
+                    fight(npc, target, body, flown, (flight, snipe_lead, weapons));
                     return Outcome::Flying;
                 }
                 // Fleeing beyond its attacker's reach: state 3's far branch.
@@ -459,7 +462,7 @@ fn fly_mobile(
             }
             // A sniper whose target is gone coasts ([`snipe::fly`]).
             None if matches!(npc.goal, Goal::Snipe(_)) => {
-                snipe::fly(npc, None, &handling, snipe_lead)
+                snipe::fly(npc, None, &handling, snipe_lead, weapons)
             }
             None => brake(&state, &handling, inertia),
         },
@@ -692,7 +695,8 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// [`BREAK_THRUST`] times its acceleration, and rushing (0x11) at
 /// [`RUSH_THRUST`] times it up to [`RUSH_SPEED`] times its top speed;
 /// sniping, it flies as [`snipe::fly`] says, a moving sniper with a last
-/// gun turning as `snipe_lead` says. It flies under `flight` as
+/// gun turning as `snipe_lead` says, leading by that gun's record in
+/// `weapons`. It flies under `flight` as
 /// `flown_by` says ([`step`]); a moving inertialess sniper brakes as
 /// substate 1 does ([`inertialess::brake`]) until
 /// rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit
@@ -702,7 +706,7 @@ fn fight(
     target: &ShipState,
     body: Body,
     flown_by: Flown,
-    (flight, snipe_lead): (FlightRules, RuleSource),
+    (flight, snipe_lead, weapons): (FlightRules, RuleSource, &Arsenal),
 ) {
     let handling = flown_by.handling;
     let window = match body.manoeuvre {
@@ -717,7 +721,7 @@ fn fight(
                 Inertia::Inertialess { .. } if inertialess::moving(npc.state.velocity) => {
                     inertialess::brake(&npc.state)
                 }
-                _ => snipe::fly(npc, Some(target), handling, snipe_lead),
+                _ => snipe::fly(npc, Some(target), handling, snipe_lead, weapons),
             };
             step(npc, handling, controls, flight, flown_by.inertia);
             return;
@@ -1279,6 +1283,7 @@ mod tests {
         speeds: TopSpeeds,
         rules: FlightRules,
     ) -> Outcome {
+        let weapons = crate::ai::fixture::records_of([&*npc]);
         super::fly(
             npc,
             sites,
@@ -1289,6 +1294,7 @@ mod tests {
             speeds,
             rules,
             Readings::default(),
+            &weapons,
             &mut Draws::of(&[]),
         )
     }
@@ -1300,6 +1306,7 @@ mod tests {
         other: Option<&ShipState>,
         speeds: TopSpeeds,
     ) -> Outcome {
+        let weapons = crate::ai::fixture::records_of([&*npc]);
         super::fly(
             npc,
             sites,
@@ -1310,6 +1317,7 @@ mod tests {
             speeds,
             FlightRules::default(),
             Readings::default(),
+            &weapons,
             &mut Draws::of(&[]),
         )
     }
@@ -2092,6 +2100,7 @@ mod tests {
                 top,
                 FlightRules::default(),
                 Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut draws,
             );
             assert!(
@@ -2258,6 +2267,7 @@ mod tests {
             speeds,
             FlightRules::default(),
             Readings::default(),
+            &crate::ai::NO_WEAPONS,
             draws,
         );
         while let Mode::LeavingGate { .. } = ship.mode {
@@ -2271,6 +2281,7 @@ mod tests {
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 draws,
             );
         }
@@ -2307,6 +2318,7 @@ mod tests {
                         speeds,
                         FlightRules::default(),
                         Readings::default(),
+                        &crate::ai::NO_WEAPONS,
                         &mut draws
                     ),
                     Outcome::Flying
@@ -2332,6 +2344,7 @@ mod tests {
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut draws,
             );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
@@ -2383,6 +2396,7 @@ mod tests {
                     speeds,
                     FlightRules::default(),
                     Readings::default(),
+                    &crate::ai::NO_WEAPONS,
                     &mut draws,
                 );
             }
@@ -2401,6 +2415,7 @@ mod tests {
                 speeds,
                 FlightRules::default(),
                 Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut draws,
             );
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
@@ -2488,6 +2503,7 @@ mod tests {
             speeds,
             FlightRules::default(),
             Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }
@@ -3233,6 +3249,7 @@ mod tests {
             &crossing,
             flown.pick,
             RuleSource::Engine,
+            &crate::ai::fixture::records_of([&flown]),
         ));
         assert_eq!(wanted, wanted.trunc(), "a whole degree");
         assert!((wanted - 45.0).abs() < 3.0, "{wanted}");
@@ -3331,6 +3348,7 @@ mod tests {
             speeds,
             FlightRules::default(),
             Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }
@@ -3488,6 +3506,7 @@ mod tests {
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
         );
         let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
+        let records = crate::ai::fixture::records_of([&ship]);
         let flown = |lead: RuleSource| {
             let mut flown = ship.clone();
             super::fly(
@@ -3503,6 +3522,7 @@ mod tests {
                     snipe_lead: lead,
                     ..Readings::default()
                 },
+                &records,
                 &mut Draws::of(&[]),
             );
             flown.state

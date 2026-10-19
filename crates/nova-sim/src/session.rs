@@ -2542,6 +2542,7 @@ impl Session {
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            weapons: &self.arsenal,
         };
         f(&mut self.traffic, world);
     }
@@ -2620,6 +2621,7 @@ impl Session {
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            weapons: &self.arsenal,
         }
     }
 

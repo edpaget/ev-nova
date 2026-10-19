@@ -79,7 +79,7 @@ use crate::catalog::{EscortClass, GovtId, LandingSite, RankId, RankRecord, ShipI
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::Strike;
-use crate::combat::armament::Trigger;
+use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::flight::ShipState;
 use crate::gate::GateKind;
@@ -581,16 +581,26 @@ pub struct Surroundings<'a> {
     /// leads ([`World::led_speed`](crate::traffic::World::led_speed)), as
     /// a swarmer's `_ShipMaxSpeed` reads it ([`swarm::lead`]).
     pub led_speed: f32,
+    /// Every weapon's record, the original's global table `*0x3b517c`,
+    /// which a fighter's lead reads by its pick or last gun whether or not
+    /// it carries the weapon (@0x85e4c-0x85e59, @0x2b06a-0x2b075; see
+    /// [`fire::dogfight_lead`]).
+    pub weapons: &'a Arsenal,
 }
 
 /// No government marked by an IFF scrambler.
 pub static NO_IFF_MARKS: BTreeSet<GovtId> = BTreeSet::new();
 
+/// No weapon records: a placeholder for surroundings in which nothing
+/// pursues, as every lead then takes the table bearing.
+pub static NO_WEAPONS: Arsenal = Arsenal::EMPTY;
+
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
     /// cloak scanner, no government marked by an IFF scrambler, the
-    /// engine's jump fuel and cached odds, and a led speed of 1.
+    /// engine's jump fuel and cached odds, a led speed of 1 and no weapon
+    /// records ([`NO_WEAPONS`]).
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -608,6 +618,7 @@ impl<'a> Surroundings<'a> {
             jump_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             led_speed: 1.0,
+            weapons: &NO_WEAPONS,
         }
     }
 

@@ -90,10 +90,6 @@
 //!   and 0x10's exit outside 165 (@0x864bd-0x86513). The engine has no
 //!   inertialess flight (rdm phase
 //!   ship-handling-fidelity/phase-5-inertialess-flight).
-//! - The lead of a pick or last gun the ship does not carry, which the
-//!   original reads from its global weapon record (@0x85e4c-0x85e59,
-//!   @0x2b06a-0x2b075): rdm phase
-//!   combat-ai-fidelity/phase-17-left-out-of-phase-7.
 //! - The order of the joust's draws: the rolls come after its other
 //!   gates here, which decides the same.
 
@@ -106,6 +102,7 @@ use crate::ai::{Goal, Surroundings, stand_off};
 use crate::catalog::WeaponId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
+use crate::combat::armament::Arsenal;
 use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
@@ -323,14 +320,15 @@ pub enum Start {
 /// The frame `npc` flies at a ship at `at` before its step has run this
 /// tick (see [`step`]): its stored frame while it is for its goal, else
 /// the high level's substate alone, with `swarm` its swarm lead, its lead
-/// from the pick it holds and its approach's by the engine. None for a
-/// goal that is no fight.
+/// from the pick it holds and its approach's by the engine, each read from
+/// `weapons`, the global records. None for a goal that is no fight.
 #[must_use]
 pub fn frame_of(
     npc: &Npc,
     at: &ShipState,
     disabled: bool,
     swarm: Option<SwarmLead>,
+    weapons: &Arsenal,
 ) -> Option<Frame> {
     if let Some(frame) = npc.pursuit.frame
         && frame.goal == npc.goal
@@ -338,7 +336,7 @@ pub fn frame_of(
         return Some(frame);
     }
     let start = high_level(npc, at, disabled, swarm)?;
-    let looks = Looks::of(npc, at, npc.pick, RuleSource::Engine, swarm);
+    let looks = Looks::of(npc, at, (npc.pick, RuleSource::Engine, weapons), swarm);
     Some(match start {
         Start::Sub(manoeuvre) => Frame::of(npc.goal, &[looks.body(manoeuvre)]),
         Start::BreakOff { heading } => Frame::of(
@@ -363,22 +361,22 @@ struct Looks {
 
 impl Looks {
     /// `npc`'s headings at a ship at `at`, leading with `pick` as its
-    /// pick and its approach by `approach_lead`, flying at its `swarm`
-    /// lead's aim (`_CalcInterceptAngle(self, P)`, @0x852d6), or with none
-    /// the bearing, which no frame then reads.
+    /// pick and its approach by `approach_lead`, each weapon read from
+    /// `weapons`, flying at its `swarm` lead's aim
+    /// (`_CalcInterceptAngle(self, P)`, @0x852d6), or with none the
+    /// bearing, which no frame then reads.
     fn of(
         npc: &Npc,
         at: &ShipState,
-        pick: Option<WeaponId>,
-        approach_lead: RuleSource,
+        (pick, approach_lead, weapons): (Option<WeaponId>, RuleSource, &Arsenal),
         swarm: Option<SwarmLead>,
     ) -> Self {
         let bearing = trig::intercept_angle(npc.state.position, at.position);
         Self {
             away: trig::intercept_angle(at.position, npc.state.position),
             bearing,
-            dogfight: fire::dogfight_lead(npc, at, pick),
-            approach: fire::approach_lead(npc, at, pick, approach_lead),
+            dogfight: fire::dogfight_lead(npc, at, pick, weapons),
+            approach: fire::approach_lead(npc, at, pick, approach_lead, weapons),
             swarm: swarm.map_or(bearing, |lead| {
                 trig::intercept_angle(npc.state.position, lead.aim)
             }),
@@ -498,8 +496,11 @@ pub fn step(
     let looks = Looks::of(
         npc,
         &at,
-        fire::lead_pick(npc, around),
-        rules.approach_lead,
+        (
+            fire::lead_pick(npc, around),
+            rules.approach_lead,
+            around.weapons,
+        ),
         swarm,
     );
     let (target_slot, target_mass) = match ship {
@@ -1267,12 +1268,14 @@ mod tests {
         let mut stepped = npc.clone();
         stepped.pursuit = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
         assert_eq!(
-            frame_of(&stepped, &at, false, None).map(|frame| frame.iter().count()),
+            frame_of(&stepped, &at, false, None, &crate::ai::NO_WEAPONS)
+                .map(|frame| frame.iter().count()),
             Some(2)
         );
         stepped.goal = Goal::Attack(OTHER);
         assert_eq!(
-            frame_of(&stepped, &at, false, None).map(|frame| frame.iter().count()),
+            frame_of(&stepped, &at, false, None, &crate::ai::NO_WEAPONS)
+                .map(|frame| frame.iter().count()),
             Some(1),
             "the high level's substate alone"
         );
@@ -1452,7 +1455,8 @@ mod tests {
         let npc = swarmer();
         let at = player_off(FAR, 0.0).state;
         let aim = Vec2::new(900.0, 200.0);
-        let frame = frame_of(&npc, &at, false, aiming(aim)).expect("a fight");
+        let frame =
+            frame_of(&npc, &at, false, aiming(aim), &crate::ai::NO_WEAPONS).expect("a fight");
         assert_eq!(
             frame.last(),
             Some(Body {
@@ -1584,6 +1588,7 @@ mod tests {
             TopSpeeds::own_of(npc),
             crate::flight::FlightRules::default(),
             crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Ranged::of(&[]),
         );
         ship
@@ -1720,6 +1725,7 @@ mod tests {
             TopSpeeds::own_of(npc),
             crate::flight::FlightRules::default(),
             crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Ranged::of(&[]),
         );
         ship

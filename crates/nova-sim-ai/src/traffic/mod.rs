@@ -527,6 +527,9 @@ pub struct World<'a> {
     /// ([`RuleKey::PlunderMarines`](crate::RuleKey::PlunderMarines), see
     /// [`plunder_contents`](crate::ai::plunder_contents)).
     pub plunder_marines: RuleSource,
+    /// Every weapon's record ([`Surroundings::weapons`]), which a fighter's
+    /// lead reads.
+    pub weapons: &'a Arsenal,
 }
 
 /// Nova's disable rule, a world's default.
@@ -542,7 +545,8 @@ impl<'a> World<'a> {
     /// no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
     /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
-    /// no government marked by an IFF scrambler and Nova's disable rule.
+    /// no government marked by an IFF scrambler, Nova's disable rule and
+    /// no weapon records ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)).
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -573,6 +577,7 @@ impl<'a> World<'a> {
             afterburner_yardstick: RuleSource::Engine,
             disable: &NOVA_DISABLE,
             plunder_marines: RuleSource::Engine,
+            weapons: bare.weapons,
         }
     }
 
@@ -622,6 +627,7 @@ impl<'a> World<'a> {
             jump_fuel: self.npc_jump_fuel,
             odds_cache: self.odds_cache,
             led_speed: self.led_speed,
+            weapons: self.weapons,
         }
     }
 }
@@ -908,8 +914,9 @@ impl Traffic {
         self.pirate_events.clear();
     }
 
-    /// Advances the traffic one tick among `sites` alone, NPCs deciding
-    /// as `behaviour` says, rolling on `chance` (see
+    /// Advances the traffic one tick among `sites` alone ([`World::new`],
+    /// so with no weapon records and every lead the table bearing), NPCs
+    /// deciding as `behaviour` says, rolling on `chance` (see
     /// [`Traffic::tick_in`]).
     pub fn tick(
         &mut self,
@@ -1298,6 +1305,7 @@ impl Traffic {
                         snipe_lead: world.snipe_brake_lead,
                         jump_fuel: world.npc_jump_fuel,
                     },
+                    world.weapons,
                     &mut *chance,
                 )
             })

@@ -397,6 +397,7 @@ mod tests {
             speeds,
             flight,
             readings,
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }
