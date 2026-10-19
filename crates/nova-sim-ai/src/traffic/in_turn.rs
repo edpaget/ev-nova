@@ -82,12 +82,13 @@ mod tests {
     use crate::ai::nova::NovaAi;
     use crate::ai::pursuit::{Body, Frame};
     use crate::combat::fixture::strike;
+    use crate::combat::hull::Condition;
     use crate::combat::{ShipRef, Strike};
     use crate::geometry::Vec2;
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
-    use crate::traffic::npc::{AiType, Npc, NpcId};
+    use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
     use crate::traffic::{Traffic, World};
     use nova_sim_base::fixture::FAST;
 
@@ -210,17 +211,53 @@ mod tests {
     /// call, the player 100 above the centre, read by `focus`; then
     /// whether taking them emptied the queue.
     fn grudges(focus: RuleSource, npcs: Vec<Npc>, strikes: &[Strike]) -> Vec<NpcId> {
+        let world = World {
+            hit_focus: focus,
+            ..World::new(&[])
+        };
+        grudges_in(&world, npcs, strikes).0
+    }
+
+    /// The grudges [`NovaAi`]'s traffic queues answering `strikes` in one
+    /// call in `world`, the player 100 above the centre, and the NPCs it
+    /// leaves; asserting taking them emptied the queue.
+    fn grudges_in(world: &World, npcs: Vec<Npc>, strikes: &[Strike]) -> (Vec<NpcId>, Vec<Npc>) {
         let mut traffic = Traffic::with_interval(1);
         traffic.npcs = npcs;
         let world = World {
             player: Some(crate::ai::fixture::player(0.0, -100.0)),
-            hit_focus: focus,
-            ..World::new(&[])
+            ..*world
         };
         traffic.answer(&NovaAi::default(), &world, strikes);
         let taken = traffic.take_grudges();
         assert_eq!(traffic.take_grudges(), [], "taken");
-        taken
+        (taken, traffic.npcs)
+    }
+
+    #[test]
+    fn a_victim_that_does_not_answer_still_holds_the_grudge() {
+        // The grudge's test (@0x3be83-0x3beb3) reads neither the victim's
+        // arrival nor its condition: a ship still in its gate, by the other
+        // reading of arrival hits, or a disabled one, answers nothing but
+        // its person still holds the grudge.
+        let by_player = strike(n(1), ShipRef::Player);
+        let mut waiting = ship(1, 0.0, 0.0);
+        waiting.mode = Mode::Emerging { ticks_left: 60 };
+        let world = World {
+            arrival_hits: RuleSource::Bible,
+            ..World::new(&[])
+        };
+        let mut disabled = ship(1, 0.0, 0.0);
+        disabled.condition = Condition::Disabled;
+        for (why, world, victim) in [
+            ("not arrived", world, waiting),
+            ("disabled", World::new(&[]), disabled),
+        ] {
+            let (taken, ships) = grudges_in(&world, vec![victim], &[by_player]);
+            assert_eq!(taken, [NpcId(1)], "{why}");
+            assert_eq!(ships[0].target, None, "{why}: not answered");
+            assert_eq!(ships[0].provoked, 0.0, "{why}: not answered");
+        }
     }
 
     #[test]
