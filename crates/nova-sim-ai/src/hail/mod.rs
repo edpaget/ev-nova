@@ -55,6 +55,7 @@ pub mod reply;
 use std::fmt::Debug;
 use std::rc::Rc;
 
+use crate::ai::threatened::player_threatened_by_enemy_of;
 use crate::ai::{Favour, Goal, Surroundings};
 use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
@@ -179,10 +180,13 @@ pub struct Hail<'a> {
     /// ([`Npc::threatens_player_among`]): `_IsPlayerThreatened` @0x8245c,
     /// read by Request Assistance (`_DoCommDialog` @0x96310).
     pub player_threatened: bool,
-    /// Whether an NPC other than the ship hailed threatens the player and
-    /// is of a government [`Governments::npc_enemies`] finds an enemy of
-    /// the ship's (`_IsPlayerThreatenedByMyEnemy` @0x82483-0x824f5, see
-    /// [`Hail::new`]).
+    /// Whether an NPC other than the ship hailed threatens the player as
+    /// `_ExtendedIsThreatToPlayer` asks it ([`Npc::threatens_player_extended`],
+    /// as the player sees it) and is of a government
+    /// [`Governments::npc_enemies`] finds an enemy of the ship's
+    /// (`_IsPlayerThreatenedByMyEnemy` @0x82483-0x824f5,
+    /// [`player_threatened_by_enemy_of`], see [`Hail::new`]): what rank
+    /// battle help reads (@0x96328).
     pub threatened_by_enemy: bool,
     /// Every NPC in the system, the ship hailed among them: what a helper
     /// picks its target from (see [`battle`]).
@@ -278,19 +282,18 @@ impl<'a> Hail<'a> {
     /// It is threatened by the ship's enemy
     /// (`_IsPlayerThreatenedByMyEnemy` @0x82483-0x824f5) when another NPC
     /// threatens it whose government [`Governments::npc_enemies`] finds
-    /// an enemy of the ship's. The original loops over slots 1-63: an
-    /// active one (@0x824a0), not the ship (@0x824ac), that
-    /// `_ExtendedIsThreatToPlayer` holds for (@0x824b8) and
-    /// `_IsShipMyEnemy` (@0x8196c) finds the ship's enemy (@0x824cf).
-    /// `_IsShipMyEnemy` needs two ships with different governments that
-    /// `_GovtEnemies` finds enemies, or the other's xenophobic and not
-    /// allied (@0x819c9-0x81a14): `npc_enemies`. Its test that the other
-    /// is not the shareware nag ship (`+0xc8d0 != 0x3ff` @0x819a4,
-    /// `_SpawnNagShip` @0x61b5) is left out, as the engine has none.
-    /// `_ExtendedIsThreatToPlayer` (@0x81b70) is read as
-    /// [`Npc::threatens_player`]; its broader branches (visibility, the
-    /// player's own escorts, attacks on the player's fighters, a threat
-    /// through an escort) are deferred. Nothing plays a sound.
+    /// an enemy of the ship's, as
+    /// [`player_threatened_by_enemy_of`] asks it: the original loops over
+    /// slots 1-63, an active one (@0x824a0), not the ship (@0x824ac), that
+    /// `_ExtendedIsThreatToPlayer` holds for (@0x824b8,
+    /// [`Npc::threatens_player_extended`], read whole with the player's
+    /// sight) and `_IsShipMyEnemy` (@0x8196c) finds the ship's enemy
+    /// (@0x824cf). Two branches are left out: the extended test's stellar
+    /// defender (+0x8c, @0x81bd3), as the engine has no defence ships
+    /// (rdm:task/planet-domination), and `_IsShipMyEnemy`'s test that the
+    /// other is not the shareware nag ship (`+0xc8d0 != 0x3ff` @0x819a4,
+    /// `_SpawnNagShip` @0x61b5), as the engine has none. Nothing plays a
+    /// sound.
     #[must_use]
     pub fn new(
         npc: &'a Npc,
@@ -334,11 +337,7 @@ impl<'a> Hail<'a> {
                 .npcs
                 .iter()
                 .any(|other| other.threatens_player_among(around.npcs)),
-            threatened_by_enemy: around.npcs.iter().any(|other| {
-                other.id != npc.id
-                    && other.threatens_player()
-                    && around.govts.npc_enemies(npc.govt, other.govt)
-            }),
+            threatened_by_enemy: player_threatened_by_enemy_of(npc, around),
             npcs: around.npcs,
             need,
             quote: None,
@@ -1223,6 +1222,86 @@ mod tests {
             !hailing(&npcs, &rivals, 0, &talk()).threatened_by_enemy,
             "an independent has no enemy"
         );
+    }
+
+    /// Whether an enemy of NPC 1 (`npcs[0]`, of 140) threatens the player
+    /// among `npcs`, the player scanning for cloaks when `scanner`.
+    fn by_enemy(npcs: &[Npc], scanner: bool) -> bool {
+        let rivals = rivals();
+        let around = Surroundings {
+            govts: &rivals,
+            system_govt: Some(G),
+            cloak_scanner: scanner,
+            ..Surroundings::new(&[], npcs)
+        };
+        Hail::new(
+            &npcs[0],
+            &around,
+            Dispositions::default(),
+            &talk(),
+            None,
+            None,
+        )
+        .threatened_by_enemy
+    }
+
+    /// NPC `id` hired by the player.
+    fn hired(id: u32) -> Npc {
+        Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..of_govt(id, Some(143), Goal::Idle)
+        }
+    }
+
+    #[test]
+    fn rank_battle_help_counts_an_enemy_attacking_a_ship_the_player_leads() {
+        let raider = of_govt(2, Some(142), Goal::Attack(ShipRef::Npc(NpcId(3))));
+        assert!(by_enemy(&[flying(1, Goal::Idle), raider, hired(3)], false));
+    }
+
+    #[test]
+    fn rank_battle_help_counts_an_enemy_whose_hit_target_is_the_player() {
+        let mut hit = of_govt(2, Some(142), Goal::Idle);
+        hit.target = Some(ShipRef::Player);
+        assert!(by_enemy(&[flying(1, Goal::Idle), hit.clone()], false));
+        hit.ai_wait = 5;
+        assert!(
+            !by_enemy(&[flying(1, Goal::Idle), hit], false),
+            "its wait running"
+        );
+    }
+
+    #[test]
+    fn rank_battle_help_counts_an_enemy_lead_whose_escort_attacks_the_player() {
+        // The lead needs a target of its own (+0x70 != -1, @0x81bad).
+        let mut lead = of_govt(2, Some(142), Goal::Idle);
+        lead.target = Some(ShipRef::Npc(NpcId(9)));
+        let mut escort = of_govt(3, Some(143), Goal::Attack(ShipRef::Player));
+        escort.leader = Some(NpcId(2));
+        assert!(by_enemy(&[flying(1, Goal::Idle), lead, escort], false));
+    }
+
+    #[test]
+    fn rank_battle_help_counts_a_cloaked_enemy_only_while_the_player_sees_it() {
+        let mut cloaked = of_govt(2, Some(142), Goal::Attack(ShipRef::Player));
+        cloaked.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        let npcs = [flying(1, Goal::Idle), cloaked];
+        assert!(!by_enemy(&npcs, false), "unseen");
+        assert!(by_enemy(&npcs, true), "scanned on screen");
+    }
+
+    #[test]
+    fn rank_battle_help_never_counts_the_players_own_escort() {
+        let mut escort = hired(2);
+        escort.govt = Some(GovtId(142));
+        escort.goal = Goal::Attack(ShipRef::Player);
+        assert!(!by_enemy(&[flying(1, Goal::Idle), escort], false));
     }
 
     #[test]
