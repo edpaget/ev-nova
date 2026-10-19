@@ -77,9 +77,10 @@
 //!   modules), then its eject check (see the `eject` module); the fight's
 //!   collision passes ([`GamePass::Again`]), their hits answered; no
 //!   NPC's point defence, which is `_AIDispatch`'s; the shots, their hits
-//!   answered; the traffic's motion
-//!   ([`Traffic::move_in`](crate::traffic::Traffic::move_in)) with its
-//!   departures and fighters docking; the NPCs' fire; the beams and all
+//!   answered; the ship loop, each NPC's flight (the second pass's fly
+//!   half, as [`Traffic::move_in`](crate::traffic::Traffic::move_in) flies
+//!   it) then its fire, by slot, with the departures and fighters docking
+//!   after it ([`Session::ship_loop`]); the beams and all
 //!   that follows from the pass's hits; then the reinforcement clock
 //!   (`_HandleReinforcements` @0x44504; see the `reinforcements`
 //!   module). A due frame therefore steps the junk and
@@ -186,7 +187,7 @@ impl Session {
     /// order: `_HandlePlayer`'s fight before its move
     /// ([`Session::player_fires`]), then its move; the collision passes,
     /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
-    /// its hits answered; the traffic's motion; `_HandleShip`'s fire;
+    /// its hits answered; the ship loop's flights and fire;
     /// `_HandleBeams` and what the pass leaves; then the asteroids and the
     /// reinforcement clock; from the eject check on, the advance pass's own
     /// routine without its AI ([`Session::pass_after_move`]). Its caller
@@ -222,25 +223,6 @@ impl Session {
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
         self.pass_after_move(&start, pass, None, behaviour, rules, chance);
-    }
-
-    /// The traffic's part of the second pass, drawing on `chance`: the NPCs
-    /// move ([`Traffic::move_in`](crate::traffic::Traffic::move_in)) in the
-    /// world the tick flies them in (among the system's stellars, its
-    /// gates' widths and the player, at the speed the player leads them
-    /// at, which is all their motion reads); each mission ship that
-    /// left raises its fate, and fighters dock. The fight that follows
-    /// lets go of a target gone and orphans the fighters of a carrier
-    /// gone, as it does after any departure, before anything is drawn.
-    /// Nothing moves before the system is populated.
-    pub(super) fn move_traffic_again(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if self.traffic_due {
-            return;
-        }
-        let marks = self.mission_marks();
-        self.step_traffic(|traffic, world| traffic.move_in(world, chance));
-        self.mission_ships_left(&marks);
-        self.dock_fighters();
     }
 }
 

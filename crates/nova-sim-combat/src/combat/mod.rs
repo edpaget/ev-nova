@@ -215,7 +215,8 @@
 //!    firer's reload for it at its `Reload` ([`Armament::hold`]).
 //! 6. `_HandleShip` (@0x44483, [`Combat::handle_npcs`]), each NPC in
 //!    turn by slot, as `_DoPlayGameWork`'s ship loop runs it
-//!    (@0x4445c-0x444c4): its reloads count down a tick (@0x33896), its
+//!    (@0x4445c-0x444c4; one NPC's, [`Combat::handle_npc`], which the
+//!    session runs right after that NPC's flight): its reloads count down a tick (@0x33896), its
 //!    shields and armour regenerate (step 10), then it fires the weapons
 //!    its trigger holds that are ready, as in step 1 (but no fighter
 //!    bay's launch, which step 4 made), reading the conditions the passes
@@ -1433,11 +1434,11 @@ impl Combat {
     /// ([`CombatEvent::Hit`]'s `late`): the player, for an NPC's wreck, and
     /// every NPC in a lower slot.
     ///
-    /// The ship loop interleaves each NPC's move with the displays, so a
-    /// later slot's ship moves by the push in the same frame; the engine
-    /// moves every NPC first, in the traffic's fly half, so the push moves
-    /// it the next (filed as
-    /// rdm:phase/weapons-fidelity/phase-46-left-out-of-phase-39).
+    /// The ship loop interleaves each NPC's move with the displays
+    /// (`nova_sim::Session::ship_loop`), so a ship of a later slot is
+    /// reached where it still stands and moves by the push in the same
+    /// frame; one of an earlier slot has moved, and moves by it the
+    /// next.
     fn shock(
         &mut self,
         fighters: &mut [Fighter],

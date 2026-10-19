@@ -7,7 +7,9 @@
 //! `_HandlePlayer` (@0x43e29), before the collision passes, on both
 //! passes ([`Combat::display_player`]); and each NPC right after its own
 //! `_HandleShip`, slot by slot (@0x444ad, the ship loop @0x4445c-0x444c4),
-//! before `_HandleBeams` ([`Combat::handle_npcs`]). So a breakup begun
+//! before `_HandleBeams` ([`Combat::handle_npc`], which the session runs
+//! right after that NPC's flight, `nova_sim::Session::ship_loop`). So a
+//! breakup begun
 //! after a ship's display (a hit on the player, a beam, a shockwave on a
 //! ship shown before its wreck) starts its countdown at that ship's next
 //! display.
@@ -35,8 +37,11 @@
 //!
 //! **The rest of the function** is listed branch by branch in the phase
 //! body of rdm:phase/weapons-fidelity/phase-39-left-out-of-phase-28. What
-//! the engine leaves out is filed as
-//! rdm:phase/weapons-fidelity/phase-46-left-out-of-phase-39.
+//! it left out is built by
+//! rdm:phase/weapons-fidelity/phase-46-left-out-of-phase-39: the
+//! inactive-slot branch's let-go of the player's target (the session's
+//! `lost_target` module) and the ship loop's flight at each slot
+//! (`nova_sim::Session::ship_loop`).
 
 use super::hull::{Breakup, Condition, DisableRule, EXPLOSION_BAND, PLAYER_BREAKUP_FACTOR};
 use super::{Combat, Fighter, ShipRef, never_breaks_up};

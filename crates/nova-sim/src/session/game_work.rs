@@ -32,11 +32,13 @@
 //!    the fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
 //!    locks, their hits settled and answered.
-//! 6. `_HandleShip` (@0x44483): the traffic's fly half and the session's
-//!    work after it, the assistance, then, slot by slot, each NPC's
-//!    reloads, regeneration, fire and death timer's tick, then its
-//!    display (@0x444ad), which starts its breakup's countdown or
-//!    explodes it ([`Session::handle_npcs`]).
+//! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
+//!    `_HandleShip` (@0x44483), its flight (the traffic's fly half, one
+//!    NPC at a time), reloads, regeneration, fire and death timer's tick,
+//!    then its display (@0x444ad), which starts its breakup's countdown
+//!    or explodes it, its shockwave reaching the later slots before
+//!    they move; then the session's work after the fly half and the
+//!    assistance ([`Session::ship_loop`]).
 //! 7. `_HandleBeams` (@0x4453d), its hits settled, then what the
 //!    pass leaves ([`Session::fight_tail`]), then the asteroids
 //!    (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids` @0x444f5, after
@@ -52,6 +54,8 @@
 //! **What remains**, none crossing a boundary the player sees, so none
 //! filed:
 //!
+//! - What the ship loop's departures leave the session, and the fly
+//!   half's end, settle after the loop (see [`Session::ship_loop`]).
 //! - A final explosion's session work (the fates, a mission ship lost, a
 //!   person gone, the take-out) runs in [`Session::fight_tail`], later in
 //!   the same pass and before the frame is drawn, where
@@ -94,6 +98,7 @@
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
+use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, TrafficMarks};
 use crate::ai::Behaviour;
 use crate::catalog::{PilotCatalog, TrafficCatalog};
@@ -194,10 +199,11 @@ impl Session {
     /// system as its slot's turn ends ([`Session::dispatch_npcs`]), then
     /// the calls the fighters that thought made are said, all before the
     /// shots,
-    /// and the traffic's motion is its fly half, its reinforcement clock
-    /// included ([`Session::traffic_tail`]), then the assistance; without
-    /// it, the traffic only moves, and the reinforcement clock
-    /// (`_HandleReinforcements` @0x44504) ticks after the asteroids.
+    /// and the ship loop's traffic flies its fly half, its reinforcement
+    /// clock included ([`Session::traffic_tail`]), then the assistance;
+    /// without it, the traffic only moves, and the reinforcement clock
+    /// (`_HandleReinforcements` @0x44504) ticks after the asteroids (see
+    /// [`Session::ship_loop`]).
     pub(super) fn pass_after_move(
         &mut self,
         start: &PassStart,
@@ -234,14 +240,14 @@ impl Session {
             combat.fly_shots(fighters, arena, chance);
         });
         self.answer_strikes(behaviour);
-        // `_HandleShip` (@0x44483).
-        if let Some(marks) = thought {
-            self.traffic_motion(marks, chance);
-            self.tick_assistance(rules.disable);
-        } else {
-            self.move_traffic_again(chance);
-        }
-        self.handle_npcs(pass, rules, chance);
+        // The ship loop: `_HandleShip` (@0x44483) and `_HandleShipDisplay`
+        // (@0x444ad), slot by slot.
+        let motion = match thought {
+            Some(Some(marks)) => Motion::Fly(marks),
+            Some(None) => Motion::Populated,
+            None => Motion::Again,
+        };
+        self.ship_loop(motion, pass, rules, chance);
         // `_HandleBeams` (@0x4453d), and what the pass leaves.
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
@@ -286,8 +292,11 @@ impl Session {
         });
     }
 
-    /// `_HandleShip` and `_HandleShipDisplay` for each NPC on `pass` by
-    /// `rules`, drawing on `chance`: every NPC's stray provocation eases
+    /// `_HandleShip`'s fight and `_HandleShipDisplay` for each NPC on
+    /// `pass` by `rules`, drawing on `chance`, for the separate parts
+    /// ([`Session::tick_combat`]), whose traffic has flown already (the
+    /// game's passes run [`Session::ship_loop`]): every NPC's stray
+    /// provocation eases
     /// (@0x35374-0x353b2), after the collision passes and the shots and
     /// before the beams; then, slot by slot, each NPC's reloads count
     /// down, it regenerates, it fires its pick, its death timer ticks and
@@ -335,19 +344,6 @@ impl Session {
         });
         self.after_traffic_ai(chance);
         Some(marks)
-    }
-
-    /// The traffic's motion, read against the `marks` its think left,
-    /// drawing on `chance`: its fly half
-    /// ([`Traffic::fly_holding`](crate::traffic::Traffic::fly_holding)) and
-    /// the session's work after it, when it thought; then the end of the
-    /// traffic tick ([`Session::traffic_tail`]).
-    fn traffic_motion(&mut self, marks: Option<TrafficMarks>, chance: &mut dyn Chance) {
-        if let Some(marks) = marks {
-            self.step_traffic(|traffic, world| traffic.fly_holding(world, &marks.still, chance));
-            self.after_traffic_motion(&marks, chance);
-        }
-        self.traffic_tail(chance);
     }
 
     /// Every NPC as it is now, for the strikes that follow to be read

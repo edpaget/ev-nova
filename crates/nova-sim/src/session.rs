@@ -430,6 +430,7 @@ mod script_effects;
 mod self_repair;
 mod ship_change;
 mod ship_display;
+mod ship_loop;
 mod shot_slots;
 mod slot_visibility;
 mod smoke_frame;
@@ -2616,7 +2617,7 @@ impl Session {
     /// ([`Session::tick_traffic`]), the gate exit's arrivals pass
     /// ([`Session::gate_exit_pass`]) and double time's second pass (see
     /// the `double_time` module) step the traffic in it.
-    fn step_traffic(&mut self, f: impl FnOnce(&mut Traffic, World<'_>)) {
+    fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         let system_govt = self.galaxy.govt(self.pilot.system);
         let facts = control::Facts {
             pilot: &self.pilot,
@@ -2659,7 +2660,7 @@ impl Session {
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
         };
-        f(&mut self.traffic, world);
+        let stepped = f(&mut self.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
         // (`Traffic::take_grudges`). The original sets each inside
         // `_DamageShip` as its hit lands; here it lands right after the
@@ -2669,6 +2670,7 @@ impl Session {
         // dialog opened, landing or jump completed or pilot saved.
         let grudges = self.traffic.take_grudges();
         self.hold_grudges(&grudges);
+        stepped
     }
 
     /// The ship-table slots a spawn whose original leaves `reserve` free

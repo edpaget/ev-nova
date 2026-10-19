@@ -77,6 +77,27 @@ pub const ESCAPE_CUT_VELOCITY: f32 = 0.5;
 /// at 0xdd068, @0x3550f).
 pub const ESCAPE_CUT_SHIELD: f32 = 1.0;
 
+/// An NPC as its own step in the ship loop found it, before its fire and
+/// its display (`Session::ship_loop`): whether `_HandleShip`'s escape-ship
+/// check finds it dying (`_IsDying` @0x253d).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AtStep {
+    id: NpcId,
+    /// `_IsDying`: its death timer runs, or its armour is at none or
+    /// below, though no display has settled its condition yet.
+    dying: bool,
+}
+
+impl AtStep {
+    pub(super) fn of(npc: &Npc) -> Self {
+        Self {
+            id: npc.id,
+            dying: matches!(npc.condition, Condition::Dying { .. })
+                || (npc.condition != Condition::Destroyed && npc.reserves.armor.now <= 0.0),
+        }
+    }
+}
+
 /// The death timers an NPC's checks read this tick, from its condition
 /// before and after the fight's tick: the pods' (none unless it was dying
 /// with its timer above 0) and the escape ship's (none unless it is

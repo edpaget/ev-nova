@@ -258,7 +258,7 @@ impl Session {
     ///
     /// The session runs it after the player's display step
     /// ([`Session::player_display_step`], @0x43e29) and after the NPCs'
-    /// (`Session::handle_npcs`, @0x444ad), so the collision passes walk
+    /// (`Session::ship_loop`, @0x444ad), so the collision passes walk
     /// the player in the layer its display just gave it and each NPC in
     /// the one its last display gave it, and the frame is drawn so. Each
     /// display is noted ([`Session::note_display`]): a ship shown is

@@ -116,7 +116,9 @@
 //!    regenerates its fuel up to its capacity ([`Npc::regenerate_fuel`],
 //!    `_HandleShip` @0x35305-0x35374), on both passes. Steps 6 to 8 are
 //!    the tick's fly half ([`Traffic::fly_holding`]), `_HandleShip`'s
-//!    motion (@0x44483).
+//!    motion (@0x44483), which its session runs one NPC at a time, each
+//!    at its own slot of the ship loop ([`fly_pass`]); an NPC that
+//!    leaves is then removed at its own flight.
 //!
 //! A session that runs the original's order (`nova_sim::Session::game_work`)
 //! runs the fight's collision passes before the think half, and its
@@ -1416,7 +1418,7 @@ impl Traffic {
     /// as `_HandleShipDisplay` steps it once a frame (@0x2d088-0x2d164),
     /// right after the ship's own `_HandleShip` (@0x444ad): so after its
     /// pick. The session runs it once after the whole NPC loop
-    /// (`nova_sim::Session::handle_npcs`), on both passes. Stepping after
+    /// (`nova_sim::Session::ship_loop`), on both passes. Stepping after
     /// the loop gives every reader what the per-slot step gives: a pick
     /// reads only its own ship's cloak (`Shooter::cloaked`), and the aim
     /// reads the targets' conditions, not their cloaks.
