@@ -336,6 +336,44 @@ mod tests {
         assert_eq!(fleet_ships(&session), 4);
     }
 
+    /// Takes every NPC out, so the system is short of its average and the
+    /// next traffic tick rolls for an arrival.
+    fn empty_the_system(session: &mut Session) {
+        let here: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
+        for id in here {
+            session.traffic.remove(id);
+        }
+    }
+
+    #[test]
+    fn a_hyperspace_arrival_in_flight_reads_a_fleets_appear_on_as_the_last_refresh_saw_it() {
+        // `_HyperShipSpawn` → `_SpawnFleet` reads flët +0x122 (@0x4275b,
+        // @0x428a5): by the engine b7, set in flight, is unseen until the
+        // next refresh.
+        let catalog = gated_fleets();
+        // An arrival's roll comes, as the `LinkSyst` fleet of slot 2,
+        // fleet 130, with three escorts.
+        let arrival = || Draws::of(&[0, 1, 0, 2, 0, 2]);
+        for (source, at_once) in [(RuleSource::Engine, 0), (RuleSource::Bible, 4)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(by(source));
+            session.populate(&catalog, &mut NeverFires);
+            empty_the_system(&mut session);
+            session.set_control_bit(bit(7), true);
+            session.tick_traffic(&catalog, &NovaAi::default(), &mut arrival());
+            assert_eq!(fleet_ships(&session), at_once, "{source:?}");
+            if at_once == 0 {
+                assert!(session.npcs().is_empty(), "nothing came");
+                // The galaxy refresh's own step, as a landing or an
+                // arrival runs it.
+                session.propagate_cached_tests();
+                session.tick_traffic(&catalog, &NovaAi::default(), &mut arrival());
+                assert_eq!(fleet_ships(&session), 4, "{source:?}: refreshed");
+            }
+        }
+    }
+
     #[test]
     fn by_the_other_reading_a_bit_set_between_refreshes_brings_a_fleet_at_once() {
         let catalog = gated_fleets();
@@ -499,6 +537,131 @@ mod tests {
             session.set_control_bit(bit(7), true);
             session.populate(&catalog, &mut NeverFires);
             assert_eq!(persons(&session), [600], "{source:?}: at once");
+        }
+    }
+
+    use super::super::mission_ships::tests::{
+        Names, forget_uniform_type, hailing_ace, marked, marked_types, person_here, settle,
+        ships_of, swapping, two_types,
+    };
+    use crate::ai::NovaAi;
+    use crate::catalog::{MissionId, StellarId};
+    use crate::person::REPLACED_BY_MISSION_SHIP;
+    use crate::testkit::land_now;
+
+    // A mission ship's `AppearOn` at its spawn (the `mission_ships`
+    // module): b5 set after the landing's refresh, ship 129 appearing on
+    // !b5 and 200 on b5, by the engine the spawn draws 129 and by the other
+    // reading 200.
+
+    /// Each reading of [`RuleKey::SpawnAvailability`], and the one type
+    /// a `düde` ship of [`gate_on_b5`] spawns as under it.
+    const B5_SINCE_THE_REFRESH: [(RuleSource, i16); 2] =
+        [(RuleSource::Engine, 129), (RuleSource::Bible, 200)];
+
+    /// Ship 129 appearing on !b5 and ship 200 on b5.
+    fn gate_on_b5(catalog: &mut FakePilotCatalog) {
+        for record in &mut catalog.ship_records {
+            match record.id.0 {
+                129 => record.appear_on = Test::parse("!b5"),
+                200 => record.appear_on = Test::parse("b5"),
+                _ => {}
+            }
+        }
+    }
+
+    /// [`two_types`] with [`gate_on_b5`].
+    fn gated_two_types(flags: u16, start: i16) -> FakePilotCatalog {
+        let mut catalog = two_types(flags, start);
+        gate_on_b5(&mut catalog);
+        catalog
+    }
+
+    /// A session of `catalog` under `source` of
+    /// [`RuleKey::SpawnAvailability`], docked at 128, b5 set since the
+    /// landing's refresh, with mission 140 accepted into slot 0.
+    fn accepted_since_the_refresh(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Names))
+            .with_rules(by(source));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        session.set_control_bit(bit(5), true);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, catalog);
+        session
+    }
+
+    #[test]
+    fn the_setups_draws_read_appear_on_as_the_last_galaxy_refresh_saw_it_by_the_engine() {
+        // `_MissionDudeSpawn` reads shïp +0xa41 (@0x3ce11/@0x3ce31).
+        let catalog = gated_two_types(0, 0);
+        for (source, drawn) in B5_SINCE_THE_REFRESH {
+            let mut session = accepted_since_the_refresh(&catalog, source);
+            session
+                .take_off(&catalog, &mut NeverFires)
+                .expect("takes off");
+            assert_eq!(marked_types(&session), [ShipId(drawn); 3], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_0x0800_slots_draw_at_its_setup_reads_appear_on_as_the_last_galaxy_refresh_saw_it() {
+        let catalog = gated_two_types(0x0800, 0);
+        for (source, drawn) in B5_SINCE_THE_REFRESH {
+            let mut session = accepted_since_the_refresh(&catalog, source);
+            forget_uniform_type(&mut session);
+            session
+                .take_off(&catalog, &mut NeverFires)
+                .expect("takes off");
+            assert_eq!(
+                ships_of(&session).uniform_type,
+                Some(ShipId(drawn)),
+                "{source:?}"
+            );
+            assert_eq!(marked_types(&session), [ShipId(drawn); 3], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn later_arrivals_draws_read_appear_on_as_the_last_galaxy_refresh_saw_it_by_the_engine() {
+        // `_EnterMoreShips` → `_SpecificDudeSpawn` reads shïp +0xa41
+        // (@0x3d141).
+        let catalog = gated_two_types(0, 1);
+        for (source, drawn) in B5_SINCE_THE_REFRESH {
+            let mut session = accepted_since_the_refresh(&catalog, source);
+            session
+                .take_off(&catalog, &mut NeverFires)
+                .expect("takes off");
+            assert!(marked(&session).is_empty(), "{source:?}: none at setup");
+            for _ in 0..199 {
+                session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+            }
+            assert_eq!(marked_types(&session), [ShipId(drawn); 3], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_swaps_draw_reads_appear_on_as_the_last_galaxy_refresh_saw_it_by_the_engine() {
+        // Without 0x0800 the swapped-in ship's type is drawn from the düde
+        // (`_MissionDudeSpawn` @0x3cdea), reading shïp +0xa41.
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].flags = 0;
+        gate_on_b5(&mut catalog);
+        for (source, drawn) in B5_SINCE_THE_REFRESH {
+            let mut session = hailing_ace(&catalog).with_rules(by(source));
+            session.set_control_bit(bit(5), true);
+            assert_eq!(
+                session.accept_mission(MissionId(140), &mut NeverFires),
+                Ok(0)
+            );
+            settle(&mut session, &catalog);
+            assert!(!person_here(&session), "{source:?}: swapped");
+            assert_eq!(marked_types(&session), [ShipId(drawn)], "{source:?}");
         }
     }
 }

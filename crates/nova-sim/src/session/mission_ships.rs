@@ -1508,7 +1508,7 @@ pub(super) mod tests {
     use crate::traffic::npc::{Mode, Npc};
 
     /// `STR#` 7000 names; 7001 subtitles.
-    struct Names;
+    pub(in crate::session) struct Names;
 
     impl CommCatalog for Names {
         fn string_list(&self, id: i16) -> Vec<String> {
@@ -5404,7 +5404,7 @@ pub(super) mod tests {
     /// 150, which flies ships 129 and 200; and "Ace" (`përs` 600, of
     /// `Flags` `flags`, flying ship 129) linked to it, whom system 130's
     /// first Person slot names at 100 %.
-    fn swapping(flags: u16) -> FakePilotCatalog {
+    pub(in crate::session) fn swapping(flags: u16) -> FakePilotCatalog {
         let mut catalog = ships_catalog(MissionShip {
             count: 1,
             goal: 3,
@@ -5436,7 +5436,7 @@ pub(super) mod tests {
 
     /// A pilot flying in system 130 among `catalog`'s Ace (NPC 0), at
     /// [`ACE_AT`] and targeted, hailed: Ace offers mission 140.
-    fn hailing_ace(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn hailing_ace(catalog: &FakePilotCatalog) -> Session {
         let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
@@ -5460,7 +5460,7 @@ pub(super) mod tests {
         session
     }
 
-    fn person_here(session: &Session) -> bool {
+    pub(in crate::session) fn person_here(session: &Session) -> bool {
         session.npcs().iter().any(|npc| npc.person.is_some())
     }
 
@@ -5735,7 +5735,7 @@ pub(super) mod tests {
     /// [`ships_catalog`] with mission 140 of `Flags` `flags` and three
     /// ships starting `start`, of düde 150 flying ship 200 at 20 and ship
     /// 129 at 17.
-    fn two_types(flags: u16, start: i16) -> FakePilotCatalog {
+    pub(in crate::session) fn two_types(flags: u16, start: i16) -> FakePilotCatalog {
         let mut catalog = ships_catalog(MissionShip {
             count: 3,
             ..shipping(-1, start)
@@ -5760,7 +5760,7 @@ pub(super) mod tests {
     }
 
     /// The ship types of the mission ships in the system, in order.
-    fn marked_types(session: &Session) -> Vec<ShipId> {
+    pub(in crate::session) fn marked_types(session: &Session) -> Vec<ShipId> {
         session
             .npcs()
             .iter()
@@ -5869,7 +5869,7 @@ pub(super) mod tests {
 
     /// Clears slot 0's kept type, as a save from before it was kept
     /// loads it.
-    fn forget_uniform_type(session: &mut Session) {
+    pub(in crate::session) fn forget_uniform_type(session: &mut Session) {
         session
             .pilot
             .missions

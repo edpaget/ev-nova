@@ -385,6 +385,45 @@ mod tests {
     }
 
     #[test]
+    fn aux_ships_read_appear_on_as_the_last_galaxy_refresh_saw_it_by_the_engine() {
+        // `_EnterMoreShips` → `_HyperSpawnFleet`/`_SelectShipFieldFromDude`
+        // read shïp +0xa41 (@0x43bd3/@0x43dcf), cached at the landing's
+        // refresh: b5, set since, is unseen by the engine.
+        let mut catalog = crate::testkit::far_129_reachable(aux_only(3, -1, 0));
+        let mut gated = ship(202, FAST);
+        gated.appear_on = crate::control::Test::parse("!b5");
+        catalog.ship_records.push(gated);
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(201) {
+                record.appear_on = crate::control::Test::parse("b5");
+            }
+        }
+        catalog.dudes[1].1.ships = vec![(ShipId(201), 50), (ShipId(202), 50)];
+        for (source, drawn) in [(RuleSource::Engine, 202), (RuleSource::Bible, 201)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::SpawnAvailability, source));
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            settle(&mut session, &catalog);
+            session.set_control_bit(crate::control::Bit::new(5).expect("a bit"), true);
+            assert_eq!(
+                session.accept_mission(MissionId(140), &mut NeverFires),
+                Ok(0)
+            );
+            settle(&mut session, &catalog);
+            take_off(&mut session, &catalog);
+            ticks(&mut session, &catalog, 140);
+            let types: Vec<ShipId> = session
+                .npcs()
+                .iter()
+                .filter(|npc| npc.aux == Some(0))
+                .map(|npc| npc.ship)
+                .collect();
+            assert_eq!(types, [ShipId(drawn); 3], "{source:?}");
+        }
+    }
+
+    #[test]
     fn aux_ships_find_no_slot_once_fifty_five_ships_are_in_the_system_and_keep_their_count() {
         let catalog = crate::testkit::far_129_reachable(aux_only(3, -1, 0));
         let mut session = accepted(&catalog);
