@@ -252,8 +252,14 @@
 //! is modal, and flight pauses under it. It opens on the player's
 //! preferences ([`AppScreen::with_prefs`]), and each change is
 //! reported once through [`Screen::take_prefs`](nova_view::Screen::take_prefs) for the app to play
-//! and save. Flight follows the Hyperspace Effects preference: it is
-//! built with it, and a change reaches a flight already built. OK, Return or Escape closes it.
+//! and save. Flight follows the Hyperspace Effects and Smoke Trails
+//! preferences: it is built with them, and a change reaches a flight
+//! already built. Weapon Effects, as in the original, takes effect at the
+//! next launch: every flight is built with the value the game launched
+//! with, and the dialog draws the original's relaunch notice while the box
+//! differs from it; by `nova_sim::RuleKey::WeaponEffectsNextLaunch`'s other
+//! reading it follows the box at once, as Smoke Trails does. OK, Return or
+//! Escape closes it.
 //! Its close redraws nothing of the status bar, as the original's menu
 //! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
 //! Apple Event's handler redraws (@0x56195).
@@ -456,6 +462,12 @@ pub struct AppScreen {
     sounds: Vec<Sound>,
     /// The player's preferences, as last chosen.
     prefs: Prefs,
+    /// The Weapon Effects the game launched with, the one every flight
+    /// takes while a change waits for the next launch
+    /// (`nova_sim::RuleKey::WeaponEffectsNextLaunch`'s engine reading):
+    /// set by [`AppScreen::with_prefs`], which `main` calls once at
+    /// startup.
+    launch_weapon_effects: bool,
     /// The Preferences dialog, while it is open.
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.

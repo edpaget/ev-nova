@@ -780,6 +780,51 @@ fn quicktime_movies_toggle_by_click_and_key_and_survive_a_restart() {
     assert_eq!(saved(&store)["quicktime_movies"], true);
 }
 
+/// The flight view under the harness.
+fn flight(harness: &Harness) -> &nova_view::flight::FlightView<Rc<GameData>> {
+    harness.app.screen().flight_view().expect("flying")
+}
+
+#[test]
+fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_waits_for_a_restart()
+ {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('f'));
+    harness.fly();
+    assert!(flight(&harness).smoke_trails() && flight(&harness).weapon_effects());
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    let smoke = harness.dialog().smoke_trails().rect().center();
+    harness.click(smoke);
+    assert!(!flight(&harness).smoke_trails(), "at once");
+    assert_eq!(saved(&store)["smoke_trails"], false);
+    let weapons = harness.dialog().weapon_effects().rect().center();
+    harness.click(weapons);
+    assert_eq!(saved(&store)["weapon_effects"], false);
+    assert_eq!(saved(&store)["smoke_trails"], false, "the rest kept");
+    assert!(harness.dialog().relaunch_notice_shown());
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text.starts_with("(Changes will")),
+        "the notice is drawn"
+    );
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert!(
+        flight(&harness).weapon_effects(),
+        "the running game keeps the glow until the next launch"
+    );
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('f'));
+    again.fly();
+    assert!(!flight(&again).weapon_effects(), "off after a restart");
+    assert!(!flight(&again).smoke_trails());
+}
+
 /// Where flight draws its hover cursor.
 fn cursor(harness: &Harness) -> Option<Point> {
     harness

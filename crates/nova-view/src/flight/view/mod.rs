@@ -1087,6 +1087,12 @@ pub struct FlightView<C> {
     /// Whether jumps play their white fades, as the Hyperspace Effects
     /// preference says.
     hyperspace_effects: bool,
+    /// Whether shots leave their particle trails and smoke, as the Smoke
+    /// Trails preference says.
+    smoke_trails: bool,
+    /// Whether ships show their weapon glow, as the Weapon Effects
+    /// preference says.
+    weapon_effects: bool,
     /// The player's sound preferences, which say whether the Red Alert
     /// blinks its icon ([`SoundPrefs::alert_quiet`]), as the session is
     /// told.

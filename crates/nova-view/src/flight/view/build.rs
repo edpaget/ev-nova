@@ -176,6 +176,8 @@ impl<
             fade_in: None,
             death_fade: None,
             hyperspace_effects: true,
+            smoke_trails: true,
+            weapon_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
             view: VIEW_SIZE,
@@ -675,6 +677,51 @@ impl<
     #[must_use]
     pub fn hyperspace_effects(&self) -> bool {
         self.hyperspace_effects
+    }
+
+    /// The flight with shots leaving their particle trails and smoke or
+    /// not, as the Smoke Trails preference is on (the default) or off.
+    #[must_use]
+    pub fn with_smoke_trails(self, smoke_trails: bool) -> Self {
+        Self {
+            smoke_trails,
+            ..self
+        }
+    }
+
+    /// Sets whether shots leave their particle trails and smoke from the
+    /// next step; the puffs already left go on ageing.
+    pub fn set_smoke_trails(&mut self, smoke_trails: bool) {
+        self.smoke_trails = smoke_trails;
+    }
+
+    /// Whether shots leave their particle trails and smoke.
+    #[must_use]
+    pub fn smoke_trails(&self) -> bool {
+        self.smoke_trails
+    }
+
+    /// The flight with ships showing their weapon glow or not, as the
+    /// Weapon Effects preference is on (the default) or off. Off, the
+    /// glows still light and fade; they are only not drawn, as the
+    /// original, without the weapon sprites, still sets and decays them.
+    #[must_use]
+    pub fn with_weapon_effects(self, weapon_effects: bool) -> Self {
+        Self {
+            weapon_effects,
+            ..self
+        }
+    }
+
+    /// Sets whether ships show their weapon glow.
+    pub fn set_weapon_effects(&mut self, weapon_effects: bool) {
+        self.weapon_effects = weapon_effects;
+    }
+
+    /// Whether ships show their weapon glow.
+    #[must_use]
+    pub fn weapon_effects(&self) -> bool {
+        self.weapon_effects
     }
 
     /// The flight with the player's sound preferences `prefs`, which say

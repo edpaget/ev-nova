@@ -33,14 +33,22 @@ impl ShotLooks {
     /// Steps it after a pass of `session`'s fight, the shots' looks read
     /// from `looks`, drawing on `chance`, as `_HandleShot` then
     /// `_HandleSmoke` do each frame: each shot new in flight draws its
-    /// spin start, and each gone is forgotten; each shot in flight
-    /// leaves its trail's burst in `effects`, under the `caps` or not,
-    /// and its puff of smoke; then the smoke ages.
+    /// spin start, and each gone is forgotten; with `smoke_trails` on,
+    /// each shot in flight leaves its trail's burst in `effects`, under
+    /// the `caps` or not, and, on a smoke frame
+    /// ([`Session::smoke_frame`]), its puff of smoke; then the smoke ages,
+    /// whether or not the preference is on.
+    ///
+    /// The Smoke Trails preference is the original's inverted
+    /// `SmokeTrails` byte, which skips the particle trail
+    /// (@0x35d64-0x35d6d) and `_SpawnSmoke` (@0x3f93d-0x3f951), but never
+    /// `_HandleSmoke`.
     pub(super) fn step(
         &mut self,
         session: &Session,
         looks: &Looks,
         (effects, caps): (&mut Effects, bool),
+        smoke_trails: bool,
         chance: &mut dyn Chance,
     ) {
         let flags = |id| looks.weapon(id).map_or(0, |look| look.flags);
@@ -49,7 +57,8 @@ impl ShotLooks {
             .iter()
             .map(|shot| (shot.id, flags(shot.weapon.id)));
         self.spin_starts.step(shots, chance);
-        for shot in session.shots() {
+        let smoke_frame = session.smoke_frame();
+        for shot in session.shots().iter().filter(|_| smoke_trails) {
             let Some(look) = looks.weapon(shot.weapon.id) else {
                 continue;
             };
@@ -57,7 +66,7 @@ impl ShotLooks {
             if let Some(burst) = self.trails.burst(shot.weapon.id, look, at, chance) {
                 effects.spray(&burst, caps, chance);
             }
-            if let Some(kind) = smoke_kind(look.flags) {
+            if let Some(kind) = smoke_kind(look.flags).filter(|_| smoke_frame) {
                 let sheet = looks.smoke_set(look.smoke_set);
                 self.smoke.spawn(shot.position, kind, sheet, caps);
             }

@@ -23,10 +23,15 @@
 //! @0x7638d): the view clears the glows where it clears the shield
 //! flashes.
 //!
-//! Left out: the `WeaponEffects` preference, under which alone the
-//! weapon sprites are loaded (`_LoadExtendedShipSprites` @0x23447), which
-//! the engine has no preference for yet
-//! (rdm:phase/weapons-fidelity/phase-35-left-out-of-phase-24); the 8-bit
+//! The Weapon Effects preference, under which alone the weapon sprites
+//! are loaded (`_LoadExtendedShipSprites` @0x2343c-0x2344b), gates the
+//! drawing: off, the flight view draws no ship's glow layer, while the
+//! glows still light and fall, as +0xc8e8 still does without the
+//! sprites. The original reads it only at launch; the router keeps the
+//! value the game launched with unless
+//! `nova_sim::RuleKey::WeaponEffectsNextLaunch` says otherwise.
+//!
+//! Left out: the 8-bit
 //! depth's translucency 32 − n (@0x2c78b-0x2c79d), as the engine draws at
 //! 16-bit only; and the cloak's effect on the layer, the cloak roadmaps'.
 

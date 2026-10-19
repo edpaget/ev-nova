@@ -543,9 +543,10 @@ impl PrefsDialog {
         self
     }
 
-    /// Whether the notice is drawn: Weapon Effects differs from the value
-    /// the game launched with.
-    fn notice_shown(&self) -> bool {
+    /// Whether the relaunch notice is drawn: Weapon Effects differs from
+    /// the value the game launched with.
+    #[must_use]
+    pub fn relaunch_notice_shown(&self) -> bool {
         self.launch_weapon_effects
             .is_some_and(|launch| launch != self.weapons.on())
     }
@@ -808,7 +809,7 @@ impl Screen for PrefsDialog {
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
-        if self.notice_shown() {
+        if self.relaunch_notice_shown() {
             self.notice.draw(list);
         }
         if let (true, Some(ok)) = (focused(Focus::Ok), self.dialog.item_bounds(OK_ITEM)) {

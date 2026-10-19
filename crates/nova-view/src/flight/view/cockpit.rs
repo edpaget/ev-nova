@@ -229,7 +229,10 @@ impl<C> FlightView<C> {
             Some(Ok(sheet)) => {
                 let frame = rotation_frame(heading, sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
-                let glow = sheet.weapon.zip(self.glows.drawn(ShipRef::Npc(npc.id)));
+                let glow = sheet
+                    .weapon
+                    .filter(|_| self.weapon_effects)
+                    .zip(self.glows.drawn(ShipRef::Npc(npc.id)));
                 if let Some((layer, level)) = glow {
                     let viewer = session.player().position;
                     let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
@@ -1084,6 +1087,7 @@ impl<C> FlightView<C> {
                 let lights = sheet.lights.zip(level.map(lights_tint));
                 let weapon = sheet
                     .weapon
+                    .filter(|_| self.weapon_effects)
                     .zip(self.glows.drawn(ShipRef::Player).map(lights_tint));
                 for (layer, tint) in [glow, lights, weapon].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();

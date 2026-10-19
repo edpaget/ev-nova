@@ -622,7 +622,9 @@ impl<
                     self.glows
                         .step(&lit, |ship| glow_decay(session_now, player, sheets, ship));
                     let effects = (&mut self.effects, scene.caps);
-                    self.shot_looks.step(session, &self.looks, effects, chance);
+                    let trails = self.smoke_trails;
+                    self.shot_looks
+                        .step(session, &self.looks, effects, trails, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {

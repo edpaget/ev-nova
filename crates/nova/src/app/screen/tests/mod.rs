@@ -1113,7 +1113,21 @@ fn prefs_template() -> DialogTemplate {
         20.0,
         100.0,
         18.0,
+        ItemSpec::CheckBox("QuickTime Movies".into()),
+    );
+    items[9] = item(
+        10.0,
+        40.0,
+        100.0,
+        18.0,
         ItemSpec::CheckBox("Smoke Trails".into()),
+    );
+    items[14] = item(
+        10.0,
+        60.0,
+        100.0,
+        18.0,
+        ItemSpec::CheckBox("Weapon Effects".into()),
     );
     items[15] = item(
         20.0,

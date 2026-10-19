@@ -104,7 +104,14 @@ impl AppScreen {
                     Rc::clone(&dialogs.metrics),
                 )
             })
-            .map(|dialog| dialog.with_scaling(&self.scaling));
+            .map(|dialog| dialog.with_scaling(&self.scaling))
+            .map(|dialog| {
+                if self.weapon_effects_wait() {
+                    dialog.with_launch_weapon_effects(self.launch_weapon_effects)
+                } else {
+                    dialog
+                }
+            });
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -160,14 +167,22 @@ impl AppScreen {
     /// kind picked as it closes, is kept, to be taken once, and the dialog
     /// closes once OK is activated.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
+        let wait = self.weapon_effects_wait();
         if let Some(dialog) = &mut self.preferences {
             dialog.input(input);
             if let Some(prefs) = dialog.take_change() {
                 self.prefs = prefs;
                 self.prefs_change = Some(prefs);
                 self.movies.set_on(prefs.quicktime_movies);
+                let weapon_effects = if wait {
+                    self.launch_weapon_effects
+                } else {
+                    prefs.weapon_effects
+                };
                 if let Some(flight) = &mut self.flight {
                     flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                    flight.set_smoke_trails(prefs.smoke_trails);
+                    flight.set_weapon_effects(weapon_effects);
                     flight.set_sound_prefs(prefs.sound);
                 }
             }
