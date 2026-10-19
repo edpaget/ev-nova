@@ -366,6 +366,7 @@ impl Session {
             fleet: ShipRef::Player,
             govt: None,
             leader: None,
+            fleet_escort: false,
             booty: None,
             state: self.player,
             hull: self.hull,
@@ -423,9 +424,23 @@ impl Session {
     /// and kills ([`Session::settle_strikes`]) and kept for the NPCs'
     /// answers; and a target lost let go.
     ///
+    /// Between the fates and the strikes, every escort the phase left
+    /// disabled leaves the fleet ([`Session::lose_escorts`]): its record,
+    /// AI type and cargo share, as `_DamageShip`'s escort block
+    /// (@0x3af8f-0x3b0d7) runs before its reaction block (@0x3b408), so
+    /// the answers read it unled, and so does everything after the phase.
+    /// A kill an escort scored in the same phase that disabled it is no
+    /// longer the player's fleet's ([`Session::credit_kills`] reads the
+    /// shooter's fleet after the loss); the original reads it at the kill,
+    /// so it differs only where the escort's loss landed after its kill
+    /// within one phase, crossing no boundary the player sees.
+    ///
     /// The original's `_DamageShip` settles each hit as it lands; here a
     /// phase's hits settle together after it, before the next phase or
-    /// the frame.
+    /// the frame. The fight itself already clears a lost escort's leader
+    /// as its hit lands (see the fight's `escort_loss` module), so the
+    /// rest of the phase reads it unled; only the session's part of the
+    /// loss waits for the phase's end.
     fn settle_landed(
         &mut self,
         was: &[NpcBefore],
@@ -437,6 +452,8 @@ impl Session {
         self.player_downed(player_was, &strikes, chance);
         self.take_shoves();
         self.raise_disabled(was, chance);
+        self.sync_fleet();
+        self.lose_escorts();
         self.settle_strikes(strikes, was, rules.law, chance);
         self.clear_lost_target();
     }

@@ -6,6 +6,7 @@
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
+use super::collision::reread;
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Landed, Rules, Scenery, ShipRef, Sides, Target, lock,
     regenerate, regenerate_player,
@@ -257,24 +258,34 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let pass = arena.pass;
         let rule = arena.rules.disable;
-        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let mut targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let beams_held = self.beams.len();
         self.move_beams(fighters, &targets, pass, chance);
         // Steps 7 and 8.
         if pass.beams_act() {
             self.hold_on_missiles(pass.beam_damage());
         }
-        let sides = Sides {
-            targets: &targets,
-            govts: arena.govts,
-            pass_through: self.pass_through,
-        };
         let first_strike = self.strikes.len();
-        let mut hits = Vec::new();
         if pass.beams_act() {
-            hits.extend(self.beam_hits(fighters, &sides, pass.beam_damage()));
+            // Each beam's hit lands before the next beam is tested
+            // (`_HandleBeams` @0x316a1), so a later beam's filter reads the
+            // escort an earlier one took out of the player's fleet.
+            for index in 0..self.beams.len() {
+                let sides = Sides {
+                    targets: &targets,
+                    govts: arena.govts,
+                    pass_through: self.pass_through,
+                };
+                let Some(hit) = self.beam_hit(index, fighters, &sides, pass.beam_damage()) else {
+                    continue;
+                };
+                let ship = hit.ship;
+                self.land(fighters, vec![hit], rule);
+                if let Some(struck) = fighters.iter().position(|fighter| fighter.ship == ship) {
+                    reread(&fighters[struck], &mut targets[struck], rule);
+                }
+            }
         }
-        self.land(fighters, hits, rule);
         // Step 9: each ship struck settles; a breakup begun here starts at
         // the ship's next display step.
         self.settle_struck(fighters, first_strike, rule);

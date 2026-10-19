@@ -42,7 +42,7 @@ pub(super) fn walk(combat: &mut Combat, ships: &mut [Ship]) -> Vec<(ShipRef, Opt
 }
 
 /// [`walk`] among `rocks` too, sub-munitions read from `arsenal`.
-fn walk_amid(
+pub(super) fn walk_amid(
     combat: &mut Combat,
     ships: &mut [Ship],
     rocks: &mut [AsteroidTarget],

@@ -371,6 +371,8 @@ mod double_time;
 mod edit;
 mod eject;
 mod entry;
+#[cfg(test)]
+mod escort_loss;
 mod escorts;
 mod events;
 #[cfg(test)]
@@ -573,6 +575,8 @@ pub use crate::combat::hull::ESCAPE_POD_SHIP;
 struct FightTerms {
     /// Whether it is held disabled.
     held_disabled: bool,
+    /// Whether it is a ship of the player's fleet ([`Fighter::fleet_escort`]).
+    fleet_escort: bool,
     /// Whether it threatens the player ([`Fighter::threatens_player`]).
     threatens_player: bool,
     /// Its class's top speed, its `Speed` alone.
@@ -633,6 +637,7 @@ impl FightTerms {
             fleet,
             govt: *govt,
             leader,
+            fleet_escort: self.fleet_escort,
             booty: *booty,
             state: *state,
             hull: *hull,
@@ -3000,6 +3005,7 @@ impl Session {
         };
         let player = FightTerms {
             held_disabled: false,
+            fleet_escort: false,
             threatens_player: false,
             class_speed: self.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
@@ -3014,6 +3020,7 @@ impl Session {
             .iter()
             .map(|npc| FightTerms {
                 held_disabled: self.mission_ship_held(npc),
+                fleet_escort: self.fleet.contains(&Some(npc.id)),
                 threatens_player: npc
                     .threatens_player_extended(self.traffic.npcs(), self.sees(npc)),
                 class_speed: self.class_speed(npc.ship),
@@ -22515,6 +22522,7 @@ pub(super) mod tests {
     fn an_npc_fights_with_its_attack_its_gate_wait_its_cloak_scanner_and_its_threat() {
         let terms = |threatens_player| FightTerms {
             held_disabled: false,
+            fleet_escort: false,
             threatens_player,
             class_speed: 0.0,
             top_speed: 0.0,

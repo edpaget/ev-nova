@@ -1402,6 +1402,7 @@ impl Combatant {
             fleet: self.id,
             govt: None,
             leader: None,
+            fleet_escort: false,
             booty: None,
             state: self.state,
             hull: self.hull,

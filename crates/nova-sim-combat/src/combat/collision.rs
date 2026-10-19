@@ -89,19 +89,24 @@
 //!   a shot touching two meets the first in their entry order; the engine
 //!   takes the first along the move:
 //!   rdm:phase/asteroids/phase-9-asteroid-contact-before-point-defence.
-//! - **An escort's leader cleared as its hit lands**, which the rest of
-//!   the frame's rules read (`_DamageShip` @0x3ae58-0x3afdd); **a Derelict
-//!   government's ships disabled at any armour** (`_IsDisabled`
-//!   @0x2cf1-0x2d14); **a ship the frame has not shown yet**:
-//!   rdm:phase/weapons-fidelity/phase-42-left-out-of-phase-33.
+//!
+//! **Built in phase 42.** An escort's leader is cleared as the hit that
+//! leaves it disabled lands (`_DamageShip` @0x3ae58-0x3afdd, the
+//! `escort_loss` module), and [`Lineup::refresh`] reads its leader and
+//! fleet again, so the rest of the walk reads it unled. A Derelict
+//! government's ships are held disabled at any armour (`_IsDisabled`
+//! @0x2cf1-0x2d14): the session sets [`Fighter::held_disabled`]. A slot
+//! made active since its last display is hidden, so the walk skips it
+//! (@0xacba3): by `RuleKey::UndisplayedShips`' engine reading the session
+//! gives such a ship no rank ([`Fighter::sprite`] none).
 //!
 //! *Ordering against the original.* The sub-munitions of a proximity hit
 //! are released after the pass, in the order their hits landed, where
 //! `_HandleShipHit` releases them in place (@0x36f12-0x36f47). A
 //! sub-munition is not tested in the frame it spawns (its sprite is not
-//! shown), carries no miss roll, and its seek reads nothing a hit changes
-//! but an escort's leader (left out above), so the deferral crosses no
-//! boundary. The struck ships' conditions settle after the pass too
+//! shown), carries no miss roll, and its seek reads the ships as the
+//! pass's hits left them, an escort's cleared leader included, so the
+//! deferral crosses no boundary. The struck ships' conditions settle after the pass too
 //! (`Combat::settle_struck`), as nothing in the pass reads them but
 //! whether a ship is destroyed, which no hit there changes.
 
@@ -198,10 +203,10 @@ impl Lineup<'_> {
         }
     }
 
-    /// Reads the [`Target::disabled`] of each ship `hit` again from its
-    /// fighter among `fighters` ([`Fighter::disabled_now`]), as `rule`
-    /// says. Only a hit changes a ship's armour in the pass, and its
-    /// condition settles after it, so no other ship's can have changed.
+    /// Reads each ship `hit` again from its fighter among `fighters`
+    /// ([`reread`]), as `rule` says. Only a hit changes a ship's armour or
+    /// clears an escort's leader in the pass, and its condition settles
+    /// after it, so no other ship's can have changed.
     fn refresh(&mut self, fighters: &[Fighter], hit: &[ShipRef], rule: &dyn DisableRule) {
         for ((fighter, target), touchable) in fighters
             .iter()
@@ -209,12 +214,22 @@ impl Lineup<'_> {
             .zip(&mut self.touchable)
         {
             if hit.contains(&fighter.ship) {
-                let disabled = fighter.disabled_now(rule);
-                target.disabled = disabled;
-                touchable.disabled = disabled;
+                reread(fighter, target, rule);
+                reread(fighter, touchable, rule);
             }
         }
     }
+}
+
+/// Reads again from `fighter` what a hit on it may have changed of
+/// `target`, as `rule` says: whether it is disabled now
+/// ([`Fighter::disabled_now`]), and its leader and fleet, which the hit
+/// that leaves a ship of the player's fleet disabled clears
+/// (`escort_loss`).
+pub(super) fn reread(fighter: &Fighter, target: &mut Target, rule: &dyn DisableRule) {
+    target.disabled = fighter.disabled_now(rule);
+    target.ties.leader = fighter.leader;
+    target.fleet = fighter.fleet;
 }
 
 /// What the walk reads beside the ships: each sub-munition's weapon, and

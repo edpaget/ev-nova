@@ -374,6 +374,7 @@ mod collision;
 pub mod damage;
 pub mod defence;
 mod display;
+mod escort_loss;
 pub mod exits;
 mod expiry;
 #[cfg(any(test, feature = "fixture"))]
@@ -850,6 +851,12 @@ pub struct Fighter<'a> {
     /// that escorts the player, else the lead it escorts or the carrier
     /// it left; none for the player and a ship led by no one.
     pub leader: Option<ShipRef>,
+    /// Whether it is a ship of the player's fleet: led by the player with
+    /// no mission mark (`_DamageShip` @0x3af8f-0x3afa5). The hit that
+    /// leaves it disabled clears its leader in place, so the rest of the
+    /// tick reads it unled (see the `escort_loss` module). Never the
+    /// player's own.
+    pub fleet_escort: bool,
     /// Its `düde`'s `Booty`, or `None` when it has no `düde` (the player
     /// has none).
     pub booty: Option<u16>,
@@ -2627,65 +2634,69 @@ impl Combat {
         }
     }
 
-    /// Step 8: the hit each beam makes this tick among `sides`,
-    /// if any, each beam ending where it hit and exploding there; an
-    /// intended hit is on the ship it was fired at, or, for one fired at
-    /// nothing, its firer's target among `fighters`. Its mass and energy
-    /// damage are multiplied by `factor` ([`GamePass`]), cone hits and
-    /// segment hits alike; its `Impact` and `Ionization` never are.
-    fn beam_hits(&mut self, fighters: &[Fighter], sides: &Sides, factor: f32) -> Vec<Landed> {
+    /// Step 8: the hit beam `index` makes this tick among `sides`, if
+    /// any, the beam ending where it hit and exploding there; an intended
+    /// hit is on the ship it was fired at, or, for one fired at nothing,
+    /// its firer's target among `fighters`. Its mass and energy damage are
+    /// multiplied by `factor` ([`GamePass`]), cone hits and segment hits
+    /// alike; its `Impact` and `Ionization` never are. The caller lands it
+    /// before the next beam is tested, as `_HandleBeams` damages the ship
+    /// in its beam loop (@0x316a1).
+    fn beam_hit(
+        &mut self,
+        index: usize,
+        fighters: &[Fighter],
+        sides: &Sides,
+        factor: f32,
+    ) -> Option<Landed> {
         let beam_rules = self.beam_rules;
-        let mut hits = Vec::new();
-        for beam in &mut self.beams {
-            let Some((ship, at)) = beam.hit(sides, beam_rules) else {
-                continue;
-            };
-            beam.end = at;
-            let meant = beam.aimed_at.or_else(|| {
-                fighters
-                    .iter()
-                    .find(|fighter| fighter.ship == beam.firer)
-                    .and_then(|firer| firer.target)
-            });
-            let hit = Hit {
-                cant_kill: beam.disable_only,
-                ..Hit::of(&beam.weapon)
-            };
-            hits.push(Landed {
-                ship,
-                by: Some(beam.firer),
-                weapon: Some(beam.weapon.id),
+        let beam = &mut self.beams[index];
+        let (ship, at) = beam.hit(sides, beam_rules)?;
+        beam.end = at;
+        let beam = *beam;
+        let meant = beam.aimed_at.or_else(|| {
+            fighters
+                .iter()
+                .find(|fighter| fighter.ship == beam.firer)
+                .and_then(|firer| firer.target)
+        });
+        let hit = Hit {
+            cant_kill: beam.disable_only,
+            ..Hit::of(&beam.weapon)
+        };
+        if let Some(explosion) = beam.weapon.explosion {
+            self.events.push(CombatEvent::Exploded {
                 at,
-                hit: Hit {
-                    mass: hit.mass * factor,
-                    energy: hit.energy * factor,
-                    ..hit
-                },
-                direct: true,
-                intended: meant == Some(ship),
-                lock: false,
-                weight: BEAM_WEIGHT,
-                push: Push {
-                    from: beam.start,
-                    impact: beam.weapon.impact,
-                    beam: true,
-                },
-                ion: Some(Dose::of(&beam.weapon, None)),
+                explosion,
+                size: beam.weapon.blast_radius,
             });
-            if let Some(explosion) = beam.weapon.explosion {
-                self.events.push(CombatEvent::Exploded {
-                    at,
-                    explosion,
-                    size: beam.weapon.blast_radius,
-                });
-            }
-            if let Some(particles) = beam.weapon.hit_particles {
-                let variation = asteroid_hit::BEAM_HIT_PART_VARIATION;
-                let burst = asteroid_hit::hit_burst(at, &particles, variation);
-                self.events.push(CombatEvent::Particles(burst));
-            }
         }
-        hits
+        if let Some(particles) = beam.weapon.hit_particles {
+            let variation = asteroid_hit::BEAM_HIT_PART_VARIATION;
+            let burst = asteroid_hit::hit_burst(at, &particles, variation);
+            self.events.push(CombatEvent::Particles(burst));
+        }
+        Some(Landed {
+            ship,
+            by: Some(beam.firer),
+            weapon: Some(beam.weapon.id),
+            at,
+            hit: Hit {
+                mass: hit.mass * factor,
+                energy: hit.energy * factor,
+                ..hit
+            },
+            direct: true,
+            intended: meant == Some(ship),
+            lock: false,
+            weight: BEAM_WEIGHT,
+            push: Push {
+                from: beam.start,
+                impact: beam.weapon.impact,
+                beam: true,
+            },
+            ion: Some(Dose::of(&beam.weapon, None)),
+        })
     }
 
     /// Takes each of `hits` in turn off the ship it landed on among
@@ -2712,6 +2723,12 @@ impl Combat {
     /// direct hit and a beam tick and after it on a blast; nothing reads
     /// the charge between the two, nor before the handling's next step,
     /// so one place serves all, crossing no boundary the player sees.
+    ///
+    /// A ship of the player's fleet that a hit leaves disabled leaves its
+    /// leader as the hit lands (`_DamageShip` @0x3afdd,
+    /// [`escort_loss::leave_fleet_if_disabled`]), so every later test of
+    /// the tick reads it unled; the escape pod, which takes no hit, never
+    /// does.
     fn land(&mut self, fighters: &mut [Fighter], hits: Vec<Landed>, rule: &dyn DisableRule) {
         // A shot passes through the escape pod and every class after it
         // (`_ShotCanHitShip` @0x447b3-0x447d9), and a beam through the pod
@@ -2767,6 +2784,7 @@ impl Combat {
             let before = taken(fighter.reserves);
             let was_disabled = fighter.disabled_now(rule);
             damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
+            escort_loss::leave_fleet_if_disabled(fighter, rule);
             self.strikes.push(Strike {
                 ship: landed.ship,
                 by: landed.by,
@@ -3680,6 +3698,7 @@ mod tests {
     mod ai_dispatch;
     mod collision_walk;
     mod display_step;
+    mod escort_lost_in_place;
     mod exit_steps;
     mod hidden_shots;
     mod plunder_fire;
@@ -3696,6 +3715,7 @@ mod tests {
         fleet: ShipRef,
         govt: Option<GovtId>,
         leader: Option<ShipRef>,
+        fleet_escort: bool,
         booty: Option<u16>,
         target: Option<ShipRef>,
         state: ShipState,
@@ -3754,6 +3774,7 @@ mod tests {
                 fleet: ShipRef::Npc(NpcId(id)),
                 govt: None,
                 leader: None,
+                fleet_escort: false,
                 booty: None,
                 target: None,
                 state: ShipState {
@@ -3819,6 +3840,7 @@ mod tests {
                 fleet: self.fleet,
                 govt: self.govt,
                 leader: self.leader,
+                fleet_escort: self.fleet_escort,
                 booty: self.booty,
                 state: self.state,
                 hull: self.hull,
