@@ -130,3 +130,37 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
     assert!(by_pick.is_some_and(|heading| heading > 0));
     assert!(by_last_gun > by_pick, "{by_last_gun:?} {by_pick:?}");
 }
+
+#[test]
+fn a_dampened_fighter_breaking_off_keeps_it_facing_only_when_the_worlds_rule_counts_its_dampener() {
+    use crate::flight::FlightRules;
+    use crate::inertialess::InertialDampener;
+    // Facing its break heading, its target 100 above: an inertial ship
+    // drops back to dogfight, an inertialess one keeps breaking off. The
+    // traffic's pursuit reads the world's flight rule.
+    let kept = |rule: InertialDampener| {
+        let mut traffic = traffic();
+        let ship = &mut traffic.npcs[0];
+        ship.afterburner = false;
+        ship.stats.dampener = true;
+        ship.hull.inherent_ai = 3;
+        ship.hull.mass = 100.0;
+        ship.state.heading = 135.0;
+        ship.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let world = World {
+            player: Some(player_at(Vec2::new(0.0, -100.0))),
+            flight: FlightRules {
+                inertial_dampener: rule,
+                ..FlightRules::default()
+            },
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
+        traffic.npcs()[0].pursuit.kept
+    };
+    assert_eq!(
+        kept(InertialDampener::AnyShip),
+        Some(Kept::BreakOff { heading: 135 })
+    );
+    assert_eq!(kept(InertialDampener::PlayerOnly), None);
+}

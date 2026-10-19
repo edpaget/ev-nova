@@ -473,6 +473,41 @@ mod tests {
     }
 
     #[test]
+    fn a_dampened_pirate_docks_within_four_times_its_box_only_when_the_worlds_rule_counts_its_dampener()
+     {
+        // Class turn 3: a box of 210, 840 for an inertialess ship. The
+        // pirate's high level reads the world's flight rule.
+        let sub = |rule: InertialDampener| {
+            let mut dampened = pirate(100);
+            dampened.stats.dampener = true;
+            assert!(!dampened.stats.inertialess_hull);
+            let mut far = victim();
+            far.state.position = Vec2::new(840.0, 0.0);
+            let mut traffic = traffic_of(vec![dampened, far]);
+            let world = World {
+                flight: FlightRules {
+                    inertial_dampener: rule,
+                    ..FlightRules::default()
+                },
+                ..World::new(&[])
+            };
+            traffic.tick_in(
+                &PirateWarship::default(),
+                world,
+                &[],
+                &mut Draws::of(&[0; 64]),
+            );
+            ship(&traffic, PIRATE).docking.map(|docking| docking.sub)
+        };
+        assert_eq!(sub(InertialDampener::AnyShip), Some(DockSub::Dock));
+        assert_eq!(
+            sub(InertialDampener::PlayerOnly),
+            Some(DockSub::Approach),
+            "beyond twice 210"
+        );
+    }
+
+    #[test]
     fn the_plunder_comes_on_the_dock_waits_last_tick_and_takes_the_cargo() {
         let mut traffic = traffic_of(vec![pirate(1), victim()]);
         tick(&mut traffic, 0);
