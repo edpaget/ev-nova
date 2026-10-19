@@ -78,7 +78,10 @@
 //!
 //! **The display** ([`display`]): each frame after the flight and the
 //! fight, [`ShipFrames::step`] on its class's [`FrameSpec`], its fold and
-//! whether it is disabled and its key ship aboard; then its ion tint
+//! whether it is disabled and its key ship aboard; its lights
+//! ([`ShipFrames::light`], random lights rolling on the traffic's chance;
+//! a new ship's blink timer is its berth's,
+//! [`berth_blink`](crate::traffic::berth_blink)); then its ion tint
 //! ([`ion_tint::display`]), on its class's capacity, its colour cleared
 //! once its charge is gone. No sound plays in any of it.
 

@@ -19,7 +19,13 @@
 //! Through a jump (+0x50 above 0, @0x6cf0d-0x6cf6c) the bank turns with the
 //! jump's auto-turn, a ship of 0x0001 levels at once past a stage of 30
 //! (30.0 @0xdd084), and the glow falls 1 more ([`ramp_jump_glow`](crate::glow::ramp_jump_glow)'s second
-//! fall). The player's +0x4c, the block's other test, is never set here.
+//! fall). The player's +0x4c, the block's other test, never fires for the
+//! player, as nothing raises it: its only writers that reach slot 0 write
+//! 0 (`_InitObjects` @0x1c3ae, `_AIMakeShipStopRefuelling` @0x833c6) or
+//! count it down (`_HandlePlayer` @0x6d7c3-0x6d7db), and every raiser misses
+//! slot 0 (`_HandleShip` from slot 1 @0x44457, `_AIDispatch` needing +0x88
+//! above 0 @0x4427e, the player's -1 @0x1d47a, the take-off's waits from
+//! slot 1 @0x673a4).
 //!
 //! **The fold's writers**, each the player's [`Fold`]:
 //!
@@ -48,7 +54,17 @@
 //! **The display** ([`Session::display_ships`]): after each pass's fight,
 //! the player's frame and then each NPC's, so each ship's frame reads the
 //! fold its flight and fire left, as `_HandleShipDisplay` runs after
-//! `_HandlePlayer` and each `_HandleShip`; before the frame is drawn.
+//! `_HandlePlayer` and each `_HandleShip`; before the frame is drawn. Each
+//! frame steps the ship's lights state, which lights out zeroes by
+//! [`RuleKey::LightsOutZeroesBlink`]'s engine reading
+//! (`nova_sim::combat::ship_lights`). The player's lights state rides
+//! through every landing, jump and ship change; the escape pod's rescue
+//! zeroes its intensity and count but not its timer, as `_ResetPlayer`
+//! does (@0x1d534-0x1d539). A new pilot's session starts it from rest; the
+//! original keeps slot 0's timer across a pilot load or new game until the
+//! app quits, which is recorded only. No display runs before a flight's
+//! first frame until `_PrepareAllSprites`' display pass is built
+//! (weapons-fidelity phase 47).
 //! Each display ends with the ship's ion tint
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it.

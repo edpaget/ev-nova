@@ -77,6 +77,11 @@
 //! The frame's `_gSpeedMult` is 1.0, the engine's fixed step. No sound
 //! plays in any of it.
 //!
+//! **The lights** ([`ShipFrames::light`]): the lights block, after the
+//! alt layer's, steps the ship's lights state ([`ShipFrames::lights`]) and
+//! puts it out (see [`ship_lights`](super::ship_lights)); its callers fill
+//! [`Drawn::lights`] with it.
+//!
 //! **Ordering.** Each ship's display steps after its flight and its fire
 //! in the same tick, before the frame is drawn, as `_HandleShipDisplay`
 //! runs after `_HandlePlayer` and each `_HandleShip`; firing reads the

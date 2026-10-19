@@ -10,6 +10,13 @@
 //! tick without replaying from tick 0, so its cost never grows with the
 //! elapsed time and the same tick always gives the same answer at any
 //! frame rate.
+//!
+//! It answers for lights that have run from rest (intensity 0, rising,
+//! timer 0) and never gone out. Flight draws each ship's lights from the
+//! sim's per-ship lights state instead (`nova_sim::combat::ship_lights`),
+//! which a lights out leaves dark and a reused slot's timer starts late;
+//! this solver serves the ship browser and pins that state's port from
+//! rest. Both draw an intensity by [`level`].
 
 /// The lights' full intensity: drawn as they are, added at full strength.
 pub const FULL: u8 = 32;
