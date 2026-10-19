@@ -1778,6 +1778,9 @@ impl Session {
         // `ship_display` module).
         session.last_set_fold();
         session.set_first_class();
+        // `_PrepareAllSprites`' display of the player's lights before the
+        // first frame (see the `ship_display` module).
+        session.prepare_player_lights();
         Ok(session)
     }
 

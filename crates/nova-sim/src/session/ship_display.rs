@@ -62,9 +62,12 @@
 //! zeroes its intensity and count but not its timer, as `_ResetPlayer`
 //! does (@0x1d534-0x1d539). A new pilot's session starts it from rest; the
 //! original keeps slot 0's timer across a pilot load or new game until the
-//! app quits, which is recorded only. No display runs before a flight's
-//! first frame until `_PrepareAllSprites`' display pass is built
-//! (weapons-fidelity phase 47).
+//! app quits, which is recorded only. As a flight is entered the player's
+//! lights block runs once before the first frame, as `_PrepareAllSprites`
+//! runs `_HandleShipDisplay` (@0x3a776-0x3a78e;
+//! [`Session::prepare_player_lights`]); its other parts are weapons-fidelity
+//! phase 47's. The NPCs come into the system on a traffic tick, whose
+//! display runs before the frame.
 //! Each display ends with the ship's ion tint
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
@@ -274,6 +277,26 @@ impl Session {
         let govts = &self.govts;
         self.traffic
             .display_ships(|govt| govts.derelict(govt), rules, chance);
+    }
+
+    /// The player's lights block run once as a flight is entered, before
+    /// its first frame, as `_PrepareAllSprites` runs `_HandleShipDisplay`
+    /// (@0x3a776-0x3a78e): so the first frame shows the lights at their
+    /// first step from rest, and each step's display the next. A random
+    /// light's first roll is the stateless solver's first, on
+    /// [`HashedRolls`](crate::blink::HashedRolls) from seed 0, as no
+    /// chance is to hand.
+    pub(super) fn prepare_player_lights(&mut self) {
+        use crate::blink::BlinkChance;
+        let spec = self.hull.frames;
+        let moment = Moment {
+            disabled: self.condition.disabled(),
+            key_aboard: false,
+            rules: self.display_rules(),
+        };
+        let rolls = crate::blink::HashedRolls::new(0);
+        let frames = &mut self.ship_display.frames;
+        self.ship_display.drawn.lights = frames.light(&spec, &moment, |sides| rolls.roll(0, sides));
     }
 
     /// Tells the traffic the first class, ID 128, which a spawn of most
@@ -760,7 +783,7 @@ mod tests {
         let catalog = lit(0x0040);
         let mut session = Session::start(&catalog).expect("starts");
         let before = player_lights(&mut session, 30, false);
-        assert_eq!(before[29], Some(22), "rising from rest");
+        assert_eq!(before[29], Some(23), "rising from rest: 31 steps");
         assert_eq!(player_lights(&mut session, 5, true), [None; 5]);
         let after = player_lights(&mut session, 42, false);
         assert_eq!(after[0], None, "dark for a step");
@@ -773,7 +796,23 @@ mod tests {
         player_lights(&mut session, 30, false);
         player_lights(&mut session, 5, true);
         let after = player_lights(&mut session, 1, false);
-        assert_eq!(after, [Some(27)], "as if never out: 0.75 x 36");
+        assert_eq!(after, [Some(27)], "as if never out: 0.75 x 37");
+    }
+
+    #[test]
+    fn a_flown_sessions_player_lights_step_once_before_the_first_frame() {
+        let session = Session::start(&lit(0)).expect("starts");
+        let lights = session.ship_display.frames.lights;
+        assert_eq!((lights.intensity, lights.count), (0.75, 0), "one step");
+        assert_eq!(session.player_drawn().lights, None, "0.75: not drawn");
+        let mut steady = lit(0);
+        let display = steady.hulls[0].display.as_mut().expect("a shän");
+        display.blink = crate::blink::Blink::STEADY;
+        let session = Session::start(&steady).expect("starts");
+        assert_eq!(session.player_drawn().lights, Some(32), "no tick needed");
+        let pilot = session.pilot.clone();
+        let loaded = Session::fly(&steady, pilot).expect("loads");
+        assert_eq!(loaded.player_drawn().lights, Some(32), "a load's too");
     }
 
     #[test]
@@ -860,6 +899,67 @@ mod tests {
             (npc.reserves.shield.now, npc.reserves.armor.now),
             (50.0, 80.0)
         );
+    }
+
+    /// [`displaying`]'s catalog, the player's 128 folding through four
+    /// sets, its escort ship 129 animated through six, `AnimDelay` 100.
+    fn animated_escort() -> FakePilotCatalog {
+        let mut catalog = displaying(FOLDS, 4);
+        catalog.ship_records.push(ship(129, FAST));
+        catalog.hulls[1].display = Some(ShipDisplay {
+            flags: ANIMATED,
+            base_sets: 6,
+            anim_delay: 100,
+            ..ShipDisplay::default()
+        });
+        catalog
+    }
+
+    #[test]
+    fn an_entering_escort_keeps_a_spent_anim_roll_spent() {
+        use crate::traffic::ship_display::AnimRoll;
+        use nova_sim_base::fixture::Draws;
+        let catalog = animated_escort();
+        let mut session = Session::start(&catalog).expect("starts");
+        session
+            .pilot
+            .escorts
+            .push(crate::session::tests::trader_escort());
+        session.populate(&catalog, &mut NeverFires);
+        let id = session.fleet[0].expect("placed");
+        let owed = session.npc(id).expect("in the system").display.rolls.anim;
+        assert_eq!(owed, AnimRoll::FirstClass, "`_SpawnEscort`'s");
+        // Its first display spends it, on class 128's four sets.
+        let mut first = Draws::of(&[]).keyed(4, 1);
+        session.display_ships(&mut first);
+        assert_eq!(first.times_asked(4), 1);
+        let npc = session.npc_mut(id).expect("in the system");
+        assert_eq!(npc.display.rolls.anim, AnimRoll::None, "spent");
+        npc.display.frames.anim_set = 2;
+        // Entering again, it keeps its set: no roll asked of class 128's
+        // four sets or its own six.
+        session.populate(&catalog, &mut NeverFires);
+        let id = session.fleet[0].expect("placed");
+        let mut again = Draws::of(&[]).keyed(4, 3).keyed(6, 5);
+        session.display_ships(&mut again);
+        assert_eq!((again.times_asked(4), again.times_asked(6)), (0, 0));
+        assert_eq!(session.npc(id).expect("in the system").display.drawn.set, 2);
+    }
+
+    #[test]
+    fn an_escort_leaving_before_its_first_display_still_owes_its_roll() {
+        use crate::traffic::ship_display::AnimRoll;
+        let catalog = animated_escort();
+        let mut session = Session::start(&catalog).expect("starts");
+        session
+            .pilot
+            .escorts
+            .push(crate::session::tests::trader_escort());
+        session.populate(&catalog, &mut NeverFires);
+        session.populate(&catalog, &mut NeverFires);
+        let id = session.fleet[0].expect("placed");
+        let npc = session.npc(id).expect("in the system");
+        assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass, "carried");
     }
 
     #[test]

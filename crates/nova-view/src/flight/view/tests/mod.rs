@@ -55,8 +55,8 @@ use crate::system::catalog::{
 };
 use crate::{Blend, DrawCommand, Font};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
+use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
-use nova_sim::{GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
@@ -2770,10 +2770,13 @@ fn boardable() -> FakeCatalog {
     player.crew = 10;
     catalog.ships[0].fields.speed = 0;
     catalog.ships.push(player);
-    catalog.hulls = vec![nova_sim::HullRecord {
-        strength: 5,
-        ..hull_of(129, &[])
-    }];
+    catalog.hulls = vec![
+        hull_of(128, &[]),
+        nova_sim::HullRecord {
+            strength: 5,
+            ..hull_of(129, &[])
+        },
+    ];
     catalog
 }
 

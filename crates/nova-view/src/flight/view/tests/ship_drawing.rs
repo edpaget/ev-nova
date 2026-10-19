@@ -332,8 +332,10 @@ fn a_disabled_0x0040_ships_lights_go_out_and_climb_back_from_nothing() {
     });
     let mut view = flying_with(catalog, 0, Rc::new(Still), &[]);
     ticks(&mut view, 29);
-    let level = Some(lights_tint(22));
-    assert_eq!(lights_drawn(&view), (level, level), "rising, intact");
+    // The player's lights stepped once more, before the first frame; the
+    // NPC's from the tick it came in.
+    let rising = (Some(lights_tint(23)), Some(lights_tint(22)));
+    assert_eq!(lights_drawn(&view), rising, "rising, intact");
     both(&mut view, Condition::Disabled);
     view.tick(TICK);
     assert_eq!(lights_drawn(&view), (None, None), "both out");
