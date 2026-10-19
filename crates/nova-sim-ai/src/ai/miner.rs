@@ -79,6 +79,18 @@ pub const SCOOPS: u16 = 0x0002;
 /// The `Flags3` bits that make a ship a miner (`testb $0x3` @0x8ff76).
 pub const MINER_BITS: u16 = 0x0003;
 
+/// Whether `_AIDispatch` sends `npc` to `_MinerAI` in place of its type's
+/// think (@0x8ff64-0x8ff96): a `shïp` `Flags3` & 3 and leader +0x9a -1,
+/// which the player's escorts and fighters, mission escorts and an NPC
+/// carrier's fighters never have.
+#[must_use]
+pub fn thinks_for(npc: &Npc) -> bool {
+    npc.miner & MINER_BITS != 0
+        && npc.leader.is_none()
+        && !npc.escorts_player()
+        && npc.carrier.is_none()
+}
+
 /// How a leaderless miner decides (see the module docs): it fires and
 /// answers hits as its AI type does, which [`NovaAi`](crate::ai::NovaAi)
 /// keeps, as `_AIDispatch` replaces only the type's think.
@@ -248,6 +260,16 @@ mod tests {
             ..Surroundings::new(sites, &npcs)
         };
         decide(npc, &around)
+    }
+
+    #[test]
+    fn only_a_leaderless_ship_of_the_miner_bits_thinks_as_a_miner() {
+        assert!(thinks_for(&miner(MINES, false)));
+        assert!(thinks_for(&miner(SCOOPS, false)));
+        assert!(!thinks_for(&miner(0, false)), "no bits");
+        let mut led = miner(MINER_BITS, true);
+        led.leader = Some(crate::traffic::npc::NpcId(9));
+        assert!(!thinks_for(&led), "a leader");
     }
 
     #[test]

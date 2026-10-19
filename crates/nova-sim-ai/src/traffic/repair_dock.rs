@@ -31,9 +31,10 @@
 //! tick k with wait W repairs on tick k + max(1, W - 100), and the drift
 //! that follows steps 100 times and sets goal 0 on its 100th.
 //!
-//! The repair's high level runs on each of its thinks though an
-//! unprovoked assister decides nothing: the type AIs return at once for
-//! goals 9 and 0xf (`_WimpyTraderAI` @0x8b045-0x8b05c), but `_AIDispatch`
+//! The repair's high level runs on each of its thinks though an assister
+//! decides nothing, provoked or not: the type AIs return at once for
+//! goals 9 and 0xf (`_WimpyTraderAI` @0x8b045-0x8b05c, see
+//! [`assist_think`](crate::traffic::assist_think)), but `_AIDispatch`
 //! runs the high and low levels whatever they did (@0x901e5-0x901f4).
 //!
 //! Left out: the ×4 box for an inertialess repairer (@0x8f781-0x8f797),

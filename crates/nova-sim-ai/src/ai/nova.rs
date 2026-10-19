@@ -46,7 +46,7 @@ use std::rc::Rc;
 use crate::ai::fire::FireRules;
 use crate::ai::flee_drop;
 use crate::ai::lost_sight;
-use crate::ai::miner::{MINER_BITS, MinerAi};
+use crate::ai::miner::{self, MinerAi};
 use crate::ai::pirate::PirateWarship;
 use crate::ai::target::TargetRules;
 use crate::ai::{
@@ -228,18 +228,11 @@ impl NovaAi {
     }
 
     /// The behaviour that decides for `npc` and picks its target: the
-    /// miners' for a leaderless miner (`_AIDispatch` @0x8ff64-0x8ff96: a
-    /// `shïp` `Flags3` & 3, and leader +0x9a -1, which the player's escorts
-    /// and fighters, mission escorts and an NPC carrier's fighters never
-    /// have), otherwise its own ([`NovaAi::of`]). A miner's fire, gate wait
-    /// and answer to hits stay its own: `_AIDispatch` replaces only the
-    /// type's think.
+    /// miners' for a leaderless miner ([`miner::thinks_for`]), otherwise
+    /// its own ([`NovaAi::of`]). A miner's fire, gate wait and answer to
+    /// hits stay its own: `_AIDispatch` replaces only the type's think.
     fn thinker(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
-        if npc.miner & MINER_BITS != 0
-            && npc.leader.is_none()
-            && !npc.escorts_player()
-            && npc.carrier.is_none()
-        {
+        if miner::thinks_for(npc) {
             &*self.miner
         } else {
             self.of(npc, around)

@@ -42,7 +42,7 @@
 //! ([`RuleKey::RefuelCap`](crate::RuleKey::RefuelCap)).
 //!
 //! The refuel's high level runs on each of its thinks though an
-//! unprovoked assister decides nothing, as the repair's does
+//! assister decides nothing, provoked or not, as the repair's does
 //! ([`repair_dock`](crate::traffic::repair_dock)). The ships refuelling run
 //! in berth order, each reading the fuel the last left, as the original's
 //! thinks run slot by slot. The player's fuel given is tallied

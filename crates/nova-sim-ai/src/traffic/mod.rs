@@ -70,8 +70,8 @@
 //!    in or emerging from a gate (waiting there or bursting out of it,
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
 //!    gate to leave, one that is not intact, or one assisting the player
-//!    while
-//!    unprovoked (until it is done, or provoked): first every goal (a
+//!    whose type's think returns at once for the help, provoked or not
+//!    (any but a leaderless miner, [`assist_think`]): first every goal (a
 //!    pirate's wait on a boarded victim settled in berth order,
 //!    [`board_wait::resolve`]; each decision that turns on the player
 //!    asking its person's quote gate, [`Traffic::turn_with_quote`], before
@@ -80,12 +80,12 @@
 //!    [`plunder::resolve`], queued on the line at the pirate's berth
 //!    ([`on_line`]); then, on the AI timer, each
 //!    ship's swarm check ([`swarm::pass`], which a coasting ship, one
-//!    entering a gate or one assisting the player unprovoked runs too);
+//!    entering a gate or one assisting the player runs too);
 //!    then each NPC's high level, a
 //!    docking or its fight, none while its AI wait runs, and each drift's
 //!    step, [`plunder::drift`]; a ship repairing the player flies its high
-//!    level, its docking with the player, though it decides nothing
-//!    unprovoked, [`repair_dock`], and so does one refuelling a ship,
+//!    level, its docking with the ship it targets, though it decides
+//!    nothing, [`repair_dock`], and so does one refuelling a ship,
 //!    its refuel run in berth order after every other high level,
 //!    [`refuel_dock`], its note queued on the line at its berth), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
@@ -136,6 +136,7 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 mod afterburners;
+pub mod assist_think;
 pub mod autopilot;
 pub mod berth_exits;
 pub mod berth_kept;
@@ -1011,7 +1012,7 @@ impl Traffic {
                     && npc.condition == Condition::Intact
                     && !npc.no_ai
                     && !pod_flight::is_pod(npc)
-                    && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
+                    && !assist_think::type_think_returns(npc)
                     && decision_due(self.ticks, npc.id, self.interval)
             })
             .collect();
@@ -1139,17 +1140,16 @@ impl Traffic {
     }
 
     /// Whether each NPC flies its high level this tick: each whose decision
-    /// is `due`, and each assisting the player, which decides nothing
-    /// unprovoked but flies its high level all the same, as `_AIDispatch`
-    /// runs it whatever the type AI did (@0x901e5; see [`repair_dock`] and
-    /// [`refuel_dock`]).
+    /// is `due`, and each assisting the player, whose type's think returns
+    /// at once, provoked or not ([`assist_think`]), but which flies its
+    /// high level all the same, as `_AIDispatch` runs it whatever the type
+    /// AI did (@0x901e5; see [`repair_dock`] and [`refuel_dock`]).
     fn high_levels_due(&self, due: &[bool]) -> Vec<bool> {
         self.npcs
             .iter()
             .zip(due)
             .map(|(npc, &due)| {
                 due || (matches!(npc.goal, Goal::Assist(_))
-                    && npc.provoked <= 0.0
                     && npc.mode == Mode::Flying
                     && npc.condition == Condition::Intact
                     && !npc.no_ai
@@ -3716,9 +3716,11 @@ mod tests {
     }
 
     #[test]
-    fn a_strike_that_provokes_an_assisting_npc_ends_its_help() {
+    fn a_strike_that_provokes_an_assisting_trader_keeps_its_help_through_its_think() {
         let mut traffic = populated(1, 1);
         traffic.npcs[0].goal = Goal::Assist(Help::Repair);
+        // A wimpy trader, whose think returns at once for goal 0xf
+        // (`_WimpyTraderAI` @0x8b045-0x8b05c), provoked or not.
         let fleeing = Fighting::deciding(Goal::Flee(ShipRef::Player));
         // The player disabled far off, so the repairer closes on it.
         let world = World {
@@ -3736,8 +3738,20 @@ mod tests {
         );
         assert!(traffic.npcs()[0].docking.is_some(), "closing");
         traffic.tick_in(&fleeing, world, &[struck(0, 2.0)], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].goal, Goal::Flee(ShipRef::Player));
-        assert_eq!(traffic.npcs()[0].docking, None, "dropped with its goal");
+        let helper = &traffic.npcs()[0];
+        assert_eq!(helper.provoked, 2.0);
+        assert!(
+            !fleeing
+                .log
+                .borrow()
+                .iter()
+                .any(|line| line.starts_with("decide 0")),
+            "{:?}",
+            fleeing.log.borrow()
+        );
+        assert_eq!(helper.goal, Goal::Assist(Help::Repair));
+        assert_eq!(helper.target, Some(ShipRef::Player), "still disabled");
+        assert!(helper.docking.is_some(), "still closing");
     }
 
     #[test]
