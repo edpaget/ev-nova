@@ -17,6 +17,7 @@ mod stock;
 mod stock_afterburner;
 mod stock_answer_flag;
 mod stock_asteroids;
+mod stock_board_reach;
 mod stock_cloak_when_hit_burst;
 mod stock_comm_calls;
 mod stock_conditional_text;
