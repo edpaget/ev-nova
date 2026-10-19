@@ -68,8 +68,9 @@ jobs:
           - name: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          # One universal (arm64 + x86_64) binary, cross-compiled on the arm64
-          # runner and merged with lipo.
+          # Nova.app, universal (arm64 + x86_64), in a .dmg: `mise run
+          # bundle` cross-compiles both targets on the arm64 runner, merges
+          # them, ad-hoc signs and packs the bundle (crates/nova-bundle).
           - name: universal-apple-darwin
             os: macos-latest
             target: aarch64-apple-darwin
@@ -102,17 +103,23 @@ jobs:
       # Default features only: never --features dev-tools or --all-features,
       # so egui stays out of published builds. The release build must stay on
       # the same default feature set that `mise run deny` checks in `ci`.
+      # The macOS leg's bundler builds both of its targets itself, with the
+      # same flags.
       - name: Build
+        if: runner.os != 'macOS'
         shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
-          if [ -n "${{ matrix.extra_target }}" ]; then
-            cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.extra_target }}"
-          fi
+        run: cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
+      # ev-nova-universal-apple-darwin.dmg, holding Nova.app, nova-dump,
+      # README.txt, LICENSE and an Applications link. The bundler stages
+      # under target/, so dist/ holds only the .dmg. No game data.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: mise run bundle -- dist
       # One top-level directory holding the two binaries, README.txt and
       # LICENSE. No game data.
       - name: Package
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -120,13 +127,6 @@ jobs:
           release="target/${{ matrix.target }}/release"
           mkdir -p "dist/$name"
           case "${{ matrix.os }}" in
-            macos-*)
-              for bin in nova nova-dump; do
-                lipo -create "$release/$bin" \
-                  "target/${{ matrix.extra_target }}/release/$bin" \
-                  -output "dist/$name/$bin"
-              done
-              ;;
             windows-*)
               cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$name/"
               ;;
@@ -171,8 +171,11 @@ jobs:
           pattern: dist-*
           merge-multiple: true
           path: dist
-      # Asset names are fixed per target, so --clobber replaces each one in
-      # place and no stale assets build up.
+      # Every build leg's dist/ is merged into dist/ above, so dist/ holds
+      # every asset this run made. --clobber replaces each one in place;
+      # then any asset not in dist/ (a renamed or dropped one, such as the
+      # macOS tarball the .dmg replaced) is deleted. Uploading first means
+      # the release is never without an asset this run makes.
       - name: Publish the nightly prerelease
         shell: bash
         env:
@@ -184,8 +187,14 @@ jobs:
           commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
           notes="Unsigned tester build of \`main\` at $GITHUB_SHA ($commit_url).
 
-          No EV Nova game data is included: supply your own \`Nova Files\` directory. See README.txt inside each archive for how to run the binaries."
+          No EV Nova game data is included: supply your own \`Nova Files\` directory. See README.txt in each download for how to run the game."
           gh release view nightly >/dev/null 2>&1 ||
             gh release create nightly --prerelease --title "Nightly build" --notes "$notes"
           gh release edit nightly --prerelease --notes "$notes"
           gh release upload nightly dist/* --clobber
+          gh release view nightly --json assets --jq '.assets[].name' |
+            while IFS= read -r asset; do
+              if [ ! -e "dist/$asset" ]; then
+                gh release delete-asset nightly "$asset" --yes
+              fi
+            done
