@@ -991,6 +991,10 @@ impl Session {
                 self.traffic.set_reused_slot_blink_timer(
                     self.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
                 );
+                self.traffic.set_spawn_anim_rolls_first_class(
+                    self.rules.source_for(RuleKey::SpawnAnimRollsFirstClass),
+                );
+                self.set_first_class();
                 self.traffic_due = true;
                 self.fleet.clear();
                 self.story.watched.clear();

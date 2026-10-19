@@ -168,7 +168,7 @@ use crate::ship_layer::Slot;
 use crate::skill::random_skill_level;
 use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
-use crate::traffic::ship_display::{NpcDisplay, Spawn};
+use crate::traffic::ship_display::{AnimRoll, NpcDisplay, Spawn};
 
 impl Session {
     /// Holds the eject chord, Command and the eject key down together, or
@@ -351,8 +351,14 @@ impl Session {
     fn hulk(&self, old: &ShipRecord, condition: Condition, chance: &mut dyn Chance) -> Npc {
         let kind = self.ship_kind(old);
         // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
-        // glow, fold and rolls (see `nova_sim::traffic::ship_display`).
-        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
+        // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
+        // anim set and timer after (@0x6f3a3, @0x6f3bb; see
+        // `nova_sim::traffic::ship_display`).
+        let spawn = Spawn {
+            anim: AnimRoll::None,
+            ..Spawn::default()
+        };
+        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, spawn);
         let mut reserves = kind.stats.full();
         reserves.shield = self.pilot.reserves.shield;
         reserves.armor = self.pilot.reserves.armor;
@@ -819,6 +825,11 @@ mod tests {
             hulk.display.glow,
             crate::traffic::ship_display::GLOW_SPAWN,
             "`_GenericRandomShipSpawn`'s"
+        );
+        assert_eq!(
+            hulk.display.rolls.anim,
+            AnimRoll::None,
+            "its anim set and timer zeroed"
         );
     }
 

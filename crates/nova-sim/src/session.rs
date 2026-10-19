@@ -1777,6 +1777,7 @@ impl Session {
         // `_LoadPilotData`'s fold (@0x76348-0x76376; see the
         // `ship_display` module).
         session.last_set_fold();
+        session.set_first_class();
         Ok(session)
     }
 
@@ -1878,6 +1879,8 @@ impl Session {
             .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
         self.traffic
             .set_reused_slot_blink_timer(rules.source_for(RuleKey::ReusedSlotBlinkTimer));
+        self.traffic
+            .set_spawn_anim_rolls_first_class(rules.source_for(RuleKey::SpawnAnimRollsFirstClass));
         self.rules = rules;
         self
     }

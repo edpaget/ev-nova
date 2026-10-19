@@ -37,6 +37,9 @@
 //!   0x0010 ([`STILL_WHILE_DISABLED`]); past `AnimDelay` it loses
 //!   `AnimDelay` while above it (or zeroes, with an `AnimDelay` of 0 or
 //!   less) and the anim set (+0xc8f6) steps, round to 0 at `BaseSets`.
+//!   A set past its last, rolled on another class's `BaseSets` at its
+//!   spawn, is drawn mod `BaseSets`, as `_SWSetCurrentFrameIndex` takes a
+//!   frame mod the sprite's frames (@0xa90d4-0xa90ee).
 //! - none: set 0.
 //!
 //! **The frame.** Drawn at set × `FramesPer` + the rotation
@@ -453,7 +456,10 @@ impl ShipFrames {
         } else if spec.has(ANIMATED) {
             animated = true;
             stepped = self.animate(spec, still);
-            u16::try_from(self.anim_set).unwrap_or(0)
+            // A set rolled on another class's `BaseSets` may lie past its
+            // own: `_SWSetCurrentFrameIndex` takes the frame mod the
+            // sprite's, `BaseSets` x `FramesPer` (@0xa90d4-0xa90ee).
+            u16::try_from(self.anim_set).unwrap_or(0) % spec.base_sets
         } else {
             0
         };
@@ -832,6 +838,18 @@ mod tests {
         ship.anim_set = -4;
         ship.anim_timer = 2.0;
         assert_eq!(ship.step(&spec, &mut fold, MOMENT).set, 1);
+    }
+
+    #[test]
+    fn an_anim_set_past_the_last_is_drawn_mod_base_sets() {
+        let spec = spec(ANIMATED, 3, 10);
+        let mut ship = ShipFrames {
+            anim_set: 5,
+            ..ShipFrames::default()
+        };
+        let mut fold = Fold::default();
+        assert_eq!(ship.step(&spec, &mut fold, MOMENT).set, 2, "5 mod 3");
+        assert_eq!(ship.anim_set, 5, "held until it steps");
     }
 
     #[test]

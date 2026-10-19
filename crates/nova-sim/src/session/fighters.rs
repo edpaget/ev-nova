@@ -57,7 +57,7 @@ use crate::skill::random_skill_level;
 use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
-use crate::traffic::ship_display::NpcDisplay;
+use crate::traffic::ship_display::{AnimRoll, NpcDisplay, Spawn};
 use crate::traffic::table::ShipKind;
 
 impl Session {
@@ -538,8 +538,17 @@ fn fighter(
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.pod_count,
         warp: crate::traffic::warp_out::Warp::default(),
-        // Its glow is left as its slot had it, none for a fresh one.
-        display: NpcDisplay::default(),
+        // `_LaunchFighter` takes its slot from `_GenericRandomShipSpawn`
+        // (@0x3d657): its glow 32 (@0x3cb77), and its anim rolls again
+        // on its own class (@0x3da72-0x3dad9).
+        display: NpcDisplay::spawned(
+            &kind.hull.frames,
+            Spawn {
+                anim: AnimRoll::Own,
+                ..Spawn::default()
+            },
+        )
+        .0,
     };
     fighter.independent();
     fighter
@@ -1681,6 +1690,28 @@ mod tests {
         };
         assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
         assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
+    }
+
+    #[test]
+    fn a_fighter_launched_glows_at_32_its_anim_owed_on_its_own_class() {
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        let sortie = Sortie {
+            carrier: ShipRef::Npc(raider),
+            bay: BAY,
+            ship: VIPER,
+            from: ShipState::default(),
+            heading: 0.0,
+            target: None,
+        };
+        assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+        let fighter = session.npcs().last().expect("launched");
+        assert_eq!(
+            fighter.display.glow,
+            crate::traffic::ship_display::GLOW_SPAWN,
+            "`_GenericRandomShipSpawn`'s, through `_LaunchFighter`"
+        );
+        assert_eq!(fighter.display.rolls.anim, AnimRoll::Own);
     }
 
     #[test]

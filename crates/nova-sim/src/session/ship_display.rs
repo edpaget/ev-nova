@@ -260,6 +260,14 @@ impl Session {
             .display_ships(|govt| govts.derelict(govt), rules, chance);
     }
 
+    /// Tells the traffic the first class, ID 128, which a spawn of most
+    /// origins rolls its animation on
+    /// (`nova_sim::traffic::ship_display::FirstClass`).
+    pub(super) fn set_first_class(&mut self) {
+        let first = self.arsenal.hull(crate::catalog::ShipId(128)).frames;
+        self.traffic.set_first_class(first);
+    }
+
     /// The readings every ship's display runs by, from the session's
     /// rulebook.
     fn display_rules(&self) -> DisplayRules {
@@ -784,6 +792,29 @@ mod tests {
                 session.traffic.reused_slot_blink_timer(),
                 reading,
                 "re-applied"
+            );
+        }
+    }
+
+    #[test]
+    fn the_traffic_rolls_spawns_on_class_128_by_the_session_reading() {
+        let catalog = displaying(ANIMATED, 3);
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let rules =
+                Rulebook::default().with_override(RuleKey::SpawnAnimRollsFirstClass, reading);
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            let first = session.traffic.first_class();
+            assert_eq!(first.spec, session.hull.frames, "the player's 128");
+            assert_eq!(first.reading, reading);
+            let stellar = session.sites[0].id;
+            session
+                .land_at(&catalog, session.pilot.system, stellar)
+                .expect("relocates");
+            let first = session.traffic.first_class();
+            assert_eq!(
+                (first.spec, first.reading),
+                (session.hull.frames, reading),
+                "re-applied to a new traffic"
             );
         }
     }

@@ -128,6 +128,7 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
 use crate::skill::random_skill_level;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
+use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN, NpcDisplay, Rolls};
 use crate::traffic::table::ShipKind;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
@@ -136,10 +137,11 @@ use crate::traffic::table::ShipKind;
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
-    /// Its display state and fold, its ship-table slot's, which
-    /// `_RespawnEscort` leaves (see the `ship_display` module); none when
-    /// its NPC was not in the system, and it takes a loaded pilot's.
-    pub(super) display: Option<(ShipFrames, Fold)>,
+    /// Its display state, fold and the anim rolls its spawn still owes,
+    /// its ship-table slot's, which `_RespawnEscort` leaves (see the
+    /// `ship_display` module); none when its NPC was not in the system,
+    /// and it takes a loaded pilot's.
+    pub(super) display: Option<(ShipFrames, Fold, AnimRoll)>,
     /// Its skill ([`Npc::skill`]), which `_RespawnEscort` leaves (it never
     /// writes +0x40, @0x3d4b8-0x3d62c); none when its NPC was not in the
     /// system, and it rolls one as `_SpawnEscort` does.
@@ -199,7 +201,11 @@ impl Session {
                     .and_then(|id| self.npc(id));
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
                     aux: npc.aux,
-                    display: Some((npc.display.frames, npc.armament.fold())),
+                    display: Some((
+                        npc.display.frames,
+                        npc.armament.fold(),
+                        npc.display.rolls.anim,
+                    )),
                     skill: Some(npc.skill),
                 })
             })
@@ -246,9 +252,12 @@ impl Session {
                 if let Some(npc) = self.npc_mut(id) {
                     npc.aux = kept.aux;
                     npc.ion = Ion::default();
+                    // `_RespawnEscort` clears its glow (@0x3d505).
+                    npc.display.glow = 0;
                     match kept.display {
-                        Some((frames, fold)) => {
+                        Some((frames, fold, anim)) => {
                             npc.display.frames = frames;
+                            npc.display.rolls.anim = anim;
                             *npc.armament.fold_mut() = fold;
                         }
                         None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
@@ -368,9 +377,20 @@ impl Session {
             // `_RespawnEscort` leaves +0xc908 alone.
             pods_left: kind.hull.pod_count,
             warp: crate::traffic::warp_out::Warp::default(),
-            // `_RespawnEscort` clears its glow (@0x3d505); its display
-            // otherwise its slot's (see `Session::enter_escorts`).
-            display: crate::traffic::ship_display::NpcDisplay::default(),
+            // `_SpawnEscort` and a capture's spawn take their slot from
+            // `_GenericRandomShipSpawn` (@0x3fe8f, @0x4114d): its glow 32
+            // (@0x3cb77) and its anim rolled on the first class's
+            // (@0x3c929); an entering escort's `_RespawnEscort` then
+            // clears its glow (@0x3d505), its display otherwise its
+            // slot's (see `Session::enter_escorts`).
+            display: NpcDisplay {
+                glow: GLOW_SPAWN,
+                rolls: Rolls {
+                    anim: AnimRoll::FirstClass,
+                    ..Rolls::default()
+                },
+                ..NpcDisplay::default()
+            },
         };
         npc.independent();
         Some(match berth {

@@ -18,7 +18,7 @@ use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
 use crate::traffic::fixture::npc;
 use crate::traffic::npc::{AiType, Npc};
-use crate::traffic::ship_display::{GLOW_SPAWN, Rolls};
+use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN, Rolls};
 use crate::traffic::spawn::{Entry, NewShip};
 use crate::traffic::table::ShipKind;
 use nova_sim_base::fixture::{Draws, FAST};
@@ -107,15 +107,20 @@ fn a_spawn_glows_folds_and_owes_its_rolls() {
     assert_eq!(
         fleet.display.rolls,
         Rolls {
-            anim: true,
+            anim: AnimRoll::FirstClass,
             jump_in: false,
             derelict_glow: true
-        }
+        },
+        "a fleet's ship: the first class's"
     );
     let fold = jumping.armament.fold();
     assert_eq!((fold.set, fold.dir), (0, 1), "jumping in");
     assert!(jumping.display.rolls.jump_in);
-    assert!(!jumping.display.rolls.anim, "a düde's own ship rolls none");
+    assert_eq!(
+        jumping.display.rolls.anim,
+        AnimRoll::Own,
+        "a düde's own ship rolls on its own class"
+    );
 }
 
 #[test]
@@ -187,7 +192,7 @@ fn a_ship_jumping_out_glows_up_as_it_warps() {
 #[test]
 fn the_display_steps_every_ship_after_the_fight() {
     let mut animated = idle(ANIMATED);
-    animated.display.rolls.anim = true;
+    animated.display.rolls.anim = AnimRoll::Own;
     animated.govt = Some(GovtId(140));
     animated.display.rolls.derelict_glow = true;
     animated.display.glow = 32;

@@ -900,6 +900,18 @@ mod tests {
     }
 
     #[test]
+    fn a_hired_escort_spawns_glowing_its_anim_owed_on_the_first_class() {
+        use crate::traffic::ship_display::{AnimRoll, GLOW_SPAWN};
+        let catalog = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        assert!(session.hire(ShipId(129), &mut NeverFires).is_ok());
+        let id = session.fleet[0].expect("placed");
+        let npc = session.npc(id).expect("in the system");
+        assert_eq!(npc.display.glow, GLOW_SPAWN, "`_SpawnEscort`'s spawn");
+        assert_eq!(npc.display.rolls.anim, AnimRoll::FirstClass);
+    }
+
+    #[test]
     fn a_hire_takes_what_the_terms_charge_not_the_fee() {
         let catalog = barred(vec![hireable(129, 100)]);
         let mut session = landed(&catalog, 25_000).with_hire_terms(Rc::new(FakeTerms {

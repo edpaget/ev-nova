@@ -59,12 +59,22 @@
 //! (`_RandomShipSpawn` @0x3c664, `_GenericRandomShipSpawn` @0x3cb77), 0
 //! for a derelict government's ship (@0x3c766, @0x3cc4d) or a person's
 //! (`_SpawnPerson` @0x410d3); its fold at its last set with no direction,
-//! never fired (@0x3c4d0, @0x3cab8, @0x3d018, @0x41101). Every spawn but a
-//! `düde`'s own ship (`_RandomShipSpawn`) rolls its anim set `Rand(BaseSets)`
-//! and its animation timer `Rand(AnimDelay)` (@0x3cc73-0x3ccc2); one
+//! never fired (@0x3c4d0, @0x3cab8, @0x3d018, @0x41101). Its anim set
+//! `Rand(BaseSets)` and animation timer `Rand(AnimDelay)` are rolled by
+//! its origin ([`AnimRoll`]): a `düde`'s own ship (`_RandomShipSpawn`
+//! @0x3c781-0x3c7d6), a mission's (`_MissionDudeSpawn` @0x3d03c-0x3d091)
+//! and a fighter (`_LaunchFighter` @0x3da72-0x3dad9) on its own class's;
+//! every other `_GenericRandomShipSpawn` caller (a fleet, a person, an
+//! aux ship, the nag ship, a capture's ship, a hired escort) on the first
+//! `shïp`'s, ID 128's, as it writes the class +0x76 = 0 before its rolls
+//! (@0x3c929, @0x3cc56-0x3ccc2), by the engine's reading of
+//! [`RuleKey::SpawnAnimRollsFirstClass`](crate::RuleKey::SpawnAnimRollsFirstClass)
+//! ([`FirstClass`]), on its own by the other; and the eject's abandoned
+//! hull rolls none (`_HandlePlayer` @0x6f3a3, @0x6f3bb). Each roll is made
+//! only when it has more than one outcome and its own class reads it. One
 //! jumping in (`_AIMakeShipJumpIn` @0x82ed5-0x82f04) takes set 0 folding
-//! up, its timer `-Rand(10)`. The rolls are made as its display first
-//! runs, before it is drawn, which is all that reads them.
+//! up, its timer `-Rand(10)`. The rolls are made as its first flight or
+//! display begins, before it is drawn, which is all that reads them.
 //!
 //! **The display** ([`display`]): each frame after the flight and the
 //! fight, [`ShipFrames::step`] on its class's [`FrameSpec`], its fold and
@@ -83,6 +93,7 @@ use crate::combat::ship_frames::{
 use crate::flight::Flyer;
 use crate::flight::{Controls, FlightRules, Turn, heading_of, shortest_turn};
 use crate::handling::Handling;
+use crate::rulebook::RuleSource;
 use crate::traffic::Traffic;
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::{Mode, Npc};
@@ -138,11 +149,53 @@ pub struct Drive {
     pub formation: bool,
 }
 
+/// Which class a spawn rolls its anim set and animation timer on (see the
+/// module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnimRoll {
+    /// None: the eject's abandoned hull, or rolled already.
+    #[default]
+    None,
+    /// Its own class's: a `düde`'s own ship, a mission's, a fighter.
+    Own,
+    /// The first class's, ID 128's, by the engine's reading: every other
+    /// `_GenericRandomShipSpawn` caller.
+    FirstClass,
+}
+
+/// The first class, ID 128, whose `BaseSets` and `AnimDelay` an
+/// [`AnimRoll::FirstClass`] spawn rolls on, and the reading of
+/// [`RuleKey::SpawnAnimRollsFirstClass`](crate::RuleKey::SpawnAnimRollsFirstClass)
+/// it rolls by.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FirstClass {
+    /// Class 128's display; [`FrameSpec::NONE`] without one.
+    pub spec: FrameSpec,
+    /// On class 128's by the engine, on its own by the other reading.
+    pub reading: RuleSource,
+}
+
+impl FirstClass {
+    /// The class a spawn of class `own` rolls `anim` on, if it rolls.
+    #[must_use]
+    pub fn roll_on(&self, anim: AnimRoll, own: &FrameSpec) -> Option<FrameSpec> {
+        match anim {
+            AnimRoll::None => None,
+            AnimRoll::Own => Some(*own),
+            AnimRoll::FirstClass => Some(match self.reading {
+                RuleSource::Engine => self.spec,
+                RuleSource::Bible => *own,
+            }),
+        }
+    }
+}
+
 /// What a ship's spawn owes its display, made as it first runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rolls {
-    /// Its anim set `Rand(BaseSets)` and animation timer `Rand(AnimDelay)`.
-    pub anim: bool,
+    /// Its anim set `Rand(BaseSets)` and animation timer `Rand(AnimDelay)`,
+    /// on the class its origin says.
+    pub anim: AnimRoll,
     /// Its fold timer `-Rand(10)`, jumping in.
     pub jump_in: bool,
     /// Its glow of 0 if its government is derelict, which the traffic's
@@ -173,25 +226,31 @@ pub struct NpcDisplay {
 pub struct Spawn {
     /// Whether a person flies it.
     pub person: bool,
-    /// Whether it is a `düde`'s own ship, which rolls no animation.
-    pub dude_ship: bool,
+    /// Which class it rolls its animation on.
+    pub anim: AnimRoll,
     /// Whether it jumps in.
     pub jumping_in: bool,
 }
 
 impl Spawn {
-    /// What `ship`'s spawn reads: whether a person flies it, whether it is
-    /// a `düde`'s own ship (its `düde`'s `Booty` carried, of no mission, no
-    /// aux slot and no person, `_RandomShipSpawn` @0x3c1d7), and whether
-    /// it jumps in.
+    /// What `ship`'s spawn reads: whether a person flies it, its anim
+    /// rolls by its origin (its own class's for a mission's ship or a
+    /// `düde`'s own, one carrying its `düde`'s `Booty` of no mission, no
+    /// aux slot and no person, `_RandomShipSpawn` @0x3c1d7; the first
+    /// class's for every other), and whether it jumps in.
     #[must_use]
     pub fn of(ship: &NewShip) -> Self {
+        let dude_ship = ship.booty.is_some()
+            && ship.mission.is_none()
+            && ship.aux.is_none()
+            && ship.person.is_none();
         Self {
             person: ship.person.is_some(),
-            dude_ship: ship.booty.is_some()
-                && ship.mission.is_none()
-                && ship.aux.is_none()
-                && ship.person.is_none(),
+            anim: if dude_ship || ship.mission.is_some() {
+                AnimRoll::Own
+            } else {
+                AnimRoll::FirstClass
+            },
             jumping_in: ship.entry == Entry::JumpingIn,
         }
     }
@@ -215,7 +274,7 @@ impl NpcDisplay {
         let display = Self {
             glow,
             rolls: Rolls {
-                anim: !spawn.dude_ship,
+                anim: spawn.anim,
                 jump_in: spawn.jumping_in,
                 derelict_glow: true,
             },
@@ -410,11 +469,17 @@ pub fn landing_unfold(npc: &mut Npc) {
 
 /// What `npc`'s spawn owes it, made before anything reads it, as its
 /// first flight or display begins (see the module docs): its glow of 0
-/// when its government is `derelict`, and its rolls on `chance`. A roll no
-/// reader of its class reads, or of one outcome, is not made: the anim
-/// set's but on the 0x0008 path, the animation timer's but there or with
-/// an alt layer, and a jump in's but for a ship that banks or folds.
-pub fn settle_spawn(npc: &mut Npc, derelict: bool, chance: &mut (impl Chance + ?Sized)) {
+/// when its government is `derelict`, and its rolls on `chance`, its anim
+/// rolls on the class `first` says. A roll no reader of its class reads,
+/// or of one outcome, is not made: the anim set's but on the 0x0008 path,
+/// the animation timer's but there or with an alt layer, and a jump in's
+/// but for a ship that banks or folds.
+pub fn settle_spawn(
+    npc: &mut Npc,
+    derelict: bool,
+    first: &FirstClass,
+    chance: &mut (impl Chance + ?Sized),
+) {
     let spec = npc.hull.frames;
     let rolls = std::mem::take(&mut npc.display.rolls);
     if rolls.derelict_glow && derelict {
@@ -423,11 +488,13 @@ pub fn settle_spawn(npc: &mut Npc, derelict: bool, chance: &mut (impl Chance + ?
     let mut roll = |sides: u16| if sides > 1 { chance.roll(sides) } else { 0 };
     let frames = &mut npc.display.frames;
     let animated = spec.anim_path();
-    if rolls.anim && animated {
-        frames.anim_set = i16::try_from(roll(spec.base_sets)).unwrap_or(0);
-    }
-    if rolls.anim && (animated || spec.alt_sets > 0) {
-        frames.anim_timer = f32::from(roll(u16::try_from(spec.anim_delay).unwrap_or(0)));
+    if let Some(on) = first.roll_on(rolls.anim, &spec) {
+        if animated {
+            frames.anim_set = i16::try_from(roll(on.base_sets)).unwrap_or(0);
+        }
+        if animated || spec.alt_sets > 0 {
+            frames.anim_timer = f32::from(roll(u16::try_from(on.anim_delay).unwrap_or(0)));
+        }
     }
     if rolls.jump_in && (spec.has(BANKS) || spec.has(FOLDS)) {
         frames.bank = -f32::from(roll(JUMP_IN_SPREAD));
@@ -436,15 +503,16 @@ pub fn settle_spawn(npc: &mut Npc, derelict: bool, chance: &mut (impl Chance + ?
 
 /// `_HandleShipDisplay`'s frame for `npc` by `rules`, what its spawn owes
 /// made first: its glow of 0 when its government is `derelict`, and its
-/// rolls on `chance`; then its sets and its lights, random lights rolling
+/// rolls on `chance`, its anim rolls on the class `first` says; then its sets and its lights, random lights rolling
 /// on `chance` (see the module docs).
 pub fn display(
     npc: &mut Npc,
     derelict: bool,
     rules: DisplayRules,
+    first: &FirstClass,
     chance: &mut (impl Chance + ?Sized),
 ) {
-    settle_spawn(npc, derelict, chance);
+    settle_spawn(npc, derelict, first, chance);
     let spec = npc.hull.frames;
     let moment = Moment {
         disabled: npc.condition.disabled(),
@@ -463,6 +531,27 @@ pub fn display(
 }
 
 impl Traffic {
+    /// Rolls the animation of a spawn of most origins on class 128's
+    /// display `spec`, its first class (see [`FirstClass`]).
+    pub fn set_first_class(&mut self, spec: FrameSpec) {
+        self.first_class.spec = spec;
+    }
+
+    /// Rolls the animation of a spawn of most origins on the first class
+    /// by `reading`
+    /// ([`RuleKey::SpawnAnimRollsFirstClass`](crate::RuleKey::SpawnAnimRollsFirstClass)):
+    /// by the engine on class 128's, on its own by the other reading.
+    pub fn set_spawn_anim_rolls_first_class(&mut self, reading: RuleSource) {
+        self.first_class.reading = reading;
+    }
+
+    /// The first class spawns roll their animation on, and the reading
+    /// they do so by.
+    #[must_use]
+    pub fn first_class(&self) -> FirstClass {
+        self.first_class
+    }
+
     /// Every NPC's display this frame ([`display`]) by `rules`, after the
     /// flight and the fight: a ship of a government `derelict` says is
     /// derelict glowing 0 from its spawn, its spawn's rolls and its random
@@ -474,9 +563,10 @@ impl Traffic {
         rules: DisplayRules,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        let first = self.first_class;
         for npc in &mut self.npcs {
             let derelict = derelict(npc.govt);
-            display(npc, derelict, rules, &mut *chance);
+            display(npc, derelict, rules, &first, &mut *chance);
         }
         self.keep_berth_blink();
     }
@@ -494,6 +584,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
+    use crate::traffic::spawn::{Entry, NewShip};
     use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::Draws;
 
@@ -861,21 +952,24 @@ mod tests {
         assert_eq!(
             spawned.rolls,
             Rolls {
-                anim: true,
+                anim: AnimRoll::None,
                 jump_in: false,
                 derelict_glow: true
             }
+        );
+        let first = Spawn {
+            anim: AnimRoll::FirstClass,
+            ..Spawn::default()
+        };
+        assert_eq!(
+            NpcDisplay::spawned(&spec, first).0.rolls.anim,
+            AnimRoll::FirstClass
         );
         let person = Spawn {
             person: true,
             ..Spawn::default()
         };
         assert_eq!(NpcDisplay::spawned(&spec, person).0.glow, 0);
-        let dude = Spawn {
-            dude_ship: true,
-            ..Spawn::default()
-        };
-        assert!(!NpcDisplay::spawned(&spec, dude).0.rolls.anim);
         // A derelict government's ship's glow is 0 by its first display.
         for (derelict, glow) in [(true, 0), (false, 32)] {
             let mut ship = folding(0, 1);
@@ -884,6 +978,7 @@ mod tests {
                 &mut ship,
                 derelict,
                 DisplayRules::ENGINE,
+                &FirstClass::default(),
                 &mut Draws::of(&[]),
             );
             assert_eq!(ship.display.glow, glow, "{derelict}");
@@ -892,6 +987,7 @@ mod tests {
                 &mut ship,
                 derelict,
                 DisplayRules::ENGINE,
+                &FirstClass::default(),
                 &mut Draws::of(&[]),
             );
             assert_eq!(ship.display.glow, 9, "{derelict}: once");
@@ -913,21 +1009,33 @@ mod tests {
     fn the_first_display_makes_the_spawns_rolls() {
         let mut ship = folding(ANIMATED, 4);
         ship.display.rolls = Rolls {
-            anim: true,
+            anim: AnimRoll::Own,
             jump_in: true,
             derelict_glow: false,
         };
         let mut draws = Draws::of(&[2, 3]);
-        display(&mut ship, false, DisplayRules::ENGINE, &mut draws);
+        display(
+            &mut ship,
+            false,
+            DisplayRules::ENGINE,
+            &FirstClass::default(),
+            &mut draws,
+        );
         assert_eq!(draws.asked, [4, 5], "Rand(BaseSets), Rand(AnimDelay)");
         assert_eq!(ship.display.frames.bank, 0.0, "no bank or fold to roll");
         assert_eq!(ship.display.frames.anim_timer, 4.0, "3, then a frame");
         assert_eq!(ship.display.drawn.set, 2);
         assert_eq!(ship.display.rolls, Rolls::default());
-        display(&mut ship, false, DisplayRules::ENGINE, &mut draws);
+        display(
+            &mut ship,
+            false,
+            DisplayRules::ENGINE,
+            &FirstClass::default(),
+            &mut draws,
+        );
         assert_eq!(draws.asked.len(), 2, "once");
         let owed = Rolls {
-            anim: true,
+            anim: AnimRoll::Own,
             jump_in: true,
             derelict_glow: false,
         };
@@ -935,13 +1043,13 @@ mod tests {
         let mut banking = folding(BANKS, 3);
         banking.display.rolls = owed;
         let mut draws = Draws::of(&[7]);
-        settle_spawn(&mut banking, false, &mut draws);
+        settle_spawn(&mut banking, false, &FirstClass::default(), &mut draws);
         assert_eq!(draws.asked, [10], "Rand(10) alone");
         assert_eq!(banking.display.frames.bank, -7.0);
         let mut plain = folding(0, 1);
         plain.display.rolls = owed;
         let mut draws = Draws::of(&[]);
-        settle_spawn(&mut plain, false, &mut draws);
+        settle_spawn(&mut plain, false, &FirstClass::default(), &mut draws);
         assert_eq!(
             draws.asked,
             Vec::<u32>::new(),
@@ -952,7 +1060,7 @@ mod tests {
         alt.hull.frames.alt_sets = 6;
         alt.display.rolls = owed;
         let mut draws = Draws::of(&[4]);
-        settle_spawn(&mut alt, false, &mut draws);
+        settle_spawn(&mut alt, false, &FirstClass::default(), &mut draws);
         assert_eq!(draws.asked, [5]);
         assert_eq!(alt.display.frames.anim_timer, 4.0);
         // A delay of 1 or less has one outcome.
@@ -960,19 +1068,155 @@ mod tests {
         quick.hull.frames.anim_delay = 1;
         quick.display.rolls = owed;
         let mut draws = Draws::of(&[3]);
-        settle_spawn(&mut quick, false, &mut draws);
+        settle_spawn(&mut quick, false, &FirstClass::default(), &mut draws);
         assert_eq!(draws.asked, [4], "Rand(BaseSets) alone");
+    }
+
+    /// A placed ship of type 200, a `düde`'s own ship when it carries
+    /// `booty`.
+    fn new_ship(booty: Option<u16>) -> NewShip {
+        NewShip {
+            ship: ShipId(200),
+            govt: None,
+            ai_type: crate::traffic::npc::AiType::WimpyTrader,
+            lead: None,
+            state: ShipState::default(),
+            entry: Entry::Placed,
+            aggression: 0,
+            booty,
+            info_types: 0,
+            person: None,
+            mission: None,
+            aux: None,
+            derelict: false,
+            held: false,
+            boarded: false,
+            cloaked: false,
+            quote: None,
+            cargo: None,
+        }
+    }
+
+    #[test]
+    fn each_spawns_origin_picks_the_class_it_rolls_its_animation_on() {
+        let of = |ship: NewShip| Spawn::of(&ship).anim;
+        assert_eq!(of(new_ship(Some(0))), AnimRoll::Own, "a düde's own ship");
+        assert_eq!(of(new_ship(None)), AnimRoll::FirstClass, "a fleet's ship");
+        let mark = crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::traffic::ShipBehav::Own,
+            formation: None,
+            order: None,
+        };
+        let mission = NewShip {
+            mission: Some(mark),
+            ..new_ship(Some(0))
+        };
+        assert_eq!(of(mission), AnimRoll::Own, "a mission's ship");
+        let aux = NewShip {
+            aux: Some(0),
+            ..new_ship(Some(0))
+        };
+        assert_eq!(of(aux), AnimRoll::FirstClass, "an aux ship");
+        let person = NewShip {
+            person: Some(crate::catalog::PersonId(128)),
+            ..new_ship(None)
+        };
+        assert_eq!(of(person), AnimRoll::FirstClass, "a person");
+        let person_dude = NewShip {
+            person: Some(crate::catalog::PersonId(128)),
+            ..new_ship(Some(0))
+        };
+        assert_eq!(
+            of(person_dude),
+            AnimRoll::FirstClass,
+            "a person, booty or not"
+        );
+    }
+
+    /// Class 128 as the stock Shuttle has it: three base sets, no
+    /// `AnimDelay`.
+    fn shuttle_first(reading: RuleSource) -> FirstClass {
+        FirstClass {
+            spec: FrameSpec {
+                base_sets: 3,
+                anim_delay: 0,
+                ..FrameSpec::NONE
+            },
+            reading,
+        }
+    }
+
+    /// The sides `npc`'s spawn asks of its rolls, owing `anim`.
+    fn asked(anim: AnimRoll, first: &FirstClass) -> Vec<u32> {
+        let mut ship = folding(ANIMATED, 4);
+        ship.display.rolls.anim = anim;
+        let mut draws = Draws::of(&[2, 3]);
+        settle_spawn(&mut ship, false, first, &mut draws);
+        draws.asked
+    }
+
+    #[test]
+    fn a_first_class_spawn_rolls_on_class_128s_by_the_engine_and_its_own_by_the_other() {
+        let engine = shuttle_first(RuleSource::Engine);
+        assert_eq!(
+            asked(AnimRoll::FirstClass, &engine),
+            [3],
+            "Rand(3), and no timer roll for an AnimDelay of 0"
+        );
+        let bible = shuttle_first(RuleSource::Bible);
+        assert_eq!(asked(AnimRoll::FirstClass, &bible), [4, 5], "its own");
+        assert_eq!(asked(AnimRoll::Own, &engine), [4, 5], "its own");
+        assert_eq!(asked(AnimRoll::None, &engine), Vec::<u32>::new());
+        // A class that does not animate reads neither, whatever it rolls on.
+        let mut plain = folding(0, 1);
+        plain.display.rolls.anim = AnimRoll::FirstClass;
+        let mut draws = Draws::of(&[]);
+        settle_spawn(&mut plain, false, &engine, &mut draws);
+        assert_eq!(draws.asked, Vec::<u32>::new());
+        assert_eq!(engine.roll_on(AnimRoll::None, &plain.hull.frames), None);
+    }
+
+    #[test]
+    fn the_traffic_keeps_its_first_class_and_reading() {
+        let mut traffic = Traffic::new();
+        assert_eq!(traffic.first_class(), FirstClass::default());
+        let first = shuttle_first(RuleSource::Bible);
+        traffic.set_first_class(first.spec);
+        traffic.set_spawn_anim_rolls_first_class(RuleSource::Bible);
+        assert_eq!(traffic.first_class(), first);
+        // Its display rolls a first-class spawn on it.
+        let mut ship = folding(ANIMATED, 4);
+        ship.display.rolls.anim = AnimRoll::FirstClass;
+        traffic.npcs = vec![ship];
+        traffic.set_spawn_anim_rolls_first_class(RuleSource::Engine);
+        let mut draws = Draws::of(&[2]);
+        traffic.display_ships(|_| false, DisplayRules::ENGINE, &mut draws);
+        assert_eq!(draws.asked, [3]);
+        assert_eq!(traffic.npcs()[0].display.drawn.set, 2);
     }
 
     #[test]
     fn the_display_reads_its_condition_and_key_ship() {
         let mut ship = folding(KEY_CARRIED, 2);
         ship.hull.key_carried = Some(ShipId(140));
-        display(&mut ship, false, DisplayRules::ENGINE, &mut Draws::of(&[]));
+        display(
+            &mut ship,
+            false,
+            DisplayRules::ENGINE,
+            &FirstClass::default(),
+            &mut Draws::of(&[]),
+        );
         assert_eq!(ship.display.drawn.set, 0, "no bay aboard");
         let mut still = folding(ANIMATED | 0x0010, 3);
         still.condition = Condition::Disabled;
-        display(&mut still, false, DisplayRules::ENGINE, &mut Draws::of(&[]));
+        display(
+            &mut still,
+            false,
+            DisplayRules::ENGINE,
+            &FirstClass::default(),
+            &mut Draws::of(&[]),
+        );
         assert_eq!(still.display.frames.anim_timer, 0.0, "disabled, still");
     }
 

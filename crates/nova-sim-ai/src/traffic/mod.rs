@@ -659,6 +659,10 @@ pub struct Traffic {
     /// new ship there takes ([`berth_blink`]): written after each display,
     /// kept as it dies or leaves, and across systems.
     berth_blink: BerthBlink,
+    /// The first class, ID 128, a spawn of most origins rolls its
+    /// animation on, and the reading it does so by
+    /// ([`ship_display::FirstClass`]).
+    first_class: ship_display::FirstClass,
     /// The ships an in-flight move left behind ([`Leave::Held`]), by the
     /// system they are in, each in the order they appeared: still in the
     /// ship table until the end of the next tick ([`Traffic::tick_in`]),
@@ -728,6 +732,7 @@ impl Traffic {
             berth_picks: BerthPicks::default(),
             berth_exits: BerthExits::default(),
             berth_blink: BerthBlink::default(),
+            first_class: ship_display::FirstClass::default(),
             left_behind: BTreeMap::new(),
         }
     }
@@ -1219,6 +1224,7 @@ impl Traffic {
         }
         let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
         let holders = tractor_hold::Holders::of(world, &self.npcs);
+        let first = self.first_class;
         let disabled: BTreeSet<NpcId> = self
             .npcs
             .iter()
@@ -1255,7 +1261,7 @@ impl Traffic {
                 // `ionization` module).
                 ionization::deionize(npc, speeds.own);
                 tractor_hold::hold(npc, &holders, world.tractor_step, think);
-                ship_display::settle_spawn(npc, derelict, &mut *chance);
+                ship_display::settle_spawn(npc, derelict, &first, &mut *chance);
                 let held = ship_display::held(npc);
                 let outcome = Self::fly_one(
                     npc,
