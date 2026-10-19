@@ -5,6 +5,7 @@
 //! earlier hits left.
 
 use super::*;
+use crate::combat::asteroid_hit::AsteroidTarget;
 
 #[test]
 fn a_fighter_is_disabled_now_as_is_disabled_reads_it() {
@@ -37,16 +38,30 @@ const X: ShipRef = ShipRef::Npc(NpcId(5));
 /// stellars, by the default rules: the strikes they made, as (ship hit,
 /// by).
 fn walk(combat: &mut Combat, ships: &mut [Ship]) -> Vec<(ShipRef, Option<ShipRef>)> {
-    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    walk_amid(combat, ships, &mut [], &Arsenal::default())
+}
+
+/// [`walk`] among `rocks` too, sub-munitions read from `arsenal`.
+fn walk_amid(
+    combat: &mut Combat,
+    ships: &mut [Ship],
+    rocks: &mut [AsteroidTarget],
+    arsenal: &Arsenal,
+) -> Vec<(ShipRef, Option<ShipRef>)> {
+    let govts = Governments::default();
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     let arena = Arena {
         pass: GamePass::Advance { double_time: false },
-        arsenal: &arsenal,
+        arsenal,
         govts: &govts,
         rules: Rules::default(),
         field: Field::default(),
     };
-    combat.test_hits(&mut fighters, arena, Scenery::default(), &mut NeverFires);
+    let scenery = Scenery {
+        asteroids: rocks,
+        ..Scenery::default()
+    };
+    combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
     combat
         .take_strikes()
         .iter()
@@ -338,4 +353,86 @@ fn strikes_come_out_in_the_walks_order() {
         None,
     );
     assert_eq!(walk(&mut combat, &mut ships), [(C, Some(A)), (B, Some(A))]);
+}
+
+#[test]
+fn a_missile_meets_the_ship_it_touched_before_an_asteroid_on_its_move() {
+    // The homing layer's ship passes come before its asteroid pass
+    // (@0x43ef1-0x43f62), and the shot layer's asteroid pass before
+    // both.
+    let mut ships = three();
+    let mut rocks = [AsteroidTarget {
+        slot: 0,
+        position: Vec2::new(0.0, -82.0),
+        velocity: Vec2::ZERO,
+        radius: 10.0,
+        strength: 10,
+        mass: 20,
+    }];
+    let mut combat = Combat::default();
+    fly(&mut combat, (missile(), A, ShotLayer::Homing), INTO_C, None);
+    combat.shots[0].target = Some(C);
+    let arsenal = Arsenal::default();
+    assert_eq!(
+        walk_amid(&mut combat, &mut ships, &mut rocks, &arsenal),
+        [(C, Some(A))]
+    );
+    assert_eq!(rocks[0].strength, 10, "the asteroid untouched");
+}
+
+#[test]
+fn point_defence_passes_a_missile_that_touched_the_player_where_it_stood() {
+    // Contact meets the player where it stood as the shots moved, so the
+    // missile's contact comes first and point defence's layer passes it.
+    let player = Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        ..Ship::at(0, 0.0, 300.0)
+    };
+    let mut ships = [Ship::at(1, -300.0, 0.0), player, Ship::at(4, 300.0, 0.0)];
+    let mut combat = Combat::default();
+    combat.stood.insert(ShipRef::Player, Vec2::new(0.0, -100.0));
+    fly(
+        &mut combat,
+        (still_missile(), A, ShotLayer::Homing),
+        INTO_C,
+        None,
+    );
+    combat.shots[0].target = Some(ShipRef::Player);
+    let at_the_missile = (Vec2::new(0.0, -90.0), INTO_C.1);
+    fly(
+        &mut combat,
+        (pd_shot(), D, ShotLayer::PointDefence),
+        at_the_missile,
+        None,
+    );
+    assert_eq!(walk(&mut combat, &mut ships), [(ShipRef::Player, Some(A))]);
+    let left: Vec<ShipRef> = combat.shots().iter().map(|shot| shot.firer).collect();
+    assert_eq!(left, [D], "point defence's shot unspent");
+}
+
+#[test]
+fn a_fused_shells_sub_munitions_read_their_owners_plunder_as_it_hits() {
+    let released = |plundering: bool| {
+        let (shell, arsenal) = cluster(0);
+        let mut ships = three();
+        ships[0].plundering = plundering;
+        ships[0].target = Some(C);
+        let mut combat = Combat::default();
+        fly(
+            &mut combat,
+            (fused(shell), A, ShotLayer::Shots),
+            BESIDE_C,
+            None,
+        );
+        let struck = walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+        assert_eq!(struck, [(C, Some(A))]);
+        let subs = sub_shots(&combat);
+        assert_eq!(subs.len(), 2);
+        subs.iter()
+            .map(|shot| shot.disable_only)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(released(true), [true, true]);
+    assert_eq!(released(false), [false, false]);
 }
