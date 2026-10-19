@@ -68,13 +68,35 @@ pub(crate) struct Facts<'a> {
     pub(crate) armament: &'a Armament,
 }
 
+/// Whether a `P` test passes: always, the engine taking the game as
+/// registered.
+pub(super) const REGISTERED: bool = true;
+
 impl Facts<'_> {
     /// The outfit a carried fighter of ship type `ship` docks back into:
     /// the first bay launching it, that bay's ammunition outfit of lowest
     /// ID, the routing [`Armament::stow`] takes.
-    pub(super) fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
+    fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
         let bay = self.armament.bay_of(ship)?;
         lowest_ammo_outfit(self.ammo_outfits, bay)
+    }
+
+    /// The outfits an `o` test counts: each the pilot owns one of or
+    /// more, and each carried fighter's dock outfit
+    /// ([`Facts::docks_into`]).
+    pub(super) fn counted_outfits(&self) -> impl Iterator<Item = OutfitId> + '_ {
+        let owned = self
+            .pilot
+            .outfits()
+            .filter(|&(_, count)| count > 0)
+            .map(|(id, _)| id);
+        let docked = self
+            .pilot
+            .escorts()
+            .iter()
+            .filter(|escort| escort.carried)
+            .filter_map(|escort| self.docks_into(escort.ship));
+        owned.chain(docked)
     }
 }
 
@@ -87,19 +109,13 @@ impl PilotFacts for Facts<'_> {
         self.pilot.gender()
     }
 
-    /// Always: the engine takes the game as registered.
+    /// [`REGISTERED`].
     fn paid(&self, _days: u16) -> bool {
-        true
+        REGISTERED
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
-        self.pilot.owned(outfit) > 0
-            || self
-                .pilot
-                .escorts()
-                .iter()
-                .filter(|escort| escort.carried)
-                .any(|escort| self.docks_into(escort.ship) == Some(outfit))
+        self.counted_outfits().any(|counted| counted == outfit)
     }
 
     fn explored(&self, system: SystemId) -> bool {

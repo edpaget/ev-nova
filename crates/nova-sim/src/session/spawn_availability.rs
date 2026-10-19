@@ -60,7 +60,7 @@
 use std::collections::BTreeSet;
 
 use super::Session;
-use super::control::Facts;
+use super::control::{Facts, REGISTERED};
 use crate::catalog::{OutfitId, SystemId};
 use crate::control::{Bit, ControlBitSet, Gate, PilotFacts};
 use crate::pilot::Gender;
@@ -85,19 +85,10 @@ impl RefreshedFacts {
     /// The player as `facts` reads them now.
     pub(crate) fn of(facts: &Facts<'_>) -> Self {
         let pilot = facts.pilot;
-        let owned = pilot
-            .outfits()
-            .filter(|&(_, count)| count > 0)
-            .map(|(id, _)| id);
-        let docked = pilot
-            .escorts()
-            .iter()
-            .filter(|escort| escort.carried)
-            .filter_map(|escort| facts.docks_into(escort.ship));
         Self {
             bits: pilot.control_bits().clone(),
             gender: pilot.gender(),
-            outfits: owned.chain(docked).collect(),
+            outfits: facts.counted_outfits().collect(),
             explored: pilot.explored().collect(),
         }
     }
@@ -112,9 +103,9 @@ impl PilotFacts for RefreshedFacts {
         self.gender
     }
 
-    /// Always, as [`Facts`] has it.
+    /// [`REGISTERED`], as [`Facts`] has it.
     fn paid(&self, _days: u16) -> bool {
-        true
+        REGISTERED
     }
 
     fn has_outfit(&self, outfit: OutfitId) -> bool {
