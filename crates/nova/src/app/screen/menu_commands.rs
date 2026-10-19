@@ -10,7 +10,9 @@
 //!   key equivalent was typed: the window saw Command go down, and the menu
 //!   bar took the chord's press) it feeds the chord's press and release;
 //!   picked with the mouse, Command's press and release around them. The
-//!   router's notion of Command stays the physical one either way.
+//!   router's notion of Command stays the physical one either way. After
+//!   a key equivalent the window still gets the chord's own release, a
+//!   second one, which no state acts on: Q and comma act only on a press.
 //! - **About** opens the About text over the side shown, as I does, where
 //!   nothing holds input and nothing is in front ([`AppScreen::front`],
 //!   or the intro's text while play is entered, which takes every input

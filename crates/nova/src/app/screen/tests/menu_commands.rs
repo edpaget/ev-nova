@@ -28,7 +28,8 @@ fn a_chords_key_names_its_command() {
 
 /// What a command left: whether the app quits (an input's action or a
 /// quit taken), whether Quit's delay runs, what shows, whether the
-/// Preferences or the About text are open, and the sounds made.
+/// Preferences or the About text are open, what the shipyard's name
+/// prompt holds, if it is open, and the sounds made.
 #[derive(Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Each a separate thing seen.
 struct Outcome {
@@ -37,16 +38,23 @@ struct Outcome {
     showing: Showing,
     preferences: bool,
     about: bool,
+    name: Option<String>,
     sounds: Vec<Sound>,
 }
 
 fn outcome(screen: &mut AppScreen, quit: bool) -> Outcome {
+    let name = screen
+        .spaceport_view()
+        .and_then(|spaceport| spaceport.open_shipyard())
+        .and_then(|shipyard| shipyard.naming())
+        .map(|prompt| prompt.field().text().to_owned());
     Outcome {
         quit: quit || screen.take_quit(),
         quitting: screen.quit_in.is_some(),
         showing: screen.showing(),
         preferences: screen.preferences().is_some(),
         about: screen.about().is_some(),
+        name,
         sounds: screen.take_sounds(),
     }
 }
@@ -73,11 +81,15 @@ fn by_keys(screen: &mut AppScreen, chord: Key) -> bool {
 }
 
 /// `command`'s key equivalent typed: the window sees Command go down and
-/// up, and the menu bar takes the chord's press between.
+/// up, and the menu bar takes the chord's press between. winit still
+/// hands the window the chord's release while Command is held (as
+/// [`an_f_released_after_the_view_menu_took_its_press_changes_nothing`]
+/// has for F), so it arrives after the command, a second time.
 fn by_equivalent(screen: &mut AppScreen, command: MenuCommand) -> bool {
+    let chord = menu_chord(command).expect("a chord");
     feed(screen, &[key(Key::Command, true)])
         || screen.menu_command(command) == ScreenAction::Quit
-        || feed(screen, &[key(Key::Command, false)])
+        || feed(screen, &[key(chord, false), key(Key::Command, false)])
 }
 
 /// A state the router can be in, the step that ends any hold it is in,
