@@ -208,6 +208,7 @@ pub(super) mod tests {
     use crate::deadly_stellar::{DEADLY_RESISTANCE, DEADLY_STELLAR};
     use crate::flight::Controls;
     use crate::geometry::Vec2;
+    use crate::message::SimMessage;
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
     use crate::sound::SimSound;
@@ -699,21 +700,36 @@ pub(super) mod tests {
         }
     }
 
-    /// The tick on which the NPC's first shot lands on the player, firing
-    /// at it from 100 above, from the start: with the player at the
-    /// centre, its armour held at `armor`.
-    fn first_hit_on_the_player(catalog: &FakePilotCatalog, armor: f32) -> usize {
+    /// `catalog`'s session, readied by `ready` before each tick, its NPC
+    /// firing at the player from 100 above, ticked until the tick its
+    /// first shot lands on the player, on which a deadly stellar covers
+    /// the player: the session after that tick, the lines and sounds of
+    /// the ticks before it taken.
+    fn hit_as_a_deadly_stellar_covers_the_player(
+        catalog: &FakePilotCatalog,
+        ready: impl Fn(&mut Session),
+    ) -> Session {
         let mut session = among(catalog, &[planet(140, 3000.0, 0.0)], 1, Rulebook::default());
-        session.pilot.reserves.armor.now = armor;
-        for tick in 0..60 {
-            fire_at_the_player(&mut session, catalog);
-            if session
+        let struck = |session: &Session| {
+            session
                 .strikes
                 .iter()
                 .any(|strike| strike.ship == ShipRef::Player)
-            {
-                return tick;
+        };
+        for _ in 0..60 {
+            ready(&mut session);
+            let mut trial = session.clone();
+            fire_at_the_player(&mut trial, catalog);
+            if struck(&trial) {
+                session.take_messages();
+                session.take_sounds();
+                session.sites = vec![deadly_at(140, 0.0, 40.0)];
+                session.listed = session.sites.clone();
+                fire_at_the_player(&mut session, catalog);
+                assert!(struck(&session), "hit that tick");
+                return session;
             }
+            session = trial;
         }
         panic!("never hit");
     }
@@ -723,50 +739,80 @@ pub(super) mod tests {
         fight(session);
     }
 
+    /// Which of the lines and sounds of a downed player `session` raised.
+    fn downed_lines(session: &mut Session) -> (Vec<SimMessage>, Vec<SimSound>) {
+        let messages = session
+            .take_messages()
+            .into_iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    SimMessage::ShipDisabled | SimMessage::ShipDestroyed
+                )
+            })
+            .collect();
+        let sounds = session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| {
+                matches!(
+                    sound,
+                    SimSound::ShipDowned | SimSound::Klaxon | SimSound::Halt(_)
+                )
+            })
+            .collect();
+        (messages, sounds)
+    }
+
     #[test]
     fn a_hit_on_the_player_the_tick_a_deadly_stellar_kills_it_says_no_line_of_its_own() {
         let catalog = armed();
         // A hit that downs nothing: the player full.
-        let on = first_hit_on_the_player(&catalog, 100_000.0);
-        let mut session = among(
-            &catalog,
-            &[planet(140, 3000.0, 0.0)],
-            1,
-            Rulebook::default(),
-        );
-        session.pilot.reserves.armor.now = 100_000.0;
-        for _ in 0..on {
-            fire_at_the_player(&mut session, &catalog);
-        }
-        session.take_messages();
-        session.take_sounds();
-        session.sites = vec![deadly_at(140, 0.0, 40.0)];
-        session.listed = session.sites.clone();
-        fire_at_the_player(&mut session, &catalog);
-        assert!(
-            session
-                .strikes
-                .iter()
-                .any(|strike| strike.ship == ShipRef::Player),
-            "hit that tick"
-        );
+        let mut session = hit_as_a_deadly_stellar_covers_the_player(&catalog, |session| {
+            session.pilot.reserves.armor.now = 100_000.0;
+        });
         assert_eq!(session.condition, Condition::Destroyed, "and killed");
-        let messages = session.take_messages();
-        assert!(
-            !messages.iter().any(|message| matches!(
-                message,
-                crate::message::SimMessage::ShipDisabled
-                    | crate::message::SimMessage::ShipDestroyed
-            )),
-            "{messages:?}"
+        assert_eq!(downed_lines(&mut session), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_hit_that_disables_the_player_the_tick_a_deadly_stellar_kills_it_says_ship_disabled() {
+        let catalog = armed();
+        // Its shields gone and its armour just above the third that
+        // disables it.
+        let mut session = hit_as_a_deadly_stellar_covers_the_player(&catalog, |session| {
+            let reserves = &mut session.pilot.reserves;
+            reserves.shield.now = 0.0;
+            reserves.armor.now = reserves.armor.max / 3.0 + 3.0;
+        });
+        assert_eq!(session.condition, Condition::Destroyed, "and killed");
+        assert_eq!(
+            downed_lines(&mut session),
+            (vec![SimMessage::ShipDisabled], vec![SimSound::ShipDowned]),
+            "no klaxon and no halt"
         );
-        let sounds = session.take_sounds();
+    }
+
+    #[test]
+    fn a_hit_that_breaks_the_player_up_the_tick_a_deadly_stellar_covers_it_says_ship_destroyed() {
+        let catalog = armed();
+        let mut session = hit_as_a_deadly_stellar_covers_the_player(&catalog, |session| {
+            session.pilot.reserves.shield.now = 0.0;
+            session.pilot.reserves.armor.now = 1.0;
+        });
         assert!(
-            !sounds.iter().any(|sound| matches!(
-                sound,
-                SimSound::ShipDowned | SimSound::Klaxon | SimSound::Halt(_)
-            )),
-            "{sounds:?}"
+            matches!(session.condition, Condition::Dying { .. }),
+            "breaking up, so spared: {:?}",
+            session.condition
+        );
+        assert_eq!(session.player_end, None, "no hold");
+        let (messages, sounds) = downed_lines(&mut session);
+        // Disabled already by its armour, so only the breakup speaks.
+        assert_eq!(messages, [SimMessage::ShipDestroyed]);
+        assert_eq!(
+            sounds,
+            [SimSound::ShipDowned],
+            "no klaxon on its first tick"
         );
     }
 
