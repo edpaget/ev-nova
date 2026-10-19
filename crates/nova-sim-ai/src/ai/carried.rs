@@ -303,7 +303,10 @@ mod tests {
         };
         let react = |strike| CarriedAi::default().react(&attacking, &strike, &around);
         let by_player = crate::combat::Strike {
-            damage: 10.0,
+            nominal: crate::combat::Nominal {
+                mass: 4.0,
+                energy: 6.0,
+            },
             ..crate::combat::fixture::strike(n(2), ShipRef::Player)
         };
         assert_eq!(
@@ -318,7 +321,7 @@ mod tests {
             react(crate::combat::fixture::strike(n(2), n(3))),
             crate::ai::Reaction {
                 target: Some(n(3)),
-                provoked: 12.0,
+                provoked: 24.0,
                 goal: None,
             }
         );

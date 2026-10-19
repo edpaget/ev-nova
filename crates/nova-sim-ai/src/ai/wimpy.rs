@@ -202,7 +202,10 @@ mod tests {
         ];
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         let strike = Strike {
-            damage: 7.0,
+            nominal: crate::combat::Nominal {
+                mass: 3.0,
+                energy: 4.0,
+            },
             ..crate::combat::fixture::strike(n(1), n(2))
         };
         assert_eq!(

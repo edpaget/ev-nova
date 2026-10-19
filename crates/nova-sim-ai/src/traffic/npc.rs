@@ -289,8 +289,10 @@ pub struct Npc {
     pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
-    /// Its provocation (the original's +0x96): the shield and armour
-    /// damage it has taken while it fights, or 1 once its government's
+    /// Its provocation (the original's +0x96): the nominal damage of the
+    /// hits it answered while it fights, each mass and energy arg above
+    /// none (see [`react::victim`](crate::ai::react::victim)), not the
+    /// damage it took; or 1 once its government's
     /// 0x0004 word turns it on the player (@0x8b7e5, @0x8cb9d,
     /// [`Decision::provokes`](crate::ai::Decision::provokes)); none once it
     /// goes back to an idle goal or is disabled.

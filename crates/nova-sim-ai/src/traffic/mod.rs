@@ -1615,8 +1615,14 @@ impl Traffic {
         for (at, reactions) in reactions.into_iter().enumerate() {
             for (reaction, strike) in reactions.into_iter().zip(&strikes) {
                 let id = self.npcs[at].id;
-                let on_itself =
-                    strike.direct && reaction.target.is_some() && strike.ship == ShipRef::Npc(id);
+                // The victim's reaction ran when it took a target or was
+                // provoked: an answered hit by no ship, which takes none,
+                // always has a nominal damage above none, as the answer
+                // flag's no-damage branch clears the rest (see
+                // `answer_flag`), so it cuts the wait as `_DamageShip`
+                // does for any source but slot 0 (@0x3bd7e-0x3be7c).
+                let ran = reaction.target.is_some() || reaction.provoked > 0.0;
+                let on_itself = strike.direct && ran && strike.ship == ShipRef::Npc(id);
                 let attacks_player = on_itself && strike.by == Some(ShipRef::Player);
                 if let Some(target) = reaction.target {
                     self.npcs[at].target = Some(target);

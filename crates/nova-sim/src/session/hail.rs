@@ -1700,7 +1700,10 @@ mod tests {
             direct: true,
             intended: true,
             lock: false,
-            nominal: crate::combat::Nominal::default(),
+            nominal: crate::combat::Nominal {
+                mass: 5.0,
+                energy: 0.0,
+            },
             weight: 0.0,
             answered: true,
         });

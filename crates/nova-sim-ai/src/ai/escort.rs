@@ -973,7 +973,10 @@ mod tests {
         // an escort (AI 5 or 6) takes its attacker as its target.
         let npcs = [escort(None), pirate(2, 100.0, 0.0)];
         let strike = crate::combat::Strike {
-            damage: 10.0,
+            nominal: crate::combat::Nominal {
+                mass: 4.0,
+                energy: 6.0,
+            },
             ..crate::combat::fixture::strike(n(1), n(2))
         };
         assert_eq!(

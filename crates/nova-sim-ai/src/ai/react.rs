@@ -8,8 +8,10 @@
 //! skips the whole block when clear (see
 //! [`answer_flag`](crate::ai::answer_flag)).
 //!
-//! - **The victim**, and the lead of an escort hit, add the damage to
-//!   their provocation and take the attacker as their target, unless the
+//! - **The victim**, and the lead of an escort hit, add the hit's nominal
+//!   damage to their provocation (+0x96: each of its mass and energy args
+//!   above none, [`Strike::nominal`], @0x3bcc0-0x3bcf0, @0x3bd25-0x3bd5d)
+//!   and take the attacker as their target, unless the
 //!   victim [keeps its target](keeps_target): attacking a ship it faces
 //!   within [`FOCUS_DEGREES`] of the heading it last wanted (+0x68), with
 //!   the attacker not nearer than half that ship's distance (dist² above
@@ -39,6 +41,11 @@
 //!   with a wait that answers has it cut to 20 ticks (@0x3be6e-0x3be7c),
 //!   which the traffic does
 //!   ([`autopilot::HIT_WAIT`](crate::traffic::autopilot::HIT_WAIT)).
+//!   A hit by no ship ([`Strike::by`] none, the original's source -1) is
+//!   never tested for focus (`si` >= 0, @0x3bbf8-0x3bc03) and draws no
+//!   target (`si` <= 63, @0x3bcf0, @0x3bd64), but still provokes the
+//!   victim and its lead and cuts the victim's wait (`testw si; jne
+//!   0x3be6e`, @0x3bd7e).
 //! - **A Good Samaritan**: for a hit by the player on the ship it was
 //!   meant for ([`Strike::intended`], @0x3bed2), every warship or
 //!   interceptor W not already attacking takes the player as its target
@@ -78,6 +85,24 @@
 //! [`call_for_help`](super::call_for_help)); the system's reinforcement
 //! fleet comes by its own call (`_AICallForReinforcements`, see
 //! [`reinforcements`](super::reinforcements)), not by a hit.
+//!
+//! Left out of the reaction block (weapons-fidelity phase 37 records each):
+//!
+//! - The defence-ship branches, for a ship defending a stellar (+0x8c),
+//!   which the engine doesn't have: the victim's (@0x3bbe2 → 0x3bd8c: it
+//!   reacts only when 0.5 × dist² to its stellar exceeds dist² to the
+//!   attacker, @0x3be17, and adds 30 × each nominal arg, @0x3be2b-0x3be56)
+//!   and the lead's and the grudge's +0x8c tests (@0x3bd1b, @0x3be88).
+//!   They belong to rdm task planet-domination.
+//! - The jump-out stage (+0x50 above 0): the entry gate (@0x3b46a), the
+//!   arriving test (@0x3b97e) and a victim whose leader jumps out
+//!   (@0x3bab7-0x3bae4), for rdm phase
+//!   weapons-fidelity-cross-roadmap/phase-1-damage-ship-jump-out-stage.
+//! - The test of the victim's slot +0x86 (@0x3bcb2), which a player victim
+//!   would fail but never reaches: the player is AI type -1 (@0x3b459).
+//! - `_AIMakeShipStopRefuelling` and target 0 for a player's hit
+//!   (@0x3beba-0x3becc), after the focus test, which rdm phase
+//!   combat-ai-fidelity/phase-26-assister-hit owns.
 
 use crate::ai::{Goal, Reaction, Surroundings};
 use crate::combat::aim::{angle_off, bearing};
@@ -138,9 +163,10 @@ pub fn answer(
 /// carrier's, which are never Good Samaritans (`_DoGoodSamaritan` takes
 /// AI 3 and 4 alone, @0x8289f-0x828bb).
 ///
-/// Unless the ship struck [keeps its target](keeps_target), it takes the attacker as
-/// its target and the damage as provocation; a hit by no ship does
-/// nothing, as does a strike not direct ([`Strike::direct`]): the
+/// Unless the ship struck [keeps its target](keeps_target), it takes the
+/// attacker as its target and the nominal damage as provocation; a hit by
+/// no ship provokes it with no target and no focus test; a strike not
+/// direct ([`Strike::direct`]) does nothing: the
 /// boarding's call, which never passes `_DamageShip`. The player's hit on
 /// the ship itself also turns it on the
 /// player at once (`Goal::Attack(Player)`): `_AIMakeShipAttackPlayer`
@@ -155,10 +181,16 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
     if !strike.direct || !hits(npc, strike, around) {
         return Reaction::default();
     }
-    // A hit by no ship provokes no one (`_DamageShip` sets a target only
-    // for a ship source, @0x3bcf0, @0x3bd64).
+    let provoked = provocation(strike);
+    // A hit by no ship is never tested for focus (`si` >= 0,
+    // @0x3bbf8-0x3bc03) and draws no target (`si` <= 63, @0x3bcf0,
+    // @0x3bd64), but still provokes.
     let Some(by) = strike.by else {
-        return Reaction::default();
+        return Reaction {
+            target: None,
+            provoked,
+            goal: None,
+        };
     };
     let hit = match strike.ship {
         ShipRef::Npc(id) if id != npc.id => around.npc(id).unwrap_or(npc),
@@ -170,9 +202,20 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
     let on_itself = strike.ship == ShipRef::Npc(npc.id);
     Reaction {
         target: Some(by),
-        provoked: strike.damage,
+        provoked,
         goal: (on_itself && by == ShipRef::Player).then_some(Goal::Attack(ShipRef::Player)),
     }
+}
+
+/// What `strike` adds to the provocation (+0x96) of its victim and of
+/// the victim's lead: each of its nominal mass and energy damage
+/// ([`Strike::nominal`], `_DamageShip`'s args +0x14 and +0x18) when above
+/// none (@0x3bcc0-0x3bcf0, @0x3bd25-0x3bd5d), not the damage taken. A
+/// missile lock's nominal damage is none, so it adds nothing. The args
+/// are 16-bit words in the original; this keeps `f32`.
+fn provocation(strike: &Strike) -> f32 {
+    let positive = |damage: f32| damage.max(0.0);
+    positive(strike.nominal.mass) + positive(strike.nominal.energy)
 }
 
 /// Whether `strike` hit `npc` itself, or an escort it leads, among
@@ -360,6 +403,7 @@ mod tests {
         ShipRef::Npc(NpcId(id))
     }
 
+    use crate::combat::Nominal;
     use crate::combat::fixture::strike;
 
     fn answered(govts: &Governments, npcs: &[Npc], who: usize, hit: &Strike) -> Reaction {
@@ -397,9 +441,11 @@ mod tests {
         answer(&npcs[who], hit, &around, RuleSource::Engine)
     }
 
+    /// The victim, or its lead, taking its attacker, provoked by the
+    /// fixture's nominal 12 mass and 12 energy damage.
     const TAKES: fn(ShipRef) -> Reaction = |attacker| Reaction {
         target: Some(attacker),
-        provoked: 12.0,
+        provoked: 24.0,
         goal: None,
     };
 
@@ -407,7 +453,7 @@ mod tests {
     /// and attacks it at once (`_AIMakeShipAttackPlayer` @0x89d3e).
     const TURNS: Reaction = Reaction {
         target: Some(ShipRef::Player),
-        provoked: 12.0,
+        provoked: 24.0,
         goal: Some(Goal::Attack(ShipRef::Player)),
     };
 
@@ -542,23 +588,74 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_by_no_ship_provokes_no_one() {
+    fn a_hit_by_no_ship_provokes_the_victim_and_its_lead_but_gives_no_target() {
+        // +0x96 takes the nominal damage whatever the source
+        // (@0x3bcb2-0x3bcf0, the lead @0x3bd25-0x3bd5d); only the target
+        // waits for a ship source (`si` <= 63, @0x3bcf0, @0x3bd64), and
+        // the focus test asks for one (`si` >= 0, @0x3bbf8-0x3bc03).
         let govts = relations(0, 0);
         let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
         escort.leader = Some(NpcId(1));
         let npcs = [ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0), escort];
-        for hit in [n(1), n(2)] {
-            let by_none = Strike {
-                by: None,
-                ..strike(hit, n(1))
+        let provoked = Reaction {
+            target: None,
+            provoked: 24.0,
+            goal: None,
+        };
+        let by_none = |hit| Strike {
+            by: None,
+            ..strike(hit, n(1))
+        };
+        assert_eq!(answered(&govts, &npcs, 0, &by_none(n(1))), provoked);
+        assert_eq!(
+            answered(&govts, &npcs, 1, &by_none(n(1))),
+            Reaction::default(),
+            "its escort, not hit"
+        );
+        assert_eq!(
+            answered(&govts, &npcs, 1, &by_none(n(2))),
+            provoked,
+            "the escort hit"
+        );
+        assert_eq!(
+            answered(&govts, &npcs, 0, &by_none(n(2))),
+            provoked,
+            "its lead"
+        );
+        let hunted = hunted(100.0);
+        for focus in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                focused_by(focus, &govts, &hunted, 0, &by_none(n(1))),
+                provoked,
+                "{focus:?}: no focus test for a hit by no ship"
+            );
+        }
+    }
+
+    #[test]
+    fn the_victim_and_its_lead_add_each_nominal_damage_above_none() {
+        // `_DamageShip` adds the mass and energy args (+0x14, +0x18) to
+        // +0x96 each when above 0 (@0x3bcc0-0x3bcf0, @0x3bd25-0x3bd5d),
+        // not the damage taken.
+        let govts = relations(0, 0);
+        let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        let npcs = [ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0), escort];
+        let provoked = |hit: ShipRef, who: usize, nominal: Nominal, lock: bool| {
+            let struck = Strike {
+                damage: 3.0,
+                nominal,
+                lock,
+                ..strike(hit, n(9))
             };
-            for who in 0..2 {
-                assert_eq!(
-                    answered(&govts, &npcs, who, &by_none),
-                    Reaction::default(),
-                    "{hit:?} {who}"
-                );
-            }
+            answered(&govts, &npcs, who, &struck).provoked
+        };
+        let nominal = |mass, energy| Nominal { mass, energy };
+        for (hit, who) in [(n(1), 0), (n(2), 1), (n(2), 0)] {
+            assert_eq!(provoked(hit, who, nominal(4.0, 10.0), false), 14.0);
+            assert_eq!(provoked(hit, who, nominal(-5.0, 10.0), false), 10.0);
+            assert_eq!(provoked(hit, who, nominal(4.0, -10.0), false), 4.0);
+            assert_eq!(provoked(hit, who, nominal(0.0, 0.0), true), 0.0, "a lock");
         }
     }
 

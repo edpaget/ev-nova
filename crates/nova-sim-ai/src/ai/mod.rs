@@ -714,7 +714,9 @@ impl<'a> Surroundings<'a> {
 pub struct Reaction {
     /// The ship it now targets, if it changes.
     pub target: Option<ShipRef>,
-    /// The damage it adds to its provocation.
+    /// The nominal damage it adds to its provocation: each of the strike's
+    /// nominal mass and energy damage above none
+    /// ([`Strike::nominal`], see [`react::victim`]).
     pub provoked: f32,
     /// The goal it takes at once, if any.
     pub goal: Option<Goal>,

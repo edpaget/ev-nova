@@ -711,8 +711,9 @@ pub struct Strike {
     pub ship: ShipRef,
     /// The ship whose shot, beam, blast or shockwave it was, or that
     /// boarded it; none for a shot no ship launched (`_DamageShip`'s
-    /// source -1), such as one turned on its firer, whose hit provokes no
-    /// one, is no crime and credits no kill.
+    /// source -1), such as one turned on its firer, whose hit draws no
+    /// target (it still provokes its victim and the victim's lead, see
+    /// `nova_sim::ai::react::victim`), is no crime and credits no kill.
     pub by: Option<ShipRef>,
     /// The shield and armour it took.
     pub damage: f32,
