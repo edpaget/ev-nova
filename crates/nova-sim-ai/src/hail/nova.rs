@@ -45,7 +45,9 @@
 //! 2. An unfriendly ship, a plunderer or a xenophobe: "In your dreams,
 //!    pal."
 //! 3. A busy one (`_AIIsShipBusy` @0x82fac): "Okay, I'm on my way." when
-//!    it is already assisting the player; "Sorry sir, I'm just an
+//!    it is already assisting the player, its target the player and not
+//!    disabled (`_IsRefuellingPlayer` @0x820fd, `_IsRepairingPlayer`
+//!    @0x8213a, so not one a hit turned on an NPC); "Sorry sir, I'm just an
 //!    escort." for a mission escort, the original's AI type above 4
 //!    (@0x962ee-0x96304), which is busy whenever it keeps formation or
 //!    fights; else "I'm busy.".
