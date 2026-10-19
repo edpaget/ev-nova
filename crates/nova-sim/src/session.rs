@@ -353,6 +353,7 @@
 //! [`Session::take_diagnostics`].
 
 mod afterburner;
+mod afterburner_roll;
 mod answer_flag;
 mod asteroids;
 mod aux_ships;
@@ -2319,7 +2320,8 @@ impl Session {
     /// and fighters carry no aux mark, so the fleet is exactly the kept
     /// ships with one; each keeps its mark into the new system. Each
     /// escort also keeps its ion colour, its charge cleared
-    /// (`_RespawnEscort` @0x3d543 leaves +0xb0).
+    /// (`_RespawnEscort` @0x3d543 leaves +0xb0), and its afterburner
+    /// (+0xbd); a loaded pilot's escorts roll theirs on `chance`.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2358,7 +2360,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &kept_escorts);
+        self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
@@ -6290,6 +6292,10 @@ impl Session {
         self.lose_captured(npc.id);
         self.leave(npc.id);
         let placed = self.place_escort(old_slot);
+        // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e).
+        if let Some(id) = placed {
+            self.roll_escort_afterburner(id, chance);
+        }
         if let Some(slot) = self.fleet.get_mut(old_slot) {
             *slot = placed;
         }

@@ -104,6 +104,7 @@ use crate::ai::swarm::{self, FormationParent};
 use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
+use crate::chance::Chance;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -130,6 +131,11 @@ pub(super) struct KeptEscort {
     pub(super) aux: Option<u8>,
     /// Its ion colour ([`Ion::colour`]); its charge is cleared.
     pub(super) ion_colour: u32,
+    /// Its afterburner ([`Npc::afterburner`]), which `_RespawnEscort`
+    /// never writes (@0x3d4b8-0x3d62c); `None` with no NPC, and the
+    /// escort rolls it as it is placed (see the `afterburner_roll`
+    /// module).
+    pub(super) afterburner: Option<bool>,
 }
 
 impl Session {
@@ -171,8 +177,9 @@ impl Session {
     /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
     /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark. And as
     /// `_RespawnEscort` clears an escort's ion charge (+0x5c @0x3d543)
-    /// but never writes its ion colour (+0xb0), the escort keeps the
-    /// colours it was ionized with.
+    /// but never writes its ion colour (+0xb0) or its afterburner
+    /// (+0xbd), the escort keeps the colours it was ionized with and its
+    /// afterburner.
     pub(super) fn fleet_kept(&self) -> Vec<KeptEscort> {
         (0..self.pilot.escorts.len())
             .map(|index| {
@@ -185,6 +192,7 @@ impl Session {
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
                     aux: npc.aux,
                     ion_colour: npc.ion.colour,
+                    afterburner: Some(npc.afterburner),
                 })
             })
             .collect()
@@ -194,8 +202,16 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark, and its ion colour with no charge.
-    pub(super) fn enter_escorts(&mut self, berths: &[u32], kept: &[KeptEscort]) {
+    /// mark, its ion colour with no charge, and its afterburner. One that
+    /// kept no afterburner, having no NPC (a loaded pilot's), rolls it on
+    /// `chance`, as `_LoadPilotData`'s `_SpawnEscort` does (@0x75a25; see
+    /// the `afterburner_roll` module).
+    pub(super) fn enter_escorts(
+        &mut self,
+        berths: &[u32],
+        kept: &[KeptEscort],
+        chance: &mut dyn Chance,
+    ) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -218,6 +234,14 @@ impl Session {
                         colour: kept.ion_colour,
                     };
                 }
+                match kept.afterburner {
+                    Some(afterburner) => {
+                        if let Some(npc) = self.npc_mut(id) {
+                            npc.afterburner = afterburner;
+                        }
+                    }
+                    None => self.roll_escort_afterburner(id, chance),
+                }
                 Some(id)
             })
             .collect();
@@ -236,8 +260,9 @@ impl Session {
     }
 
     /// Escort `index` as an NPC in the system, at `berth` or else the
-    /// first free one, beside the player until it is snapped to its slot;
-    /// none when its ship type has no record.
+    /// first free one, beside the player until it is snapped to its slot,
+    /// with no afterburner, which each caller rolls or restores (see the
+    /// `afterburner_roll` module); none when its ship type has no record.
     pub(super) fn place_escort_at(&mut self, index: usize, berth: Option<u32>) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
         let record = self.ship_record(escort.ship)?;

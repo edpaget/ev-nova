@@ -30,13 +30,16 @@
 //!   an auxiliary ship and a fleet's escorts have none, as
 //!   `_GenericRandomShipSpawn` writes 0 (@0x3cb83) and their spawns roll
 //!   nothing ([`asks`]).
+//! - The player's escorts (the session's, see `nova_sim`'s
+//!   `afterburner_roll` module): `_SpawnEscort` rolls it for a ship hired
+//!   (@0x3ff51) and for each escort of a pilot loaded, against the loaded
+//!   pilot's rating, as the pilot file never keeps it (`_LoadPilotData`
+//!   @0x75a25, @0x75b2b); `_DoShipCapture` for the old ship kept on "Use
+//!   As My Ship" (@0x4123e). Each keeps it through every jump, landing and
+//!   take-off (`_RespawnEscort` never writes it, @0x3d4b8-0x3d62c). A ship
+//!   kept on "Use As Escort" (`_AIMakeEscortFlyInForm` @0x89b8e) keeps the
+//!   flag its own spawn rolled.
 //! - Neither routine plays a sound.
-//!
-//! # Not modelled
-//!
-//! - The player's escorts' flag, which `_SpawnEscort` (@0x3ff51) and
-//!   `_DoShipCapture` (@0x4123e) roll and a jump keeps: here they have
-//!   none (rdm phase combat-ai-fidelity/phase-17-left-out-of-phase-7).
 
 use crate::chance::Chance;
 use crate::combat::hull::{AFTERBURNER_ALWAYS, AFTERBURNER_BY_RATING, HullSpec};

@@ -27,6 +27,18 @@ use crate::session::LandPress;
 use crate::session::Session;
 use crate::traffic::npc::NpcId;
 
+/// A bar, stellar 128, of tech level 7 (above 5, so no low-tech
+/// discount), at the centre, so a ship taking off flies out as one
+/// starting.
+pub(crate) fn bar() -> crate::catalog::LandingSite {
+    use crate::landing::StellarFlags;
+    crate::catalog::LandingSite {
+        flags: StellarFlags::CAN_LAND | StellarFlags::BAR,
+        tech_level: 7,
+        ..planet(128, 0.0, 0.0)
+    }
+}
+
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
 /// whole, with no `OnRegen`.
 pub(crate) fn life(id: i16, dead_time: i16) -> StellarLife {

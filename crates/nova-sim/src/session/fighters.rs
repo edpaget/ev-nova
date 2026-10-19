@@ -39,7 +39,9 @@ use std::collections::BTreeMap;
 
 use super::Session;
 use crate::ai::pursuit::Pursuit;
-use crate::ai::{Goal, afterburner, leave, swarm};
+use crate::ai::{Goal, leave};
+#[cfg(doc)]
+use crate::ai::{afterburner, swarm};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::chance::Chance;
@@ -72,8 +74,9 @@ impl Session {
 
     /// Puts the fighter of `sortie` in the system, its afterburner rolled
     /// on `chance` as `_LaunchFighter` asks `_AIHasAfterburner` (@0x3d736,
-    /// see [`afterburner`]), none at a berth another ship still names as
-    /// its swarm leader ([`swarm::named`]): its number, or none when it found no room or
+    /// see [`afterburner`] and the `afterburner_roll` module), none at a
+    /// berth another ship still names as its swarm leader
+    /// ([`swarm::named`]): its number, or none when it found no room or
     /// no record of its ship type. A dying NPC's last launch comes this way
     /// too (see the `npc_escape` module).
     pub(super) fn launch_fighter(
@@ -109,19 +112,7 @@ impl Session {
             ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
         };
         let mut npc = fighter(&kind, sortie.ship, state, speed, carrier);
-        let side = self.player_side();
-        // A class's `Strength` is none below none, so in 16 bits.
-        #[allow(clippy::cast_possible_truncation)]
-        let own = kind.hull.strength as i16;
-        let yardstick = afterburner::yardstick(
-            self.rules.source_for(RuleKey::AfterburnerYardstick),
-            side.yardstick,
-            own,
-        );
-        // A berth another ship names as its swarm leader gives none, unrolled
-        // (@0x64ff-0x6539).
-        npc.afterburner = !swarm::named(berth, self.traffic.npcs())
-            && afterburner::has_afterburner(&kind.hull, side.rating, yardstick, chance);
+        npc.afterburner = self.rolls_afterburner(&kind.hull, berth, chance);
         match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.join_carrier(npc, id),
