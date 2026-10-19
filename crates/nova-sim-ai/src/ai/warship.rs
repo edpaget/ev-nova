@@ -413,8 +413,10 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
         && npc.goal.attacking().is_some()
         && below(ODDS_RETREAT_SHIELDS)
         // A stale slot (-1) skips the odds retreat (@0x8bd30, @0x8d1d8).
-        // A `MaxOdds` is no less than 0.01, so -1 is never above it
-        // anyway.
+        // Kept to mirror the original's skip, but unreachable while a
+        // `MaxOdds` is no less than 0.01 (`Governments::max_odds`) and
+        // `odds_factor` is 1 or 2: -1 is never above their product anyway,
+        // so no test can tell this conjunct from its absence.
         && odds >= 0.0
         && odds > govts.max_odds(npc.govt) * odds_factor(npc, around);
     let by_government = retreat.shields && govts.flag(npc.govt, WARSHIPS_RETREAT);
@@ -774,8 +776,11 @@ mod tests {
         assert!(!retreats(50.0, 1.0), "cached at its MaxOdds");
     }
 
+    /// A stale slot's -1 never retreats a warship or an interceptor by the
+    /// odds. This shows the outcome, not the stale skip (@0x8bd30,
+    /// @0x8d1d8) itself: -1 is never above a `MaxOdds` either.
     #[test]
-    fn a_stale_slot_never_retreats_by_its_odds() {
+    fn a_stale_slots_odds_of_minus_one_never_retreat_it() {
         let warship = Warship::default();
         let interceptor = crate::ai::Interceptor::default();
         for (behaviour, flag) in [
