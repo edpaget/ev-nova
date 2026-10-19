@@ -1337,6 +1337,29 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_attacking_a_hired_escort_is_hostile_and_an_unseen_cloaked_attacker_is_not() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let mut escort = npc(&mut session).clone();
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let escort = session.traffic.add_npc(escort);
+        npc(&mut session).goal = Goal::Attack(ShipRef::Npc(escort));
+        assert!(hail(&mut session, &catalog).hostile, "a raider");
+        npc(&mut session).goal = Goal::Attack(ShipRef::Player);
+        npc(&mut session).cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        assert!(
+            !hail(&mut session, &catalog).hostile,
+            "unseen, with no cloak scanner"
+        );
+    }
+
+    #[test]
     fn the_view_names_the_ship_and_its_government() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
