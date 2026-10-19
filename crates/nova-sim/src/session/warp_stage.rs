@@ -843,6 +843,61 @@ mod tests {
         );
     }
 
+    /// `catalog`'s ship, as [`jumping`], its jump begun in double time.
+    fn jumping_in_double_time(catalog: &FakePilotCatalog) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
+        session.warp_sounds = [364, 252];
+        session.set_double_time_key(true);
+        session.begin_jump().expect("jumps");
+        assert!(session.double_time());
+        session
+    }
+
+    fn again(session: &mut Session) {
+        session.tick_again(
+            Controls::default(),
+            crate::Rules::default(),
+            &mut NeverFires,
+        );
+    }
+
+    /// Runs `frames` double-time frames: an advance pass, then the second.
+    fn frames(session: &mut Session, frames: u32) {
+        for _ in 0..frames {
+            tick(session);
+            again(session);
+        }
+    }
+
+    #[test]
+    fn a_double_time_fallback_ends_on_its_frames_second_pass() {
+        // w 1.3, d 252: t > 193.8 first at clock 97 (t 194). The fallback
+        // fires on frame 97's advance pass and sets `_warpSoundDone`, so
+        // the natural end comes on the next pass, that frame's second.
+        let mut session = jumping_in_double_time(&catalog());
+        frames(&mut session, 96);
+        assert!(!session.warp_end_due(), "frame 96");
+        tick(&mut session);
+        assert!(!session.warp_end_due(), "the fallback's pass");
+        assert!(session.warp_ups.playing(true));
+        again(&mut session);
+        assert!(session.warp_end_due(), "the next pass, frame 97's second");
+    }
+
+    #[test]
+    fn a_slow_jumpers_double_time_warp_ends_naturally_at_its_pitched_length() {
+        // w 0.91: 252 × 65536 / 72017 = 229 Mac ticks, over after 115
+        // advance passes, before d / w = 276.9.
+        let catalog = flagged(0x0001);
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 114);
+        assert!(session.warp_ups.playing(true));
+        assert!(!session.warp_end_due(), "frame 114");
+        frames(&mut session, 1);
+        assert!(!session.warp_ups.playing(true));
+        assert!(session.warp_end_due(), "frame 115, the natural end");
+    }
+
     #[test]
     fn a_warp_up_played_clears_the_warp_sound_flag_a_cancelled_warp_left() {
         // Left set by a warp given up a pass after its fallback, the flag
