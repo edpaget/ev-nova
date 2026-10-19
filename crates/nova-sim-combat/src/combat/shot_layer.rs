@@ -28,8 +28,10 @@
 
 use super::weapon::Guidance;
 
-/// The sprite layer a shot's sprite is in (see the module docs).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// The sprite layer a shot's sprite is in (see the module docs). The
+/// layers compare in the order they are drawn, bottom first
+/// ([`SpriteLayer`](crate::sprite_layer::SpriteLayer)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ShotLayer {
     /// Point defence's own layer 0x3b53bc, which only the missile pass
     /// walks (`_DoPlayGameWork` @0x43fff-0x44010) and no ship's contact
@@ -116,5 +118,21 @@ mod tests {
             );
         }
         assert_eq!(ShotLayer::default(), ShotLayer::Shots);
+    }
+
+    #[test]
+    fn the_shot_layers_compare_as_they_are_drawn() {
+        use crate::sprite_layer::SpriteLayer;
+        let layers = [
+            ShotLayer::OverShips,
+            ShotLayer::Homing,
+            ShotLayer::Shots,
+            ShotLayer::PointDefence,
+        ];
+        let mut sorted = layers;
+        sorted.sort();
+        let mut drawn = layers;
+        drawn.sort_by_key(|&layer| SpriteLayer::from(layer));
+        assert_eq!(sorted, drawn);
     }
 }

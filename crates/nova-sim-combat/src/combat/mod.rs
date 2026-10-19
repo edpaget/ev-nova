@@ -369,6 +369,7 @@ pub mod projectile;
 pub mod report;
 pub mod shockwave;
 pub mod shot_layer;
+pub mod shot_slots;
 pub mod sides;
 pub mod stellar;
 pub mod submunition;
