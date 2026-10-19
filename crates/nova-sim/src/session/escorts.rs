@@ -90,7 +90,10 @@
 //! runs no reset, and the mission cargo is never touched. A mission
 //! escort breaking up takes its share too (see
 //! [`mission_escorts`](super::mission_escorts)). A ship captured joins
-//! the fleet where it is, intact, its armour at half its most; and the
+//! the fleet where it is, intact, its armour at half its most; a
+//! mission's special ship, its mark kept, joins as a mission escort, of
+//! no record or fleet slot (see
+//! [`captured_mission_ship`](super::captured_mission_ship)); and the
 //! player's old ship, swapped for one captured, joins beside the player.
 //! Released (see [`hail`](super::hail)), an escort takes its share of the
 //! cargo while still in the fleet, of any ship type by the engine reading
@@ -404,14 +407,10 @@ impl Session {
         let Some(npc) = self.npc_mut(id) else {
             return;
         };
-        npc.independent();
-        if let Some((inherent_ai, _)) = ship {
-            npc.ai_type = AiType::from_raw(inherent_ai);
-        }
-        npc.former = None;
-        npc.leader = None;
-        npc.goal = Goal::Formation { guard: None };
-        npc.target = None;
+        fall_in(
+            npc,
+            ship.map(|(inherent_ai, _)| AiType::from_raw(inherent_ai)),
+        );
         npc.escort = Some(EscortDuty {
             formation: FormationSlot::default(),
             order: record.order,
@@ -861,6 +860,23 @@ impl Session {
 /// escort but a carried fighter back to formation (`_IssueNewEscortCommand`
 /// @0x661a5-0x661ed, the AI type 5 test), a recall when it had another
 /// order.
+/// `npc` falls in with the player, as a hired escort joining
+/// (`_AIMakeEscortFlyInForm` @0x89b8e) and a captured mission escort
+/// alike: of no government, and so of no government's factor, keeping
+/// its skill, its AI type `inherent` (its ship type's `InherentAI`) when
+/// known, no longer a former escort, of no leader but the player, keeping
+/// formation with no target of its own.
+pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
+    npc.independent();
+    if let Some(ai_type) = inherent {
+        npc.ai_type = ai_type;
+    }
+    npc.former = None;
+    npc.leader = None;
+    npc.goal = Goal::Formation { guard: None };
+    npc.target = None;
+}
+
 fn order_for(
     command: EscortCommand,
     carried: bool,

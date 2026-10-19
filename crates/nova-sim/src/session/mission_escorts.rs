@@ -33,6 +33,12 @@
 //! another `ShipBehav` never joins: the swap's `_AIMakeEscortFlyInForm`
 //! (@0x62509) follows its leader, which `_GenericRandomShipSpawn` left at
 //! -1 (@0x3c9cd), so it never forms on the player.
+//! A mission's special ship captured for an escort, of any `ShipBehav`,
+//! is a mission escort too: the escort path makes it AI type 6 led by the
+//! player and never writes its mark (`_DoPlunderDialog` @0x9459b-0x947cf,
+//! `_AIShipCapturedByPlayer` @0x89693-0x89780), so it joins with its
+//! class's order and no record (see the
+//! [`captured_mission_ship`](super::captured_mission_ship) module).
 //! Because the join comes before its type's AI decides, a `ShipBehav` 1
 //! ship never thinks as a warship or interceptor while its mission is
 //! active, so `_SelectWarshipTarget`'s `ShipBehav` 1 branch

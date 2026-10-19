@@ -1259,6 +1259,42 @@ mod tests {
     }
 
     #[test]
+    fn a_captured_ship_behav_0_mission_escort_still_hunts_the_player() {
+        // A captured mission ship keeps its mark and flies as a mission
+        // escort; `_HighLevelAIHandler` runs after `_EscortAI` (@0x901e5)
+        // and attacks the player for a `ShipBehav` 0 slot in formation
+        // (@0x8d628-0x8d6ea), with no test on the leader (@0x89c3e).
+        let mark = Marked::new(7);
+        let ai = NovaAi::default().with_escorts(mark.clone());
+        let mut captured = mission_ship(of(1, AiType::Warship), 0);
+        if let Some(mission) = &mut captured.mission {
+            mission.formation = Some(crate::escort::FormationSlot::default());
+        }
+        captured.goal = Goal::Formation { guard: None };
+        assert!(captured.mission_escort());
+        let npcs = [captured];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+        let mut unmarked = npcs[0].clone();
+        unmarked.mission = None;
+        unmarked.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let npcs = [unmarked];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(mark.ship()),
+            "a hired escort thinks as the escorts do"
+        );
+    }
+
+    #[test]
     fn a_mission_ship_goes_back_to_its_types_ai_unmarked_or_of_another_behaviour() {
         let mark = Marked::new(7);
         let ai = NovaAi::default().with(AiType::Warship, mark.clone());

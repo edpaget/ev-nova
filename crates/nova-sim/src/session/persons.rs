@@ -414,14 +414,18 @@ impl Session {
     /// [`RuleKey::CapturedPerson`](crate::RuleKey::CapturedPerson) reads
     /// (see the `capture` module); otherwise it lives on with its grudge.
     ///
-    /// It also unmarks a mission's special ship, which is the engine's
-    /// own: the original's escort path never writes the mark +0xc8d2, and
-    /// `_DoShipCapture`'s @0x413c2 clears the old ship's, not the captured
-    /// one's (rdm:phase/ship-handling-fidelity/phase-21-captured-mission-ship-keeps-its-mark).
+    /// A mission's special ship keeps its mark +0xc8d2, as the original
+    /// does: the escort path never writes it (`_DoPlunderDialog`
+    /// @0x9459b-0x947cf, `_AIShipCapturedByPlayer` @0x89693-0x89780), so
+    /// it flies on as a mission escort (see the `captured_mission_ship`
+    /// module); and `_DoShipCapture` clears the old ship's mark
+    /// (@0x413c2), not the captured one's, whose slot it makes inactive
+    /// (@0x41a46). Every reader of the mark tests the active flag first
+    /// (@0x9ea2a, @0x99ab5), and Use As My Ship takes the NPC out of the
+    /// system, so that stale mark is never seen.
     pub(super) fn lose_captured(&mut self, id: NpcId, gone: bool) {
         let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
         let taken = npc.map(|npc| {
-            npc.mission = None;
             npc.booty = None;
             (npc.berth, npc.person.take())
         });

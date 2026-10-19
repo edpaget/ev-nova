@@ -555,7 +555,10 @@ pub struct MissionMark {
     pub behav: ShipBehav,
     /// Its place in the player's formation once it has joined it as a
     /// mission escort (the original's AI type 6 led by the player): none
-    /// before (see the session's `mission_ships` module). It is never an
+    /// before (see the session's `mission_ships` module). A `ShipBehav` 1
+    /// ship joins on its own; one of any `ShipBehav` captured for an escort
+    /// joins as it is captured, keeping its mark (`_DoPlunderDialog`
+    /// @0x9459b-0x947cf, see `nova_sim::Session::assign`). It is never an
     /// [`EscortDuty`], so every hired-escort path leaves it out.
     pub formation: Option<FormationSlot>,
     /// Its standing order while a mission escort, given by the player's
@@ -638,7 +641,8 @@ impl Npc {
     }
 
     /// Whether it is a mission escort: a mission's special ship that has
-    /// joined the player's formation ([`MissionMark::formation`]).
+    /// joined the player's formation ([`MissionMark::formation`]), a
+    /// `ShipBehav` 1 ship or one captured for an escort.
     #[must_use]
     pub fn mission_escort(&self) -> bool {
         self.mission.is_some_and(|mark| mark.formation.is_some())

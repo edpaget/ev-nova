@@ -10,7 +10,9 @@
 //! (+0x9a == 0), of AI type 6 and of no mission mark (+0xc8d2 == -1):
 //! a launched fighter is AI type 5 (`_LaunchFighter` @0x3d771) and a
 //! carried one has no slot, so neither counts, and a mission escort is
-//! marked. The odds count only those of `InherentAI` above 2 (see
+//! marked, a mission's special ship captured for an escort among them, as
+//! the escort path keeps its mark (@0x9459b-0x947cf; see the
+//! `captured_mission_ship` module). The odds count only those of `InherentAI` above 2 (see
 //! [`NovaBoarding::capture_odds`](crate::board::NovaBoarding)).
 //! `_CanHireEscorts` is true while it counts 5 or fewer
 //! ([`Session::can_hire_escorts`]), for a capture, a hire in the bar and

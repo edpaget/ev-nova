@@ -362,6 +362,7 @@ mod board_attempt;
 mod brackets;
 mod buoys;
 mod capture;
+mod captured_mission_ship;
 mod cargo_boxes;
 mod clearance;
 mod cloaks;
@@ -6160,7 +6161,9 @@ impl Session {
     /// person, who lives on or is gone for good as
     /// [`RuleKey::CapturedPerson`] reads (see the `capture` module),
     /// intact, its armour at half its most, and then as
-    /// [`Session::fleet_up`] says.
+    /// [`Session::fleet_up`] says: a mission's special ship keeps its mark
+    /// and joins as a mission escort (`_DoPlunderDialog`
+    /// @0x9459b-0x947cf; see the `captured_mission_ship` module).
     fn join_fleet(&mut self, id: NpcId) {
         self.lose_captured(id, self.escort_capture_loses_person());
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
@@ -6186,13 +6189,16 @@ impl Session {
     /// government, its AI type its ship type's `InherentAI`, keeping
     /// formation with no standing order. Every other NPC lets it go, its
     /// own escorts leave it, and so does the player's target; a save is
-    /// due.
+    /// due. A mission's special ship, captured with its mark kept, falls
+    /// in as a mission escort instead, with no escort record
+    /// ([`Session::join_as_mission_escort`]).
     fn fleet_up(&mut self, id: NpcId, person: Option<PersonId>) {
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
         npc.trigger = Trigger::default();
         npc.provoked = 0.0;
+        let marked = npc.mission.is_some();
         let record = Escort {
             ship: npc.ship,
             reserves: npc.reserves,
@@ -6213,7 +6219,11 @@ impl Session {
         if self.target == Some(id) {
             self.target = None;
         }
-        self.enlist(id, record);
+        if marked {
+            self.join_as_mission_escort(id);
+        } else {
+            self.enlist(id, record);
+        }
     }
 
     /// NPC `id` leaves the system: every other NPC after it lets it go,
@@ -6229,7 +6239,9 @@ impl Session {
     /// [`board`](crate::board)). Either button beeps first
     /// ([`SimSound::CaptureAssigned`]). "Use As Escort" adds it to the
     /// fleet, its person living on or gone as [`RuleKey::CapturedPerson`]
-    /// reads; "Use As My Ship" swaps the player into it, the old ship
+    /// reads, a mission's special ship keeping its mark as a mission
+    /// escort with no escort record (see the `captured_mission_ship`
+    /// module); "Use As My Ship" swaps the player into it, the old ship
     /// joining the fleet and its person gone for good, unless no ship slot
     /// is free in the system for the old ship, when the prize is lost and
     /// nothing else changes. The player keeps its persistent outfits and

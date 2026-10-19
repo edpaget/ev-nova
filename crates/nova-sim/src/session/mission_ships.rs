@@ -2637,13 +2637,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_captured_mission_ship_loses_its_mark_and_the_ships_left_stay() {
+    fn a_captured_mission_ship_keeps_its_mark_and_the_ships_left_stay() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         let id = session.npcs()[0].id;
         session.lose_captured(id, true);
-        assert_eq!(marked(&session), [0]);
+        assert_eq!(
+            marked(&session),
+            [0, 0],
+            "_DoPlunderDialog @0x9459b-0x947cf"
+        );
         assert_eq!(ships_of(&session).left, 2);
     }
 
@@ -2675,7 +2679,7 @@ pub(super) mod tests {
 
     /// Destroys the NPC at `index`, as the fight does once it has broken
     /// up.
-    fn destroy(session: &mut Session, index: usize) {
+    pub(in crate::session) fn destroy(session: &mut Session, index: usize) {
         session.traffic.npcs_mut()[index].condition = Condition::Destroyed;
         session.take_out_the_destroyed(&mut NeverFires);
     }
