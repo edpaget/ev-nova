@@ -620,6 +620,61 @@ fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothin
     assert_eq!(list.iter().count(), 0, "no weapon glow lit");
 }
 
+#[test]
+fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_nothing() {
+    let mut view = flying_with(
+        shown(
+            display(0, 1, 0),
+            display(0, 1, 0),
+            Some(ShipSheet {
+                weapon: Some(layer(2301, 72)),
+                ..npc_sheet()
+            }),
+        ),
+        0,
+        Rc::new(Still),
+        &[],
+    );
+    let mut npc = npc_of(&view);
+    view.glows
+        .step(&[(ShipRef::Npc(npc.id), false)], |_| Some(1.0));
+    let level = view.glows.drawn(ShipRef::Npc(npc.id)).expect("lit");
+    npc.cloak = CLOAKED;
+    let session = view.session().expect("flying");
+    assert_eq!(session.cloak_shown(&npc), CloakShown::Hidden);
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    let drawn: Vec<_> = list
+        .iter()
+        .map(|command| match *command {
+            DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            } => Some((image.id, center, tint, blend)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        drawn,
+        [Some((
+            2301,
+            VIEW_CENTER,
+            lights_tint(level.min(8)),
+            crate::draw::Blend::Or
+        ))],
+        "the weapon glow alone, unjittered"
+    );
+    // Waiting at its gate, uncloaked, it draws nothing, lit glow or not.
+    npc.cloak = nova_sim::cloak::Cloak::default();
+    npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 100 };
+    assert_eq!(npc_tint(&npc), None);
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    assert_eq!(list.iter().count(), 0, "hidden at its gate");
+}
+
 /// Each colorized sprite of `image` drawn: its tint, whether it is OR-ed
 /// in, and its colorize.
 fn colorized_of(list: &DrawList, image: i16) -> Vec<(Color, bool, crate::Colorize)> {
