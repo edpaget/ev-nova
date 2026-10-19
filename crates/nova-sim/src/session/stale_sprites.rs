@@ -46,7 +46,7 @@
 use super::Session;
 use crate::catalog::LandingSite;
 use crate::combat::stellar_hazards::DeadlyDisc;
-use crate::deadly_stellar::is_deadly;
+use crate::deadly_stellar::{is_deadly, sprite_radius};
 use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::sprite_pool::{SlotSprite, StellarSpritePool, offset};
@@ -111,24 +111,26 @@ impl Session {
 
     /// The disc of `site`, shown, as it is drawn: none when nothing is.
     fn drawn_disc(&self, site: &LandingSite) -> Option<DeadlyDisc> {
-        let (width, height) = self.drawn_frame_size(site)?;
         Some(DeadlyDisc {
             at: site.position,
-            radius: half_side(width.max(height)),
+            radius: sprite_radius(self.drawn_frame_size(site)?),
         })
     }
 
     /// The disc of an unowned slot placed at `top_left` from the player:
     /// graphic type 0's frame there, none when it cannot be read.
     fn ghost_disc(&self, top_left: (i32, i32)) -> Option<DeadlyDisc> {
-        let (width, height) = self.fallback_frame?;
-        // A screen offset is far within a float's exact range.
+        let frame = self.fallback_frame?;
+        // A screen offset and a sprite's side are far within a float's
+        // exact range.
         #[allow(clippy::cast_precision_loss)]
-        let corner = Vec2::new(top_left.0 as f32, top_left.1 as f32);
-        let centre = Vec2::new(half_side(width), half_side(height));
+        let (corner, size) = (
+            Vec2::new(top_left.0 as f32, top_left.1 as f32),
+            Vec2::new(frame.0 as f32, frame.1 as f32),
+        );
         Some(DeadlyDisc {
-            at: self.player.position + corner + centre,
-            radius: half_side(width.max(height)),
+            at: self.player.position + corner + size * 0.5,
+            radius: sprite_radius(frame),
         })
     }
 
@@ -147,14 +149,6 @@ impl Session {
         self.stellar_sprites = pool;
         self.rebuild_sprite_pool();
     }
-}
-
-/// Half of `side`, a sprite's, in pixels.
-fn half_side(side: u32) -> f32 {
-    // A sprite's side is far within a float's exact range.
-    #[allow(clippy::cast_precision_loss)]
-    let side = side as f32;
-    side / 2.0
 }
 
 #[cfg(test)]

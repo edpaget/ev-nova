@@ -25,9 +25,11 @@
 //! - **Touching** ([`touches`]): the original compares the two sprites'
 //!   pixel masks (`_SWRLECollision` @0x39d97). The engine has no masks, so
 //!   it tests discs, as a shot at a stellar or an asteroid does: a ship is
-//!   its hull's hit radius, and a sprite half the larger side of the
-//!   frame it holds ([`drawn_radius`]), centred on its rect. A sprite with
-//!   no frame touches nothing.
+//!   its hull's hit radius, and a stellar's sprite half the larger side of
+//!   the frame it holds ([`sprite_radius`]), centred on its rect. Which
+//!   frame that is is the session's: the one the stellar is drawn with, or
+//!   graphic type 0's for an unowned slot (`nova_sim::Session`'s
+//!   deadly-stellar discs). A sprite with no frame touches nothing.
 //!
 //! What a kill does to the ship is the session's (`nova_sim::Session`'s
 //! deadly-stellar step), under [`RuleKey::DeadlyStellarKill`]
@@ -70,24 +72,18 @@ pub fn resists_deadly(immune_hull: bool, outfit: bool, flyer: Flyer) -> bool {
     immune_hull || (outfit && flyer == Flyer::Player)
 }
 
-/// The radius a stellar touches ships within: half the larger side of the
-/// frame it is drawn with, `dead_frame` once `destroyed`, else `frame`;
-/// none without that frame.
+/// The radius a stellar's sprite touches ships within: half the larger
+/// side of `frame` (width, height), the frame it holds.
 #[must_use]
-pub fn drawn_radius(
-    frame: Option<(u32, u32)>,
-    dead_frame: Option<(u32, u32)>,
-    destroyed: bool,
-) -> Option<f32> {
-    let (width, height) = if destroyed { dead_frame } else { frame }?;
+pub fn sprite_radius(frame: (u32, u32)) -> f32 {
     // A sprite's side is far within a float's exact range.
     #[allow(clippy::cast_precision_loss)]
-    let side = width.max(height) as f32;
-    Some(side / 2.0)
+    let side = frame.0.max(frame.1) as f32;
+    side / 2.0
 }
 
 /// Whether a ship at `ship_at` of hit radius `ship_radius` touches a
-/// stellar at `stellar_at` of `stellar_radius` ([`drawn_radius`]): their
+/// stellar at `stellar_at` of `stellar_radius` ([`sprite_radius`]): their
 /// discs overlap. A stellar of no radius touches nothing.
 #[must_use]
 pub fn touches(
@@ -158,13 +154,11 @@ mod tests {
     }
 
     #[test]
-    fn a_stellar_is_drawn_half_its_larger_side_across_its_dead_frame_once_destroyed() {
-        let live = Some((100, 60));
-        let dead = Some((30, 50));
-        assert_eq!(drawn_radius(live, dead, false), Some(50.0));
-        assert_eq!(drawn_radius(live, dead, true), Some(25.0));
-        assert_eq!(drawn_radius(None, dead, false), None);
-        assert_eq!(drawn_radius(live, None, true), None);
+    #[allow(clippy::float_cmp)]
+    fn a_sprite_touches_within_half_the_larger_side_of_its_frame() {
+        assert_eq!(sprite_radius((100, 60)), 50.0);
+        assert_eq!(sprite_radius((30, 51)), 25.5);
+        assert_eq!(sprite_radius((0, 0)), 0.0);
     }
 
     #[test]
