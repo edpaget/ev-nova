@@ -962,6 +962,20 @@ mod tests {
     }
 
     #[test]
+    fn the_fights_countdown_leaves_a_pods_adrift_wait_alone() {
+        // `_HandleShip`'s countdown skips class 0x2ff (@0x3502f): a pod's
+        // wait is its own flight's (`pod_flight::count_down`).
+        use crate::traffic::npc::Mode;
+        let mut pod = npc(0, ShipStats::new(FAST, &[]));
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        pod.mode = Mode::Adrift { ticks_left: 3 };
+        let mut npcs = [pod];
+        count_down(&mut npcs);
+        crate::traffic::board_wait::count_down(&mut npcs);
+        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 3 });
+    }
+
+    #[test]
     fn the_strengths_marines_follow_the_worlds_reading() {
         // By the place, the pirate's crew of 500 gives odds of 100 and a
         // capture; by its own outfit, none: odds of 15.

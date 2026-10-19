@@ -159,13 +159,6 @@
 //!   weapons-fidelity/phase-30-snipe-left-out-of-phase-17). Under goal 0xd
 //!   it is the only launch, and is built: a hopeless plunderer sniping
 //!   launches its fighters after its passes, the bay its pick.
-//! - The escape pod's (class 0x2ff) exemption from the wait gate
-//!   (@0x34a69-0x34a72): a pod NPC
-//!   ([`pod_flight`](crate::traffic::pod_flight)) counts its wait in its
-//!   mode, which [`Npc::wait_running`] doesn't read, and the gate's own
-//!   test of its class is
-//!   rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate.
-//!   A pirate's count wait (goal 22) is exempt ([`gated`]).
 //! - `_ShipTurnRate`'s nag-ship +1, which [`suitable_missile`] would read
 //!   through the target's turn rate: no ship of ours is the nag. Every
 //!   other factor is read: an NPC's rate is its class's alone by the
@@ -605,6 +598,9 @@ fn launches_after_snipe(npc: &Npc, around: &Surroundings) -> bool {
 /// @0x3501f), so the pick is neither fired nor cleared (@0x35012); the
 /// point defence (`_AIFireTurret` → `_HandleShipPointDefense` @0x80b0d)
 /// and `_AILaunchFighter` are the AI's, which the gate does not stop.
+/// An escape pod (class 0x2ff) is exempt too (@0x34a6c): its wait is its
+/// [`Mode::Adrift`](crate::traffic::npc::Mode::Adrift), which
+/// [`Npc::wait_running`] doesn't read, so no test of its class is needed.
 #[must_use]
 pub fn gated(npc: &Npc) -> Trigger {
     let trigger = npc.trigger;
@@ -3251,6 +3247,28 @@ mod tests {
         );
         npc.ai_wait = 0;
         assert_eq!(gated(&npc), FULL);
+    }
+
+    #[test]
+    fn a_pod_adrift_is_not_held_by_the_wait_gate() {
+        // `_HandleShip` skips class 0x2ff's gate (@0x34a6c): a pod's wait
+        // is its `Mode::Adrift`, which the gate doesn't read.
+        let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
+        npc.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        npc.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 5 };
+        npc.trigger = FULL;
+        assert!(!npc.wait_running());
+        assert_eq!(gated(&npc), FULL);
+        npc.trigger = Trigger {
+            only: id(128),
+            ..Trigger::default()
+        };
+        after_firing(&mut npc, &gun_and_secondary());
+        assert_eq!(
+            (npc.trigger.only, npc.pick),
+            (None, None),
+            "fired, so cleared"
+        );
     }
 
     // The snipe.
