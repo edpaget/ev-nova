@@ -273,6 +273,8 @@ const FIELDS: ShipFields = ShipFields {
     armor_rech: 0,
     flags: 0,
     flags2: 0,
+    ionize_max: 0,
+    deionize: 0,
 };
 
 fn sheet() -> ShipSheet {

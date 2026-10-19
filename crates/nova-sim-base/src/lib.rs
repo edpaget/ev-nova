@@ -19,6 +19,9 @@
 //!   growing down.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
+//! - [`ionization`]: what an ion charge does to a ship's handling: its
+//!   factor, the slowed turn and thrust, the charge shed each frame and
+//!   the pull back toward a lowered top speed.
 //! - [`player_turn`]: the player's turn block, `_HandlePlayer`'s: the
 //!   whole-degree turn, the auto-turn toward an aim that holds the turn
 //!   keys off, and the aims reverse and the jump's brake take.
@@ -54,6 +57,7 @@ pub mod fuel;
 pub mod geometry;
 pub mod handling;
 pub mod inertialess;
+pub mod ionization;
 pub mod player_turn;
 pub mod reserves;
 pub mod rule_values;

@@ -59,6 +59,14 @@ pub struct ShipFields {
     pub flags: u16,
     /// `Flags2`: the raw flag word, decoded in `nova_sim::stats::ShipStats`.
     pub flags2: u16,
+    /// `IonizeMax`: the ion charge at which the ship is fully ionized, its
+    /// ionization factor's divisor (class +0x9fa, copied raw by
+    /// `_LoadObjectData` @0x7a5db-0x7a5e2; see
+    /// [`ionization`](crate::ionization)).
+    pub ionize_max: i16,
+    /// `Deionize`: the ion charge it sheds a tick, ×100; 0 or below sheds
+    /// 1 a tick (class +0x48, `_LoadObjectData` @0x7a5be-0x7a60f).
+    pub deionize: i16,
 }
 
 impl ShipFields {
@@ -99,8 +107,9 @@ pub const MIN_TURN_RATE: f32 = 1.0;
 /// and an NPC unless its class turns under 1°. Left out: between the
 /// floors, a tractor's hold on an NPC, × 0.333
 /// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), and the nag
-/// ship's +1, which no ship of ours is; after them, ionization
-/// (rdm:phase/ship-handling-fidelity/phase-11-ionization-handling). The
+/// ship's +1, which no ship of ours is. Ionization comes after them,
+/// applied to the floored rate as the ship flies
+/// ([`ionized`](crate::ionization::ionized)). The
 /// original's NPC rate is its class's alone, with no outfits, where ours
 /// counts them
 /// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).

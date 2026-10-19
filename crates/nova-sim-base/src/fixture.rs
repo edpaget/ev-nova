@@ -28,6 +28,8 @@ pub const FAST: ShipFields = ShipFields {
     armor_rech: 0,
     flags: 0,
     flags2: 0,
+    ionize_max: 0,
+    deionize: 0,
 };
 
 /// A [`Chance`] that answers and rolls from a script (no, and 0, once it

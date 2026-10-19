@@ -1340,6 +1340,8 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         armor_rech: ship.armor_rech,
         flags: ship.flags.bits(),
         flags2: ship.flags2.bits(),
+        ionize_max: ship.ionize_max,
+        deionize: ship.deionize,
     }
 }
 
@@ -1744,6 +1746,15 @@ mod tests {
         put_i16s(&mut bytes, 0x62, &[0x4021]);
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags2), Ok(0x4021));
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_deionize_and_ionize_max() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x36A, &[-5, 400]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        let fields = data.ship_fields(ShipId(128)).expect("decodes");
+        assert_eq!((fields.deionize, fields.ionize_max), (-5, 400));
     }
 
     /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in
