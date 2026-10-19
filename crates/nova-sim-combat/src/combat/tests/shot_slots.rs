@@ -113,6 +113,54 @@ fn a_spent_shots_slot_is_held_through_the_npcs_point_defence_and_freed_by_handle
     assert_eq!(combat.first_free_slot(), Some(1));
 }
 
+#[test]
+fn a_shot_spent_on_a_stellar_holds_its_slot_through_the_npcs_point_defence() {
+    // A planet-type shot of C's whose last move, from 10 to the left,
+    // ended inside the stellar at (0, 500): the hit pass spends it
+    // (`Combat::strike_stellars`) and its slot is held until `_HandleShot`
+    // visits it (@0x36195 → @0x3617c), as a shot spent on a ship's is.
+    let at = Vec2::new(0.0, 500.0);
+    let on_the_stellar = Shot {
+        position: at,
+        moved_from: Some(at - Vec2::new(10.0, 0.0)),
+        age: 1,
+        ..Shot::launch(
+            WeaponSpec::new(&planet_gun()),
+            C,
+            C,
+            &ShipState::default(),
+            90.0,
+        )
+    };
+    let mut combat = Combat::default();
+    combat.put_in_flight(idle());
+    combat.put_in_flight(on_the_stellar);
+    let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 0.0, -200.0)];
+    let mut stellars = [stellar_at(0.0, 500.0, 20.0, 100)];
+    let govts = Governments::default();
+    let arsenal = Arsenal::default();
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal: &arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    };
+    let scenery = Scenery {
+        stellars: &mut stellars,
+        ..Scenery::default()
+    };
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, &mut NeverFires);
+    assert_eq!(slots(&combat), [0], "spent on the stellar");
+    assert!(combat.slots.is_held(1), "held through point defence");
+    assert_eq!(combat.first_free_slot(), Some(2));
+    combat.fly_shots(&mut fighters, arena, &mut NeverFires);
+    assert!(!combat.slots.is_held(1), "freed at its visit");
+    assert_eq!(combat.first_free_slot(), Some(1));
+}
+
 /// A shot of C's in `layer`, numbered `id` in firing order.
 fn in_layer(layer: ShotLayer, id: u32) -> Shot {
     Shot {
