@@ -412,6 +412,7 @@ pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
 pub use nova_sim_base::speed_cap;
 pub use nova_sim_combat::sabotage;
+pub use nova_sim_combat::self_destruct;
 pub mod save;
 pub mod saves;
 pub use nova_sim_ai::scan;
@@ -534,6 +535,7 @@ pub use rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
+pub use self_destruct::SelfDestruct;
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
     HookRules, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress, MissionComputer,
