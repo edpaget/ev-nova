@@ -29,8 +29,8 @@ use super::{
     EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
     HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
     NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, Said,
-    TOO_CLOSE, Then, arrival_lead, arrival_message_with, assigned_message, assigned_ticks,
-    comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
+    TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message,
+    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
     jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
     point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
     stellar_name, track_appeared,
@@ -490,9 +490,9 @@ impl<
 
     /// Begins a jump, or shows why not when the player is told
     /// ([`Session::jump_refusal_told`]). Starting it clears the message
-    /// line only when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or
-    /// [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9; the
-    /// tractor's #36 has no engine source). The original's second jump
+    /// line only when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`]
+    /// or [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9, #36 at
+    /// @0x6b2ac-0x6b30d). The original's second jump
     /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
     /// the tutorial, which the arrival line replaces anyway. The keys
     /// held stay held: the session flies the jump without them, and a
@@ -507,7 +507,7 @@ impl<
         };
         match session.begin_jump() {
             Ok(_) => {
-                for text in [TOO_CLOSE, FAR_ENOUGH, NOTHING_OUT_HERE] {
+                for text in [TOO_CLOSE, TRACTORED, FAR_ENOUGH, NOTHING_OUT_HERE] {
                     self.clear_message(text);
                 }
                 self.start_jump_effect();

@@ -61,22 +61,24 @@ pub const TOO_FAR_TICKS: u16 = 360;
 /// A hypergate jump cancelled, or a wormhole leading nowhere: 250
 /// (`_PlayerEnterHypergate` @0x6397e, `_PlayerEnterWormhole` @0x646a3).
 pub const GATE_REFUSAL_TICKS: u16 = 250;
-/// A jump refused as too close or with no destination: 360
-/// (`_HandlePlayer` @0x6b931, @0x6ba00).
+/// A jump refused as too close, held by a tractor beam or with no
+/// destination: 360 (`_HandlePlayer` @0x6b931, @0x6ba00).
 pub const JUMP_REFUSAL_TICKS: u16 = 360;
 /// The capture's old ship retained or lost: 360 (`_DoShipCapture`
 /// @0x41aa1).
 pub const OLD_SHIP_TICKS: u16 = 360;
 
 /// How long the message for `refusal` stays: [`JUMP_REFUSAL_TICKS`] too
-/// close or with no destination, 240 short of fuel (`_HandlePlayer`
+/// close, held by a tractor beam or with no destination, 240 short of fuel (`_HandlePlayer`
 /// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals. A
 /// disabled ship's refusal shows no message ([`jump_refusal_message`]),
 /// so its time is never used.
 #[must_use]
 pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
     match refusal {
-        JumpRefusal::TooClose { .. } | JumpRefusal::NoDestination => JUMP_REFUSAL_TICKS,
+        JumpRefusal::TooClose { .. } | JumpRefusal::Tractored | JumpRefusal::NoDestination => {
+            JUMP_REFUSAL_TICKS
+        }
         JumpRefusal::NoFuel { .. } | JumpRefusal::Landed | JumpRefusal::Disabled => MESSAGE_TICKS,
     }
 }
@@ -518,6 +520,9 @@ pub const NO_DESTINATION: &str =
 /// `STR#` 2002 #42.
 pub const TOO_CLOSE: &str =
     "Can't initiate hyperspace jump - not yet far enough away from system center.";
+/// `STR#` 2002 #36, shown in place of #42 while another ship holds the
+/// player in a tractor beam (`_HandlePlayer` @0x6b8a4-0x6b8dc).
+pub const TRACTORED: &str = "Your ship is unable to enter hyperspace while held by a tractor beam.";
 /// `STR#` 2002 #10.
 pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 /// Not the original's, which never flies a landed ship: worded after
@@ -1211,6 +1216,7 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> Option<&'static str> {
     match refusal {
         JumpRefusal::NoDestination => Some(NO_DESTINATION),
         JumpRefusal::TooClose { .. } => Some(TOO_CLOSE),
+        JumpRefusal::Tractored => Some(TRACTORED),
         JumpRefusal::NoFuel { .. } => Some(NO_FUEL),
         JumpRefusal::Landed => Some(TAKE_OFF_FIRST),
         JumpRefusal::Disabled => None,
@@ -1491,6 +1497,7 @@ mod tests {
         let jump = [
             (JumpRefusal::NoDestination, 360),
             (JumpRefusal::TooClose { distance: 1.0 }, 360),
+            (JumpRefusal::Tractored, 360),
             (JumpRefusal::NoFuel { fuel: 1.0 }, 240),
             (JumpRefusal::Landed, 240),
         ];
@@ -1757,10 +1764,21 @@ mod tests {
         );
         assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), None);
         assert_eq!(
-            [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
+            jump_refusal_message(&JumpRefusal::Tractored),
+            Some(TRACTORED)
+        );
+        assert_eq!(
+            [
+                NO_DESTINATION,
+                TOO_CLOSE,
+                TRACTORED,
+                NO_FUEL,
+                TAKE_OFF_FIRST
+            ],
             [
                 "You have to select a destination before you can start a hyperspace jump.",
                 "Can't initiate hyperspace jump - not yet far enough away from system center.",
+                "Your ship is unable to enter hyperspace while held by a tractor beam.",
                 "Insufficient energy for hyperspace jump.",
                 "Can't initiate hyperspace jump - take off first.",
             ]

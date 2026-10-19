@@ -552,8 +552,29 @@ fn far_enough_and_nothing_out_here_last_512() {
 }
 
 #[test]
+fn j_held_by_a_tractor_beam_says_36_with_the_refusal_beep() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    let session = view.session.as_mut().expect("flying");
+    nova_sim::fixture::set_player_tractor(
+        session,
+        Some(nova_sim::combat::impact::TractorLock::by(
+            nova_sim::combat::ShipRef::Npc(nova_sim::NpcId(7)),
+        )),
+    );
+    view.take_sounds();
+    view.input(&key(JUMP, true));
+    assert_eq!(view.jump_effect(), None);
+    assert!(!view.preparing_jump());
+    assert_eq!(view.take_sounds(), [REFUSED]);
+    assert_eq!(message(&view), Some(message_drawn(TRACTORED)));
+    assert_lasts(&mut view, TRACTORED, 360);
+}
+
+#[test]
 fn starting_a_jump_clears_the_far_enough_hint() {
-    for text in [FAR_ENOUGH, NOTHING_OUT_HERE, TOO_CLOSE] {
+    for text in [FAR_ENOUGH, NOTHING_OUT_HERE, TOO_CLOSE, TRACTORED] {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);

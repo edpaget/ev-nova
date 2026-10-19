@@ -5,7 +5,8 @@
 //! [`bits_allowing`], the control bits that make a test hold, for setting
 //! a pilot up directly; [`disable`], for disabling a ship directly;
 //! [`set_player_condition`], for downing or repairing the player directly;
-//! [`put_player_over`], for bringing the player over a ship to board it;
+//! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
+//! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
 //! [`cloak`], for setting a ship's cloak directly; [`hide`], for
 //! making a ship's type one whose `Cost` is -1; [`place`], for putting a
 //! ship somewhere directly; [`sabotage_kill`], for setting off the
@@ -56,6 +57,12 @@ pub fn set_player_condition(session: &mut Session, to: Condition) {
 /// needs the player ionized without a fight.
 pub fn set_player_ion(session: &mut Session, ion: crate::combat::ion::Ion) {
     session.set_player_ion(ion);
+}
+
+/// Sets the player's tractor lock in `session` to `lock`: for a test that
+/// needs the player held without a fight.
+pub fn set_player_tractor(session: &mut Session, lock: Option<crate::combat::impact::TractorLock>) {
+    session.set_player_tractor(lock);
 }
 
 /// Puts the player's ship in `session` over NPC `id`, at its place,
@@ -245,6 +252,17 @@ mod tests {
         };
         set_player_ion(&mut session, ion);
         assert_eq!(session.ion(), ion);
+    }
+
+    #[test]
+    fn setting_the_players_tractor_lock_holds_it() {
+        use crate::combat::ShipRef;
+        use crate::combat::impact::TractorLock;
+        let mut session = Session::start(&catalog()).expect("starts");
+        let lock = Some(TractorLock::by(ShipRef::Npc(NpcId(3))));
+        set_player_tractor(&mut session, lock);
+        assert_eq!(session.tractor(), lock);
+        assert!(session.held_by_other());
     }
 
     #[test]

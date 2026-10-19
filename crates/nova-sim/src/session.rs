@@ -520,7 +520,7 @@ use crate::handling::{Handling, ShipFields};
 use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
-    MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_zone,
+    MultiJumpRule, RouteError, StarMap, arrival, check_jump, hold_jump, hops_per_jump, jump_zone,
 };
 use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
@@ -3533,6 +3533,12 @@ impl Session {
     /// Only this first hop of a multi-jump turns and slows: the rest are
     /// made in hyperspace, on arrival.
     ///
+    /// While another ship holds the player in a tractor beam
+    /// ([`Session::held_by_other`]), a jump it would make or one too close
+    /// is [`JumpRefusal::Tractored`] ([`hold_jump`]); the nav area still
+    /// draws the jump clear ([`Session::jump_readiness`]), as
+    /// `_DrawStatusNav` never reads the lock.
+    ///
     /// A refusal [`check_jump`] gives that the player is told of
     /// ([`Session::jump_refusal_told`]) beeps [`SimSound::Refused`]
     /// (`_HandlePlayer` @0x6b89f, @0x6b9cc, @0x6ba72); the engine's own
@@ -3547,7 +3553,9 @@ impl Session {
         if let Some(Jump::PreJump { to, .. }) = self.jump {
             return Ok(to);
         }
-        let next = self.check_next_jump().inspect_err(|refusal| {
+        // A jump under way carries on whatever holds the ship (@0x6b21d).
+        let held = self.jump.is_none() && self.held_by_other();
+        let next = hold_jump(self.check_next_jump(), held).inspect_err(|refusal| {
             if self.jump_refusal_told(refusal) {
                 self.sounds.push(SimSound::Refused);
             }

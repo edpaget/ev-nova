@@ -45,5 +45,6 @@ mod stock_stand_off;
 mod stock_star_map;
 mod stock_storyline;
 mod stock_target_selection;
+mod stock_tractor_hold;
 mod stock_turning;
 mod story;

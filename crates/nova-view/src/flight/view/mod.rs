@@ -575,7 +575,8 @@
 //! `_RedrawComm` (@0x903a0) redraws it; the plunder dialog counts it down
 //! one tick a press that leaves the dialog open, as its loop calls
 //! `_HandleComm` (@0x949a1). Starting a jump clears it only
-//! when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or [`NOTHING_OUT_HERE`]
+//! when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`] or
+//! [`NOTHING_OUT_HERE`]
 //! (`_HandlePlayer` @0x6b231-0x6b3d9), and
 //! opening the escort menu only when it says [`NO_ESCORTS`](super::escorts::NO_ESCORTS)
 //! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the

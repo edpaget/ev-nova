@@ -73,6 +73,13 @@ impl Session {
         );
     }
 
+    /// Sets the player's lock directly, for
+    /// [`fixture::set_player_tractor`](crate::fixture::set_player_tractor).
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn set_player_tractor(&mut self, lock: Option<crate::combat::impact::TractorLock>) {
+        self.tractor = lock;
+    }
+
     /// Drops the player's lock, as a landing completes and as a jump
     /// arrives (see the module docs).
     pub(super) fn clear_tractor(&mut self) {
@@ -274,5 +281,55 @@ mod tests {
             Some(SystemId(131))
         );
         assert_eq!(session.tractor(), None);
+    }
+
+    // The jump.
+
+    /// A session on course for 131, out far enough to jump, its lock
+    /// `lock`.
+    fn bound(catalog: &crate::testkit::FakePilotCatalog, lock: Option<TractorLock>) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
+        session.tractor = lock;
+        session.take_sounds();
+        session
+    }
+
+    #[test]
+    fn a_held_players_jump_is_refused_with_the_refusal_beep() {
+        use crate::hyperspace::JumpRefusal;
+        use crate::sound::SimSound;
+        let catalog = catalog();
+        let mut session = bound(&catalog, Some(TractorLock::by(NPC)));
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::Tractored));
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+        assert_eq!(session.preparing_jump(), None);
+        // Too close is told as the tractor too.
+        session.player.position = Vec2::ZERO;
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::Tractored));
+        assert_eq!(session.take_sounds(), [SimSound::Refused]);
+    }
+
+    #[test]
+    fn a_player_holding_itself_jumps() {
+        let catalog = catalog();
+        let mut session = bound(&catalog, Some(TractorLock::by(ShipRef::Player)));
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+    }
+
+    #[test]
+    fn a_jump_accepted_before_the_hold_carries_on() {
+        let catalog = catalog();
+        let mut session = bound(&catalog, None);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        session.tractor = Some(TractorLock::by(NPC));
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+    }
+
+    #[test]
+    fn the_nav_area_shows_a_held_players_jump_clear() {
+        use crate::hyperspace::JumpReadiness;
+        let catalog = catalog();
+        let session = bound(&catalog, Some(TractorLock::by(NPC)));
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
     }
 }
