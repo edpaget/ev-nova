@@ -404,7 +404,10 @@ pub struct Npc {
     /// along its own (the original's +0xc8dc and +0xb4, see
     /// [`impact`](crate::combat::impact)): none as it spawns or launches,
     /// as the original's spawns and `_LaunchFighter` set it (@0x3c5c8,
-    /// @0x3cb1c, @0x3d71d). The fight sets and touches it.
+    /// @0x3cb1c, @0x3d71d). The fight sets and touches it; its hold pulls
+    /// it, releases it and lets it lapse, and slows it while another ship
+    /// holds it (see the [`tractor_hold`](crate::traffic::tractor_hold)
+    /// module).
     pub tractor: Option<TractorLock>,
     /// Its ionization (the original's +0x5c and +0xb0, see
     /// [`ion`](crate::combat::ion)): none as it spawns, launches or is

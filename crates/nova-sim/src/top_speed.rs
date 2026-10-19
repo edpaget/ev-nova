@@ -17,9 +17,11 @@
 //!    engine flies an NPC at its own handling, outfits counted.
 //! 4. **× its government's `SkillMult` / 100** (@0x37cb-0x37ee). Left out,
 //!    to the same phase.
-//! 5. **× 0.333** (@0xdd0c8) while a tractor beam pulls the ship
-//!    (+0xc8dc, @0x37f4-0x3815). Left out: the engine has no tractor
-//!    beams. Owner: rdm:task/weapon-flags-follow-up.
+//! 5. **× 0.333** (@0xdd0c8) while another ship holds the NPC in a
+//!    tractor beam (+0xc8dc, @0x37f4-0x3815). Ported in
+//!    [`Npc::own_handling`](crate::traffic::npc::Npc::own_handling) (see
+//!    the [`tractor_hold`](crate::combat::tractor_hold) module), which
+//!    [`Npc::top_speed`](crate::traffic::npc::Npc::top_speed) reads.
 //! 6. **× 2** for the shareware nag ship (+0xc8d0 0x3ff, @0x381c-0x382a).
 //!    Left out: the nag is out of scope.
 //! 7. **× 1.5** (@0xdd078) for the player, and for every ship whose

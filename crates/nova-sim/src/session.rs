@@ -5481,7 +5481,9 @@ impl Session {
     /// holds itself along its own (see
     /// [`impact`](crate::combat::impact)); none at the start of a session
     /// and of a load, as it is never saved. The fight sets and touches it;
-    /// nothing else here reads or clears it yet.
+    /// the player's hold pulls it, releases it and lets it lapse, a landing
+    /// and an arrival clear it, and it refuses the jump (see the
+    /// `tractor_hold` module).
     #[must_use]
     pub fn tractor(&self) -> Option<TractorLock> {
         self.tractor

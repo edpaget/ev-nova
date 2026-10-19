@@ -166,10 +166,9 @@
 //!   test of its class is
 //!   rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate.
 //!   A pirate's count wait (goal 22) is exempt ([`gated`]).
-//! - `_ShipTurnRate`'s own factors but its floor and ionization, which
-//!   [`suitable_missile`] reads through the target's turn rate: the
-//!   tractor's hold (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold)
-//!   and an NPC's class rate without its outfits
+//! - `_ShipTurnRate`'s own factors but its floor, a tractor's hold and
+//!   ionization, which [`suitable_missile`] reads through the target's
+//!   turn rate: an NPC's class rate without its outfits
 //!   (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
 
 #[cfg(doc)]
@@ -430,10 +429,11 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
 /// The original asks `_ShipTurnRate` of the target; here the target's
 /// [`Handling::turn_rate`](crate::handling::Handling) stands in for it,
 /// floored as `_ShipTurnRate` floors it
-/// ([`floored_turn`](crate::handling::floored_turn)) and slowed by its ion
-/// charge ([`Npc::turn_rate`], [`PlayerSide::handling`]). Its other
-/// factors are left out: the tractor's hold
-/// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), an NPC's
+/// ([`floored_turn`](crate::handling::floored_turn)), a third for an NPC
+/// another ship holds in a tractor beam
+/// ([`Npc::own_handling`](crate::traffic::npc::Npc::own_handling)), and
+/// slowed by its ion charge ([`Npc::turn_rate`],
+/// [`PlayerSide::handling`]). Its other factors are left out: an NPC's
 /// class rate without its outfits
 /// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves),
 /// and the nag ship's +1, which no ship of ours is.

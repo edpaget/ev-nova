@@ -104,9 +104,9 @@ pub const MIN_TURN_RATE: f32 = 1.0;
 /// 3. None below none (@0x34cd).
 ///
 /// So the player turns at least 1° a tick unless its class turns none,
-/// and an NPC unless its class turns under 1°. Left out: between the
-/// floors, a tractor's hold on an NPC, × 0.333
-/// (rdm:phase/ship-handling-fidelity/phase-12-tractor-hold), and the nag
+/// and an NPC unless its class turns under 1°. Between the floors, a
+/// tractor's hold on an NPC takes × 0.333, floored again by this
+/// (`nova_sim::combat::tractor_hold::held_handling`). Left out: the nag
 /// ship's +1, which no ship of ours is. Ionization comes after them,
 /// applied to the floored rate as the ship flies
 /// ([`ionized`](crate::ionization::ionized)). The
