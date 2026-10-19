@@ -24,6 +24,7 @@ mod hyperspace;
 mod hyperspace_outfits;
 mod land_key;
 mod landing;
+mod menu_commands;
 mod missions;
 mod navigation;
 mod news;
