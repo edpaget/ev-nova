@@ -1,4 +1,4 @@
-//! A pass's strikes answered one at a time ([`Traffic::react`]), as
+//! A pass's strikes answered one at a time ([`Traffic::answer`]), as
 //! `_DamageShip` runs hit by hit: each strike's reactions read the NPCs
 //! as the strikes before it left them.
 //!

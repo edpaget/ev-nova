@@ -1597,7 +1597,9 @@ impl Traffic {
     /// Each intact NPC answers each of `strikes` in `world` that was
     /// answered ([`Strike::answered`]), as `behaviour` says, now, as
     /// [`Traffic::tick_in`]'s step 2 does: the hit's own step (see
-    /// `nova_sim::Session::answer_strikes`).
+    /// `nova_sim::Session::answer_strikes`). The strikes are answered one
+    /// at a time, in the order they landed, each reading the NPCs as the
+    /// strikes before it left them (see `Traffic::react`).
     pub fn answer(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1612,9 +1614,29 @@ impl Traffic {
     /// [`weigh_strikes`](Traffic::weigh_strikes), which a blast's or a
     /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
     /// flag skips the whole reaction block, @0x3baea), as `behaviour`
-    /// says, all against the NPCs as they were before; by the
-    /// other reading of [`World::arrival_hits`] only those that have
-    /// arrived ([`Npc::arrived`]) do. A hit on it that it answers (taking
+    /// says; by the other reading of [`World::arrival_hits`] only those
+    /// that have arrived ([`Npc::arrived`]) do.
+    ///
+    /// The strikes are answered one at a time, in the order the session
+    /// holds them (the order they landed), as `_DamageShip` runs hit by
+    /// hit ([`in_turn`]): each strike's reactions read the targets
+    /// (+0x70), goals and provocations the strikes before it left, and the
+    /// heading each NPC wanted as the pass began
+    /// ([`in_turn::wanted_headings`], +0x68, which only the low level
+    /// writes). Within one strike every NPC reads the NPCs as they were
+    /// before that strike: the victim's part and its lead's both read the
+    /// victim's focus test before its own writes, as the original's lead
+    /// part does, and the Good Samaritan test agrees (see
+    /// [`react::answer`](crate::ai::react::answer)). Each strike of the
+    /// player's also queues, in the same turn, the grudge its victim's
+    /// person may hold ([`Traffic::take_grudges`], [`in_turn::grudge`]).
+    ///
+    /// The strikes a caller leaves for the traffic tick (one that never
+    /// calls [`Traffic::answer`]) are answered in turn too, but after that
+    /// tick's think, against the NPCs as the think left them, where the
+    /// original answered them as they landed. The answers settle in that
+    /// tick, before its frame is drawn, so this crosses no boundary the
+    /// player sees and is not filed. A hit on it that it answers (taking
     /// a target) cuts its wait, in its gate, held at it or holding its
     /// course ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
     ///
@@ -2097,7 +2119,7 @@ impl Traffic {
 
     /// The NPCs whose persons the player's answered hits give a grudge
     /// (`_DamageShip` @0x3be83-0x3beb3), decided as each strike is
-    /// answered ([`Traffic::react`], [`in_turn::grudge`]), since they were
+    /// answered ([`Traffic::answer`], [`in_turn::grudge`]), since they were
     /// last taken, in order, an NPC once for each such hit; taking them
     /// empties the list. Whether the person holds grudges (`Flags`
     /// 0x0001) is the taker's to read.

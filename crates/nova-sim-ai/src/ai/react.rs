@@ -12,10 +12,14 @@
 //!   damage to their provocation (+0x96: each of its mass and energy args
 //!   above none, [`Strike::nominal`], @0x3bcc0-0x3bcf0, @0x3bd25-0x3bd5d)
 //!   and take the attacker as their target, unless the
-//!   victim [keeps its target](keeps_target): attacking a ship it faces
-//!   within [`FOCUS_DEGREES`] of the heading it last wanted (+0x68), with
-//!   the attacker not nearer than half that ship's distance (dist² above
-//!   [`FOCUS`] × its target's, `_DamageShip` @0x3bbf3-0x3bcac). Then the
+//!   victim [keeps its target](keeps_target): attacking (goal 4) its
+//!   target (+0x70), faced within [`FOCUS_DEGREES`] of the heading it
+//!   last wanted (+0x68), with the attacker not nearer than half that
+//!   target's distance (dist² above [`FOCUS`] × its target's,
+//!   `_DamageShip` @0x3bbf3-0x3bcac). A pass's strikes are answered in
+//!   turn (see `traffic::in_turn`), so the target is the one the hits
+//!   before it in the pass left, which may be an attacker of an earlier
+//!   hit, and +0x68 the heading wanted as the pass began. Then the
 //!   hit changes nothing for it or its lead: the original jumps to the
 //!   Good Samaritan call (0x3bed2), past +0x96 and the target, the lead's
 //!   part (@0x3bcfa-0x3bd79), the turn on the player, the wait cut and
@@ -278,16 +282,20 @@ fn hits(npc: &Npc, strike: &Strike, around: &Surroundings) -> bool {
 /// (@0x3b4b0-0x3b4c2), a ship jumping out, never one coming in.
 ///
 /// - By the engine (`_DamageShip` @0x3bbf3-0x3bcac), `hit` is tested,
-///   whichever ship answers: it keeps its target when it attacks a live
-///   one T ([`Goal::attacking`], `_IsShipAttacking` @0x82f6a), faces
-///   within [`FOCUS_DEGREES`] of the heading it last wanted
-///   (`_AngularDifference(trunc(+0x44), +0x68)`), and dist²(`attacker`) >
-///   [`FOCUS`] × dist²(T). +0x68 is the last body's heading of its frame
-///   for its goal ([`Pursuit::frame`](crate::ai::pursuit::Pursuit::frame)),
-///   which at the collision passes is the previous tick's, as in the
-///   original; with no such frame, the whole-degree bearing to T stands
-///   in. The original reads T's slot whatever is in it; a dead or departed
-///   T is not kept here.
+///   whichever ship answers: it keeps its target when it is attacking
+///   ([`Goal::attacking`] some, `_IsShipAttacking` @0x82f6a, which tests
+///   the goal word alone), its target T ([`Npc::target`], +0x70, not the
+///   goal's quarry) is live, it faces within [`FOCUS_DEGREES`] of the
+///   heading it last wanted (`_AngularDifference(trunc(+0x44), +0x68)`),
+///   and dist²(`attacker`) > [`FOCUS`] × dist²(T). The two part when an
+///   earlier hit of the pass set the target and left the goal. +0x68 is
+///   the last body's heading of its frame for its goal
+///   ([`Pursuit::frame`](crate::ai::pursuit::Pursuit::frame)), which at
+///   the collision passes is the previous tick's, as in the original;
+///   while a pass is answered it is that heading as the pass began
+///   ([`Surroundings::wanted`]), as no reaction writes +0x68; with no such
+///   frame, the whole-degree bearing to T stands in. The original reads
+///   T's slot whatever is in it; a dead or departed T is not kept here.
 /// - By the other reading, the engine's before weapons-fidelity phase 37,
 ///   `answering` tests itself: it keeps its target when T is nearer than
 ///   half the attacker's distance (dist²(T) < [`FOCUS`] × dist²(attacker))
