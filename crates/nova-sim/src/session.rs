@@ -2546,12 +2546,10 @@ impl Session {
     /// The session's work after the traffic's AI, drawing on `chance`: the
     /// fleets announced and the comm calls answered.
     ///
-    /// In [`Session::game_work`] it runs after `_AIDispatch`'s whole loop
-    /// (`Session::dispatch_npcs`), so a fighter launched and thinking in
-    /// the loop has its calls answered with the rest; the original says
-    /// each in its own slot's `_AIDispatch`. Nothing between the think and
-    /// this draws a frame, opens a dialog, lands, jumps or saves the
-    /// pilot, so the deferral crosses no boundary the player sees.
+    /// In [`Session::game_work`] it runs right after the batch think,
+    /// before the scans and `_AIDispatch`'s loop (`Session::dispatch_npcs`);
+    /// the calls of the fighters that think in the loop are answered after
+    /// it (see there).
     fn after_traffic_ai(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.announce_fleets(chance);
         self.answer_comm_calls(chance);

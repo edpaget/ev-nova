@@ -20,15 +20,16 @@
 //!    answered at once, as `_DamageShip`'s reaction block runs in them.
 //! 4. The advance pass's AI (@0x44223-0x442ae): the traffic's think half,
 //!    the damage aimed read after the passes (`_CalculateTargetedDamage`
-//!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the scans,
-//!    then every NPC's point defence and fighter launches, slot by slot
-//!    (`_AIFireTurret` @0x80b0d, `_AILaunchFighter` @0x8e6fa and
-//!    @0x8732f; [`Combat::defend_npcs`]), each fighter launched put in the
-//!    system as its slot's turn ends (`_LaunchFighter`, see the `fighters`
+//!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the fleets
+//!    announced and the comm calls answered, the scans, then every NPC's
+//!    point defence and fighter launches, slot by slot (`_AIFireTurret`
+//!    @0x80b0d, `_AILaunchFighter` @0x8e6fa and @0x8732f;
+//!    [`Combat::defend_npcs`]), each fighter launched put in the system
+//!    as its slot's turn ends (`_LaunchFighter`, see the `fighters`
 //!    module), a fighter above its carrier thinking then, and the loop
-//!    resumed after that slot ([`Session::dispatch_npcs`]); then the
-//!    fleets announced and the comm calls answered. All before
-//!    `_HandleShot`, so the fighters move on their launch frame.
+//!    resumed after that slot ([`Session::dispatch_npcs`]); then the comm
+//!    calls those fighters made answered. All before `_HandleShot`, so
+//!    the fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
 //!    locks, their hits settled and answered.
 //! 6. `_HandleShip` (@0x44483): the traffic's fly half and the session's
@@ -59,9 +60,9 @@
 //! - Every existing NPC's point defence and launches run after every
 //!   existing NPC's decision, where `_AIDispatch` interleaves them slot by
 //!   slot; a fighter launched in the loop decides at its launch.
-//! - The fleets announced and the comm calls answered come after the
-//!   whole AI loop, where `_AIDispatch` says each in its own slot (see
-//!   [`Session::dispatch_npcs`]).
+//! - A fighter launched and thinking in the loop has its comm calls
+//!   answered after the whole loop, where its own slot's `_AIDispatch`
+//!   says them (see [`Session::dispatch_npcs`]).
 //! - What the close strikes (the beams, the shockwaves) is answered by the
 //!   caller after the pass ([`Session::answer_strikes`]), before the frame
 //!   is drawn.
@@ -76,7 +77,11 @@
 //! **Filed.** An existing NPC in a slot above a carrier thinks before
 //! the loop, blind to the fighter launched that frame, and a launched
 //! fighter's own launch settles against the room left after every
-//! existing claim, where the original's loop reaches them in slot order
+//! existing claim, where the original's loop reaches them in slot order;
+//! and every existing NPC's comm calls are answered before every scan, a
+//! launched fighter's after every scan, where each slot's `_AIDispatch`
+//! makes its calls and then its scan, so a scan line keeps a later slot's
+//! call off the line
 //! (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
@@ -181,11 +186,12 @@ impl Session {
     /// `ai` is the advance pass's AI, its traffic drawn from the catalog
     /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
     /// past it (@0x4402a to @0x44350). Where the original branches on its
-    /// argument, this branches on `ai`: with it, the traffic thinks, the
-    /// scans settle and every NPC's point defence fires and its fighters
-    /// launch, each put in the system as its slot's turn ends
-    /// ([`Session::dispatch_npcs`]), then the fleets and comm calls are
-    /// said, all before the shots,
+    /// argument, this branches on `ai`: with it, the traffic thinks and
+    /// its fleets and comm calls are said, the scans settle and every
+    /// NPC's point defence fires and its fighters launch, each put in the
+    /// system as its slot's turn ends ([`Session::dispatch_npcs`]), then
+    /// the calls the fighters that thought made are said, all before the
+    /// shots,
     /// and the traffic's motion is its fly half, its reinforcement clock
     /// included ([`Session::traffic_tail`]), then the assistance; without
     /// it, the traffic only moves, and the reinforcement clock
@@ -214,9 +220,9 @@ impl Session {
             // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
             // `_HandleShot` and its own `_HandleShip` see it that frame.
             self.dispatch_npcs(pass, behaviour, rules, chance);
-            if marks.is_some() {
-                self.after_traffic_ai(chance);
-            }
+            // The calls the fighters launched in the loop made as they
+            // thought (see `Session::dispatch_npcs`).
+            self.answer_comm_calls(chance);
             Some(marks)
         } else {
             None
@@ -304,10 +310,11 @@ impl Session {
     /// says and drawing on `chance`: on the first pass in a system not
     /// yet set up, its population ([`Session::populate`]), which moves
     /// from the next; otherwise the session's work before the AI and the
-    /// traffic's think half ([`Traffic::think_holding`]). The fleets it
-    /// brings and the comm calls it queues are said after the AI loop
-    /// ([`Session::dispatch_npcs`], `Session::after_traffic_ai`). What its
-    /// motion is read against, when it thought.
+    /// traffic's think half ([`Traffic::think_holding`]), and the fleets
+    /// it brings and the comm calls it queues said
+    /// (`Session::after_traffic_ai`), before the scans, as before the
+    /// launch frame's loop. What its motion is read against, when it
+    /// thought.
     ///
     /// [`Traffic::think_holding`]: crate::traffic::Traffic::think_holding
     fn traffic_think(
@@ -324,6 +331,7 @@ impl Session {
         self.step_traffic(|traffic, world| {
             traffic.think_holding(behaviour, world, &strikes, chance);
         });
+        self.after_traffic_ai(chance);
         Some(marks)
     }
 

@@ -58,12 +58,16 @@ impl Session {
     /// stops, its fighters put in the system after it.
     ///
     /// The fighters' comm calls are queued as they think and answered
-    /// with every other NPC's after this loop, with the fleets announced
-    /// (`Session::after_traffic_ai`), where the original answers each in
-    /// its own slot's `_AIDispatch`. Nothing between them draws a frame,
-    /// opens a dialog, lands, jumps or saves the pilot, so the deferral
-    /// crosses no boundary the player sees: the calls and announcements
-    /// are said before the frame is drawn.
+    /// after this loop, by the caller
+    /// ([`Session::answer_comm_calls`]), where the original answers each
+    /// in its own slot's `_AIDispatch`; every other NPC's were answered
+    /// after the batch think, before the scans
+    /// (`Session::after_traffic_ai`), so only the fighters' wait. Nothing
+    /// in the loop draws a frame, opens a dialog, lands, jumps or saves
+    /// the pilot, so the wait crosses no boundary the player sees: the
+    /// calls are said before the frame is drawn. That they come after
+    /// every scan, where the original orders calls and scans by slot, is
+    /// filed (rdm:phase/weapons-fidelity/phase-48-left-out-of-phase-44).
     pub(super) fn dispatch_npcs(
         &mut self,
         pass: GamePass,
@@ -104,18 +108,20 @@ impl Session {
 #[allow(clippy::float_cmp)]
 mod tests {
     use crate::ai::pursuit::Pursuit;
-    use crate::ai::{Behaviour, Goal, Surroundings};
+    use crate::ai::{Behaviour, CommCall, Decision, Goal, Surroundings};
     use crate::catalog::{HullRecord, StockWeapon, WeaponId, WeaponRecord};
     use crate::chance::Chance;
     use crate::combat::armament::{Armament, LauncherRounds, Trigger};
     use crate::combat::weapon::WeaponSpec;
     use crate::combat::{CombatEvent, ShipRef};
     use crate::geometry::Vec2;
+    use crate::message::SimMessage;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::fighters::tests::{
         BAY, GUN, QUAD, VIPER, armed_npc, bay, carrier_npc, carrying, flying_by, game_pass, pilot,
     };
+    use crate::sound::SimSound;
     use crate::testkit::{FakePilotCatalog, weapon};
     use crate::traffic::npc::{Npc, NpcId};
 
@@ -454,6 +460,64 @@ mod tests {
         let (_, [launch, next]) = defended_against(RuleSource::Bible, &above);
         assert_eq!(launch, Vec::<&str>::new());
         assert_eq!(next, ["low", "high"]);
+    }
+
+    /// [`Scripted`], every Viper calling for help as it decides.
+    #[derive(Debug)]
+    struct CallingVipers(Scripted);
+
+    impl Behaviour for CallingVipers {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.0.decide(npc, around, chance)
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            Decision {
+                goal: self.0.decide(npc, around, chance),
+                comm_call: (npc.ship == VIPER).then_some(CommCall::Distress),
+                ..Decision::default()
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            self.0.trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            self.0.target(npc, around)
+        }
+    }
+
+    /// One pass of [`raid`] whose carrier sits at `carrier_berth`, its
+    /// Viper calling for help: whether the call was said, with its sound.
+    fn called(source: RuleSource, carrier_berth: u32) -> bool {
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, source, carrier_berth);
+        let _ = (session.take_messages(), session.take_sounds());
+        let script = CallingVipers(Scripted {
+            carrier,
+            twice: false,
+            defenders: Vec::new(),
+            fighter: Trigger::default(),
+        });
+        game_pass(&mut session, &catalog, &script);
+        assert_eq!(vipers(&session).len(), 1, "one launch");
+        let said = session
+            .take_messages()
+            .iter()
+            .any(|message| matches!(message, SimMessage::CallForHelp(_)));
+        let sounded = session.take_sounds().contains(&SimSound::CallForHelp);
+        assert_eq!(said, sounded, "the call and its sound together");
+        said
+    }
+
+    #[test]
+    fn a_fighter_launched_above_its_carrier_has_its_call_answered_on_its_launch_tick() {
+        // Its `_AIDispatch` makes the call in its launch frame
+        // (`_AICallForHelp` @0x82ffb), before the frame is drawn.
+        assert!(called(RuleSource::Engine, 1));
+        assert!(!called(RuleSource::Engine, 5), "below: it thinks next tick");
+        assert!(!called(RuleSource::Bible, 1), "by the other reading");
     }
 
     #[test]

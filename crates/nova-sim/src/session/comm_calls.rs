@@ -677,4 +677,97 @@ mod tests {
         session.tick_quotes(&catalog, &mut NeverFires);
         assert!(session.comm_line().free_for_calls(), "400 counted");
     }
+
+    // The calls against the scans, in a pass of the game's work.
+
+    /// A pass of the game's work by `source`'s reading of
+    /// [`RuleKey::LaunchFrameAi`](crate::rulebook::RuleKey::LaunchFrameAi),
+    /// the player carrying mission 140's cargo, which the traders (of a
+    /// `SmugPenalty` of 5) scan for: an interceptor of the traders gives
+    /// up inspecting the player, so it scans and finds the cargo, while
+    /// `calling` sets up the NPCs whose calls are made in the same pass.
+    /// The messages and sounds the pass raised.
+    fn scanned_while(
+        source: crate::rulebook::RuleSource,
+        calling: impl FnOnce(&mut Session) -> Calling,
+    ) -> (Vec<SimMessage>, Vec<SimSound>) {
+        use crate::rulebook::{RuleKey, Rulebook};
+        let mut catalog = calling_catalog();
+        catalog.govts[0].penalties.smuggle = 5;
+        let mut session = flying(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::LaunchFrameAi, source));
+        session.pilot.missions.put(0, carrying(140, 4));
+        let scanner = add(&mut session, Some(TRADERS), CALLER);
+        let npc = session.npc_mut(scanner).expect("there");
+        npc.ai_type = AiType::Interceptor;
+        npc.goal = Goal::Inspect(ShipRef::Player);
+        let calls = calling(&mut session);
+        let mut chance = crate::testkit::Ranged::of(&[(100, 0)]);
+        let rescued = session.game_work(
+            crate::flight::Controls::default(),
+            &catalog,
+            &calls,
+            crate::Rules::default(),
+            &mut chance,
+        );
+        assert!(!rescued);
+        (session.take_messages(), session.take_sounds())
+    }
+
+    /// The smuggling message of the interceptor's scan.
+    fn smuggling(messages: &[SimMessage]) -> bool {
+        messages
+            .iter()
+            .any(|message| matches!(message, SimMessage::Smuggling { .. }))
+    }
+
+    #[test]
+    fn a_distress_call_in_a_scans_pass_is_said_before_the_scans_message() {
+        // The batch's calls are answered before the scans settle, as they
+        // were before the launch frame's loop: the scan's message does not
+        // ask the line, so it follows the call.
+        use crate::rulebook::RuleSource;
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let (messages, sounds) =
+                scanned_while(source, |session| fleeing(session, Some(TRADERS), CALLER).1);
+            assert_eq!(
+                messages.first(),
+                Some(&SimMessage::CallForHelp("Ship 129:  Help 20".to_owned())),
+                "{source:?}"
+            );
+            assert!(smuggling(&messages), "{source:?}: {messages:?}");
+            assert_eq!(
+                sounds,
+                [SimSound::CallForHelp, SimSound::Smuggling],
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pre_scan_hail_in_a_scans_pass_is_said_before_the_scans_message() {
+        use crate::rulebook::RuleSource;
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let (messages, sounds) = scanned_while(source, |session| {
+                let police = add(session, Some(TRADERS), CALLER);
+                session.npc_mut(police).expect("there").ai_type = AiType::Interceptor;
+                session.count_down_comm_line();
+                let picks = (Goal::Inspect(ShipRef::Player), CommCall::PreScan);
+                Calling(BTreeMap::from([(police, picks)]))
+            });
+            assert_eq!(
+                messages.first(),
+                Some(&SimMessage::ScanHail(
+                    "Ship 129:  Ship 128, hold.".to_owned()
+                )),
+                "{source:?}"
+            );
+            assert!(smuggling(&messages), "{source:?}: {messages:?}");
+            assert_eq!(
+                sounds,
+                [SimSound::ScanHail, SimSound::Smuggling],
+                "{source:?}"
+            );
+        }
+    }
 }
