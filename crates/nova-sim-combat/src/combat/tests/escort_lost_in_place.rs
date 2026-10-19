@@ -194,6 +194,109 @@ fn a_seeking_sub_munition_of_a_proximity_hit_reads_the_escort_unled() {
     assert_eq!(picked(mission_escort()), [Some(X), Some(X)], "led still");
 }
 
+/// A sub-munition's slot, its target and whether it has moved.
+type SubSeated = (usize, Option<ShipRef>, bool);
+
+/// The player's seeking shell S1 (slot 0) ending 28 pixels from X and 22
+/// from `e`, then A's proximity shell S2 (slot 1) of 4 mass ending 30 below
+/// `e`, out of X's reach: the proximity pass's strikes, as (ship hit, by),
+/// and S1's sub-munitions' slots, targets and whether they moved.
+fn s1_then_s2(e: Ship) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<SubSeated>) {
+    let (shell, arsenal) = cluster_seeking();
+    let fused_on_e = WeaponRecord {
+        reload: 1000,
+        count: 3,
+        speed: 1000,
+        mass_dmg: 4,
+        prox_radius: 40,
+        ..weapon(183)
+    };
+    let mut combat = Combat::default();
+    let player = player_at(&mut combat, 0.0, 300.0);
+    let mut ships = [
+        player,
+        Ship::at(1, -300.0, 0.0),
+        Ship::at(2, 0.0, -150.0),
+        e,
+    ];
+    let beside = (Vec2::new(-10.0, -122.0), Vec2::new(0.0, -122.0));
+    fly(
+        &mut combat,
+        (shell, ShipRef::Player, ShotLayer::Shots),
+        beside,
+        None,
+    );
+    let below_e = (Vec2::new(-10.0, -70.0), Vec2::new(0.0, -70.0));
+    fly(
+        &mut combat,
+        (fused_on_e, A, ShotLayer::Shots),
+        below_e,
+        None,
+    );
+    let struck = walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+    let subs = combat
+        .shots()
+        .iter()
+        .filter(|shot| shot.weapon.id == WeaponId(148))
+        .map(|shot| (shot.slot, shot.target, shot.moved_from.is_some()))
+        .collect();
+    (struck, subs)
+}
+
+#[test]
+fn a_proximity_releases_seek_before_a_later_proximity_hit_unleds_an_escort() {
+    // `_CheckShotProximities` walks the shots by slot and
+    // `_HandleShipHit(shot, ship, 1)` releases each hit's sub-munitions in
+    // place (@0x3768a → @0x36f47): S1's seek before S2's hit on E lands,
+    // and read E still led.
+    let (struck, subs) = s1_then_s2(escort());
+    assert_eq!(struck, [(X, Some(ShipRef::Player)), (E, Some(A))]);
+    let targets: Vec<Option<ShipRef>> = subs.iter().map(|&(_, target, _)| target).collect();
+    assert_eq!(targets, [Some(X), Some(X)]);
+}
+
+#[test]
+fn a_proximity_hits_own_sub_munitions_read_its_own_hit() {
+    // `_HandleShipHit` lands the hit and its blast (@0x36bc5-0x36f05)
+    // before it releases (@0x36f12-0x36f47): the player's shell, set off
+    // by X, blasts E out of the fleet, and its own sub-munitions take E.
+    let (shell, _) = cluster_seeking();
+    let blasting = WeaponRecord {
+        blast_radius: 40,
+        mass_dmg: 4,
+        ..shell
+    };
+    let arsenal = seekers_of(blasting);
+    let mut combat = Combat::default();
+    let player = player_at(&mut combat, 0.0, 300.0);
+    let mut ships = [player, Ship::at(2, 0.0, -150.0), escort()];
+    let beside = (Vec2::new(-10.0, -122.0), Vec2::new(0.0, -122.0));
+    fly(
+        &mut combat,
+        (blasting, ShipRef::Player, ShotLayer::Shots),
+        beside,
+        None,
+    );
+    walk_amid(&mut combat, &mut ships, &mut [], &arsenal);
+    let targets: Vec<Option<ShipRef>> = combat
+        .shots()
+        .iter()
+        .filter(|shot| shot.weapon.id == WeaponId(148))
+        .map(|shot| shot.target)
+        .collect();
+    assert_eq!(targets, [Some(E), Some(E)]);
+}
+
+#[test]
+fn a_sub_munition_released_into_a_later_slot_sets_off_no_fuse_that_pass() {
+    // Released at S1's hit, they take the first slots free with S1's still
+    // held and S2 in flight (slots 2 and 3), and the pass does not fuse
+    // them: their life is still their `Count` (@0x3720e-0x3721e).
+    let (struck, subs) = s1_then_s2(mission_escort());
+    assert_eq!(struck, [(X, Some(ShipRef::Player)), (E, Some(A))]);
+    assert_eq!(subs, [(2, Some(X), false), (3, Some(X), false)]);
+}
+
 /// A shell of 40-pixel fuse releasing two unguided sub-munitions 148
 /// that seek the nearest ship (`Flags2` 0x0010).
 pub(super) fn cluster_seeking() -> (WeaponRecord, Arsenal) {

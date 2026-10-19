@@ -100,19 +100,22 @@
 //! (@0xacba3): by `RuleKey::UndisplayedShips`' engine reading the session
 //! gives such a ship no rank ([`Fighter::sprite`] none).
 //!
-//! *Ordering against the original.* The sub-munitions of a proximity hit
-//! are released after the pass, in the order their hits landed, where
-//! `_HandleShipHit` releases them in place (@0x36f12-0x36f47). A
-//! sub-munition is not tested in the frame it spawns (its sprite is not
-//! shown). Each seeks once seated, with its slot's leftover miss roll
-//! and its interference jam (see [`submunition`](super::submunition)),
-//! and reads the ships as the whole pass's hits left them, an escort's
-//! cleared leader included, where in place it would read only the hits
-//! before its own. The target it takes is kept, so this crosses a
-//! boundary: rdm weapons-fidelity phase 47 (item 6) releases them in
-//! place. The struck ships' conditions settle after the pass
-//! (`Combat::settle_struck`), as nothing in the pass reads them but
-//! whether a ship is destroyed, which no hit there changes.
+//! **Built in phase 47.** The sub-munitions of a proximity hit are
+//! released in place, right after its hit and blast land, as
+//! `_HandleShipHit(shot, ship, 1)` releases them (@0x36f12-0x36f47) before
+//! the pass moves on ([`Combat::proximity_pass`]). Each seeks once seated,
+//! with its slot's leftover miss roll and its interference jam (see
+//! [`submunition`](super::submunition)), and reads the ships as the pass's
+//! earlier hits and its own left them, an escort's cleared leader
+//! included, never a later one. Every shot of the pass still holds its
+//! slot then, so the sub-munitions take the slots the original gives
+//! them. A sub-munition released in the pass is not fused in it, as its
+//! life is still its `Count` (@0x3720e-0x3721e), nor tested in the frame
+//! it spawns (its sprite is not shown).
+//!
+//! *Ordering against the original.* The struck ships' conditions settle
+//! after the pass (`Combat::settle_struck`), as nothing in the pass reads
+//! them but whether a ship is destroyed, which no hit there changes.
 
 use super::asteroid_hit::{self, AsteroidTarget};
 use super::damage::Hit;
@@ -260,10 +263,9 @@ impl Combat {
     /// against the asteroids; then the proximity pass, shot by shot in
     /// slot order, a ship then an asteroid. Each hit
     /// and its blast land as they are found ([`Combat::land_hit`]), and
-    /// an asteroid's blast likewise. The sub-munitions of the proximity
-    /// hits, their weapons read from `terms`' arsenal and their spread
-    /// drawn on `chance`, are released after the pass, in the order their
-    /// hits landed (see the module docs).
+    /// an asteroid's blast likewise. Each proximity hit releases its
+    /// sub-munitions in place, their weapons read from `terms`' arsenal and
+    /// their spread drawn on `chance` ([`Combat::proximity_pass`]).
     ///
     /// The move that spends a shot is never tested against a ship
     /// (`_ShotCanHitShip` @0x447c2, `_CheckShotProximities` @0x371ea), nor
@@ -329,17 +331,44 @@ impl Combat {
             terms.rule,
             asteroids,
         );
-        let mut released: Vec<(Shot, ShipRef)> = Vec::new();
-        for index in 0..shots.len() {
-            let shot = shots[index];
-            if spent[index] || shot.expired() {
+        // Every shot of the pass holds its slot through the proximity pass,
+        // as only `_HandleShot` frees a spent one (@0x3617c), so a
+        // sub-munition released mid-pass is seated as the original seats it.
+        self.keep_unspent(shots, &spent);
+        self.proximity_pass((fighters, lineup), terms, chance, asteroids);
+    }
+
+    /// The hit pass's proximity pass (`_CheckShotProximities`
+    /// @0x371bc-0x37775), among `fighters` as `lineup` reads them: each
+    /// shot in flight, by slot, that its last move did not spend is set
+    /// off by the first ship in slot order it can hit within reach
+    /// ([`Shot::fused`]), or else by an asteroid among `asteroids`, and is
+    /// spent there, holding its slot. A ship's hit lands at once
+    /// ([`Combat::land_hit`]), and then the shot releases its
+    /// sub-munitions at that ship (`_HandleShipHit` @0x36f12-0x36f47),
+    /// their weapons read from `terms`' arsenal and their spread drawn on
+    /// `chance`, seeking among the ships as the pass's earlier hits and its
+    /// own left them. A shot that has not moved, a sub-munition released
+    /// in the pass among them, sets off no fuse (@0x3720e-0x3721e).
+    fn proximity_pass(
+        &mut self,
+        (fighters, lineup): Among,
+        terms: &WalkTerms,
+        chance: &mut dyn Chance,
+        asteroids: &mut [AsteroidTarget],
+    ) {
+        let mut next = 0;
+        while let Some(index) = self.shots.iter().position(|shot| shot.slot >= next) {
+            let shot = self.shots[index];
+            next = shot.slot + 1;
+            if shot.expired() {
                 continue;
             }
             let Some(from) = shot.moved_from else {
                 continue;
             };
             if let Some(met) = shot.fused(from, &lineup.sides(), self.proximity_fuse) {
-                spent[index] = true;
+                self.spend(index);
                 let mut parent = shot;
                 self.land_hit(
                     &mut parent,
@@ -347,9 +376,11 @@ impl Combat {
                     (fighters, lineup),
                     terms.rule,
                 );
-                released.push((parent, met.ship));
+                let sides = lineup.sides();
+                let target = (Some(met.ship), &*fighters);
+                self.release(&parent, target, &sides, terms.arsenal, chance);
             } else if let Some(rock) = asteroid_hit::fused(&shot, asteroids, self.asteroid_fuse) {
-                spent[index] = true;
+                self.spend(index);
                 let at = shot.position;
                 self.land_on_asteroid(
                     (&shot, &mut asteroids[rock], at),
@@ -358,17 +389,13 @@ impl Combat {
                 );
             }
         }
-        self.keep_unspent(shots, &spent);
-        for (parent, target) in released {
-            let sides = lineup.sides();
-            self.release(
-                &parent,
-                (Some(target), &*fighters),
-                &sides,
-                terms.arsenal,
-                chance,
-            );
-        }
+    }
+
+    /// Takes the shot in flight at `index` out, its slot held until
+    /// `_HandleShot` frees it (@0x3617c).
+    fn spend(&mut self, index: usize) {
+        let shot = self.shots.remove(index);
+        self.slots.hold(shot.slot);
     }
 
     /// Keeps the shots among `shots` not `spent` in flight; each spent one

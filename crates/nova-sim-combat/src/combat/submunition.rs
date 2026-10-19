@@ -13,7 +13,11 @@
 //!   `_HandleShipHit` with `spawnSubs` 0 (@0x37095), the proximity pass
 //!   with 1 (@0x37678). It releases
 //!   them only while its generation is below the `SubLimit`, when there is
-//!   one.
+//!   one. A proximity hit releases them after its hit and blast land
+//!   (`_HandleShipHit` @0x36f12-0x36f47), so they seek among the ships as
+//!   that hit left them; an end of life releases them before its own blast
+//!   lands (`_HandleShot` @0x35f49, the blast @0x36106). Either way they
+//!   read what every shot handled before it landed, never a later one.
 //! - Each of the `SubCount` shots starts where its parent is, a
 //!   generation on, fired by its parent's firer and carrying its parent's
 //!   [`Source`](super::projectile::Source) ([`release`]). The loop seats
