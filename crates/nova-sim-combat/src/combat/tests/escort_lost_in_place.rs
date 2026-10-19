@@ -341,3 +341,77 @@ fn each_beams_hit_lands_before_the_next_beam_is_tested() {
 }
 
 const D_SHIP: ShipRef = ShipRef::Npc(NpcId(4));
+
+/// The strikes and escort losses of a tick's close among A at
+/// (-100, -100) facing right, D at (100, -100) facing left and `e`, with
+/// A's beam held first and D's second, each along E's centre.
+fn beamed_from_both_sides(e: Ship) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<EscortLoss>) {
+    let mut combat = Combat::default();
+    let mut facing_left = Ship::at(4, 100.0, -100.0);
+    facing_left.state.heading = 270.0;
+    let mut ships = [Ship::at(1, -100.0, -100.0), e, facing_left];
+    combat.beams.push(beam_of(A, -100.0, -100.0, 90.0));
+    combat.beams.push(beam_of(D_SHIP, 100.0, -100.0, 270.0));
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal: &arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    };
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    let (strikes, losses) = combat.take_landed();
+    let struck = strikes
+        .iter()
+        .map(|strike| (strike.ship, strike.by))
+        .collect();
+    (struck, losses)
+}
+
+#[test]
+fn an_escort_lost_is_taken_with_the_index_of_the_strike_that_lost_it() {
+    // `_DamageShip` reads a shooter's leader as each kill lands
+    // (@0x3ad72), so the session needs where in the strikes the escort
+    // stopped being the player's.
+    let (struck, losses) = beamed_from_both_sides(escort());
+    assert_eq!(struck, [(E, Some(A)), (E, Some(D_SHIP))]);
+    assert_eq!(
+        losses,
+        [EscortLoss { ship: E, strike: 0 }],
+        "once, as A's hit"
+    );
+    let mut sturdier = escort();
+    sturdier.reserves.armor.now = 15.0;
+    let (struck, losses) = beamed_from_both_sides(sturdier);
+    assert_eq!(struck, [(E, Some(A)), (E, Some(D_SHIP))]);
+    assert_eq!(losses, [EscortLoss { ship: E, strike: 1 }], "as D's hit");
+}
+
+#[test]
+fn an_escort_left_intact_or_a_mission_escort_is_never_lost() {
+    let mut whole = escort();
+    whole.reserves.armor.now = 30.0;
+    assert_eq!(beamed_from_both_sides(whole).1, []);
+    assert_eq!(beamed_from_both_sides(mission_escort()).1, []);
+}
+
+#[test]
+fn taking_the_strikes_alone_drops_the_escort_losses_with_them() {
+    let mut combat = Combat::default();
+    let mut ships = [Ship::at(1, -100.0, -100.0), escort()];
+    combat.beams.push(beam_of(A, -100.0, -100.0, 90.0));
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal: &arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field: Field::default(),
+    };
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.close_tick(&mut fighters, arena, &mut NeverFires);
+    assert_eq!(combat.take_strikes().len(), 1);
+    assert_eq!(combat.take_landed(), (Vec::new(), Vec::new()));
+}

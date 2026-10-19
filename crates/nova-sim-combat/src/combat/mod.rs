@@ -409,6 +409,7 @@ pub use collision::SpriteRank;
 use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
+pub use escort_loss::EscortLoss;
 use exits::{Compression, ExitCursors, ExitPoints, StrayWord, drawn_frame, frame_angle};
 use hull::{
     Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
@@ -1116,6 +1117,9 @@ pub struct Combat {
     beams: Vec<Beam>,
     events: Vec<CombatEvent>,
     strikes: Vec<Strike>,
+    /// The ships of the player's fleet lost as the strikes landed, each
+    /// with its strike's index ([`Combat::take_landed`]).
+    escort_losses: Vec<EscortLoss>,
     stellar_strikes: Vec<StellarStrike>,
     /// The words outside the fight that stray beams stepped this tick,
     /// with their firers ([`Combat::take_stray_steps`]).
@@ -2784,7 +2788,12 @@ impl Combat {
             let before = taken(fighter.reserves);
             let was_disabled = fighter.disabled_now(rule);
             damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
-            escort_loss::leave_fleet_if_disabled(fighter, rule);
+            if escort_loss::leave_fleet_if_disabled(fighter, rule) {
+                self.escort_losses.push(EscortLoss {
+                    ship: landed.ship,
+                    strike: self.strikes.len(),
+                });
+            }
             self.strikes.push(Strike {
                 ship: landed.ship,
                 by: landed.by,
@@ -3138,9 +3147,21 @@ impl Combat {
     }
 
     /// The strikes made since they were last taken, in order; taking them
-    /// empties the list.
+    /// empties the list, and drops the escort losses noted with them
+    /// ([`Combat::take_landed`]).
     pub fn take_strikes(&mut self) -> Vec<Strike> {
-        std::mem::take(&mut self.strikes)
+        self.take_landed().0
+    }
+
+    /// The strikes made since they were last taken, in order, and the
+    /// ships of the player's fleet they lost, each with the index of the
+    /// strike that lost it, in order ([`EscortLoss`]); taking them empties
+    /// both lists.
+    pub fn take_landed(&mut self) -> (Vec<Strike>, Vec<EscortLoss>) {
+        (
+            std::mem::take(&mut self.strikes),
+            std::mem::take(&mut self.escort_losses),
+        )
     }
 
     /// The words outside the fight that beams of stray `ExitType` stepped

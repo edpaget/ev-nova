@@ -36,10 +36,29 @@
 //! from [`Combat::land`](super::Combat)); the record, the AI type and the
 //! cargo share are the session's, settled as the phase's hits settle
 //! (`nova_sim::Session::lose_escorts`).
+//!
+//! The crime block before it reads the shooter's leader as each hit lands
+//! (@0x3ad54-0x3ad7b): a kill an escort scores counts for the player only
+//! while the escort is still led by the player. So the fight notes each
+//! loss with where it fell among the strikes ([`EscortLoss`],
+//! [`Combat::take_landed`](super::Combat::take_landed)), for the session
+//! to credit a kill by the fleet as it stood at the kill.
 
 use super::Fighter;
 use super::ShipRef;
 use super::hull::DisableRule;
+
+/// A ship of the player's fleet that left it as a hit landed: `ship`,
+/// lost as the strike at index `strike` among the strikes taken with it
+/// ([`Combat::take_landed`](super::Combat::take_landed)) landed. Every
+/// strike before that one found it still the player's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EscortLoss {
+    /// The ship lost.
+    pub ship: ShipRef,
+    /// The index of the strike that lost it.
+    pub strike: usize,
+}
 
 /// Clears `fighter`'s leader when it is a ship of the player's fleet
 /// ([`Fighter::fleet_escort`]) that `_IsDisabled` holds for now, as `rule`

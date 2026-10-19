@@ -431,11 +431,12 @@ impl Session {
     /// AI type and cargo share, as `_DamageShip`'s escort block
     /// (@0x3af8f-0x3b0d7) runs before its reaction block (@0x3b408), so
     /// the answers read it unled, and so does everything after the phase.
-    /// A kill an escort scored in the same phase that disabled it is no
-    /// longer the player's fleet's ([`Session::credit_kills`] reads the
-    /// shooter's fleet after the loss); the original reads it at the kill,
-    /// so it differs only where the escort's loss landed after its kill
-    /// within one phase, crossing no boundary the player sees.
+    /// A kill credits the player's combat rating, which the pilot's save
+    /// keeps, by the shooter's leader at the kill, as `_DamageShip` reads
+    /// it as each hit lands (@0x3ad72): the fight notes each escort lost
+    /// with the strike that lost it ([`Combat::take_landed`]), so a kill an
+    /// escort scored before that strike in the phase still counts and one
+    /// after does not ([`Session::credit_kills`]).
     ///
     /// The original's `_DamageShip` settles each hit as it lands; here a
     /// phase's hits settle together after it, before the next phase or
@@ -450,13 +451,13 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let strikes = self.combat.take_strikes();
+        let (strikes, losses) = self.combat.take_landed();
         self.player_downed(player_was, &strikes, chance);
         self.take_shoves();
         self.raise_disabled(was, chance);
         self.sync_fleet();
         self.lose_escorts();
-        self.settle_strikes(strikes, was, rules.law, chance);
+        self.settle_strikes((strikes, losses), was, rules.law, chance);
         self.clear_lost_target();
     }
 

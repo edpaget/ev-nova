@@ -170,12 +170,9 @@ fn mission_escorted(catalog: &FakePilotCatalog) -> Session {
     session
 }
 
-/// The player fires until two of its shots are in flight, both then set
-/// on a move into NPC 0 for the
-/// next pass's collision passes to land: the first made no ship's, so it
-/// hits whatever it meets, and the second left the player's own, which
-/// passes through a ship the player leads. Gives the second shot's id.
-fn two_shots_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) -> ShotId {
+/// The player fires until two of its shots are in flight, then lets go
+/// of the trigger, its escort NPC 0 still led.
+fn fire_until_two_shots(session: &mut Session, catalog: &FakePilotCatalog) {
     session.hold_trigger(FIRE);
     let players = |session: &Session| {
         session
@@ -199,6 +196,15 @@ fn two_shots_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) 
     }
     session.hold_trigger(crate::combat::armament::Trigger::default());
     assert!(session.npcs()[0].escorts_player(), "still led");
+}
+
+/// The player fires until two of its shots are in flight, both then set
+/// on a move into NPC 0 for the
+/// next pass's collision passes to land: the first made no ship's, so it
+/// hits whatever it meets, and the second left the player's own, which
+/// passes through a ship the player leads. Gives the second shot's id.
+fn two_shots_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) -> ShotId {
+    fire_until_two_shots(session, catalog);
     let at = session.npc(NpcId(0)).expect("there").state.position;
     let mut shots = session
         .combat
@@ -265,4 +271,86 @@ fn only_an_enlisted_escort_fights_as_a_ship_of_the_fleet() {
         [false, false],
         "the mission escort, then the bystander"
     );
+}
+
+/// [`escorted`], its bystander NPC 1 a ship one point of armour from
+/// breaking up, and two shots set on a move for the next pass's collision
+/// passes to land: the escort's, aimed at NPC 1, and one of no ship's into
+/// the escort, that disables it. The escort's lands first when
+/// `kill_first` (it is in the shot layer, walked before the homing layer
+/// the other is in), else last. The player's combat rating after the
+/// pass.
+fn rating_after_an_escorts_kill(kill_first: bool) -> i64 {
+    use crate::combat::shot_layer::ShotLayer;
+    use crate::combat::sides::Ties;
+    let catalog = armed();
+    let mut session = escorted(&catalog);
+    let victim = session.npc_mut(NpcId(1)).expect("there");
+    victim.reserves.shield.now = 0.0;
+    victim.reserves.armor.now = 1.0;
+    fire_until_two_shots(&mut session, &catalog);
+    assert_eq!(session.pilot.combat_rating, 0);
+    let escort_at = session.npc(NpcId(0)).expect("there").state.position;
+    let victim_at = session.npc(NpcId(1)).expect("there").state.position;
+    let (kill_layer, loss_layer) = if kill_first {
+        (ShotLayer::Shots, ShotLayer::Homing)
+    } else {
+        (ShotLayer::Homing, ShotLayer::Shots)
+    };
+    let mut shots = session
+        .combat
+        .shots_mut()
+        .iter_mut()
+        .filter(|shot| shot.firer == ShipRef::Player);
+    let kill = shots.next().expect("a first shot");
+    kill.firer = ShipRef::Npc(NpcId(0));
+    kill.fleet = ShipRef::Player;
+    kill.source = Source::Ship(Ties {
+        leader: Some(ShipRef::Player),
+        govt: None,
+        booty: None,
+    });
+    kill.aimed_at = Some(ShipRef::Npc(NpcId(1)));
+    kill.target = Some(ShipRef::Npc(NpcId(1)));
+    kill.layer = kill_layer;
+    kill.moved_from = Some(victim_at + Vec2::new(0.0, 20.0));
+    kill.position = victim_at;
+    let loss = shots.next().expect("a second shot");
+    loss.source = Source::Other;
+    loss.aimed_at = None;
+    loss.layer = loss_layer;
+    loss.moved_from = Some(escort_at + Vec2::new(0.0, 20.0));
+    loss.position = escort_at;
+    session.game_work(
+        Controls::default(),
+        &catalog,
+        &Watching::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+    assert_ne!(
+        session.npc(NpcId(0)).expect("still here").condition,
+        crate::combat::hull::Condition::Intact,
+        "the escort was disabled"
+    );
+    assert!(
+        session
+            .npc(NpcId(1))
+            .is_none_or(|npc| npc.condition != crate::combat::hull::Condition::Intact),
+        "the victim was killed"
+    );
+    session.pilot.combat_rating
+}
+
+#[test]
+fn an_escorts_kill_before_its_loss_in_the_walk_credits_the_player() {
+    // `_DamageShip` reads the shooter's leader +0x9a as the kill lands
+    // (@0x3ad72): the escort is still the player's.
+    assert!(rating_after_an_escorts_kill(true) > 0);
+}
+
+#[test]
+fn an_escorts_kill_after_its_loss_in_the_walk_credits_no_one() {
+    // Its leader was cleared to -1 as the disabling hit landed (@0x3afdd).
+    assert_eq!(rating_after_an_escorts_kill(false), 0);
 }

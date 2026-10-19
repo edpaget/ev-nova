@@ -500,8 +500,8 @@ use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
 use crate::combat::{
-    Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, ShipRef, Shove, SpriteRank,
-    Strike,
+    Combat, CombatEvent, Downed, EscortLoss, Field, Fighter, GamePass, Rules, ShipRef, Shove,
+    SpriteRank, Strike,
 };
 use crate::comm_line::CommLine;
 use crate::control::{ControlBits, NovaBits, ScriptNote};
@@ -3078,11 +3078,12 @@ impl Session {
     /// before it: weighing whether each is answered, rolling on `chance`
     /// (see the `answer_flag` module), refilling the invincible, holding
     /// persons' grudges, convicting the player by `law`, crediting kills
-    /// and letting each hit NPC's cloak take its hit; then keeps them for
-    /// the app.
+    /// by the fleet as it stood before each of the escort `losses` the
+    /// strikes made, and letting each hit NPC's cloak take its hit; then
+    /// keeps them for the app.
     fn settle_strikes(
         &mut self,
-        mut strikes: Vec<Strike>,
+        (mut strikes, losses): (Vec<Strike>, Vec<EscortLoss>),
         was: &[NpcBefore],
         law: &dyn LegalCode,
         chance: &mut dyn Chance,
@@ -3091,7 +3092,7 @@ impl Session {
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, was, law);
-        self.credit_kills(&strikes, was);
+        self.credit_kills(&strikes, &losses, was);
         self.cloak_hits(&strikes);
         self.strikes.extend(strikes);
     }
@@ -3207,10 +3208,13 @@ impl Session {
     /// [`rating`](crate::rating)): the shooter is the player or a ship of
     /// its fleet, its escorts and fighters, and the victim's government,
     /// from `was`, is not derelict. As the original's `_DamageShip`
-    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before a
-    /// shooter in the fleet can be lost or the victim taken out.
-    fn credit_kills(&mut self, strikes: &[Strike], was: &[NpcBefore]) {
-        for strike in strikes {
+    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before the
+    /// victim is taken out, and reads the shooter's leader as the hit
+    /// lands (@0x3ad72): a shooter now out of the fleet still counts for
+    /// a kill it scored before the strike that lost it, among `losses`
+    /// ([`EscortLoss`]), and not for one after.
+    fn credit_kills(&mut self, strikes: &[Strike], losses: &[EscortLoss], was: &[NpcBefore]) {
+        for (index, strike) in strikes.iter().enumerate() {
             let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
                 continue;
             };
@@ -3224,11 +3228,17 @@ impl Session {
             let by_players_fleet = match strike.by {
                 None => false,
                 Some(ShipRef::Player) => true,
-                Some(ShipRef::Npc(by)) => self
-                    .traffic
-                    .npcs()
-                    .iter()
-                    .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player),
+                Some(ShipRef::Npc(by)) => {
+                    let lost_after = losses
+                        .iter()
+                        .any(|loss| loss.ship == ShipRef::Npc(by) && loss.strike > index);
+                    lost_after
+                        || self
+                            .traffic
+                            .npcs()
+                            .iter()
+                            .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
+                }
             };
             if !rating::counts(by_players_fleet, self.govts.derelict(govt)) {
                 continue;
@@ -18130,9 +18140,9 @@ pub(super) mod tests {
             weight: 0.0,
             answered: true,
         };
-        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
+        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &[], &was);
         let by_the_police = session.pilot().combat_rating();
-        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(0)))], &was);
+        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(0)))], &[], &was);
         (by_the_police, session.pilot().combat_rating())
     }
 
@@ -18186,6 +18196,7 @@ pub(super) mod tests {
                 weight: 0.0,
                 answered: true,
             }],
+            &[],
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 2, "10 / 5");
@@ -18225,11 +18236,13 @@ pub(super) mod tests {
                 strike(ShipRef::Player, Some(Downed::BreakingUp)),
                 strike(ShipRef::Npc(NpcId(9)), Some(Downed::BreakingUp)),
             ],
+            &[],
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 0);
         session.credit_kills(
             &[strike(ShipRef::Npc(NpcId(0)), Some(Downed::BreakingUp))],
+            &[],
             &was,
         );
         assert_eq!(session.pilot().combat_rating(), 2);
@@ -18820,7 +18833,7 @@ pub(super) mod tests {
                 weight: 0.0,
                 answered: true,
             };
-            session.credit_kills(&[by_none], &was);
+            session.credit_kills(&[by_none], &[], &was);
             session.punish(&[by_none], &was, &witness);
         }
         assert_eq!(session.pilot().combat_rating(), rating);
