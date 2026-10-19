@@ -34,13 +34,17 @@
 //!   (`_Accel(trunc(heading))` @0x3f597), a bomb's (5) too,
 //!   whoever fired the parent; a rocket's (6) starts with its parent's
 //!   velocity instead, with no speed added (@0x3f55c-0x3f5a5).
-//! - None carries a turret miss roll ([`Shot::miss_roll`]), so none is
-//!   ever missed, its own seek included. The original's
+//! - None rolls a turret miss ([`Shot::miss_roll`]): the original's
 //!   `_SpawnShot(…, 1)` never writes the roll (+0x42, written only under
 //!   -0x42 @0x3e89e), so a sub-munition carries whatever its shot slot's
-//!   last shot left there: -1, 0 for a slot never used, or a turret's roll.
-//!   That depends on how the fixed 128-slot shot table was reused, which
-//!   the engine does not keep, so it is ported as -1.
+//!   last ship-fired shot left there: -1, 0 for a slot never used, or a
+//!   turret's or point defence's roll. The fight gives it that leftover
+//!   as it takes its slot
+//!   ([`shot_slots`](super::shot_slots), by
+//!   [`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)'s
+//!   engine reading; none by the other), so it can miss an intact ship of
+//!   a lower class. Its own seek, made here before it has a slot, reads no
+//!   roll (rdm weapons-fidelity phase 43).
 //! - Each takes its sprite layer by its own guidance, as `_SpawnShot`
 //!   places it ([`ShotLayer::spawned`], @0x3f328): a turret (4) over the
 //!   ships when its parent's source is a ship whose class has `Flags3`

@@ -527,7 +527,8 @@ pub struct Shot {
     /// intact ship of a lower class (see [`sides`](super::sides)). Only a
     /// ship's turret (4) or point-defence (9) shot rolls (`_SpawnShot`
     /// @0x3e89e-0x3e963); any other shot carries none, the original's -1,
-    /// and never misses. A sub-munition carries none too: see
+    /// and never misses. A sub-munition, which writes none, carries the
+    /// roll its slot's last ship-fired shot left: see
     /// [`submunition`](super::submunition).
     pub miss_roll: Option<u32>,
     /// The sprite layer it is in, as `_SpawnShot` puts it

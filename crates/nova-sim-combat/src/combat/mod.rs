@@ -1173,6 +1173,10 @@ pub struct Combat {
     /// engine, the order its slots entered it; by the other reading,
     /// firing order.
     shot_overlap: RuleSource,
+    /// Whether a shot that writes no miss roll carries its slot's leftover
+    /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
+    /// by the engine, it does.
+    reused_roll: RuleSource,
     /// The shots point defence ended at life 0, their sprites hidden,
     /// kept for the next proximity pass's stellar and asteroid branches
     /// (see [`hidden`]).
@@ -1613,12 +1617,21 @@ impl Combat {
 
     /// Puts `shot` in flight at the first free slot, as `_SpawnShot` does
     /// (@0x3e5ab-0x3e5ce), keeping the shots in slot order: its slot's
-    /// sprite is put in its layer ([`ShotSlots::put`]). Whether it found
-    /// a slot.
+    /// sprite is put in its layer ([`ShotSlots::put`]). A ship's own shot
+    /// (a ship source, not a sub-munition) writes its miss roll into the
+    /// slot (@0x3e5e1-0x3e5f7, @0x3e89e); any other writes none, and by
+    /// [`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)'s
+    /// engine reading carries the roll the slot's last ship-fired shot
+    /// left ([`ShotSlots::roll`]). The slot it took, if it found one.
     fn put_in_flight(&mut self, mut shot: Shot) -> Option<usize> {
         let free = self.first_free_slot()?;
         shot.slot = free;
         self.slots.put(free, shot.layer);
+        if shot.generation == 0 && matches!(shot.source, Source::Ship(_)) {
+            self.slots.write_roll(free, shot.miss_roll);
+        } else if self.reused_roll == RuleSource::Engine {
+            shot.miss_roll = self.slots.roll(free);
+        }
         let at = self.shots.partition_point(|flying| flying.slot < free);
         self.shots.insert(at, shot);
         Some(free)
@@ -1671,6 +1684,14 @@ impl Combat {
     /// the engine's, the order its slots entered it.
     pub fn set_shot_overlap(&mut self, source: RuleSource) {
         self.shot_overlap = source;
+    }
+
+    /// Has a sub-munition carry its slot's leftover miss roll as `source`
+    /// reads
+    /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):
+    /// by default, the engine's, it does; by the other reading, none.
+    pub fn set_reused_shot_slot_roll(&mut self, source: RuleSource) {
+        self.reused_roll = source;
     }
 
     /// Whether a beam fired now finds a free slot: always uncapped; under

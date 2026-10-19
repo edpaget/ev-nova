@@ -441,3 +441,60 @@ fn a_held_slot_is_freed_at_its_own_visit() {
     assert!(subs[0].moved_from.is_some(), "visited after slot 5");
     assert!(!above.slots.is_held(7), "freed at its own visit");
 }
+
+/// A ship's shot rolling `roll` (none for a shot that rolls no miss) put
+/// in slot 0 and ended there, then a shell in slot 1 whose sub-munition
+/// takes slot 0 at slot 1's visit: the sub-munition's roll, by
+/// `source`'s reading of the leftover roll, and the combat.
+fn sub_after(roll: Option<u32>, source: RuleSource) -> (Option<u32>, Combat) {
+    let (shell, arsenal) = one_sub();
+    let mut combat = Combat::default();
+    combat.set_reused_shot_slot_roll(source);
+    combat.put_in_flight(Shot {
+        miss_roll: roll,
+        ..idle()
+    });
+    combat.put_in_flight(spent_shell(shell));
+    end_and_free(&mut combat, 0);
+    handle_shots(&mut combat, &arsenal);
+    let subs = sub_shots(&combat);
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].slot, 0);
+    (subs[0].miss_roll, combat)
+}
+
+#[test]
+fn a_sub_munition_carries_the_roll_its_slots_last_ship_fired_shot_left() {
+    // A turret's roll of 90 left in slot 0 (`_SpawnShot` writes +0x42
+    // only for a ship's own shot, @0x3e89e): the sub-munition carries it,
+    // and misses the intact fighter C of class 80 but hits it disabled
+    // (`_ShotCanHitShip` @0x448bd-0x448d5). By the other reading it
+    // carries none and hits both.
+    for (source, roll) in [(RuleSource::Engine, Some(90)), (RuleSource::Bible, None)] {
+        for disabled in [false, true] {
+            let (carried, mut combat) = sub_after(Some(90), source);
+            assert_eq!(carried, roll, "{source:?}");
+            combat.shots.retain(|shot| shot.weapon.id == WeaponId(148));
+            let sub = &mut combat.shots[0];
+            (sub.moved_from, sub.position) = (Some(INTO_C.0), INTO_C.1);
+            let mut ships = three();
+            if disabled {
+                ships[1].condition = Condition::Disabled;
+            }
+            let hit = !walk(&mut combat, &mut ships).is_empty();
+            let misses = roll.is_some() && !disabled;
+            assert_eq!(hit, !misses, "{source:?}, disabled {disabled}");
+        }
+    }
+}
+
+#[test]
+fn a_sub_munition_after_a_shot_of_no_roll_or_in_a_slot_never_used_carries_none() {
+    assert_eq!(sub_after(None, RuleSource::Engine).0, None, "a gun's -1");
+    let (shell, arsenal) = one_sub();
+    let mut combat = Combat::default();
+    combat.put_in_flight(spent_shell(shell));
+    handle_shots(&mut combat, &arsenal);
+    let subs = sub_shots(&combat);
+    assert_eq!((subs[0].slot, subs[0].miss_roll), (1, None), "never used");
+}
