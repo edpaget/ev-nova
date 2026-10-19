@@ -67,6 +67,9 @@ pub const ESCORT_REPAIRED: Priority = Priority::new(8);
 pub const PROPULSION_REPAIRED: Priority = Priority::new(1);
 /// The Red Alert, `_redAlertSnd`: `_HandlePlayer` @0x68cff.
 pub const RED_ALERT: Priority = Priority::new(5);
+/// The player cloaking or uncloaking, `cloakSnd[1]` / `cloakSnd[0]`:
+/// `_DoShipCloak` @0xdef3, `_DoShipUncloak` @0xdfd0.
+pub const CLOAK: Priority = Priority::new(8);
 /// Cargo jettisoned, `_beepSnd[4]`: `_JettisonCargo` @0x3e33d.
 pub const JETTISON: Priority = Priority::new(1);
 /// A scan failing a mission, `_beepSnd[1]`: `_ScanPlayer`'s
@@ -226,6 +229,7 @@ mod tests {
             (ESCORT_REPAIRED, 8, "escort repaired"),
             (PROPULSION_REPAIRED, 1, "propulsion repaired"),
             (RED_ALERT, 5, "red alert"),
+            (CLOAK, 8, "cloak"),
             (JETTISON, 1, "jettison"),
             (SCAN_FAILED, 1, "scan failed"),
             (SMUGGLING, 1, "smuggling"),

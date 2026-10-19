@@ -129,6 +129,16 @@ pub const PRESS_RANGE: f32 = 165.0;
 /// to be on screen.
 pub const ON_SCREEN_INSET: f32 = 0.75;
 
+/// The fade direction `_HandleShipDisplay` gives a dying ship with any
+/// fade left (@0x2d17e): it falls at twice the rate.
+pub const DYING_DIRECTION: i8 = -2;
+/// The `snd ` `_DoShipCloak` plays as the player cloaks (`cloakSnd[1]`,
+/// @0xdec0-0xdef3), at priority 8.
+pub const CLOAK_SOUND: i16 = 381;
+/// The `snd ` `_DoShipUncloak` plays as the player uncloaks
+/// (`cloakSnd[0]`, @0xdf9e-0xdfd0), at priority 8.
+pub const UNCLOAK_SOUND: i16 = 380;
+
 /// The `ModType` of a cloaking device.
 pub const MOD_CLOAK: i16 = 17;
 /// The `ModType` of a cloak scanner.
@@ -201,7 +211,8 @@ pub fn full_fade_translucency(led: bool, scanner: bool) -> u8 {
 pub struct Cloak {
     /// The fade level, 0 (seen) to [`FADE_FULL`].
     pub fade: f32,
-    /// The way the fade moves: 1 in, -1 out, 0 neither.
+    /// The way the fade moves: 1 in, -1 out ([`DYING_DIRECTION`], -2,
+    /// for a dying ship), 0 neither.
     pub direction: i8,
 }
 
@@ -216,25 +227,47 @@ impl Cloak {
         }
     }
 
-    /// Starts cloaking, as `_DoShipCloak` does (see the module docs).
-    pub fn cloak(&mut self) {
+    /// Starts cloaking, as `_DoShipCloak` does (see the module docs);
+    /// and whether the cloak's sound would play: when it was not cloaked
+    /// and not already fading in (`jg` @0xded2). The original plays it
+    /// only for the player ([`CLOAK_SOUND`]); the caller raises it.
+    pub fn cloak(&mut self) -> bool {
         if self.is_cloaked() {
-            return;
+            return false;
         }
+        let sounds = self.direction <= 0;
         if self.fade <= 0.0 {
             self.direction = 1;
         } else if self.direction < 0 {
             self.direction = 0;
         }
+        sounds
     }
 
-    /// Starts uncloaking, as `_DoShipUncloak` does (see the module docs).
-    pub fn uncloak(&mut self) {
+    /// Starts uncloaking, as `_DoShipUncloak` does (see the module docs);
+    /// and whether the decloak sound would play: when it was cloaked and
+    /// not already fading out (`js` @0xdfb0). The original plays it only
+    /// for the player ([`UNCLOAK_SOUND`]); the caller raises it.
+    pub fn uncloak(&mut self) -> bool {
         // The original sets direction -1 for a fade above 0, else stops a
         // fade going in (@0xdfda-0xdff8); a cloaked ship's fade is above 8,
         // so only the first can happen.
-        if self.is_cloaked() {
-            self.direction = -1;
+        if !self.is_cloaked() {
+            return false;
+        }
+        let sounds = self.direction >= 0;
+        self.direction = -1;
+        sounds
+    }
+
+    /// One frame of `_HandleShipDisplay`'s fade: [`Cloak::step`], then,
+    /// for a `dying` ship (`_IsDying`) with any fade left, the direction
+    /// [`DYING_DIRECTION`] whatever it was (@0x2d169-0x2d17e), so the
+    /// next step falls at twice the rate.
+    pub fn display_step(&mut self, fast: bool, dying: bool) {
+        self.step(fast);
+        if dying && self.fade > 0.0 {
+            self.direction = DYING_DIRECTION;
         }
     }
 
@@ -699,6 +732,56 @@ mod tests {
         let mut rising = at(5.0, 1);
         rising.cloak();
         assert_eq!(rising, at(5.0, 1));
+    }
+
+    #[test]
+    fn cloaking_sounds_only_from_rest_or_fading_out_and_not_when_cloaked() {
+        // `_DoShipCloak` plays snd 381 only for a direction at or below 0
+        // (`jg` @0xded2), after the cloaked early return.
+        assert!(at(0.0, 0).cloak(), "from rest");
+        assert!(at(5.0, -1).cloak(), "fading out, no longer cloaked");
+        assert!(at(5.0, -2).cloak(), "dying, no longer cloaked");
+        assert!(!at(10.0, 1).cloak(), "already rising");
+        assert!(!at(20.0, -1).cloak(), "cloaked");
+        assert!(!at(FADE_FULL, 0).cloak(), "full");
+    }
+
+    #[test]
+    fn uncloaking_sounds_only_when_cloaked_and_not_already_falling() {
+        // `_DoShipUncloak` plays snd 380 only for a direction at or above
+        // 0 (`js` @0xdfb0), after the not-cloaked early return.
+        assert!(at(FADE_FULL, 0).uncloak(), "holding");
+        assert!(at(20.0, 1).uncloak(), "rising");
+        assert!(!at(20.0, -1).uncloak(), "falling");
+        assert!(!at(20.0, -2).uncloak(), "dying");
+        assert!(!at(10.0, 1).uncloak(), "not cloaked");
+        assert!(!at(0.0, 0).uncloak(), "seen");
+    }
+
+    #[test]
+    fn a_dying_ship_with_any_fade_left_falls_at_twice_the_rate() {
+        // `_HandleShipDisplay` sets -2 after the step (@0x2d169-0x2d17e).
+        for start in [at(10.0, 1), at(FADE_FULL, 0), at(20.0, -1)] {
+            let mut cloak = start;
+            cloak.display_step(false, true);
+            let mut plain = start;
+            plain.step(false);
+            assert_eq!(cloak, at(plain.fade, -2), "{start:?} moved the old way");
+            cloak.display_step(false, true);
+            assert_eq!(cloak, at(plain.fade - 1.5, -2), "{start:?} then 2 x 0.75");
+        }
+        let mut fast = at(20.0, -2);
+        fast.display_step(true, true);
+        assert_eq!(fast, at(17.0, -2), "2 x 1.5");
+        let mut gone = Cloak::default();
+        gone.display_step(false, true);
+        assert_eq!(gone, Cloak::default(), "no fade, left alone");
+        let mut emptied = at(1.0, -2);
+        emptied.display_step(false, true);
+        assert_eq!(emptied, Cloak::default(), "faded out on this step");
+        let mut alive = at(10.0, 1);
+        alive.display_step(true, false);
+        assert_eq!(alive, at(11.5, 1), "not dying, a plain step");
     }
 
     #[test]

@@ -1654,7 +1654,9 @@ impl Traffic {
         }
     }
 
-    /// Each NPC's cloak fade a tick on ([`Cloak::step`](cloak::Cloak::step)),
+    /// Each NPC's cloak fade a tick on
+    /// ([`Cloak::display_step`](cloak::Cloak::display_step): a dying one
+    /// then falls at twice the rate),
     /// as `_HandleShipDisplay` steps it once a frame (@0x2d088-0x2d164),
     /// right after the ship's own `_HandleShip` (@0x444ad): so after its
     /// pick. The session runs it once after the whole NPC loop
@@ -1664,7 +1666,8 @@ impl Traffic {
     /// reads the targets' conditions, not their cloaks.
     pub fn step_fades(&mut self) {
         for npc in &mut self.npcs {
-            npc.cloak.step(npc.cloak_gear.fast());
+            let dying = npc.condition.is_dying(npc.reserves.armor);
+            npc.cloak.display_step(npc.cloak_gear.fast(), dying);
         }
     }
 
@@ -3122,6 +3125,32 @@ mod tests {
         assert_eq!(traffic.npcs()[0].cloak.direction, 0, "not held yet");
         traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.direction, -1, "held");
+    }
+
+    #[test]
+    fn a_dying_ships_fade_falls_at_twice_the_rate_after_its_step() {
+        // `_HandleShipDisplay` sets direction -2 for a dying ship with any
+        // fade left (@0x2d169-0x2d17e), after the step.
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        let npc = &mut traffic.npcs[0];
+        npc.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        npc.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        traffic.step_fades();
+        assert_eq!(
+            traffic.npcs()[0].cloak,
+            Cloak {
+                fade: FADE_FULL,
+                direction: -2
+            }
+        );
+        traffic.step_fades();
+        assert_eq!(traffic.npcs()[0].cloak.fade, FADE_FULL - 1.5);
     }
 
     #[test]
