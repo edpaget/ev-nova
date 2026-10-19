@@ -179,6 +179,7 @@ impl Session {
     /// [`warp::warp_factor`]).
     pub(super) fn player_warp_factor(&self) -> f32 {
         let flags = self
+            .statics
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.flags);
         warp::warp_factor(flags)

@@ -72,7 +72,7 @@
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
 
-use super::Session;
+use super::{Session, Statics};
 use crate::Chance;
 use crate::RuleKey;
 use crate::combat::armament::{Fold, OutfitRounds};
@@ -350,6 +350,19 @@ impl Session {
     /// no record of.
     #[must_use]
     pub fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
+        self.statics.class_shield(ship)
+    }
+}
+
+impl Statics {
+    /// Ship class `ship`'s own `Shield` as the original loads it (class
+    /// +0x5c: a negative one 5 times its size,
+    /// [`shield_points`](crate::reserves::shield_points)), none of its
+    /// outfits': what a shield flash's level is a share of
+    /// (`_HandleShipDisplay` @0x2c8aa); none for a class the session has
+    /// no record of.
+    #[must_use]
+    fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
         // A `Shield` within an `i16` × 5: exact in an `f32`.
         #[allow(clippy::cast_precision_loss)]
         self.ship_record(ship)
@@ -593,7 +606,11 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.armament.fold_mut().dir = -1;
         session.ship_display.frames.bank = 3.0;
-        let record = session.ship_record(ShipId(129)).cloned().expect("ship 129");
+        let record = session
+            .statics
+            .ship_record(ShipId(129))
+            .cloned()
+            .expect("ship 129");
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,

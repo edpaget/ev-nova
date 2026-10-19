@@ -172,7 +172,7 @@
 //! ([`Session::mission_ships_came`]) and on every traffic tick, and leave
 //! it as their marks are cleared.
 
-use super::Session;
+use super::{Session, Statics};
 use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
 use std::collections::BTreeMap;
 
@@ -319,7 +319,12 @@ impl Session {
         };
         let mut draw_type = |dude: DudeId, chance: &mut dyn Chance| {
             let dude = self.statics.uniform_dudes.get(&dude)?;
-            dude_ship_type(dude, |ship| self.appear_on(ship), self.gate(), chance)
+            dude_ship_type(
+                dude,
+                |ship| self.statics.appear_on(ship),
+                self.gate(),
+                chance,
+            )
         };
         SpecialShips::at_accept(
             &record.ships,
@@ -330,15 +335,6 @@ impl Session {
             &mut draw_type,
             chance,
         )
-    }
-
-    /// Ship type `ship`'s `AppearOn`: none when it has no record.
-    fn appear_on(&self, ship: ShipId) -> Option<&Test> {
-        self.statics
-            .ships
-            .iter()
-            .find(|record| record.id == ship)
-            .map(|record| &record.appear_on)
     }
 
     /// Registers `slot`'s hooks ([`ship_hook`]): its enter-system hook
@@ -417,7 +413,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         if !self.hook_restarts(&record, active, how) {
             return;
         }
@@ -457,7 +453,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let ships = &active.ships;
         let facts = GoalFacts {
             goal: ShipGoal::from_code(record.ships.goal),
@@ -532,7 +528,7 @@ impl Session {
     /// `chance` (`_SetupShipsInSystem` @0x43169-0x4317e).
     pub(super) fn abort_set_up(&mut self, set_up: &[(u8, MissionId)], chance: &mut dyn Chance) {
         for &(slot, mission) in set_up {
-            let record = self.lifecycle_record(mission);
+            let record = self.statics.lifecycle_record(mission);
             self.abort_on_spawn(slot, &record, chance);
         }
     }
@@ -554,7 +550,7 @@ impl Session {
         self.pilot
             .missions
             .iter()
-            .filter_map(|(_, active)| self.lifecycle_record(active.mission).ships.dude)
+            .filter_map(|(_, active)| self.statics.lifecycle_record(active.mission).ships.dude)
             .collect()
     }
 
@@ -582,7 +578,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             let state = &active.ships;
             let left = state.left;
             let expired = active.days_left == Some(0);
@@ -740,7 +736,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let active = active.clone();
         if entering.is_some_and(|how| self.hook_restarts(&record, &active, how)) {
             return;
@@ -780,7 +776,7 @@ impl Session {
         before: &ActiveMission,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let record = self.lifecycle_record(before.mission);
+        let record = self.statics.lifecycle_record(before.mission);
         let Some(part) = self.special_part(catalog, slot, &record, before, chance) else {
             return;
         };
@@ -939,7 +935,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let Some(dude) = record.ships.dude else {
             return;
         };
@@ -1057,7 +1053,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return false;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let count = record.ships.count;
         let goal = ShipGoal::from_code(record.ships.goal);
         let meets = matches!(
@@ -1138,7 +1134,7 @@ impl Session {
         let mut failed = false;
         if let Some(active) = self.pilot.missions.get(mark.slot) {
             failed = active.failed.is_some();
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             let cargo = active.cargo_type;
             let goal = ShipGoal::from_code(record.ships.goal);
             let counts = if record.pickup_mode == PICKUP_BOARDING {
@@ -1187,6 +1183,7 @@ impl Session {
             return false;
         };
         let goal = self
+            .statics
             .mission_record(active.mission)
             .map_or(ShipGoal::None, |record| {
                 ShipGoal::from_code(record.ships.goal)
@@ -1228,7 +1225,7 @@ impl Session {
             });
             let observing = self.pilot.missions.get(slot).is_some_and(|active| {
                 !active.goals_met
-                    && ShipGoal::from_code(self.lifecycle_record(active.mission).ships.goal)
+                    && ShipGoal::from_code(self.statics.lifecycle_record(active.mission).ships.goal)
                         == ShipGoal::Observe
             });
             if observing {
@@ -1322,7 +1319,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(mark.slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let counted = departure(
             ShipGoal::from_code(record.ships.goal),
             active.ships.system == ShipSystem::FollowsPlayer,
@@ -1373,7 +1370,7 @@ impl Session {
         let npc = self.npcs().iter().find(|npc| npc.id == id)?;
         let (mark, boarded) = (npc.mission?, npc.boarded);
         let active = self.pilot.missions.get(mark.slot)?;
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let facts = LossFacts {
             goal: ShipGoal::from_code(record.ships.goal),
             flags: record.flags,
@@ -1461,6 +1458,16 @@ impl Session {
     ) -> Option<&str> {
         let active = self.pilot.missions.get(mark?.slot)?;
         Some(pick(&active.ships)).filter(|text| !text.is_empty())
+    }
+}
+
+impl Statics {
+    /// Ship type `ship`'s `AppearOn`: none when it has no record.
+    fn appear_on(&self, ship: ShipId) -> Option<&Test> {
+        self.ships
+            .iter()
+            .find(|record| record.id == ship)
+            .map(|record| &record.appear_on)
     }
 }
 

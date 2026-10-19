@@ -415,6 +415,7 @@ mod tests {
         let mut session = alongside(&catalog);
         session.pilot.outfits.insert(OutfitId(330), 2);
         let record = session
+            .statics
             .ship_record(ShipId(129))
             .cloned()
             .expect("the trader");

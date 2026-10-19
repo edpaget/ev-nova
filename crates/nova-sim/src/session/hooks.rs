@@ -107,7 +107,7 @@ impl Session {
     /// Runs ship class `ship`'s `hook`, drawing on `chance`: nothing when
     /// the session has no record of it.
     pub(super) fn ship_hook(&mut self, ship: ShipId, hook: ShipHook, chance: &mut dyn Chance) {
-        let Some(record) = self.ship_record(ship) else {
+        let Some(record) = self.statics.ship_record(ship) else {
             return;
         };
         let script = match hook {

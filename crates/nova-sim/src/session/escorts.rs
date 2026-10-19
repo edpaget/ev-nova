@@ -107,7 +107,7 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::{Session, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::swarm::{self, FormationParent};
 use crate::ai::{Goal, Surroundings};
@@ -328,7 +328,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
-        let record = self.ship_record(escort.ship)?;
+        let record = self.statics.ship_record(escort.ship)?;
         let maneuver = record.fields.maneuver;
         let fitted = escort
             .person
@@ -461,6 +461,7 @@ impl Session {
     /// pilot's, the formation re-forms, and a save is due.
     pub(super) fn enlist(&mut self, id: NpcId, record: Escort) {
         let ship = self
+            .statics
             .ship_record(record.ship)
             .map(|ship| (ship.inherent_ai, ship.fields.maneuver));
         let carrier = ship
@@ -573,7 +574,7 @@ impl Session {
     pub(super) fn restock_fleet(&mut self) {
         for index in 0..self.pilot.escorts.len() {
             let ship = self.pilot.escorts[index].ship;
-            let Some(record) = self.ship_record(ship) else {
+            let Some(record) = self.statics.ship_record(ship) else {
                 continue;
             };
             let kind = self.ship_kind(record);
@@ -658,19 +659,11 @@ impl Session {
     /// the fleet's holds it takes its share of; by the other reading of
     /// [`RuleKey::LostCargoShare`] they count too.
     pub(super) fn lose_cargo_share(&mut self, ship: ShipId) {
-        let Some(holds) = self.trader_holds(ship) else {
+        let Some(holds) = self.statics.trader_holds(ship) else {
             return;
         };
         let counted = self.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
         self.destroy_cargo_share(holds, counted);
-    }
-
-    /// The `Holds` of ship class `ship` when its `InherentAI` is a
-    /// trader's ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less).
-    pub(super) fn trader_holds(&self, ship: ShipId) -> Option<i16> {
-        self.ship_record(ship)
-            .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
-            .map(|record| record.fields.holds)
     }
 
     /// `_DestroyPartialFleetCargo` (@0xcd32-0xcff6) for a ship other than
@@ -756,8 +749,11 @@ impl Session {
         let index = self.fleet.iter().position(|&placed| placed == Some(id))?;
         let ship = self.pilot.escorts.get(index)?.ship;
         match self.rules.source_for(RuleKey::ReleaseCargoShare) {
-            RuleSource::Engine => self.ship_record(ship).map(|record| record.fields.holds),
-            RuleSource::Bible => self.trader_holds(ship),
+            RuleSource::Engine => self
+                .statics
+                .ship_record(ship)
+                .map(|record| record.fields.holds),
+            RuleSource::Bible => self.statics.trader_holds(ship),
         }
     }
 
@@ -782,7 +778,7 @@ impl Session {
         self.pilot
             .escorts
             .get(index)
-            .and_then(|escort| self.ship_record(escort.ship))
+            .and_then(|escort| self.statics.ship_record(escort.ship))
             .map_or_else(EscortClass::default, |record| {
                 EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
             })
@@ -937,6 +933,16 @@ impl Session {
             || self
                 .player_led()
                 .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
+    }
+}
+
+impl Statics {
+    /// The `Holds` of ship class `ship` when its `InherentAI` is a
+    /// trader's ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less).
+    pub(super) fn trader_holds(&self, ship: ShipId) -> Option<i16> {
+        self.ship_record(ship)
+            .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
+            .map(|record| record.fields.holds)
     }
 }
 

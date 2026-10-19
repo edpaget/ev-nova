@@ -156,7 +156,7 @@ impl Session {
     pub fn map_mission_systems(&self) -> Vec<SystemId> {
         let active = |stellar| {
             self.galaxy
-                .active_holder(self.listers(stellar), self.pilot.system)
+                .active_holder(self.statics.listers(stellar), self.pilot.system)
         };
         let mut systems = Vec::new();
         for (_, mission) in self.pilot.missions().iter() {
@@ -170,6 +170,7 @@ impl Session {
                 system = Some(holder);
             }
             let flags = self
+                .statics
                 .mission_record(mission.mission)
                 .map_or(0, |record| record.flags);
             let hidden = flags & HIDES_ARROW != 0;

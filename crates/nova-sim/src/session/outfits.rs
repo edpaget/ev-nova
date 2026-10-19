@@ -72,7 +72,7 @@
 //!   systems are one set, where the original keeps `X`'s level 1 apart
 //!   from a map's level 2.
 
-use super::{Session, clamp_i16};
+use super::{Session, Statics, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
@@ -144,18 +144,10 @@ impl Session {
         OutfitRules::from_rulebook(&self.rules)
     }
 
-    /// The record of `outfit`, if there is one.
-    fn outfit_record(&self, outfit: OutfitId) -> Option<&OutfitRecord> {
-        self.statics
-            .outfits
-            .iter()
-            .find(|record| record.id == outfit)
-    }
-
     /// What granting one of `outfit` does: a plain item's when it has no
     /// record.
     fn grant_effect(&self, outfit: OutfitId) -> GrantEffect {
-        self.outfit_record(outfit).map_or(
+        self.statics.outfit_record(outfit).map_or(
             GrantEffect {
                 map: None,
                 paint: None,
@@ -247,7 +239,7 @@ impl Session {
         if !self.grant_effect(outfit).added {
             return true;
         }
-        self.outfit_record(outfit).is_none_or(|record| {
+        self.statics.outfit_record(outfit).is_none_or(|record| {
             let stock = self.grant_stock(record);
             held_to_max(self.outfit_rules().grant_max, 1, &stock, self.free_mass())
                 .is_none_or(|count| count > 0)
@@ -269,7 +261,7 @@ impl Session {
             return;
         }
         if self.outfit_rules().remove_refund == RuleSource::Bible {
-            let price = self.outfit_record(outfit).map_or(0, |record| {
+            let price = self.statics.outfit_record(outfit).map_or(0, |record| {
                 unit_price(record, self.fields.mass, &self.rules)
             });
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
@@ -290,6 +282,13 @@ impl Session {
     /// remove it after purchase (see the module docs).
     pub(crate) fn remove_after_purchase(&mut self, outfit: OutfitId) {
         take_one(&mut self.pilot, outfit);
+    }
+}
+
+impl Statics {
+    /// The record of `outfit`, if there is one.
+    fn outfit_record(&self, outfit: OutfitId) -> Option<&OutfitRecord> {
+        self.outfits.iter().find(|record| record.id == outfit)
     }
 }
 

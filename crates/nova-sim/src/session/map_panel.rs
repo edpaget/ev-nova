@@ -100,7 +100,7 @@ impl Session {
                 gravity: site.gravity,
                 active: self
                     .galaxy
-                    .active_holder(self.listers(site.id), self.pilot.system)
+                    .active_holder(self.statics.listers(site.id), self.pilot.system)
                     .is_some(),
                 destroyed: site.destroyed,
             })

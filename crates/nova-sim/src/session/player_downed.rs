@@ -108,7 +108,7 @@ impl Session {
             .missions
             .iter()
             .filter(|(_, active)| active.failed.is_none())
-            .map(|(slot, active)| (slot, self.lifecycle_record(active.mission)))
+            .map(|(slot, active)| (slot, self.statics.lifecycle_record(active.mission)))
             .find(|(_, record)| record.flags2 & FAILS_IF_DOWNED != 0);
         let Some((slot, record)) = found else {
             return;

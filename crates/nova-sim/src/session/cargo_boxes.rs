@@ -44,7 +44,10 @@ impl Session {
             .iter()
             .zip(&self.fleet)
             .filter_map(|(escort, &placed)| {
-                let holds = self.holds_of(escort).filter(|holds| holds.adds_holds())?;
+                let holds = self
+                    .statics
+                    .holds_of(escort)
+                    .filter(|holds| holds.adds_holds())?;
                 let npc = self.npc(placed?)?;
                 Some((
                     npc.state,

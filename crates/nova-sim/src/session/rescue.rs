@@ -258,7 +258,7 @@ impl Session {
             .map(|(slot, active)| (slot, active.mission))
             .collect();
         for (slot, mission) in active {
-            let record = self.lifecycle_record(mission);
+            let record = self.statics.lifecycle_record(mission);
             self.end_mission(slot, &record, true, chance);
         }
     }
@@ -266,7 +266,7 @@ impl Session {
     /// `_ResetPlayer(0)`'s part of the rescue that the engine models (see
     /// the module docs), the placement and the scene left to the entry.
     fn reset_player_for_rescue(&mut self) {
-        let Some(record) = self.ship_record(RESCUE_SHIP).cloned() else {
+        let Some(record) = self.statics.ship_record(RESCUE_SHIP).cloned() else {
             return;
         };
         self.board_class(&record, &BTreeMap::new());

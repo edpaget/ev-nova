@@ -115,6 +115,7 @@ impl Session {
         let (mut hold, pirate_holds) = (npc.cargo, npc.holds);
         let defender = Side {
             strength: self
+                .statics
                 .ship_record(self.pilot.ship)
                 .map_or(0, |record| i32::from(record.strength)),
             marines: Marines::owned(
@@ -161,7 +162,7 @@ impl Session {
             .iter()
             .filter(|(_, active)| active.failed.is_none())
             .filter(|(_, active)| {
-                self.lifecycle_record(active.mission).flags & FAILS_IF_PLUNDERED != 0
+                self.statics.lifecycle_record(active.mission).flags & FAILS_IF_PLUNDERED != 0
             })
             .map(|(slot, _)| slot)
             .collect();

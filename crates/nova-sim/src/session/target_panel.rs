@@ -21,7 +21,7 @@ impl Session {
     /// [`target_panel::status`]).
     #[must_use]
     pub fn target_status(&self, npc: &Npc) -> TargetStatus {
-        let record = self.ship_record(npc.ship);
+        let record = self.statics.ship_record(npc.ship);
         target_panel::status(&StatusFacts {
             reserves: npc.reserves,
             disabled: npc.condition == Condition::Disabled,
@@ -52,6 +52,7 @@ impl Session {
                 })
             ),
             type_mass: self
+                .statics
                 .ship_record(npc.ship)
                 .map_or(0, |record| record.fields.mass),
         })

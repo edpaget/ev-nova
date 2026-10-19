@@ -34,9 +34,9 @@
 //! None of it is saved. The next outside offer the original drops after
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
 
-use super::Session;
 #[cfg(test)]
 use super::missions::TextSource;
+use super::{Session, Statics};
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::galaxy_map::MapMarks;
@@ -320,7 +320,7 @@ impl Session {
     /// it started: `None` for a `mïsn` it has no texts of.
     #[must_use]
     pub fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
-        self.statics.mission_texts.get(&id)
+        self.statics.mission_texts(id)
     }
 
     /// The mission texts and offer movies to show since they were last
@@ -348,17 +348,12 @@ impl Session {
     /// one played `after` the dialog or not, as asked.
     fn show_offer_movie(&mut self, mission: MissionId, after: bool) {
         if let Some(movie) = self
+            .statics
             .offer_movie(mission)
             .filter(|movie| movie.after == after)
         {
             self.shown_texts.push(MissionShown::Movie(movie));
         }
-    }
-
-    /// The movie `mission`'s offer `dësc` names, if any.
-    fn offer_movie(&self, mission: MissionId) -> Option<DescMovie> {
-        self.mission_texts(mission)
-            .and_then(|texts| texts.movies.offer.clone())
     }
 
     /// Queues the after-movie the offer dialog of `mission` plays once its
@@ -376,7 +371,7 @@ impl Session {
         }
         let movie = match self.rules.source_for(RuleKey::DescMovieGlobals) {
             RuleSource::Engine => self.loaded_movie.clone(),
-            RuleSource::Bible => self.offer_movie(mission),
+            RuleSource::Bible => self.statics.offer_movie(mission),
         };
         if let Some(movie) = movie.filter(|movie| movie.after) {
             self.shown_texts.push(MissionShown::Movie(movie));
@@ -411,6 +406,7 @@ impl Session {
                 .offer_of(mission)
                 .is_some_and(|offer| offer.venue != Venue::Computer)
             && self
+                .statics
                 .mission_record(mission)
                 .is_some_and(|record| record.flags & UNREFUSABLE == 0)
     }
@@ -586,7 +582,7 @@ impl Session {
             .missions
             .iter()
             .filter_map(|(slot, active)| {
-                let record = self.lifecycle_record(active.mission);
+                let record = self.statics.lifecycle_record(active.mission);
                 if record.flags & HIDDEN != 0 {
                     return None;
                 }
@@ -672,7 +668,8 @@ impl Session {
             .mission_offers(Venue::Outside)
             .iter()
             .filter(|offer| {
-                self.mission_record(offer.mission)
+                self.statics
+                    .mission_record(offer.mission)
                     .is_some_and(|record| record.avail_loc == loc)
                     && !self.suppressed.contains(&offer.mission)
             })
@@ -726,6 +723,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> VenueOffer {
         let can_refuse = self
+            .statics
             .mission_record(mission)
             .is_some_and(|record| record.flags & UNREFUSABLE == 0);
         let texts = self.mission_texts(mission);
@@ -784,7 +782,8 @@ impl Session {
     /// `_IsMissionAvailable(i, 1)` checks it: never in flight, nor for a
     /// mission the session has no record of.
     fn still_available(&self, offer: &Offer) -> bool {
-        let (Some(stellar), Some(record)) = (self.landed, self.mission_record(offer.mission))
+        let (Some(stellar), Some(record)) =
+            (self.landed, self.statics.mission_record(offer.mission))
         else {
             return false;
         };
@@ -801,6 +800,21 @@ impl Session {
                 .is_ok()
         })
         .unwrap_or(false)
+    }
+}
+
+impl Statics {
+    /// What the screens show of mission `id`, as the session read it as
+    /// it started: `None` for a `mïsn` it has no texts of.
+    #[must_use]
+    fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
+        self.mission_texts.get(&id)
+    }
+
+    /// The movie `mission`'s offer `dësc` names, if any.
+    fn offer_movie(&self, mission: MissionId) -> Option<DescMovie> {
+        self.mission_texts(mission)
+            .and_then(|texts| texts.movies.offer.clone())
     }
 }
 

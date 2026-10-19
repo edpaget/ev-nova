@@ -125,7 +125,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
         let berth = self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
-        let record = self.ship_record(sortie.ship).cloned()?;
+        let record = self.statics.ship_record(sortie.ship).cloned()?;
         let push = self
             .statics
             .arsenal
@@ -338,6 +338,7 @@ impl Session {
         let fuelled = |session: &Self, escort: &Escort, npc: Option<&Npc>| match npc {
             Some(npc) => leave::can_jump(npc, reading),
             None => session
+                .statics
                 .ship_record(escort.ship)
                 .is_some_and(|record| f32::from(record.fields.fuel) >= JUMP_FUEL),
         };

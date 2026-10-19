@@ -129,6 +129,7 @@ impl Session {
         let kept = escort.wage.unwrap_or(0);
         match self.rules.source_for(RuleKey::EscortWage) {
             RuleSource::Engine => self
+                .statics
                 .ship_record(escort.ship)
                 .map_or(kept, |record| self.hire_terms.0.wage(record)),
             RuleSource::Bible => kept,
@@ -161,7 +162,7 @@ impl Session {
                 // A trader takes its share of the cargo, and the session
                 // resets, while it is still in the fleet, its own holds
                 // among the fleet's (@0x40225-0x40240).
-                if let Some(holds) = self.trader_holds(escort.ship) {
+                if let Some(holds) = self.statics.trader_holds(escort.ship) {
                     self.destroy_cargo_share(holds, false);
                 }
                 self.pilot.escorts.remove(index);
@@ -234,6 +235,7 @@ impl Session {
         let list = self.escorts_for_hire(chance).ok_or(HireRefusal::NoBar)?;
         list.check(ship)?;
         let record = self
+            .statics
             .ship_record(ship)
             .cloned()
             .ok_or(HireRefusal::NotListed)?;

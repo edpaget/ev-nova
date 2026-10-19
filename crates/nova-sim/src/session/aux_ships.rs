@@ -94,7 +94,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let coming = active.aux.coming(&record.aux);
         let holder = |stop: Option<Stop>| stop.and_then(|stop| self.holder_of(stop.stellar));
         let holders = (holder(active.destination), holder(active.return_to));
@@ -167,7 +167,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         if let Some(active) = self.pilot.missions.get_mut(slot) {
             active.aux.restart(&record.aux, record.flags, chance);
         }
@@ -197,7 +197,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active
                     .aux
@@ -241,7 +241,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        if self.lifecycle_record(active.mission).aux.syst != ANY_SYSTEM {
+        if self.statics.lifecycle_record(active.mission).aux.syst != ANY_SYSTEM {
             return;
         }
         if let Some(active) = self.pilot.missions.get_mut(slot) {
@@ -265,7 +265,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.aux.give_back(&record.aux);
             }
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(
             session
                 .galaxy()
-                .holder(session.listers(StellarId(128)), SystemId(130)),
+                .holder(session.statics.listers(StellarId(128)), SystemId(130)),
             Some(SystemId(130)),
             "rescued"
         );

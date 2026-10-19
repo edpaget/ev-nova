@@ -71,7 +71,7 @@ impl Session {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
             };
-            let record = self.lifecycle_record(active.mission);
+            let record = self.statics.lifecycle_record(active.mission);
             let govt = record
                 .ships
                 .dude
@@ -154,7 +154,7 @@ impl Session {
             .iter()
             .filter(|(_, active)| {
                 let ships = &active.ships;
-                let behav = self.lifecycle_record(active.mission).ships.behav;
+                let behav = self.statics.lifecycle_record(active.mission).ships.behav;
                 // The original also asks for ships left (@0x67383): a slot
                 // with none has no ship here to move.
                 ships.system == ShipSystem::FollowsPlayer

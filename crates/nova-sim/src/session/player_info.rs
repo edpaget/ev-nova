@@ -149,7 +149,11 @@ impl Session {
             .escorts
             .iter()
             .filter(|escort| escort.hired())
-            .filter_map(|escort| self.ship_record(escort.ship).map(|record| record.cost))
+            .filter_map(|escort| {
+                self.statics
+                    .ship_record(escort.ship)
+                    .map(|record| record.cost)
+            })
             .collect();
         let day = player_info::daily_income(costs, self.tribute(catalog), ranks.salary);
         PlayerInfo {
@@ -223,6 +227,7 @@ impl Session {
                     cargo_type,
                     tons: active.cargo_tons,
                     can_abort: self
+                        .statics
                         .mission_record(active.mission)
                         .is_some_and(|record| record.can_abort != 0),
                 })
@@ -248,7 +253,8 @@ impl Session {
     /// Extras text ([`shipyard::trade_in`]).
     fn trade_in_shown(&self) -> i64 {
         shipyard::trade_in(
-            self.ship_record(self.pilot.ship)
+            self.statics
+                .ship_record(self.pilot.ship)
                 .map_or(0, |record| record.cost),
             self.fields.mass,
             &self.pilot.outfits,
@@ -309,7 +315,7 @@ impl Session {
         let govt = self.galaxy.govt(system);
         let counting = sites.iter().take(3).filter(|site| {
             self.galaxy
-                .active_holder(self.listers(site.id), self.pilot.system)
+                .active_holder(self.statics.listers(site.id), self.pilot.system)
                 .is_some()
                 && !uninhabited(site)
                 && is_landable(site)

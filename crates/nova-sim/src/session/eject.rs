@@ -243,7 +243,7 @@ impl Session {
         {
             return false;
         }
-        let Some(old) = self.ship_record(self.pilot.ship).cloned() else {
+        let Some(old) = self.statics.ship_record(self.pilot.ship).cloned() else {
             return false;
         };
         self.eject(&old, hulk, chance);
@@ -265,7 +265,10 @@ impl Session {
         self.secondary = None;
         self.ship_hook(old.id, ShipHook::Retire, chance);
         let escape = self.escape_ship();
-        let record = self.ship_record(escape.unwrap_or(ESCAPE_POD_SHIP)).cloned();
+        let record = self
+            .statics
+            .ship_record(escape.unwrap_or(ESCAPE_POD_SHIP))
+            .cloned();
         // -1 or 350, either way not the 0 a stray beam leaves (see the
         // `stray_words` module).
         self.pod_zeroed = false;
@@ -498,7 +501,7 @@ impl Session {
         self.unfleet(id);
         let inherent = self
             .npc(id)
-            .and_then(|npc| self.ship_record(npc.ship))
+            .and_then(|npc| self.statics.ship_record(npc.ship))
             .map(|record| AiType::from_raw(record.inherent_ai));
         if let Some(npc) = self.npc_mut(id) {
             if let Some(mark) = &mut npc.mission

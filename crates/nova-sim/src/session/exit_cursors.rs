@@ -167,7 +167,11 @@ fn a_change_of_ship_keeps_the_players_exit_cursors_by_the_engine_and_resets_them
     let catalog = four_guns();
     for (reading, exit) in [(RuleSource::Engine, 1), (RuleSource::Bible, 0)] {
         let mut session = fired_once(&catalog, reading);
-        let record = session.ship_record(ShipId(129)).cloned().expect("ship 129");
+        let record = session
+            .statics
+            .ship_record(ShipId(129))
+            .cloned()
+            .expect("ship 129");
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
@@ -190,7 +194,11 @@ fn a_change_of_ship_puts_the_players_fold_set_back_to_0_by_either_reading() {
         let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
         let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
         session.armament = session.armament.clone().with_fold_set(2);
-        let record = session.ship_record(ShipId(129)).cloned().expect("ship 129");
+        let record = session
+            .statics
+            .ship_record(ShipId(129))
+            .cloned()
+            .expect("ship 129");
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,

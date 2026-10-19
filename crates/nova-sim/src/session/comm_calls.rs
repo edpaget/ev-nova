@@ -254,6 +254,7 @@ impl Session {
         let around = world.around(self.npcs());
         let npc = around.npc(id)?;
         let inherent = self
+            .statics
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
         Some(DistressFacts {
@@ -302,7 +303,7 @@ impl Session {
             return;
         };
         let found = hail_finds(govt, &self.pilot.missions, |mission| {
-            self.lifecycle_record(mission)
+            self.statics.lifecycle_record(mission)
         });
         if !found || !self.comm_line.idle() {
             return;

@@ -422,7 +422,7 @@ impl Session {
     /// docs); nothing changes when the session has no record of the
     /// class.
     pub(super) fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
-        let Some(record) = self.ship_record(ship).cloned() else {
+        let Some(record) = self.statics.ship_record(ship).cloned() else {
             return;
         };
         let rules = self.ship_change_rules();
@@ -780,7 +780,11 @@ mod tests {
 
     /// `session`'s record of ship `id`.
     fn record(session: &Session, id: i16) -> ShipRecord {
-        session.ship_record(ShipId(id)).cloned().expect("a record")
+        session
+            .statics
+            .ship_record(ShipId(id))
+            .cloned()
+            .expect("a record")
     }
 
     #[test]

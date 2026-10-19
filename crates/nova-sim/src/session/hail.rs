@@ -330,7 +330,7 @@ impl Session {
         let mark = npc.mission?;
         Some(match self.pilot.missions.get(mark.slot) {
             Some(active) => MissionHail {
-                goal: ShipGoal::from_code(self.lifecycle_record(active.mission).ships.goal),
+                goal: ShipGoal::from_code(self.statics.lifecycle_record(active.mission).ships.goal),
                 behav: mark.behav,
             },
             None => MissionHail {
@@ -344,6 +344,7 @@ impl Session {
     /// ranks reaching it by the session's `rank_govt_reach` rule.
     fn dispositions(&self, npc: &Npc) -> Dispositions {
         let inherent = self
+            .statics
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
         let favour = rank::favour(
@@ -437,6 +438,7 @@ impl Session {
             first: talk.first.map(say),
             reply,
             comm_name: self
+                .statics
                 .ship_record(npc.ship)
                 .map(|record| record.comm_name.clone())
                 .unwrap_or_default(),
@@ -635,6 +637,7 @@ impl Session {
         let note = CommNote {
             from,
             comm_name: self
+                .statics
                 .ship_record(ship)
                 .map(|record| record.comm_name.clone())
                 .unwrap_or_default(),

@@ -48,7 +48,7 @@
 //! @0x34a54-0x34a72, counted down @0x35026-0x35048). The pickup path sets
 //! no wait.
 
-use super::Session;
+use super::{Session, Statics};
 use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
 use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
@@ -59,20 +59,6 @@ use crate::traffic::npc::{Npc, NpcId};
 pub(super) const BOARDED_WAIT: u32 = 100;
 
 impl Session {
-    /// `npc` as the boarding checks see it: its class's `Crew` (none
-    /// without a record) and whether it carries a mission's mark, failed,
-    /// standing or stale.
-    pub(super) fn board_target(&self, npc: &Npc) -> BoardTarget {
-        BoardTarget {
-            state: npc.state,
-            condition: npc.condition,
-            boarded: npc.boarded,
-            crew: self.crew(npc.ship),
-            mission: npc.mission.is_some(),
-            reach: npc.hull.board_reach,
-        }
-    }
-
     /// Beeps [`SimSound::Refused`] for `refusal` when it is said, as
     /// `_HandlePlayerBoardAttempt` plays `_beepSnd[3]` before each line
     /// (see the module docs); a silent one ([`BoardRefusal::silent`])
@@ -142,6 +128,22 @@ impl Session {
         if let Some(state) = self.npc(id).map(|npc| npc.state) {
             self.player = state;
             self.target = Some(id);
+        }
+    }
+}
+
+impl Statics {
+    /// `npc` as the boarding checks see it: its class's `Crew` (none
+    /// without a record) and whether it carries a mission's mark, failed,
+    /// standing or stale.
+    pub(super) fn board_target(&self, npc: &Npc) -> BoardTarget {
+        BoardTarget {
+            state: npc.state,
+            condition: npc.condition,
+            boarded: npc.boarded,
+            crew: self.crew(npc.ship),
+            mission: npc.mission.is_some(),
+            reach: npc.hull.board_reach,
         }
     }
 }

@@ -61,6 +61,7 @@ impl Session {
             return;
         };
         let inherent = self
+            .statics
             .ship_record(npc.ship)
             .map(|record| AiType::from_raw(record.inherent_ai));
         let order = self.class_order(npc.class);

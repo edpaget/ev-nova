@@ -67,7 +67,7 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let at_destination = self.docked_at_stop(active.destination, stellar);
         let at_return = self.docked_at_stop(active.return_to, stellar);
         if at_destination {
@@ -105,7 +105,7 @@ impl Session {
         let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
             return false;
         };
-        if self.lifecycle_record(mission).pickup_mode != PICKUP_BOARDING {
+        if self.statics.lifecycle_record(mission).pickup_mode != PICKUP_BOARDING {
             return false;
         }
         let picked = self.pickup_passes(slot, mission);
@@ -151,7 +151,7 @@ impl Session {
         let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,
-            |id| self.lifecycle_record(id),
+            |id| self.statics.lifecycle_record(id),
             all,
             goods,
         );
@@ -162,7 +162,7 @@ impl Session {
             let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
                 continue;
             };
-            let record = self.lifecycle_record(mission);
+            let record = self.statics.lifecycle_record(mission);
             if let Some(active) = self.slot_holding(slot, mission) {
                 active.aboard = false;
             }
@@ -291,7 +291,7 @@ impl Session {
         let outcome = scan(
             govt,
             &self.pilot.missions,
-            |mission| self.lifecycle_record(mission),
+            |mission| self.statics.lifecycle_record(mission),
             self.pilot.cash,
         );
         match outcome {
@@ -301,7 +301,7 @@ impl Session {
                 else {
                     return;
                 };
-                let record = self.lifecycle_record(mission);
+                let record = self.statics.lifecycle_record(mission);
                 if announce {
                     self.sounds.push(SimSound::ScanFailedMission);
                     self.say(SimMessage::MissionScanned);

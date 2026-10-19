@@ -169,6 +169,7 @@ impl Session {
         };
         let escort = npc.mission_escort();
         let inherent = self
+            .statics
             .ship_record(npc.ship)
             .map(|record| AiType::from_raw(record.inherent_ai));
         let Some(npc) = self.npc_mut(id) else {
@@ -207,6 +208,7 @@ impl Session {
             .collect();
         for &(id, ship) in &dying {
             let inherent = self
+                .statics
                 .ship_record(ship)
                 .map(|record| AiType::from_raw(record.inherent_ai));
             if let Some(npc) = self.npc_mut(id) {

@@ -109,13 +109,15 @@ impl Session {
         return_to: Option<StellarId>,
     ) -> Option<SystemId> {
         let flags = self
+            .statics
             .mission_record(mission)
             .map_or(0, |record| record.flags);
         if flags & MARKS_DESTINATION == 0 {
             return None;
         }
         let stellar = destination.or(return_to)?;
-        self.galaxy.holder(self.listers(stellar), self.pilot.system)
+        self.galaxy
+            .holder(self.statics.listers(stellar), self.pilot.system)
     }
 }
 
@@ -192,6 +194,7 @@ mod tests {
             deadline: None,
         };
         let record = session
+            .statics
             .mission_record(MissionId(mission))
             .cloned()
             .expect("a record");

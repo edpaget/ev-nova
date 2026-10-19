@@ -122,6 +122,7 @@ impl Session {
             None => return,
         };
         let flags = self
+            .statics
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.flags);
         let speed = warp::lead_in_speed(

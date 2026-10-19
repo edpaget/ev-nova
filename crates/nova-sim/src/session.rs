@@ -354,6 +354,37 @@
 //! [`Session::take_combat_events`], and the [`SimDiagnostic`]s about game
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
+//!
+//! # State
+//!
+//! `Session`'s state is being gathered into owned sub-states, each in its
+//! own module under `session/`, with the logic that touches only it moved
+//! onto it; `Session` keeps the pilot, the mode fields and a few
+//! stragglers, and coordinates the rest (the `session-substates`
+//! roadmap). The target shape, and how far it has got:
+//!
+//! - `pilot: Pilot`: the saved record, unchanged.
+//! - `statics: Rc<statics::Statics>` (`statics` module; phase 1, done):
+//!   the catalog data read once at load, shared by every clone; tests
+//!   change it only through `statics_mut`.
+//! - `setup: setup::Setup` (`setup` module; phase 2, to come): the rule
+//!   set and the strategy ports the `with_*` builders set.
+//! - `out: outbox::Outbox` (`outbox` module; phase 3, to come): what the
+//!   view takes each frame.
+//! - `ship: player_ship::PlayerShip` (`player_ship` module; phase 4, to
+//!   come): the player's ship.
+//! - `space: space::Space` (`space` module; phase 5, to come): what is in
+//!   the system, the NPCs and the fleet among it.
+//! - `chart: chart::Chart` (`chart` module; phase 6, to come): the system
+//!   shown, the galaxy overlay and the nav selection.
+//! - `port: port::Port` (`port` module; phase 7, to come): landing,
+//!   take-off and the spaceport visit.
+//! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, to
+//!   come): the missions' runtime state and the story runtime.
+//! - The mode fields `landed`, `jump`, `pod` and `player_end`: phase 8
+//!   decides whether they become one enum.
+//! - The stragglers `red_alert`, `tutorial` and `load_repaired`, which
+//!   stay on `Session`.
 
 mod afterburner;
 mod afterburner_roll;
@@ -2796,7 +2827,7 @@ impl Session {
     /// [`EscortClass::of`] works out a ship of no record, without a
     /// record of its ship type.
     fn player_side(&self) -> PlayerSide {
-        let record = self.ship_record(self.pilot.ship);
+        let record = self.statics.ship_record(self.pilot.ship);
         PlayerSide {
             state: self.player,
             condition: self.condition,
@@ -3056,6 +3087,7 @@ impl Session {
     /// once each jammer it owns, never halved.
     fn player_jamming(&self) -> Jamming {
         let class_govt = self
+            .statics
             .ship_record(self.pilot.ship)
             .and_then(|record| record.inherent_govt);
         Jamming::of_player(
@@ -3070,7 +3102,7 @@ impl Session {
     /// class's default items, halved as its government's `Flags` 0x0080
     /// says by [`RuleKey::JamHalving`]; none without a class record.
     fn npc_jamming(&self, npc: &Npc) -> Jamming {
-        let Some(record) = self.ship_record(npc.ship) else {
+        let Some(record) = self.statics.ship_record(npc.ship) else {
             return Jamming::NONE;
         };
         let freighter = npc.ai_type.trades();
@@ -3108,7 +3140,7 @@ impl Session {
             held_disabled: false,
             fleet_escort: false,
             threatens_player: false,
-            class_speed: self.class_speed(self.pilot.ship),
+            class_speed: self.statics.class_speed(self.pilot.ship),
             top_speed: self.top_speed(),
             drawn_heading: drawn(ShipRef::Player, self.player.heading),
             jamming: self.player_jamming(),
@@ -3125,7 +3157,7 @@ impl Session {
                 fleet_escort: self.fleet.contains(&Some(npc.id)),
                 threatens_player: npc
                     .threatens_player_extended(self.traffic.npcs(), self.sees(npc)),
-                class_speed: self.class_speed(npc.ship),
+                class_speed: self.statics.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
                 jamming: self.npc_jamming(npc),
@@ -3151,14 +3183,6 @@ impl Session {
                 }
             }
         }
-    }
-
-    /// Ship class `ship`'s top speed, its `Speed` alone
-    /// ([`ShipFields::class_speed`](crate::handling::ShipFields::class_speed));
-    /// none without a record.
-    fn class_speed(&self, ship: ShipId) -> f32 {
-        self.ship_record(ship)
-            .map_or(0.0, |record| record.fields.class_speed())
     }
 
     /// Answers the fight's `strikes` this tick, against what each NPC `was`
@@ -3511,7 +3535,7 @@ impl Session {
         ships.extend(self.pilot.escorts.iter().map(|escort| escort.ship));
         let mut armaments: Vec<Armament> = ships
             .iter()
-            .filter_map(|&ship| self.ship_record(ship))
+            .filter_map(|&ship| self.statics.ship_record(ship))
             .map(|record| self.statics.arsenal.of_class(record.id))
             .collect();
         armaments.push(self.armament.clone());
@@ -3530,29 +3554,21 @@ impl Session {
     /// it, if the session has its record.
     #[must_use]
     pub fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
-        let record = self.statics.ships.iter().find(|record| record.id == ship)?;
-        Some(&record.long_name)
+        self.statics.ship_long_name(ship)
     }
 
     /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
     /// session has its record.
     #[must_use]
     pub fn ship_name(&self, ship: ShipId) -> Option<&str> {
-        let record = self.statics.ships.iter().find(|record| record.id == ship)?;
-        Some(&record.name)
+        self.statics.ship_name(ship)
     }
 
     /// `jünk` `id`'s `LCName`, raw, if the session has its record: what a
     /// scan that finds it calls it.
     #[must_use]
     pub fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
-        let record = self
-            .statics
-            .goods
-            .junk()
-            .iter()
-            .find(|record| record.id == id)?;
-        Some(&record.lc_name)
+        self.statics.junk_lc_name(id)
     }
 
     /// Stops the thrust, if the ship was thrusting, and puts the engine
@@ -3787,6 +3803,7 @@ impl Session {
     /// whose armour test also holds for a ship breaking up).
     fn warp_holds_scans(&self) -> bool {
         let flags = self
+            .statics
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.flags);
         warp::held(
@@ -4228,17 +4245,12 @@ impl Session {
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
     }
 
-    /// Every system listing `stellar`, by ascending ID ([`listers_of`]):
-    /// what its owner and the systems resolving it are derived from.
-    fn listers(&self, stellar: StellarId) -> &[SystemId] {
-        listers_of(&self.statics.listed_stellars, stellar)
-    }
-
     /// The system that holds `stellar` now, with the player where they
     /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
     /// the stellar's +0x14 as the aux and mission ship readers find it.
     fn holder_of(&self, stellar: StellarId) -> Option<SystemId> {
-        self.galaxy.holder(self.listers(stellar), self.pilot.system)
+        self.galaxy
+            .holder(self.statics.listers(stellar), self.pilot.system)
     }
 
     /// The links of `stellar` among `sites`; none when no system lists it.
@@ -4272,7 +4284,10 @@ impl Session {
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
         if has_links(&links) {
-            let system_of = |id| self.galaxy.system_of(self.listers(id), self.pilot.system);
+            let system_of = |id| {
+                self.galaxy
+                    .system_of(self.statics.listers(id), self.pilot.system)
+            };
             Ok(gate::hypergate_offers(
                 &links,
                 &sites,
@@ -4302,7 +4317,8 @@ impl Session {
         };
         let links = Self::links_of(&catalog.gate_sites(), here);
         gate::hypergate_cycle(&links, |link| {
-            self.galaxy.find_system_from_stellar(self.listers(link))
+            self.galaxy
+                .find_system_from_stellar(self.statics.listers(link))
         })
     }
 
@@ -4325,7 +4341,10 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
-        let system_of = |id| self.galaxy.system_of(self.listers(id), self.pilot.system);
+        let system_of = |id| {
+            self.galaxy
+                .system_of(self.statics.listers(id), self.pilot.system)
+        };
         let exit = if has_links(&links) {
             to.and_then(|to| {
                 let exit = hypergate_exit(&links, &sites, to, system_of, self.galaxy.map())?;
@@ -4395,7 +4414,7 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
-        let owner_of = |id| self.galaxy.holder(self.listers(id), player);
+        let owner_of = |id| self.galaxy.holder(self.statics.listers(id), player);
         let Some(exit) = wormhole_exit(here, player, &sites, owner_of, self.wormholes, chance)
         else {
             self.deselect();
@@ -4823,7 +4842,8 @@ impl Session {
     /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
     /// with no record, like any class field that cannot be read.
     fn hardpoints(&self) -> Hardpoints {
-        self.ship_record(self.pilot.ship)
+        self.statics
+            .ship_record(self.pilot.ship)
             .map_or_else(Hardpoints::default, |record| Hardpoints {
                 guns: record.max_gun,
                 turrets: record.max_tur,
@@ -5532,18 +5552,7 @@ impl Session {
         self.pilot
             .escorts
             .iter()
-            .filter_map(|escort| self.holds_of(escort))
-    }
-
-    /// What the fleet's cargo space needs of `escort`: none when its ship
-    /// class has no record.
-    fn holds_of(&self, escort: &crate::pilot::Escort) -> Option<EscortHolds> {
-        let record = self.ship_record(escort.ship)?;
-        Some(EscortHolds {
-            holds: record.fields.holds,
-            inherent_ai: record.inherent_ai,
-            carried: escort.carried,
-        })
+            .filter_map(|escort| self.statics.holds_of(escort))
     }
 
     /// How the ship performs, with the outfits it carries.
@@ -5690,7 +5699,7 @@ impl Session {
     /// either way the bar is `ïntf` 128.
     #[must_use]
     pub fn interface_government(&self) -> Option<GovtId> {
-        let record = self.ship_record(self.ship())?;
+        let record = self.statics.ship_record(self.ship())?;
         record.inherent_govt.or(record.combat_govt)
     }
 
@@ -5698,41 +5707,21 @@ impl Session {
     /// ([`Goods::name`](crate::market::Goods::name)).
     #[must_use]
     pub fn good_name(&self, good: Good) -> Option<&str> {
-        self.statics.goods.name(good)
+        self.statics.good_name(good)
     }
 
     /// Outfit `outfit`'s name, as its [`OutfitRecord`] gives it, if the
     /// session has its record.
     #[must_use]
     pub fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
-        let record = self
-            .statics
-            .outfits
-            .iter()
-            .find(|record| record.id == outfit)?;
-        Some(&record.name)
+        self.statics.outfit_name(outfit)
     }
 
     /// Outfit `outfit`'s lower-case names, its `LCName` and `LCPlural`, if
     /// the session has its record.
     #[must_use]
     pub fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
-        let record = self
-            .statics
-            .outfits
-            .iter()
-            .find(|record| record.id == outfit)?;
-        Some((&record.lc_name, &record.lc_plural))
-    }
-
-    /// Ship class `ship`'s record, if the session has it.
-    fn ship_record(&self, ship: ShipId) -> Option<&ShipRecord> {
-        self.statics.ships.iter().find(|record| record.id == ship)
-    }
-
-    /// Ship class `ship`'s `Crew`; none without a record.
-    fn crew(&self, ship: ShipId) -> i16 {
-        self.ship_record(ship).map_or(0, |record| record.crew)
+        self.statics.outfit_names(outfit)
     }
 
     /// Boards the player's target, if it is not landed and the
@@ -5812,7 +5801,7 @@ impl Session {
         if self.landed.is_some() {
             return Err(BoardRefusal::NoTarget);
         }
-        let target = self.target().map(|npc| self.board_target(npc));
+        let target = self.target().map(|npc| self.statics.board_target(npc));
         let crewless = self.rules.source_for(RuleKey::CrewlessMissionShip);
         check_board(&self.player, self.condition, target, crewless)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
@@ -5960,7 +5949,7 @@ impl Session {
     /// carries fires them ([`board::player_fires`](crate::board::player_fires), by the rulebook's
     /// [`RuleKey::PlunderAmmoBays`]).
     fn prize(&self, npc: &Npc) -> Prize {
-        let record = self.ship_record(npc.ship);
+        let record = self.statics.ship_record(npc.ship);
         let fields = record.map(|record| record.fields).unwrap_or_default();
         let carried: Vec<crate::combat::weapon::WeaponSpec> = self
             .armament
@@ -6004,7 +5993,7 @@ impl Session {
     /// The crews the odds of capturing `npc` are worked out from.
     fn capture_crew(&self, npc: &Npc) -> CaptureCrew {
         CaptureCrew {
-            crew: i32::from(self.crew(self.pilot.ship)),
+            crew: i32::from(self.statics.crew(self.pilot.ship)),
             strength: self.hull.strength as i32,
             // The escorts `_SetPlunderValues` counts (@0x92653-0x926c9; see
             // the `capture` module).
@@ -6012,9 +6001,10 @@ impl Session {
                 .led_escorts()
                 .into_iter()
                 .map(|ship| EscortCrew {
-                    crew: i32::from(self.crew(ship)),
+                    crew: i32::from(self.statics.crew(ship)),
                     strength: self.statics.arsenal.hull(ship).strength as i32,
                     inherent_ai: self
+                        .statics
                         .ship_record(ship)
                         .map_or(0, |record| record.inherent_ai),
                 })
@@ -6024,7 +6014,7 @@ impl Session {
                 .filter(|outfit| outfit.mod_type == MARINES)
                 .map(|outfit| (outfit.mod_val, outfit.count))
                 .collect(),
-            target_crew: i32::from(self.crew(npc.ship)),
+            target_crew: i32::from(self.statics.crew(npc.ship)),
             target_strength: npc.hull.strength as i32,
             derelict: self.statics.govts.derelict(npc.govt),
             fleet_room: self.can_hire_escorts(),
@@ -6231,7 +6221,7 @@ impl Session {
             self.sounds.push(SimSound::Refused);
             return self.keep_plunder_open(aboard, Taken::FleetFull);
         }
-        if self.crew(self.pilot.ship) > 0 {
+        if self.statics.crew(self.pilot.ship) > 0 {
             aboard.captured = true;
             self.aboard = Some(aboard);
             return Taken::Captured;
@@ -6401,7 +6391,7 @@ impl Session {
             self.close_plunder();
             return Some(Assigned::Escort);
         }
-        let record = self.ship_record(npc.ship).cloned();
+        let record = self.statics.ship_record(npc.ship).cloned();
         let reserve = self.spawn_reserve(CAPTURE_RESERVE);
         let Some(record) = record.filter(|_| self.traffic.free_berth(reserve).is_some()) else {
             self.close_plunder();
@@ -6514,6 +6504,90 @@ impl Session {
         reserves.armor.now =
             f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
         reserves.fuel.now = drawn;
+    }
+}
+
+impl Statics {
+    /// Ship class `ship`'s top speed, its `Speed` alone
+    /// ([`ShipFields::class_speed`](crate::handling::ShipFields::class_speed));
+    /// none without a record.
+    fn class_speed(&self, ship: ShipId) -> f32 {
+        self.ship_record(ship)
+            .map_or(0.0, |record| record.fields.class_speed())
+    }
+
+    /// Ship type `ship`'s shipyard long name, as its [`ShipRecord`] gives
+    /// it, if the session has its record.
+    #[must_use]
+    fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
+        let record = self.ships.iter().find(|record| record.id == ship)?;
+        Some(&record.long_name)
+    }
+
+    /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
+    /// session has its record.
+    #[must_use]
+    fn ship_name(&self, ship: ShipId) -> Option<&str> {
+        let record = self.ships.iter().find(|record| record.id == ship)?;
+        Some(&record.name)
+    }
+
+    /// `jünk` `id`'s `LCName`, raw, if the session has its record: what a
+    /// scan that finds it calls it.
+    #[must_use]
+    fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
+        let record = self.goods.junk().iter().find(|record| record.id == id)?;
+        Some(&record.lc_name)
+    }
+
+    /// Every system listing `stellar`, by ascending ID ([`listers_of`]):
+    /// what its owner and the systems resolving it are derived from.
+    fn listers(&self, stellar: StellarId) -> &[SystemId] {
+        listers_of(&self.listed_stellars, stellar)
+    }
+
+    /// What the fleet's cargo space needs of `escort`: none when its ship
+    /// class has no record.
+    fn holds_of(&self, escort: &crate::pilot::Escort) -> Option<EscortHolds> {
+        let record = self.ship_record(escort.ship)?;
+        Some(EscortHolds {
+            holds: record.fields.holds,
+            inherent_ai: record.inherent_ai,
+            carried: escort.carried,
+        })
+    }
+
+    /// `good`'s name, as the exchange names it, if it is traded
+    /// ([`Goods::name`](crate::market::Goods::name)).
+    #[must_use]
+    fn good_name(&self, good: Good) -> Option<&str> {
+        self.goods.name(good)
+    }
+
+    /// Outfit `outfit`'s name, as its [`OutfitRecord`] gives it, if the
+    /// session has its record.
+    #[must_use]
+    fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
+        let record = self.outfits.iter().find(|record| record.id == outfit)?;
+        Some(&record.name)
+    }
+
+    /// Outfit `outfit`'s lower-case names, its `LCName` and `LCPlural`, if
+    /// the session has its record.
+    #[must_use]
+    fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
+        let record = self.outfits.iter().find(|record| record.id == outfit)?;
+        Some((&record.lc_name, &record.lc_plural))
+    }
+
+    /// Ship class `ship`'s record, if the session has it.
+    fn ship_record(&self, ship: ShipId) -> Option<&ShipRecord> {
+        self.ships.iter().find(|record| record.id == ship)
+    }
+
+    /// Ship class `ship`'s `Crew`; none without a record.
+    fn crew(&self, ship: ShipId) -> i16 {
+        self.ship_record(ship).map_or(0, |record| record.crew)
     }
 }
 

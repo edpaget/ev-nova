@@ -72,8 +72,8 @@
 
 use std::collections::BTreeMap;
 
-use super::Session;
 use super::mission_screens::MissionTextKind;
+use super::{Session, Statics};
 use crate::catalog::{
     AuxShip, DescMovie, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId,
     SystemId,
@@ -384,19 +384,6 @@ impl Session {
         Some(freed)
     }
 
-    /// The record of `mïsn` `id`, if the session has one.
-    pub(super) fn mission_record(&self, id: MissionId) -> Option<&MissionRecord> {
-        self.statics.missions.iter().find(|record| record.id == id)
-    }
-
-    /// The record an active mission's lifecycle reads: its own, or a
-    /// blank one when its `mïsn` is gone.
-    pub(super) fn lifecycle_record(&self, id: MissionId) -> MissionRecord {
-        self.mission_record(id)
-            .cloned()
-            .unwrap_or_else(|| blank(id))
-    }
-
     /// The offer of `mission` on the visit under way, or in flight the
     /// offer from a ship the offer dialog shows (see the `person_offers`
     /// module).
@@ -513,6 +500,7 @@ impl Session {
     ) -> Result<u8, AcceptError> {
         let offer = self.offer_of(mission).ok_or(AcceptError::NotOffered)?;
         let record = self
+            .statics
             .mission_record(mission)
             .cloned()
             .ok_or(AcceptError::NotOffered)?;
@@ -561,7 +549,7 @@ impl Session {
         self.interface_loads.clear();
         let offer = self.offer_of(mission).ok_or(NotOffered)?;
         let at = self.outside_position(&offer);
-        let record = self.lifecycle_record(mission);
+        let record = self.statics.lifecycle_record(mission);
         let offer_hidden = self
             .mission_texts(mission)
             .is_some_and(|texts| texts.refuse_named);
@@ -637,7 +625,7 @@ impl Session {
             .get(slot)
             .ok_or(AbortError::NotActive)?
             .mission;
-        let record = self.lifecycle_record(mission);
+        let record = self.statics.lifecycle_record(mission);
         let facts = AbortFacts {
             mission: &record,
             rules: &self.rules,
@@ -645,7 +633,7 @@ impl Session {
         abort_checks()
             .first_refusal(&facts, chance)
             .map_err(AbortError::Refused)?;
-        let penalty = abort_penalty(&record, self.govt_targets(&record), |govt| {
+        let penalty = abort_penalty(&record, self.statics.govt_targets(&record), |govt| {
             self.pilot.legal_record(govt)
         });
         let in_systems = abort_penalty(&record, self.galaxy.governed(), |system| {
@@ -932,15 +920,6 @@ impl Session {
         self.save_due = true;
     }
 
-    /// Every government a mission writer changes the record with, each its
-    /// own target ([`success_records`]): each in the catalog, and
-    /// `record`'s `CompGovt` though it is not.
-    fn govt_targets(&self, record: &MissionRecord) -> Vec<(GovtId, Option<GovtId>)> {
-        let ids: std::collections::BTreeSet<GovtId> =
-            self.statics.govts.ids().chain(record.comp_govt).collect();
-        ids.into_iter().map(|govt| (govt, Some(govt))).collect()
-    }
-
     /// Sets each government's record as `records` says, and each
     /// system's as `in_systems` says.
     fn set_records(&mut self, records: &[(GovtId, i16)], in_systems: &[(SystemId, i16)]) {
@@ -1000,12 +979,12 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         let repeats = self.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
         if failed == FailedBy::Marked || repeats {
             self.run_mission_script(slot, &record.on_failure, chance);
         }
-        let changes = failure_records(&record, self.govt_targets(&record), |govt| {
+        let changes = failure_records(&record, self.statics.govt_targets(&record), |govt| {
             self.pilot.legal_record(govt)
         });
         let in_systems = failure_records(&record, self.galaxy.governed(), |system| {
@@ -1059,7 +1038,7 @@ impl Session {
         // The escort branch ([`met_at_return`]) writes the goals met
         // directly: no `ShipDone` moment.
         let mission = active.mission;
-        let goal = ShipGoal::from_code(self.lifecycle_record(mission).ships.goal);
+        let goal = ShipGoal::from_code(self.statics.lifecycle_record(mission).ships.goal);
         let Some(active) = self.pilot.missions.get_mut(slot) else {
             return;
         };
@@ -1070,7 +1049,7 @@ impl Session {
         if !active.reached || !active.goals_met {
             return;
         }
-        let record = self.lifecycle_record(mission);
+        let record = self.statics.lifecycle_record(mission);
         // `CompText` (@0xa0417-0xa048c), filled before the slot is freed
         // (@0xa0457).
         self.show_mission_text(MissionTextKind::Comp, mission, Some(slot), chance);
@@ -1082,7 +1061,7 @@ impl Session {
         let changes = success_records(
             &record,
             &self.statics.govts,
-            self.govt_targets(&record),
+            self.statics.govt_targets(&record),
             |govt| self.pilot.legal_record(govt),
         );
         let in_systems = success_records(
@@ -1108,7 +1087,7 @@ impl Session {
         if active.failed.is_some() || active.days_left != Some(0) || self.landed.is_some() {
             return;
         }
-        let record = self.lifecycle_record(active.mission);
+        let record = self.statics.lifecycle_record(active.mission);
         // The beep, `_beepSnd[3]` (`snd ` 153, @0x9ebd9-0x9ec02), and the
         // comm message, `STR#` 2002 #285, before the failure, unless
         // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
@@ -1163,7 +1142,7 @@ impl Session {
     /// whatever its `CanAbort` (`_EvalSetExp` @0x152f3-0x1534c), drawing
     /// on `chance`.
     pub(super) fn script_abort(&mut self, mission: MissionId, chance: &mut dyn Chance) {
-        let record = self.lifecycle_record(mission);
+        let record = self.statics.lifecycle_record(mission);
         for slot in self.pilot.missions.holding(mission) {
             self.end_mission(slot, &record, true, chance);
         }
@@ -1194,7 +1173,7 @@ impl Session {
     /// mission the session has no record of; with every slot taken, its
     /// values are still drawn, then nothing is accepted.
     pub(super) fn script_start(&mut self, mission: MissionId, chance: &mut dyn Chance) {
-        let Some(record) = self.mission_record(mission).cloned() else {
+        let Some(record) = self.statics.mission_record(mission).cloned() else {
             return;
         };
         let restarts = self.rules.source_for(RuleKey::StartActiveMission) == RuleSource::Engine;
@@ -1363,7 +1342,7 @@ impl Session {
     /// The player as availability reads it, its legal record the one in
     /// `system`, as [`Session::record_in`] reads it.
     fn mission_player(&self, system: SystemId) -> Player {
-        let ship = self.ship_record(self.pilot.ship);
+        let ship = self.statics.ship_record(self.pilot.ship);
         Player {
             record: self.record_in(system, None),
             rating: self.pilot.combat_rating,
@@ -1399,7 +1378,7 @@ impl Session {
     /// writes the cache does (`_IsMissionAvailable(m, 1)` @0x9b4af-0x9b4d3:
     /// an accept, a port offer, the mission computer, a hail or a board).
     pub(super) fn check_avail_bits(&mut self, mission: MissionId) {
-        if let Some(record) = self.mission_record(mission) {
+        if let Some(record) = self.statics.mission_record(mission) {
             let holds = self.gate().allows(&record.avail_bits);
             self.avail_cache.insert(mission, holds);
         }
@@ -1432,6 +1411,7 @@ impl Session {
     /// `cached` when given.
     fn ship_mission_available_reading(&self, mission: MissionId, cached: Option<bool>) -> bool {
         let Some(record) = self
+            .statics
             .mission_record(mission)
             .filter(|_| self.landed.is_none())
         else {
@@ -1625,6 +1605,30 @@ impl Session {
     }
 }
 
+impl Statics {
+    /// The record of `mïsn` `id`, if the session has one.
+    pub(super) fn mission_record(&self, id: MissionId) -> Option<&MissionRecord> {
+        self.missions.iter().find(|record| record.id == id)
+    }
+
+    /// The record an active mission's lifecycle reads: its own, or a
+    /// blank one when its `mïsn` is gone.
+    pub(super) fn lifecycle_record(&self, id: MissionId) -> MissionRecord {
+        self.mission_record(id)
+            .cloned()
+            .unwrap_or_else(|| blank(id))
+    }
+
+    /// Every government a mission writer changes the record with, each its
+    /// own target ([`success_records`]): each in the catalog, and
+    /// `record`'s `CompGovt` though it is not.
+    fn govt_targets(&self, record: &MissionRecord) -> Vec<(GovtId, Option<GovtId>)> {
+        let ids: std::collections::BTreeSet<GovtId> =
+            self.govts.ids().chain(record.comp_govt).collect();
+        ids.into_iter().map(|govt| (govt, Some(govt))).collect()
+    }
+}
+
 /// Where a text the session fills comes from, which decides the rank
 /// governments its crossed tags read
 /// ([`RuleKey::CrossedRankTags`]; see [`RankTagGovts`]). Each is parsed
@@ -1677,7 +1681,7 @@ impl TagNames for Session {
 
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
         self.galaxy
-            .whereabouts(self.listers(stellar), self.pilot.system)
+            .whereabouts(self.statics.listers(stellar), self.pilot.system)
             .named(self.galaxy.map().places())
     }
 

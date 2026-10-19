@@ -239,6 +239,7 @@ impl Session {
         let lines = catalog.string_list(HAIL_QUOTES);
         self.say_queued_attack_quotes(catalog, &lines, chance);
         let player_ai = self
+            .statics
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.inherent_ai);
         let mut mission_checked = false;

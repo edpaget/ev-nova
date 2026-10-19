@@ -168,7 +168,7 @@ impl Session {
             .map(MissionId)
             .collect();
         for id in linked {
-            let Some(record) = self.mission_record(id).cloned() else {
+            let Some(record) = self.statics.mission_record(id).cloned() else {
                 continue;
             };
             let origin = self.person_mission_stellar();
