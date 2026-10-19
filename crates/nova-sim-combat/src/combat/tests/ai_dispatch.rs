@@ -315,6 +315,15 @@ fn the_loop_stops_after_the_slot_that_launched() {
 fn a_resumed_loop_runs_only_the_slots_after() {
     let mut combat = Combat::default();
     let mut ships = launch_between_defenders(&mut combat);
+    // A bay of `Reload` 0, ready again at once: a second turn would
+    // launch again.
+    ships[1].armament = Armament::new([(
+        WeaponSpec::new(&WeaponRecord {
+            reload: 0,
+            ..carrier_bay()
+        }),
+        1,
+    )]);
     dispatch(&mut combat, &mut ships, None, true);
     combat.take_events();
     combat.take_sorties();
