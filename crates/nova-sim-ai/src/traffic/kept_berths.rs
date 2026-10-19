@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn a_ship_brought_into_a_new_traffic_takes_its_berths_search_timer() {
         let mut old = passed();
-        old.berth_search.write(1, SearchTimer::Searching(40));
+        old.write_berth_search(1, SearchTimer::Searching(40));
         let mut new = Traffic::new();
         new.keep_berths(old.kept_berths());
         let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn keeping_berths_keeps_the_traffics_own_reading() {
         let mut old = passed();
-        old.berth_search.write(1, SearchTimer::Searching(40));
+        old.write_berth_search(1, SearchTimer::Searching(40));
         let mut new = Traffic::new();
         new.set_reused_slot_search(RuleSource::Bible);
         new.keep_berths(old.kept_berths());
