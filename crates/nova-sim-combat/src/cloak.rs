@@ -240,7 +240,8 @@ pub const CLOAK_TRAVELLING: u16 = 0x0800;
 /// idles ([`Situation::idle`]).
 pub const CLOAK_IDLE: u16 = 0x2000;
 /// The `Flags2` bit that keeps a ship cloaked while it presses an attack
-/// from beyond [`PRESS_RANGE`].
+/// from beyond [`PRESS_RANGE`], or while it mines as a miner on any
+/// [`MineOrder`] but [`MineOrder::Close`].
 pub const CLOAK_PRESSING: u16 = 0x1000;
 /// The `Flags2` bit that cloaks a ship hit by a ship it is not
 /// attacking.
