@@ -373,15 +373,15 @@ impl Session {
             rules: TagRules::from_rulebook(&self.setup.rules),
         };
         let text = expand_tags(&line, &tags);
-        self.quotes.push(PersonQuote { npc: id, text });
-        self.sounds.push(SimSound::HailQuote);
+        self.out.quotes.push(PersonQuote { npc: id, text });
+        self.out.sounds.push(SimSound::HailQuote);
         self.offering_ship = None;
     }
 
     /// The hail quotes said since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_quotes(&mut self) -> Vec<PersonQuote> {
-        std::mem::take(&mut self.quotes)
+        std::mem::take(&mut self.out.quotes)
     }
 
     /// Person `id` is gone for good: it never appears again, and its

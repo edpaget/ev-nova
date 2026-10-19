@@ -337,7 +337,7 @@ impl Session {
         offering: Offering,
         chance: &mut dyn Chance,
     ) -> VenueOffer {
-        self.sounds.push(match offering.by {
+        self.out.sounds.push(match offering.by {
             OfferedBy::Hail => SimSound::HailOffer,
             OfferedBy::Boarding => SimSound::PersonOfferBoarded,
         });

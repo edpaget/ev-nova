@@ -225,7 +225,7 @@ impl Session {
                     line(SENSORS_DETECT),
                     line(FLEET_APPROACHING)
                 );
-                self.sounds.push(SimSound::ReinforcementsApproaching);
+                self.out.sounds.push(SimSound::ReinforcementsApproaching);
                 self.say(SimMessage::ReinforcementsApproaching(text));
             }
             Some(Event::Arrive) => {

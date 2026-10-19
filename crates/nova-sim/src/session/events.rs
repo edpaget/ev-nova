@@ -60,13 +60,13 @@ pub enum SessionEvent {
 impl Session {
     /// Tells `event` to whoever takes the events next.
     pub(super) fn emit(&mut self, event: SessionEvent) {
-        self.events.push(event);
+        self.out.events.push(event);
     }
 
     /// The events since they were last taken, in order; taking them
     /// empties the list.
     pub fn take_events(&mut self) -> Vec<SessionEvent> {
-        std::mem::take(&mut self.events)
+        std::mem::take(&mut self.out.events)
     }
 }
 

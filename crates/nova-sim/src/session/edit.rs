@@ -82,14 +82,14 @@ impl Session {
     /// due.
     pub fn set_credits(&mut self, credits: i64) {
         self.pilot.cash = credits;
-        self.save_due = true;
+        self.out.save_due = true;
     }
 
     /// Sets the date to `date`, landed or in flight, with no days going by
     /// (see the module docs); a save is due.
     pub fn set_date(&mut self, date: GameDate) {
         self.pilot.date = date;
-        self.save_due = true;
+        self.out.save_due = true;
     }
 
     /// Moves the landed pilot to `stellar` in `system`, read from
@@ -109,7 +109,7 @@ impl Session {
             return Err(RelocateRefusal::InFlight);
         };
         if (system, stellar) == (self.pilot.system, landed) {
-            self.save_due = true;
+            self.out.save_due = true;
             return Ok(());
         }
         self.enter_at(catalog, system, stellar)?;
@@ -188,7 +188,7 @@ impl Session {
     pub fn set_reserve(&mut self, reserve: Reserve, amount: f32) -> f32 {
         let gauge = self.pilot.reserves.get_mut(reserve);
         gauge.now = amount.max(0.0).min(gauge.max);
-        self.save_due = true;
+        self.out.save_due = true;
         gauge.now
     }
 }

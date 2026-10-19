@@ -1164,10 +1164,10 @@ impl Session {
             }
         }
         if line.is_some() {
-            self.sounds.push(SimSound::MissionShipBoarded);
+            self.out.sounds.push(SimSound::MissionShipBoarded);
         }
         if failed {
-            self.board_line = line;
+            self.out.board_line = line;
             return None;
         }
         self.mark_boarded(npc.id);
@@ -1395,7 +1395,7 @@ impl Session {
         if fails {
             if record.flags & HIDDEN == 0 {
                 self.say(SimMessage::MissionShipLost);
-                self.sounds.push(SimSound::MissionShipLost);
+                self.out.sounds.push(SimSound::MissionShipLost);
             }
             self.quick_failure(mark.slot, &record, chance);
         }

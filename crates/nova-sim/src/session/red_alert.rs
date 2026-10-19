@@ -65,7 +65,7 @@ impl Session {
                 .red_alert
                 .check(self.player_threatened(), self.pod.is_some(), blinks)
             {
-                self.sounds.push(SimSound::RedAlert);
+                self.out.sounds.push(SimSound::RedAlert);
             }
         }
     }

@@ -80,7 +80,7 @@ impl Session {
         );
         for hint in hints {
             self.say(SimMessage::Tutorial(hint));
-            self.sounds.push(SimSound::TutorialHint);
+            self.out.sounds.push(SimSound::TutorialHint);
         }
     }
 }

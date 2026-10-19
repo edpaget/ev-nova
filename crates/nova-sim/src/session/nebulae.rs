@@ -112,7 +112,7 @@ impl Session {
         self.emit(SessionEvent::GalaxyChanged);
         if self.setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
             self.pilot.story_fired.insert(nebula_hook(nebula));
-            self.save_due = true;
+            self.out.save_due = true;
         }
     }
 

@@ -364,7 +364,7 @@ impl Session {
         for id in super::mission_ships::ship_hooks(slot) {
             self.unregister_story(id);
         }
-        self.save_due = true;
+        self.out.save_due = true;
         Some(freed)
     }
 
@@ -460,7 +460,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<u8, AcceptError> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let venue = self.offer_of(mission).map(|offer| offer.venue);
         let accepted = self.in_offer_dialog(|session| session.accept_offered(mission, chance));
         if let Some(venue) = venue {
@@ -530,7 +530,7 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<RefuseShown, NotOffered> {
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let offer = self.offer_of(mission).ok_or(NotOffered)?;
         let at = self.outside_position(&offer);
         let record = self.statics.lifecycle_record(mission);
@@ -602,7 +602,7 @@ impl Session {
     /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
     /// when a check refuses, and then nothing runs.
     pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let mission = self
             .pilot
             .missions
@@ -667,7 +667,7 @@ impl Session {
             // next (see the `mission_ships` module).
             self.goal_checks_due.push(slot);
         }
-        self.save_due = true;
+        self.out.save_due = true;
         self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
         // `BriefText`, filled for the slot after `OnAccept` and the charge
@@ -733,7 +733,7 @@ impl Session {
         slot: u8,
         mission: MissionId,
     ) -> Option<&mut ActiveMission> {
-        self.save_due = true;
+        self.out.save_due = true;
         self.pilot
             .missions
             .get_mut(slot)
@@ -901,7 +901,7 @@ impl Session {
             }
             PayEffect::Fine(percent) => self.pilot.cash = fined(self.pilot.cash, percent),
         }
-        self.save_due = true;
+        self.out.save_due = true;
     }
 
     /// Sets each government's record as `records` says, and each
@@ -909,11 +909,11 @@ impl Session {
     fn set_records(&mut self, records: &[(GovtId, i16)], in_systems: &[(SystemId, i16)]) {
         for &(govt, record) in records {
             self.pilot.set_legal_record(govt, record);
-            self.save_due = true;
+            self.out.save_due = true;
         }
         for &(system, record) in in_systems {
             self.pilot.set_system_record(system, record);
-            self.save_due = true;
+            self.out.save_due = true;
         }
     }
 
@@ -1015,7 +1015,7 @@ impl Session {
                 .is_some_and(|ret| ret.stellar == stop.stellar)
         }) {
             active.reached = true;
-            self.save_due = true;
+            self.out.save_due = true;
         }
         if let Some(failed) = active.failed {
             self.mission_failure_at(slot, failed, chance);
@@ -1030,7 +1030,7 @@ impl Session {
         };
         if met_at_return(goal, active.ships.destroyed) && !active.goals_met {
             active.goals_met = true;
-            self.save_due = true;
+            self.out.save_due = true;
         }
         if !active.reached || !active.goals_met {
             return;
@@ -1078,7 +1078,7 @@ impl Session {
         // comm message, `STR#` 2002 #285, before the failure, unless
         // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
         if record.flags & HIDDEN == 0 {
-            self.sounds.push(crate::SimSound::Refused);
+            self.out.sounds.push(crate::SimSound::Refused);
             self.say(SimMessage::DeadlineMissed);
         }
         self.quick_failure(slot, &record, chance);

@@ -57,7 +57,7 @@ impl<C: Chance + ?Sized> CronDay for SessionCrons<'_, C> {
             Some(state) => crons.insert(cron, state),
             None => crons.remove(&cron),
         };
-        self.session.save_due = true;
+        self.session.out.save_due = true;
     }
 
     fn eligible(&mut self, record: &CronRecord) -> bool {
@@ -81,6 +81,7 @@ impl<C: Chance + ?Sized> CronDay for SessionCrons<'_, C> {
     /// Reports it, once a session.
     fn capped(&mut self, cron: CronId, hook: CronHook) {
         self.session
+            .out
             .reports
             .report(SimDiagnostic::CronRunsCapped { cron, hook });
     }

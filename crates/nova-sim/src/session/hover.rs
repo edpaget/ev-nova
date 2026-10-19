@@ -97,7 +97,7 @@ impl Session {
             took = Some(Hover::Ship(id));
         }
         if self.target != before {
-            self.sounds.push(if self.target.is_some() {
+            self.out.sounds.push(if self.target.is_some() {
                 SimSound::TargetSelected
             } else {
                 SimSound::TargetCleared
@@ -112,7 +112,7 @@ impl Session {
         let picked = stellar_under_past(&self.sites, at, selected, |site| {
             self.drawn_frame_size(site)
         })?;
-        self.sounds.push(SimSound::NavSelected);
+        self.out.sounds.push(SimSound::NavSelected);
         self.nav_fly_in.start();
         self.set_nav(NavMode::Stellar(Some(picked)));
         self.dock = None;

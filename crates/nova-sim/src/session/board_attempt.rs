@@ -65,7 +65,7 @@ impl Session {
     /// plays nothing.
     pub(super) fn beep_refusal(&mut self, refusal: BoardRefusal) {
         if !refusal.silent() {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
         }
     }
 
@@ -116,7 +116,7 @@ impl Session {
     /// none. Any other board leaves none here: a standing mission's ship
     /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
     pub fn take_board_line(&mut self) -> Option<MissionBoardLine> {
-        self.board_line.take()
+        self.out.board_line.take()
     }
 
     /// Puts the player's ship over NPC `id`, at its place, velocity and

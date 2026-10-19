@@ -309,7 +309,7 @@ impl Session {
         }
         let info = self.mission_info();
         if info.rows.is_empty() {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
             self.say(crate::SimMessage::NoActiveMissions);
             return MissionInfoPress::NoActiveMissions;
         }
@@ -327,8 +327,8 @@ impl Session {
     /// taken, in the order they came. Taking them lets go of the bars
     /// noted with them ([`Session::text_bars`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
-        self.text_bars.clear();
-        std::mem::take(&mut self.shown_texts)
+        self.out.text_bars.clear();
+        std::mem::take(&mut self.out.shown_texts)
     }
 
     /// The mission texts to show since they were last taken, for a test
@@ -352,7 +352,7 @@ impl Session {
             .offer_movie(mission)
             .filter(|movie| movie.after == after)
         {
-            self.shown_texts.push(MissionShown::Movie(movie));
+            self.out.shown_texts.push(MissionShown::Movie(movie));
         }
     }
 
@@ -374,7 +374,7 @@ impl Session {
             RuleSource::Bible => self.statics.offer_movie(mission),
         };
         if let Some(movie) = movie.filter(|movie| movie.after) {
-            self.shown_texts.push(MissionShown::Movie(movie));
+            self.out.shown_texts.push(MissionShown::Movie(movie));
         }
     }
 
@@ -416,7 +416,7 @@ impl Session {
     /// whether the last text was queued after its last redraw.
     #[must_use]
     pub fn texts_queued(&self) -> u64 {
-        self.texts_queued
+        self.out.texts_queued
     }
 
     /// The status bar as each mission text since they were last taken
@@ -427,7 +427,7 @@ impl Session {
     /// Taking the texts lets go of them.
     #[must_use]
     pub fn text_bars(&self) -> &[TextBar] {
-        &self.text_bars
+        &self.out.text_bars
     }
 
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
@@ -435,7 +435,7 @@ impl Session {
     /// [`Session::text_bars`]'s.
     #[must_use]
     pub fn text_nav(&self) -> Option<NavMode> {
-        self.text_bars.last().map(|bar| bar.nav)
+        self.out.text_bars.last().map(|bar| bar.nav)
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
@@ -510,13 +510,13 @@ impl Session {
     /// Queues `text` to show, counting it ([`Session::texts_queued`]) and
     /// noting the bar as it is now ([`Session::text_bars`]).
     fn queue_text(&mut self, text: MissionText) {
-        self.texts_queued += 1;
-        self.text_bars.push(TextBar {
-            texts: self.texts_queued,
+        self.out.texts_queued += 1;
+        self.out.text_bars.push(TextBar {
+            texts: self.out.texts_queued,
             nav: self.nav_mode(),
             reserves: self.reserves(),
         });
-        self.shown_texts.push(MissionShown::Text(text));
+        self.out.shown_texts.push(MissionShown::Text(text));
     }
 
     /// The mission computer of the stellar docked at (`_DoMissionDialog`
@@ -662,7 +662,7 @@ impl Session {
     /// accept from the dialog drops the next outside offer too.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         self.enter_offer_venue(loc);
         let candidates: Vec<Offer> = self
             .mission_offers(Venue::Outside)

@@ -675,7 +675,7 @@ impl Session {
         } = arrival;
         let resolved = self.galaxy.arrival(asked);
         if story::show(&mut self.pilot, &mut self.galaxy, resolved) {
-            self.save_due = true;
+            self.out.save_due = true;
             self.emit(SessionEvent::GalaxyChanged);
         }
         let system = resolved.to;
@@ -738,7 +738,7 @@ impl Session {
             self.open_port_prices();
         }
         // The fighter notes this entry queues, which a buoy drops.
-        let notes = self.fighter_notes.len();
+        let notes = self.out.fighter_notes.len();
         self.leave_behind(&resets);
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
@@ -758,7 +758,7 @@ impl Session {
             self.open_outfit_visit();
         }
         if resets.has(Reset::SaveDue) {
-            self.save_due = true;
+            self.out.save_due = true;
         }
         if resets.has(Reset::ForgetOffers) {
             self.forget_offers();
@@ -1025,7 +1025,7 @@ impl Session {
     /// warp end's fallback pass (see the `warp_stage` module).
     pub(super) fn sound_warp_out(&mut self) {
         self.warp_out.start(self.statics.warp_out_sound);
-        self.sounds.push(SimSound::Arrived);
+        self.out.sounds.push(SimSound::Arrived);
     }
 
     /// Whether an arrival `how` plays the warp-out, `snd ` 130: a jump's
@@ -1067,7 +1067,7 @@ impl Session {
         if resets.has(Reset::ArrivalMessage) {
             let message = self.arrival_message(system, catalog);
             if matches!(message, SimMessage::Buoy(_)) {
-                self.fighter_notes.truncate(notes);
+                self.out.fighter_notes.truncate(notes);
             }
             self.say(message);
             // The hyperspace arrival leaves the pilot past the tutorial

@@ -84,7 +84,7 @@ impl Session {
             || self.in_takeoff_grace()
             || matches!(self.condition, Condition::Dying { .. })
         {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
             return false;
         }
         true

@@ -274,7 +274,7 @@ impl Session {
             cap,
         );
         if self.pilot.cash != before {
-            self.save_due = true;
+            self.out.save_due = true;
         }
     }
 }

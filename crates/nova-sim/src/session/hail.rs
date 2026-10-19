@@ -217,7 +217,7 @@ impl Session {
         answered: Result<T, HailRefusal>,
     ) -> Result<T, HailRefusal> {
         if answered.is_err() {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
         }
         answered
     }
@@ -645,14 +645,14 @@ impl Session {
             done,
         };
         self.comm_line.show(note.ticks());
-        self.comm.push(note);
-        self.sounds.push(sound);
+        self.out.comm.push(note);
+        self.out.sounds.push(sound);
     }
 
     /// What the NPCs assisting the player have done since this was last
     /// taken, in order; taking it empties the list.
     pub fn take_comm(&mut self) -> Vec<CommNote> {
-        std::mem::take(&mut self.comm)
+        std::mem::take(&mut self.out.comm)
     }
 }
 

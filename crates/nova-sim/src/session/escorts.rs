@@ -485,7 +485,7 @@ impl Session {
         self.fleet.resize(self.pilot.escorts.len() - 1, None);
         self.fleet.push(Some(id));
         self.reform();
-        self.save_due = true;
+        self.out.save_due = true;
     }
 
     /// Gives each ship the player leads ([`Session::player_led`]) whose
@@ -692,7 +692,7 @@ impl Session {
     /// an escort, and the rest re-form. A save is due.
     pub(super) fn dismiss(&mut self, id: NpcId) {
         if self.unfleet(id) {
-            self.save_due = true;
+            self.out.save_due = true;
         }
     }
 
@@ -858,7 +858,7 @@ impl Session {
             changed |= take_target(npc, target);
         }
         if changed {
-            self.sounds.push(crate::SimSound::EscortsCommanded);
+            self.out.sounds.push(crate::SimSound::EscortsCommanded);
         }
         changed.then_some(Commanded {
             group,

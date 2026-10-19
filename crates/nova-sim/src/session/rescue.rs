@@ -189,7 +189,7 @@ impl Session {
         if !std::mem::take(&mut self.rescue_due) {
             return false;
         }
-        let save_due = self.save_due;
+        let save_due = self.out.save_due;
         let from = self.pilot.system;
         self.end_every_mission_for_rescue(&mut &mut *chance);
         self.reset_player_for_rescue();
@@ -215,7 +215,7 @@ impl Session {
         self.rebuild_stellars();
         self.rename_for_rescue(&mut &mut *chance);
         self.reset_records_for_rescue();
-        self.save_due = save_due;
+        self.out.save_due = save_due;
         self.strict_play_save(catalog);
         self.rescue_desc_due = true;
         true
@@ -240,7 +240,7 @@ impl Session {
             .first()
             .map_or(STRICT_SAVE_FALLBACK, |site| site.id);
         self.pilot.stellar = Some(first);
-        self.save_due = true;
+        self.out.save_due = true;
     }
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.

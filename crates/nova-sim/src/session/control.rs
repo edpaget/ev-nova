@@ -272,7 +272,7 @@ impl Session {
             self.reset_precalced_for(ResetCause::SetExpr);
         }
         if self.pilot != before {
-            self.save_due = true;
+            self.out.save_due = true;
             // What a `Visibility` test reads is the pilot's: one left as
             // it was cannot change the galaxy.
             self.galaxy_stale = true;
@@ -282,7 +282,7 @@ impl Session {
     /// What running set expressions had to tell since this was last taken,
     /// in order; taking it empties the list.
     pub fn take_script_notes(&mut self) -> Vec<ScriptNote> {
-        std::mem::take(&mut self.script_notes)
+        std::mem::take(&mut self.out.script_notes)
     }
 
     /// What a control-bit test reads about the pilot.
@@ -318,7 +318,7 @@ impl Session {
         } else {
             bits.clear(bit);
         }
-        self.save_due = true;
+        self.out.save_due = true;
     }
 }
 

@@ -254,7 +254,7 @@ impl Session {
     /// `hulk` (see the module docs), a pre-jump still on collapsing first.
     fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
         self.collapse_jump(false);
-        let save_due = self.save_due;
+        let save_due = self.out.save_due;
         let hulk = self.hulk(old, hulk, chance);
         let hulk = self.traffic.add_npc(hulk);
         if let Some(slot) = self.npc(hulk).map(slot_of) {
@@ -310,9 +310,9 @@ impl Session {
             self.player.velocity + crate::cargo_box::accel(heading, self.top_speed());
         self.condition = Condition::Intact;
         self.stop_thrust();
-        self.sounds.push(SimSound::Ejected);
+        self.out.sounds.push(SimSound::Ejected);
         self.halt_sounds(&WARP_UP_HALTS);
-        self.save_due = save_due;
+        self.out.save_due = save_due;
     }
 
     /// The escape pod's flight, a tick of it (`_HandlePlayer`

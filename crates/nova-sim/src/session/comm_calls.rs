@@ -139,7 +139,7 @@ impl Session {
     /// its ticks as `_DisplayComm` does (@0x9024b).
     pub(super) fn say(&mut self, message: SimMessage) {
         self.comm_line.show(message.ticks());
-        self.messages.push(message);
+        self.out.messages.push(message);
     }
 
     /// The flight shows a line of its own for `ticks`: one the view
@@ -289,7 +289,7 @@ impl Session {
             .setup
             .nth_string(DISTRESS_LINES, 1 + pick)
             .unwrap_or_default();
-        self.sounds.push(SimSound::CallForHelp);
+        self.out.sounds.push(SimSound::CallForHelp);
         self.say(SimMessage::CallForHelp(format!("{name}:  {line}")));
     }
 
@@ -317,7 +317,7 @@ impl Session {
             .nth_string(SCAN_HAIL_LINES, SCAN_HAIL_FIRST + pick)
             .unwrap_or_default();
         let text = format!("{class}:  {ship_name}, {words}.");
-        self.sounds.push(SimSound::ScanHail);
+        self.out.sounds.push(SimSound::ScanHail);
         self.say(SimMessage::ScanHail(text));
     }
 }

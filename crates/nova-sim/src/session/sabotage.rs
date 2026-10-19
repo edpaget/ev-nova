@@ -103,7 +103,7 @@ impl Session {
         let Some(flag) = self.sabotage.tick(dying, chance) else {
             return;
         };
-        self.sounds.push(SimSound::OnboardExplosion);
+        self.out.sounds.push(SimSound::OnboardExplosion);
         match flag {
             Sabotage::Kill => self.sabotage_kill(),
             Sabotage::Bomb => self.sabotage_bombs(rules.disable, chance),

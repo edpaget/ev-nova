@@ -59,7 +59,7 @@ impl Session {
                 starting: false,
             }
         ) {
-            self.sounds.push(SimSound::Klaxon);
+            self.out.sounds.push(SimSound::Klaxon);
         }
         self.eject_check(chance);
         self.self_destruct_tick(dying_at_head);

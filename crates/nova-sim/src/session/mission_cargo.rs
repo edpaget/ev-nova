@@ -151,7 +151,7 @@ impl Session {
     pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
         // A new run of docked scripts, its failures' `OnFailure` (see
         // [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,
@@ -173,7 +173,7 @@ impl Session {
             self.quick_failure(slot, &record, chance);
         }
         self.pilot.cargo.clear();
-        self.save_due = true;
+        self.out.save_due = true;
         // `_JettisonCargo`'s reset (@0x3e3b5; see the `precalced` module):
         // every good is gone, so its trim never cuts.
         self.reset_precalced();
@@ -182,7 +182,7 @@ impl Session {
         }
         self.drop_cargo_boxes(decided.total, goods, chance);
         if decided.total > 0 {
-            self.sounds.push(SimSound::CargoJettisoned);
+            self.out.sounds.push(SimSound::CargoJettisoned);
         }
         if let Some(message) = decided.message {
             self.say(match message {
@@ -260,7 +260,7 @@ impl Session {
         self.set_on_player(id);
         let (Contraband::Junk { fine, .. } | Contraband::Outfit { fine, .. }) = found;
         self.take_scan_fine(fine);
-        self.sounds.push(SimSound::Smuggling);
+        self.out.sounds.push(SimSound::Smuggling);
         self.say(match found {
             Contraband::Junk { id: junk, fine } => SimMessage::IllegalJunk {
                 scanner,
@@ -307,7 +307,7 @@ impl Session {
                 };
                 let record = self.statics.lifecycle_record(mission);
                 if announce {
-                    self.sounds.push(SimSound::ScanFailedMission);
+                    self.out.sounds.push(SimSound::ScanFailedMission);
                     self.say(SimMessage::MissionScanned);
                 }
                 self.quick_failure(slot, &record, chance);
@@ -326,7 +326,7 @@ impl Session {
                 });
                 self.set_on_player(id);
                 self.take_scan_fine(credits);
-                self.sounds.push(SimSound::Smuggling);
+                self.out.sounds.push(SimSound::Smuggling);
                 self.say(SimMessage::Smuggling {
                     scanner,
                     ship_name,
@@ -352,7 +352,7 @@ impl Session {
     fn take_scan_fine(&mut self, credits: i64) {
         if credits != 0 {
             self.pilot.cash = self.pilot.cash.saturating_sub(credits).max(0);
-            self.save_due = true;
+            self.out.save_due = true;
         }
     }
 

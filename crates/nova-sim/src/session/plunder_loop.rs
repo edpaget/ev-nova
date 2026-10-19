@@ -63,7 +63,7 @@ impl Session {
     /// ([`SimSound::Refused`], @0x93ad2, @0x93cb8, @0x93d2f, @0x94256),
     /// nothing taken, and the dialog open.
     pub(super) fn refuse_take(&mut self, aboard: Aboard) -> Taken {
-        self.sounds.push(SimSound::Refused);
+        self.out.sounds.push(SimSound::Refused);
         self.keep_plunder_open(aboard, Taken::Missed)
     }
 }

@@ -77,7 +77,7 @@ impl Session {
             };
         }
         self.reform();
-        self.save_due = true;
+        self.out.save_due = true;
     }
 }
 

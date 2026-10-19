@@ -100,7 +100,7 @@ impl Session {
         let record = former.rejoined(npc.reserves);
         self.enlist(id, record);
         self.say(rejoin_message(former.kind()));
-        self.sounds.push(SimSound::EscortRepaired);
+        self.out.sounds.push(SimSound::EscortRepaired);
     }
 }
 

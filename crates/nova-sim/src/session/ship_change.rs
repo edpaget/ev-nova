@@ -407,7 +407,7 @@ impl Session {
         // 0 (`_HandlePlayer` @0x6ef1b-0x6ef3f), 0 for a hull of one set,
         // by either reading (see the `ship_display` module).
         self.last_set_fold();
-        self.save_due = true;
+        self.out.save_due = true;
         self.emit(SessionEvent::ShipChanged);
     }
 
@@ -461,11 +461,11 @@ impl Session {
         self.bump_armor();
         // `_LoadIntfResource` (@0x156c7), as the docked bar sees it.
         if self.landed.is_some() {
-            self.interface_loads.push(InterfaceLoad {
+            self.out.interface_loads.push(InterfaceLoad {
                 government: self.interface_government(),
                 nav: self.nav_mode(),
                 reserves: self.reserves(),
-                texts: self.texts_queued,
+                texts: self.out.texts_queued,
             });
         }
     }
@@ -484,7 +484,7 @@ impl Session {
     /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
     /// or a purchase that is refused before it begins clears nothing.
     pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
-        std::mem::take(&mut self.interface_loads)
+        std::mem::take(&mut self.out.interface_loads)
     }
 
     /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
@@ -821,7 +821,7 @@ mod tests {
                 s.defaults.clone(),
                 s.stock.clone(),
                 s.stats(),
-                s.save_due,
+                s.out.save_due,
             ));
         });
         assert_eq!(

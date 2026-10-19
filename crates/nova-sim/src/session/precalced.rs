@@ -169,7 +169,7 @@ impl Session {
         let before = self.pilot.cargo.clone();
         market::trim_commodities(&mut self.pilot.cargo, holds, total);
         if self.pilot.cargo != before {
-            self.save_due = true;
+            self.out.save_due = true;
         }
     }
 }

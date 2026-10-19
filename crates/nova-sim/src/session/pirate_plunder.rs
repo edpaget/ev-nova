@@ -77,7 +77,7 @@ impl Session {
                     self.say_stolen_cargo(line.tons, line.credits);
                 }
                 if let Some(Taken::Escort | Taken::Fighter) = taken {
-                    self.sounds.push(SimSound::ShipStolen);
+                    self.out.sounds.push(SimSound::ShipStolen);
                     self.say(SimMessage::ShipStolen {
                         fighter: taken == Some(Taken::Fighter),
                     });
@@ -173,7 +173,7 @@ impl Session {
 
     /// The cargo line of a plunder of `tons` and `credits`, with its beep.
     fn say_stolen_cargo(&mut self, tons: u32, credits: i64) {
-        self.sounds.push(SimSound::CargoStolen);
+        self.out.sounds.push(SimSound::CargoStolen);
         self.say(SimMessage::CargoStolen { tons, credits });
     }
 }

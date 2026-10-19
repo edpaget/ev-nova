@@ -78,7 +78,7 @@ impl Session {
             Condition::Intact
         };
         self.say(SimMessage::PropulsionRepaired);
-        self.sounds.push(SimSound::PropulsionRepaired);
+        self.out.sounds.push(SimSound::PropulsionRepaired);
     }
 
     /// The armour the player regenerates a fight tick: none while the

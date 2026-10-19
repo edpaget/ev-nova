@@ -99,14 +99,14 @@ impl Session {
             Some(DockSaid::Requested) => {
                 if let Ok(LandOutcome::Requested { stellar, .. }) = press.outcome {
                     let kind = self.dock_kind(stellar);
-                    self.sounds.push(SimSound::TrafficControl);
+                    self.out.sounds.push(SimSound::TrafficControl);
                     self.say(SimMessage::DockRequested { stellar, kind });
                 }
             }
             None => {}
         }
         if let Err(LandingRefusal::Denied { .. }) = press.outcome {
-            self.sounds.push(SimSound::TrafficControl);
+            self.out.sounds.push(SimSound::TrafficControl);
         }
         press.outcome
     }
@@ -146,7 +146,7 @@ impl Session {
                     let kind = DockKind::of_site(site);
                     self.dock = (!done.expired).then_some(request);
                     if done.greet {
-                        self.sounds.push(SimSound::TrafficControl);
+                        self.out.sounds.push(SimSound::TrafficControl);
                         self.say(SimMessage::DockCleared {
                             stellar: request.stellar,
                             kind,
@@ -164,7 +164,7 @@ impl Session {
     /// [`Session::forget_dock_chatter`] starts forgetting.
     #[cfg(test)]
     pub(crate) fn chatter_marks(&self) -> (usize, usize) {
-        (self.messages.len(), self.sounds.len())
+        (self.out.messages.len(), self.out.sounds.len())
     }
 
     /// Forgets the dock request's messages and traffic control's sound
@@ -174,7 +174,7 @@ impl Session {
     pub(crate) fn forget_dock_chatter(&mut self, marks: (usize, usize)) {
         let (messages, sounds) = marks;
         let mut index = 0;
-        self.messages.retain(|message| {
+        self.out.messages.retain(|message| {
             index += 1;
             index <= messages
                 || !matches!(
@@ -185,7 +185,7 @@ impl Session {
                 )
         });
         let mut index = 0;
-        self.sounds.retain(|sound| {
+        self.out.sounds.retain(|sound| {
             index += 1;
             index <= sounds || *sound != SimSound::TrafficControl
         });

@@ -457,6 +457,7 @@ mod nebulae;
 mod news;
 mod npc_escape;
 mod npc_kinds;
+mod outbox;
 mod outfits;
 mod person_offers;
 mod persons;
@@ -531,19 +532,18 @@ use std::rc::Rc;
 
 use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
+use self::outbox::Outbox;
 use self::outfits::{carries, launches};
 use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::statics::Statics;
 use crate::afterburner::MaxVel;
 use crate::ai::{Behaviour, Goal, PlayerSide};
-use crate::bay::FighterNote;
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
     CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE, EscortCrew,
-    HeldRounds, MARINES, MissionBoardLine, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL,
-    TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken,
-    check_board,
+    HeldRounds, MARINES, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
+    TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
 };
 use crate::catalog::{
     AsteroidCatalog, CombatCatalog, CronRecord, DescMovie, EscortClass, GateSite, GovtId, JunkId,
@@ -561,7 +561,7 @@ use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::combat::jamming::{Halving, Jamming};
 use crate::combat::projectile::{DecayStep, Shot};
-use crate::combat::report::{Reports, SimDiagnostic};
+use crate::combat::report::SimDiagnostic;
 use crate::combat::sides::PassThrough;
 use crate::combat::stellar_hazards::HazardResistance;
 use crate::combat::{
@@ -582,9 +582,7 @@ use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
 use crate::grant::{GrantStock, Granted, PersonGrant};
-use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
-use crate::hire::PayNote;
 use crate::hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hold_jump, hops_per_jump, jump_zone,
@@ -821,6 +819,9 @@ pub struct Session {
     /// The rule set and the strategy ports the `with_*` builders set
     /// (see the `setup` module).
     setup: Setup,
+    /// What the session fills and the view takes with the `take_*`
+    /// methods (see the `outbox` module).
+    out: Outbox,
     /// The ship's fields, read when the session starts.
     fields: ShipFields,
     /// The ship's default items, read when the session starts.
@@ -898,10 +899,6 @@ pub struct Session {
     /// the last tick left it (see the `afterburner` module). Unsaved, and
     /// none in a new session, as the original's static data is.
     player_max_vel: MaxVel,
-    /// The sounds emitted since they were last taken.
-    sounds: Vec<SimSound>,
-    /// The messages raised since they were last taken.
-    messages: Vec<SimMessage>,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
     comm_line: CommLine,
@@ -916,11 +913,6 @@ pub struct Session {
     /// The governments an IFF scrambler has marked (see the
     /// `iff_scramblers` module); never saved, as the original saves none.
     iff_marked: BTreeSet<GovtId>,
-    /// The events told since they were last taken.
-    events: Vec<SessionEvent>,
-    /// Whether the pilot has changed in a way that should be saved since
-    /// this was last taken.
-    save_due: bool,
     /// The NPCs in the system.
     traffic: Traffic,
     /// Whether the system is to be populated on the next traffic tick in
@@ -963,9 +955,6 @@ pub struct Session {
     /// the ship is destroyed, and never saved: the session is dropped
     /// when play ends.
     player_end: Option<Ending>,
-    /// Whether the hold ran out on a tick since
-    /// [`Session::take_hold_expired`] was last asked.
-    hold_expiry_due: bool,
     /// The escape pod's countdown, the ticks still to run before the
     /// rescue, while the player is in the pod: the original's +0xc908
     /// while it is above 0, set to [`POD_TICKS`](crate::POD_TICKS) by the
@@ -1014,8 +1003,6 @@ pub struct Session {
     /// [`RuleKey::AsteroidEntryField`] places it (see the `asteroids`
     /// module); never saved.
     asteroid_field_due: bool,
-    /// What the session reports outside combat.
-    reports: Reports,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
     /// What the view shows of space about the player's ship (see the
@@ -1031,25 +1018,14 @@ pub struct Session {
     strikes: Vec<Strike>,
     /// The boarding under way, if any.
     aboard: Option<Aboard>,
-    /// What the last boarding granted, until it is taken.
-    granted: Option<Granted>,
     /// Whether the player's fuel capacity is cached, as `_ShipFuelCapacity`
     /// caches it (`*0x3b508c`, @0x2f55-0x2feb) at the flight tick's fuel
     /// regeneration and an Energy take, until a reset invalidates it
     /// (@0xc397): which capacity Use As My Ship draws its fuel below (see
     /// the `capture` module). Never saved.
     fuel_cap_cached: bool,
-    /// The comm line a failed mission's ship said as the last board
-    /// plundered it, until it is taken (see the `board_attempt` module).
-    board_line: Option<MissionBoardLine>,
     /// The hail under way, if any.
     talk: Option<hail::Talk>,
-    /// What the NPCs assisting the player have done since this was last
-    /// taken.
-    comm: Vec<CommNote>,
-    /// What the player's fighters met as it left systems since this was
-    /// last taken.
-    fighter_notes: Vec<FighterNote>,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     fleet: Vec<Option<NpcId>>,
@@ -1154,14 +1130,8 @@ pub struct Session {
     nav_fly_in: crate::brackets::FlyIn,
     /// How far out the ship target's brackets are; not saved either.
     target_fly_in: crate::brackets::FlyIn,
-    /// What paying the escorts did since this was last taken.
-    pay_notes: Vec<PayNote>,
-    /// What running set expressions had to tell since this was last taken.
-    script_notes: Vec<ScriptNote>,
     /// The hail quotes' clock.
     quote_clock: persons::QuoteClock,
-    /// The hail quotes said since they were last taken.
-    quotes: Vec<persons::PersonQuote>,
     /// Whether a pirate has docked with the player's disabled ship (its
     /// slot's +0xb9; see the `pirate_plunder` module): never saved.
     player_boarded: bool,
@@ -1280,9 +1250,6 @@ pub struct Session {
     /// The mission slots whose `OnAbort` is running, so that none ends
     /// again inside itself (see the `missions` module); never saved.
     ending: BTreeSet<u8>,
-    /// The mission texts to show, until they are taken (see the
-    /// `mission_screens` module); never saved.
-    shown_texts: Vec<MissionShown>,
     /// The governments the last `<PRKnnn>` and `<SRKnnn>` taken in named
     /// (`_descRankGovt`; see the `missions` module's text sources), as
     /// the crossed rank tags read them; never saved, as the original
@@ -1304,22 +1271,6 @@ pub struct Session {
     /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`]); never saved,
     /// as a load refreshes it.
     avail_cache: BTreeMap<MissionId, bool>,
-    /// How many mission texts have been queued, never reset (see the
-    /// `mission_screens` module); never saved.
-    texts_queued: u64,
-    /// The status bar as each text queued since they were last taken was
-    /// queued: what its caller's redraw shows as it closes (see the
-    /// `mission_screens` module's [`TextBar`]); never saved.
-    text_bars: Vec<TextBar>,
-    /// The `C`, `E` and `H` run while docked since the last outfit order
-    /// or ship purchase began, in order (see the `ship_change` module's
-    /// [`InterfaceLoad`]); never saved.
-    interface_loads: Vec<InterfaceLoad>,
-    /// The nav mode as the last take-off began, before its deselect: what
-    /// the original's take-off redraw shows (`_PlayerLandOnStellar`
-    /// @0x633a0), until taken ([`Session::take_takeoff_nav`]); never
-    /// saved.
-    takeoff_nav: Option<NavMode>,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1601,10 +1552,6 @@ impl Session {
             player_speed: 0.0,
             afterburner_on: false,
             player_max_vel: MaxVel::START,
-            sounds: Vec::new(),
-            messages: Vec::new(),
-            events: Vec::new(),
-            save_due: false,
             traffic: Traffic::new(),
             traffic_due: true,
             // Refitted below, from the ship and the outfits the pilot owns.
@@ -1617,7 +1564,6 @@ impl Session {
             ion: Ion::default(),
             drawn: BTreeMap::new(),
             player_end: None,
-            hold_expiry_due: false,
             pod: None,
             pod_zeroed: false,
             rescue_due: false,
@@ -1635,18 +1581,13 @@ impl Session {
             // @0x1aff0) do, and places a field (see the `asteroids`
             // module).
             asteroid_field_due: true,
-            reports: Reports::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
             secondary: None,
             strikes: Vec::new(),
             aboard: None,
-            granted: None,
             fuel_cap_cached: false,
-            board_line: None,
             talk: None,
-            comm: Vec::new(),
-            fighter_notes: Vec::new(),
             fleet: Vec::new(),
             restock_persons: false,
             class_orders: [None; 4],
@@ -1671,14 +1612,11 @@ impl Session {
             tutorial: crate::tutorial::Tutorial::SEASONED,
             nav_fly_in: crate::brackets::FlyIn::default(),
             target_fly_in: crate::brackets::FlyIn::default(),
-            pay_notes: Vec::new(),
-            script_notes: Vec::new(),
             quote_clock: persons::QuoteClock::default(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
             reinforcements_held: false,
             iff_marked: BTreeSet::new(),
-            quotes: Vec::new(),
             player_boarded: false,
             queued: script_effects::Queued::default(),
             next_sites: None,
@@ -1710,15 +1648,10 @@ impl Session {
             swap_due: None,
             offer_roll_due: None,
             ending: BTreeSet::new(),
-            shown_texts: Vec::new(),
             rank_govts: RankTagGovts::NONE,
             loaded_movie: None,
             offering_ship: None,
             avail_cache: BTreeMap::new(),
-            texts_queued: 0,
-            text_bars: Vec::new(),
-            interface_loads: Vec::new(),
-            takeoff_nav: None,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),
@@ -1729,6 +1662,7 @@ impl Session {
             pilot,
             statics: Rc::new(statics),
             setup: Setup::default(),
+            out: Outbox::default(),
         };
         session.register_offer_roll();
         session.register_nebulae();
@@ -2264,7 +2198,7 @@ impl Session {
         match ending {
             Ending::Holding { ticks_left: 0 } => {
                 *ending = Ending::Expired;
-                self.hold_expiry_due = true;
+                self.out.hold_expiry_due = true;
             }
             Ending::Holding { ticks_left } => *ticks_left -= 1,
             Ending::Expired | Ending::Fading | Ending::GameOver => {}
@@ -2286,7 +2220,7 @@ impl Session {
     /// ([`Session::sabotage_death_descs`]).
     /// True once.
     pub fn take_hold_expired(&mut self) -> bool {
-        std::mem::take(&mut self.hold_expiry_due)
+        std::mem::take(&mut self.out.hold_expiry_due)
     }
 
     /// Begins the fade to black after an expired hold: `_PlayGame`'s exit
@@ -2340,7 +2274,7 @@ impl Session {
     fn sound_thrust(&mut self, thrust: bool) {
         if thrust != self.thrusting {
             self.thrusting = thrust;
-            self.sounds.push(if thrust {
+            self.out.sounds.push(if thrust {
                 SimSound::ThrustStarted
             } else {
                 SimSound::ThrustStopped
@@ -2706,7 +2640,7 @@ impl Session {
                 .unwrap_or_default();
             let text = crate::traffic::quote::fill_digits(&line, chance);
             self.say(SimMessage::FleetArrivalQuote(text));
-            self.sounds.push(SimSound::FleetArrivalQuote);
+            self.out.sounds.push(SimSound::FleetArrivalQuote);
         }
     }
 
@@ -3324,28 +3258,28 @@ impl Session {
             match pick {
                 TargetPick::Nearest | TargetPick::NearestThreat => {
                     match targeting::nearest(npcs, from, scanner, closest) {
-                        None => self.sounds.push(SimSound::Refused),
+                        None => self.out.sounds.push(SimSound::Refused),
                         Some(id) if Some(id) == before => {}
                         Some(id) => {
-                            self.sounds.push(SimSound::TargetSelected);
+                            self.out.sounds.push(SimSound::TargetSelected);
                             self.target = Some(id);
                         }
                     }
                 }
                 TargetPick::Next => {
-                    self.sounds.push(SimSound::TargetSelected);
+                    self.out.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::next(npcs, self.target, scanner);
                 }
                 TargetPick::NextEscort => {
-                    self.sounds.push(SimSound::TargetSelected);
+                    self.out.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::next_escort(npcs, self.target, scanner);
                 }
                 TargetPick::Previous => {
-                    self.sounds.push(SimSound::TargetSelected);
+                    self.out.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::previous(npcs, self.target, scanner);
                 }
                 TargetPick::PreviousEscort => {
-                    self.sounds.push(SimSound::TargetSelected);
+                    self.out.sounds.push(SimSound::TargetSelected);
                     self.target = targeting::previous_escort(npcs, self.target, scanner);
                 }
             }
@@ -3427,7 +3361,7 @@ impl Session {
     /// empties the list.
     pub fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
         let mut diagnostics = self.combat.take_diagnostics();
-        diagnostics.extend(self.reports.take());
+        diagnostics.extend(self.out.reports.take());
         diagnostics
     }
 
@@ -3495,7 +3429,7 @@ impl Session {
         self.engine_glow = 0;
         if self.thrusting {
             self.thrusting = false;
-            self.sounds.push(SimSound::ThrustStopped);
+            self.out.sounds.push(SimSound::ThrustStopped);
         }
     }
 
@@ -3583,7 +3517,7 @@ impl Session {
         let held = self.jump.is_none() && self.held_by_other();
         let next = hold_jump(self.check_next_jump(), held).inspect_err(|refusal| {
             if self.jump_refusal_told(refusal) {
-                self.sounds.push(SimSound::Refused);
+                self.out.sounds.push(SimSound::Refused);
             }
         })?;
         let bearing = self.jump_aim(next);
@@ -3682,7 +3616,7 @@ impl Session {
         self.warp_ups
             .start(double_time, warp::pitched_length(duration, rate));
         self.clear_warp_sound_done();
-        self.sounds.push(if double_time {
+        self.out.sounds.push(if double_time {
             SimSound::JumpBeganInDoubleTime { rate }
         } else {
             SimSound::JumpBegan { rate }
@@ -3694,7 +3628,7 @@ impl Session {
     pub(super) fn halt_sounds(&mut self, sounds: &'static [crate::catalog::SoundId]) {
         self.warp_ups.halt(sounds);
         self.warp_out.halt(sounds);
-        self.sounds.push(SimSound::Halt(sounds));
+        self.out.sounds.push(SimSound::Halt(sounds));
     }
 
     /// The warp's clock: the engine's ticks since the warp stage began,
@@ -3971,13 +3905,13 @@ impl Session {
     /// The sounds emitted since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_sounds(&mut self) -> Vec<SimSound> {
-        std::mem::take(&mut self.sounds)
+        std::mem::take(&mut self.out.sounds)
     }
 
     /// The messages raised since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_messages(&mut self) -> Vec<SimMessage> {
-        std::mem::take(&mut self.messages)
+        std::mem::take(&mut self.out.messages)
     }
 
     /// The star map every reader sees: the catalog's, read when the
@@ -4098,7 +4032,7 @@ impl Session {
         if let Err(refusal) = &press
             && refusal.beeps()
         {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
         }
         press
     }
@@ -4440,11 +4374,11 @@ impl Session {
         self.land_day_rolls();
         self.open_outfit_visit();
         self.stay = Stay::default();
-        self.save_due = true;
+        self.out.save_due = true;
         self.stop_thrust();
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
-        self.sounds.push(SimSound::Landed);
+        self.out.sounds.push(SimSound::Landed);
         // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
         // module), before the port opens.
         self.reset_precalced();
@@ -4556,7 +4490,7 @@ impl Session {
         // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
         // @0x633a0), before the stay's days (@0x63440) and the deselect
         // (@0x674d2); see the flight view's `took_off`.
-        self.takeoff_nav = Some(self.nav_mode());
+        self.out.takeoff_nav = Some(self.nav_mode());
         // A held `Q`'s leave is consumed (@0x63588-0x635e3; see the
         // `script_effects` module).
         self.depart();
@@ -4612,8 +4546,8 @@ impl Session {
         self.reset_precalced();
         self.pod_zeroed = false;
         self.populate(catalog, chance);
-        self.sounds.push(SimSound::TookOff);
-        self.save_due = true;
+        self.out.sounds.push(SimSound::TookOff);
+        self.out.save_due = true;
         self.raise(StoryEvent::TookOff { stellar });
         // The dock request's rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
@@ -4643,7 +4577,7 @@ impl Session {
             return false;
         }
         change(&mut self.pilot);
-        self.save_due = true;
+        self.out.save_due = true;
         true
     }
 
@@ -4967,7 +4901,7 @@ impl Session {
     ) -> OutfitRun {
         // The bar's loads are this order's alone (see
         // [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let follows = self.setup.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
         // An order of another outfit names another cell: the selection
         // moved, so the relisting's selection is let go.
@@ -5382,7 +5316,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<ShipPurchase, ShipRefusal> {
         let (shipyard, record) = self.buyable(ship, chance)?;
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let quote = Quote {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
@@ -5483,7 +5417,7 @@ impl Session {
     /// changed in the spaceport or, playing strictly, been rescued from the
     /// escape pod since this was last taken. Taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
-        std::mem::take(&mut self.save_due)
+        std::mem::take(&mut self.out.save_due)
     }
 
     /// The stellar the ship is docked at, if it has landed.
@@ -5694,7 +5628,7 @@ impl Session {
         rule: &dyn BoardingRule,
         chance: &mut dyn Chance,
     ) -> Result<Boarding, BoardRefusal> {
-        self.board_line = None;
+        self.out.board_line = None;
         let boarded = self.attempt_board(law, rule, chance);
         if let Err(refusal) = boarded {
             self.beep_refusal(refusal);
@@ -5739,13 +5673,13 @@ impl Session {
             self.offering_ship = None;
         }
         self.mark_boarded(npc.id);
-        self.sounds.push(SimSound::Boarded);
+        self.out.sounds.push(SimSound::Boarded);
         if rule.repels(npc.booty.unwrap_or(0)) {
             return Ok(Boarding::Repelled);
         }
         let mut plunder = Plunder::roll(&self.prize(&npc), rule, chance);
         plunder.odds = rule.capture_odds(&self.capture_crew(&npc), chance);
-        self.granted = self.grant(&npc, rule, chance);
+        self.out.granted = self.grant(&npc, rule, chance);
         let aboard = Aboard {
             npc: npc.id,
             ship: npc.ship,
@@ -5820,13 +5754,13 @@ impl Session {
         self.reset_precalced();
         // The grant line's beep, only for a count above none (@0x933fe;
         // none skips it, @0x931f6 → @0x93441).
-        self.sounds.push(SimSound::PlunderBeep);
+        self.out.sounds.push(SimSound::PlunderBeep);
         Some(granted)
     }
 
     /// What the last boarding granted, once: taking it leaves none.
     pub fn take_grant(&mut self) -> Option<Granted> {
-        self.granted.take()
+        self.out.granted.take()
     }
 
     /// Every NPC other than `id` that targets it, or fights it, lets it go
@@ -5962,7 +5896,7 @@ impl Session {
         };
         if take == Take::Abort {
             // Abort's beep (@0x935cb).
-            self.sounds.push(SimSound::PlunderBeep);
+            self.out.sounds.push(SimSound::PlunderBeep);
             self.close_plunder();
             return Taken::Aborted;
         }
@@ -5977,7 +5911,7 @@ impl Session {
             && chance.below(SELF_DESTRUCT_ROLL) <= plunder.threshold
         {
             // The trip's beep (@0x93681).
-            self.sounds.push(SimSound::PlunderBeep);
+            self.out.sounds.push(SimSound::PlunderBeep);
             self.self_destruct(aboard.npc);
             return Taken::Tripped;
         }
@@ -6040,7 +5974,7 @@ impl Session {
         };
         // Each take's beep (@0x937a0, @0x939b9, @0x93b3b, @0x93f10,
         // @0x93f77, @0x94095).
-        self.sounds.push(SimSound::PlunderBeep);
+        self.out.sounds.push(SimSound::PlunderBeep);
         plunder.threshold = (f64::from(plunder.threshold) * growth) as u32;
         plunder.armed = true;
         self.keep_plunder_open(aboard, taken)
@@ -6119,7 +6053,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Taken {
         if !rule.captures(aboard.plunder.odds, chance) {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
             self.close_plunder();
             return Taken::CaptureFailed;
         }
@@ -6127,9 +6061,9 @@ impl Session {
             self.self_destruct(aboard.npc);
             return Taken::Tripped;
         }
-        self.sounds.push(SimSound::PlunderBeep);
+        self.out.sounds.push(SimSound::PlunderBeep);
         if !self.can_hire_escorts() {
-            self.sounds.push(SimSound::Refused);
+            self.out.sounds.push(SimSound::Refused);
             return self.keep_plunder_open(aboard, Taken::FleetFull);
         }
         if self.statics.crew(self.pilot.ship) > 0 {
@@ -6290,7 +6224,7 @@ impl Session {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
         // Either button's beep, before anything else
         // (`_DoCapturedShipAssignmentDialog` @0x5b56b, @0x5b66b).
-        self.sounds.push(SimSound::CaptureAssigned);
+        self.out.sounds.push(SimSound::CaptureAssigned);
         self.aboard = None;
         let Some(npc) = self.npcs().iter().find(|npc| npc.id == aboard.npc).cloned() else {
             self.close_plunder();

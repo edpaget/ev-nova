@@ -284,7 +284,8 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         if !self.destroying.insert(stellar) {
-            self.script_notes
+            self.out
+                .script_notes
                 .push(ScriptNote::OnDestroyReentered { stellar });
             return;
         }

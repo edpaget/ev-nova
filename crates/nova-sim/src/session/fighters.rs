@@ -278,7 +278,7 @@ impl Session {
                 let stowed = self.armament.stow(ship, &mut rounds);
                 self.unfleet(id);
                 if !stowed {
-                    self.save_due = true;
+                    self.out.save_due = true;
                 }
             }
             ShipRef::Npc(carrier) => {
@@ -347,8 +347,8 @@ impl Session {
         let abandoned = self.drop_fighters(fuelled);
         let count = u32::try_from(abandoned.len()).unwrap_or(u32::MAX);
         if count > 0 {
-            self.fighter_notes.push(FighterNote::Abandoned(count));
-            self.save_due = true;
+            self.out.fighter_notes.push(FighterNote::Abandoned(count));
+            self.out.save_due = true;
         }
     }
 
@@ -362,7 +362,7 @@ impl Session {
                 sources: &self.statics.ammo_outfits,
             };
             if !self.armament.stow(fighter.ship, &mut rounds) {
-                self.save_due = true;
+                self.out.save_due = true;
             }
         }
     }
@@ -520,7 +520,7 @@ impl Session {
     /// What the player's fighters met as it left systems since this was
     /// last taken, in order; taking it empties the list.
     pub fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
-        std::mem::take(&mut self.fighter_notes)
+        std::mem::take(&mut self.out.fighter_notes)
     }
 
     /// Puts the fighter of `sortie` back into its bay, a round again.

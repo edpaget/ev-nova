@@ -136,7 +136,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
 
     fn mark_fired(&mut self, id: SubscriptionId) {
         self.session.pilot.story_fired.insert(id);
-        self.session.save_due = true;
+        self.session.out.save_due = true;
     }
 
     fn holds(&self, guard: &Test) -> bool {
@@ -355,7 +355,7 @@ impl Session {
     /// was registered. Clearing a fired entry makes a save due.
     pub fn unregister_story(&mut self, id: SubscriptionId) -> bool {
         if self.pilot.story_fired.remove(&id) {
-            self.save_due = true;
+            self.out.save_due = true;
         }
         self.story.registry.unregister(id).is_some()
     }
@@ -385,7 +385,8 @@ impl Session {
             reentry,
         );
         if dropped > 0 {
-            self.script_notes
+            self.out
+                .script_notes
                 .push(ScriptNote::EventsDropped { dropped });
         }
     }
@@ -549,7 +550,7 @@ impl Session {
             return None;
         }
         self.galaxy.set_overlay(self.pilot.galaxy.clone());
-        self.save_due = true;
+        self.out.save_due = true;
         Some(before)
     }
 

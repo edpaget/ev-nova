@@ -279,7 +279,7 @@ impl Session {
     /// as its deselect (@0x674d2) comes later in the same dock request
     /// (see the flight view's `took_off`).
     pub fn take_takeoff_nav(&mut self) -> Option<NavMode> {
-        self.takeoff_nav.take()
+        self.out.takeoff_nav.take()
     }
 
     /// The system the galaxy map selects as it opens, as `_DoSystemMap`
@@ -524,7 +524,7 @@ impl Session {
         if self.jump.is_some() {
             return false;
         }
-        self.sounds.push(SimSound::NavSelected);
+        self.out.sounds.push(SimSound::NavSelected);
         self.dock = None;
         if nav_off {
             self.set_nav(NavMode::Off);
@@ -560,7 +560,7 @@ impl Session {
     pub fn clear_target(&mut self) -> bool {
         let had = self.target.take().is_some();
         if had {
-            self.sounds.push(SimSound::TargetCleared);
+            self.out.sounds.push(SimSound::TargetCleared);
         }
         had
     }
@@ -589,7 +589,7 @@ impl Session {
             StellarPick::Nearest => nearest_stellar(self.player.position, &self.sites),
         }?;
         let selected = self.nav == NavMode::Stellar(Some(picked));
-        self.sounds.push(SimSound::NavSelected);
+        self.out.sounds.push(SimSound::NavSelected);
         if !selected {
             self.nav_fly_in.start();
             self.set_nav(NavMode::Stellar(Some(picked)));
@@ -632,7 +632,7 @@ impl Session {
             self.deselect();
             return None;
         };
-        self.sounds.push(SimSound::HyperSelected);
+        self.out.sounds.push(SimSound::HyperSelected);
         if self.setup.hyper_select == HyperSelectRule::OneJumpCourse {
             self.pilot.course = vec![next];
         }
@@ -778,7 +778,7 @@ impl Session {
             return false;
         }
         self.set_nav(NavMode::Hyperspace(link));
-        self.sounds.push(SimSound::HyperSelected);
+        self.out.sounds.push(SimSound::HyperSelected);
         true
     }
 }

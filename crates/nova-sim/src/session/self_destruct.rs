@@ -92,7 +92,7 @@ impl Session {
             Beat::Cancelled => (SimSound::SelfDestructCancelled, SelfDestructLine::Cancelled),
             Beat::Destruct => (SimSound::SelfDestructed, SelfDestructLine::NiceDay),
         };
-        self.sounds.push(sound);
+        self.out.sounds.push(sound);
         self.say(SimMessage::SelfDestruct(line));
         if beat == Beat::Destruct {
             self.destruct_player();

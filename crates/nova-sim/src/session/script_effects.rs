@@ -348,7 +348,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
-        self.interface_loads.clear();
+        self.out.interface_loads.clear();
         let mut settled = Settled::default();
         if let Some(stellar) = self.offer_roll_due.take()
             && self.landed == Some(stellar)
@@ -415,7 +415,7 @@ impl Session {
         };
         settled.message = Some(text).filter(|text| !text.is_empty());
         if settled.message.is_some() {
-            self.sounds.push(SimSound::ScriptMessage);
+            self.out.sounds.push(SimSound::ScriptMessage);
         }
         true
     }
@@ -499,7 +499,7 @@ impl Session {
     pub(super) fn play_script_sound(&mut self, sound: SoundId) {
         match self.setup.script_effect_rules().sound {
             RuleSource::Engine => self.queued.sound = Some(sound),
-            RuleSource::Bible => self.sounds.push(SimSound::Script {
+            RuleSource::Bible => self.out.sounds.push(SimSound::Script {
                 sound,
                 exclusive: false,
             }),
@@ -510,7 +510,7 @@ impl Session {
     /// tick does.
     pub(super) fn sound_script(&mut self) {
         if let Some(sound) = self.queued.sound.take() {
-            self.sounds.push(SimSound::Script {
+            self.out.sounds.push(SimSound::Script {
                 sound,
                 exclusive: true,
             });

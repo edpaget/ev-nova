@@ -117,7 +117,7 @@ impl Session {
     /// What paying the escorts did since this was last taken, in order;
     /// taking it empties the list.
     pub fn take_pay_notes(&mut self) -> Vec<PayNote> {
-        std::mem::take(&mut self.pay_notes)
+        std::mem::take(&mut self.out.pay_notes)
     }
 
     /// Pays every hired escort its wage for each of `days`, in fleet
@@ -160,8 +160,8 @@ impl Session {
         }
         if defected > 0 {
             self.reform();
-            self.pay_notes.push(PayNote::Defected(defected));
-            self.save_due = true;
+            self.out.pay_notes.push(PayNote::Defected(defected));
+            self.out.save_due = true;
         }
     }
 
