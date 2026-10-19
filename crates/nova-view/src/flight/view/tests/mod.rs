@@ -291,6 +291,7 @@ fn sheet() -> ShipSheet {
         alt: None,
         shield: None,
         base_transp: 0,
+        solid: false,
     }
 }
 
@@ -1177,6 +1178,7 @@ fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
         image_id,
         frames: NonZeroU16::new(frames).expect("non-zero"),
+        solid: false,
     }
 }
 

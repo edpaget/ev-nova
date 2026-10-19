@@ -67,11 +67,13 @@ impl ShipSprites for GameData {
             alt,
             shield,
             base_transp: field(|anim| anim.base_transp),
+            solid: sheet.solid_frames().is_some(),
         })
     }
 }
 
-/// A resolved layer's ID and frame count; `None` for one that failed.
+/// A resolved layer's ID, frame count and whether it holds solid runs;
+/// `None` for one that failed.
 fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // An `rlëD` header counts its frames in a u16, and the decoder rejects
@@ -81,6 +83,7 @@ fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet>
     Some(LayerSheet {
         image_id: layer.image_id,
         frames,
+        solid: layer.sheet.solid_frames().is_some(),
     })
 }
 
@@ -421,6 +424,7 @@ mod tests {
         LayerSheet {
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
+            solid: false,
         }
     }
 
@@ -459,6 +463,7 @@ mod tests {
                 alt: None,
                 shield: None,
                 base_transp: 0,
+                solid: false,
             })
         );
     }
@@ -487,6 +492,40 @@ mod tests {
             (RLED, 1000, sheet(8)),
         ]);
         assert_eq!(data.ship_sheet(ShipId(128)).expect("a sheet").weapon, None);
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames, each with a white run.
+    fn with_runs(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2), |b, _| {
+                b.frame(|f| f.line().run(3, 0x7FFF, 0x7FFF).line().pixels(&[0x7C00; 3]))
+            })
+            .build()
+    }
+
+    #[test]
+    fn a_ships_sheet_marks_the_hull_and_layers_whose_sheets_hold_solid_runs() {
+        let mut shan = layered(1000, 1, 8, 1100, 1200);
+        put_i16(&mut shan, 0x26, 1930);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, with_runs(8)),
+            (RLED, 1100, sheet(8)),
+            (RLED, 1200, sheet(8)),
+            (RLED, 1930, with_runs(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert!(found.solid, "the hull");
+        assert_eq!(found.weapon.map(|layer| layer.solid), Some(true));
+        assert_eq!(found.glow.map(|layer| layer.solid), Some(false));
+        assert_eq!(found.lights.map(|layer| layer.solid), Some(false));
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").solid);
     }
 
     #[test]

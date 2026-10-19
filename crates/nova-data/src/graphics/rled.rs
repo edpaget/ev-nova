@@ -48,6 +48,13 @@ const COUNT_MASK: u32 = 0x00FF_FFFF;
 ///   that follows. The low half is ignored, as ResForge does; stock data
 ///   (always `0x7FFF7FFF`) cannot tell this from alternating halves.
 ///
+/// A sheet with any run also keeps its runs alone, as a second set of
+/// frames ([`SpriteSheet::solid_frames`]): each run's texels in its
+/// colour, opaque, every other texel clear. The original's 16-bit RLE
+/// blits fill a run raw (`_BlitPixieMemSet`), with no colorize,
+/// translucency or blend, so a view draws these again over the layer.
+/// A sheet with none keeps nothing more.
+///
 /// Tokens after the last frame are ignored.
 pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteSheet, GraphicsError> {
     let mut r = Reader::new(data);
@@ -77,6 +84,9 @@ pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteShe
 
     let mut frames = Vec::with_capacity(usize::from(count));
     let mut frame = Image::transparent(width, height);
+    // Each finished frame's runs, if it had any, and the frame's own.
+    let mut solids: Vec<Option<Image>> = Vec::with_capacity(usize::from(count));
+    let mut solid: Option<Image> = None;
     let mut lines = 0;
     let mut x = 0;
     // Every token is four bytes, so the data runs out first.
@@ -89,9 +99,11 @@ pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteShe
         match op {
             FRAME_END => {
                 frames.push(frame);
+                solids.push(solid.take());
                 if frames.len() == usize::from(count) {
                     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
-                    return Ok(SpriteSheet::new(width, height, frames, layout));
+                    let sheet = SpriteSheet::new(width, height, frames, layout);
+                    return Ok(sheet.with_solid(solid_frames(solids, width, height)));
                 }
                 frame = Image::transparent(width, height);
                 lines = 0;
@@ -130,8 +142,10 @@ pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteShe
                     }
                     RUN => {
                         let colour = rgb555((r.u32()? >> 16) as u16);
+                        let solid = solid.get_or_insert_with(|| Image::transparent(width, height));
                         for i in 0..len {
                             frame.put(x + i, y, colour);
+                            solid.put(x + i, y, colour);
                         }
                     }
                     _ => {}
@@ -142,6 +156,17 @@ pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteShe
         }
     }
     Err(GraphicsError::UnexpectedEnd { offset: r.pos() })
+}
+
+/// Each frame's solid runs, a frame without any clear, when any frame
+/// has one; else none.
+fn solid_frames(solids: Vec<Option<Image>>, width: u32, height: u32) -> Option<Vec<Image>> {
+    solids.iter().any(Option::is_some).then(|| {
+        solids
+            .into_iter()
+            .map(|solid| solid.unwrap_or_else(|| Image::transparent(width, height)))
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -283,6 +308,72 @@ mod tests {
         assert_eq!(
             frames(&decode(&bytes).unwrap()),
             [vec![CLEAR, red, red, red, CLEAR]]
+        );
+    }
+
+    #[test]
+    fn a_sheets_runs_are_kept_as_solid_frames_of_their_texels_alone() {
+        let bytes = RledBuilder::new(5, 2)
+            .frame(|f| {
+                f.line()
+                    .pixels(&[GREEN])
+                    .run(2, WHITE, WHITE)
+                    .skip(1)
+                    .pixels(&[BLUE])
+                    .line()
+                    .skip(3)
+                    .run(1, RED, RED)
+            })
+            .build();
+        let sheet = decode(&bytes).unwrap();
+        let solid = sheet.solid_frames().expect("it has runs");
+        let (white, red) = (rgb555(WHITE), rgb555(RED));
+        assert_eq!(
+            solid.iter().map(rgba).collect::<Vec<_>>(),
+            [vec![
+                CLEAR, white, white, CLEAR, CLEAR, //
+                CLEAR, CLEAR, CLEAR, red, CLEAR,
+            ]]
+        );
+        // The frames themselves still hold the runs.
+        assert_eq!(sheet.frames()[0].pixel(1, 0), Some(white));
+        assert_eq!(sheet.into_solid_frames().map(|f| f.len()), Some(1));
+    }
+
+    #[test]
+    fn a_sheet_without_runs_has_no_solid_frames() {
+        let bytes = RledBuilder::new(3, 1)
+            .frame(|f| f.line().pixels(&[RED]).skip(1).pixels(&[BLUE]))
+            .frame(|f| f.line().skip(3))
+            .build();
+        let sheet = decode(&bytes).unwrap();
+        assert_eq!(sheet.solid_frames(), None);
+        assert_eq!(sheet.into_solid_frames(), None);
+    }
+
+    #[test]
+    fn each_frames_runs_land_on_its_own_solid_frame() {
+        let bytes = RledBuilder::new(2, 1)
+            .frame(|f| f.line().pixels(&[RED, RED]))
+            .frame(|f| f.line().run(1, WHITE, WHITE))
+            .frame(|f| f.line().pixels(&[RED]))
+            .frame(|f| f.line().skip(1).run(1, GREEN, GREEN))
+            .build();
+        let sheet = decode(&bytes).unwrap();
+        let solid: Vec<_> = sheet
+            .solid_frames()
+            .expect("runs")
+            .iter()
+            .map(rgba)
+            .collect();
+        assert_eq!(
+            solid,
+            [
+                vec![CLEAR, CLEAR],
+                vec![rgb555(WHITE), CLEAR],
+                vec![CLEAR, CLEAR],
+                vec![CLEAR, rgb555(GREEN)],
+            ]
         );
     }
 

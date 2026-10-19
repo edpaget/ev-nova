@@ -74,6 +74,7 @@ pub mod radar;
 pub mod ship_layers;
 pub mod shot_fade;
 pub mod smoke;
+pub mod solid_runs;
 pub mod spin;
 pub mod sprite;
 pub mod target;

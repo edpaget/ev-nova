@@ -23,6 +23,9 @@ pub struct LayerSheet {
     /// The layer's frames. The base's rotation frame `f` is drawn with the
     /// layer's frame `f % frames`.
     pub frames: NonZeroU16,
+    /// Whether its `rlëD` holds solid runs, drawn raw over the layer (see
+    /// [`solid_runs`](super::solid_runs)).
+    pub solid: bool,
 }
 
 /// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
@@ -64,6 +67,9 @@ pub struct ShipSheet {
     /// The `shän`'s `BaseTransp`, raw: the hull's translucency in 32nds,
     /// drawn at (32 − it)/32 (see the flight view's ship drawing).
     pub base_transp: i16,
+    /// Whether the hull's `rlëD` holds solid runs, drawn raw over the hull
+    /// (see [`solid_runs`](super::solid_runs)).
+    pub solid: bool,
 }
 
 /// What `WeapDecay` is multiplied by for the glow's fall a tick
@@ -602,6 +608,7 @@ mod tests {
                 alt: None,
                 shield: None,
                 base_transp: 0,
+                solid: false,
             })
         }
     }

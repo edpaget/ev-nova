@@ -839,3 +839,149 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
     );
     assert_eq!(plain_of(&list, 2300), [], "drawn colorized alone");
 }
+
+// Solid runs (rdm ship-handling-fidelity phase 23, the `solid_runs`
+// module).
+
+/// [`ionized_sheet`] with a weapon glow `rlëD` 1930, whose sheet holds
+/// solid runs as `weapon` says, and its hull's as `hull` says.
+fn solid_sheet(weapon: bool, hull: bool) -> ShipSheet {
+    ShipSheet {
+        weapon: Some(LayerSheet {
+            solid: weapon,
+            ..layer(1930, 72)
+        }),
+        solid: hull,
+        ..ionized_sheet()
+    }
+}
+
+/// A murky flight whose NPC has `sheet`.
+fn murky_with(sheet: ShipSheet) -> View {
+    let mut catalog = shown(display(0, 1, 0), display(0, 1, 0), Some(sheet));
+    catalog.sol_murk = 30;
+    flying_with(catalog, 0, Rc::new(Still), &[])
+}
+
+/// Each command of `image` in `list`, with its place in the list: its
+/// kind, frame, whether it is colorized, tint and blend.
+fn commands_of(
+    list: &DrawList,
+    image: i16,
+) -> Vec<(
+    usize,
+    crate::ImageKind,
+    u16,
+    bool,
+    Color,
+    crate::draw::Blend,
+)> {
+    list.iter()
+        .enumerate()
+        .filter_map(|(at, command)| match *command {
+            DrawCommand::Sprite {
+                image: key,
+                tint,
+                blend,
+                ..
+            } if key.id == image => Some((at, key.kind, key.frame, false, tint, blend)),
+            DrawCommand::Colorized {
+                image: key,
+                tint,
+                blend,
+                ..
+            } if key.id == image => Some((at, key.kind, key.frame, true, tint, blend)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Lights the NPC's weapon glow in `view`, falling 4 a step for 2 steps:
+/// drawn at 28.
+fn lit_at_28(view: &mut View, npc: &nova_sim::Npc) {
+    let ship = ShipRef::Npc(npc.id);
+    view.glows.step(&[(ship, false)], |_| Some(4.0));
+    view.glows.step(&[], |_| Some(4.0));
+    assert_eq!(view.glows.drawn(ship), Some(28));
+}
+
+#[test]
+fn an_ionized_npcs_lit_weapon_glow_draws_its_solid_runs_plainly_right_after_it() {
+    use crate::ImageKind::{Rled, RledSolid};
+    use crate::draw::Blend;
+    let mut view = murky_with(solid_sheet(true, false));
+    let npc = npc_of(&view);
+    lit_at_28(&mut view, &npc);
+    let (list, _) = npc_drawn_ionized(&view, &npc, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    let drawn = commands_of(&list, 1930);
+    assert_eq!(drawn.len(), 2, "{drawn:?}");
+    let (glow_at, kind, frame, colorized, _, blend) = drawn[0];
+    assert_eq!((kind, colorized, blend), (Rled, true, Blend::Or));
+    assert_eq!(
+        drawn[1],
+        (
+            glow_at + 1,
+            RledSolid,
+            frame,
+            false,
+            Color::WHITE,
+            Blend::Normal
+        ),
+        "right after it, its frame, plain white"
+    );
+}
+
+#[test]
+fn a_weapon_glow_whose_sheet_holds_no_runs_draws_no_overlay() {
+    let mut view = murky_with(solid_sheet(false, false));
+    let npc = npc_of(&view);
+    lit_at_28(&mut view, &npc);
+    let (list, _) = npc_drawn_ionized(&view, &npc, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    let drawn = commands_of(&list, 1930);
+    assert_eq!(drawn.len(), 1, "{drawn:?}");
+    assert_eq!(drawn[0].1, crate::ImageKind::Rled);
+}
+
+#[test]
+fn an_unlit_weapon_glow_draws_neither_it_nor_its_runs() {
+    let view = murky_with(solid_sheet(true, false));
+    let npc = npc_of(&view);
+    let (list, _) = npc_drawn_ionized(&view, &npc, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
+    assert_eq!(commands_of(&list, 1930), []);
+}
+
+#[test]
+fn a_translucent_hull_whose_sheet_holds_runs_draws_them_after_it() {
+    use crate::ImageKind::{Rled, RledSolid};
+    use crate::draw::Blend;
+    let view = murky_with(solid_sheet(false, true));
+    let npc = npc_of(&view);
+    let (list, murk) = npc_drawn_ionized(&view, &npc, None, nova_sim::Vec2::new(100.0, -100.0));
+    let drawn = commands_of(&list, 2001);
+    let unmurked = Color {
+        a: crate::flight::ship_layers::base_alpha(10),
+        ..Color::WHITE
+    };
+    let (hull_at, _, frame, ..) = drawn[0];
+    assert_eq!(
+        drawn,
+        [
+            (
+                hull_at,
+                Rled,
+                frame,
+                false,
+                murk_tint(unmurked, murk),
+                Blend::Normal
+            ),
+            (
+                hull_at + 1,
+                RledSolid,
+                frame,
+                false,
+                Color::WHITE,
+                Blend::Normal
+            ),
+        ]
+    );
+}

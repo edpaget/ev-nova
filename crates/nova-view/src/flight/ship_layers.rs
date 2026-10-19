@@ -43,7 +43,9 @@
 //!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
-//! plainly.
+//! plainly. Each one whose sheet holds solid runs draws them raw right
+//! after itself ([`solid_runs`](super::solid_runs)), as the original's
+//! blits fill a run over every blend and colorize.
 
 use nova_sim::HashedRolls;
 use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
@@ -52,6 +54,7 @@ use nova_sim::traffic::npc::NpcId;
 use super::catalog::{LayerSheet, ShipSheet};
 use super::held_alt::AltLayer;
 use super::murk::murk_tint;
+use super::solid_runs::solid_overlay;
 use super::weapon_glow::npc_glow_level;
 use crate::draw::lights_tint;
 use crate::{Blend, Color, Colorize, DrawList, ImageKey, Point};
@@ -196,6 +199,9 @@ impl ShipDraw<'_> {
         if self.hull {
             let hull = ImageKey::sprite(self.sheet.image_id, frame);
             draw_layer(list, (hull, at, hull_tint, Blend::Normal), colorize);
+            if self.sheet.solid {
+                solid_overlay(list, self.sheet.image_id, frame, at);
+            }
         }
         // The level an NPC's layers are held below and colorized at: the
         // hull's ion tint's, or its murk.
@@ -225,6 +231,9 @@ impl ShipDraw<'_> {
                         None => (murk_tint(lights_tint(level), murk), None),
                     };
                     draw_layer(list, (image, at, tint, Blend::Or), colorize);
+                    if layer.solid && level > 0 {
+                        solid_overlay(list, layer.image_id, frame, at);
+                    }
                 }
             };
         let lights_murk = if self.held { lights_murk(murk) } else { 0 };
@@ -238,6 +247,10 @@ impl ShipDraw<'_> {
         if let Some(alt) = alt {
             let blend = Blend::Normal;
             draw_layer(list, (alt.image, alt.at, alt.tint, blend), alt.colorize);
+            let alt_sheet = self.sheet.alt;
+            if alt_sheet.is_some_and(|layer| layer.solid && layer.image_id == alt.image.id) {
+                solid_overlay(list, alt.image.id, alt.image.frame, alt.at);
+            }
         }
         if let (Some(layer), Some(level)) = (self.sheet.shield, self.shield) {
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
@@ -247,6 +260,9 @@ impl ShipDraw<'_> {
                 None => murk_tint(lights_tint(level), self.murk),
             };
             draw_layer(list, (image, at, tint, Blend::Or), colorize);
+            if layer.solid && level > 0 {
+                solid_overlay(list, layer.image_id, frame, at);
+            }
         }
     }
 }
