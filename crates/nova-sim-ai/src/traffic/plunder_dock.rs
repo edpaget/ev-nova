@@ -59,7 +59,9 @@
 //! sub 0xb's formation branch (@0x87364-0x873a3) is
 //! rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. A ship
 //! repairing the player flies these substates too, by its own high level
-//! ([`repair_dock::high_level`](crate::traffic::repair_dock::high_level)).
+//! ([`repair_dock::high_level`](crate::traffic::repair_dock::high_level)),
+//! and a ship refuelling another flies subs 0xb and 1, the stop
+//! ([`DockSub::Stop`], [`refuel_dock`](crate::traffic::refuel_dock)).
 //! Nothing here plays a sound.
 
 use crate::ai::Goal;
@@ -72,6 +74,7 @@ use crate::hail::Help;
 use crate::handling::Handling;
 use crate::traffic::autopilot::{self, steer};
 use crate::traffic::inertialess::{self, Inertia};
+use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
 use nova_sim_base::trig;
 
@@ -137,6 +140,10 @@ pub enum DockSub {
     Close,
     /// Sub 0xf: it matches the victim's velocity and docks.
     Dock,
+    /// Sub 1: it stops, with goal 9's damping off its retro heading
+    /// ([`leave_flight::stop`]). A refuel's alone
+    /// ([`refuel_dock`](crate::traffic::refuel_dock)).
+    Stop,
 }
 
 /// The docking box of a class whose turn (+0x38) is `class_turn`:
@@ -217,7 +224,12 @@ pub fn fly(
     let Some(docking) = npc.docking else {
         return DockOutcome::Flying;
     };
+    let inertia = Inertia::of(npc, Some(victim), flight);
     let (controls, flown, outcome) = match docking.sub {
+        DockSub::Stop => {
+            let (controls, flown) = leave_flight::stop(&mut npc.state, handling, inertia, true);
+            (controls, flown, DockOutcome::Flying)
+        }
         DockSub::Dock => {
             let (controls, outcome) = dock(npc, docking.ship, victim, handling, chance);
             (controls, *handling, outcome)
@@ -227,7 +239,6 @@ pub fn fly(
             (controls, flown, DockOutcome::Flying)
         }
     };
-    let inertia = Inertia::of(npc, Some(victim), flight);
     if npc.ai_wait > 0 {
         match inertia {
             Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,

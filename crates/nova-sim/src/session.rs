@@ -228,7 +228,7 @@
 //! that apply ([`Session::hailing`]). A press ([`Session::answer`]) says
 //! the ship's reply and does its deed: a ship paid to spare the player
 //! never targets it again and leaves; one declined attacks; one asked for
-//! help flies over to refuel the player (`Session::tick_assistance`) or
+//! help flies over to refuel the player (the `refuel_dock` module) or
 //! docks with it to repair it (the `repair_dock` module), and says when it
 //! is done ([`Session::take_comm`]). A price asked is
 //! haggled over and paid from the cash ([`Session::haggle`]), which makes
@@ -2423,8 +2423,8 @@ impl Session {
     /// the NPCs raises the first sighting of the ships watched
     /// ([`Session::watch_ship`]), and each mission ship that left the
     /// system raises [`Fate::Departed`] and is counted (see the
-    /// `mission_ships` module). The NPCs refuelling the player give their
-    /// help (`Session::tick_assistance`). The frame's work on the line,
+    /// `mission_ships` module). The fuel the NPCs refuelling the player
+    /// gave it lands (see the `refuel_dock` module). The frame's work on the line,
     /// its calls, scans, plunders, docks, repairs and refuel notes, is
     /// queued in slot order, and settles in [`Session::tick_combat`] (see
     /// the `comm_calls` module). Then, unless the ship is docked, each
@@ -2465,7 +2465,7 @@ impl Session {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });
                 self.announce_fleets(chance);
-                self.tick_assistance();
+                self.take_refuel();
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();

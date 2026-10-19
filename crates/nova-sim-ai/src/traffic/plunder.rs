@@ -15,7 +15,10 @@
 //!   flies on as a fight with no quarry; a ship turned out of it onto
 //!   another goal keeps the wait and is skipped. A plunder of a disabled ship docks
 //!   ([`plunder_dock::high_level`]), as does a repair of the player
-//!   ([`repair_dock::high_level`], nothing changing with no target); any
+//!   ([`repair_dock::high_level`], nothing changing with no target); a
+//!   refuel with a target refuels ([`HighLevel::Refuels`], its docking
+//!   set by the refuel pass, [`refuel_dock`](crate::traffic::refuel_dock)),
+//!   nothing changing with none (@0x8f3f3); any
 //!   other goal flies its fight, which
 //!   drops any docking, as goal 4's and goal 0xd's other substates do.
 //! - **The plunder** ([`resolve`]), over the decisions that plunder
@@ -149,6 +152,9 @@ pub enum HighLevel {
     /// ([`lost_sight::searching`](crate::ai::lost_sight::searching)),
     /// dropping any docking.
     Stops,
+    /// It refuels its target (goal 9), keeping its docking for the refuel
+    /// pass to set ([`refuel_dock`](crate::traffic::refuel_dock)).
+    Refuels,
 }
 
 /// What `npc`'s high level does this think among `around` (see the module
@@ -157,6 +163,14 @@ pub enum HighLevel {
 pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
     if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift | Goal::CountWait) {
         return HighLevel::Skipped;
+    }
+    if npc.goal == Goal::Assist(Help::Refuel) {
+        // No target, no block (@0x8f3f3).
+        return if npc.target.is_some() {
+            HighLevel::Refuels
+        } else {
+            HighLevel::Skipped
+        };
     }
     if npc.goal == Goal::Assist(Help::Repair) {
         return repair_dock::high_level(npc, around).map_or(HighLevel::Skipped, |step| {
@@ -191,7 +205,7 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
 /// it flies its fight.
 pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
     match high {
-        HighLevel::Skipped => {}
+        HighLevel::Skipped | HighLevel::Refuels => {}
         HighLevel::Docks {
             step: DockStep::GiveUp,
             ..
@@ -895,6 +909,34 @@ mod tests {
             HighLevel::Skipped,
             "no target: nothing changes"
         );
+    }
+
+    #[test]
+    fn a_refuels_high_level_is_skipped_while_its_wait_runs_or_with_no_target_and_refuels_after() {
+        let mut helper = npc(1, ShipStats::new(FAST, &[]));
+        helper.goal = Goal::Assist(Help::Refuel);
+        helper.target = Some(ShipRef::Player);
+        helper.ai_wait = 5;
+        helper.docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Close,
+        });
+        let world = World {
+            player: Some(crate::ai::fixture::player(2.0, 0.0)),
+            ..World::new(&[])
+        };
+        let high = |helper: &Npc| {
+            let npcs = [helper.clone()];
+            high_level(&npcs[0], &world.around(&npcs))
+        };
+        assert_eq!(high(&helper), HighLevel::Skipped);
+        helper.ai_wait = 0;
+        assert_eq!(high(&helper), HighLevel::Refuels);
+        let mut kept = helper.clone();
+        take_high_level(&mut kept, HighLevel::Refuels);
+        assert_eq!(kept.docking, helper.docking, "the refuel pass sets it");
+        helper.target = None;
+        assert_eq!(high(&helper), HighLevel::Skipped, "no target, @0x8f3f3");
     }
 
     #[test]

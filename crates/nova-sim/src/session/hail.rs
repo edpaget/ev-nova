@@ -60,15 +60,15 @@
 //!   the carried fighters.
 //! - **Help** (`_AIMakeShipRefuelPlayer` @0x82dbb,
 //!   `_AIMakeShipRepairPlayer` @0x82df2): it assists the player
-//!   ([`Goal::Assist`]), its provocation gone. Each step a refuel
-//!   ([`Session::tick_assistance`], in the traffic's tick) gives the help
-//!   as [`assist`](crate::hail::assist) says; once done it decides again,
-//!   and says so ([`Session::take_comm`]) with `snd ` 151 in slot order
-//!   with the frame's other lines (see the `comm_calls` module). A repair
-//!   is the traffic's: the ship docks with the player as a pirate does and
-//!   repairs it once its dock's wait is done (see
+//!   ([`Goal::Assist`]), its provocation gone. The traffic flies the help:
+//!   a refueller closes on the player and gives it fuel a think at a time
+//!   (see [`refuel_dock`](crate::traffic::refuel_dock) and the session's
+//!   `refuel_dock` module); a repairer docks with the player as a pirate
+//!   does and repairs it once its dock's wait is done (see
 //!   [`repair_dock`](crate::traffic::repair_dock) and the session's
-//!   `repair_dock` module). The traffic lets an assisting ship decide
+//!   `repair_dock` module). Once done it decides again, and says so
+//!   ([`Session::take_comm`]) with `snd ` 151 in slot order with the
+//!   frame's other lines (see the `comm_calls` module). The traffic lets an assisting ship decide
 //!   again once anything provokes it.
 //! - **Defend** (battle help, `_AIFightEnemyThreatToPlayer` @0x82c80):
 //!   it attacks the threat to the player picked
@@ -98,8 +98,7 @@ use crate::person::{COMM_QUOTES, offers_to_join};
 use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
-use crate::traffic::on_line::OnLine;
+use crate::traffic::npc::{AiType, Npc, NpcId};
 
 /// What the comm key hails ([`Session::hail_target`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -629,45 +628,6 @@ impl Session {
         self.call_for_reinforcements(id, true, None);
     }
 
-    /// Gives a tick of the refuel each NPC refuelling the player gives (see
-    /// [`assist`](crate::hail::assist)), queueing its note "Energy
-    /// transfer complete" on the line at its berth once it is done
-    /// ([`OnLine::RefuelDone`]), said with `snd ` 151 as the line's work
-    /// settles (see the `comm_calls` module). While the ship is landed or
-    /// jumping, nothing happens. A repair is the traffic's (see the
-    /// `repair_dock` module). [`Session::tick_traffic`] runs it.
-    pub(super) fn tick_assistance(&mut self) {
-        if self.landed.is_some() || self.jumping().is_some() {
-            return;
-        }
-        let player = self.player;
-        let mut done = Vec::new();
-        for npc in self.traffic.npcs_mut() {
-            if npc.goal != Goal::Assist(Help::Refuel) {
-                continue;
-            }
-            // Not while it jumps in or comes out of a gate, nor while it
-            // holds its course after (`Mode::Coasting`): the help is given
-            // in `_HighLevelAIHandler`, which returns at once while the
-            // wait +0x4c runs, refuel (goal 9) included (@0x8d4b4-0x8d4d2).
-            if npc.condition != Condition::Intact || npc.mode != Mode::Flying {
-                continue;
-            }
-            let reach = assist::reach(Help::Refuel, npc.stats.handling.turn_rate);
-            if assist::within(&npc.state, &player, reach)
-                && assist::docked(&npc.state)
-                && refuel(&mut self.pilot.reserves.fuel)
-            {
-                stop(npc);
-                done.push((npc.id, npc.ship));
-            }
-        }
-        for (from, ship) in done {
-            self.traffic
-                .queue_on_line(from, OnLine::RefuelDone(from, ship));
-        }
-    }
-
     /// NPC `from`, of ship type `ship`, says it has `done` its help
     /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
     /// message line for the note's ticks, with `sound`.
@@ -693,17 +653,6 @@ impl Session {
     }
 }
 
-/// A tick of refuelling into `fuel`, and whether the refuel is done: it
-/// gains [`assist::REFUEL_STEP`] while it holds no more than
-/// [`assist::REFUEL_UNTIL`], no further than its most, and is done above
-/// that or full.
-fn refuel(fuel: &mut crate::reserves::Gauge) -> bool {
-    if fuel.now <= assist::REFUEL_UNTIL {
-        fuel.now = (fuel.now + assist::REFUEL_STEP).min(fuel.max);
-    }
-    fuel.now > assist::REFUEL_UNTIL || fuel.now >= fuel.max
-}
-
 /// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0-0x7e2e7): it
 /// jumps out (state 2), whatever its fuel, as the original tests none,
 /// and its target is gone (+0x70 -1). Those are the routine's writes
@@ -719,15 +668,6 @@ pub(super) fn make_leave(npc: &mut Npc) {
     npc.goal = Goal::JumpOut;
     npc.target = None;
     npc.trigger = Trigger::default();
-}
-
-/// `npc` stops assisting, and decides again, its travel stellar
-/// cleared.
-fn stop(npc: &mut Npc) {
-    npc.goal = Goal::Idle;
-    npc.target = None;
-    // +0x6c -1 (@0x8f6ce): the travel stellar a pirate reads.
-    npc.travel_set = false;
 }
 
 #[cfg(test)]
@@ -747,9 +687,9 @@ mod tests {
     use crate::hail::{Answer, BRIBABLE_WARSHIPS, HailOption, MUTE, UNTALKATIVE};
     use crate::handling::ShipFields;
     use crate::landing::StellarFlags;
-    use crate::reserves::Gauge;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, govt, land_now, ship};
+    use crate::traffic::npc::Mode;
 
     const FED: GovtId = GovtId(128);
     const OTHER: GovtId = GovtId(129);
@@ -2359,15 +2299,7 @@ mod tests {
 
     // Assistance.
 
-    /// A tick of `session`'s assistance, then the line's work settled, as
-    /// the combat tick of the same step settles it: the refuel's note.
-    fn assist(session: &mut Session) {
-        session.tick_assistance();
-        session.settle_line_queue(crate::Rules::default().law, &mut crate::NeverFires);
-    }
-
-    /// `catalog`'s session with its ship (NPC 0, `Maneuver` 20, so a
-    /// refuel's reach of 120 and a repair's of 290) assisting the player
+    /// `catalog`'s session with its ship (NPC 0) assisting the player
     /// with `help` from (`x`, 0), at rest; the player at the centre.
     fn helped(catalog: &FakePilotCatalog, help: Help, x: f32) -> Session {
         let mut session = targeting(catalog);
@@ -2375,133 +2307,7 @@ mod tests {
         helper.goal = Goal::Assist(help);
         helper.target = Some(ShipRef::Player);
         helper.state.position = Vec2::new(x, 0.0);
-        // Bound for a stellar before it was asked: its travel stellar set.
-        helper.travel_set = true;
         session
-    }
-
-    #[test]
-    fn a_refuelling_ship_docked_at_its_reach_gives_a_unit_a_tick() {
-        let catalog = hailable();
-        let mut session = helped(&catalog, Help::Refuel, 120.0);
-        session.pilot.reserves.fuel.now = 40.0;
-        assist(&mut session);
-        assert_eq!(session.reserves().fuel.now, 41.0);
-        let mut far = helped(&catalog, Help::Refuel, 121.0);
-        far.pilot.reserves.fuel.now = 40.0;
-        assist(&mut far);
-        assert_eq!(far.reserves().fuel.now, 40.0, "beyond its reach");
-        let mut moving = helped(&catalog, Help::Refuel, 120.0);
-        moving.pilot.reserves.fuel.now = 40.0;
-        npc(&mut moving).state.velocity = Vec2::new(0.0, 0.35);
-        assist(&mut moving);
-        assert_eq!(moving.reserves().fuel.now, 40.0, "not slow enough");
-    }
-
-    #[test]
-    fn a_ship_holding_its_course_after_its_glide_gives_no_help_until_it_flies() {
-        let catalog = hailable();
-        let mut session = helped(&catalog, Help::Refuel, 120.0);
-        session.pilot.reserves.fuel.now = 40.0;
-        npc(&mut session).mode = Mode::Coasting { ticks_left: 3 };
-        assist(&mut session);
-        assert_eq!(session.reserves().fuel.now, 40.0);
-        npc(&mut session).mode = Mode::Flying;
-        assist(&mut session);
-        assert_eq!(session.reserves().fuel.now, 41.0);
-    }
-
-    #[test]
-    fn a_refuel_stops_above_a_jumps_fuel_and_says_so() {
-        let catalog = hailable();
-        let mut session = helped(&catalog, Help::Refuel, 0.0);
-        session.pilot.reserves.fuel.now = 40.0;
-        session.pilot.ship_name = Some("Kestrel".to_owned());
-        let _ = session.take_sounds();
-        for tick in 1..=61 {
-            assert!(session.take_comm().is_empty(), "tick {tick}");
-            assist(&mut session);
-        }
-        assert_eq!(session.reserves().fuel.now, 101.0);
-        assert_eq!(
-            session.take_comm(),
-            [CommNote {
-                from: NpcId(0),
-                comm_name: "Cruiser".to_owned(),
-                ship_name: "Kestrel".to_owned(),
-                done: Help::Refuel,
-            }]
-        );
-        assert_eq!(session.take_sounds(), [SimSound::EnergyTransferComplete]);
-        let helper = &session.npcs()[0];
-        assert_eq!(helper.goal, Goal::Idle, "it decides again");
-        assert_eq!(helper.target, None);
-        assert!(!helper.travel_set, "+0x6c -1, @0x8f6ce");
-        assist(&mut session);
-        assert_eq!(session.reserves().fuel.now, 101.0);
-        assert!(session.take_comm().is_empty());
-    }
-
-    #[test]
-    fn a_finished_help_holds_the_message_line_for_its_note() {
-        let catalog = hailable();
-        let mut session = helped(&catalog, Help::Refuel, 0.0);
-        session.pilot.reserves.fuel.now = 150.0;
-        assert!(session.comm_line().free_for_calls(), "free before");
-        assist(&mut session);
-        let [note] = session.take_comm().try_into().expect("one note");
-        for tick in 1..note.ticks() {
-            session.count_down_comm_line();
-            assert!(!session.comm_line().free_for_calls(), "{tick} counted");
-        }
-        session.count_down_comm_line();
-        assert!(session.comm_line().free_for_calls(), "the note counted");
-    }
-
-    #[test]
-    fn a_player_already_above_a_jumps_fuel_gains_nothing_and_the_refuel_is_done() {
-        let catalog = hailable();
-        let mut session = helped(&catalog, Help::Refuel, 0.0);
-        session.pilot.reserves.fuel.now = 150.0;
-        assist(&mut session);
-        assert_eq!(session.reserves().fuel.now, 150.0);
-        assert_eq!(session.take_comm().len(), 1);
-    }
-
-    #[test]
-    fn a_refuel_stops_at_the_tanks_most() {
-        let catalog = hailable();
-        let mut session = helped(&catalog, Help::Refuel, 0.0);
-        session.pilot.reserves.fuel = Gauge {
-            now: 79.5,
-            max: 80.0,
-        };
-        assist(&mut session);
-        assert_eq!(session.reserves().fuel.now, 80.0);
-        assert_eq!(session.take_comm().len(), 1);
-    }
-
-    #[test]
-    fn nothing_is_given_while_landed_jumping_or_by_a_ship_not_intact() {
-        let catalog = hailable();
-        let mut landed = helped(&catalog, Help::Refuel, 0.0);
-        landed.landed = Some(StellarId(128));
-        let mut jumping = helped(&catalog, Help::Refuel, 0.0);
-        jumping.jump = Some(crate::session::Jump::Hyperspace {
-            to: SystemId(131),
-            warp: 0,
-        });
-        let mut disabled = helped(&catalog, Help::Refuel, 0.0);
-        npc(&mut disabled).condition = Condition::Disabled;
-        // One at a time: three sessions make too large an array.
-        let given_nothing = |mut session: Session| {
-            session.pilot.reserves.fuel.now = 40.0;
-            assist(&mut session);
-            assert_eq!(session.reserves().fuel.now, 40.0);
-        };
-        given_nothing(landed);
-        given_nothing(jumping);
-        given_nothing(disabled);
     }
 
     #[test]

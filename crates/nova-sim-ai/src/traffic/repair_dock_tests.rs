@@ -2,11 +2,8 @@
 //! [`repair_dock`](crate::traffic::repair_dock)): its high level, the dock
 //! it shares with the plunder, the completion and the drift after.
 
-use std::cell::RefCell;
-
-use super::{Traffic, World};
-use crate::ai::{Behaviour, Goal, PlayerSide, Surroundings};
-use crate::chance::Chance;
+use super::Traffic;
+use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::FlightRules;
@@ -14,6 +11,7 @@ use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::stats::ShipStats;
 use crate::traffic::autopilot::TopSpeeds;
+use crate::traffic::fixture::assisting::{Recording, player_in as player, world_with as world};
 use crate::traffic::fixture::npc;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::traffic::plunder::{self, PirateEvent};
@@ -23,40 +21,6 @@ use nova_sim_base::fixture::{FAST, Scripted};
 use nova_sim_catalog::catalog::ShipId;
 
 const HELPER: NpcId = NpcId(1);
-
-/// Logs each ship it decides for, keeping its goal, or waiting (state 6)
-/// when it has none.
-#[derive(Debug, Default)]
-struct Recording {
-    decided: RefCell<Vec<NpcId>>,
-}
-
-impl Behaviour for Recording {
-    fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
-        self.decided.borrow_mut().push(npc.id);
-        if npc.goal == Goal::Idle {
-            Goal::Wait
-        } else {
-            npc.goal
-        }
-    }
-}
-
-/// The player at the centre at rest facing up, in `condition`.
-fn player(condition: Condition) -> PlayerSide {
-    PlayerSide {
-        condition,
-        ..crate::ai::fixture::player(0.0, 0.0)
-    }
-}
-
-/// A world holding the player in `condition`.
-fn world(condition: Condition) -> World<'static> {
-    World {
-        player: Some(player(condition)),
-        ..World::new(&[])
-    }
-}
 
 /// Traffic of one ship, NPC 1, repairing the player from (`x`, `y`), at
 /// rest facing up, its class turn 3 (a box of 260), deciding every tick.
@@ -215,7 +179,7 @@ fn far_off_a_repairer_closes_on_the_player_through_sub_0xb() {
 }
 
 #[test]
-fn every_repairer_flies_its_high_level_and_no_other_unprovoked_assister() {
+fn every_unprovoked_assister_flies_its_high_level_a_repairer_and_a_refueller_alike() {
     let mut traffic = repairing(1000.0, 0.0);
     let mut second = traffic.npcs[0].clone();
     second.id = NpcId(2);
@@ -224,13 +188,8 @@ fn every_repairer_flies_its_high_level_and_no_other_unprovoked_assister() {
     refueller.id = NpcId(3);
     refueller.berth = 3;
     refueller.goal = Goal::Assist(Help::Refuel);
-    // A docking only its high level would drop.
-    let kept = Docking {
-        ship: ShipRef::Player,
-        sub: DockSub::Close,
-    };
-    refueller.docking = Some(kept);
     second.docking = None;
+    refueller.docking = None;
     traffic.npcs.extend([second, refueller]);
     let recording = Recording::default();
     tick(&mut traffic, &recording, Condition::Disabled, &[]);
@@ -244,9 +203,9 @@ fn every_repairer_flies_its_high_level_and_no_other_unprovoked_assister() {
     };
     assert_eq!(docking(2).map(|docking| docking.sub), Some(DockSub::Close));
     assert_eq!(
-        docking(3),
-        Some(kept),
-        "a refueller's high level doesn't run"
+        docking(3).map(|docking| docking.sub),
+        Some(DockSub::Close),
+        "a refueller's high level runs too (@0x901e5)"
     );
     assert_eq!(*recording.decided.borrow(), []);
 }

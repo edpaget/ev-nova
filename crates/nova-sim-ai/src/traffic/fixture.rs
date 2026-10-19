@@ -1,7 +1,9 @@
 //! Test support for the ai and traffic layer's tests and the tests above
 //! it, behind the `fixture` feature: a default NPC ([`npc`]), one put
-//! in a pirate's count wait ([`count_waiting`]), and the calls among the
-//! line's work ([`calls_on_line`]).
+//! in a pirate's count wait ([`count_waiting`]), the calls among the
+//! line's work ([`calls_on_line`]), and, for this crate's tests, a
+//! behaviour logging the ships it decides for and the player in a
+//! condition in a world of its own (`assisting`).
 
 use super::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use super::on_line::OnLine;
@@ -107,4 +109,56 @@ pub fn calls_on_line(work: &[OnLine]) -> Vec<(NpcId, CommCall, f32)> {
             _ => None,
         })
         .collect()
+}
+
+/// A behaviour logging the ships it decides for ([`assisting::Recording`]),
+/// and the player in a condition ([`assisting::player_in`]) in a world of
+/// its own ([`assisting::world_with`]), for the tests of the ships
+/// assisting the player.
+#[cfg(test)]
+pub mod assisting {
+    use std::cell::RefCell;
+
+    use crate::ai::{Behaviour, Goal, PlayerSide, Surroundings};
+    use crate::chance::Chance;
+    use crate::combat::hull::Condition;
+    use crate::traffic::World;
+    use crate::traffic::npc::{Npc, NpcId};
+
+    /// Logs each ship it decides for, keeping its goal, or waiting (state 6)
+    /// when it has none.
+    #[derive(Debug, Default)]
+    pub struct Recording {
+        /// The ships decided for, in order.
+        pub decided: RefCell<Vec<NpcId>>,
+    }
+
+    impl Behaviour for Recording {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.decided.borrow_mut().push(npc.id);
+            if npc.goal == Goal::Idle {
+                Goal::Wait
+            } else {
+                npc.goal
+            }
+        }
+    }
+
+    /// The player at the centre at rest facing up, in `condition`.
+    #[must_use]
+    pub fn player_in(condition: Condition) -> PlayerSide {
+        PlayerSide {
+            condition,
+            ..crate::ai::fixture::player(0.0, 0.0)
+        }
+    }
+
+    /// A world holding the player in `condition`, and nothing else.
+    #[must_use]
+    pub fn world_with(condition: Condition) -> World<'static> {
+        World {
+            player: Some(player_in(condition)),
+            ..World::new(&[])
+        }
+    }
 }

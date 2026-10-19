@@ -44,11 +44,11 @@
 //!   not read).
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
 //!   matching its lead's velocity there.
-//! - [`Goal::Assist`]: outside its reach of the player (see
-//!   [`assist`]) it follows the player as an escort its lead; within it,
-//!   it brakes. A repairer flies so only while it holds no docking (with
-//!   no target): its docking flies it otherwise
-//!   ([`repair_dock`](crate::traffic::repair_dock)).
+//! - [`Goal::Assist`]: its docking flies it
+//!   ([`repair_dock`](crate::traffic::repair_dock),
+//!   [`refuel_dock`](crate::traffic::refuel_dock)); holding none (with no
+//!   target), it coasts, as sub 0xb with no target does nothing
+//!   (@0x87345-0x87351).
 //! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
 //!   keeps its slot beside the player ([`Npc::formation`],
 //!   [`slot_position`](crate::escort::slot_position)); with no slot it brakes. Within
@@ -218,7 +218,6 @@ use crate::flight::{
 };
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
-use crate::hail::assist;
 use crate::handling::Handling;
 use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
@@ -473,14 +472,6 @@ fn fly_mobile(
             }
             None => brake(&state, &handling, inertia),
         },
-        Goal::Assist(help) => match other {
-            Some(player)
-                if !assist::within(&state, player, assist::reach(help, handling.turn_rate)) =>
-            {
-                follow(&state, &handling, player, inertia)
-            }
-            _ => brake(&state, &handling, inertia),
-        },
         Goal::Formation { .. } => match formation(npc, other, &handling, inertia) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
@@ -492,8 +483,10 @@ fn fly_mobile(
         // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
         // is a wait (state 6, @0x8f101).
         Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait => brake(&state, &handling, inertia),
-        // A drift moves on with no turn or thrust (its wait above).
-        Goal::Hold | Goal::Drift => Controls::default(),
+        // A drift moves on with no turn or thrust (its wait above), as
+        // does an assister its docking doesn't fly: sub 0xb with no target
+        // does nothing (@0x87345-0x87351).
+        Goal::Hold | Goal::Drift | Goal::Assist(_) => Controls::default(),
     };
     step(npc, &handling, controls, flight, inertia);
     Outcome::Flying
@@ -1215,7 +1208,7 @@ fn match_velocity(
 mod tests {
     use super::*;
     use crate::escort::{EscortDuty, FormationSlot};
-    use crate::hail::{Help, assist};
+    use crate::hail::Help;
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::traffic::emerge::EMERGE_TICKS;
@@ -2812,76 +2805,23 @@ mod tests {
     }
 
     #[test]
-    fn an_assisting_ship_comes_to_the_player_and_waits_docked_within_its_reach() {
-        for help in [Help::Refuel, Help::Repair] {
-            let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
-            let mut ship = npc(FAST, Goal::Assist(help), at(-600.0, 400.0, 0.0, 0.0, 0.0));
-            for _ in 0..600 {
-                assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
-            }
-            let reach = assist::reach(help, ship.stats.handling.turn_rate);
-            assert!(
-                assist::within(&ship.state, &player, reach),
-                "{help:?} {:?}",
-                ship.state
-            );
-            assert!(assist::docked(&ship.state), "{help:?} {:?}", ship.state);
-        }
-    }
-
-    #[test]
-    fn outside_its_reach_an_assisting_ship_follows_the_player() {
-        let player = at(0.0, 0.0, 1.0, 0.0, 0.0);
-        // FAST turns 3° a tick: a refuel's reach is 105.
-        for start in [
-            at(-106.0, 0.0, 0.0, 0.0, 0.0),
-            at(0.0, 300.0, 2.0, 1.0, 45.0),
-        ] {
-            let mut ship = npc(FAST, Goal::Assist(Help::Refuel), start);
-            let mut escort = npc(FAST, Goal::Follow(NpcId(0)), start);
-            fly(&mut ship, &[], Some(&player));
-            fly(&mut escort, &[], Some(&player));
-            assert_eq!(ship.state, escort.state, "{start:?}");
-        }
-    }
-
-    #[test]
-    fn within_its_reach_or_with_the_player_gone_an_assisting_ship_brakes() {
+    fn an_assisting_ship_its_docking_doesnt_fly_coasts_as_a_drifting_one_does() {
         let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        let start = at(-105.0, 105.0, 2.0, -1.0, 30.0);
+        let start = at(-600.0, 400.0, 2.0, -1.0, 30.0);
         for (help, other) in [
             (Help::Refuel, Some(&player)),
             (Help::Repair, Some(&player)),
             (Help::Refuel, None),
         ] {
             let mut ship = npc(FAST, Goal::Assist(help), start);
-            let mut idle = npc(FAST, Goal::Idle, start);
+            let mut drifting = npc(FAST, Goal::Hold, start);
             for _ in 0..30 {
                 fly(&mut ship, &[], other);
-                fly(&mut idle, &[], other);
-                assert_eq!(ship.state, idle.state, "{help:?} {other:?}");
+                fly(&mut drifting, &[], other);
+                assert_eq!(ship.state, drifting.state, "{help:?} {other:?}");
             }
+            assert_eq!(ship.state.velocity, Vec2::new(2.0, -1.0), "no thrust");
         }
-        let moving = at(0.0, 0.0, 1.0, 0.0, 0.0);
-        let mut ship = npc(
-            FAST,
-            Goal::Assist(Help::Refuel),
-            at(-100.0, 0.0, 0.0, 0.0, 90.0),
-        );
-        for _ in 0..30 {
-            fly(&mut ship, &[], Some(&moving));
-        }
-        assert_eq!(
-            ship.state.position,
-            Vec2::new(-100.0, 0.0),
-            "within reach of a moving player it does not chase"
-        );
-        let far = at(-1000.0, 0.0, 2.0, 0.0, 30.0);
-        let mut ship = npc(FAST, Goal::Assist(Help::Repair), far);
-        let mut idle = npc(FAST, Goal::Idle, far);
-        fly(&mut ship, &[], None);
-        fly(&mut idle, &[], None);
-        assert_eq!(ship.state, idle.state, "gone, from afar");
     }
 
     #[test]

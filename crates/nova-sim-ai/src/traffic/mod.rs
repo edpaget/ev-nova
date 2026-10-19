@@ -85,7 +85,9 @@
 //!    docking or its fight, none while its AI wait runs, and each drift's
 //!    step, [`plunder::drift`]; a ship repairing the player flies its high
 //!    level, its docking with the player, though it decides nothing
-//!    unprovoked, [`repair_dock`]), then, each NPC
+//!    unprovoked, [`repair_dock`], and so does one refuelling a ship,
+//!    its refuel run in berth order after every other high level,
+//!    [`refuel_dock`], its note queued on the line at its berth), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
@@ -172,6 +174,9 @@ mod pursuit_tests;
 pub mod quote;
 #[cfg(test)]
 mod re_pick_tests;
+pub mod refuel_dock;
+#[cfg(test)]
+mod refuel_dock_tests;
 mod reinforcing;
 pub mod repair_dock;
 #[cfg(test)]
@@ -204,7 +209,6 @@ use crate::control::Gate;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
-use crate::hail::Help;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
@@ -511,7 +515,7 @@ pub struct World<'a> {
     /// ([`RuleKey::OddsCache`](crate::RuleKey::OddsCache)).
     pub odds_cache: RuleSource,
     /// How much fuel a refuelling ship gives and when it is done
-    /// (`refuel_dock::fuel_step`): no cap, done only above 100, by the
+    /// ([`refuel_dock::fuel_step`]): no cap, done only above 100, by the
     /// engine; capped at the tank, a full tank done too, by the other
     /// reading ([`RuleKey::RefuelCap`](crate::RuleKey::RefuelCap)).
     pub refuel_cap: RuleSource,
@@ -688,7 +692,7 @@ pub struct Traffic {
     /// The frame's work on the message line, in slot order, since it was
     /// last taken ([`Traffic::take_on_line`]): the calls the decisions
     /// made, the scans of the player, what the pirates and repairers did
-    /// and the session's refuel notes.
+    /// and the refuel notes.
     on_line: LineQueue,
     /// The `STR#`s of the arrival quotes of the fleets added since the
     /// quotes were last taken, in order ([`NewShip::quote`]).
@@ -730,6 +734,9 @@ pub struct Traffic {
     /// holding their berths and their persons, but not in the system:
     /// not ticked, not drawn, and not among [`Traffic::npcs`].
     left_behind: BTreeMap<SystemId, Vec<LeftShip>>,
+    /// The fuel the ships refuelling the player have given it since it was
+    /// last taken ([`Traffic::take_fuel_given`], see [`refuel_dock`]).
+    fuel_given: f32,
 }
 
 /// What becomes of the ships [`Traffic::retarget`] does not take along.
@@ -794,6 +801,7 @@ impl Traffic {
             berth_search: BerthSearch::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
+            fuel_given: 0.0,
         }
     }
 
@@ -1051,7 +1059,9 @@ impl Traffic {
         swarm::pass(&mut self.npcs, |npc| {
             decision_due(self.ticks, npc.id, self.interval)
         });
-        self.pursue(&world, &self.high_levels_due(&due), &keeps, chance);
+        let high_levels = self.high_levels_due(&due);
+        self.pursue(&world, &high_levels, &keeps, chance);
+        self.refuel(&world, &high_levels);
         plunder::drift(&mut self.npcs, &due);
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
@@ -1129,15 +1139,16 @@ impl Traffic {
     }
 
     /// Whether each NPC flies its high level this tick: each whose decision
-    /// is `due`, and each repairing the player, which decides nothing
+    /// is `due`, and each assisting the player, which decides nothing
     /// unprovoked but flies its high level all the same, as `_AIDispatch`
-    /// runs it whatever the type AI did (@0x901e5; see [`repair_dock`]).
+    /// runs it whatever the type AI did (@0x901e5; see [`repair_dock`] and
+    /// [`refuel_dock`]).
     fn high_levels_due(&self, due: &[bool]) -> Vec<bool> {
         self.npcs
             .iter()
             .zip(due)
             .map(|(npc, &due)| {
-                due || (npc.goal == Goal::Assist(Help::Repair)
+                due || (matches!(npc.goal, Goal::Assist(_))
                     && npc.provoked <= 0.0
                     && npc.mode == Mode::Flying
                     && npc.condition == Condition::Intact
@@ -1459,8 +1470,7 @@ impl Traffic {
 
     /// Queues `work` on the line at NPC `id`'s berth in the frame now being
     /// queued, or after the frame's other work if it has gone (see
-    /// [`on_line`]): the session's refuel note
-    /// ([`OnLine::RefuelDone`]) among them.
+    /// [`on_line`]): the refuel note ([`OnLine::RefuelDone`]) among them.
     pub fn queue_on_line(&mut self, id: NpcId, work: OnLine) {
         let berth = self
             .npcs
@@ -2127,10 +2137,7 @@ impl Traffic {
             }
             if !matches!(
                 goal,
-                Goal::Attack(_)
-                    | Goal::Snipe(_)
-                    | Goal::Plunder { .. }
-                    | Goal::Assist(Help::Repair)
+                Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } | Goal::Assist(_)
             ) {
                 npc.docking = None;
             }
@@ -2151,7 +2158,7 @@ impl Traffic {
     /// the player while within an interceptor's reach of it, its scan of
     /// the player (`_HighLevelAIHandler` @0x8f11e-0x8f38a calls
     /// `_ScanPlayer` there); what its pirate or repairer did; and the
-    /// session's refuel note ([`Traffic::queue_on_line`]). Taking it
+    /// refuel note ([`refuel_dock`]). Taking it
     /// empties the queue; entering or going on into another system drops
     /// it.
     pub fn take_on_line(&mut self) -> Vec<OnLine> {
@@ -3737,6 +3744,7 @@ mod tests {
     fn an_assisting_npc_flies_to_the_player() {
         let mut traffic = populated(1, 1);
         traffic.npcs[0].goal = Goal::Assist(Help::Refuel);
+        traffic.npcs[0].target = Some(ShipRef::Player);
         traffic.npcs[0].state.position = Vec2::new(-600.0, 0.0);
         let player = PlayerSide {
             state: ShipState::default(),

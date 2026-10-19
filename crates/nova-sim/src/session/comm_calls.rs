@@ -70,7 +70,7 @@
 //! @0x86fc7). So each line keeps a later slot's call off the line, and a
 //! later slot's line replaces an earlier one's. The traffic queues all of
 //! it at each ship's berth (see `nova_sim::traffic::on_line`), the
-//! refuel note from `Session::tick_assistance` in the traffic's tick, and
+//! refuel note among it (see `nova_sim::traffic::refuel_dock`), and
 //! [`Session::settle_line_queue`] settles it in [`Session::tick_combat`],
 //! right after `_HandlePlayer`'s part of the frame (`before_fight`: the
 //! propulsion repair, the sabotage and the eject), so their lines come
