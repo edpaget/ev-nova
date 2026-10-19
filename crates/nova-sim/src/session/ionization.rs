@@ -635,6 +635,82 @@ mod tests {
         assert_eq!(fired, before_the_hit, "held from the hit's own fight");
     }
 
+    /// `knocking`'s session with NPC 0, of class `IonizeMax` 100 shedding
+    /// 1 a tick, firing its [`held_gun`] at the player whatever its AI,
+    /// charged `charge`.
+    fn shedding_npc(charge: f32) -> (Session, FakePilotCatalog) {
+        use crate::session::tests::{armed, knocking};
+        use crate::testkit::ship;
+        let catalog = FakePilotCatalog {
+            ship_records: vec![ship(
+                129,
+                ShipFields {
+                    ionize_max: 100,
+                    deionize: 100,
+                    ..FAST
+                },
+            )],
+            ..armed()
+        };
+        let mut session = knocking(&catalog, (None, 100.0), (Some(held_gun()), 100.0));
+        let npc = &mut session.traffic.npcs_mut()[0];
+        assert_eq!(npc.stats.ion.rate(Flyer::Npc), 1.0);
+        npc.ion.charge = charge;
+        (session, catalog)
+    }
+
+    /// Whether NPC 0 fired among the fight's events, taken.
+    fn npc_fired(session: &mut Session) -> bool {
+        let npc = ShipRef::Npc(session.npcs()[0].id);
+        session.take_combat_events().iter().any(
+            |event| matches!(event, crate::combat::CombatEvent::Fired { ship, .. } if *ship == npc),
+        )
+    }
+
+    #[test]
+    fn an_npcs_hold_reads_the_charge_as_its_own_block_found_it() {
+        use crate::session::tests::Firing;
+        let (mut session, catalog) = shedding_npc(101.5);
+        let mut fired = Vec::new();
+        for tick in 1..=5 {
+            session.tick(Controls::default());
+            session.tick_traffic(&catalog, &Firing, &mut crate::chance::NeverFires);
+            session.tick_combat(
+                crate::combat::Rules::default(),
+                &mut crate::chance::NeverFires,
+            );
+            if npc_fired(&mut session) {
+                fired.push(tick);
+            }
+        }
+        // Its blocks find 101.5, 100.5, then 99.5 on tick 3: held through
+        // tick 2, though its charge is 99.5 by tick 2's fight, then freed.
+        assert_eq!(fired, [3, 4, 5]);
+    }
+
+    #[test]
+    fn in_double_time_an_npcs_hold_reads_each_passs_own_block() {
+        use crate::session::tests::Firing;
+        let (mut session, catalog) = shedding_npc(102.0);
+        let rules = crate::combat::Rules::default;
+        let mut fired = Vec::new();
+        for tick in 1..=3 {
+            session.tick(Controls::default());
+            session.tick_traffic(&catalog, &Firing, &mut crate::chance::NeverFires);
+            session.tick_combat(rules(), &mut crate::chance::NeverFires);
+            if npc_fired(&mut session) {
+                fired.push((tick, 1));
+            }
+            session.tick_again(Controls::default(), rules(), &mut crate::chance::NeverFires);
+            if npc_fired(&mut session) {
+                fired.push((tick, 2));
+            }
+        }
+        // Its blocks find 102 and 101 on tick 1's passes, then 100 and 99
+        // on tick 2's: freed on tick 2's second pass.
+        assert_eq!(fired, [(2, 2), (3, 1), (3, 2)]);
+    }
+
     #[test]
     fn double_times_second_pass_holds_on_the_charge_as_its_own_block_found_it() {
         use crate::session::tests::armed;
