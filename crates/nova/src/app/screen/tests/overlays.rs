@@ -347,6 +347,8 @@ fn quiet() -> Prefs {
         },
         hyperspace_effects: true,
         quicktime_movies: true,
+        smoke_trails: true,
+        weapon_effects: true,
         fullscreen: nova_view::FullscreenKind::Borderless,
         scaling: nova_view::Scaling::Native,
     }
