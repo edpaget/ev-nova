@@ -71,8 +71,9 @@
 //!
 //! What a lock does to the ship it holds (the pull to its holder's
 //! velocity, the lapse half a second after its last touch, the third of
-//! its speed, turn and thrust, the refused jump) is
-//! `ship-handling-fidelity/phase-12-tractor-hold`'s.
+//! its speed, turn and thrust) is the
+//! [`tractor_hold`](super::tractor_hold) module's; the refused jump is
+//! `nova_sim::Session::begin_jump`'s.
 //!
 //! Neither block makes a sound.
 
@@ -128,9 +129,10 @@ pub struct TractorLock {
     pub holder: ShipRef,
     /// The engine ticks since a tractor beam last touched it. The fight
     /// sets it to none on each touch, as the original sets +0xb4 to the
-    /// `TickCount`; counting it up, and dropping the lock as the original
-    /// does once `TickCount` reaches +0xb4 + 30 (half a second, 15 ticks),
-    /// are `ship-handling-fidelity/phase-12-tractor-hold`'s.
+    /// `TickCount`; the hold counts it up ([`TractorLock::age`]) and drops
+    /// the lock as the original does once `TickCount` reaches +0xb4 + 30
+    /// (half a second, [`LAPSE_TICKS`](super::tractor_hold::LAPSE_TICKS);
+    /// see the [`tractor_hold`](super::tractor_hold) module).
     pub ticks_since_touch: u32,
 }
 

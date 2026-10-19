@@ -318,6 +318,7 @@ pub mod shot_layer;
 pub mod sides;
 pub mod stellar;
 pub mod submunition;
+pub mod tractor_hold;
 pub mod weapon;
 
 use std::collections::BTreeMap;
