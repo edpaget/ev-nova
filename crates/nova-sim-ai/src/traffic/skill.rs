@@ -20,7 +20,12 @@
 //! the factor on the NPC ([`Npc::skill_mult`]), as `SkillMult` is fixed
 //! record data, and every write of an NPC's government goes through
 //! [`Npc::independent`], [`Npc::take_govt_of`] or [`Npc::join_govt`],
-//! which write both.
+//! which write both. Each builder of an NPC sets them so once it is
+//! built: `Traffic::add` joins the spawned ship's government; an escort
+//! placed, a fighter launched and the eject's hulk are made independent,
+//! a fighter of an NPC carrier then taking its carrier's; and a ship
+//! enlisted in place becomes independent, a ship a pirate takes taking
+//! the pirate's.
 //!
 //! **What the skill also feeds, left out.** `_LowLevelAIHandler`'s
 //! close formation (substate 0xc, @0x87b4f-0x87bcb) nudges an escort's

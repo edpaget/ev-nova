@@ -300,7 +300,7 @@ impl Session {
         }
         let carrier = escort.carried.then(|| self.player_carrier(maneuver));
         let skill = skill.unwrap_or_else(|| random_skill_level(kind.skill_var, chance));
-        let npc = Npc {
+        let mut npc = Npc {
             id: NpcId::default(),
             berth: 0,
             ship: escort.ship,
@@ -369,6 +369,7 @@ impl Session {
             // otherwise its slot's (see `Session::enter_escorts`).
             display: crate::traffic::ship_display::NpcDisplay::default(),
         };
+        npc.independent();
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),
             None => self.traffic.add_npc(npc),

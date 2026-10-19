@@ -474,7 +474,7 @@ fn fighter(
     speed: f32,
     carrier: Carrier,
 ) -> Npc {
-    Npc {
+    let mut fighter = Npc {
         id: NpcId::default(),
         berth: 0,
         ship,
@@ -540,7 +540,9 @@ fn fighter(
         warp: crate::traffic::warp_out::Warp::default(),
         // Its glow is left as its slot had it, none for a fresh one.
         display: NpcDisplay::default(),
-    }
+    };
+    fighter.independent();
+    fighter
 }
 
 #[cfg(test)]

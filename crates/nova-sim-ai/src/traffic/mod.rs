@@ -2167,11 +2167,12 @@ impl Traffic {
                 &kind.hull.frames,
                 ship_display::Spawn::of(&ship),
             );
-            let npc = Npc {
+            let mut npc = Npc {
                 id,
                 berth,
                 ship: ship.ship,
-                govt: ship.govt,
+                // Independent until it joins its government below.
+                govt: None,
                 ai_type: ship.ai_type,
                 leader,
                 class: kind.escort_class,
@@ -2229,7 +2230,7 @@ impl Traffic {
                 self_repair: kind.self_repair,
                 immobile: kind.immobile,
                 skill,
-                skill_mult: govts.skill_mult(ship.govt),
+                skill_mult: 1.0,
                 still: kind.still,
                 miner: kind.miner,
                 can_scoop: kind.can_scoop,
@@ -2246,6 +2247,7 @@ impl Traffic {
                 warp: warp_out::Warp::default(),
                 display,
             };
+            npc.join_govt(ship.govt, govts);
             self.write_berth_person(berth, name);
             self.npcs.push(npc);
         }

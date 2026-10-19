@@ -356,7 +356,7 @@ impl Session {
         let mut reserves = kind.stats.full();
         reserves.shield = self.pilot.reserves.shield;
         reserves.armor = self.pilot.reserves.armor;
-        Npc {
+        let mut hulk = Npc {
             id: NpcId::default(),
             berth: 0,
             ship: old.id,
@@ -419,7 +419,9 @@ impl Session {
             pods_left: kind.hull.pod_count,
             warp: crate::traffic::warp_out::Warp::default(),
             display,
-        }
+        };
+        hulk.independent();
+        hulk
     }
 
     /// Every NPC that targets, fights or inspects the player lets it go

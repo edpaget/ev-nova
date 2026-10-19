@@ -113,14 +113,14 @@ impl Session {
         let Some(dude) = aux_dude(&record.aux) else {
             return;
         };
+        let items = self.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
             &self.ships,
             &self.outfits,
             &self.arsenal,
-            self.rules
-                .source_for(crate::rulebook::RuleKey::NpcDefaultItems),
+            items,
         );
         let spawn = AuxSpawn {
             slot,
