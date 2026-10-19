@@ -425,6 +425,7 @@ mod reinforcements;
 mod rescue;
 mod sabotage;
 mod script_effects;
+mod self_destruct;
 mod self_repair;
 mod ship_change;
 mod ship_display;
@@ -929,6 +930,12 @@ pub struct Session {
     /// Whether the player holds the eject chord, Command and the eject
     /// key together (see the `eject` module); never saved.
     eject_held: bool,
+    /// The self-destruct countdown, `_destructCount` (see the
+    /// `self_destruct` module); never saved.
+    self_destruct: crate::self_destruct::SelfDestruct,
+    /// Whether the player holds the self-destruct chord, Command and `-`
+    /// together (see the `self_destruct` module); never saved.
+    self_destruct_held: bool,
     /// The fire command the player holds.
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
@@ -1599,6 +1606,8 @@ impl Session {
             rescue_due: false,
             rescue_desc_due: false,
             eject_held: false,
+            self_destruct: crate::self_destruct::SelfDestruct::default(),
+            self_destruct_held: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
@@ -2784,12 +2793,19 @@ impl Session {
     /// fight, on either pass (see the `double_time` module): the repair
     /// inhibit's countdown and the disabled player's self-repair (see the
     /// `player_repair` module), the sabotage clock's tick (see the
-    /// `sabotage` module), then the eject check for a player who enters it
-    /// disabled or dying (see the `eject` module), drawing on `chance`.
+    /// `sabotage` module), the eject check for a player who enters it
+    /// disabled or dying (see the `eject` module), drawing on `chance`,
+    /// then the self-destruct countdown, which reads whether the player
+    /// was dying as the work began (see the `self_destruct` module).
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
+        let dying_at_head = matches!(
+            self.condition,
+            Condition::Dying { .. } | Condition::Destroyed
+        );
         self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
         self.eject_before_fight(chance);
+        self.self_destruct_tick(dying_at_head);
     }
 
     /// The fight's part of a game-work pass on `pass` (see

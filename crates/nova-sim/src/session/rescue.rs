@@ -19,7 +19,9 @@
 //!    is cleared (`_playerPaint`); the Red Alert forgets its threat and
 //!    its icon (`_playerThreatened`, `_oldPlayerThreatened`,
 //!    `_alertSpritePending`); the rank last activated is forgotten
-//!    (`_recentActivatedRank`, @0x1db44); the system died in has its
+//!    (`_recentActivatedRank`, @0x1db44); the self-destruct countdown
+//!    idles (`_destructCount` = -1.0, @0x1d764; see the `self_destruct`
+//!    module); the system died in has its
 //!    reinforcement timer cancelled and its countdown cleared
 //!    (@0x1db17-0x1db30; see the `reinforcements` module); and its tail
 //!    call into `_ResetPlayerPrecalcedValues` runs
@@ -72,8 +74,7 @@
 //! `_RandomizeStars` (@0x690d0; the starfield is drawn the same each
 //! time), and of `_ResetPlayer`'s writes the price flux
 //! (`_globalPriceFlux`, `_localPriceFlux`), the bribe roll
-//! (`_bribeRandom`), the advice roll (`_adviceRandom`), the
-//! self-destruct count (`_destructCount`), the docking globals
+//! (`_bribeRandom`), the advice roll (`_adviceRandom`), the docking globals
 //! (`_dockTarget`, `_dockPermission`: the engine's clearance is its nav
 //! target, which the entry lets go), `_antiEscortDelay`,
 //! `_greenMissionSyst`, `_newbieFlag`, `_commCount`, `_fadePending`,
@@ -272,6 +273,7 @@ impl Session {
         self.condition = Condition::Intact;
         self.pod = None;
         self.target = None;
+        self.self_destruct.reset();
         // The nav mode and the dock request go to -1, and the pilot is past
         // the tutorial, as at every flight start (`_ResetPlayer`
         // @0x1d4cd-0x1d4d5, @0x1d7cf; see the `nav` and `clearance`
@@ -699,6 +701,16 @@ mod tests {
         assert!(session.takes(PlayerCommand::MissionInfo));
         assert!(session.press_player_info());
         assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_rescue_idles_the_self_destruct() {
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        session.self_destruct.step(true, false);
+        assert_eq!(session.self_destruct.count(), Some(149));
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.self_destruct.count(), None, "_ResetPlayer @0x1d764");
     }
 
     #[test]
