@@ -378,11 +378,12 @@ pub struct Npc {
     /// `None` stands for both the original's -1 and -2: every spawn starts
     /// it at -2 (e.g. @0x1c3d6, @0x41ed4, @0x7f3fa), and the interceptor's
     /// patrol writes -2 (@0x8d01e). Its writers here: the gate emerge
-    /// ([`Npc::emerge_from_gate`], @0x8955e-0x89574). The landing's end
+    /// ([`Npc::emerge_from_gate`], @0x8955e-0x89574) and a miner's shuttle
+    /// as it sets off (@0x8b3ae, [`Decision::visits`](crate::ai::Decision::visits),
+    /// see [`miner`](crate::ai::miner)), which also reads it to leave that
+    /// stellar out of its pick (@0x8b373). The landing's end
     /// (`_HighLevelAIHandler` @0x8db00) is
-    /// rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's, and the
-    /// miner's (@0x8b3ae) is left out (see
-    /// [`idle_block`](crate::ai::idle_block)).
+    /// rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's.
     pub visited: Option<StellarId>,
     /// Whether its travel stellar, the original's +0x6c, is set: what a
     /// pirate's idle block reads to skip its pick (@0x8c472-0x8c477, read

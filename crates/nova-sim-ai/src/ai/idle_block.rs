@@ -48,7 +48,9 @@
 //!   that comes out of a gate has visited it
 //!   (`_AIMakeShipEmergeFromHyperGate` @0x8955e-0x89574,
 //!   [`Npc::gate_visit`]), so on its first idle think it leaves by
-//!   hyperspace, or stops if it can't jump. The landing's end
+//!   hyperspace, or stops if it can't jump. A miner's shuttle writes the
+//!   stellar it sets off for (`_MinerAI` @0x8b3ae, see
+//!   [`miner`](super::miner)). The landing's end
 //!   (`_HighLevelAIHandler` @0x8db00) is
 //!   rdm:phase/stellar-fidelity/phase-5-npc-landing-reach's: until it lands,
 //!   a landing ship leaves the system. `_LoadPilotData` @0x751ed writes the
@@ -72,8 +74,7 @@
 //! - The interceptor's +0x92 = -2 (@0x8d01e): no reader for AI type 4.
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 //! - Owned by rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12:
-//!   the miner's +0x92 (@0x8b373, @0x8b3ae); and state 6 written outside
-//!   the idle block.
+//!   state 6 written outside the idle block.
 
 use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, travel};
 use crate::catalog::StellarId;

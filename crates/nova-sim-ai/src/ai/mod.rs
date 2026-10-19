@@ -836,6 +836,11 @@ pub struct Decision {
     /// [`travel`]): the traffic [`take`](travel::take)s it into
     /// [`Npc::travel_set`] as it takes the goal.
     pub travel: travel::TravelWrite,
+    /// The stellar the think records as visited, its +0x92, if it writes
+    /// one: a miner's shuttle as it sets off (`_MinerAI` @0x8b3ae, see
+    /// [`miner`]). The traffic sets [`Npc::visited`] so as it takes the
+    /// goal; none leaves it as it was.
+    pub visits: Option<StellarId>,
 }
 
 /// How NPCs decide what to do.
