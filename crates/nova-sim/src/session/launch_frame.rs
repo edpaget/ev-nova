@@ -31,7 +31,7 @@
 //! The existing NPCs still think in one batch before the loop, so an NPC
 //! in a slot above the carrier's thinks blind to the fighter, and the
 //! fighter's own think reads them as their last frame left them
-//! (rdm:phase/combat-ai-fidelity/phase-32-left-out-of-weapons-fidelity-phase-44).
+//! (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
 
 use std::collections::BTreeSet;
 
@@ -67,7 +67,7 @@ impl Session {
     /// the pilot, so the wait crosses no boundary the player sees: the
     /// calls are said before the frame is drawn. That they come after
     /// every scan, where the original orders calls and scans by slot, is
-    /// filed (rdm:phase/combat-ai-fidelity/phase-32-left-out-of-weapons-fidelity-phase-44).
+    /// filed (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
     pub(super) fn dispatch_npcs(
         &mut self,
         pass: GamePass,
