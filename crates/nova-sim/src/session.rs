@@ -2432,8 +2432,9 @@ impl Session {
     /// calls (see the `reinforcements` module), unless work is queued on
     /// the line: then its tick is held, and runs in
     /// [`Session::tick_combat`] right after the work settles, or, if no
-    /// combat tick came between, first thing in the next traffic tick. The traffic ticks in the same [`World`] the
-    /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
+    /// combat tick came between, first thing in the next traffic tick.
+    /// The traffic ticks in the same [`World`] the gate exit's arrivals
+    /// pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),

@@ -263,3 +263,17 @@ fn a_call_carries_the_odds_its_think_read_not_the_passs() {
         "stale at their thinks"
     );
 }
+
+#[test]
+fn work_queued_for_a_ship_gone_comes_after_the_frames_other_work() {
+    let mut traffic = Traffic::with_interval(1);
+    let here = traffic.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 5);
+    let gone = NpcId(99);
+    traffic.queue_on_line(gone, OnLine::Scan(gone));
+    traffic.queue_on_line(here, OnLine::Scan(here));
+    assert_eq!(
+        traffic.take_on_line(),
+        [OnLine::Scan(here), OnLine::Scan(gone)],
+        "at the berth of a ship here, after it for one gone"
+    );
+}
