@@ -71,12 +71,21 @@
 //!   ([`Session::take_comm`]) with `snd ` 151 in slot order with the
 //!   frame's other lines (see the `comm_calls` module). The traffic lets an assisting ship decide
 //!   again once anything provokes it.
-//! - **Defend** (battle help, `_AIFightEnemyThreatToPlayer` @0x82c80):
-//!   it attacks the threat to the player picked
-//!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f), and calls for
-//!   reinforcements, forced past their strength test
+//! - **Defend** (a helper sent at a threat to the player, see
+//!   [`hail::battle`](crate::hail::battle)): it attacks the threat picked
+//!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f, @0x8194f), or
+//!   with none its target is cleared and nothing else changes (@0x82daa,
+//!   @0x8195e). Three callers: rank battle help
+//!   (`_AIFightEnemyThreatToPlayer` @0x82c80) then calls for
+//!   reinforcements, forced past their strength test, whatever it picked
 //!   (`_AICallForReinforcements(ship, 1)` @0x9636d; see the
-//!   `reinforcements` module).
+//!   `reinforcements` module); a paid warship, interceptor or brave
+//!   trader (`_AIFightEnemyThreatToPlayer`) calls none; a ship of AI type
+//!   0 or above 4 (`_AIFightThreatToPlayer` @0x8183c) calls none and drops
+//!   its travel stellar ([`Npc::travel_set`], +0x6c = -1, @0x81949).
+//!   The target is picked at the press, which the comm dialog makes over
+//!   the paused flight, as the original's modal dialog does, so it is
+//!   still in the system when the deed is done.
 
 use super::Session;
 use super::missions::TextSource;
@@ -605,9 +614,15 @@ impl Session {
             }
             Deed::Release | Deed::Join => {}
             Deed::Defend(defence) => {
-                if let Some(threat) = defence.threat {
-                    npc.goal = Goal::Attack(ShipRef::Npc(threat));
-                    npc.target = Some(ShipRef::Npc(threat));
+                match defence.threat {
+                    Some(threat) => {
+                        npc.goal = Goal::Attack(ShipRef::Npc(threat));
+                        npc.target = Some(ShipRef::Npc(threat));
+                        if defence.drop_travel {
+                            npc.travel_set = false;
+                        }
+                    }
+                    None => npc.target = None,
                 }
                 if defence.reinforce {
                     self.call_for_battle_help_reinforcements(id);
@@ -2057,8 +2072,13 @@ mod tests {
         assert_eq!(view.reply, "I'm busy.");
     }
 
-    #[test]
-    fn battle_help_calls_the_systems_reinforcements_past_their_strength_test() {
+    /// `hailable`, its pirates enemies of the Federation, a rank of
+    /// battle help with the Federation, and system 130's reinforcements a
+    /// Federation fleet: a session as `targeting` makes it, the rank
+    /// active, its warship of strength 100 at cached odds of 0.2, beside
+    /// a pirate of strength 20 attacking the player. The catalog, the
+    /// session and the pirate.
+    fn reinforced() -> (FakePilotCatalog, Session, NpcId) {
         let mut catalog = hailable();
         catalog.govts[2].enemies = [1, -1, -1, -1];
         catalog.ranks = vec![RankRecord {
@@ -2096,18 +2116,236 @@ mod tests {
             },
             ..session.npcs()[0].clone()
         };
-        session.traffic.add_npc(pirate);
+        let pirate = session.traffic.add_npc(pirate);
         // Its odds as the frame's pass left them: the pirate's 20 over
         // its 100 (see `odds_cache`).
         let hailed = session.npcs()[0].id;
         session.traffic.cache_odds(hailed, 0.2);
+        (catalog, session, pirate)
+    }
+
+    /// The reinforcements `reinforced` calls: the Federation's.
+    const FED_COMING: Option<crate::ai::reinforcements::Coming> =
+        Some(crate::ai::reinforcements::Coming { govt: Some(FED) });
+
+    #[test]
+    fn battle_help_calls_the_systems_reinforcements_past_their_strength_test() {
+        let (catalog, mut session, _) = reinforced();
         assert_eq!(session.reinforcements_coming(), None);
         hail(&mut session, &catalog);
         press(&mut session, &catalog, 1, 0);
         assert_eq!(
             session.reinforcements_coming(),
-            Some(crate::ai::reinforcements::Coming { govt: Some(FED) }),
+            FED_COMING,
             "odds of 0.2, below half of 1, yet called (@0x9636d)"
+        );
+    }
+
+    /// An option for every ship that says "Okay, I'm on my way." and
+    /// sends it to fight as its [`Defence`](crate::hail::Defence) says.
+    #[derive(Debug)]
+    struct Sends(crate::hail::Defence);
+
+    impl HailOption for Sends {
+        fn label(&self) -> String {
+            "Defend".to_owned()
+        }
+
+        fn applies(&self, _hail: &Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+            Answer {
+                deed: Some(Deed::Defend(self.0)),
+                ..Answer::say(Reply::Comm(reply::ON_MY_WAY))
+            }
+        }
+    }
+
+    /// `reinforced`'s session, its warship idle with its travel stellar
+    /// set and its target the player, pressing [`Sends`] of the defence
+    /// `defence` makes of the pirate; and the pirate.
+    fn sent(defence: impl FnOnce(NpcId) -> crate::hail::Defence) -> (Session, NpcId) {
+        let (catalog, mut session, pirate) = reinforced();
+        let ship = npc(&mut session);
+        ship.goal = Goal::Idle;
+        ship.target = Some(ShipRef::Player);
+        ship.travel_set = true;
+        let options = HailOptions::empty().with(Rc::new(Sends(defence(pirate))));
+        session
+            .hail(&catalog, &options, &mut Draws::of(&opening(0)))
+            .expect("answered");
+        let view = session
+            .answer(0, &catalog, &options, &mut Draws::of(&[]))
+            .expect("open");
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        (session, pirate)
+    }
+
+    #[test]
+    fn a_defence_with_no_threat_clears_the_target_and_still_calls_when_it_reinforces() {
+        // `_AIFightEnemyThreatToPlayer` with none sets +0x70 = -1 alone
+        // (@0x82daa); rank battle help calls after it whatever it found
+        // (@0x9636d).
+        let (session, _) = sent(|_| crate::hail::Defence {
+            threat: None,
+            reinforce: true,
+            drop_travel: true,
+        });
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.target, None);
+        assert_eq!(helper.goal, Goal::Idle, "nothing else changes");
+        assert!(helper.travel_set, "+0x6c is dropped only with a threat");
+        assert_eq!(session.reinforcements_coming(), FED_COMING);
+    }
+
+    #[test]
+    fn a_defence_that_does_not_reinforce_attacks_and_makes_no_call() {
+        let (session, pirate) = sent(|pirate| crate::hail::Defence {
+            threat: Some(pirate),
+            reinforce: false,
+            drop_travel: false,
+        });
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
+        assert!(
+            helper.travel_set,
+            "`_AIFightEnemyThreatToPlayer` keeps +0x6c"
+        );
+        assert_eq!(session.reinforcements_coming(), None);
+    }
+
+    #[test]
+    fn a_defence_that_drops_travel_clears_the_travel_stellar_as_it_attacks() {
+        // `_AIFightThreatToPlayer` sets +0x6c = -1 with its pick (@0x81949).
+        let (session, pirate) = sent(|pirate| crate::hail::Defence {
+            threat: Some(pirate),
+            reinforce: false,
+            drop_travel: true,
+        });
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert!(!helper.travel_set);
+        assert_eq!(session.reinforcements_coming(), None);
+    }
+
+    /// `reinforced`'s session without the rank: its Federation warship
+    /// has no battle help, while the pirate, an enemy, attacks the
+    /// player.
+    fn unranked() -> (FakePilotCatalog, Session, NpcId) {
+        let (catalog, mut session, pirate) = reinforced();
+        session.pilot.ranks.clear();
+        (catalog, session, pirate)
+    }
+
+    /// Presses Request Assistance, the pick drawing 0 and the haggle roll
+    /// `roll`.
+    fn request_help(session: &mut Session, catalog: &FakePilotCatalog, roll: u32) -> HailView {
+        hail(session, catalog);
+        session
+            .answer(
+                1,
+                catalog,
+                &HailOptions::default(),
+                &mut Draws::of(&[0, roll]),
+            )
+            .expect("open")
+    }
+
+    #[test]
+    fn a_warship_asks_its_price_to_fight_an_enemy_threat_and_paid_attacks_it_with_no_call() {
+        // `_DoCommDialog` @0x96465-0x964ee.
+        let (catalog, mut session, pirate) = unranked();
+        let view = request_help(&mut session, &catalog, 99);
+        assert_eq!(view.reply, "You'll have to pay me first.");
+        assert_eq!(view.asking, Some(3000));
+        assert_eq!(session.npcs()[0].goal, Goal::Idle, "nothing until paid");
+        let view = haggle(&mut session, &catalog, Haggle::Accept);
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(session.pilot().cash, 97_000);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
+        assert_eq!(session.reinforcements_coming(), None, "no call (@0x964b4)");
+    }
+
+    #[test]
+    fn a_warships_price_declined_is_laughed_off_and_short_is_no_money() {
+        let (catalog, mut session, _) = unranked();
+        request_help(&mut session, &catalog, 36);
+        let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
+        assert_eq!(view.reply, "Ha ha ha. What a comedian.");
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+        assert_eq!(session.pilot().cash, 100_000);
+        let (catalog, mut session, _) = unranked();
+        session.pilot.cash = 500;
+        request_help(&mut session, &catalog, 99);
+        let view = haggle(&mut session, &catalog, Haggle::Accept);
+        assert_eq!(
+            view.reply,
+            "Yeah, come back when you actually have some money."
+        );
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+        assert_eq!(session.pilot().cash, 500);
+    }
+
+    /// NPC 0 of `session` made an escort of a fleet led by NPC 9.
+    fn in_a_fleet(session: &mut Session) {
+        npc(session).leader = Some(NpcId(9));
+    }
+
+    #[test]
+    fn a_fleet_escort_fights_a_threat_for_nothing_and_drops_its_travel() {
+        // AI type 6 (`_HyperSpawnFleet` @0x421dc): @0x964f8-0x9650f and
+        // `_AIFightThreatToPlayer` (@0x81949-0x81953).
+        let (catalog, mut session, pirate) = unranked();
+        in_a_fleet(&mut session);
+        npc(&mut session).travel_set = true;
+        hail(&mut session, &catalog);
+        let mut chance = Draws::of(&[0]);
+        let view = session
+            .answer(1, &catalog, &HailOptions::default(), &mut chance)
+            .expect("open");
+        assert_eq!(chance.asked, [1], "the pick alone, no haggle roll");
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert!(!helper.travel_set);
+        assert_eq!(session.reinforcements_coming(), None);
+    }
+
+    /// What group `group` says in variant 0 in `hailable`'s strings.
+    fn said(group: u8) -> String {
+        format!("c{}", Reply::locate(group, 0).1)
+    }
+
+    #[test]
+    fn a_busy_fleet_escort_is_just_an_escort() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        in_a_fleet(&mut session);
+        npc(&mut session).goal = Goal::Formation { guard: None };
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn a_fleet_escort_asked_for_fuel_cannot_do_that() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        in_a_fleet(&mut session);
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::CANT_DO_THAT)
         );
     }
 
