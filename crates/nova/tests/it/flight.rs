@@ -736,7 +736,9 @@ fn holding_up_ors_the_engine_glow_over_the_ship_and_it_fades_out_after_release()
 #[test]
 fn the_ships_lights_are_ored_over_it() {
     let mut harness = Harness::flying_with_lights(60);
-    let frame = harness.frame();
+    // The lights are drawn at the level the ship's display drew them,
+    // from its first step on.
+    let frame = harness.run(0.1);
 
     assert_eq!(
         sprite_batch(&frame, 3),
