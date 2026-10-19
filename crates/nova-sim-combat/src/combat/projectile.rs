@@ -1072,12 +1072,13 @@ impl Shot {
     /// A point-defence shot fired at a ship is in the shot layer, and
     /// touches one.
     ///
-    /// It takes the ship met first along the move, which point defence's
-    /// precheck (`touches_a_ship`) and [`Shot::hit`] ask. The hit pass
-    /// itself walks the ships as the original's contact passes do, in
-    /// their layers' order, each ship asking [`Shot::touches`]: of two
-    /// ships a move touches, the one walked first takes the shot, wherever
-    /// it is along the move.
+    /// It takes the ship met first along the move, which [`Shot::hit`]
+    /// asks. The hit pass itself walks the ships as the original's contact
+    /// passes do, in their layers' order, a hidden ship not among them,
+    /// each ship asking [`Shot::touches`]: of two ships a move touches,
+    /// the one walked first takes the shot, wherever it is along the move.
+    /// Point defence's precheck (`touches_a_ship`) asks the same of the
+    /// ships walked.
     ///
     /// The engine tests a swept hit radius in place of the original's
     /// sprite rects and RLE masks (`_SWRadiusCollision`,

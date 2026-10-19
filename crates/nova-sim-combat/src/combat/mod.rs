@@ -2320,7 +2320,9 @@ impl Combat {
         let camera = position_of(&lineup.touchable, ShipRef::Player).unwrap_or(Vec2::ZERO);
         let first_strike = self.strikes.len();
         let mut gone = vec![false; self.shots.len()];
-        self.intercept(camera, &lineup.touch(), &mut gone);
+        let ranks: Vec<_> = fighters.iter().map(|fighter| fighter.sprite).collect();
+        let walked = collision::walk_order(&ranks);
+        self.intercept(camera, (&lineup.touch(), &walked), &mut gone);
         let terms = collision::WalkTerms { arsenal, rule };
         self.resolve(
             (fighters, &mut lineup),
@@ -2398,9 +2400,12 @@ impl Combat {
     /// point defence cannot target (`Flags` 0x0080), a friendly one or one
     /// aimed elsewhere is met all the same (`_PointDefenseCollisionHandler`
     /// @0x37776-0x3785d). A missile shot down by an earlier shot this
-    /// pass, or that touches a ship among `touch` on its move
+    /// pass, or that touches a ship among `touch` on its move that the
+    /// contact passes walk, those of `walked`'s indices
     /// ([`touches_a_ship`], which the original's contact passes take
-    /// first, @0x43e75-0x43ffa), is not met; one whose move spent its life
+    /// first, @0x43e75-0x43ffa), is not met; one that touches only a
+    /// hidden ship is, as the contact passes never walk a hidden ship's
+    /// sprite (@0xacba3); one whose move spent its life
     /// still is, as the pass tests no life. What is spent or destroyed is
     /// marked `gone`, and [`Combat::resolve`] keeps it hidden at life 0
     /// for the proximity pass that follows ([`hidden`]).
@@ -2411,7 +2416,7 @@ impl Combat {
     /// @0xac620), the same but for a reused slot whose sprite was already
     /// in the layer, which keeps its place; the simulation has no slots,
     /// and the order crosses no boundary the player sees.
-    fn intercept(&mut self, camera: Vec2, touch: &Sides, gone: &mut [bool]) {
+    fn intercept(&mut self, camera: Vec2, (touch, walked): (&Sides, &[usize]), gone: &mut [bool]) {
         for pd in 0..self.shots.len() {
             let defender = &self.shots[pd];
             if defender.layer != ShotLayer::PointDefence || defender.moved_from.is_none() {
@@ -2425,7 +2430,7 @@ impl Combat {
                 if gone[missile]
                     || shot.layer != ShotLayer::Homing
                     || !defence::sprites_meet(&self.shots[pd], shot, camera)
-                    || touches_a_ship(shot, from, touch)
+                    || touches_a_ship(shot, from, touch, walked)
                 {
                     continue;
                 }
@@ -3418,12 +3423,18 @@ fn holds_armour(armor: Gauge) -> bool {
 }
 
 /// Whether `shot` meets a ship by contact on its move here from `from`
-/// among `sides`: the original's contact passes, which run before point
-/// defence's (`_DoPlayGameWork` @0x43e75-0x44010), so point defence never
-/// meets it. A shot whose move spent its life is not tested, as in the
-/// hit pass ([`Combat::hit_pass`]).
-fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides) -> bool {
-    !shot.expired() && shot.touched(from, sides).is_some()
+/// among the ships of `sides` at `walked`'s indices, those the contact
+/// passes walk ([`collision::walk_order`]), a hidden ship not among them:
+/// the original's contact passes, which run before point defence's
+/// (`_DoPlayGameWork` @0x43e75-0x44010), so point defence never meets
+/// it. A shot whose move spent its life is not tested, as in the hit pass
+/// ([`Combat::hit_pass`]).
+fn touches_a_ship(shot: &Shot, from: Vec2, sides: &Sides, walked: &[usize]) -> bool {
+    !shot.expired()
+        && walked.iter().any(|&ship| {
+            let target = &sides.targets[ship];
+            shot.touches(from, target).is_some() && sides.shot_can_hit(shot, target)
+        })
 }
 
 /// What a beam's hit weighs as a player's stray hit ([`Strike::weight`]):

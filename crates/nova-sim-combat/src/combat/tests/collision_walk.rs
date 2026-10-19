@@ -411,6 +411,60 @@ fn point_defence_passes_a_missile_that_touched_the_player_where_it_stood() {
     assert_eq!(left, [D], "point defence's shot unspent");
 }
 
+/// A homing missile of A's into C, a point-defence shot of D's over it,
+/// with C hidden or not: the strikes the walk made and whose shots are
+/// left in flight.
+fn missile_into_c_under_point_defence(
+    sprite: Option<SpriteRank>,
+) -> (Vec<(ShipRef, Option<ShipRef>)>, Vec<ShipRef>) {
+    let mut ships = [
+        Ship::at(1, -300.0, 0.0),
+        Ship {
+            sprite,
+            ..Ship::at(3, 0.0, -100.0)
+        },
+        Ship::at(4, 300.0, 0.0),
+    ];
+    let mut combat = Combat::default();
+    fly(
+        &mut combat,
+        (still_missile(), A, ShotLayer::Homing),
+        INTO_C,
+        None,
+    );
+    combat.shots[0].target = Some(C);
+    let at_the_missile = (Vec2::new(0.0, -90.0), INTO_C.1);
+    fly(
+        &mut combat,
+        (pd_shot(), D, ShotLayer::PointDefence),
+        at_the_missile,
+        None,
+    );
+    let struck = walk(&mut combat, &mut ships);
+    let left = combat.shots().iter().map(|shot| shot.firer).collect();
+    (struck, left)
+}
+
+#[test]
+fn point_defence_meets_a_missile_that_touches_only_a_hidden_ship() {
+    // The contact passes never walk a hidden ship's sprite (@0xacba3), so
+    // `_PointDefenseCollisionHandler` (pass 6, @0x43fff) meets the missile.
+    let (struck, left) = missile_into_c_under_point_defence(None);
+    assert_eq!(struck, []);
+    assert_eq!(left, [], "point defence's shot spent, the missile down");
+}
+
+#[test]
+fn point_defence_passes_a_missile_that_touches_a_walked_ship() {
+    let walked = Some(SpriteRank {
+        layer: ShipLayer::Ships,
+        entry: 0,
+    });
+    let (struck, left) = missile_into_c_under_point_defence(walked);
+    assert_eq!(struck, [(C, Some(A))]);
+    assert_eq!(left, [D], "point defence's shot unspent");
+}
+
 #[test]
 fn a_fused_shells_sub_munitions_read_their_owners_plunder_as_it_hits() {
     let released = |plundering: bool| {
