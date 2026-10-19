@@ -161,7 +161,7 @@
 //! | [`LostCargoShare`](RuleKey::LostCargoShare) | `lost_cargo_share` | a lost trader escort's own `Holds` are never in the fleet's space it takes its share of, so it takes min(1, its `Holds` over the rest) of every good (`_DamageShip` @0x3afdd, @0x3b013; `_DestroyPartialFleetCargo` @0xce98-0xcf37; `nova_sim::Session`) | they are, so it takes the share of the space it added, mission escorts too\* |
 //! | [`NonStrictSpeed`](RuleKey::NonStrictSpeed) | `non_strict_speed` | the player and every ship it leads fly at 1.5 × their top speed when the pilot does not play Strict Play (`_ShipMaxSpeed` @0x382e-0x384f, @0xdd078; see `nova_sim::top_speed`) | every ship flies at its own top speed, Strict Play or not\* |
 //! | [`HunterBribe`](RuleKey::HunterBribe) | `hunter_bribe` | a `ShipBehav` 0 mission ship the player paid off attacks the player again on its next think, as no site reads the bribe (`_HighLevelAIHandler` @0x8d628-0x8d6e9, `_AIMakeShipLeave` @0x7e2b0; see `nova_sim::ai::target::mission_hunt`) | the bribe holds: it decides as its type, a wimpy trader, does\* |
-//! | [`ShipOverlap`](RuleKey::ShipOverlap) | `ship_overlap` | ships overlap within each draw layer in the order they last entered it, the player starting on top and a ship entering a layer going over every ship in it (`_PutSpriteInLayer` @0x766c, `_InitSprites` @0x1f0eb-0x1f88b, `_DoPlayGameWork` @0x43e29, @0x444ad; see `nova_sim::Session::draw_order`) | each layer in the session's NPC order, the player on top of its own\* |
+//! | [`ShipOverlap`](RuleKey::ShipOverlap) | `ship_overlap` | ships overlap within each draw layer in the order they last entered it, the player starting on top and a ship entering a layer going over every ship in it (`_PutSpriteInLayer` @0x766c, `_InitSprites` @0x1f0eb-0x1f88b, `_DoPlayGameWork` @0x43e29, @0x444ad; see `nova_sim::Session::draw_order`), and the collision passes walk each layer in it (`_SWCollideSpriteLayer` @0xacb4b) | each layer in the session's NPC order, the player on top of its own\* |
 //! | [`QuadrantTurretArc`](RuleKey::QuadrantTurretArc) | `quadrant_turret_arc` | an NPC's quadrant turret fires only while the angle to its target less the heading (front, 7) or `(heading + 180) mod 360` (rear, 8), absolute and mod 360 with no fold, is at most 45, so one whose reference sits near 0 holds fire across the seam (`_AIFireTurret` @0x80c3d-0x80cf3; `nova_sim::NovaAi`) | the angle folds and the arc wraps\* |
 //! | [`HiddenShips`](RuleKey::HiddenShips) | `hidden_ships` | a ship whose type's `Cost` is -1 is hidden, the player too, and its slot keeps its draw-layer place, as `_HandleShipDisplay` skips its showing and layer block (@0x2b7f3 → @0x2cc6b; see `nova_sim::Session::draw_order`) | drawn and laid out as any other ship\* |
 //! | [`HiddenShipHoverBox`](RuleKey::HiddenShipHoverBox) | `hidden_ship_hover_box` | while `hidden_ships` reads the engine, the pointer hovers a hidden ship by the box of the frames its slot last cloned, its last shown type's or `shïp` 128's in a slot nothing shown has used, as `_HandleShipDisplay` skips `_SWCloneFramesFromMaster` (@0x2b824) and `_HandleMouse` boxes the stale sprite (@0x38171; `_InitSprites` @0x1f193; see `nova_sim::Session::framed_by`) | the box of its own type's sheet\* |
@@ -2225,9 +2225,13 @@ rule_keys! {
     /// as the original's sprites do, so a pilot loaded later in the same
     /// run starts from the order the last one left
     /// (`nova_sim::Session::with_slot_sprites`);
-    /// the other reading has no history. The Bible says nothing of it, so
-    /// the other reading is the intended behaviour, not anything the Bible
-    /// says (see `nova_sim::Session::draw_order`).
+    /// the other reading has no history. By either reading the collision
+    /// passes walk each layer in this order, bottom first
+    /// (`_SWCollideSpriteLayer` @0xacb4b; see
+    /// `nova_sim_combat::combat::SpriteRank`), so of two ships a shot
+    /// touches in one layer, the lower takes it. The Bible says nothing of
+    /// it, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see `nova_sim::Session::draw_order`).
     ShipOverlap => "ship_overlap",
     /// How an NPC's quadrant turret (guidance 7 and 8) measures its arc
     /// (see `nova_sim::ai::fire`). By the engine, as `_AIFireTurret`

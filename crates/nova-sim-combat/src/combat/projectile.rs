@@ -1072,18 +1072,43 @@ impl Shot {
     /// A point-defence shot fired at a ship is in the shot layer, and
     /// touches one.
     ///
-    /// It takes the ship met first along the move; the original's
-    /// contact pass goes in sprite-collision order, which crosses no
-    /// boundary the player sees.
+    /// It takes the ship met first along the move, which point defence's
+    /// precheck (`touches_a_ship`) and [`Shot::hit`] ask. The hit pass
+    /// itself walks the ships as the original's contact passes do, in
+    /// their layers' order, each ship asking [`Shot::touches`]: of two
+    /// ships a move touches, the one walked first takes the shot, wherever
+    /// it is along the move.
+    ///
+    /// The engine tests a swept hit radius in place of the original's
+    /// sprite rects and RLE masks (`_SWRadiusCollision`,
+    /// `_SWRLECollision` @0x3700f-0x3704a).
     #[must_use]
     pub fn touched(&self, was: Vec2, sides: &Sides) -> Option<Meeting> {
-        // Point defence's layer is one no ship's collision proc acts on
-        // (see the doc comment).
-        let by_contact = self.layer != ShotLayer::PointDefence;
-        if !by_contact || self.age < self.weapon.prox_safety {
+        if !self.touches_ships() {
             return None;
         }
         self.first_along(was, sides, Fuse::Contact, 0.0)
+    }
+
+    /// Where on its move here from `was` it touched `target`, within its
+    /// hit radius, whether or not it can hit it: one ship's contact, as
+    /// the contact passes test each ship they walk ([`Shot::touched`]).
+    /// None for a shot in point defence's layer, or before its
+    /// `ProxSafety`.
+    #[must_use]
+    pub fn touches(&self, was: Vec2, target: &Target) -> Option<Vec2> {
+        if !self.touches_ships() {
+            return None;
+        }
+        let t = contact(was, self.position, target.position, target.radius)?;
+        Some(was + (self.position - was) * t)
+    }
+
+    /// Whether it can touch a ship at all: it is not in point defence's
+    /// layer, one no ship's collision proc acts on (see
+    /// [`Shot::touched`]), and its age has reached its `ProxSafety`.
+    fn touches_ships(&self) -> bool {
+        self.layer != ShotLayer::PointDefence && self.age >= self.weapon.prox_safety
     }
 
     /// The ship among `sides` that sets its proximity fuse off, its move
@@ -1678,6 +1703,47 @@ mod tests {
         assert!(
             (from_20.at.x - first.at.x).abs() < 1e-3 && from_20.at.y.abs() < 1e-3,
             "met at the same point on a shorter way: {from_20:?}"
+        );
+    }
+
+    #[test]
+    fn a_shot_touches_one_ship_where_touched_meets_it_alone() {
+        let shot = passing(3);
+        let lone = target(2, 50.0, 4.9, Condition::Intact);
+        let touched = shot.touched(Vec2::ZERO, &among(&[lone])).expect("touched");
+        assert_eq!(shot.touches(Vec2::ZERO, &lone), Some(touched.at));
+        // Behind a nearer ship it still touches: one ship's contact.
+        assert!(
+            shot.touches(Vec2::ZERO, &target(3, 80.0, 0.0, Condition::Intact))
+                .is_some()
+        );
+        assert_eq!(
+            shot.touches(Vec2::ZERO, &target(2, 50.0, 7.9, Condition::Intact)),
+            None,
+            "within its fuse's reach alone"
+        );
+    }
+
+    #[test]
+    fn a_shot_touches_no_ship_before_its_prox_safety() {
+        let mut shot = passing(0);
+        shot.weapon.prox_safety = 5;
+        shot.age = 4;
+        let on_path = target(2, 50.0, 0.0, Condition::Intact);
+        assert_eq!(shot.touches(Vec2::ZERO, &on_path), None);
+        shot.age = 5;
+        assert!(shot.touches(Vec2::ZERO, &on_path).is_some());
+    }
+
+    #[test]
+    fn a_shot_in_point_defences_layer_touches_no_ship() {
+        let shot = Shot {
+            layer: ShotLayer::PointDefence,
+            ..passing(0)
+        };
+        assert_eq!(
+            shot.touches(Vec2::ZERO, &target(2, 50.0, 0.0, Condition::Intact)),
+            None
         );
     }
 

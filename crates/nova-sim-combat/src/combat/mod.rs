@@ -95,9 +95,16 @@
 //!    moved, and is not tested. The pass meets each NPC where it stood as
 //!    the last tick ran and the player where it is now, but for contact
 //!    and point defence's sprites, which meet the player where it stood
-//!    too. In the original's order:
-//!    - Each shot that touches a ship it may hit ([`sides`]) on its move
-//!      hits it, or else an asteroid it touched (see 2a).
+//!    too. In the original's order (see the `collision` module):
+//!    - The contact passes: for each shot layer in turn (the shots, the
+//!      homing missiles, then the turret shots drawn over the ships), the
+//!      ships are walked by layer, top first, and within a layer in the
+//!      order they are drawn, bottom first ([`Fighter::sprite`]; a hidden
+//!      ship is not walked); each ship meets the layer's shots in firing
+//!      order, and a shot that touches a ship it may hit ([`sides`]) hits
+//!      it. So of two ships a move touches, the one walked first takes
+//!      the shot. Then the layer's shots meet the asteroids they touched
+//!      (see 2a).
 //!    - A point-defence shot still in point defence's layer (fired at a
 //!      missile; one fired at a ship is in the shot layer, contact-tested
 //!      like any shot and meeting no missile,
@@ -160,13 +167,16 @@
 //!    stellar. The session takes each hit as a [`StellarStrike`]
 //!    ([`Combat::take_stellar_strikes`]) and shoots down those it
 //!    destroyed.
-//! 3. The pass's hits land at once (`Combat::land`), in its order:
-//!    contacts, then proximities. Each ship struck settles its condition
-//!    as step 9 does, but for a breakup's countdown: it is disabled, or
-//!    starts breaking up, and the pass's last strike on it says so. So an
-//!    NPC downed by a shot runs no point defence and fires nothing more
-//!    that tick, as `_AIDispatch` and `_HandleShip` read `_IsDisabled`
-//!    after the passes.
+//! 3. Each of the pass's hits lands as the walk finds it (`Combat::land`),
+//!    with its blast, as `_HandleShipHit` lands it before the walk's next
+//!    pair: so a later test in the pass reads the armour the hits before
+//!    it left, and a turret shot rolling over a fighter that an earlier
+//!    hit disabled hits it ([`Target::disabled`]). After the pass, each
+//!    ship struck settles its condition as step 9 does, but for a
+//!    breakup's countdown: it is disabled, or starts breaking up, and the
+//!    pass's last strike on it says so. So an NPC downed by a shot runs no
+//!    point defence and fires nothing more that tick, as `_AIDispatch` and
+//!    `_HandleShip` read `_IsDisabled` after the passes.
 //! 4. Every NPC's point defence fires ([`Combat::defend_npcs`]), as
 //!    `_AIDispatch` runs it in its slot loop (@0x4429d, `_AIFireTurret`
 //!    @0x80b0d), on the advance pass alone (@0x4402a). So a missile an NPC
@@ -299,8 +309,6 @@
 //! What remains of the original's order crosses no boundary the player
 //! sees, and is not filed:
 //!
-//! - Within the hit pass, shots go in the order they are kept, where the
-//!   original goes in sprite-collision or slot order.
 //! - Step 5 runs every end of life and then every move, where
 //!   `_HandleShot` goes slot by slot, and frees the held slots at once,
 //!   where the original frees each at its visit.
@@ -309,7 +317,13 @@
 //!
 //! When a breakup's countdown starts, and when ships regenerate, differ
 //! from the original's `_HandleShipDisplay` and `_HandleShip` per-slot
-//! loop (filed as weapons-fidelity's phase 39).
+//! loop (filed as weapons-fidelity's phase 39). Two orders within the hit
+//! pass differ too: the shots within a layer go in firing order, where
+//! the original walks them by entry, a reused shot slot keeping its place,
+//! and its proximity pass by slot (weapons-fidelity phase 34); and the
+//! ships are walked in the layers the last tick's layout left, which puts
+//! a ship the beams or the late steps disabled in its new layer a frame
+//! early (weapons-fidelity phase 39, item 3). See the `collision` module.
 
 //! A tick runs on a [`GamePass`] ([`Combat::tick_on`]): double time's second
 //! pass runs every step but the NPCs' point defence, which it skips, and
@@ -380,8 +394,8 @@ use jamming::Jamming;
 pub use phases::Arena;
 use plunder::Plunderer;
 use projectile::{
-    BombLaunch, DecayStep, Fuse, Guide, Jam, LockAngle, Meeting, ProximityFuse, Shot, ShotId,
-    ShotLayer, Sight, Source, Target,
+    BombLaunch, DecayStep, Guide, Jam, LockAngle, ProximityFuse, Shot, ShotId, ShotLayer, Sight,
+    Source, Target,
 };
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
@@ -2229,15 +2243,19 @@ impl Combat {
     /// frame tests it, before `_HandleShot` moves it again
     /// (`_DoPlayGameWork` @0x43e70-0x44015, @0x44385). A shot that has not
     /// moved yet is not tested, as its sprite is not shown. The tests go
-    /// in the original's order:
+    /// in the original's order ([`collision`]):
     ///
-    /// 1. contact with a ship, then with an asteroid (`rock_met`);
-    /// 2. the point-defence layer against the missiles
-    ///    ([`Combat::intercept`]);
-    /// 3. the proximity fuse, a ship then an asteroid; then the shots
-    ///    point defence ended, kept hidden at life 0, which only a stellar
-    ///    or an asteroid sets off ([`hidden`], [`Combat::test_hidden`]):
-    ///    this pass's point-defence ends and the last tick's beam kills;
+    /// 1. the point-defence layer against the missiles
+    ///    ([`Combat::intercept`]), whose precheck stands in for the
+    ///    contact passes the original runs first;
+    /// 2. the contact passes, each shot layer against the ships, walked by
+    ///    layer and entry, then the asteroids; then point defence's layer
+    ///    against the asteroids;
+    /// 3. the proximity pass, a ship then an asteroid ([`Combat::resolve`]);
+    ///    then the shots point defence ended, kept hidden at life 0, which
+    ///    only a stellar or an asteroid sets off ([`hidden`],
+    ///    [`Combat::test_hidden`]): this pass's point-defence ends and the
+    ///    last tick's beam kills;
     /// 4. the stellars ([`Combat::strike_stellars`]).
     ///
     /// A shot whose move spent it meets only the asteroids it touches, and
@@ -2256,17 +2274,18 @@ impl Combat {
     /// `arsenal`, its spread drawn on `chance`; the relations between
     /// governments are `govts`'.
     ///
-    /// The hits land at once ([`Combat::land`]), as `_DamageShip` takes
-    /// each, and each ship struck settles its condition as step 9 does
-    /// but for a breakup's countdown, its strike marked as downing it,
-    /// as `rule` says: so an NPC downed by a shot fires nothing more that
+    /// Each hit lands as the walk finds it ([`Combat::land`]), as
+    /// `_HandleShipHit` lands it before the walk's next pair, so a later
+    /// test reads the armour it left ([`Target::disabled`]). Each ship
+    /// struck then settles its condition as step 9 does but for a
+    /// breakup's countdown, its last strike marked as downing it, as
+    /// `rule` says: so an NPC downed by a shot fires nothing more that
     /// tick, as `_HandleShip`'s fire reads `_IsDisabled` after the passes.
     /// It keeps the ships whose breakup it began, whose first tick takes no
-    /// tick off (step 9, see `Combat::settle_struck`).
-    ///
-    /// Within the pass, shots go in the order they are kept, where the
-    /// original goes in sprite-collision or slot order; that crosses no
-    /// boundary the player sees.
+    /// tick off (step 9, see `Combat::settle_struck`). The original
+    /// settles each in `_DamageShip`; nothing in the pass reads the
+    /// condition but whether a ship is destroyed, which no hit there
+    /// changes, so settling after it crosses no boundary.
     fn hit_pass(
         &mut self,
         fighters: &mut [Fighter],
@@ -2292,28 +2311,25 @@ impl Combat {
                 _ => *target,
             })
             .collect();
-        let sides = Sides {
-            targets: &targets,
+        let mut lineup = collision::Lineup {
+            targets,
+            touchable,
             govts,
             pass_through: self.pass_through,
         };
-        let touch = Sides {
-            targets: &touchable,
-            ..sides
-        };
-        let camera = position_of(&touchable, ShipRef::Player).unwrap_or(Vec2::ZERO);
+        let camera = position_of(&lineup.touchable, ShipRef::Player).unwrap_or(Vec2::ZERO);
         let first_strike = self.strikes.len();
         let mut gone = vec![false; self.shots.len()];
-        self.intercept(camera, &touch, &mut gone);
-        let mut hits = self.resolve(
-            fighters,
-            (&sides, &touch),
+        self.intercept(camera, &lineup.touch(), &mut gone);
+        let terms = collision::WalkTerms { arsenal, rule };
+        self.resolve(
+            (fighters, &mut lineup),
             &gone,
-            arsenal,
+            &terms,
             chance,
             &mut *asteroids,
         );
-        hits.extend(self.test_hidden(fighters, &mut *stellars, asteroids));
+        let hits = self.test_hidden(fighters, &mut *stellars, asteroids);
         self.land(fighters, hits, rule);
         self.strike_stellars(stellars);
         for (fighter, position) in fighters.iter_mut().zip(now) {
@@ -2467,137 +2483,6 @@ impl Combat {
         });
     }
 
-    /// The hit pass's ship and asteroid tests (see [`Combat::hit_pass`]):
-    /// the hits and blasts of the shots that have moved, among `sides`
-    /// and, for contact, `touch`, those `gone` to point defence taken out
-    /// first and kept hidden at life 0 ([`Combat::hide`]); each sub-munition's weapon is read from `arsenal`, its spread
-    /// drawn on `chance`. Gives the hits on ships to land, in the
-    /// original's pass order: contacts, then proximities. A shot its move
-    /// spent that meets no asteroid is kept for its end of life in
-    /// `_HandleShot` ([`Combat::expire`]).
-    ///
-    /// Each shot is checked against the ships and `asteroids` in the
-    /// original's order (`_DoPlayGameWork` @0x43e70-0x43fd8, then
-    /// `_CheckShotProximities` @0x44015): a ship it touched, then an
-    /// asteroid it touched, then a ship that set its fuse off as
-    /// [`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse) says, then
-    /// an asteroid that set it off ([`asteroid_hit`]). The move that spends
-    /// a shot tests no ship and no asteroid's fuse (`_CheckShotProximities`
-    /// @0x371ea skips it before both); an asteroid it touches on that move
-    /// it still meets, as `_AsteroidCollisionHandler` tests no life.
-    fn resolve(
-        &mut self,
-        fighters: &[Fighter],
-        (sides, touch): (&Sides, &Sides),
-        gone: &[bool],
-        arsenal: &Arsenal,
-        chance: &mut dyn Chance,
-        asteroids: &mut [AsteroidTarget],
-    ) -> Vec<Landed> {
-        // The original's passes, in its frame's order: the contact passes
-        // (`_SWCollideSpriteLayer` @0x43e70-0x44010), then the proximity
-        // pass (`_CheckShotProximities` @0x44015), each hit with its blast.
-        let mut contacts: Vec<Landed> = Vec::new();
-        let mut proximities: Vec<Landed> = Vec::new();
-        let mut kept = Vec::with_capacity(self.shots.len());
-        let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
-        let shots = std::mem::take(&mut self.shots);
-        let mut ended = 0;
-        for (mut shot, &gone) in shots.into_iter().zip(gone) {
-            let Some(from) = shot.moved_from else {
-                kept.push(shot);
-                continue;
-            };
-            if gone {
-                ended += 1;
-                self.hide(shot);
-                continue;
-            }
-            let hit = Hit {
-                cant_kill: shot.disable_only,
-                ..Hit::of(&shot.weapon)
-            };
-            // The move that spends a shot is never tested: both passes
-            // skip a shot whose life is down to none (`_ShotCanHitShip`
-            // @0x447c2, `_CheckShotProximities` @0x371ea), and its end of
-            // life comes the next frame where it moved to (@0x36195).
-            let met = (!shot.expired())
-                .then(|| {
-                    shot.touched(from, touch)
-                        .or_else(|| shot.fused(from, sides, self.proximity_fuse))
-                })
-                .flatten();
-            let fuse = self.asteroid_fuse;
-            if let Some((index, at, how)) = rock_met(&shot, from, met, asteroids, fuse) {
-                let queue = match how {
-                    Fuse::Contact => &mut contacts,
-                    Fuse::Proximity => &mut proximities,
-                };
-                self.hit_asteroid(&shot, &mut asteroids[index], at, fighters, queue);
-                ended += 1;
-                continue;
-            }
-            let subs = if let Some(Meeting { ship, at, fuse }) = met {
-                let queue = match fuse {
-                    Fuse::Contact => &mut contacts,
-                    Fuse::Proximity => &mut proximities,
-                };
-                queue.push(Landed {
-                    ship,
-                    by: shot.attacker(),
-                    weapon: Some(shot.weapon.id),
-                    at,
-                    hit: hit.decayed(shot.decay_steps(self.decay)),
-                    direct: true,
-                    intended: shot.aimed_at == Some(ship),
-                    lock: false,
-                    weight: shot.weapon.reload,
-                    push: Push {
-                        from: at,
-                        impact: shot.weapon.impact,
-                        beam: false,
-                    },
-                    ion: Some(Dose::of(&shot.weapon, None)),
-                });
-                shot.position = at;
-                let blast = shot.blast(Some(ship));
-                self.explode_shot(&shot, &blast);
-                // Once a hit, where the shot is (`_HandleShipHit`
-                // @0x36b44-0x36bae); the ships its blast reaches spray none.
-                self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-                // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
-                queue.extend(blasted(&shot, &blast, hit, 0.0, sides.targets));
-                // Only the proximity pass releases sub-munitions
-                // (`spawnSubs` 1 @0x37678, 0 @0x37095).
-                (fuse == Fuse::Proximity).then_some(Some(ship))
-            } else {
-                // A shot its move spent waits for its end of life in
-                // `_HandleShot` (`Combat::expire`).
-                kept.push(shot);
-                continue;
-            };
-            ended += 1;
-            if let Some(target) = subs {
-                released.push((shot, target));
-            }
-        }
-        let mut hits = contacts;
-        hits.extend(proximities);
-        self.ended_shots += ended;
-        self.shots = kept;
-        for (parent, target) in released {
-            // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):
-            // its plunder as it is now, not the parent's flag.
-            let owner = fighters
-                .iter()
-                .find(|fighter| fighter.ship == parent.firer)
-                .filter(|_| matches!(parent.source, Source::Ship(_)))
-                .map_or_else(Plunderer::default, Plunderer::of);
-            self.release(&parent, (target, owner), sides, arsenal, chance);
-        }
-        hits
-    }
-
     /// `shot`'s explosion where `blast` goes off, if its weapon has one,
     /// of its `BlastRadius` (`_CreateExplosion(.., ExplodType,
     /// BlastRadius, 1)`, `_HandleShipHit` @0x36aa9, `_HandleShot`
@@ -2696,7 +2581,8 @@ impl Combat {
     /// velocities from the shoves after the fight's tick
     /// ([`Combat::take_shoves`]), before the next movement, which crosses
     /// no boundary the player sees. The hits compound in the order they
-    /// land: contacts, proximities, expiries, locks, then beams.
+    /// land: the hit pass's in its walk's order ([`collision`]), then
+    /// expiries, locks, then beams.
     ///
     /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
     /// at the ship's place, the escape pod included, whatever the tractor
@@ -3516,33 +3402,6 @@ fn truncate_downed_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
     if armour_gone(armor) || holds_armour(armor) && rule.disabled(armor, &fighter.hull) {
         fighter.reserves.armor.now = armor.now.trunc();
     }
-}
-
-/// The asteroid among `asteroids`, by its index, that `shot`, flown here
-/// from `from`, meets in place of `met`, its meeting with a ship if any,
-/// where and how, in the original's order (see [`Combat::resolve`]): an
-/// asteroid it touched, unless it touched a ship first; else, when no ship
-/// met it, one that set off its armed fuse as `fuse` says, where the shot
-/// is. A shot whose life is spent sets off no fuse (`_CheckShotProximities`
-/// @0x371ea), but an asteroid it touches it still meets, as
-/// `_AsteroidCollisionHandler` tests no life.
-fn rock_met(
-    shot: &Shot,
-    from: Vec2,
-    met: Option<Meeting>,
-    asteroids: &[AsteroidTarget],
-    fuse: AsteroidFuse,
-) -> Option<(usize, Vec2, Fuse)> {
-    if met.is_some_and(|met| met.fuse == Fuse::Contact) {
-        return None;
-    }
-    if let Some((index, at)) = asteroid_hit::touched(shot, from, asteroids) {
-        return Some((index, at, Fuse::Contact));
-    }
-    if met.is_some() || shot.expired() {
-        return None;
-    }
-    asteroid_hit::fused(shot, asteroids, fuse).map(|index| (index, shot.position, Fuse::Proximity))
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
