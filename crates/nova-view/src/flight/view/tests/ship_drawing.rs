@@ -539,6 +539,32 @@ const ION: nova_sim::combat::ion_tint::IonTint = nova_sim::combat::ion_tint::Ion
     colour: 0x0034_c2ff,
 };
 
+/// Has `ship`'s shield flash in `view` on a hit's first frame at a full
+/// shield: the level its layer is drawn at.
+fn flashing(view: &mut View, ship: ShipRef) -> u8 {
+    let mut flash = crate::flight::flash::ShieldFlash::default();
+    flash.hit(false);
+    let level = flash.step(100.0, 100.0, true).expect("drawn");
+    view.flashes.insert(ship, flash);
+    level
+}
+
+/// Each sprite of `image` drawn plainly in `list`: its tint and whether
+/// it is OR-ed in.
+fn plain_of(list: &DrawList, image: i16) -> Vec<(Color, bool)> {
+    list.iter()
+        .filter_map(|command| match *command {
+            DrawCommand::Sprite {
+                image: key,
+                tint,
+                blend,
+                ..
+            } if key.id == image => Some((tint, blend == crate::draw::Blend::Or)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The NPC's sheet with an alt layer (`rlëD` 2400) and a shield
 /// (`rlëD` 2500), `BaseTransp` 10.
 fn ionized_sheet() -> ShipSheet {
@@ -571,9 +597,10 @@ fn murky_ionizing(rules: Option<nova_sim::Rulebook>) -> View {
 
 #[test]
 fn an_ionized_npc_draws_its_hull_and_layers_colorized_in_its_ion_colour_at_its_unmurked_tint() {
-    let view = murky_ionizing(None);
+    let mut view = murky_ionizing(None);
     let mut npc = npc_of(&view);
     npc.display.drawn.alt_set = Some(0);
+    let shield = flashing(&mut view, ShipRef::Npc(npc.id));
     let (list, murk) =
         npc_drawn_ionized(&view, &npc, Some(ION), nova_sim::Vec2::new(100.0, -100.0));
     assert!(murk > 0 && murk < 16, "{murk}");
@@ -592,6 +619,12 @@ fn an_ionized_npc_draws_its_hull_and_layers_colorized_in_its_ion_colour_at_its_u
         [(unmurked, false, colorize)],
         "the alt layer"
     );
+    assert_eq!(
+        colorized_of(&list, 2500),
+        [(lights_tint(shield), true, colorize)],
+        "the shield, at its own level unmurked, in the hull's colorize"
+    );
+    assert_eq!(plain_of(&list, 2500), [], "drawn colorized alone");
     // Its glow and lights copy the hull's colorize, the lights a third as
     // deep, each held below it.
     let glow = colorized_of(&list, 2101);
@@ -614,11 +647,18 @@ fn an_ionized_npc_draws_its_hull_and_layers_colorized_in_its_ion_colour_at_its_u
 
 #[test]
 fn an_npc_below_a_third_ionized_draws_as_before() {
-    let view = murky_ionizing(None);
+    let mut view = murky_ionizing(None);
     let npc = npc_of(&view);
+    let shield = flashing(&mut view, ShipRef::Npc(npc.id));
     let at = nova_sim::Vec2::new(100.0, -100.0);
     let (plain, murk) = npc_drawn_ionized(&view, &npc, None, at);
     assert!(colorized_of(&plain, 2001).is_empty());
+    assert!(colorized_of(&plain, 2500).is_empty());
+    assert_eq!(
+        plain_of(&plain, 2500),
+        [(murk_tint(lights_tint(shield), murk), true)],
+        "its shield murked"
+    );
     let hull = plain.iter().find_map(|command| match *command {
         DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(tint),
         _ => None,
@@ -710,4 +750,12 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
     assert_eq!(hull[0].2, crate::Colorize::toward(tint.level, 0x0000_80ff));
     assert_eq!(hull[0].0, Color::WHITE, "never murked");
     assert!(colorized_of(&list, 2100).is_empty(), "its glow plain");
+    let shield = flashing(&mut view, ShipRef::Player);
+    let list = drawn(&view);
+    assert_eq!(
+        colorized_of(&list, 2300),
+        [(lights_tint(shield), true, hull[0].2)],
+        "its shield takes the hull's colorize"
+    );
+    assert_eq!(plain_of(&list, 2300), [], "drawn colorized alone");
 }

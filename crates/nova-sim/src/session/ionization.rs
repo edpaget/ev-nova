@@ -494,6 +494,54 @@ mod tests {
         assert_eq!(fired_ticks(6.0), [1, 7]);
     }
 
+    /// The fights, from 1, on which NPC 0, of class `IonizeMax` 100 and
+    /// charged `charge`, fires its blaster of `Seeker` 0x0020 (reload 2)
+    /// at the player 100 above it, over 3 fights; and its reload as they
+    /// end.
+    fn npc_fired_ticks(charge: f32) -> (Vec<u32>, f32) {
+        use crate::combat::ion::CANT_FIRE_IONIZED;
+        use crate::session::tests::{armed, blaster, knocking};
+        use crate::testkit::ship;
+        let mut catalog = armed();
+        catalog.ship_records = vec![ship(
+            129,
+            ShipFields {
+                ionize_max: 100,
+                ..FAST
+            },
+        )];
+        let gun = crate::catalog::WeaponRecord {
+            seeker: CANT_FIRE_IONIZED,
+            ..blaster()
+        };
+        let mut session = knocking(&catalog, (None, 100.0), (Some(gun), 100.0));
+        let npc = &mut session.traffic.npcs_mut()[0];
+        assert_eq!(npc.stats.ion.capacity(Flyer::Npc), 100.0, "its class's");
+        npc.ion.charge = charge;
+        let mut fired = Vec::new();
+        for tick in 1..=3 {
+            let before = session.shots().len();
+            session.tick_combat(
+                crate::combat::Rules::default(),
+                &mut crate::chance::NeverFires,
+            );
+            if session.shots().len() > before {
+                fired.push(tick);
+            }
+        }
+        let reload = session.npcs()[0].armament.mounts()[0].reload;
+        (fired, reload)
+    }
+
+    #[test]
+    fn an_npcs_seeker_0x0020_gun_is_held_from_a_factor_of_1_of_its_class_ionize_max() {
+        // Its first shot leaves before any reload step can hold it.
+        assert_eq!(npc_fired_ticks(100.0), (vec![1], 1.0), "factor 1: held");
+        assert_eq!(npc_fired_ticks(250.0), (vec![1], 1.0), "factor 2.5: held");
+        assert_eq!(npc_fired_ticks(99.0), (vec![1, 3], 1.0), "0.99: fires");
+        assert_eq!(npc_fired_ticks(0.0), (vec![1, 3], 1.0), "uncharged");
+    }
+
     // The dissipator.
 
     #[test]
