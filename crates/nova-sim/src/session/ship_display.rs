@@ -14,11 +14,11 @@
 //! -6 turning left or auto-turning, else 0 (6.0 @0xdd06c, -6.0 @0xdd964):
 //! auto-turning (local -0x2cd) flags a bank either way. A banked ship of
 //! 0x0002 raises its glow by 2 while it is 23 or less (@0x6cece-0x6cf06),
-//! between the thrust's step and the afterburner's ([`step_glow`]).
+//! between the thrust's step and the afterburner's ([`step_glow`](crate::glow::step_glow)).
 //!
 //! Through a jump (+0x50 above 0, @0x6cf0d-0x6cf6c) the bank turns with the
 //! jump's auto-turn, a ship of 0x0001 levels at once past a stage of 30
-//! (30.0 @0xdd084), and the glow falls 1 more ([`ramp_jump_glow`]'s second
+//! (30.0 @0xdd084), and the glow falls 1 more ([`ramp_jump_glow`](crate::glow::ramp_jump_glow)'s second
 //! fall). The player's +0x4c, the block's other test, is never set here.
 //!
 //! **The fold's writers**, each the player's [`Fold`]:

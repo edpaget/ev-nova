@@ -21,7 +21,8 @@
 //!   bank flag (+0xc8f8) is below 0, set 2 above, set 0 at 0. The flag is
 //!   the flight's (`nova_sim::traffic::ship_display` and the session's).
 //! - **0x0002, folding** ([`FOLDS`], @0x2b894-0x2b9f1): the fold set
-//!   (+0xc8fc, [`Armament::fold`]) steps toward its direction (+0xc8fa):
+//!   (+0xc8fc, [`Armament::fold`](super::armament::Armament::fold)) steps
+//!   toward its direction (+0xc8fa):
 //!   with a direction its timer (+0xc8e4, the bank's own field) grows by a
 //!   frame, and past `AnimDelay` it zeroes and the set steps, stopping
 //!   at `BaseSets` − 1 going up or 0 going down, where the direction goes
