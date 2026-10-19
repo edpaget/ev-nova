@@ -64,6 +64,11 @@ pub fn the_installed_bar_is_the_applications_and_sends_the_games_commands() {
         [Command::Quit, Command::Preferences, Command::About]
     );
 
+    assert_eq!(
+        format!("{bar:?}"),
+        "MenuBar { commands: [About, Preferences, Quit], .. }"
+    );
+
     // The game greys and offers its commands.
     bar.set_enabled(Command::Preferences, false);
     assert!(!prefs.isEnabled());
