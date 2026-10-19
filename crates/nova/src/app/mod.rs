@@ -142,14 +142,16 @@ use nova_render::{Gpu, ImageError, ImageSource, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
 use nova_view::view_shape::widened_size;
 use nova_view::{
-    DrawList, FullscreenKind, ImageKey, Input, Key, MonitorMode, MouseButton, Point, Screen,
-    ScreenAction, ViewShape,
+    DrawList, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode, MouseButton, Point,
+    Screen, ScreenAction, ViewShape,
 };
 
 mod fullscreen;
+mod menu;
 mod scaling;
 pub mod screen;
 
+pub use menu::{MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};
 
 use crate::config::Os;
@@ -266,6 +268,8 @@ pub enum WindowEvent {
     },
     /// The user asked to close the window.
     CloseRequested,
+    /// An item of the platform's menu bar was picked (see `menu`).
+    Menu(MenuCommand),
 }
 
 /// Whether the app goes on after an event.
@@ -781,6 +785,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 })
             }
             WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
+            WindowEvent::Menu(command) => game(self.route_menu(command)),
         }
     }
 
@@ -978,6 +983,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             self.cursor_synced = true;
         }
         let action = self.screen.input(&input);
+        self.after_input(action)
+    }
+
+    /// What follows the screen's answer to an input, `action`: the
+    /// viewport refitted to its shape, the audio fed, its warnings kept,
+    /// and an exit when it quits, now or through [`Screen::take_quit`].
+    fn after_input(&mut self, action: ScreenAction) -> Control {
         self.refit_shape();
         self.forget_sync_unless_drawing();
         self.feed_audio();
@@ -1220,6 +1232,7 @@ mod tests {
     type TestApp = App<NoImages, RecordingScreen>;
 
     mod display_shapes;
+    mod menu;
     mod pointer_release;
 
     /// Bytes written, kept where the test can read them.
