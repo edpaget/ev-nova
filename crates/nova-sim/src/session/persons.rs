@@ -976,6 +976,59 @@ mod tests {
         }
     }
 
+    /// [`facing_ace`] over [`duel`]`(GRUDGE, 0)`, Ace still facing the
+    /// player and attacking a quarry at `quarry`, ticked through the
+    /// fight's real settle path (each tick's strikes settled, then
+    /// answered) until the player's blaster hits it, at most 60 ticks.
+    fn ace_hit_while_hunting(quarry: Vec2) -> (Session, NpcId) {
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let mut ship = session.npcs()[0].clone();
+        ship.person = None;
+        ship.state.position = quarry;
+        let quarry = session.traffic.add_npc(ship);
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
+        ace.pursuit.frame = None;
+        for _ in 0..60 {
+            let shield = session.npcs()[0].reserves.shield.now;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.answer_strikes(&crate::ai::NovaAi::default());
+            if session.npcs()[0].reserves.shield.now < shield {
+                return (session, quarry);
+            }
+        }
+        panic!("never hit: {:?}", session.npcs()[0]);
+    }
+
+    #[test]
+    fn the_grudges_focus_reads_the_npcs_before_the_strikes_are_answered() {
+        // The focus test (@0x3bbf3-0x3bcac) runs before `_DamageShip`'s
+        // `_AIMakeShipAttackPlayer`: read after the answer, a person
+        // turned on the player and facing it would look to keep its new
+        // target and skip the grudge (@0x3be83-0x3beb3).
+        //
+        // Its quarry beside the player, nearer than twice the player's 100
+        // (100² > 0.25 × 116.6²): it keeps its target, with no grudge.
+        let (session, quarry) = ace_hit_while_hunting(Vec2::new(60.0, 0.0));
+        assert_eq!(session.world().hit_focus, RuleSource::Engine);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+        assert_eq!(
+            session.npcs()[0].goal,
+            crate::ai::Goal::Attack(ShipRef::Npc(quarry))
+        );
+        // Its quarry behind the player, 400 off (100² is not above
+        // 0.25 × 400²): it holds the grudge and turns on the player.
+        let (session, _) = ace_hit_while_hunting(Vec2::new(0.0, 300.0));
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+        assert_eq!(
+            session.npcs()[0].goal,
+            crate::ai::Goal::Attack(ShipRef::Player)
+        );
+    }
+
     #[test]
     fn a_hit_by_no_ship_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
