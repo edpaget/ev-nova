@@ -143,4 +143,36 @@ mod tests {
             assert_eq!(subs[0].layer, layer, "{source:?}");
         }
     }
+
+    #[test]
+    fn a_sessions_shot_slots_reach_the_next_session_through_its_slot_sprites() {
+        // The shot sprites outlive a pilot, as the ship slots' do
+        // (`_InitSprites` runs once, @0x1fa90-0x1fb83).
+        let catalog = armed();
+        let mut history = crate::combat::shot_slots::ShotSlots::new();
+        history.put(0, ShotLayer::Homing);
+        history.write_roll(0, Some(40));
+        let sprites = crate::ship_layer::SlotSprites {
+            shots: history.clone(),
+            ..Default::default()
+        };
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_slot_sprites(sprites);
+        assert_eq!(session.combat.shot_slots(), history, "handed to the fight");
+        session.hold_trigger(FIRE);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.shots().len(), 1);
+        let left = session.slot_sprites().shots.clone();
+        assert_eq!(left.rank(0).map(|(layer, _)| layer), Some(ShotLayer::Shots));
+        assert!(
+            left.rank(127) < left.rank(0),
+            "moved to the shot layer's tail"
+        );
+        assert_eq!(left.roll(0), None, "the blaster's own roll, none");
+        let next = Session::start(&catalog)
+            .expect("starts")
+            .with_slot_sprites(session.slot_sprites().clone());
+        assert_eq!(next.combat.shot_slots(), left);
+    }
 }

@@ -658,3 +658,44 @@ fn sub_of(parent: &Shot) -> Shot {
         ..*parent
     }
 }
+
+#[test]
+fn the_shot_slots_keep_their_places_and_rolls_through_a_system_change() {
+    // `_InitSprites` lays the shot sprites out once (@0x1fa90-0x1fb83);
+    // a system change only frees the slots, and a homing shot in slot 0
+    // keeps the place slot 0 took in the homing layer.
+    let mut combat = Combat::default();
+    combat.put_in_flight(in_layer(ShotLayer::Homing, 0));
+    combat.put_in_flight(Shot {
+        miss_roll: Some(40),
+        ..in_layer(ShotLayer::Homing, 1)
+    });
+    combat.slots.hold(2);
+    let history = combat.shot_slots();
+    combat.clear();
+    assert_eq!(combat.slots.held().count(), 0, "every slot free");
+    assert_eq!(combat.shot_slots(), history, "the places and rolls kept");
+    combat.put_in_flight(in_layer(ShotLayer::Homing, 2));
+    assert_eq!(drawn(&combat), [2]);
+    assert!(
+        combat.slots.rank(0) < combat.slots.rank(1),
+        "slot 0's place"
+    );
+    assert_eq!(combat.slots.roll(1), Some(40));
+}
+
+#[test]
+fn a_fight_starts_from_the_shot_slots_an_earlier_one_left_none_held() {
+    let mut earlier = Combat::default();
+    earlier.put_in_flight(in_layer(ShotLayer::Homing, 0));
+    earlier.slots.hold(1);
+    let history = earlier.shot_slots();
+    assert!(!history.is_held(1), "the history holds none");
+    let mut held = history.clone();
+    held.hold(5);
+    let mut later = Combat::default();
+    later.set_shot_slots(held);
+    assert_eq!(later.shot_slots(), history);
+    assert_eq!(later.first_free_slot(), Some(0), "none held");
+    assert_eq!(later.slots.rank(0), history.rank(0));
+}

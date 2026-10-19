@@ -1699,6 +1699,23 @@ impl Combat {
         self.shot_overlap = source;
     }
 
+    /// The shot slots' history, each slot's place in its layer and its
+    /// leftover roll, none held: what outlives the fight
+    /// ([`SlotSprites::shots`](crate::ship_layer::SlotSprites::shots)).
+    #[must_use]
+    pub fn shot_slots(&self) -> ShotSlots {
+        let mut history = self.slots.clone();
+        history.clear();
+        history
+    }
+
+    /// Starts the shot slots from `history`, the places and rolls a fight
+    /// earlier in the run left ([`Combat::shot_slots`]), none held.
+    pub fn set_shot_slots(&mut self, history: ShotSlots) {
+        self.slots = history;
+        self.slots.clear();
+    }
+
     /// Has a sub-munition carry its slot's leftover miss roll as `source`
     /// reads
     /// ([`RuleKey::ReusedShotSlotRoll`](crate::RuleKey::ReusedShotSlotRoll)):

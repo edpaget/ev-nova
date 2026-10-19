@@ -224,7 +224,8 @@ impl Session {
         &self.slot_sprites
     }
 
-    /// The session, its ship slots' layers and cloned frames starting
+    /// The session, its ship slots' layers and cloned frames, and its shot
+    /// slots' places and rolls, starting
     /// from `slot_sprites`, the history a session flown earlier in the
     /// same run left ([`Session::slot_sprites`]), in place of
     /// `_InitSprites`' order and frames. The original's sprites outlive a
@@ -233,6 +234,7 @@ impl Session {
     /// (see [`ship_layer`](crate::ship_layer)).
     #[must_use]
     pub fn with_slot_sprites(mut self, slot_sprites: SlotSprites) -> Self {
+        self.combat.set_shot_slots(slot_sprites.shots.clone());
         self.slot_sprites = slot_sprites;
         self
     }
@@ -254,6 +256,10 @@ impl Session {
     /// new layer a tick early beside its neighbours. The tick ends before
     /// a frame is drawn, so the player never sees the difference.
     ///
+    /// The fight's shot slots' history is kept here too
+    /// ([`Combat::shot_slots`](crate::combat::Combat::shot_slots)), for a
+    /// later session to start from.
+    ///
     /// Each shown ship's slot clones its type's frames here too
     /// ([`SlotFrames::clone_frames`](crate::ship_layer::SlotFrames::clone_frames)),
     /// as `_HandleShipDisplay` does before its layer block (@0x2b824),
@@ -261,6 +267,7 @@ impl Session {
     /// the end of the tick rather than per ship never crosses a frame
     /// boundary either.
     pub(super) fn lay_out_ships(&mut self) {
+        self.slot_sprites.shots = self.combat.shot_slots();
         for (ship, slot, layer) in self.ship_layers() {
             self.slot_sprites.layers.put(slot, layer);
             let ship = match ship {

@@ -89,6 +89,7 @@
 use crate::catalog::ShipId;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
+use crate::combat::shot_slots::ShotSlots;
 
 /// The layer a ship is drawn in, bottom to top (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -238,14 +239,20 @@ impl SlotFrames {
     }
 }
 
-/// What the ship slots' sprites keep across pilots in one run: each
-/// slot's layer history and its last cloned frames (see the module docs).
+/// What the ship and shot slots' sprites keep across pilots in one run:
+/// each ship slot's layer history and its last cloned frames (see the
+/// module docs), and each shot slot's place in its layer and its leftover
+/// miss roll ([`ShotSlots`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SlotSprites {
     /// Each slot's layer and when it entered it.
     pub layers: LayerEntries,
     /// Each slot's last cloned frames.
     pub frames: SlotFrames,
+    /// Each shot slot's layer history and leftover roll, none held: the
+    /// 128 shot sprites `_InitSprites` lays out once (@0x1fa90-0x1fb83)
+    /// keep their places across systems and pilots.
+    pub shots: ShotSlots,
 }
 
 /// Whether a ship in `condition` is disabled for its layer, as
