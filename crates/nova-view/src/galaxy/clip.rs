@@ -81,6 +81,7 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             }
             DrawCommand::Text { .. }
             | DrawCommand::Sprite { .. }
+            | DrawCommand::Colorized { .. }
             | DrawCommand::Picture { .. }
             | DrawCommand::StretchedPicture { .. }
             | DrawCommand::BlendedPicture { .. }

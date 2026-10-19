@@ -61,6 +61,7 @@ pub mod escorts;
 pub mod flash;
 pub mod floating;
 pub mod hud;
+pub mod ion_tint;
 pub mod jump;
 pub mod lightning;
 pub mod murk;

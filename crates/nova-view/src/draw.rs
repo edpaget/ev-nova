@@ -3,6 +3,7 @@
 use nova_sim::blink::FULL;
 
 use crate::color::Color;
+use crate::colorize::Colorize;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -88,6 +89,22 @@ pub enum DrawCommand {
         tint: Color,
         /// How it combines with what is beneath it.
         blend: Blend,
+    },
+    /// A sprite frame as [`DrawCommand::Sprite`] draws it, each texel
+    /// first mixed toward a colour by `colorize` ([`Colorize::mix`]), as
+    /// the murk and an ionized ship's tint colorize a ship's layers. A
+    /// colorize that does not mix draws as the plain sprite.
+    Colorized {
+        /// The frame.
+        image: ImageKey,
+        /// Where the frame's centre goes.
+        center: Point,
+        /// Colour multiplier and alpha, or the OR level, as for a sprite.
+        tint: Color,
+        /// How it combines with what is beneath it.
+        blend: Blend,
+        /// The mix toward a colour.
+        colorize: Colorize,
     },
     /// A picture, unscaled and untinted, with its top-left corner at
     /// `top_left`.
@@ -201,7 +218,9 @@ impl DrawCommand {
         };
         let mut command = self.clone();
         match &mut command {
-            Self::Sprite { center, .. } | Self::Dot { center, .. } => *center = moved(*center),
+            Self::Sprite { center, .. }
+            | Self::Colorized { center, .. }
+            | Self::Dot { center, .. } => *center = moved(*center),
             Self::Picture { top_left, .. }
             | Self::StretchedPicture { top_left, .. }
             | Self::BlendedPicture { top_left, .. } => *top_left = moved(*top_left),
@@ -343,6 +362,24 @@ impl DrawList {
             center,
             tint,
             blend: Blend::Or,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Colorized`] combined by `blend`.
+    pub fn colorized_sprite(
+        &mut self,
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Colorize,
+    ) -> &mut Self {
+        self.push(DrawCommand::Colorized {
+            image,
+            center,
+            tint,
+            blend,
+            colorize,
         })
     }
 

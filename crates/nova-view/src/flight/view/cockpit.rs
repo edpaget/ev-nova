@@ -21,6 +21,7 @@ use crate::flight::escorts::{
 use crate::flight::flash::ShieldFlash;
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
+use crate::flight::ion_tint::hull_colorize;
 use crate::flight::murk::{self, sprite_murk};
 use crate::flight::ship_layers::{ShipDraw, base_alpha, lights_out, npc_rolls, turning};
 use crate::flight::sprite::rotation_frame;
@@ -233,12 +234,12 @@ impl<C> FlightView<C> {
             return;
         };
         let alpha = (u16::from(tint.a) * u16::from(cloak) + 127) / 255;
-        let faded = shown != nova_sim::cloak::CloakShown::Opaque
-            || matches!(
-                npc.mode,
-                nova_sim::traffic::npc::Mode::Emerging { .. }
-                    | nova_sim::traffic::npc::Mode::EnteringGate { .. }
-            );
+        let gating = matches!(
+            npc.mode,
+            nova_sim::traffic::npc::Mode::Emerging { .. }
+                | nova_sim::traffic::npc::Mode::EnteringGate { .. }
+        );
+        let faded = shown != nova_sim::cloak::CloakShown::Opaque || gating;
         match self.npc_sheets.get(&npc.ship) {
             Some(Ok(sheet)) => {
                 let alpha = if faded {
@@ -252,6 +253,14 @@ impl<C> FlightView<C> {
                 let since =
                     tick.saturating_sub(self.appeared.get(&npc.id).copied().unwrap_or(tick));
                 let (glow_rolls, blink_rolls) = npc_rolls(npc.id);
+                // A gate's fade writes the hull's colorize after the ion
+                // tint, so none shows while it fades (`_HandleShipDisplay`
+                // @0x2bfa5-0x2c17b).
+                let colorize = (!gating)
+                    .then(|| {
+                        hull_colorize(murk, npc.display.ion_tint, session.ion_tint_murk_colour())
+                    })
+                    .flatten();
                 let base = nova_sim::glow::drawn_base(npc.display.glow);
                 let lights = (!lights_out(sheet.flags, npc.condition))
                     .then(|| lights_level(&sheet.blink, since, &blink_rolls))
@@ -269,6 +278,7 @@ impl<C> FlightView<C> {
                     lights,
                     weapon: self.glows.drawn(ShipRef::Npc(npc.id)),
                     shield: self.shield_drawn(ShipRef::Npc(npc.id)),
+                    colorize,
                 };
                 ship.draw(list, at);
             }
@@ -1141,6 +1151,9 @@ impl<C> FlightView<C> {
                     lights,
                     weapon: self.glows.drawn(ShipRef::Player),
                     shield: self.shield_drawn(ShipRef::Player),
+                    colorize: session.and_then(|session| {
+                        hull_colorize(0, session.player_ion_tint(), session.ion_tint_murk_colour())
+                    }),
                 };
                 ship.draw(list, at);
             }

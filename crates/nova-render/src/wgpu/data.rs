@@ -16,6 +16,8 @@ pub(crate) struct SpriteInstance {
     pub uv: [f32; 4],
     /// RGBA multiplier.
     pub tint: [f32; 4],
+    /// The colorize: 5-bit red, green, blue and the level (none at 0).
+    pub colorize: [f32; 4],
 }
 
 impl From<&QuadInstance> for SpriteInstance {
@@ -24,6 +26,7 @@ impl From<&QuadInstance> for SpriteInstance {
             dest: [quad.dest.x, quad.dest.y, quad.dest.w, quad.dest.h],
             uv: [quad.uv.u0, quad.uv.v0, quad.uv.u1, quad.uv.v1],
             tint: quad.tint,
+            colorize: quad.colorize,
         }
     }
 }
@@ -97,6 +100,7 @@ mod tests {
                 v1: 1.0,
             },
             tint: [0.125, 0.25, 0.375, 0.5],
+            colorize: [1.0, 2.0, 3.0, 14.0],
         };
         let instance = SpriteInstance::from(&quad);
         assert_eq!(
@@ -105,13 +109,15 @@ mod tests {
                 dest: [1.0, 2.0, 3.0, 4.0],
                 uv: [0.5, 0.25, 0.75, 1.0],
                 tint: [0.125, 0.25, 0.375, 0.5],
+                colorize: [1.0, 2.0, 3.0, 14.0],
             }
         );
         let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&instance));
         assert_eq!(
             floats,
             [
-                1.0, 2.0, 3.0, 4.0, 0.5, 0.25, 0.75, 1.0, 0.125, 0.25, 0.375, 0.5
+                1.0, 2.0, 3.0, 4.0, 0.5, 0.25, 0.75, 1.0, 0.125, 0.25, 0.375, 0.5, 1.0, 2.0, 3.0,
+                14.0
             ]
         );
     }

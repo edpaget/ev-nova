@@ -26,8 +26,10 @@
 //!   colour. The RGB555 rounding gives even a black `BkgndColor` 1 of 31
 //!   a channel, and the stock systems that murk 1 to 4 of 31, so at full
 //!   murk the view is within 4/31 a channel of the original, and nearer
-//!   below it. Loading `BkgndColor` and an additive sprite colour in the
-//!   renderer is rdm:task/murk-mixes-toward-the-background-colour.
+//!   below it. Loading `BkgndColor` and drawing the murk with the
+//!   renderer's colorize ([`Colorize`](crate::Colorize), which an ionized
+//!   ship's tint already uses) is
+//!   rdm:task/murk-mixes-toward-the-background-colour.
 //! - **The 8-bit depth's cap of 24** (@0x2b4b1-0x2b4c1): the engine draws
 //!   at 16-bit only.
 

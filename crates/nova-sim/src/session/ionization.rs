@@ -77,6 +77,13 @@ impl Session {
         self.ionization().slows(handling)
     }
 
+    /// Sets the player's ionization directly, for
+    /// [`fixture::set_player_ion`](crate::fixture::set_player_ion).
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn set_player_ion(&mut self, ion: crate::combat::ion::Ion) {
+        self.ion = ion;
+    }
+
     /// The player's frame's ion block (see the module docs): a charge
     /// above none sheds the rate and the velocity is pulled toward the top
     /// speed lowered by the charge left; one at or below none is cleared.

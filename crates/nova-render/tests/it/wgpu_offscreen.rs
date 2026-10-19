@@ -14,7 +14,7 @@ use nova_render::{
 };
 use nova_view::draw::{fill_rect, lights_tint};
 use nova_view::geometry::Bounds;
-use nova_view::{Blend, Color, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
+use nova_view::{Blend, Color, Colorize, DrawCommand, DrawList, Font, ImageKey, ImageKind, Point};
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
 const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
@@ -479,6 +479,83 @@ fn a_partial_level_light_composites_like_the_originals_translucent_blit() {
     let alone = w555(original_lights_555(LIT_555, [0, 0, 0], 16));
     assert_eq!(alone, [66, 41, 16, 255]);
     assert_area(&pixels, (26, 4), (28, 8), alone, 0);
+}
+
+#[test]
+fn a_colorized_sprite_mixes_each_5_bit_channel_like_the_originals_blit() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // `rlëD` 9, solid LIT, at logical (4..8, 4..8) colorized at level 16
+    // toward a 5-bit blue, at (14..18, 4..8) at level 0, and at (24..28,
+    // 4..8) at level 26 under a half alpha tint.
+    let blue = Colorize {
+        level: 16,
+        rgb5: [0, 4, 31],
+    };
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let solid = ImageKey::sprite(9, 0);
+    let mut list = DrawList::new();
+    list.colorized_sprite(solid, spots[0], Color::WHITE, Blend::Normal, blue)
+        .colorized_sprite(
+            solid,
+            spots[1],
+            Color::WHITE,
+            Blend::Normal,
+            Colorize { level: 0, ..blue },
+        )
+        .colorized_sprite(
+            solid,
+            spots[2],
+            Color::WHITE,
+            Blend::Normal,
+            Colorize { level: 26, ..blue },
+        );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // (16, 10, 5) at 16 toward (0, 4, 31): (8 | 0, 5 | 2, 2 | 15).
+    let mixed = w555(blue.mix(LIT_555));
+    assert_eq!(mixed, w555([8, 7, 15]));
+    assert_area(&pixels, (4, 4), (8, 8), mixed, 0);
+    assert_area(&pixels, (14, 4), (18, 8), LIT, 0);
+    let deep = w555(Colorize { level: 26, ..blue }.mix(LIT_555));
+    assert_area(&pixels, (24, 4), (28, 8), deep, 0);
+}
+
+#[test]
+fn a_colorized_or_layer_mixes_its_lit_texels_and_leaves_its_transparent_ones() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // The OR sheet over the black clear at (4..8, 4..8), colorized at
+    // level 20 toward a 5-bit red, at full level.
+    let red = Colorize {
+        level: 20,
+        rgb5: [31, 0, 3],
+    };
+    let mut list = DrawList::new();
+    list.colorized_sprite(
+        ImageKey::sprite(7, 0),
+        Point::new(6.0, 6.0),
+        Color::WHITE,
+        Blend::Or,
+        red,
+    );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // The transparent column leaves the clear; the opaque black one is
+    // mixed toward red too, as the original mixes every drawn texel.
+    assert_area(&pixels, (4, 4), (5, 8), BLACK, 0);
+    assert_area(&pixels, (5, 4), (6, 8), w555(red.mix([0, 0, 0])), 0);
+    assert_area(&pixels, (6, 4), (8, 8), w555(red.mix(LIT_555)), 0);
 }
 
 #[test]

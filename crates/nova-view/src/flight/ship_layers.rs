@@ -25,6 +25,18 @@
 //!   player's murk is 0.
 //! - **Lights out** ([`lights_out`]): a ship of `shän` `Flags` 0x0040 shows
 //!   no lights while disabled, the player too (@0x2c56c-0x2c593).
+//! - **The ion tint** ([`ShipDraw::colorize`], see
+//!   [`ion_tint`](super::ion_tint)): an ionized ship's hull is colorized
+//!   in place of its murk, drawn at its unmurked tint, and the layers that
+//!   copy the hull's colorize after the tint block take it in place of
+//!   theirs: the alt layer (@0x2caa1-0x2cb0a) and the shield
+//!   (@0x2c91b-0x2c939), the player's and an NPC's; an NPC's glow
+//!   (@0x2c233-0x2c250) and weapon glow (@0x2c723-0x2c740) at the hull's
+//!   level, and its lights at trunc(level × 0.333) (@0x2c5df-0x2c60c),
+//!   each held below that level as below a murk
+//!   (@0x2c25a-0x2c291, @0x2c616-0x2c64d, @0x2c74a-0x2c781). The
+//!   player's glow, lights and weapon glow are never colorized
+//!   (@0x2c209, @0x2c5d1, @0x2c715).
 //!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
@@ -38,7 +50,7 @@ use super::catalog::{LayerSheet, ShipSheet};
 use super::murk::murk_tint;
 use super::weapon_glow::npc_glow_level;
 use crate::draw::lights_tint;
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::{Blend, Color, Colorize, DrawList, ImageKey, Point};
 
 /// The steps of a sprite's translucency: `BaseTransp` 32 or more is not
 /// seen.
@@ -114,6 +126,24 @@ pub struct ShipDraw<'a> {
     pub weapon: Option<u8>,
     /// Its shield flash's level, if shown.
     pub shield: Option<u8>,
+    /// Its hull's ion colorize, if it shows one
+    /// ([`hull_colorize`](super::ion_tint::hull_colorize)), which takes
+    /// the place of its murk.
+    pub colorize: Option<Colorize>,
+}
+
+/// Draws `image` at `at` at `tint`, combined by `blend`, colorized by
+/// `colorize` when it mixes.
+fn draw_layer(
+    list: &mut DrawList,
+    (image, at, tint, blend): (ImageKey, Point, Color, Blend),
+    colorize: Option<Colorize>,
+) {
+    match colorize.filter(|colorize| colorize.mixes()) {
+        Some(colorize) => list.colorized_sprite(image, at, tint, blend, colorize),
+        None if blend == Blend::Or => list.or_sprite(image, at, tint),
+        None => list.sprite(image, at, tint),
+    };
 }
 
 /// Class `spec`'s display turning by `sheet`'s rotations, its `shän`'s
@@ -138,10 +168,19 @@ impl ShipDraw<'_> {
     /// (@0x2bd58-0x2bdad).
     pub fn draw(&self, list: &mut DrawList, at: Point) {
         let frame = self.frame();
-        let hull_tint = murk_tint(self.tint, self.murk);
+        // The hull's tint and colorize: its unmurked tint colorized by its
+        // ion tint, or its murk.
+        let (hull_tint, colorize) = match self.colorize {
+            Some(colorize) => (self.tint, Some(colorize)),
+            None => (murk_tint(self.tint, self.murk), None),
+        };
         if self.hull {
-            list.sprite(ImageKey::sprite(self.sheet.image_id, frame), at, hull_tint);
+            let hull = ImageKey::sprite(self.sheet.image_id, frame);
+            draw_layer(list, (hull, at, hull_tint, Blend::Normal), colorize);
         }
+        // The level an NPC's layers are held below and colorized at: the
+        // hull's ion tint's, or its murk.
+        let murk = colorize.map_or(self.murk, |colorize| colorize.level);
         let held = |level: u8, murk: u8| {
             if self.held {
                 npc_glow_level(level, murk)
@@ -149,32 +188,49 @@ impl ShipDraw<'_> {
                 level
             }
         };
+        // An NPC's glow, lights and weapon glow copy the hull's colorize at
+        // `murk`; the player's never do.
+        let copied = |murk: u8| {
+            colorize.filter(|_| self.held).map(|colorize| Colorize {
+                level: murk,
+                ..colorize
+            })
+        };
         let add =
             |list: &mut DrawList, layer: Option<LayerSheet>, level: Option<u8>, murk, frame| {
                 if let (Some(layer), Some(level)) = (layer, level) {
-                    let tint = murk_tint(lights_tint(level), murk);
                     let frame = frame % layer.frames.get();
-                    list.or_sprite(ImageKey::sprite(layer.image_id, frame), at, tint);
+                    let image = ImageKey::sprite(layer.image_id, frame);
+                    let (tint, colorize) = match copied(murk) {
+                        Some(colorize) => (lights_tint(level), Some(colorize)),
+                        None => (murk_tint(lights_tint(level), murk), None),
+                    };
+                    draw_layer(list, (image, at, tint, Blend::Or), colorize);
                 }
             };
-        let lights_murk = if self.held { lights_murk(self.murk) } else { 0 };
-        let glow = self.glow.map(|level| held(level, self.murk));
-        add(list, self.sheet.glow, glow, self.murk, frame);
+        let lights_murk = if self.held { lights_murk(murk) } else { 0 };
+        let glow = self.glow.map(|level| held(level, murk));
+        add(list, self.sheet.glow, glow, murk, frame);
         let lights = self.lights.map(|level| held(level, lights_murk));
         add(list, self.sheet.lights, lights, lights_murk, frame);
-        let weapon = self.weapon.map(|level| held(level, self.murk));
-        add(list, self.sheet.weapon, weapon, self.murk, frame);
+        let weapon = self.weapon.map(|level| held(level, murk));
+        add(list, self.sheet.weapon, weapon, murk, frame);
         let spec = turning(self.spec, self.sheet);
         if self.hull
             && let (Some(layer), Some(set)) = (self.sheet.alt, self.drawn.alt_set)
         {
             let alt = spec.index(set, self.heading) % layer.frames.get();
-            list.sprite(ImageKey::sprite(layer.image_id, alt), at, hull_tint);
+            let alt = ImageKey::sprite(layer.image_id, alt);
+            draw_layer(list, (alt, at, hull_tint, Blend::Normal), colorize);
         }
         if let (Some(layer), Some(level)) = (self.sheet.shield, self.shield) {
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
-            let tint = murk_tint(lights_tint(level), self.murk);
-            list.or_sprite(ImageKey::sprite(layer.image_id, frame), at, tint);
+            let image = ImageKey::sprite(layer.image_id, frame);
+            let tint = match colorize {
+                Some(_) => lights_tint(level),
+                None => murk_tint(lights_tint(level), self.murk),
+            };
+            draw_layer(list, (image, at, tint, Blend::Or), colorize);
         }
     }
 }

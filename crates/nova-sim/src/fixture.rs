@@ -52,6 +52,12 @@ pub fn set_player_condition(session: &mut Session, to: Condition) {
     session.set_player_condition(to);
 }
 
+/// Sets the player's ionization in `session` to `ion`: for a test that
+/// needs the player ionized without a fight.
+pub fn set_player_ion(session: &mut Session, ion: crate::combat::ion::Ion) {
+    session.set_player_ion(ion);
+}
+
 /// Puts the player's ship in `session` over NPC `id`, at its place,
 /// velocity and heading, and targets it, if it is in the system: for a
 /// test that boards a ship without flying to it.

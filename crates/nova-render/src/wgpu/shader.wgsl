@@ -23,6 +23,8 @@ struct SpriteOut {
     // The same for every vertex of a quad; flat, so no interpolation can
     // nudge an OR level off its exact 32nd.
     @location(1) @interpolate(flat) tint: vec4<f32>,
+    // The colorize: 5-bit red, green, blue and the level, 0 for none.
+    @location(2) @interpolate(flat) colorize: vec4<f32>,
 };
 
 // Six vertices per instance: two triangles over the unit square.
@@ -32,6 +34,7 @@ fn sprite_vs(
     @location(0) dest: vec4<f32>,
     @location(1) uv: vec4<f32>,
     @location(2) tint: vec4<f32>,
+    @location(3) colorize: vec4<f32>,
 ) -> SpriteOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
@@ -42,12 +45,42 @@ fn sprite_vs(
     out.position = to_clip(dest.xy + corner * dest.zw);
     out.uv = mix(uv.xy, uv.zw, corner);
     out.tint = tint;
+    out.colorize = colorize;
     return out;
+}
+
+// Whether a quad's colorize mixes: a level of 1 to 32.
+fn mixes(colorize: vec4<f32>) -> bool {
+    return colorize.w >= 1.0 && colorize.w <= 32.0;
+}
+
+// The 5-bit `s5` mixed toward the colorize's colour, as
+// `_BlitPixieTranslucentCopy` does per channel:
+// `((s × (32 − m)) >> 5) | ((c × m) >> 5)`, the halves ORed.
+fn colorized5(s5: vec3<u32>, colorize: vec4<f32>) -> vec3<u32> {
+    let m = u32(colorize.w);
+    let c5 = vec3<u32>(colorize.rgb);
+    return ((s5 * (32u - m)) >> vec3<u32>(5u)) | ((c5 * m) >> vec3<u32>(5u));
+}
+
+// A 5-bit colour widened to 8 bits by bit replication, as 0 to 1.
+fn widened(c5: vec3<u32>) -> vec3<f32> {
+    return vec3<f32>((c5 << vec3<u32>(3u)) | (c5 >> vec3<u32>(2u))) / 255.0;
+}
+
+// A texel, its colour mixed by the colorize when it mixes, its alpha kept.
+fn colorized(t: vec4<f32>, colorize: vec4<f32>) -> vec4<f32> {
+    let s5 = vec3<u32>(round(t.rgb * 255.0)) >> vec3<u32>(3u);
+    return vec4<f32>(widened(colorized5(s5, colorize)), t.a);
 }
 
 @fragment
 fn sprite_fs(in: SpriteOut) -> @location(0) vec4<f32> {
-    return textureSample(page, page_sampler, in.uv) * in.tint;
+    let t = textureSample(page, page_sampler, in.uv);
+    if mixes(in.colorize) {
+        return colorized(t, in.colorize) * in.tint;
+    }
+    return t * in.tint;
 }
 
 // A max batch's colour, premultiplied by its alpha so a transparent texel
@@ -70,9 +103,13 @@ fn max_fs(in: SpriteOut) -> @location(0) vec4<f32> {
 fn or_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     let t = textureSampleLevel(page, page_sampler, in.uv, 0.0);
     let d = textureLoad(backdrop, vec2<u32>(in.position.xy), 0);
-    // Premultiplied, so a transparent texel contributes nothing.
-    let s8 = vec3<u32>(round(t.rgb * t.a * 255.0));
-    let s5 = s8 >> vec3<u32>(3u);
+    // Premultiplied, so a transparent texel contributes nothing; a
+    // colorized one is mixed first, still nothing where transparent.
+    var s5 = vec3<u32>(round(t.rgb * t.a * 255.0)) >> vec3<u32>(3u);
+    if mixes(in.colorize) && t.a > 0.0 {
+        let c = colorized(t, in.colorize);
+        s5 = vec3<u32>(round(c.rgb * c.a * 255.0)) >> vec3<u32>(3u);
+    }
     // n/32 and s5 * n/32 are exact in f32, so this is the original's floor.
     let t5 = vec3<u32>(floor(vec3<f32>(s5) * in.tint.rgb));
     let t8 = (t5 << vec3<u32>(3u)) | (t5 >> vec3<u32>(2u));
