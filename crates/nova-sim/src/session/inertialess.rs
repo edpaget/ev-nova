@@ -233,6 +233,15 @@ mod tests {
     }
 
     #[test]
+    fn the_player_side_carries_the_players_speed() {
+        // An inertialess dogfighter matches it (`_LowLevelAIHandler`
+        // @0x860a6 reads the target's +0x48).
+        let mut session = flying(&hull(), 90.0);
+        session.player_speed = 2.5;
+        assert_eq!(session.player_side().speed, 2.5);
+    }
+
+    #[test]
     fn an_inertial_player_still_drifts_after_turning() {
         let mut session = flying(&catalog(), 90.0);
         for _ in 0..60 {

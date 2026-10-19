@@ -416,14 +416,14 @@ fn fly_mobile(
         Goal::Plunder { .. } if other_disabled => brake(&state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
-                if let Some(body) =
-                    pursuit::frame_of(npc, target, other_disabled).and_then(|frame| frame.last())
+                if let Some((body, speed_cap)) = pursuit::frame_of(npc, target, other_disabled)
+                    .and_then(|frame| Some((frame.last()?, frame.speed_cap)))
                 {
                     let flown = Flown {
                         handling: &handling,
                         inertia,
                     };
-                    fight(npc, target, body, flown, (flight, snipe_lead));
+                    fight(npc, target, (body, speed_cap), flown, (flight, snipe_lead));
                     return Outcome::Flying;
                 }
                 // Running out from its attacker beyond its reach.
@@ -660,7 +660,7 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 }
 
 /// Flies one tick of `npc`'s fight at a target at `target` on
-/// `handling` by its frame's last `body`, whose writes to the thrust
+/// `handling` by its frame's last `body` and its `speed_cap`, whose writes to the thrust
 /// (+0x30), the cap (+0x34) and the heading (+0x68) win (see
 /// [`pursuit`](crate::ai::pursuit)): it turns to the heading the body
 /// wants, and thrusts approaching (7) while off it by less than
@@ -673,11 +673,15 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// sniping, it flies as [`snipe::fly`] says, a moving sniper with a last
 /// gun turning as `snipe_lead` says. It flies under `flight` as
 /// `flown_by` says ([`step`]); a moving inertialess sniper brakes as
-/// substate 0xe does ([`snipe::inertialess_brake`]).
+/// substate 0xe does ([`snipe::inertialess_brake`]). An inertialess
+/// dogfighter whose frame matches its target's speed
+/// ([`Frame::speed_cap`](pursuit::Frame::speed_cap)) flies at most at
+/// that speed, a cap of none being none, as `_HandleShip` reads +0x34
+/// (@0x34a8a-0x34aab); a later body's cap (0x10's none, 0x11's) wins.
 fn fight(
     npc: &mut Npc,
     target: &ShipState,
-    body: Body,
+    (body, speed_cap): (Body, Option<f32>),
     flown_by: Flown,
     (flight, snipe_lead): (FlightRules, RuleSource),
 ) {
@@ -711,6 +715,13 @@ fn fight(
             #[allow(clippy::cast_possible_truncation)]
             max_speed: (f64::from(handling.max_speed) * RUSH_SPEED) as f32,
             ..*handling
+        },
+        Manoeuvre::Dogfight => match (flown_by.inertia, speed_cap) {
+            (Inertia::Inertialess { .. }, Some(cap)) if cap > 0.0 => Handling {
+                max_speed: cap,
+                ..*handling
+            },
+            _ => *handling,
         },
         _ => *handling,
     };

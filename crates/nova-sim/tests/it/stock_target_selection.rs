@@ -116,6 +116,7 @@ fn stock_player(
             record.fields.mass,
         ),
         boarded: false,
+        speed: 0.0,
     }
 }
 

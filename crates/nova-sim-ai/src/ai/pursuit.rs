@@ -41,11 +41,36 @@
 //!   ([`joust`]) may break it off (0x10), and the rush entry
 //!   ([`rush_entry`]), tested after it even when it passed, may rush it
 //!   (0x11), either in the same frame.
+//! - **The speed match** ([`speed_match`], @0x85f85-0x860a6): an
+//!   inertialess dogfighter ([`Npc::flies_inertialess`], by
+//!   [`PursuitRules::inertial_dampener`]) facing its lead within
+//!   [`GUN_FACING`] turns, strictly, its target within [`MATCH_BOX`] on
+//!   both axes, strictly, and faster than its target, caps its speed at
+//!   its target's ([`Frame::speed_cap`]). The cap binds only on a
+//!   thrusting tick, and only while the dogfight is the frame's last body,
+//!   as 0x10 and 0x11 write the cap after it (@0x8645a, @0x865cf); a target
+//!   at none sets a cap of none, which is none
+//!   (see [`autopilot`](crate::traffic::autopilot)).
+//! - **The joust's skip** (@0x86143-0x86150): an inertialess dogfighter
+//!   outside 165.0 on both axes skips the joust for the rush entry. The
+//!   joust's [`JOUST_RANGE`] already fails there, so the skip changes only
+//!   whether its rolls are drawn, and nothing is built for it.
 //! - **Break off** (0x10, [`Manoeuvre::BreakOff`]): it wants its break
 //!   heading (+0x8e), thrusts every tick at [`BREAK_THRUST`] times its
 //!   acceleration, runs its turret pass alone inside [`FIRE_BOX`] on both
 //!   axes, and drops back to dogfight once it faces the break heading
-//!   within [`GUN_FACING`] turns, strictly (@0x86515-0x86563).
+//!   within [`GUN_FACING`] turns, strictly (@0x86515-0x86563). An
+//!   inertialess one drops back instead once its target is beyond
+//!   [`BREAK_EXIT_BOX`] whole pixels on an axis, never by its facing
+//!   ([`leaves_break_off`], @0x864bd-0x86513). The high level, which runs
+//!   first on the same positions, keeps 0x10 only inside 165.0 on both
+//!   axes, so in the engine's tick the exit beyond 165 is never reached:
+//!   the original reaches it when the low level runs under an AI wait
+//!   without the high level (@0x8d4b9-0x8d4d2, @0x901f4), which the
+//!   engine's pursuit doesn't (rdm task
+//!   waiting-ships-run-their-per-type-ai). What shows is that an
+//!   inertialess ship never leaves the break-off by facing its break
+//!   heading.
 //! - **Rush** (0x11, [`Manoeuvre::Rush`]): it wants the table bearing to
 //!   its target, thrusts every tick at [`RUSH_THRUST`] times its
 //!   acceleration up to [`RUSH_SPEED`] times its top speed; inside
@@ -67,11 +92,6 @@
 //! - The swarm's `_AIMaintainFormation` and +0xc8d4 copy in subs 5, 0x11
 //!   and 7 (@0x85c87-0x85cbf, @0x8660b-0x8663d, @0x867e0-0x86818): rdm
 //!   phase combat-ai-fidelity/phase-14-swarming.
-//! - Inertialess flight's branches: sub 6's speed match within 100
-//!   (@0x85ff3-0x860a6), the joust's skip outside 165 (@0x86143-0x86150)
-//!   and 0x10's exit outside 165 (@0x864bd-0x86513). The engine has no
-//!   inertialess flight (rdm phase
-//!   ship-handling-fidelity/phase-5-inertialess-flight).
 //! - The lead of a pick or last gun the ship does not carry, which the
 //!   original reads from its global weapon record (@0x85e4c-0x85e59,
 //!   @0x2b06a-0x2b075), and a negative `Mass` in the joust: rdm phase
@@ -88,6 +108,7 @@ use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 use crate::trig;
@@ -136,6 +157,14 @@ pub const JOUST_ROLL: u16 = 2;
 /// to rush in (`cmpl $0x52`, strictly, @0x863b2, @0x863ce, @0x869a4,
 /// @0x869c3).
 pub const RUSH_CLEARANCE: i32 = 82;
+/// How far, in whole pixels on an axis, an inertialess ship breaking off
+/// must be from its target to drop back to dogfight, strictly (`cmpl
+/// $0xa5`, `jg` @0x864f3, @0x86511).
+pub const BREAK_EXIT_BOX: i32 = 165;
+/// How near, in pixels on both axes, an inertialess dogfighter's target
+/// must be for it to match its speed, strictly and untruncated (the
+/// float 100.0 @0xdd060, @0x8603b, @0x8607b).
+pub const MATCH_BOX: f32 = 100.0;
 
 /// The substate a ship keeps from tick to tick: its pursuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,12 +190,17 @@ pub struct Body {
 
 /// The bodies a fighting ship's low level runs this tick, in block order
 /// (up to two), for the goal it was worked out under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     /// The goal it was worked out under: a frame for any other is stale.
     pub goal: Goal,
     /// The bodies, in order; none for a ship running out.
     pub bodies: [Option<Body>; 2],
+    /// The speed an inertialess dogfighter matches (sub 6's cap +0x34,
+    /// @0x85ff3-0x860a6): its target's speed, which it flies at most while
+    /// the dogfight is the frame's last body. A cap of none is no cap, as
+    /// `_HandleShip` reads it (@0x34a8a-0x34aab).
+    pub speed_cap: Option<f32>,
 }
 
 impl Frame {
@@ -177,6 +211,7 @@ impl Frame {
         let mut frame = Self {
             goal,
             bodies: [None; 2],
+            speed_cap: None,
         };
         for (slot, body) in frame.bodies.iter_mut().zip(bodies) {
             *slot = Some(*body);
@@ -198,7 +233,7 @@ impl Frame {
 
 /// What an NPC holds of its pursuit: the substate it keeps and this
 /// tick's frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pursuit {
     /// The pursuit it keeps for the next tick.
     pub kept: Option<Kept>,
@@ -212,6 +247,9 @@ pub struct PursuitRules {
     /// Which weapon an approach leads with
     /// ([`RuleKey::ApproachLead`](crate::RuleKey::ApproachLead)).
     pub approach_lead: RuleSource,
+    /// Whose dampener makes a ship inertialess
+    /// ([`RuleKey::InertialDampener`](crate::RuleKey::InertialDampener)).
+    pub inertial_dampener: InertialDampener,
 }
 
 /// Whether `off` lies within `reach` whole pixels on both axes, each
@@ -342,10 +380,14 @@ impl Looks {
     }
 }
 
-/// What the joust and the rush entry read of a ship and its target.
+/// What the joust, the rush entry and the speed match read of a ship and
+/// its target.
 struct Duel {
     /// Its offset from its target (self − target).
     off: Vec2,
+    /// Its target's speed along its heading, +0x48 ([`Npc::speed`], or
+    /// the player's [`PlayerSide::speed`](crate::ai::PlayerSide::speed)).
+    target_speed: f32,
     /// Its whole-degree heading.
     heading: i16,
     /// The table bearing to its target.
@@ -405,6 +447,35 @@ pub fn break_heading(heading: f32, berth: u32) -> i16 {
     whole
 }
 
+/// The speed an inertialess (`inertialess`) dogfighter `npc` matches on
+/// `duel`, wanting its dogfight `lead` (sub 6, @0x85f85-0x860a6): its
+/// target's, when it faces `lead` within [`GUN_FACING`] turns, strictly
+/// (the gun pass's branch it runs in), its target lies within
+/// [`MATCH_BOX`] on both axes, strictly and untruncated, and its own
+/// speed is higher, strictly.
+fn speed_match(npc: &Npc, inertialess: bool, lead: i16, duel: &Duel) -> Option<f32> {
+    (inertialess
+        && fire::faces(npc, lead, GUN_FACING)
+        && duel.off.x.abs() < MATCH_BOX
+        && duel.off.y.abs() < MATCH_BOX
+        && npc.speed > duel.target_speed)
+        .then_some(duel.target_speed)
+}
+
+/// Whether `npc`, breaking off along `heading` with its target `off`
+/// (self − target), drops back to dogfight (@0x864b7-0x86563): an
+/// inertialess one (`inertialess`) once its target is beyond
+/// [`BREAK_EXIT_BOX`] whole pixels on an axis (@0x864c6-0x86513), never
+/// by its facing; any other once it faces `heading` within
+/// [`GUN_FACING`] turns, strictly (@0x86515-0x8655e).
+fn leaves_break_off(npc: &Npc, inertialess: bool, heading: i16, off: Vec2) -> bool {
+    if inertialess {
+        !within_whole(off, BREAK_EXIT_BOX)
+    } else {
+        fire::faces(npc, heading, GUN_FACING)
+    }
+}
+
 /// Whether `npc` rushes in on `duel` (see the module docs): an afterburner,
 /// more than [`RUSH_CLEARANCE`] off on both axes, and facing its target
 /// within [`FACE_OFF`] (@0x86371-0x86404, @0x86969-0x869f6).
@@ -435,15 +506,20 @@ pub fn step(
     let Some(start) = high_level(npc, &at, disabled) else {
         return Pursuit::default();
     };
+    // A fight is never close formation: no leader.
+    let inertialess = npc.flies_inertialess(None, rules.inertial_dampener);
     let looks = Looks::of(npc, &at, fire::lead_pick(npc, around), rules.approach_lead);
-    let (target_slot, target_mass) = match ship {
-        ShipRef::Player => (0, around.player.map_or(0.0, |player| player.hull.mass)),
-        ShipRef::Npc(id) => around
-            .npc(id)
-            .map_or((0, 0.0), |other| (other.berth, other.hull.mass)),
+    let (target_slot, target_mass, target_speed) = match ship {
+        ShipRef::Player => around
+            .player
+            .map_or((0, 0.0, 0.0), |player| (0, player.hull.mass, player.speed)),
+        ShipRef::Npc(id) => around.npc(id).map_or((0, 0.0, 0.0), |other| {
+            (other.berth, other.hull.mass, other.speed)
+        }),
     };
     let duel = Duel {
         off: npc.state.position - at.position,
+        target_speed,
         heading: trig::whole(npc.state.heading),
         bearing: looks.bearing,
         target_heading: trig::whole(at.heading),
@@ -463,6 +539,7 @@ pub fn step(
         }
     };
     let mut bodies: Vec<Body> = Vec::with_capacity(2);
+    let mut speed_cap = None;
     // Sub 5 (@0x85c62-0x85e0b).
     if sub == Sub::Body(Manoeuvre::Flee) {
         bodies.push(looks.body(Manoeuvre::Flee));
@@ -473,6 +550,7 @@ pub fn step(
     // Sub 6 (@0x85e14-0x8640d): the joust, then the rush entry over it.
     if sub == Sub::Body(Manoeuvre::Dogfight) {
         bodies.push(looks.body(Manoeuvre::Dogfight));
+        speed_cap = speed_match(npc, inertialess, looks.dogfight, &duel);
         if joust(npc, &duel, chance) {
             sub = Sub::BreakOff(break_heading(npc.state.heading, npc.berth));
         }
@@ -486,7 +564,7 @@ pub fn step(
             manoeuvre: Manoeuvre::BreakOff,
             heading,
         });
-        if fire::faces(npc, heading, GUN_FACING) {
+        if leaves_break_off(npc, inertialess, heading, duel.off) {
             sub = Sub::Body(Manoeuvre::Dogfight);
         }
     }
@@ -514,7 +592,10 @@ pub fn step(
             Sub::Body(Manoeuvre::Rush) => Some(Kept::Rush),
             Sub::Body(_) => None,
         },
-        frame: Some(Frame::of(npc.goal, &bodies)),
+        frame: Some(Frame {
+            speed_cap,
+            ..Frame::of(npc.goal, &bodies)
+        }),
     }
 }
 
@@ -643,6 +724,7 @@ mod tests {
             (1.5, 2.75, 135.0, 199.0)
         );
         assert_eq!(RUSH_SPEED, 1.8);
+        assert_eq!((BREAK_EXIT_BOX, MATCH_BOX), (165, 100.0));
     }
 
     #[test]
@@ -808,6 +890,174 @@ mod tests {
         assert_eq!(bodies(&pursuit), [Manoeuvre::BreakOff]);
         assert_eq!(pursuit.kept, None);
         assert!(chance.asked.is_empty());
+    }
+
+    /// `npc` on an inertialess hull ([`FAST`]'s, `Flags2` 0x0040).
+    fn inertialess(mut npc: Npc) -> Npc {
+        npc.stats = ShipStats::new(
+            crate::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        assert!(npc.flies_inertialess(None, InertialDampener::PlayerOnly));
+        npc
+    }
+
+    #[test]
+    fn an_inertialess_ship_breaking_off_leaves_only_beyond_165_whole_pixels_never_by_facing() {
+        let facing = fighter(AT_PLAYER, 135.0);
+        assert!(fire::faces(&facing, 135, GUN_FACING));
+        let away = fighter(AT_PLAYER, 0.0);
+        assert!(!fire::faces(&away, 135, GUN_FACING));
+        for npc in [&facing, &away] {
+            assert!(!leaves_break_off(npc, true, 135, Vec2::new(100.0, 100.0)));
+            assert!(!leaves_break_off(npc, true, 135, Vec2::new(165.9, 0.0)));
+            assert!(!leaves_break_off(npc, true, 135, Vec2::new(0.0, -165.9)));
+            assert!(leaves_break_off(npc, true, 135, Vec2::new(166.0, 0.0)));
+            assert!(leaves_break_off(npc, true, 135, Vec2::new(0.0, -166.0)));
+            assert!(leaves_break_off(npc, true, 135, Vec2::new(-166.0, 20.0)));
+        }
+        // An inertial one leaves by facing alone, wherever its target.
+        assert!(leaves_break_off(&facing, false, 135, Vec2::new(0.0, 0.0)));
+        assert!(!leaves_break_off(&away, false, 135, Vec2::new(0.0, 0.0)));
+        assert!(!leaves_break_off(&away, false, 135, Vec2::new(500.0, 0.0)));
+    }
+
+    #[test]
+    fn an_inertialess_ship_breaking_off_keeps_it_facing_its_break_heading() {
+        let mut npc = fighter(AT_PLAYER, 135.0);
+        npc.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        let mut chance = Ranged::of(&[]);
+        let inertial = stepped_at_player(&npc, &player_off(ABOVE, 180.0), 0, &mut chance);
+        assert_eq!(inertial.kept, None, "an inertial one drops back");
+        let raven = inertialess(npc);
+        let pursuit = stepped_at_player(&raven, &player_off(ABOVE, 180.0), 0, &mut chance);
+        assert_eq!(bodies(&pursuit), [Manoeuvre::BreakOff]);
+        assert_eq!(pursuit.kept, Some(Kept::BreakOff { heading: 135 }));
+        // By the Bible's reading a dampener counts too.
+        let mut dampened = fighter(AT_PLAYER, 135.0);
+        dampened.pursuit.kept = Some(Kept::BreakOff { heading: 135 });
+        dampened.stats.dampener = true;
+        let npcs = [dampened.clone()];
+        let around = Surroundings {
+            player: Some(player_off(ABOVE, 180.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let bible = PursuitRules {
+            inertial_dampener: InertialDampener::AnyShip,
+            ..PursuitRules::default()
+        };
+        assert_eq!(
+            step(&dampened, &around, bible, &mut chance).kept,
+            Some(Kept::BreakOff { heading: 135 })
+        );
+        assert_eq!(
+            step(&dampened, &around, PursuitRules::default(), &mut chance).kept,
+            None
+        );
+    }
+
+    #[test]
+    fn an_inertialess_dogfighter_outside_165_on_both_axes_never_breaks_off() {
+        // The original skips the joust there (@0x86143-0x86150); its 122
+        // range already fails, so only its draws differ.
+        let duel = |off: Vec2| Duel {
+            off,
+            target_speed: 0.0,
+            heading: 315,
+            bearing: 315,
+            target_heading: 135,
+            at_player: true,
+            target_slot: 0,
+            target_mass: 100.0,
+            rating: 1599,
+        };
+        let npc = inertialess(fighter(AT_PLAYER, 315.0));
+        assert!(joust(
+            &npc,
+            &duel(Vec2::new(122.0, 122.0)),
+            &mut Ranged::of(&[])
+        ));
+        assert!(!joust(
+            &npc,
+            &duel(Vec2::new(165.0, 165.0)),
+            &mut Ranged::of(&[])
+        ));
+        assert!(!joust(
+            &npc,
+            &duel(Vec2::new(-200.0, 166.0)),
+            &mut Ranged::of(&[])
+        ));
+    }
+
+    /// The surroundings of a fighter `npc` whose target, NPC 2 (in slot 2,
+    /// so no joust) or the player, lies `off` from [`AT`], facing away
+    /// along the bearing to it and moving at `speed` along its heading.
+    fn match_target(npc: &Npc, off: Vec2, speed: f32) -> (Vec<Npc>, PlayerSide) {
+        let heading = f32::from(trig::intercept_angle(AT, AT + off));
+        let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = AT + off;
+        other.state.heading = heading;
+        other.berth = 2;
+        other.speed = speed;
+        let side = PlayerSide {
+            speed,
+            ..player_off(off, heading)
+        };
+        (vec![npc.clone(), other], side)
+    }
+
+    /// The speed cap `npc`'s step sets at its target `off` from [`AT`]
+    /// moving at `speed` (see [`match_target`]), its heading `turned` from
+    /// its dogfight lead.
+    fn speed_cap(npc: &Npc, off: Vec2, speed: f32, turned: f32) -> Option<f32> {
+        let (npcs, side) = match_target(npc, off, speed);
+        let target = if npc.goal == AT_PLAYER {
+            side.state
+        } else {
+            npcs[1].state
+        };
+        let mut npc = npc.clone();
+        npc.state.heading = f32::from(fire::dogfight_lead(&npc, &target, None)) + turned;
+        let npcs = [npc.clone(), npcs[1].clone()];
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let pursuit = step(&npc, &around, PursuitRules::default(), &mut Ranged::of(&[]));
+        assert_eq!(bodies(&pursuit), [Manoeuvre::Dogfight]);
+        pursuit.frame.and_then(|frame| frame.speed_cap)
+    }
+
+    #[test]
+    fn an_inertialess_dogfighter_facing_within_3_turns_and_inside_100_caps_at_its_targets_lower_speed()
+     {
+        let close = Vec2::new(50.0, -50.0);
+        for goal in [Goal::Attack(OTHER), AT_PLAYER] {
+            let mut npc = inertialess(fighter(goal, 0.0));
+            npc.speed = 5.0;
+            assert_eq!(speed_cap(&npc, close, 2.0, 0.0), Some(2.0), "{goal:?}");
+            // Within 3 turns of 3, strictly.
+            assert_eq!(speed_cap(&npc, close, 2.0, 8.0), Some(2.0));
+            assert_eq!(speed_cap(&npc, close, 2.0, 9.0), None);
+            // Within 100 on both axes, strictly.
+            assert_eq!(speed_cap(&npc, Vec2::new(99.9, -99.9), 2.0, 0.0), Some(2.0));
+            assert_eq!(speed_cap(&npc, Vec2::new(100.0, 0.0), 2.0, 0.0), None);
+            assert_eq!(speed_cap(&npc, Vec2::new(0.0, 100.0), 2.0, 0.0), None);
+            assert_eq!(speed_cap(&npc, Vec2::new(-100.0, 0.0), 2.0, 0.0), None);
+            // Only at a lower speed, strictly; a target at none sets none.
+            assert_eq!(speed_cap(&npc, close, 5.0, 0.0), None);
+            assert_eq!(speed_cap(&npc, close, 4.9, 0.0), Some(4.9));
+            assert_eq!(speed_cap(&npc, close, 0.0, 0.0), Some(0.0));
+            // Never for an inertial ship.
+            let inertial = Npc {
+                stats: ShipStats::new(FAST, &[]),
+                ..npc
+            };
+            assert_eq!(speed_cap(&inertial, close, 2.0, 0.0), None);
+        }
     }
 
     #[test]
@@ -1342,6 +1592,122 @@ mod tests {
             "{:?}",
             ship.state
         );
+    }
+
+    /// An inertialess fighter at speed 5 (top 6, 0.18 a tick) attacking
+    /// NPC 2 `off` from [`AT`] at `speed` (see [`match_target`]), in
+    /// `slot` and facing `heading`, the fighter facing its dogfight lead,
+    /// stepped on `chance` and then flown a tick.
+    fn flown_matching(
+        off: Vec2,
+        speed: f32,
+        (slot, heading): (u32, f32),
+        chance: &mut Ranged,
+    ) -> Npc {
+        let mut npc = inertialess(fighter(Goal::Attack(OTHER), 0.0));
+        npc.speed = 5.0;
+        let (mut npcs, side) = match_target(&npc, off, speed);
+        npcs[1].berth = slot;
+        npcs[1].state.heading = heading;
+        npc.state.heading = f32::from(fire::dogfight_lead(&npc, &npcs[1].state, None));
+        npcs[0] = npc.clone();
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut ship = npc.clone();
+        ship.pursuit = step(&npc, &around, PursuitRules::default(), chance);
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&npcs[1].state),
+            false,
+            TopSpeeds::own_of(&npc),
+            crate::flight::FlightRules::default(),
+            RuleSource::Engine,
+            &mut Ranged::of(&[]),
+        );
+        ship
+    }
+
+    #[test]
+    fn a_speed_matched_inertialess_dogfighter_thrusting_snaps_its_speed_down_to_the_cap() {
+        let ship = flown_matching(Vec2::new(50.0, -50.0), 2.0, (2, 45.0), &mut Ranged::of(&[]));
+        assert_eq!(
+            ship.pursuit
+                .frame
+                .and_then(|frame| frame.last())
+                .map(|body| body.manoeuvre),
+            Some(Manoeuvre::Dogfight)
+        );
+        assert_eq!(ship.speed, 2.0);
+        assert_eq!(
+            ship.display.drive.thrust,
+            crate::traffic::ship_display::Thrust::Plain
+        );
+    }
+
+    #[test]
+    fn a_cap_of_none_is_no_cap() {
+        // A target at none sets a cap of none, which `_HandleShip` reads
+        // as the top speed (@0x34a8a-0x34aab): 5 + 0.18.
+        let ship = flown_matching(Vec2::new(50.0, -50.0), 0.0, (2, 45.0), &mut Ranged::of(&[]));
+        assert_eq!(
+            ship.pursuit.frame.and_then(|frame| frame.speed_cap),
+            Some(0.0)
+        );
+        assert!((ship.speed - 5.18).abs() < 1e-6, "{}", ship.speed);
+    }
+
+    #[test]
+    fn a_dogfight_that_breaks_off_or_rushes_flies_no_cap() {
+        // Head on, 50 above, NPC 2 in slot 1 and a roll of 0 on `Rand(2)`:
+        // it jousts, and the break-off's cap of none wins (@0x8645a), so
+        // it thrusts at 1.5 × 0.18 to 5.27.
+        let ship = flown_matching(
+            Vec2::new(0.0, -50.0),
+            2.0,
+            (1, 180.0),
+            &mut Ranged::of(&[(2, 0)]),
+        );
+        let frame = ship.pursuit.frame.expect("a frame");
+        assert_eq!(
+            frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
+            [Manoeuvre::Dogfight, Manoeuvre::BreakOff]
+        );
+        assert_eq!(frame.speed_cap, Some(2.0), "set by the dogfight");
+        assert!((ship.speed - 5.27).abs() < 1e-5, "{}", ship.speed);
+        // Rushing, at 2.75 × 0.18 up to 1.8 × 6.
+        let mut chance = Ranged::of(&[]);
+        let mut npc = burning(inertialess(fighter(Goal::Attack(OTHER), 0.0)));
+        npc.speed = 5.0;
+        let off = Vec2::new(-100.0, -100.0);
+        let (mut npcs, side) = match_target(&npc, off, 2.0);
+        npc.state.heading = f32::from(fire::dogfight_lead(&npc, &npcs[1].state, None));
+        npcs[0] = npc.clone();
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut ship = npc.clone();
+        ship.pursuit = step(&npc, &around, PursuitRules::default(), &mut chance);
+        assert_eq!(
+            bodies(&ship.pursuit),
+            [Manoeuvre::Dogfight, Manoeuvre::Rush]
+        );
+        autopilot::fly(
+            &mut ship,
+            &[],
+            &std::collections::BTreeMap::new(),
+            Some(&npcs[1].state),
+            false,
+            TopSpeeds::own_of(&npc),
+            crate::flight::FlightRules::default(),
+            RuleSource::Engine,
+            &mut chance,
+        );
+        assert!((ship.speed - 5.495).abs() < 1e-5, "{}", ship.speed);
     }
 
     #[test]

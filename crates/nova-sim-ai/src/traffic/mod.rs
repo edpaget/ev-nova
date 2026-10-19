@@ -1062,6 +1062,7 @@ impl Traffic {
         let around = world.around(&self.npcs);
         let rules = PursuitRules {
             approach_lead: world.approach_lead,
+            inertial_dampener: world.flight.inertial_dampener,
         };
         let steps: Vec<Option<(HighLevel, Pursuit)>> = self
             .npcs
@@ -3636,6 +3637,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         };
         let world = World {
             player: Some(player),
@@ -3702,6 +3704,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         };
         let world = World {
             player: Some(player),
@@ -5119,6 +5122,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         }
     }
 

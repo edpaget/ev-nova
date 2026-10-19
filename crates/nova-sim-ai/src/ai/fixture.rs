@@ -112,6 +112,7 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         target: None,
         class: EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     }
 }
 

@@ -293,6 +293,7 @@ mod tests {
                     }),
                     None,
                 ],
+                speed_cap: None,
             }),
         };
         assert!(counts(band.clone()), "a stand-off ship in its band");

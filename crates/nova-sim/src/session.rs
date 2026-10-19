@@ -2660,6 +2660,7 @@ impl Session {
                 EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
             }),
             boarded: self.player_boarded,
+            speed: self.player_speed,
         }
     }
 

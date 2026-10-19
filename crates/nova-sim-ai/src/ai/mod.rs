@@ -502,6 +502,10 @@ pub struct PlayerSide {
     /// passes a boarded player over ([`plunder_target`]) and waits or
     /// attacks one ([`pirate`]).
     pub boarded: bool,
+    /// Its speed along its heading while it flies inertialess, the
+    /// original's player +0x48 (`nova_sim::Session::player_speed`): an
+    /// inertialess dogfighter matches it ([`pursuit`]).
+    pub speed: f32,
 }
 
 /// No governments at all.
@@ -1546,6 +1550,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         };
         around.player = Some(player);
         assert!(around.live(P));

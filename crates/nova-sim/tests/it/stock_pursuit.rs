@@ -153,6 +153,7 @@ fn player(at: Vec2) -> PlayerSide {
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     }
 }
 
