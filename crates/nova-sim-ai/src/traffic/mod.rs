@@ -167,6 +167,8 @@ pub mod pod_flight;
 #[cfg(test)]
 mod pursuit_tests;
 pub mod quote;
+#[cfg(test)]
+mod re_pick_tests;
 mod reinforcing;
 pub mod repair_dock;
 #[cfg(test)]
@@ -1987,7 +1989,8 @@ impl Traffic {
     /// Gives each NPC the goal of its decision, if any, the player at
     /// `player_at` if there is one: one that stops inspecting a ship
     /// remembers it, and has scanned the player when it was inspecting the
-    /// player within its reach; one whose decision provokes it
+    /// player within its reach, unless an interceptor's re-pick gave the
+    /// new goal ([`Decision::re_picked`]); one whose decision provokes it
     /// ([`Decision::provokes`]) has a provocation of 1, the word's +0x96
     /// (@0x8b7e5, @0x8cb9d); one that does not fight loses its
     /// provocation; and one whose decision clears its target
@@ -2017,6 +2020,7 @@ impl Traffic {
                 lost_sight,
                 travel,
                 visits,
+                re_picked,
                 ..
             } = decision;
             if let Some(write) = lost_sight {
@@ -2031,7 +2035,9 @@ impl Traffic {
                 && goal != npc.goal
             {
                 npc.inspected = Some(ship);
-                scans = ship == ShipRef::Player
+                // A re-pick moves the reach onto its own target (@0x8f11e).
+                scans = !re_picked
+                    && ship == ShipRef::Player
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
             }
             // The calls carry the odds the think read, before the pass.
@@ -4293,6 +4299,7 @@ mod tests {
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
+            re_picked: false,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

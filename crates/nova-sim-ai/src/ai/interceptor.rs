@@ -60,16 +60,23 @@
 //!   [`sight`](super::sight)), it drops it: target -1, state 0
 //!   (@0x8d39a-0x8d3ee, [`lost_sight::after_inspection`]). An inspection
 //!   the out-of-ammo retreat turned into a flight is left alone.
-//! - Its re-pick while inspecting (@0x8d404-0x8d43a, `_SelectWarshipTarget`
-//!   with a government, the inspection kept when it finds none) is not
-//!   what the engine's [`hunt`] gives, which runs first on every think and
-//!   attacks what it picks: the original's needs a government, and its
-//!   hunt pick writes the target alone (@0x8ad11), so the interceptor goes
-//!   on to inspect it. Left out, in
-//!   rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
+//! - Inspecting (state 7) it runs no search of its own (the block needs
+//!   state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; [`hunt`] answers only
+//!   its provoker), but last in its think, with a government (+0x98,
+//!   @0x8d404), it re-picks ([`re_pick`], `_SelectWarshipTarget` @0x8d41e):
+//!   a pick that writes state 4 itself (a grudge, a mission hunter's, the
+//!   help, or the player through `_AIMakeShipAttackPlayer`) it attacks;
+//!   the hunt's or the xenophobe's NPC pick, which writes the target alone
+//!   (@0x8ad11, @0x8a3f0), it inspects instead; with none it keeps its
+//!   inspection (@0x8d42d-0x8d431). The re-pick runs in the think that
+//!   picks a fresh inspection too, rolling the enemy class a second time,
+//!   and never asks the threat step, which needs no target (@0x8ad3c). Its
+//!   reach then reads the new target (@0x8f11e): a re-pick away from the
+//!   player scans nothing ([`Decision::re_picked`]).
 
 use crate::ai::fire::FireRules;
-use crate::ai::target::TargetRules;
+use crate::ai::odds::hopeless_chase;
+use crate::ai::target::{TargetRules, dropped, re_pick_target};
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
     Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
@@ -152,14 +159,15 @@ impl Behaviour for Interceptor {
             comm_call = call;
             out_of_ammo::after_patrol(npc, goal)
         });
-        lost_sight::after_inspection(
+        let decision = lost_sight::after_inspection(
             npc,
             Decision {
                 comm_call,
                 ..decision
             },
             around,
-        )
+        );
+        re_pick(npc, decision, around, self.target, chance)
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -213,6 +221,58 @@ impl Interceptor {
                 None,
             ),
         }
+    }
+}
+
+/// `decision`, an interceptor's think, through `_InterceptorAI`'s re-pick
+/// while inspecting (@0x8d404-0x8d43a), last in its think: an inspection
+/// (state 7, kept or fresh) by an interceptor with a government (+0x98,
+/// @0x8d404) runs `_SelectWarshipTarget` again
+/// ([`re_pick_target`](crate::ai::target::re_pick_target), by `rules`,
+/// drawing on `chance`). With none the inspection stands (@0x8d42d). A
+/// pick that writes state 4 ([`Pick::attacks`](crate::ai::target::Pick::attacks)) attacks, as
+/// `_HighLevelAIHandler`'s state-4 block takes it that frame: dropped at
+/// once when the drop would take it (@0x8e3ef, [`dropped`]), sniped at in
+/// a hopeless chase unless the hull stands off (@0x8e48e), the call on the
+/// player kept. Any other pick is inspected instead of the ship it was
+/// inspecting. The retreats came before (@0x8d161-0x8d2e4) and need state
+/// 4, so a fresh attack isn't judged for one in the same think.
+fn re_pick(
+    npc: &Npc,
+    decision: Decision,
+    around: &Surroundings,
+    rules: TargetRules,
+    chance: &mut dyn Chance,
+) -> Decision {
+    let Goal::Inspect(_) = decision.goal else {
+        return decision;
+    };
+    if npc.govt.is_none() {
+        return decision;
+    }
+    let inspecting = Npc {
+        goal: decision.goal,
+        ..npc.clone()
+    };
+    let Some(pick) = re_pick_target(&inspecting, around, rules, chance) else {
+        return decision;
+    };
+    let turns_on_player = decision.turns_on_player || pick.turns_on_player;
+    let (goal, clears_target) = if !pick.attacks {
+        (Goal::Inspect(pick.ship), false)
+    } else if dropped(&inspecting, pick.ship, around, rules) {
+        (Goal::Idle, true)
+    } else if !npc.hull.stands_off && hopeless_chase(&inspecting, pick.ship, around) {
+        (Goal::Snipe(pick.ship), false)
+    } else {
+        (Goal::Attack(pick.ship), false)
+    };
+    Decision {
+        goal,
+        turns_on_player,
+        clears_target,
+        re_picked: true,
+        ..decision
     }
 }
 
@@ -707,6 +767,7 @@ mod tests {
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
+                re_picked: false,
             },
             "@0x8cb8f-0x8cb9d"
         );
@@ -801,16 +862,7 @@ mod tests {
                 goal: Goal::Attack(P),
                 turns_on_player: true,
                 dropped_target: true,
-                provokes: false,
-                comm_call: None,
-                calls_reinforcements: false,
-                board_wait: None,
-                clears_target: false,
-                keeps_pursuit: false,
-                plunders: None,
-                lost_sight: None,
-                travel: crate::ai::travel::TravelWrite::Keep,
-                visits: None,
+                ..Decision::default()
             },
             "the 0x0040 word drops it (@0x8cbc0), the grudge takes it again"
         );
@@ -983,5 +1035,218 @@ mod tests {
         let decision = inspecting(cop, true);
         assert_eq!(decision.goal, Goal::Flee(n(2)), "state 3, not 7");
         assert!(!decision.clears_target);
+    }
+
+    // The re-pick while inspecting (`_InterceptorAI` @0x8d404-0x8d43a).
+
+    /// The decision of `cop` among `others` (it first), the player 1000
+    /// above of record `record` and fighting as `combat_govt`, drawing
+    /// `draws`; and the draws asked.
+    fn re_picked(
+        cop: Npc,
+        others: &[Npc],
+        record: i16,
+        combat_govt: Option<crate::catalog::GovtId>,
+        draws: &[u32],
+    ) -> (Decision, Vec<u32>) {
+        let (sites, govts) = (sites(), govts(0, 0));
+        let npcs: Vec<Npc> = std::iter::once(cop).chain(others.iter().cloned()).collect();
+        let mut seen = around(&sites, &npcs, &govts, (0.0, -1000.0), record);
+        if let Some(player) = seen.player.as_mut() {
+            player.combat_govt = combat_govt;
+        }
+        let mut chance = Draws::of(draws);
+        let decision = Interceptor::default().decision(&npcs[0], &seen, &mut chance);
+        (decision, chance.asked)
+    }
+
+    /// A traders' interceptor at the centre inspecting NPC 2, a trader 500
+    /// off.
+    fn trader_cop_inspecting() -> (Npc, Npc) {
+        let mut cop = ship(1, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Inspect(n(2));
+        (cop, ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0))
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_does_not_hunt_at_its_first_search() {
+        // `_SelectWarshipTarget` @0x8cce6 needs state 1 or below, or 0x14
+        // (@0x8cc6d-0x8cc7d).
+        let (sites, govts) = (sites(), govts(0, 0));
+        let mut cop = police();
+        cop.goal = Goal::Inspect(n(2));
+        let npcs = [cop, ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)];
+        let wanted = around(&sites, &npcs, &govts, (0.0, -1000.0), -10);
+        let mut chance = Draws::of(&[]);
+        let first = hunt(
+            &npcs[0],
+            &wanted,
+            INTERCEPTOR_RETREAT,
+            RuleSource::Engine,
+            TargetRules::default(),
+            &mut chance,
+        );
+        assert_eq!(first.goal, None, "no search while inspecting");
+        let mut idle = npcs.clone();
+        idle[0].goal = Goal::Idle;
+        let wanted = around(&sites, &idle, &govts, (0.0, -1000.0), -10);
+        let first = hunt(
+            &idle[0],
+            &wanted,
+            INTERCEPTOR_RETREAT,
+            RuleSource::Engine,
+            TargetRules::default(),
+            &mut chance,
+        );
+        assert_eq!(first.goal, Some(Goal::Attack(P)), "idle, it searches");
+        let mut provoked = npcs.clone();
+        provoked[0].provoked = 3.0;
+        provoked[0].target = Some(n(2));
+        provoked[1].govt = Some(PIRATES);
+        let seen = around(&sites, &provoked, &govts, (0.0, -1000.0), 0);
+        let first = hunt(
+            &provoked[0],
+            &seen,
+            INTERCEPTOR_RETREAT,
+            RuleSource::Engine,
+            TargetRules::default(),
+            &mut chance,
+        );
+        assert_eq!(first.goal, Some(Goal::Attack(n(2))), "the provoker stands");
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_inspects_its_hunts_pick_rather_than_attacking_it() {
+        // The hunt's NPC pick writes the target alone (@0x8ad11).
+        let (cop, trader) = trader_cop_inspecting();
+        let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 300.0);
+        let (decision, _) = re_picked(cop, &[trader, pirate], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)));
+        assert!(decision.re_picked);
+        assert!(!decision.turns_on_player);
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_attacks_a_pick_that_writes_state_4() {
+        let (cop, trader) = trader_cop_inspecting();
+        let (decision, _) = re_picked(cop.clone(), std::slice::from_ref(&trader), -10, None, &[]);
+        assert_eq!(
+            decision.goal,
+            Goal::Attack(P),
+            "the hunt's player (@0x8ad31)"
+        );
+        assert!(decision.turns_on_player);
+        assert!(decision.re_picked);
+        let mut police_cop = police();
+        police_cop.goal = Goal::Inspect(n(2));
+        let mut fleeing = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 200.0);
+        fleeing.goal = Goal::Flee(n(4));
+        let pirate = ship(4, PIRATES, AiType::Warship, 0.0, 300.0);
+        let (decision, _) = re_picked(police_cop, &[trader, fleeing, pirate], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Attack(n(4)), "a help (@0x8a5c1)");
+        assert!(!decision.turns_on_player, "the help makes no call");
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_with_nothing_to_pick_keeps_its_inspection() {
+        let (cop, trader) = trader_cop_inspecting();
+        let (decision, asked) = re_picked(cop, &[trader], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)), "@0x8d42d-0x8d431");
+        assert!(!decision.re_picked);
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_re_picks_no_threat() {
+        // Step 8 needs +0x70 -1 (@0x8ad3c), and the re-pick enters with
+        // the inspected ship.
+        let (cop, trader) = trader_cop_inspecting();
+        let mut threat = ship(3, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        threat.goal = Goal::Attack(n(1));
+        let (decision, _) = re_picked(cop, &[trader, threat], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
+    }
+
+    #[test]
+    fn an_independent_inspecting_interceptor_re_picks_nothing() {
+        // The re-pick needs a government (+0x98, @0x8d404).
+        let (mut cop, trader) = trader_cop_inspecting();
+        cop.govt = None;
+        cop.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(600),
+            flags: crate::traffic::GRUDGE,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: true,
+            quoted: false,
+            quoted_at: None,
+            zero_fuel: false,
+        });
+        let (decision, _) = re_picked(cop.clone(), std::slice::from_ref(&trader), 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)), "it still inspects");
+        cop.govt = Some(TRADERS);
+        let (decision, _) = re_picked(cop, &[trader], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Attack(P), "with one, the grudge");
+    }
+
+    #[test]
+    fn a_fresh_inspection_is_re_picked_in_the_same_think() {
+        // The pick (@0x8ce34-0x8ce42) comes before the re-pick in one
+        // think, which rolls the enemy class again (`Rand(50)` @0x8a993).
+        let mut cop = ship(1, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Idle;
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let (decision, asked) = re_picked(
+            cop.clone(),
+            std::slice::from_ref(&trader),
+            0,
+            Some(PIRATES),
+            &[1, 0, 0],
+        );
+        assert_eq!(
+            asked,
+            [50, 2, 50],
+            "the hunt's roll, the pick, the re-pick's roll"
+        );
+        assert_eq!(decision.goal, Goal::Attack(P), "the second roll turns it");
+        assert!(decision.turns_on_player);
+        assert_eq!(
+            decision.comm_call,
+            Some(CommCall::PreScan),
+            "the fresh pick's hail stands"
+        );
+        let (decision, _) = re_picked(cop, &[trader], 0, Some(PIRATES), &[1, 0, 1]);
+        assert_eq!(decision.goal, Goal::Inspect(P));
+    }
+
+    #[test]
+    fn a_lost_inspection_is_not_re_picked() {
+        // The lost-sight tail leaves +0x70 -1 (@0x8d3d6-0x8d402).
+        let (cop, trader) = trader_cop_inspecting();
+        let (decision, asked) = re_picked(cop, &[cloaked(trader)], -10, None, &[]);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+        assert!(!decision.turns_on_player);
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_re_picked_attack_on_a_ship_it_drops_leaves_it_idle() {
+        // `_HighLevelAIHandler`'s state-4 drop takes it that frame
+        // (@0x8e3ef).
+        let (cop, trader) = trader_cop_inspecting();
+        let mut police_cop = cop;
+        police_cop.govt = Some(POLICE);
+        let mut fleeing = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 200.0);
+        fleeing.goal = Goal::Flee(n(4));
+        let mut wreck = ship(4, PIRATES, AiType::Warship, 0.0, 300.0);
+        wreck.condition = Condition::Disabled;
+        let (decision, _) = re_picked(police_cop, &[trader, fleeing, wreck], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
     }
 }

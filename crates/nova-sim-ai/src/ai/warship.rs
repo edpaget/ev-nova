@@ -259,7 +259,14 @@ pub fn hunt(
             let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
             let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
             let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && held(ship));
-            if npc.goal == Goal::Hold || (npc.goal == Goal::Wait && !retreat.searches_waiting) {
+            // Held, inspecting (an interceptor's state 7: its search needs
+            // state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; its re-pick
+            // comes after, see `interceptor`), or waiting without a
+            // search, it answers only its provoker.
+            if npc.goal == Goal::Hold
+                || matches!(npc.goal, Goal::Inspect(_))
+                || (npc.goal == Goal::Wait && !retreat.searches_waiting)
+            {
                 return Hunt {
                     goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
                     ..nothing(false)
@@ -355,6 +362,7 @@ impl Hunt {
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
+            re_picked: false,
         }
     }
 }
@@ -1320,6 +1328,7 @@ mod tests {
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
+                re_picked: false,
             }
         );
         assert!(
@@ -1818,6 +1827,7 @@ mod tests {
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
+            re_picked: false,
         }
     }
 
@@ -1901,6 +1911,7 @@ mod tests {
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
+                re_picked: false,
             }
         );
         let mut calm = grudger;
@@ -1924,6 +1935,7 @@ mod tests {
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
+                re_picked: false,
             },
             "no grudge: dropped, and nothing picked"
         );

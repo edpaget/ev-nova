@@ -849,6 +849,12 @@ pub struct Decision {
     /// [`miner`]). The traffic sets [`Npc::visited`] so as it takes the
     /// goal; none leaves it as it was.
     pub visits: Option<StellarId>,
+    /// Whether an inspecting interceptor's re-pick gave its goal
+    /// (`_InterceptorAI` @0x8d41e, see [`interceptor`]): the state-7
+    /// block's reach then reads the new target (@0x8f11e), and a state-4
+    /// pick runs no reach at all, so the ship it was inspecting is not
+    /// looked over and the player is not scanned.
+    pub re_picked: bool,
 }
 
 /// How NPCs decide what to do.

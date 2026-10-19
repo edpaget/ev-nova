@@ -53,9 +53,11 @@
 //!
 //! # Not modelled
 //!
-//! - `_InterceptorAI`'s re-pick while inspecting (@0x8d404-0x8d43a),
-//!   which needs a government and inspects its pick rather than attacking
-//!   it: rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
+//! - What a hit by an NPC does to an inspection: the original writes the
+//!   attacker into +0x70 (`_DamageShip` @0x3bcf6), so the interceptor
+//!   inspects and re-picks over its attacker (`_InterceptorAI` spares
+//!   state 7 its provocation, @0x8cc0d), where the engine's turns on it:
+//!   rdm:phase/combat-ai-fidelity/phase-27-left-out-of-phase-21.
 //! - The slot's timer lasting the app's life, through a pilot load or a
 //!   new game: rdm:phase/combat-ai-fidelity/phase-23-left-out-of-phase-16.
 //! - The warp-stage writes of the trader's leave (+0x50, +0xa4), the
