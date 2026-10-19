@@ -436,6 +436,7 @@ mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
 mod thrust;
+mod tractor_hold;
 mod tutorial;
 mod warp_stage;
 
@@ -2056,6 +2057,9 @@ impl Session {
     /// frame counter moves on. Only the advance pass steps the Red
     /// Alert's blink, as `_HandleAlertSprite` runs on it alone.
     fn fly_player(&mut self, frame: i16, controls: Controls, pass: GamePass) {
+        // The very top of `_HandlePlayer`, before the pod's return (see
+        // the `tractor_hold` module).
+        self.hold_player(pass);
         self.gamma_tick();
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
@@ -2347,6 +2351,7 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            tractor_step: self.tractor_step(),
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
@@ -2527,6 +2532,7 @@ impl Session {
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
             warp: self.warp_world(),
+            tractor_step: self.tractor_step(),
         };
         f(&mut self.traffic, world);
     }
@@ -2604,6 +2610,7 @@ impl Session {
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
             warp: self.warp_world(),
+            tractor_step: self.tractor_step(),
         }
     }
 
@@ -3801,6 +3808,7 @@ impl Session {
             return None;
         };
         self.jump = None;
+        self.clear_tractor();
         // The arrival's fold (@0x6c538-0x6c57b; see the `ship_display`
         // module).
         self.arrival_fold();
@@ -4359,6 +4367,7 @@ impl Session {
         // `_PlayerLandOnStellar` @0x63409.
         self.player_speed = 0.0;
         self.landed = Some(stellar);
+        self.clear_tractor();
         self.reset_comm_line();
         // A warp-up or warp-out still playing is taken as over (see
         // `warp::WarpUps`, `warp::WarpOut`).
@@ -19032,7 +19041,7 @@ pub(super) mod tests {
 
     /// A tractor beam: 200 pixels long, lasting 3 ticks, doing 1 energy
     /// damage, at `Impact` -5.
-    fn tractor_beam() -> WeaponRecord {
+    pub(super) fn tractor_beam() -> WeaponRecord {
         WeaponRecord {
             guidance: 0,
             count: 3,

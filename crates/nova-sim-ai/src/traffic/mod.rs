@@ -161,6 +161,7 @@ pub mod snipe;
 pub mod spawn;
 pub mod strength;
 pub mod table;
+pub mod tractor_hold;
 pub mod warp_out;
 pub mod weigh;
 
@@ -492,6 +493,12 @@ pub struct World<'a> {
     /// The player's warp, the warp sound's durations and double time,
     /// which the ships' warp-outs read ([`warp_out`]).
     pub warp: warp_out::WarpWorld,
+    /// The step a tractor's hold pulls a held ship's velocity by on each
+    /// axis: a quarter of the player's `_ShipAccelRate` as the player
+    /// thrusts, ionized and under the flight's divisor
+    /// ([`tractor_hold`]). Its session gives it, whether or not the
+    /// player is in the system, as the original reads slot 0's.
+    pub tractor_step: f32,
 }
 
 /// Nova's disable rule, a world's default.
@@ -507,8 +514,9 @@ impl<'a> World<'a> {
     /// no damage aimed, no gate's
     /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
     /// no cloak scanner, no asteroid in slot 0, no reinforcements coming,
-    /// no government marked by an IFF scrambler, Nova's disable rule, and
-    /// no player's warp under way with warp sounds of no length.
+    /// no government marked by an IFF scrambler, Nova's disable rule,
+    /// no player's warp under way with warp sounds of no length, and no
+    /// tractor's pull.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -538,6 +546,7 @@ impl<'a> World<'a> {
             disable: &NOVA_DISABLE,
             plunder_marines: RuleSource::Engine,
             warp: warp_out::WarpWorld::default(),
+            tractor_step: 0.0,
         }
     }
 
@@ -1176,6 +1185,7 @@ impl Traffic {
             warp_out::send_leaders_out(&mut self.npcs);
         }
         let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
+        let holders = tractor_hold::Holders::of(world, &self.npcs);
         let disabled: BTreeSet<NpcId> = self
             .npcs
             .iter()
@@ -1211,6 +1221,7 @@ impl Traffic {
                 // Its ion block, the move's other side (see the
                 // `ionization` module).
                 ionization::deionize(npc, speeds.own);
+                tractor_hold::hold(npc, &holders, world.tractor_step, think);
                 ship_display::settle_spawn(npc, derelict, &mut *chance);
                 let held = ship_display::held(npc);
                 let outcome = Self::fly_one(
