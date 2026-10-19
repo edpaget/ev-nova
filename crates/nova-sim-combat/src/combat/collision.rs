@@ -341,12 +341,7 @@ impl Combat {
                 );
             }
         }
-        self.ended_shots += spent.iter().filter(|&&spent| spent).count();
-        self.shots = shots
-            .into_iter()
-            .zip(spent)
-            .filter_map(|(shot, spent)| (!spent).then_some(shot))
-            .collect();
+        self.keep_unspent(shots, &spent);
         for (parent, target) in released {
             // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):
             // its plunder as it is now, not the parent's flag.
@@ -363,6 +358,18 @@ impl Combat {
                 terms.arsenal,
                 chance,
             );
+        }
+    }
+
+    /// Keeps the shots among `shots` not `spent` in flight; each spent one
+    /// holds its slot until `_HandleShot` frees it (@0x3617c).
+    fn keep_unspent(&mut self, shots: Vec<Shot>, spent: &[bool]) {
+        for (shot, spent) in shots.into_iter().zip(spent) {
+            if *spent {
+                self.slots.hold(shot.slot);
+            } else {
+                self.shots.push(shot);
+            }
         }
     }
 

@@ -157,7 +157,7 @@ impl Combat {
         // defence ended, hidden at life 0, is freed with no end of life
         // (@0x36195 → @0x35f0a → @0x3617c); the collision passes have
         // already tested and let it go (`Combat::test_hidden`).
-        self.ended_shots = 0;
+        self.slots.clear();
         let now = self.stand_where_they_stood(fighters);
         let stood: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let sides = Sides {
@@ -168,7 +168,7 @@ impl Combat {
         let first_strike = self.strikes.len();
         let expiries = self.expire(fighters, &sides, arena.arsenal, chance);
         // Each end of life frees its slot as it ends (@0x3617c).
-        self.ended_shots = 0;
+        self.slots.clear();
         self.land(fighters, expiries, rule);
         for (fighter, position) in fighters.iter_mut().zip(now) {
             fighter.state.position = position;

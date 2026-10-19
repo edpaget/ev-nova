@@ -277,7 +277,7 @@ fn under_the_caps_an_npcs_point_defence_finds_the_slots_the_hit_pass_ended_still
     // defence no slot.
     for capped in [false, true] {
         let (mut combat, mut ships) = last_slot_left(A, capped);
-        combat.shots.push(ending_on_b());
+        combat.put_in_flight(ending_on_b());
         ships[0].trigger = QUIET;
         tick(&mut combat, &mut ships, &NovaDisable);
         assert!(ships[1].reserves.shield.now < 10.0, "{capped}: B struck");
@@ -308,7 +308,7 @@ fn under_the_caps_an_npcs_pick_after_the_shots_fly_finds_them_freed() {
     for capped in [false, true] {
         // One ended on B by the collision passes.
         let (mut combat, mut ships) = last_slot_left(A, capped);
-        combat.shots.push(ending_on_b());
+        combat.put_in_flight(ending_on_b());
         ships[0].trigger = Trigger {
             only: Some(WeaponId(128)),
             point_defence: false,
@@ -319,7 +319,7 @@ fn under_the_caps_an_npcs_pick_after_the_shots_fly_finds_them_freed() {
         // One whose move spends it on the tick before, ended in
         // `_HandleShot`.
         let (mut combat, mut ships) = last_slot_left(A, capped);
-        combat.shots.push(spent);
+        combat.put_in_flight(spent);
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.shots().len(), MAX_SHOTS, "{capped}: spent");
         ships[0].trigger = Trigger {

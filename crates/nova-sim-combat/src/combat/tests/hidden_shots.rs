@@ -499,5 +499,5 @@ fn a_hidden_shot_holds_one_slot_until_handle_shot() {
     combat.shots.pop();
     assert!(combat.shot_room(), "each held once");
     fly_amid(&mut combat, &mut ships);
-    assert_eq!(combat.ended_shots, 0, "freed");
+    assert_eq!(combat.slots.held().count(), 0, "freed");
 }

@@ -89,7 +89,7 @@ fn fly(
     shot.age = 1;
     shot.miss_roll = roll;
     shot.layer = layer;
-    combat.shots.push(shot);
+    combat.put_in_flight(shot);
 }
 
 /// A homing missile, aimed at C.

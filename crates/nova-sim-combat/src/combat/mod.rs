@@ -399,6 +399,7 @@ use projectile::{
     Source, Target,
 };
 use report::{Reports, SimDiagnostic};
+use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
 use weapon::{Explosion, Guidance};
@@ -1159,16 +1160,15 @@ pub struct Combat {
     /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)): by default on
     /// each axis, as `_SpeedLimit` does.
     speed_cap: SpeedCap,
-    /// The shots that left the table whose slots the original frees only
-    /// at its next `_HandleShot` (see [`Combat::shot_room`]): from the
-    /// late part of a tick (step 7) to the next tick's `_HandleShot`
-    /// ([`Combat::fly_shots`]), the missiles point-defence beams downed;
-    /// from the collision passes on, those and the passes' own ends, as
-    /// each is ended; in `_HandleShot`, the ends of life so far, freed as
-    /// it ends; none from then to step 7. Those point defence ended are
-    /// also kept in `hidden` until a proximity pass tests them, but are
-    /// counted here alone.
-    ended_shots: usize,
+    /// The original's shot slots ([`shot_slots`]). Each shot that leaves
+    /// the table holds its slot until the next `_HandleShot` visits it
+    /// (see [`Combat::shot_room`]): from the late part of a tick (step 7)
+    /// to the next tick's `_HandleShot` ([`Combat::fly_shots`]), the
+    /// missiles point-defence beams downed; from the collision passes on,
+    /// those and the passes' own ends, as each is ended. Those point
+    /// defence ended are also kept in `hidden` until a proximity pass
+    /// tests them, and hold their slots here alone.
+    slots: ShotSlots,
     /// The shots point defence ended at life 0, their sprites hidden,
     /// kept for the next proximity pass's stellar and asteroid branches
     /// (see [`hidden`]).
@@ -1572,7 +1572,8 @@ impl Combat {
 
     /// Whether a shot fired now finds a free slot: always uncapped; under
     /// the caps, while the shots in flight and those whose slots are still
-    /// held (`ended_shots`) are fewer than [`MAX_SHOTS`]. The original
+    /// held ([`ShotSlots::hold`]) leave one of [`MAX_SHOTS`] free
+    /// ([`ShotSlots::first_free`]). The original
     /// frees a shot's slot only on the `_HandleShot` pass after it ends
     /// (life -1.0 or 0 then -2.0, @0x356c1, @0x30ab1, @0x3617c; free below
     /// -1.0, @0x3e5be), which comes after `_HandlePlayer` and `_AIDispatch`
@@ -1590,7 +1591,29 @@ impl Combat {
     /// A shot point defence ended holds its slot once, here, while it is
     /// kept hidden for the proximity pass ([`hidden`]).
     fn shot_room(&self) -> bool {
-        !self.capped || self.shots.len() + self.ended_shots < MAX_SHOTS
+        self.first_free_slot().is_some()
+    }
+
+    /// The slot a shot spawned now takes ([`ShotSlots::first_free`]), the
+    /// shots in flight taking theirs.
+    fn first_free_slot(&self) -> Option<usize> {
+        let taken = self.shots.iter().map(|shot| shot.slot);
+        self.slots.first_free(taken, self.capped)
+    }
+
+    /// Puts `shot` in flight at the first free slot, as `_SpawnShot` does
+    /// (@0x3e5ab-0x3e5ce), keeping the shots in slot order: its slot's
+    /// sprite is put in its layer ([`ShotSlots::put`]). Whether it found
+    /// a slot.
+    fn put_in_flight(&mut self, mut shot: Shot) -> bool {
+        let Some(free) = self.first_free_slot() else {
+            return false;
+        };
+        shot.slot = free;
+        self.slots.put(free, shot.layer);
+        let at = self.shots.partition_point(|flying| flying.slot < free);
+        self.shots.insert(at, shot);
+        true
     }
 
     /// Whether a beam fired now finds a free slot: always uncapped; under
@@ -1828,8 +1851,7 @@ impl Combat {
                 along
             };
             shot.velocity = projectile::launch_velocity(&weapon, &from, out, thrown);
-            self.shots.push(shot);
-            true
+            self.put_in_flight(shot)
         }
     }
 
@@ -2476,7 +2498,7 @@ impl Combat {
         let shots = std::mem::take(&mut self.shots);
         for (shot, gone) in shots.into_iter().zip(gone) {
             if gone {
-                self.ended_shots += 1;
+                self.slots.hold(shot.slot);
                 self.hide(shot);
             } else {
                 self.shots.push(shot);
@@ -2808,6 +2830,7 @@ impl Combat {
                 kept.push(shot);
                 continue;
             };
+            self.slots.hold(shot.slot);
             self.strike_stellar(&shot, &mut stellars[index], at);
         }
         self.shots = kept;
@@ -2897,14 +2920,13 @@ impl Combat {
         });
         for mut shot in shots {
             // `_SpawnShot` failing ends the loop (@0x3f32d-0x3f331).
-            if !sub.spawns_shot() || self.capped && self.shots.len() + self.ended_shots >= MAX_SHOTS
-            {
+            if !sub.spawns_shot() || !self.shot_room() {
                 break;
             }
             shot.id = self.next_id();
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, chance);
-            self.shots.push(shot);
+            self.put_in_flight(shot);
         }
     }
 
@@ -3126,7 +3148,7 @@ impl Combat {
         self.shots.clear();
         self.hidden.clear();
         self.beams.clear();
-        self.ended_shots = 0;
+        self.slots.clear();
         self.ended_beams = 0;
         self.stood.clear();
         self.begun.clear();
@@ -3607,6 +3629,7 @@ mod tests {
     mod exit_steps;
     mod hidden_shots;
     mod plunder_fire;
+    mod shot_slots;
     mod strike_terms;
     mod tick_phases;
     mod weapon_glow;
@@ -6490,7 +6513,7 @@ mod tests {
             ships[0].trigger = QUIET;
         }
         combat.take_strikes();
-        combat.shots.push(Shot {
+        combat.put_in_flight(Shot {
             id: ShotId(99),
             position: Vec2::new(5000.0, 0.0),
             velocity: Vec2::new(10.0, 0.0),
@@ -7085,7 +7108,7 @@ mod tests {
             age: 1,
             ..Shot::launch(WeaponSpec::new(&record), firer, firer, &from, 0.0)
         };
-        combat.shots.push(shot);
+        combat.put_in_flight(shot);
         shot.id
     }
 
@@ -7743,7 +7766,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            combat.shots.push(Shot {
+            combat.put_in_flight(Shot {
                 id: ShotId(n as u32),
                 ..shot
             });
@@ -13198,8 +13221,8 @@ mod tests {
             for capped in [false, true] {
                 let released = 2;
                 let mut combat = crowded(MAX_SHOTS - 3, capped);
-                combat.shots.push(ending);
-                combat.shots.push(flown(shell, Vec2::new(0.0, -3000.0), 3));
+                combat.put_in_flight(ending);
+                combat.put_in_flight(flown(shell, Vec2::new(0.0, -3000.0), 3));
                 let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 100.0, 0.0)];
                 let mut stellars = [stellar_at(0.0, 500.0, 20.0, 100)];
                 tick_by(&mut combat, &mut ships, &arsenal, &mut stellars);
@@ -13261,8 +13284,10 @@ mod tests {
             for capped in [false, true] {
                 let released = 2;
                 let mut combat = crowded(MAX_SHOTS - 2 - endings.len(), capped);
-                combat.shots.extend(endings.iter().copied());
-                combat.shots.push(spent_shell);
+                for ending in &endings {
+                    combat.put_in_flight(*ending);
+                }
+                combat.put_in_flight(spent_shell);
                 let mut ships = [Ship::at(1, 0.0, 1000.0)];
                 let mut rocks = [rock(0, 500.0, 0.0)];
                 tick_amid(
@@ -13336,10 +13361,10 @@ mod tests {
 
     /// A combat with `n` [`filler`] shots in flight, capped or not.
     fn crowded(n: usize, capped: bool) -> Combat {
-        let mut combat = Combat {
-            shots: filler(n),
-            ..Combat::default()
-        };
+        let mut combat = Combat::default();
+        for shot in filler(n) {
+            combat.put_in_flight(shot);
+        }
         if capped {
             combat.set_combat_caps(RuleSource::Engine);
         }
@@ -13645,7 +13670,7 @@ mod tests {
         };
         for capped in [false, true] {
             let mut combat = crowded(MAX_SHOTS - 1, capped);
-            combat.shots.push(Shot::launch(ending, C, C, &far, 0.0));
+            combat.put_in_flight(Shot::launch(ending, C, C, &far, 0.0));
             // Its move spends it this tick, nothing firing: it is still in
             // flight, drawn at its last point.
             let mut ships = [player_with(blaster()), Ship::at(1, 0.0, 300.0)];
@@ -13701,7 +13726,7 @@ mod tests {
                 };
                 // A shot of one tick takes the 128th, and its move spends
                 // it, nothing firing.
-                combat.shots.push(Shot::launch(ending, C, C, &far, 0.0));
+                combat.put_in_flight(Shot::launch(ending, C, C, &far, 0.0));
                 tick(&mut combat, &mut ships, &NovaDisable);
                 assert_eq!(combat.shots().len(), MAX_SHOTS, "spent");
                 combat.take_events();
@@ -13860,13 +13885,15 @@ mod tests {
     #[test]
     fn clearing_the_fight_frees_the_slots_ended_shots_and_beams_hold() {
         let mut combat = crowded(1, true);
-        combat.ended_shots = 5;
+        for slot in 1..6 {
+            combat.slots.hold(slot);
+        }
         combat.ended_beams = 5;
         combat.stood.insert(B, Vec2::new(1.0, 2.0));
         let ended = combat.shots[0];
         combat.hide(ended);
         combat.clear();
-        assert_eq!((combat.ended_shots, combat.ended_beams), (0, 0));
+        assert_eq!((combat.slots.held().count(), combat.ended_beams), (0, 0));
         assert_eq!(combat.shots(), []);
         assert_eq!(combat.hidden, [], "the shots point defence ended");
         assert_eq!(combat.stood, BTreeMap::new(), "where the ships stood");
@@ -14005,7 +14032,7 @@ mod tests {
         let mut combat = Combat::default();
         tick(&mut combat, ships, &NovaDisable);
         moved(ships);
-        combat.shots.push(*shot);
+        combat.put_in_flight(*shot);
         tick(&mut combat, ships, &NovaDisable);
         combat
             .take_strikes()
@@ -14066,7 +14093,7 @@ mod tests {
         );
         // A ship not in the last tick's fight is met where it is.
         let mut combat = Combat::default();
-        combat.shots.push(touching);
+        combat.put_in_flight(touching);
         let mut ships = [Ship::at(2, 0.0, 0.0)];
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_strikes().len(), 1, "met where it is");
@@ -14295,7 +14322,7 @@ mod tests {
             };
             let mut ships = [defender];
             let mut combat = Combat::default();
-            combat.shots.push(Shot {
+            combat.put_in_flight(Shot {
                 target: Some(A),
                 aimed_at: Some(A),
                 ..Shot::launch(
@@ -14331,7 +14358,7 @@ mod tests {
             ..shell
         };
         let mut combat = Combat::default();
-        combat.shots.push(Shot {
+        combat.put_in_flight(Shot {
             target: Some(B),
             aimed_at: Some(B),
             ..flown_by_c(fused, Vec2::new(20.0, 0.0))
@@ -14480,7 +14507,7 @@ mod tests {
         for (source, hit) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
             let mut combat = Combat::default();
             combat.set_proximity_fuse(source);
-            combat.shots.push(Shot {
+            combat.put_in_flight(Shot {
                 moved_from: Some(Vec2::ZERO),
                 ..flown_by_c(fused, Vec2::new(80.0, 0.0))
             });

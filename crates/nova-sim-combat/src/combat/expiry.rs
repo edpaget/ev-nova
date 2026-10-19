@@ -39,7 +39,7 @@ impl Combat {
         let mut expiries: Vec<Landed> = Vec::new();
         let mut released: Vec<Shot> = Vec::new();
         let mut kept = Vec::with_capacity(self.shots.len());
-        let mut ended = 0;
+        let mut ended = Vec::new();
         for shot in std::mem::take(&mut self.shots) {
             if shot.moved_from.is_none() || !shot.expired() {
                 kept.push(shot);
@@ -60,9 +60,11 @@ impl Combat {
             if shot.weapon.subs_on_expiry() {
                 released.push(shot);
             }
-            ended += 1;
+            ended.push(shot.slot);
         }
-        self.ended_shots += ended;
+        for slot in ended {
+            self.slots.hold(slot);
+        }
         self.shots = kept;
         for parent in released {
             // `_SpawnShotSubmunitions` spawns as the parent's owner (+0x2c):

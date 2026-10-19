@@ -548,6 +548,11 @@ pub struct Shot {
     /// the collision passes to test (`_SpawnShot` never shows it; the
     /// walks skip a hidden sprite @0xacba3, @0xacbc6).
     pub moved_from: Option<Vec2>,
+    /// The original's shot slot it holds
+    /// ([`ShotSlots`](super::shot_slots::ShotSlots)), which
+    /// [`Combat`](super::Combat) gives it as it puts it in flight: the
+    /// shots in flight are kept in slot order.
+    pub slot: usize,
 }
 
 /// How a freefall bomb (5) or a rocket (6) leaves its ship. `_SpawnShot`
@@ -701,6 +706,7 @@ impl Shot {
             turret_over: false,
             jam_rolls: [0; JAMMING_TYPES],
             moved_from: None,
+            slot: 0,
         }
     }
 
