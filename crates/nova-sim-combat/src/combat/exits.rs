@@ -51,9 +51,11 @@
 //! the word before the cursors (@0x450fa), steps its ship's fold set
 //! (+0xc8fc, [`Armament::fold`](super::armament::Armament::fold);
 //! [`step_stray`]) and starts at the centre, as the rulebook's
-//! [`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit) says. Any other
-//! `ExitType` outside 0-3 steps nothing here, though the original steps
-//! whatever word it lands on (weapons-fidelity phase 31).
+//! [`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit) says. One of
+//! `ExitType` 5 lands on +0xc908, which the session steps for its firer
+//! ([`StrayWord::Pods`]). Any other `ExitType` outside 0-3 steps nothing,
+//! though the original steps whatever word it lands on; weapons-fidelity
+//! phase 31 records each ([`StrayWord`]).
 //!
 //! `_SpawnBeam`'s given exit (@0x450c7-0x450df) is never given by any of
 //! its callers. A negative `FramesPer`, which the original divides by,
@@ -421,6 +423,42 @@ impl ExitCursors {
         });
         self.step_from(kind, cursor);
         index
+    }
+}
+
+/// A ship word outside the cursors that a beam of stray `ExitType` steps,
+/// as `_SpawnBeam` reads `ExitType` signed and indexes the cursors at
+/// +0xc8fe with it, unchecked (@0x450fa-0x4523d). Only the words the engine
+/// models as a small integer the step fits are named:
+///
+/// | `ExitType` | Word | Here |
+/// |---|---|---|
+/// | -1 | +0xc8fc, the fold set | [`StrayWord::FoldSet`] |
+/// | 5 | +0xc908, an NPC's crew pods left / the player's pod countdown | [`StrayWord::Pods`] |
+///
+/// Every other `ExitType` outside 0-3 lands on a word the engine doesn't
+/// model in that form (the fold direction, frame counters, the swarm
+/// leader, the escort order, halves of floats and 32-bit fields, caches,
+/// or another slot's record) and steps nothing; weapons-fidelity phase 31
+/// records each one and why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrayWord {
+    /// -1: the fold set (+0xc8fc), stepped within the fight.
+    FoldSet,
+    /// 5: +0xc908, which the session steps: an NPC's crew pods left, or the
+    /// player's escape-pod countdown (-1 while flying).
+    Pods,
+}
+
+impl StrayWord {
+    /// The word a beam of `ExitType` `raw` steps, if the engine models it.
+    #[must_use]
+    pub fn of(raw: i16) -> Option<Self> {
+        match raw {
+            -1 => Some(Self::FoldSet),
+            5 => Some(Self::Pods),
+            _ => None,
+        }
     }
 }
 
@@ -873,5 +911,16 @@ mod tests {
         assert_eq!(gun.side(ExitKind::Gun, 0), 1.0);
         assert_eq!(gun.side(ExitKind::Gun, 1), -1.0);
         assert_eq!(gun.side(ExitKind::Gun, 2), 0.0);
+    }
+
+    #[test]
+    fn a_stray_exit_type_names_the_fold_set_at_minus_1_the_pod_word_at_5_and_nothing_else() {
+        assert_eq!(StrayWord::of(-1), Some(StrayWord::FoldSet));
+        assert_eq!(StrayWord::of(5), Some(StrayWord::Pods));
+        for raw in i16::MIN..=i16::MAX {
+            if raw != -1 && raw != 5 {
+                assert_eq!(StrayWord::of(raw), None, "{raw}");
+            }
+        }
     }
 }

@@ -5,11 +5,20 @@
 //! ([`Sortie`]) is put in the system at its carrier, its shield and
 //! armour full, its class's stock weapons and rounds aboard, its AI type
 //! its `InherentAI`, pushed out at the bay's speed ([`launch_velocity`])
-//! along the launch heading. With no ship slot free below the
-//! reserve `_LaunchFighter` leaves (8 @0x3d648, so it stops at 55 NPCs,
-//! as [`RuleKey::SpawnReserve`] reads; see
-//! [`SPAWN_RESERVE`]), or no record of its
-//! ship type, it goes back into its bay, a round again.
+//! along the launch heading: the player's after its trigger, an NPC's
+//! right after its carrier's turn in the NPCs' point-defence loop
+//! ([`Session::dispatch_npcs`]), before `_HandleShot`
+//! ([`Session::game_work`]), so each moves on its launch tick. An NPC's
+//! fighter in a slot above its carrier's thinks then and takes its turn
+//! in the rest of the loop, and every later slot's point defence can
+//! choose it, as [`RuleKey::LaunchFrameAi`] reads. With no ship slot
+//! free below the reserve `_LaunchFighter` leaves (8 @0x3d648, so it
+//! stops at 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]), or no record of its ship type, it goes
+//! back into its bay, a round again. An NPC's launch has its slot
+//! already: the traffic counts the free slots as its NPCs fire, and a
+//! carrier finding none launches nothing (see `nova_sim::traffic`'s room
+//! ledger), so for an NPC this only guards a missing record. The player's
+//! glow bay lights the weapon glow only for a fighter put in the system.
 //!
 //! - **The player's fighter** joins the fleet as a carried escort
 //!   ([`Escort::carried`]), of no government, on its formation slot, as
@@ -48,6 +57,7 @@ use crate::chance::Chance;
 use crate::combat::armament::{Fold, MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
+use crate::combat::weapon::WeaponSpec;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
@@ -65,13 +75,40 @@ use crate::traffic::table::ShipKind;
 impl Session {
     /// Puts each fighter of `sorties` in the system (see the module
     /// docs); one with no room, or whose ship type has no record, goes
-    /// back into its bay. Each rolls its afterburner on `chance`.
-    pub(super) fn launch_fighters(&mut self, sorties: &[Sortie], chance: &mut dyn Chance) {
+    /// back into its bay. Each rolls its afterburner on `chance`. The
+    /// NPCs put in the system, in order.
+    ///
+    /// Once one of the player's, from a glow bay (`Flags2` 0x0200), is put
+    /// in the system, the player's weapon glow lights, once
+    /// ([`Combat::light_glow`](crate::combat::Combat::light_glow)), as
+    /// `_FirePlayerWeapon` reaches the glow from a bay only when
+    /// `_LaunchFighter` returns a fighter (@0x62c61-0x62c6e,
+    /// @0x62c78-0x62c98). An NPC's launch never lights it, as
+    /// `_AILaunchFighter` never writes it.
+    pub(super) fn launch_fighters(
+        &mut self,
+        sorties: &[Sortie],
+        chance: &mut dyn Chance,
+    ) -> Vec<NpcId> {
+        let mut glows = false;
+        let mut placed = Vec::new();
         for sortie in sorties {
-            if self.launch_fighter(sortie, chance).is_none() {
+            let Some(id) = self.launch_fighter(sortie, chance) else {
                 self.put_back(sortie);
+                continue;
+            };
+            placed.push(id);
+            if sortie.carrier == ShipRef::Player {
+                glows |= self
+                    .arsenal
+                    .weapon(sortie.bay)
+                    .is_some_and(WeaponSpec::glows);
             }
         }
+        if glows {
+            self.combat.light_glow(ShipRef::Player);
+        }
+        placed
     }
 
     /// Puts the fighter of `sortie` in the system, its afterburner rolled
@@ -209,32 +246,37 @@ impl Session {
     /// round to its bay, and one no bay launches is lost, which makes a
     /// save due.
     pub(super) fn dock_fighters(&mut self) {
-        let docked: Vec<(NpcId, ShipRef, crate::catalog::ShipId)> = self
-            .traffic
-            .departed()
-            .iter()
-            .filter_map(|&(id, outcome)| match outcome {
-                Outcome::Docked { carrier, ship } => Some((id, carrier, ship)),
-                _ => None,
-            })
-            .collect();
-        for (id, carrier, ship) in docked {
-            match carrier {
-                ShipRef::Player => {
-                    let mut rounds = OutfitRounds {
-                        owned: &mut self.pilot.outfits,
-                        sources: &self.ammo_outfits,
-                    };
-                    let stowed = self.armament.stow(ship, &mut rounds);
-                    self.unfleet(id);
-                    if !stowed {
-                        self.save_due = true;
-                    }
+        let departed = self.traffic.departed().to_vec();
+        for (id, outcome) in departed {
+            self.dock_fighter(id, outcome);
+        }
+    }
+
+    /// Takes NPC `id` aboard its carrier when its flight's `outcome` docked
+    /// it, as [`Session::dock_fighters`] does for each; any other outcome
+    /// is left alone. The ship loop settles each dock at the fighter's own
+    /// slot, as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
+    /// (@0x87fef), so no later slot's step finds the player's fighter gone
+    /// from the system but still in the fleet.
+    pub(super) fn dock_fighter(&mut self, id: NpcId, outcome: Outcome) {
+        let Outcome::Docked { carrier, ship } = outcome else {
+            return;
+        };
+        match carrier {
+            ShipRef::Player => {
+                let mut rounds = OutfitRounds {
+                    owned: &mut self.pilot.outfits,
+                    sources: &self.ammo_outfits,
+                };
+                let stowed = self.armament.stow(ship, &mut rounds);
+                self.unfleet(id);
+                if !stowed {
+                    self.save_due = true;
                 }
-                ShipRef::Npc(carrier) => {
-                    if let Some(carrier) = self.npc_mut(carrier) {
-                        carrier.armament.stow(ship, &mut carrier.rounds);
-                    }
+            }
+            ShipRef::Npc(carrier) => {
+                if let Some(carrier) = self.npc_mut(carrier) {
+                    carrier.armament.stow(ship, &mut carrier.rounds);
                 }
             }
         }
@@ -551,7 +593,7 @@ fn fighter(
         swarm_leader: None,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
-        pods_left: kind.hull.pod_count,
+        pods_left: kind.hull.signed_pod_count,
         warp: crate::traffic::warp_out::Warp::default(),
         // `_LaunchFighter` takes its slot from `_GenericRandomShipSpawn`
         // (@0x3d657): its glow 32 (@0x3cb77), and its anim rolls again
@@ -574,7 +616,7 @@ fn fighter(
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::combat::armament::LauncherRounds;
     use std::rc::Rc;
 
@@ -604,16 +646,16 @@ mod tests {
 
     /// The Viper Bay: carrying ship 144, reloading every 60 ticks,
     /// pushing its fighter out at 4 pixels a tick, 4 fighters a bay.
-    const BAY: WeaponId = WeaponId(149);
+    pub(in crate::session) const BAY: WeaponId = WeaponId(149);
     /// The fighter, a Viper.
-    const VIPER: ShipId = ShipId(144);
+    pub(in crate::session) const VIPER: ShipId = ShipId(144);
     /// The fighter outfit, the bay's rounds.
     const VIPERS: OutfitId = OutfitId(158);
     /// The outfit holding the Viper Bay.
     const VIPER_BAY: OutfitId = OutfitId(157);
     /// The fighter's gun: 10 pixels a tick for 30 ticks, every 5, 5
     /// energy and 2 mass damage.
-    const GUN: WeaponId = WeaponId(141);
+    pub(in crate::session) const GUN: WeaponId = WeaponId(141);
     /// A warship escort's ship type.
     const WARSHIP: ShipId = ShipId(150);
 
@@ -625,7 +667,7 @@ mod tests {
         ..FAST
     };
 
-    fn bay() -> WeaponRecord {
+    pub(in crate::session) fn bay() -> WeaponRecord {
         WeaponRecord {
             guidance: 99,
             ammo_type: 144,
@@ -642,7 +684,7 @@ mod tests {
     /// across, carries a Viper Bay (held by outfit 157); the Viper (a
     /// fighter, an interceptor by `InherentAI`, 20 across) carries a gun;
     /// and a warship escort type, 150.
-    fn carrying() -> FakePilotCatalog {
+    pub(in crate::session) fn carrying() -> FakePilotCatalog {
         FakePilotCatalog {
             ship_records: vec![
                 ship(128, FAST),
@@ -705,7 +747,11 @@ mod tests {
     }
 
     /// A pilot owning `vipers` Vipers aboard, with `escorts`.
-    fn pilot(catalog: &FakePilotCatalog, vipers: u16, escorts: Vec<Escort>) -> Pilot {
+    pub(in crate::session) fn pilot(
+        catalog: &FakePilotCatalog,
+        vipers: u16,
+        escorts: Vec<Escort>,
+    ) -> Pilot {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.outfits.insert(VIPERS, vipers);
         pilot.escorts = escorts;
@@ -715,9 +761,20 @@ mod tests {
     /// `pilot`'s session by `launch`, the bay selected, its first traffic
     /// tick done.
     fn flying(catalog: &FakePilotCatalog, pilot: Pilot, launch: RuleSource) -> Session {
+        let rules = Rulebook::default().with_override(RuleKey::FighterLaunch, launch);
+        flying_by(catalog, pilot, rules)
+    }
+
+    /// `pilot`'s session by `rules`, the bay selected, its first traffic
+    /// tick done.
+    pub(in crate::session) fn flying_by(
+        catalog: &FakePilotCatalog,
+        pilot: Pilot,
+        rules: Rulebook,
+    ) -> Session {
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
-            .with_rules(Rulebook::default().with_override(RuleKey::FighterLaunch, launch));
+            .with_rules(rules);
         session.select_secondary(false);
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
         session
@@ -852,6 +909,73 @@ mod tests {
         let (immobile, at, state) = launched(VIPER_FIELDS);
         assert!(!immobile);
         assert_ne!(state.position, at, "the bay's push moves it");
+    }
+
+    #[test]
+    fn a_fighter_the_player_launches_moves_on_its_launch_tick() {
+        // `_FirePlayerWeapon`'s bay calls `_LaunchFighter` (@0x62c61),
+        // which marks the slot active before `_AIDispatch` and
+        // `_HandleShip` (@0x4429d, @0x44483) run that frame.
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        let stood = session.player().position;
+        session.hold_fire(false, true);
+        session.game_work(
+            Controls::default(),
+            &catalog,
+            &Sitting,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        let fighters = fleet_npcs(&session);
+        assert_eq!(fighters.len(), 1, "launched");
+        assert_ne!(fighters[0].state.position, stood, "moved off the bay");
+    }
+
+    /// The fighter the player's bay launches in `_HandlePlayer`, by
+    /// `undisplayed`: whether the collision passes walk it and the frame
+    /// draws it after the player's trigger, then after the NPCs' display
+    /// steps.
+    fn launched_fighter_shown(undisplayed: RuleSource) -> [(bool, bool); 2] {
+        let catalog = carrying();
+        let rules = Rulebook::default()
+            .with_override(RuleKey::FighterLaunch, RuleSource::Engine)
+            .with_override(RuleKey::UndisplayedShips, undisplayed);
+        let mut session = flying_by(&catalog, pilot(&catalog, 2, Vec::new()), rules);
+        session.select_secondary(false);
+        session.hold_fire(false, true);
+        let pass = crate::combat::GamePass::Advance { double_time: false };
+        session.player_fires(pass, Rules::default(), &mut NeverFires);
+        let fighter = ShipRef::Npc(fleet_npcs(&session)[0].id);
+        let shown = |session: &Session| {
+            let walked = session
+                .sprite_ranks()
+                .iter()
+                .any(|&(ship, _)| ship == fighter);
+            (walked, session.draw_order().contains(&fighter))
+        };
+        let launched = shown(&session);
+        session.handle_npcs(pass, Rules::default(), &mut NeverFires);
+        [launched, shown(&session)]
+    }
+
+    #[test]
+    fn a_fighter_the_player_launches_is_not_walked_until_its_display_step() {
+        // `_LaunchFighter` from `_HandlePlayer` (@0x62c61) makes active a
+        // slot whose last display hid it (@0x2b555-0x2b60a): the collision
+        // passes skip it (@0xacba3) until its own display (@0x444ad).
+        assert_eq!(
+            launched_fighter_shown(RuleSource::Engine),
+            [(false, false), (true, true)]
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_fighter_the_player_launches_is_walked_at_once() {
+        assert_eq!(
+            launched_fighter_shown(RuleSource::Bible),
+            [(true, true), (true, true)]
+        );
     }
 
     #[test]
@@ -1173,6 +1297,77 @@ mod tests {
         assert_eq!(session.npcs().len(), 63, "by the Bible, the table full");
     }
 
+    /// [`carrying`] with the Viper Bay a glow weapon (`Flags2` 0x0200).
+    fn carrying_a_glow_bay() -> FakePilotCatalog {
+        let mut catalog = carrying();
+        catalog.weapons[0].flags2 |= crate::combat::weapon::GLOWS;
+        catalog
+    }
+
+    /// The weapon glows among `events`: each ship's, and whether late.
+    fn glows(events: &[CombatEvent]) -> Vec<(ShipRef, bool)> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::WeaponGlow { ship, late } => Some((ship, late)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_players_glow_bay_glows_only_for_a_fighter_put_in_the_system() {
+        let catalog = carrying_a_glow_bay();
+        let launched = |ships: u32, reserve: RuleSource| {
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            for n in 0..ships {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            launch(&mut session);
+            let glows = glows(&session.take_combat_events());
+            (glows, session.npcs().len(), session.pilot().owned(VIPERS))
+        };
+        assert_eq!(
+            launched(55, RuleSource::Engine),
+            (Vec::new(), 55, 2),
+            "no slot: the round put back and no glow"
+        );
+        assert_eq!(
+            launched(54, RuleSource::Engine),
+            (vec![(ShipRef::Player, false)], 55, 1),
+            "the last slot: the frame it launched"
+        );
+        assert_eq!(
+            launched(55, RuleSource::Bible),
+            (vec![(ShipRef::Player, false)], 56, 1),
+            "by the other reading, any slot"
+        );
+    }
+
+    #[test]
+    fn two_fighters_launched_in_one_call_glow_once() {
+        let mut catalog = carrying_a_glow_bay();
+        catalog.weapons[0].flags |= crate::combat::weapon::SIMULTANEOUS;
+        catalog.hulls[0].weapons[0].count = 2;
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        launch(&mut session);
+        assert_eq!(vipers(&session).len(), 2, "two at once");
+        assert_eq!(
+            glows(&session.take_combat_events()),
+            [(ShipRef::Player, false)]
+        );
+    }
+
+    #[test]
+    fn a_bay_without_the_flag_glows_never() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        launch(&mut session);
+        assert_eq!(vipers(&session).len(), 1, "launched");
+        assert_eq!(glows(&session.take_combat_events()), []);
+    }
+
     #[test]
     fn a_ship_left_behind_takes_a_slot_from_the_fighters() {
         let catalog = carrying();
@@ -1406,6 +1601,7 @@ mod tests {
         let docked = (1..=600).find(|_| {
             session.tick_again(
                 Controls::default(),
+                &crate::ai::NovaAi::default(),
                 crate::Rules::default(),
                 &mut NeverFires,
             );
@@ -1414,6 +1610,84 @@ mod tests {
         assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
         assert_eq!(session.npcs(), []);
         assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+    }
+
+    /// Game work passes of the player at rest and Nova's traffic until no
+    /// fighter is out, at most `limit`; how many it took.
+    fn until_docked_in_game_work(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        limit: u32,
+    ) -> Option<u32> {
+        let ai = NovaAi::default();
+        (1..=limit).find(|_| {
+            session.game_work(
+                Controls::default(),
+                catalog,
+                &ai,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session
+                .pilot()
+                .escorts()
+                .iter()
+                .all(|escort| !escort.carried)
+        })
+    }
+
+    #[test]
+    fn a_fighter_docking_in_the_ship_loop_below_another_slot_makes_no_save_due() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
+        let fighter = session.fleet[0].expect("placed");
+        let escort = session.fleet[1].expect("placed");
+        let berth = |session: &Session, id| session.npc(id).expect("here").berth;
+        assert!(berth(&session, fighter) < berth(&session, escort));
+        let npc = session.npc_mut(fighter).expect("out");
+        npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
+        session.take_save_due();
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        let passes = until_docked_in_game_work(&mut session, &catalog, 600);
+        assert!(passes.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            session.fleet,
+            [Some(escort)],
+            "the fleet no longer holds it"
+        );
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+        assert!(!session.take_save_due(), "as docking makes none");
+    }
+
+    #[test]
+    fn a_fighter_docking_on_double_times_second_pass_below_another_slot_makes_no_save_due() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
+        let fighter = session.fleet[0].expect("placed");
+        let escort = session.fleet[1].expect("placed");
+        let npc = session.npc_mut(fighter).expect("out");
+        npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        session.take_save_due();
+        let docked = (1..=600).find(|_| {
+            session.tick_again(
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().len() == 1
+        });
+        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(
+            session.fleet,
+            [Some(escort)],
+            "the fleet no longer holds it"
+        );
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+        assert!(!session.take_save_due(), "as docking makes none");
     }
 
     #[test]
@@ -1485,12 +1759,17 @@ mod tests {
         sitting_ai().with(AiType::Warship, Rc::new(Raiding))
     }
 
-    const PIRATES: crate::catalog::GovtId = crate::catalog::GovtId(142);
+    pub(in crate::session) const PIRATES: crate::catalog::GovtId = crate::catalog::GovtId(142);
 
     /// Adds a pirate carrier, a warship 60 across, 200 above the player
     /// and attacking it, escorting `lead`, carrying a Viper Bay with
     /// `vipers` fighters aboard.
     fn carrier(session: &mut Session, lead: NpcId, vipers: u32) -> NpcId {
+        session.traffic.add_npc(carrier_npc(lead, vipers))
+    }
+
+    /// The pirate carrier [`carrier`] adds.
+    pub(in crate::session) fn carrier_npc(lead: NpcId, vipers: u32) -> Npc {
         let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
         npc.ship = ShipId(160);
         npc.govt = Some(PIRATES);
@@ -1505,7 +1784,7 @@ mod tests {
         )]);
         npc.rounds = LauncherRounds::from([(BAY, i32::try_from(vipers).expect("few"))]);
         npc.hull.sprite_size = Some(60.0);
-        session.traffic.add_npc(npc)
+        npc
     }
 
     /// The Vipers in the system.
@@ -1528,10 +1807,35 @@ mod tests {
     /// A session with a pirate carrier of 2 Vipers attacking the player,
     /// and the carrier's lead far off; the carrier and the lead.
     fn raided(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
-        let mut session = flying(catalog, pilot(catalog, 0, Vec::new()), RuleSource::Engine);
+        raided_by(catalog, RuleSource::Engine)
+    }
+
+    /// [`raided`], an NPC's pick spending as `spend` reads
+    /// [`RuleKey::AiSpendWithoutShot`]: by the other reading the carrier's
+    /// kept bay, fired as its pick on the tick its reload runs out, drains
+    /// no fighter (see `an_npc_carrier_launches_its_fighters_at_its_target`),
+    /// so both its fighters launch.
+    fn raided_by(catalog: &FakePilotCatalog, spend: RuleSource) -> (Session, NpcId, NpcId) {
+        let rules = Rulebook::default()
+            .with_override(RuleKey::FighterLaunch, RuleSource::Engine)
+            .with_override(RuleKey::AiSpendWithoutShot, spend);
+        let mut session = flying_by(catalog, pilot(catalog, 0, Vec::new()), rules);
         let lead = pirate(&mut session, 2000.0, 2000.0);
         let raider = carrier(&mut session, lead, 2);
         (session, raider, lead)
+    }
+
+    #[test]
+    fn an_npc_carriers_glow_bay_glows_never() {
+        let catalog = carrying_a_glow_bay();
+        let (mut session, raider, _) = raided(&catalog);
+        let glow_bay = crate::combat::weapon::WeaponSpec::new(&catalog.weapons[0]);
+        assert!(glow_bay.glows());
+        session.npc_mut(raider).expect("there").armament =
+            crate::combat::armament::Armament::new([(glow_bay, 1)]);
+        fight(&mut session, &catalog, &raiding_ai());
+        assert_eq!(vipers(&session).len(), 1, "launched");
+        assert_eq!(glows(&session.take_combat_events()), [], "_AILaunchFighter");
     }
 
     #[test]
@@ -1562,17 +1866,24 @@ mod tests {
         assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(fighter.escort, None);
         assert_eq!(aboard(&session, raider), 1);
+        // The launch sets the bay's reload to 60 in `_AIDispatch`
+        // (@0x8e6fa), and `_HandleShip` counts it down that tick
+        // (@0x33896). 59 ticks on it runs out in `_HandleShip`'s countdown,
+        // after that tick's `_AILaunchFighter` found it reloading, and the
+        // bay, its kept pick, fires as the pick: `_FireAIShipWeapon`
+        // spawns nothing, and by the engine drains a fighter
+        // (@0x88cd8-0x88dac, `RuleKey::AiSpendWithoutShot`).
         for _ in 0..59 {
             fight(&mut session, &catalog, &ai);
         }
         assert_eq!(vipers(&session).len(), 1, "the bay reloads 60 ticks");
+        assert_eq!(aboard(&session, raider), 0, "drained by its pick");
         fight(&mut session, &catalog, &ai);
-        assert_eq!(vipers(&session).len(), 2);
-        assert_eq!(aboard(&session, raider), 0);
+        assert_eq!(vipers(&session).len(), 1, "none left to launch");
         for _ in 0..240 {
             fight(&mut session, &catalog, &ai);
         }
-        assert_eq!(vipers(&session).len(), 2, "none more");
+        assert_eq!(vipers(&session).len(), 1, "none more");
         assert!(
             session.reserves().shield.now < 30.0,
             "the fighters' shots: {:?}",
@@ -1584,6 +1895,454 @@ mod tests {
             vipers(&session)
                 .iter()
                 .all(|npc| npc.reserves.shield.now == 30.0)
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_carriers_kept_bay_drains_nothing_and_it_launches_every_60_ticks() {
+        // `RuleKey::AiSpendWithoutShot`'s other reading: the pick that
+        // spawns nothing spends nothing, so the next `_AILaunchFighter`
+        // launches the fighter the engine's reading drains.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided_by(&catalog, RuleSource::Bible);
+        let ai = raiding_ai();
+        fight(&mut session, &catalog, &ai);
+        assert_eq!(vipers(&session).len(), 1);
+        for _ in 0..59 {
+            fight(&mut session, &catalog, &ai);
+        }
+        assert_eq!(vipers(&session).len(), 1, "the bay reloads 60 ticks");
+        assert_eq!(aboard(&session, raider), 1, "nothing drained");
+        fight(&mut session, &catalog, &ai);
+        assert_eq!(vipers(&session).len(), 2);
+        assert_eq!(aboard(&session, raider), 0);
+    }
+
+    #[test]
+    fn a_sniping_carrier_whose_launch_finds_no_slot_launches_nothing_and_takes_its_bay_as_its_pick()
+    {
+        // A goal-4 carrier sniping at rest 100 above the player, facing it,
+        // with a gun its pass finds. With 55 ships in the system its launch
+        // finds no slot (@0x3d648-0x3d662) and leaves the bay ready, so the
+        // snipe's own `_AILaunchFighter` makes the bay its pick after its
+        // passes (@0x8732f, @0x81411). Both launches fail before the sound,
+        // the round and the reload (@0x81421-0x81423); the pick, the bay,
+        // ready, is then fired by `_FireAIShipWeapon` with the gun pass's
+        // flag, which spawns nothing and by the engine spends a fighter
+        // (@0x88cd8-0x88dac, `RuleKey::AiSpendWithoutShot`).
+        let catalog = carrying();
+        let sniped = |ships: u32| {
+            let (mut session, raider, _) = raided(&catalog);
+            let gun = WeaponRecord {
+                speed: 1000,
+                count: 20,
+                energy_dmg: 1,
+                mass_dmg: 1,
+                ..weapon(128)
+            };
+            let npc = session.npc_mut(raider).expect("there");
+            npc.goal = Goal::Snipe(ShipRef::Player);
+            npc.state.position = Vec2::new(0.0, -100.0);
+            npc.state.heading = 180.0;
+            npc.armament = crate::combat::armament::Armament::new([
+                (crate::combat::weapon::WeaponSpec::new(&gun), 1),
+                (crate::combat::weapon::WeaponSpec::new(&bay()), 1),
+            ]);
+            for n in 0..ships - 2 {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            fight(&mut session, &catalog, &raiding_ai());
+            (session, raider)
+        };
+        let (mut full, raider) = sniped(55);
+        assert_eq!(vipers(&full), [], "no fighter");
+        assert_eq!(aboard(&full, raider), 1, "drained by its pick alone");
+        let carrier = full.npc(raider).expect("there");
+        assert_eq!(carrier.pick, Some(BAY));
+        let bay = carrier
+            .armament
+            .mounts()
+            .iter()
+            .find(|mount| mount.spec.id == BAY)
+            .expect("carried");
+        assert_eq!(bay.reload, 0.0, "no launch reloads it");
+        let heard = full
+            .take_combat_events()
+            .into_iter()
+            .any(|event| matches!(event, CombatEvent::Fired { weapon, .. } if weapon == BAY));
+        assert!(!heard, "no bay heard");
+        let (room, raider) = sniped(54);
+        assert_eq!(vipers(&room).len(), 1);
+        assert_eq!(aboard(&room, raider), 1);
+        assert_eq!(
+            room.npc(raider).expect("there").pick,
+            None,
+            "its gun fired and cleared"
+        );
+    }
+
+    /// A session with [`raided_by`]'s carrier, by `spend`, sniping at rest
+    /// 100 above the player, facing it, carrying only `bays` (each record
+    /// and its fighters aboard), the system filled with pirates to
+    /// `ships`, after one [`fight`]: the session and the carrier.
+    fn sniping_with(
+        catalog: &FakePilotCatalog,
+        spend: RuleSource,
+        bays: &[(WeaponRecord, i32)],
+        ships: u32,
+    ) -> (Session, NpcId) {
+        let (mut session, raider, _) = raided_by(catalog, spend);
+        let npc = session.npc_mut(raider).expect("there");
+        npc.goal = Goal::Snipe(ShipRef::Player);
+        npc.state.position = Vec2::new(0.0, -100.0);
+        npc.state.heading = 180.0;
+        npc.armament = crate::combat::armament::Armament::new(
+            bays.iter()
+                .map(|(record, _)| (crate::combat::weapon::WeaponSpec::new(record), 1)),
+        );
+        npc.rounds = bays
+            .iter()
+            .map(|(record, aboard)| (record.id, *aboard))
+            .collect();
+        for n in 0..ships - 2 {
+            pirate(&mut session, 1000.0 + n as f32, 1000.0);
+        }
+        fight(&mut session, catalog, &raiding_ai());
+        (session, raider)
+    }
+
+    /// The bays heard launching at `carrier` among `session`'s fight
+    /// events, in order.
+    fn launches_heard(session: &mut Session, carrier: NpcId) -> Vec<WeaponId> {
+        session
+            .take_combat_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                CombatEvent::Fired { ship, weapon, .. }
+                    if ship == ShipRef::Npc(carrier) && weapon != GUN =>
+                {
+                    Some(weapon)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_sniping_carrier_whose_bay_reloads_in_zero_launches_twice_a_tick_while_two_slots_are_free()
+    {
+        // The high level's launch (@0x8e6fa) sets a reload of 0 / 1 = 0
+        // (@0x81473-0x81491), so the snipe's own `_AILaunchFighter`
+        // (@0x8732f) finds the bay ready (@0x81403-0x8140b) and launches a
+        // second fighter, heard (@0x81466), into the next free slot.
+        // The bay is then its pick, ready, which its gun pass flags
+        // (@0x80213-0x8021d): `_FireAIShipWeapon` spawns nothing and by
+        // the engine drains a fighter (@0x88cd8-0x88dac,
+        // `RuleKey::AiSpendWithoutShot`). The counts below take the other
+        // reading, which drains none.
+        let catalog = carrying();
+        let zero = WeaponRecord { reload: 0, ..bay() };
+        let sniped = |ships| sniping_with(&catalog, RuleSource::Bible, &[(zero, 3)], ships);
+        let (drained, raider) = sniping_with(&catalog, RuleSource::Engine, &[(zero, 3)], 53);
+        assert_eq!(vipers(&drained).len(), 2);
+        assert_eq!(aboard(&drained, raider), 0, "drained by its pick");
+        let (mut two, raider) = sniped(53);
+        assert_eq!(vipers(&two).len(), 2, "two slots free below 56");
+        assert_eq!(aboard(&two, raider), 1);
+        assert_eq!(launches_heard(&mut two, raider), [BAY, BAY]);
+        // With one slot the second `_LaunchFighter` fails (@0x81421-0x81423)
+        // after its pick write (@0x81411).
+        let (mut one, raider) = sniped(54);
+        assert_eq!(vipers(&one).len(), 1);
+        assert_eq!(aboard(&one, raider), 2);
+        assert_eq!(launches_heard(&mut one, raider), [BAY]);
+        assert_eq!(one.npc(raider).expect("there").pick, Some(BAY));
+        let (mut none, raider) = sniped(55);
+        assert_eq!(vipers(&none), []);
+        assert_eq!(aboard(&none, raider), 3);
+        assert_eq!(launches_heard(&mut none, raider), []);
+    }
+
+    #[test]
+    fn a_sniping_carrier_whose_first_bay_empties_launches_from_its_next_bay_the_same_tick() {
+        // Stock-shaped: two bays of `Reload` 60. The high level's launch
+        // spends 149's last round, so the snipe's call passes it over
+        // (@0x813da) to 150, ready, and launches from it.
+        let catalog = carrying();
+        let next = WeaponRecord {
+            id: WeaponId(150),
+            ..bay()
+        };
+        let (mut session, raider) =
+            sniping_with(&catalog, RuleSource::Engine, &[(bay(), 1), (next, 1)], 53);
+        assert_eq!(vipers(&session).len(), 2);
+        assert_eq!(
+            launches_heard(&mut session, raider),
+            [BAY, WeaponId(150)],
+            "one from each"
+        );
+        let carrier = session.npc(raider).expect("there");
+        assert_eq!(carrier.rounds.slot(BAY), 0);
+        assert_eq!(carrier.rounds.slot(WeaponId(150)), 0);
+    }
+
+    // NPC launches in `_AIDispatch`, through the game's work.
+
+    /// One advance pass of `session`'s game work, the player at rest, its
+    /// NPCs deciding as `behaviour` says.
+    pub(in crate::session) fn game_pass(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        behaviour: &impl Behaviour,
+    ) {
+        let rescued = session.game_work(
+            Controls::default(),
+            catalog,
+            behaviour,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(!rescued);
+    }
+
+    /// Keeps each goal and target, and asks every NPC for the goal-4
+    /// launch alone: no pick, no point defence.
+    #[derive(Debug)]
+    struct Launching;
+
+    impl Behaviour for Launching {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                bays: true,
+                ..Trigger::default()
+            }
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.target
+        }
+    }
+
+    /// The bay launches heard among `events`, by carrier.
+    fn bays_heard(events: &[CombatEvent]) -> Vec<ShipRef> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Fired { ship, weapon, .. } if weapon == BAY => Some(ship),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_npcs_fighter_moves_on_its_launch_tick() {
+        // `_AILaunchFighter` → `_LaunchFighter` in `_AIDispatch` marks the
+        // slot active (@0x3c90b, @0x3d680) before `_HandleShip` (@0x44483)
+        // runs that frame: the NPC twin of
+        // `a_fighter_the_player_launches_moves_on_its_launch_tick`.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        let stood = session.npc(raider).expect("there").state.position;
+        game_pass(&mut session, &catalog, &Launching);
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1, "launched");
+        assert_ne!(launched[0].state.position, stood, "moved off the bay");
+    }
+
+    #[test]
+    fn an_npc_launches_on_the_advance_pass_alone() {
+        // `_AIDispatch` runs on the advance pass alone (@0x44026-0x4402a):
+        // a bay ready by the advance pass's countdown waits through double
+        // time's second pass for the next advance pass.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        // A tick left: reloading as the advance pass's AI runs, ready after
+        // its `_HandleShip`'s countdown (@0x33896).
+        let carrier = session.npc_mut(raider).expect("there");
+        carrier.armament.hold(BAY);
+        for _ in 0..59 {
+            carrier.armament.reload();
+        }
+        assert_eq!(carrier.armament.mounts()[0].reload, 1.0);
+        game_pass(&mut session, &catalog, &Launching);
+        assert_eq!(vipers(&session), [], "reloading as its AI ran");
+        assert_eq!(
+            session.npc(raider).expect("there").armament.mounts()[0].reload,
+            0.0
+        );
+        session.tick_again(
+            Controls::default(),
+            &Launching,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(vipers(&session), [], "no AI on the second pass");
+        game_pass(&mut session, &catalog, &Launching);
+        assert_eq!(vipers(&session).len(), 1);
+    }
+
+    #[test]
+    fn two_carriers_sharing_the_last_free_berth_the_lower_slot_launches() {
+        // The lower slot's `_AILaunchFighter` takes the last slot below 56
+        // before the higher slot's AI runs (@0x44270-0x442ae); the higher's
+        // `_LaunchFighter` then fails before the sound, the round and the
+        // reload (@0x81421-0x81423). The higher was added first.
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 0, Vec::new()), RuleSource::Engine);
+        let lead = pirate(&mut session, 2000.0, 2000.0);
+        let high = session.traffic.add_npc_at(carrier_npc(lead, 2), 40);
+        let low = session.traffic.add_npc_at(carrier_npc(lead, 2), 20);
+        while session.traffic.free_berths(SPAWN_RESERVE) > 1 {
+            pirate(&mut session, 1000.0, 1000.0);
+        }
+        session.take_combat_events();
+        game_pass(&mut session, &catalog, &Launching);
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1);
+        assert_eq!(
+            launched[0].carrier.map(|carrier| carrier.ship),
+            Some(ShipRef::Npc(low))
+        );
+        assert_eq!(launched[0].berth, 55, "the last berth below 56");
+        assert_eq!(aboard(&session, low), 1, "its round spent");
+        assert_eq!(aboard(&session, high), 2, "its round kept");
+        let reload = session.npc(high).expect("there").armament.mounts()[0].reload;
+        assert_eq!(reload, 0.0, "nor reloading");
+        assert_eq!(
+            bays_heard(&session.take_combat_events()),
+            [ShipRef::Npc(low)],
+            "the higher's bay unheard"
+        );
+    }
+
+    /// Scripts each NPC's trigger by its number: point defence for the
+    /// defenders, the goal-4 launch for the carrier once `launch` is set,
+    /// and the missile for the picker, at the low defender.
+    #[derive(Debug)]
+    struct Scripted {
+        defenders: [NpcId; 2],
+        carrier: NpcId,
+        picker: NpcId,
+        launch: std::cell::Cell<bool>,
+    }
+
+    impl Behaviour for Scripted {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            if self.defenders.contains(&npc.id) {
+                Trigger {
+                    point_defence: true,
+                    ..Trigger::default()
+                }
+            } else if npc.id == self.carrier {
+                Trigger {
+                    bays: self.launch.get(),
+                    ..Trigger::default()
+                }
+            } else if npc.id == self.picker {
+                Trigger {
+                    only: Some(MISSILE),
+                    ..Trigger::default()
+                }
+            } else {
+                Trigger::default()
+            }
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            (npc.id == self.picker).then_some(ShipRef::Npc(self.defenders[0]))
+        }
+    }
+
+    /// A homing missile fired every tick, 5 pixels a tick for 100.
+    const MISSILE: WeaponId = WeaponId(134);
+    /// The Quad Light Blaster Turret's point defence.
+    pub(in crate::session) const QUAD: WeaponId = WeaponId(133);
+
+    /// An NPC at (`x`, `y`) at rest, armed with `weapon`.
+    pub(in crate::session) fn armed_npc(x: f32, y: f32, weapon: WeaponRecord) -> Npc {
+        let mut npc = crate::testkit::npc(0, ShipStats::new(FAST, &[]));
+        npc.state.position = Vec2::new(x, y);
+        npc.armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&weapon),
+            1,
+        )]);
+        npc
+    }
+
+    #[test]
+    fn an_npcs_launch_is_heard_after_a_lower_slots_point_defence_before_a_higher_slots_and_before_every_pick()
+     {
+        // `_AIDispatch`'s slot loop (@0x44270-0x442ae): slot 2's
+        // `_AIFireTurret` (@0x80b0d), slot 3's `_AILaunchFighter`
+        // (@0x8e6fa), slot 4's `_AIFireTurret`; then `_HandleShot`
+        // (@0x44385) and the picks in `_HandleShip` (@0x44483), slot 1's
+        // among them.
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 0, Vec::new()), RuleSource::Engine);
+        let missile = WeaponRecord {
+            guidance: 1,
+            speed: 500,
+            count: 100,
+            guided_turn: 70,
+            durability: 4,
+            mass_dmg: 20,
+            energy_dmg: 10,
+            ..weapon(134)
+        };
+        let quad = WeaponRecord {
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..weapon(133)
+        };
+        let picker = session
+            .traffic
+            .add_npc_at(armed_npc(1000.0, 850.0, missile), 1);
+        let low = session
+            .traffic
+            .add_npc_at(armed_npc(1000.0, 1000.0, quad), 2);
+        let raider = session.traffic.add_npc_at(carrier_npc(low, 2), 3);
+        session.npc_mut(raider).expect("there").state.position = Vec2::new(1100.0, 1000.0);
+        let mut wing = armed_npc(1030.0, 1000.0, quad);
+        wing.leader = Some(low);
+        let high = session.traffic.add_npc_at(wing, 4);
+        let script = Scripted {
+            defenders: [low, high],
+            carrier: raider,
+            picker,
+            launch: std::cell::Cell::new(false),
+        };
+        game_pass(&mut session, &catalog, &script);
+        session.take_combat_events();
+        script.launch.set(true);
+        game_pass(&mut session, &catalog, &script);
+        let fired: Vec<(ShipRef, WeaponId)> = session
+            .take_combat_events()
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Fired { ship, weapon, .. } => Some((ship, weapon)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fired,
+            [
+                (ShipRef::Npc(low), QUAD),
+                (ShipRef::Npc(raider), BAY),
+                (ShipRef::Npc(high), QUAD),
+                (ShipRef::Npc(picker), MISSILE),
+            ]
         );
     }
 
@@ -1731,6 +2490,14 @@ mod tests {
         };
         assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
         assert_eq!(session.npcs().last().expect("launched").pods_left, 2);
+        catalog.hulls[1].pod_count = -3;
+        let (mut session, _, _) = raided(&catalog);
+        assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+        assert_eq!(
+            session.npcs().last().expect("launched").pods_left,
+            -3,
+            "raw, as _LaunchFighter writes it (@0x3d8fe)"
+        );
     }
 
     #[test]
@@ -1824,7 +2591,7 @@ mod tests {
     #[test]
     fn once_its_carrier_stops_attacking_its_fighters_dock_and_it_holds_them_again() {
         let catalog = carrying();
-        let (mut session, raider, _) = raided(&catalog);
+        let (mut session, raider, _) = raided_by(&catalog, RuleSource::Bible);
         let ai = raiding_ai();
         for _ in 0..61 {
             fight(&mut session, &catalog, &ai);
@@ -1842,7 +2609,7 @@ mod tests {
     #[test]
     fn a_carriers_fighters_fly_by_their_own_ai_once_it_is_destroyed() {
         let catalog = carrying();
-        let (mut session, raider, _) = raided(&catalog);
+        let (mut session, raider, _) = raided_by(&catalog, RuleSource::Bible);
         let ai = raiding_ai();
         for _ in 0..61 {
             fight(&mut session, &catalog, &ai);

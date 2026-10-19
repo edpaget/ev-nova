@@ -408,7 +408,12 @@ mod tests {
             session.settle_box();
             fight(&mut session);
             let once = session.player.velocity;
-            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
             let again = pull(session.player.position, Vec2::new(2000.0, 0.0), 40, 1.0);
             assert!(
                 near(session.player.velocity, once + again),

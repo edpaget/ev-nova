@@ -22,7 +22,8 @@
 //!   ship or at its fleet's lead (an escort defends its lead), that is
 //!   within the weapon's [`engagement_range`] and not in a blind spot (see
 //!   [`aim`](super::aim)), its squared distance truncated. The nearest
-//!   wins; of two as near, the one fired first. The original has no
+//!   wins; of two as near, the one in the lower shot slot, as the shots
+//!   are kept by slot ([`shot_slots`](super::shot_slots)). The original has no
 //!   hostility test: "fired at me or my lead" is the whole rule, so by
 //!   default the player's point defence engages its own escort's stray
 //!   missile, and police an allied trader's. By the other reading of
@@ -160,15 +161,20 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 
 /// The missile among `shots` that point defence `spec` on `defender`, at
 /// `at` with `hull`, engages, if any (`_HandleShipPointDefense`
-/// @0x393b1-0x394bd): a homing shot not jammed ([`Jam::Clear`]), that point
-/// defence can target (no `Flags` 0x0080), whose damage is aimed at the
+/// @0x393b1-0x394bd): a homing shot not jammed ([`Jam::Clear`]), with life
+/// left (not [`Shot::expired`]: the missile loop skips a life of 0.0 or
+/// less, @0x393bb-0x393c7, so one whose move spent it, waiting for its end
+/// of life, is passed over), that point defence can target (no `Flags` 0x0080), whose damage is aimed at the
 /// defender or at its fleet's lead ([`Shot::aimed_at`], shot +0x2a, not
 /// its quarry), within the weapon's [`engagement_range`] and not in a
 /// blind spot ([`blind_spot`], by the table's bearing to it,
 /// `_CalcInterceptAngle` @0x39477). Its squared distance is truncated before the range test
 /// and before the nearest test, so a missile under a square pixel past
 /// the range is in it, and of two whose squared distances truncate alike
-/// the one fired first wins. By the engine (`rule` none) there is no
+/// the first among `shots` wins: the one in the lower slot, as the fight
+/// keeps its shots by slot and `_HandleShipPointDefense` walks the slots
+/// keeping a new best only when strictly nearer (`cmpl; setg`
+/// @0x3944e-0x3945e). By the engine (`rule` none) there is no
 /// other test; by the other reading
 /// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)), `rule` must
 /// also call the firer hostile, with the relations in `govts`.
@@ -195,6 +201,7 @@ pub fn choose<'a>(
         let aimed = shot.aimed_at == Some(defender.ship) || shot.aimed_at == Some(defender.fleet);
         let candidate = shot.weapon.guidance == Guidance::Homing
             && shot.jam == Jam::Clear
+            && !shot.expired()
             && !shot.weapon.pd_immune()
             && aimed
             && distance <= in_range
@@ -501,11 +508,12 @@ mod tests {
 
     /// A shot numbered `id` of a homing missile fired by `ENEMY` of
     /// government 140 at `target`, its quarry and the ship its damage is
-    /// aimed at, at (`x`, `y`).
+    /// aimed at, at (`x`, `y`), with 30 ticks of life left.
     fn missile(id: u32, x: f32, y: f32, target: Option<ShipRef>) -> Shot {
         let spec = WeaponSpec::new(&WeaponRecord {
             guidance: 1,
             durability: 4,
+            count: 30,
             ..weapon(134)
         });
         Shot {
@@ -576,7 +584,21 @@ mod tests {
     }
 
     #[test]
-    fn missiles_whose_squared_distances_truncate_alike_go_to_the_one_fired_first() {
+    fn missiles_whose_squared_distances_truncate_alike_go_to_the_one_in_the_lower_slot() {
+        // `farther` takes slot 1 while slot 0 is held; `nearer`, fired
+        // later, takes slot 0 once it is freed, and is kept first.
+        let farther = missile(1, 0.0, -10_000.9_f32.sqrt(), Some(DEFENDER));
+        let nearer = missile(2, 10_000.1_f32.sqrt(), 0.0, Some(DEFENDER));
+        let mut combat = super::super::Combat::default();
+        combat.slots.hold(0);
+        combat.put_in_flight(farther);
+        combat.slots.free(0);
+        combat.put_in_flight(nearer);
+        assert_eq!(picked(combat.shots(), 0, 0), Some(ShotId(2)), "both 10,000");
+    }
+
+    #[test]
+    fn missiles_whose_squared_distances_truncate_alike_go_to_the_first_kept() {
         let farther = missile(1, 0.0, -10_000.9_f32.sqrt(), Some(DEFENDER));
         let nearer = missile(2, 10_000.1_f32.sqrt(), 0.0, Some(DEFENDER));
         assert_eq!(
@@ -638,6 +660,26 @@ mod tests {
         assert_eq!(picked(&at(Some(ShipRef::Player)), 0, 0), None);
         assert_eq!(picked(&at(None), 0, 0), None, "at nothing");
         assert_eq!(picked(&[], 0, 0), None);
+    }
+
+    #[test]
+    fn point_defence_passes_over_a_missile_its_move_spent() {
+        // `_HandleShipPointDefense` skips a shot of life 0.0 or less
+        // (@0x393bb-0x393c7): one whose move spent it waits for its end of
+        // life in the next `_HandleShot`.
+        let fresh = missile(1, 0.0, -100.0, Some(DEFENDER));
+        let lifetime = fresh.weapon.lifetime;
+        let spent = Shot {
+            age: lifetime,
+            ..fresh
+        };
+        assert!(spent.expired());
+        assert_eq!(picked(&[spent], 0, 0), None, "spent");
+        let last = Shot {
+            age: lifetime - 1,
+            ..fresh
+        };
+        assert_eq!(picked(&[last], 0, 0), Some(ShotId(1)), "a tick left");
     }
 
     #[test]
@@ -1038,7 +1080,9 @@ mod tests {
                 sprite_x: 30.0,
                 sheet: true,
                 condition: Condition::Intact,
+                disabled: false,
                 miss_class: 80,
+                slot: crate::ship_layer::Slot::Berth(0),
             },
             pd_target: true,
             held_disabled: false,

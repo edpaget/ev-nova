@@ -439,22 +439,17 @@ impl Session {
         }
     }
 
-    /// Each person of `Flags` 0x0001 that a shot of the player's hit among
-    /// `strikes` holds a grudge against it from now on, on the pilot too
-    /// (`_DamageShip` @0x3be83-0x3beb3), once the hit is answered
-    /// ([`Strike::answered`]): the grudge is in the reaction block, which a
-    /// clear answer flag skips (see the `answer_flag` module). An escort's
-    /// shot does not count, nor does a blast or the player's death
-    /// shockwave, which is no direct hit and never answered. No save is
+    /// Each person of `Flags` 0x0001 flying one of the NPCs `hit` holds a
+    /// grudge against the player from now on, on the pilot too
+    /// (`_DamageShip` @0x3be83-0x3beb3). The traffic decides which hits
+    /// count as it answers each strike in turn
+    /// ([`Traffic::take_grudges`](crate::traffic::Traffic::take_grudges),
+    /// `in_turn::grudge`): an answered direct hit of the player's whose
+    /// victim, by [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)'s engine
+    /// reading, does not keep its target against the player. No save is
     /// due.
-    pub(super) fn hold_grudges(&mut self, strikes: &[Strike]) {
-        for strike in strikes
-            .iter()
-            .filter(|strike| strike.by == Some(ShipRef::Player) && strike.answered)
-        {
-            let ShipRef::Npc(id) = strike.ship else {
-                continue;
-            };
+    pub(super) fn hold_grudges(&mut self, hit: &[NpcId]) {
+        for &id in hit {
             let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
             let Some(person) = npc.and_then(|npc| npc.person.as_mut()) else {
                 continue;
@@ -464,6 +459,27 @@ impl Session {
                 self.pilot.grudges.insert(person.id);
             }
         }
+    }
+
+    /// Holds the grudges of `strikes` that the traffic never answers, as
+    /// they are dropped with the system left (`Session::populate_as`, an
+    /// entry's `Reset::Strikes`), while the system's NPCs are still in the
+    /// traffic: each answered player's hit is read alone against the NPCs
+    /// as they stand ([`grudge`](crate::traffic::in_turn::grudge)), as the
+    /// session held every grudge at its settle step before weapons-fidelity
+    /// phase 45. Record only, not filed: in the original these hits were
+    /// answered in turn, but the NPCs are discarded with the system, so
+    /// their reactions are never seen, and the grudge is kept.
+    pub(super) fn hold_left_grudges(&mut self, strikes: &[Strike]) {
+        let hit: Vec<NpcId> = {
+            let world = self.world();
+            let around = world.around(self.traffic.npcs());
+            strikes
+                .iter()
+                .filter_map(|strike| crate::traffic::in_turn::grudge(strike, &around))
+                .collect()
+        };
+        self.hold_grudges(&hit);
     }
 
     /// Refills each invincible person's shield and armour at the end of
@@ -959,6 +975,7 @@ mod tests {
         let mut session = facing_ace(&catalog, ada(&catalog));
         for _ in 0..8 {
             session.tick_combat(Rules::default(), &mut NeverFires);
+            session.answer_strikes(&crate::ai::NovaAi::default());
         }
         assert!(session.npcs()[0].reserves.shield.now < 30.0, "hit");
         assert!(session.npcs()[0].person.expect("Ace").grudge);
@@ -968,9 +985,82 @@ mod tests {
         let mut session = facing_ace(&catalog, ada(&catalog));
         for _ in 0..8 {
             session.tick_combat(Rules::default(), &mut NeverFires);
+            session.answer_strikes(&crate::ai::NovaAi::default());
         }
         assert!(!session.npcs()[0].person.expect("Ace").grudge, "no 0x0001");
         assert!(!session.pilot().grudge(PersonId(600)));
+    }
+
+    /// Fires on Ace until its shield drops, at most 60 ticks, leaving the
+    /// strikes for the traffic to answer.
+    fn hit_ace(session: &mut Session) {
+        for _ in 0..60 {
+            let shield = session.npcs()[0].reserves.shield.now;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < shield {
+                return;
+            }
+        }
+        panic!("never hit: {:?}", session.npcs()[0]);
+    }
+
+    #[test]
+    fn a_grudge_whose_strike_the_traffic_tick_answers_is_held_after_the_tick() {
+        // A caller that never calls `answer_strikes` leaves the strike to
+        // the next traffic tick, which answers it.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        hit_ace(&mut session);
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+    }
+
+    #[test]
+    fn a_grudge_whose_strike_a_jumps_arrival_drops_unanswered_is_held() {
+        // Hits a jump's arrival comes before any answer to are never
+        // answered: the arrival drops them (`Reset::Strikes`), holding
+        // their grudges.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        hit_ace(&mut session);
+        session.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
+        assert!(!session.pilot().grudge(PersonId(600)), "unanswered");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert!(session.pilot().grudge(PersonId(600)));
+    }
+
+    #[test]
+    fn a_grudge_whose_strike_populating_drops_unanswered_is_held() {
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        hit_ace(&mut session);
+        session.populate(&catalog, &mut NeverFires);
+        assert!(session.pilot().grudge(PersonId(600)));
+        let catalog = duel(0, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        hit_ace(&mut session);
+        session.populate(&catalog, &mut NeverFires);
+        assert!(!session.pilot().grudge(PersonId(600)), "no 0x0001");
+    }
+
+    #[test]
+    fn the_traffic_steps_in_a_world_holding_the_rulebooks_hit_focus() {
+        let catalog = duel(GRUDGE, 0);
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::HitFocus, source);
+            let mut session = facing_ace(&catalog, ada(&catalog)).with_rules(rules);
+            assert_eq!(session.world().hit_focus, source);
+            let mut stepped = None;
+            session.step_traffic(|_, world| stepped = Some(world.hit_focus));
+            assert_eq!(stepped, Some(source));
+        }
     }
 
     #[test]
@@ -980,32 +1070,196 @@ mod tests {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
-        session.hold_grudges(&[Strike {
-            answered: false,
-            ..hit
-        }]);
+        answer_in_one_pass(
+            &mut session,
+            &[Strike {
+                answered: false,
+                ..hit
+            }],
+        );
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
-        session.hold_grudges(&[hit]);
+        answer_in_one_pass(&mut session, &[hit]);
         assert!(session.pilot().grudge(PersonId(600)), "answered");
+    }
+
+    /// [`facing_ace`] over [`duel`]`(GRUDGE, 0)` read by `focus`, with
+    /// Ace facing up and attacking a quarry `above` it, the player 100
+    /// below it.
+    fn ace_hunting(focus: RuleSource, above: f32) -> Session {
+        let catalog = duel(GRUDGE, 0);
+        let rules = Rulebook::default().with_override(RuleKey::HitFocus, focus);
+        let mut session = facing_ace(&catalog, ada(&catalog)).with_rules(rules);
+        let mut quarry = session.npcs()[0].clone();
+        quarry.person = None;
+        quarry.state.position = Vec2::new(0.0, -100.0 - above);
+        let quarry = session.traffic.add_npc(quarry);
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
+        ace.target = Some(ShipRef::Npc(quarry));
+        ace.state.heading = 0.0;
+        ace.pursuit.frame = None;
+        session
+    }
+
+    #[test]
+    fn a_person_keeping_its_target_holds_no_grudge_for_the_players_hit() {
+        // The focus test's jump to 0x3bed2 (@0x3bcac) skips the grudge
+        // (@0x3be83-0x3beb3): its quarry 50 above, the player 100 off
+        // (10000 > 0.25 × 2500).
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        let mut session = ace_hunting(RuleSource::Engine, 50.0);
+        answer_in_one_pass(&mut session, &[hit]);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+        let mut session = ace_hunting(RuleSource::Bible, 50.0);
+        answer_in_one_pass(&mut session, &[hit]);
+        assert!(
+            session.pilot().grudge(PersonId(600)),
+            "by the other reading every answered player hit"
+        );
+    }
+
+    /// `session` once the traffic has answered `strikes` in one pass.
+    fn answer_in_one_pass(session: &mut Session, strikes: &[Strike]) {
+        session.strikes.extend_from_slice(strikes);
+        session.answer_strikes(&crate::ai::NovaAi::default());
+    }
+
+    #[test]
+    fn a_grudge_reads_the_focus_the_strikes_before_it_left() {
+        // Ace attacks a quarry 400 above it, facing it. An NPC A 20 above
+        // hits it first (400 is not above 0.25 × 160000): it takes A
+        // (+0x70 @0x3bcf6). The player's hit, 100 off, then measures
+        // against A (10000 > 0.25 × 400), dead ahead, and is kept: the
+        // focus test's jump (@0x3bcac) skips the grudge.
+        let mut session = ace_hunting(RuleSource::Engine, 400.0);
+        let mut ship = session.npcs()[0].clone();
+        ship.person = None;
+        ship.goal = crate::ai::Goal::Attack(ShipRef::Npc(NpcId(0)));
+        ship.target = Some(ShipRef::Npc(NpcId(0)));
+        ship.state.position = Vec2::new(0.0, -120.0);
+        let near = ShipRef::Npc(session.traffic.add_npc(ship));
+        let ace = ShipRef::Npc(NpcId(0));
+        answer_in_one_pass(
+            &mut session,
+            &[
+                crate::combat::fixture::strike(ace, near),
+                crate::combat::fixture::strike(ace, ShipRef::Player),
+            ],
+        );
+        assert_eq!(session.npcs()[0].target, Some(near));
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+    }
+
+    #[test]
+    fn a_players_first_hit_in_a_pass_holds_the_grudge_its_second_keeps_out() {
+        // Ace attacks a quarry 400 above it while facing the player below:
+        // the player's first hit turns it (no keep, facing away from its
+        // quarry) and holds the grudge; its second is kept (A == T, faced).
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let mut ship = session.npcs()[0].clone();
+        ship.person = None;
+        ship.state.position = Vec2::new(0.0, -500.0);
+        let quarry = ShipRef::Npc(session.traffic.add_npc(ship));
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.goal = crate::ai::Goal::Attack(quarry);
+        ace.target = Some(quarry);
+        ace.pursuit.frame = None;
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        answer_in_one_pass(&mut session, &[hit, hit]);
+        assert_eq!(session.npcs()[0].target, Some(ShipRef::Player));
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+    }
+
+    #[test]
+    fn a_person_hit_by_the_player_nearer_than_half_its_targets_distance_holds_its_grudge() {
+        // Its quarry 400 above: 10000 is not above 0.25 × 160000.
+        let hit = crate::combat::fixture::strike(ShipRef::Npc(NpcId(0)), ShipRef::Player);
+        for focus in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = ace_hunting(focus, 400.0);
+            answer_in_one_pass(&mut session, &[hit]);
+            assert!(session.pilot().grudge(PersonId(600)), "{focus:?}");
+            assert!(session.npcs()[0].person.expect("Ace").grudge, "{focus:?}");
+        }
+    }
+
+    /// [`facing_ace`] over [`duel`]`(GRUDGE, 0)`, Ace still facing the
+    /// player and attacking a quarry at `quarry`, ticked through the
+    /// fight's real settle path (each tick's strikes settled, then
+    /// answered) until the player's blaster hits it, at most 60 ticks.
+    fn ace_hit_while_hunting(quarry: Vec2) -> (Session, NpcId) {
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let mut ship = session.npcs()[0].clone();
+        ship.person = None;
+        ship.state.position = quarry;
+        let quarry = session.traffic.add_npc(ship);
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
+        ace.target = Some(ShipRef::Npc(quarry));
+        ace.pursuit.frame = None;
+        for _ in 0..60 {
+            let shield = session.npcs()[0].reserves.shield.now;
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.answer_strikes(&crate::ai::NovaAi::default());
+            if session.npcs()[0].reserves.shield.now < shield {
+                return (session, quarry);
+            }
+        }
+        panic!("never hit: {:?}", session.npcs()[0]);
+    }
+
+    #[test]
+    fn the_grudges_focus_reads_the_npcs_before_the_strikes_are_answered() {
+        // The focus test (@0x3bbf3-0x3bcac) runs before `_DamageShip`'s
+        // `_AIMakeShipAttackPlayer`: read after the answer, a person
+        // turned on the player and facing it would look to keep its new
+        // target and skip the grudge (@0x3be83-0x3beb3).
+        //
+        // Its quarry beside the player, nearer than twice the player's 100
+        // (100² > 0.25 × 116.6²): it keeps its target, with no grudge.
+        let (session, quarry) = ace_hit_while_hunting(Vec2::new(60.0, 0.0));
+        assert_eq!(session.world().hit_focus, RuleSource::Engine);
+        assert!(!session.pilot().grudge(PersonId(600)));
+        assert!(!session.npcs()[0].person.expect("Ace").grudge);
+        assert_eq!(
+            session.npcs()[0].goal,
+            crate::ai::Goal::Attack(ShipRef::Npc(quarry))
+        );
+        // Its quarry behind the player, 400 off (100² is not above
+        // 0.25 × 400²): it holds the grudge and turns on the player.
+        let (session, _) = ace_hit_while_hunting(Vec2::new(0.0, 300.0));
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+        assert_eq!(
+            session.npcs()[0].goal,
+            crate::ai::Goal::Attack(ShipRef::Player)
+        );
     }
 
     #[test]
     fn a_hit_by_no_ship_holds_no_grudge() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        session.hold_grudges(&[Strike {
-            ship: ShipRef::Npc(NpcId(0)),
-            by: None,
-            damage: 1.0,
-            downed: None,
-            direct: true,
-            intended: true,
-            lock: false,
-            nominal: crate::combat::Nominal::default(),
-            weight: 0.0,
-            answered: true,
-        }]);
+        answer_in_one_pass(
+            &mut session,
+            &[Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: None,
+                damage: 1.0,
+                downed: None,
+                direct: true,
+                intended: true,
+                lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: true,
+            }],
+        );
         assert!(!session.pilot().grudge(PersonId(600)));
     }
 
@@ -1025,9 +1279,9 @@ mod tests {
             weight: 0.0,
             answered: true,
         };
-        session.hold_grudges(&[hit(ShipRef::Npc(NpcId(7)))]);
+        answer_in_one_pass(&mut session, &[hit(ShipRef::Npc(NpcId(7)))]);
         assert!(!session.pilot().grudge(PersonId(600)));
-        session.hold_grudges(&[hit(ShipRef::Player)]);
+        answer_in_one_pass(&mut session, &[hit(ShipRef::Player)]);
         assert!(session.pilot().grudge(PersonId(600)));
     }
 
@@ -1036,18 +1290,21 @@ mod tests {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         // A blast's strike and a shockwave's alike: no direct hit.
-        session.hold_grudges(&[Strike {
-            ship: ShipRef::Npc(NpcId(0)),
-            by: Some(ShipRef::Player),
-            damage: 32.0,
-            downed: None,
-            direct: false,
-            intended: false,
-            lock: false,
-            nominal: crate::combat::Nominal::default(),
-            weight: 0.0,
-            answered: false,
-        }]);
+        answer_in_one_pass(
+            &mut session,
+            &[Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: Some(ShipRef::Player),
+                damage: 32.0,
+                downed: None,
+                direct: false,
+                intended: false,
+                lock: false,
+                nominal: crate::combat::Nominal::default(),
+                weight: 0.0,
+                answered: false,
+            }],
+        );
         assert!(!session.pilot().grudge(PersonId(600)));
         assert!(!session.npcs()[0].person.expect("Ace").grudge);
     }

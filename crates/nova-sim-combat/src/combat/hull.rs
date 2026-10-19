@@ -208,6 +208,11 @@ pub struct HullSpec {
     /// The crew pods a dying ship of the type ejects, its `PodCount`
     /// (class +0xa20); none below none.
     pub pod_count: u16,
+    /// Its `PodCount` as the data gives it, negative too: the spawns write
+    /// it raw to the ship's pod word (+0xc908), which a stray beam steps
+    /// as a signed word (see `nova_sim::Npc::pods_left`), while the pods
+    /// ejected read it floored ([`HullSpec::pod_count`]).
+    pub signed_pod_count: i16,
     /// The explosion as it breaks up, its `Explode1`.
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
@@ -345,6 +350,7 @@ impl Default for HullSpec {
             death_delay: 0,
             signed_death_delay: 0,
             pod_count: 0,
+            signed_pod_count: 0,
             breakup: None,
             explosion: None,
             mass: 0.0,
@@ -399,6 +405,7 @@ impl HullSpec {
             death_delay: u32::try_from(record.death_delay).unwrap_or(0),
             signed_death_delay: i32::from(record.death_delay),
             pod_count: u16::try_from(record.pod_count).unwrap_or(0),
+            signed_pod_count: record.pod_count,
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
@@ -461,21 +468,25 @@ pub enum Condition {
     Disabled,
     /// Its armour is gone, and it breaks up, counting down the original's
     /// death timer (field 0x3c) to its final explosion (see
-    /// [`Combat`](super::Combat)'s step 9).
+    /// [`Combat`](super::Combat)'s step 9 and its display step,
+    /// `_HandleShipDisplay` @0x2d7ef-0x2dcfc).
     Dying {
-        /// The death timer: its `DeathDelay`, times
-        /// [`PLAYER_BREAKUP_FACTOR`] for the player, as set on the
-        /// breakup's first tick, less a tick for each tick since. The ship
-        /// explodes on the tick it comes down to [`EXPLOSION_BAND`] or
-        /// below.
+        /// The death timer: 0 while it is unset (the original's 0.0 or
+        /// below), as a hit or any loss of armour leaves it; its
+        /// `DeathDelay`, times [`PLAYER_BREAKUP_FACTOR`] for the player,
+        /// once the ship's display step sets it (@0x2d834-0x2d850); less
+        /// a tick for each of the ship's own steps since
+        /// ([`Condition::count_down`]). The display step explodes the
+        /// ship once it is at 1 to [`EXPLOSION_BAND`].
         ticks_left: u32,
-        /// Whether the timer was set on this tick: the original's "dying,
-        /// timer not yet set" frame, on which `_HandleShipDisplay` sets it
-        /// (@0x2d834-0x2d850) and does nothing else. False from the next
-        /// tick on; under [`Breakup::Stalls`], true again on every tick
-        /// the timer is set again. Phase 9's eject reads it, as
-        /// `_HandlePlayer` (@0x6f248-0x6f286) runs before
-        /// `_HandleShipDisplay` sets the timer.
+        /// Whether the timer is unset, or this pass's display step set it:
+        /// the original's "dying, timer not yet set" frame, on which
+        /// `_HandleShipDisplay` sets it and does nothing else. The ship's
+        /// next death-timer tick clears it; under [`Breakup::Stalls`] the
+        /// display sets it again every time it finds the timer run down.
+        /// The eject reads it, as `_HandlePlayer` (@0x6f248-0x6f286) runs
+        /// before `_HandleShipDisplay` sets the timer, and so does the
+        /// view's breakup puffs.
         starting: bool,
     },
     /// Destroyed.
@@ -501,6 +512,25 @@ impl Condition {
         self != Self::Destroyed
     }
 
+    /// The death timer's tick at the ship's own step, the player's in
+    /// `_HandlePlayer` (@0x6d7e6-0x6d7f8), an NPC's in `_HandleShip` after
+    /// its pick (@0x35083-0x350a3): a timer above 0 loses a tick, and the
+    /// display step's set (`starting`) is past. Anything else is left as
+    /// it is.
+    ///
+    /// Left out: `_HandleShip` skips the NPC's tick while `_gameFrozen` is
+    /// set (@0x35091-0x35099), and the engine has no frozen game.
+    pub fn count_down(&mut self) {
+        if let Self::Dying { ticks_left, .. } = *self
+            && ticks_left > 0
+        {
+            *self = Self::Dying {
+                ticks_left: ticks_left - 1,
+                starting: false,
+            };
+        }
+    }
+
     /// Whether it is disabled as the original's `_IsDisabled` reads it:
     /// disabled or breaking up. A pirate plunders only such a ship, and
     /// fires disable-only at one that is not.
@@ -508,6 +538,66 @@ impl Condition {
     pub fn disabled(self) -> bool {
         matches!(self, Self::Disabled | Self::Dying { .. })
     }
+
+    /// The breakup a standing ship with `armor` starts, if it does: `Dying`
+    /// with its timer unset, which the ship's next display step sets (see
+    /// the `display` module), when it is intact or disabled and its armour
+    /// is gone ([`armour_gone`]). A ship breaking up or destroyed is left
+    /// as it is: `None`.
+    ///
+    /// It is `_IsDying`'s (@0x253d) armour test, the timer above 0 or the
+    /// armour at 0.0 or below, read off a ship whose condition has not yet
+    /// followed its armour, with the engine's [`holds_armour`] guard: a
+    /// ship type that holds none has none to lose. The fight's settling
+    /// of a condition (`Combat::settle_condition`) and the player's eject
+    /// check (`nova_sim::Session::eject_check`) both read it, so the rule
+    /// has one home.
+    ///
+    /// It leaves out, on purpose:
+    ///
+    /// - The escape pod's exemption ([`never_breaks_up`]). It is
+    ///   `_HandleShipDisplay`'s, which skips its dying block for class
+    ///   0x2ff (@0x2d803), not `_IsDying`'s, which never reads the class.
+    ///   The fight's settling checks it before asking this; the eject
+    ///   check reads `_IsDying` as `_HandlePlayer` caches it (@0x6f22c),
+    ///   with no class test, and so does not.
+    /// - [`Fighter::held_disabled`](super::Fighter::held_disabled). It
+    ///   holds a standing ship disabled only while its armour is left: a
+    ///   held ship whose armour is gone breaks up all the same, so it
+    ///   never changes this answer.
+    #[must_use]
+    pub fn breaking_up(self, armor: Gauge) -> Option<Self> {
+        (self.standing() && armour_gone(armor)).then_some(Self::Dying {
+            ticks_left: 0,
+            starting: true,
+        })
+    }
+
+    /// `_IsDying` (@0x253d): whether a ship in this condition with `armor`
+    /// is dying, its death timer running or, though nothing has settled
+    /// its condition yet, its armour gone ([`breaking_up`](Self::breaking_up)).
+    /// A ship type that holds no armour never reads dying by its armour,
+    /// and a destroyed ship never reads dying. The NPC escape-ship check
+    /// (`nova_sim::Session::npc_escapes`) reads it.
+    #[must_use]
+    pub fn is_dying(self, armor: Gauge) -> bool {
+        matches!(self, Self::Dying { .. }) || self.breaking_up(armor).is_some()
+    }
+}
+
+/// Whether `armor` is gone: at or below none, on a ship that holds any.
+#[must_use]
+pub fn armour_gone(armor: Gauge) -> bool {
+    armor.now <= 0.0 && holds_armour(armor)
+}
+
+/// Whether a ship with `armor` holds any. A ship type with no armour at
+/// all (stock `shïp` 895, plug-in or test data) has none to lose, so it
+/// never breaks up, and the [`DisableRule`] is never asked of it, so it is
+/// never disabled either.
+#[must_use]
+pub fn holds_armour(armor: Gauge) -> bool {
+    armor.max > 0.0
 }
 
 /// What the player's `DeathDelay` is multiplied by as its breakup starts
@@ -589,6 +679,75 @@ mod tests {
             ..HullSpec::default()
         };
         NovaDisable.disabled(armor(now, max), &hull)
+    }
+
+    const UNSET: Condition = Condition::Dying {
+        ticks_left: 0,
+        starting: true,
+    };
+
+    #[test]
+    fn a_standing_ship_whose_armour_is_gone_starts_breaking_up_its_timer_unset() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            for now in [0.0, -1.0] {
+                assert_eq!(
+                    condition.breaking_up(armor(now, 100.0)),
+                    Some(UNSET),
+                    "{condition:?} at {now}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_standing_ship_with_armour_left_or_none_to_lose_is_not_breaking_up() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert_eq!(condition.breaking_up(armor(0.5, 100.0)), None);
+            assert_eq!(condition.breaking_up(armor(0.0, 0.0)), None);
+        }
+    }
+
+    #[test]
+    fn a_ship_breaking_up_or_destroyed_is_left_as_it_is() {
+        let dying = Condition::Dying {
+            ticks_left: 7,
+            starting: false,
+        };
+        for condition in [dying, Condition::Destroyed] {
+            assert_eq!(condition.breaking_up(armor(-1.0, 100.0)), None);
+        }
+    }
+
+    #[test]
+    fn is_dying_reads_a_breakup_or_a_standing_ship_whose_armour_is_gone() {
+        // `_IsDying` (@0x253d): its timer runs, or its armour is at none or
+        // below on a ship that holds any, though nothing settled it yet.
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert!(dying.is_dying(armor(5.0, 100.0)), "breaking up");
+        assert!(UNSET.is_dying(armor(5.0, 100.0)), "its timer unset");
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert!(condition.is_dying(armor(0.0, 100.0)), "{condition:?}");
+            assert!(condition.is_dying(armor(-1.0, 100.0)), "{condition:?}");
+            assert!(!condition.is_dying(armor(0.5, 100.0)), "{condition:?}");
+            assert!(
+                !condition.is_dying(armor(0.0, 0.0)),
+                "{condition:?} holds no armour to lose"
+            );
+        }
+        assert!(!Condition::Destroyed.is_dying(armor(-1.0, 100.0)), "gone");
+    }
+
+    #[test]
+    fn armour_is_gone_at_or_below_none_on_a_ship_that_holds_any() {
+        assert!(armour_gone(armor(0.0, 1.0)));
+        assert!(armour_gone(armor(-1.0, 1.0)));
+        assert!(!armour_gone(armor(0.1, 1.0)));
+        assert!(!armour_gone(armor(0.0, 0.0)));
+        assert!(holds_armour(armor(0.0, 0.1)));
+        assert!(!holds_armour(armor(5.0, 0.0)));
     }
 
     #[test]
@@ -898,6 +1057,9 @@ mod tests {
             ..hull(128)
         });
         assert_eq!(odd.pod_count, 0, "none below none");
+        assert_eq!(odd.signed_pod_count, -3, "the pod word's raw");
+        assert_eq!(liner.signed_pod_count, 10);
+        assert_eq!(HullSpec::default().signed_pod_count, 0);
         assert_eq!(
             (odd.death_delay, odd.signed_death_delay),
             (0, -5),
@@ -1218,5 +1380,27 @@ mod tests {
         assert_eq!(Breakup::from(RuleSource::Bible), Breakup::Explodes);
         assert_eq!(Breakup::default(), Breakup::Explodes);
         assert_eq!((PLAYER_BREAKUP_FACTOR, EXPLOSION_BAND), (3, 2));
+    }
+
+    #[test]
+    fn the_death_timer_ticks_only_while_it_is_set() {
+        // `_HandlePlayer` @0x6d7e6 and `_HandleShip` @0x35083 take 1.0
+        // off a timer above 0 and leave any other.
+        let dying = |ticks_left, starting| Condition::Dying {
+            ticks_left,
+            starting,
+        };
+        let ticked = |mut condition: Condition| {
+            condition.count_down();
+            condition
+        };
+        assert_eq!(ticked(dying(5, true)), dying(4, false), "set: ticks");
+        assert_eq!(ticked(dying(3, false)), dying(2, false));
+        assert_eq!(ticked(dying(1, false)), dying(0, false), "runs down");
+        assert_eq!(ticked(dying(0, true)), dying(0, true), "unset: kept");
+        assert_eq!(ticked(dying(0, false)), dying(0, false));
+        for kept in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
+            assert_eq!(ticked(kept), kept);
+        }
     }
 }

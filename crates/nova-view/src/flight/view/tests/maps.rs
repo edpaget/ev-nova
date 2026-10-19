@@ -911,6 +911,8 @@ fn a_disabled_ship_draws_under_the_escorts() {
     let (mut view, ships) = escorted_on_a_mission();
     let session = view.session.as_mut().expect("flying");
     nova_sim::fixture::disable(session, ships.traffic);
+    // Laid out at its display step (@0x444ad, @0x2bd24).
+    session.tick_combat(nova_sim::Rules::default(), &mut NeverFires);
     let [traffic, hired, led, player] = ship_indices(&view, ships);
     assert!(traffic < hired, "{traffic} {hired}");
     assert!(hired < led && led < player, "{hired} {led} {player}");

@@ -481,6 +481,116 @@ fn a_partial_level_light_composites_like_the_originals_translucent_blit() {
     assert_area(&pixels, (26, 4), (28, 8), alone, 0);
 }
 
+/// The original's 16-bit translucent copy with its channel factors at 0,
+/// transcribed from `EV Nova`'s `_BlitPixieTranslucentCopy` (0xc1110) as a
+/// shot's plain fade and an escape pod set it up: per 5-bit channel,
+/// `((src * k) >> 5) | ((dst * (32 - k)) >> 5)`, k the source's opacity in
+/// 32nds.
+fn original_crossfade_555(src: [u8; 3], dst: [u8; 3], k: u8) -> [u8; 3] {
+    let (k, rest) = (u16::from(k), 32 - u16::from(k));
+    std::array::from_fn(|c| {
+        (((u16::from(src[c]) * k) >> 5) | ((u16::from(dst[c]) * rest) >> 5)) as u8
+    })
+}
+
+#[test]
+fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Hull squares at logical (4..8, 4..8) and (14..18, 4..8), with the OR
+    // sheet crossfaded over the first translucent by 8 (k = 24) and over
+    // the second by 24 (k = 8), and over the black clear by 8, (24..28,
+    // 4..8). Below, a hull square at (4..8, 14..18) with the sheet over it
+    // at k = 0, and two solid lit squares crossfaded at k = 16 over the
+    // clear, (14..18, 14..18) then (16..20, 14..18), the second over half
+    // the first. Beside them, a hull square at (24..28, 14..18) with the
+    // sheet crossfaded over it by 8 at a murk of 16, its colour halved.
+    let see_through = nova_view::flight::weapons::see_through;
+    let murk_tint = nova_view::flight::murk::murk_tint;
+    let hull = w555(HULL_555);
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
+        .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
+        .sprite(ImageKey::sprite(2, 0), Point::new(6.0, 16.0), tint(hull))
+        .sprite(ImageKey::sprite(2, 0), Point::new(26.0, 16.0), tint(hull))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[0], see_through(8))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[1], see_through(24))
+        .crossfade_sprite(ImageKey::sprite(7, 0), spots[2], see_through(8))
+        .crossfade_sprite(
+            ImageKey::sprite(7, 0),
+            Point::new(6.0, 16.0),
+            see_through(32),
+        )
+        .crossfade_sprite(
+            ImageKey::sprite(7, 0),
+            Point::new(26.0, 16.0),
+            murk_tint(see_through(8), 16),
+        )
+        .crossfade_sprite(
+            ImageKey::sprite(9, 0),
+            Point::new(16.0, 16.0),
+            see_through(16),
+        )
+        .crossfade_sprite(
+            ImageKey::sprite(9, 0),
+            Point::new(18.0, 16.0),
+            see_through(16),
+        );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // A transparent pixel leaves what is beneath exactly.
+    assert_area(&pixels, (4, 4), (5, 8), hull, 0);
+    assert_area(&pixels, (14, 4), (15, 8), hull, 0);
+    assert_area(&pixels, (24, 4), (25, 8), BLACK, 0);
+    // An opaque black one darkens it: the hull × 8 >> 5, not left alone
+    // as the OR leaves it.
+    let black_24 = w555(original_crossfade_555([0, 0, 0], HULL_555, 24));
+    assert_eq!(black_24, [33, 24, 0, 255]);
+    assert_area(&pixels, (5, 4), (6, 8), black_24, 0);
+    let black_8 = w555(original_crossfade_555([0, 0, 0], HULL_555, 8));
+    assert_eq!(black_8, [99, 74, 0, 255]);
+    assert_area(&pixels, (15, 4), (16, 8), black_8, 0);
+    // A lit one is scaled by k and the hull by 32 - k, both floored in 5
+    // bits, and ORed: not the normal alpha blend.
+    let lit_24 = w555(original_crossfade_555(LIT_555, HULL_555, 24));
+    assert_eq!(lit_24, [99, 57, 24, 255]);
+    assert_ne!(lit_24, [132, 86, 31, 255], "the normal blend at 24/32");
+    assert_area(&pixels, (6, 4), (8, 8), lit_24, 0);
+    let lit_8 = w555(original_crossfade_555(LIT_555, HULL_555, 8));
+    assert_eq!(lit_8, [99, 90, 8, 255]);
+    assert_area(&pixels, (16, 4), (18, 8), lit_8, 0);
+    // Over the clear.
+    let alone = w555(original_crossfade_555(LIT_555, [0, 0, 0], 24));
+    assert_eq!(alone, [99, 57, 24, 255]);
+    assert_area(&pixels, (25, 4), (26, 8), BLACK, 0);
+    assert_area(&pixels, (26, 4), (28, 8), alone, 0);
+    // At k = 0 nothing changes.
+    assert_area(&pixels, (4, 14), (8, 18), hull, 0);
+    // The later crossfade sees the earlier where they overlap.
+    let first = w555(original_crossfade_555(LIT_555, [0, 0, 0], 16));
+    let both = w555(original_crossfade_555(
+        LIT_555,
+        original_crossfade_555(LIT_555, [0, 0, 0], 16),
+        16,
+    ));
+    assert_eq!((first, both), ([66, 41, 16, 255], [99, 57, 24, 255]));
+    assert_area(&pixels, (14, 14), (16, 18), first, 0);
+    assert_area(&pixels, (16, 14), (18, 18), both, 0);
+    assert_area(&pixels, (18, 14), (20, 18), first, 0);
+    // A darkened tint scales the source's colour before the crossfade:
+    // at a murk of 16, by 16/32.
+    let murked = w555(original_crossfade_555(LIT_555.map(|c| c / 2), HULL_555, 24));
+    assert_eq!(murked, [49, 24, 8, 255]);
+    assert_ne!(murked, lit_24, "the crossfade ignoring the tint's colour");
+    assert_area(&pixels, (26, 14), (28, 18), murked, 0);
+}
+
 #[test]
 fn a_colorized_sprite_mixes_each_5_bit_channel_like_the_originals_blit() {
     let Some(mut gpu) = gpu() else {

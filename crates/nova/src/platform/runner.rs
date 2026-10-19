@@ -550,6 +550,8 @@ mod tests {
             fullscreen_kind: crate::settings::FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
             frame_upscaler: crate::settings::ScalingSetting::default(),
             nova_files: None,
         };

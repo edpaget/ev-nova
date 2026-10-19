@@ -208,7 +208,10 @@ fn a_kill_destroys_at_minus_1000_armour_in_one_explode2_once_however_many_discs(
         exploding(2, 0.0, 100.0),
         exploding(3, 500.0, 0.0),
     ];
+    // Disabled by its armour, so its display step before the hazards
+    // keeps it so.
     ships[0].condition = Condition::Disabled;
+    ships[0].reserves.armor.now = 1.0;
     let overlapping = deadly(&[(Vec2::new(0.0, 50.0), 80.0), (Vec2::ZERO, 80.0)]);
     tick_in(&mut combat, &mut ships, &overlapping, ADVANCE);
     let seen = combat.stellar_kills().to_vec();

@@ -529,13 +529,30 @@ impl<
         }
     }
 
+    /// The triggers held as the steps run: the primary and secondary
+    /// fire keys, the eject chord and the self-destruct chord, each chord
+    /// only while the player's fate takes its command.
+    fn held_triggers(&self) -> ((bool, bool), bool, bool) {
+        let fire = (
+            self.held.contains(&FIRE_KEY),
+            self.held.contains(&SECONDARY_KEY),
+        );
+        let chord = |command, key| {
+            self.takes(command) && self.held.contains(&Key::Command) && self.held.contains(&key)
+        };
+        let eject = chord(PlayerCommand::Eject, EJECT_KEY);
+        let self_destruct = chord(PlayerCommand::SelfDestruct, SELF_DESTRUCT_KEY);
+        (fire, eject, self_destruct)
+    }
+
     /// Runs up to `steps` of the session's steps, each only while
-    /// `go_on` holds of the session before it: the ship's tick under the
-    /// keys held, the traffic's (the assistance's within it) and the
-    /// fight's, which settles the frame's lines, then the quotes and the
-    /// effects; in double time, the second pass
-    /// ([`Session::tick_again`]) with the answers to its hits and their
-    /// attack quotes, and the effects again. Then says the comm
+    /// `go_on` holds of the session before it: the advance pass under the
+    /// keys held, in the original's order ([`Session::game_work`]: the
+    /// player, the fight's collision passes, the traffic's AI, the shots,
+    /// the traffic's motion, the NPCs' fire, the beams), the answers to
+    /// what its close struck and the quotes, then the effects; in double
+    /// time, the second pass ([`Session::tick_again`]) with the same, and
+    /// the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
     /// system the session populated afresh. Flight and the jump's warp
     /// both step this way. The eject and self-destruct chords, the land key
@@ -544,16 +561,7 @@ impl<
     /// view laid out afresh where the rescue put the ship.
     pub(super) fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
         let controls = self.controls();
-        let fire = (
-            self.held.contains(&FIRE_KEY),
-            self.held.contains(&SECONDARY_KEY),
-        );
-        let eject = self.takes(PlayerCommand::Eject)
-            && self.held.contains(&Key::Command)
-            && self.held.contains(&EJECT_KEY);
-        let self_destruct = self.takes(PlayerCommand::SelfDestruct)
-            && self.held.contains(&Key::Command)
-            && self.held.contains(&SELF_DESTRUCT_KEY);
+        let (fire, eject, self_destruct) = self.held_triggers();
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         let mut rescued = false;
@@ -584,33 +592,39 @@ impl<
                     if again && !session.double_time() {
                         break;
                     }
-                    if again {
-                        session.tick_again(controls, rules, &mut self.chance);
-                    } else {
-                        session.tick(controls);
-                    }
                     // The rescue settles on the pass the pod's countdown
                     // runs out, and stops the stepping so its dësc opens
                     // before the next: the original's `_HandlePlayer` runs
                     // it in place of the rest of that pass's player
                     // handling (@0x68ddd).
-                    if session.rescue_if_due(&self.catalog, &mut self.chance) {
+                    let rescued_now = if again {
+                        session.tick_again(controls, &*self.behaviour, rules, &mut self.chance);
+                        session.rescue_if_due(&self.catalog, &mut self.chance)
+                    } else {
+                        let behaviour = &*self.behaviour;
+                        let rescued_now = session.game_work(
+                            controls,
+                            &self.catalog,
+                            behaviour,
+                            rules,
+                            &mut self.chance,
+                        );
+                        notes.extend(session.take_comm());
+                        rescued_now
+                    };
+                    if rescued_now {
                         self.previous = *session.player();
                         rescued = true;
                         break 'steps;
                     }
-                    if !again {
-                        session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_combat(rules, &mut self.chance);
-                        notes.extend(session.take_comm());
-                    }
-                    // The pass's hits are answered before the frame is
-                    // drawn, as `_HandleShot` answers them (@0x44385)
-                    // before `_HandleShip` and the display pass, on both
-                    // passes. Each pass then says the attack quotes its
-                    // answers raise (`_ShowPersonHailQuote` @0x89ce1) and
-                    // runs `_HandleShip`'s quote roll (@0x33f0f-0x33fba),
-                    // the quote clock moving on the advance pass alone.
+                    // The pass answers its collision passes' and shots'
+                    // hits as they land, as `_HandleShot` does (@0x44385);
+                    // what its close struck (the beams, the shockwaves)
+                    // is answered here, before the frame is drawn. Each
+                    // pass then says the attack quotes its answers raise
+                    // (`_ShowPersonHailQuote` @0x89ce1) and runs
+                    // `_HandleShip`'s quote roll (@0x33f0f-0x33fba), the
+                    // quote clock moving on the advance pass alone.
                     session.answer_strikes(&*self.behaviour);
                     if again {
                         session.tick_quotes_again(&self.catalog, &mut self.chance);
@@ -630,7 +644,9 @@ impl<
                     self.glows
                         .step(&lit, |ship| glow_decay(session_now, player, sheets, ship));
                     let effects = (&mut self.effects, scene.caps);
-                    self.shot_looks.step(session, &self.looks, effects, chance);
+                    let trails = self.smoke_trails;
+                    self.shot_looks
+                        .step(session, &self.looks, effects, trails, chance);
                 }
             }
             if let Some(scene) = &mut self.scene {

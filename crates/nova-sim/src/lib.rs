@@ -548,10 +548,11 @@ pub use saves::{OpenError, PilotKeeper, PilotStore, pilot_key};
 pub use self_destruct::SelfDestruct;
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
-    HookRules, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress, MissionComputer,
-    MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind, NotOffered,
-    OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav, ScriptEffectRules, Session,
-    SessionEvent, Settled, ShipChangeRules, StellarPick, TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
+    HookRules, HoverPlace, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress,
+    MissionComputer, MissionInfo, MissionInfoPress, MissionShown, MissionText, MissionTextKind,
+    NotOffered, OfferPrompt, PersonQuote, RefuseShown, RelocateRefusal, SavedNav,
+    ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
+    TAKEOFF_GRACE_TICKS, TextBar, VenueOffer,
 };
 pub use ship_layer::ShipLayer;
 pub use shipyard::{

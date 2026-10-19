@@ -85,10 +85,24 @@
 //! chooses. The slot's other five sprites (+0x4..+0x14, cloned
 //! @0x2bc52 and @0x2ca74) are not boxed, so are not kept. Neither path
 //! plays a sound.
+//!
+//! **Laid-out places.** Only a display places a slot's base sprite:
+//! `SWSetSpriteLocation` (@0x2cd9d) at `trunc(ship − player)` per axis
+//! plus the play area's centre less half the frame (@0x2cd38-0x2cd8e),
+//! for a shown ship and a hidden one alike (@0x2cc6b → @0x2cd17). An
+//! inactive slot's display only hides it (@0x2b555-0x2b60a). So the rect
+//! `_HandleMouse` boxes (+0x1a-+0x21, @0x38177) for a ship its slot has
+//! not displayed is where the slot's last occupant was last laid out, on
+//! screen. [`SlotPlaces`] keeps each slot's last offset from the player;
+//! like the frames, it outlives a pilot. A slot never laid out this run
+//! keeps the rect `_InitSprites`' clone left (@0x1f135), which is not
+//! modelled (`nova_sim::Session::hover_place`).
 
 use crate::catalog::ShipId;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
+use crate::combat::shot_slots::ShotSlots;
+use crate::geometry::Vec2;
 
 /// The layer a ship is drawn in, bottom to top (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -238,14 +252,60 @@ impl SlotFrames {
     }
 }
 
-/// What the ship slots' sprites keep across pilots in one run: each
-/// slot's layer history and its last cloned frames (see the module docs).
+/// Where each slot's base sprite was last laid out (see the module docs'
+/// "Laid-out places"): its offset from the player at its last display,
+/// in whole pixels, as `_HandleShipDisplay` places it at
+/// `trunc(ship − player)` per axis (`SWSetSpriteLocation` @0x2cd9d, the
+/// offsets @0x2cd56 and @0x2cd87), shown or hidden alike.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SlotPlaces {
+    /// The slots laid out since launch, each with its last offset.
+    placed: std::collections::BTreeMap<Slot, (i32, i32)>,
+}
+
+impl SlotPlaces {
+    /// No slot laid out, as `_InitSprites` leaves them.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Lays `slot` out at `offset` from the player, truncated to whole
+    /// pixels per axis.
+    // The offset is on screen, far inside 32 bits.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn place(&mut self, slot: Slot, offset: Vec2) {
+        let whole = (offset.x.trunc() as i32, offset.y.trunc() as i32);
+        self.placed.insert(slot, whole);
+    }
+
+    /// The whole-pixel offset from the player `slot` was last laid out
+    /// at, or none for a slot no display has laid out.
+    // A whole-pixel offset on screen is exact in an `f32`.
+    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
+    pub fn of(&self, slot: Slot) -> Option<Vec2> {
+        let &(x, y) = self.placed.get(&slot)?;
+        Some(Vec2::new(x as f32, y as f32))
+    }
+}
+
+/// What the ship and shot slots' sprites keep across pilots in one run:
+/// each ship slot's layer history, its last cloned frames and its last
+/// laid-out place (see the module docs), and each shot slot's place in
+/// its layer and its leftover miss roll ([`ShotSlots`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SlotSprites {
     /// Each slot's layer and when it entered it.
     pub layers: LayerEntries,
     /// Each slot's last cloned frames.
     pub frames: SlotFrames,
+    /// Each slot's last laid-out place.
+    pub places: SlotPlaces,
+    /// Each shot slot's layer history and leftover roll, none held: the
+    /// 128 shot sprites `_InitSprites` lays out once (@0x1fa90-0x1fb83)
+    /// keep their places across systems and pilots.
+    pub shots: ShotSlots,
 }
 
 /// Whether a ship in `condition` is disabled for its layer, as
@@ -389,6 +449,18 @@ mod tests {
         assert_eq!(frames.of(Slot::Player), ShipId(128));
         frames.clone_frames(Slot::Player, ShipId(130));
         assert_eq!(frames.of(Slot::Player), ShipId(130));
+    }
+
+    #[test]
+    fn a_slot_keeps_the_whole_pixel_offset_of_its_last_layout() {
+        let mut places = SlotPlaces::new();
+        assert_eq!(places.of(Slot::Berth(3)), None, "never laid out");
+        places.place(Slot::Berth(3), Vec2::new(100.7, -20.3));
+        assert_eq!(places.of(Slot::Berth(3)), Some(Vec2::new(100.0, -20.0)));
+        assert_eq!(places.of(Slot::Berth(4)), None);
+        places.place(Slot::Berth(3), Vec2::new(-5.9, 7.2));
+        assert_eq!(places.of(Slot::Berth(3)), Some(Vec2::new(-5.0, 7.0)));
+        assert_eq!(SlotPlaces::default(), SlotPlaces::new());
     }
 
     #[test]

@@ -28,9 +28,13 @@ impl Traffic {
     ///
     /// Each verdict reads the targets and goals as the tick found them,
     /// where the original runs the previous hit's reaction before it
-    /// weighs the next. It settles in the hit's own step, before the frame
-    /// is drawn (see `nova_sim::Session::answer_strikes`), so it crosses no
-    /// boundary the player sees.
+    /// weighs the next, as [`Traffic::answer`] now answers them in turn.
+    /// That is a divergence, filed as rdm phase
+    /// weapons-fidelity-followups/phase-1-answer-flag-reads-in-turn: a
+    /// verdict the earlier reactions would change (the entry test
+    /// @0x3bb63-0x3bb74, an NPC's stray hit @0x3b7bf-0x3b7dc, an escort
+    /// near the player @0x3b8da, the plunder read @0x3a95b) shows in the
+    /// frame drawn after the pass.
     pub fn weigh_strikes(
         &mut self,
         world: &World,

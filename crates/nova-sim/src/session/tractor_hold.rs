@@ -166,7 +166,12 @@ mod tests {
     fn the_second_pass_pulls_but_does_not_age() {
         let mut session = held(Vec2::new(-2.0, 2.0));
         let step = session.tractor_step();
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.player().velocity, Vec2::new(-step, step));
         assert_eq!(
             session.tractor().map(|lock| lock.ticks_since_touch),

@@ -40,10 +40,10 @@
 //! nag left out, "Ship destroyed." always shows.
 //!
 //! **Hits only.** `_DamageShip` takes the condition before and after
-//! each hit, so only damage speaks the lines. The engine decides the
-//! condition once a fight tick (`Combat::update_condition`), so this runs
-//! only on a tick whose strikes hit the player, comparing its condition
-//! before and after the tick. A condition that changes with no hit (a
+//! each hit, so only damage speaks the lines. The engine settles the
+//! condition after each phase of the fight that lands hits, so this runs
+//! only after a phase whose strikes hit the player, comparing its
+//! condition before and after the phase. A condition that changes with no hit (a
 //! ship taken over, armour set by a script or an editor) says nothing,
 //! fails nothing, and is not truncated. A hit that disables and a later
 //! one in the same tick that breaks the ship up make the same calls in
@@ -277,8 +277,13 @@ mod tests {
         assert!(matches!(session.condition, Condition::Dying { .. }));
         assert_eq!(
             tick(&mut session, &catalog, 10.0),
+            (vec![], vec![]),
+            "still: the next display sets the timer (@0x43e29), no klaxon"
+        );
+        assert_eq!(
+            tick(&mut session, &catalog, 10.0),
             (vec![SimSound::Klaxon], vec![]),
-            "still: the klaxon alone"
+            "still: the klaxon alone (@0x6f1e4)"
         );
         assert!(matches!(session.condition, Condition::Dying { .. }));
     }
@@ -303,24 +308,30 @@ mod tests {
         catalog.hulls[0].death_delay = 0;
         let mut session = under_fire(&catalog, 0.5, Condition::Disabled);
         let halt = SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        // The hit breaks it up; its next display (@0x43e29) finds no
+        // timer to set and explodes it, halting its sounds after the
+        // line's beep.
+        let unset = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
         assert_eq!(
             hit(&mut session, &catalog, 10.0),
-            (
-                vec![SimSound::ShipDowned, halt],
-                vec![SimMessage::ShipDestroyed]
-            ),
-            "the explosion's halt after the line's beep"
+            (vec![SimSound::ShipDowned], vec![SimMessage::ShipDestroyed])
         );
+        assert_eq!(session.condition, unset);
+        assert_eq!(tick(&mut session, &catalog, 10.0), (vec![halt], vec![]));
         assert_eq!(session.condition, Condition::Destroyed);
         catalog.weapons[0].mass_dmg = 20;
         let mut session = under_fire(&catalog, 10.6, Condition::Intact);
         assert_eq!(
             hit(&mut session, &catalog, 10.0),
             (
-                vec![SimSound::ShipDowned, SimSound::ShipDowned, halt],
+                vec![SimSound::ShipDowned, SimSound::ShipDowned],
                 vec![SimMessage::ShipDisabled, SimMessage::ShipDestroyed]
             )
         );
+        assert_eq!(tick(&mut session, &catalog, 10.0), (vec![halt], vec![]));
         assert_eq!(session.condition, Condition::Destroyed);
     }
 

@@ -679,7 +679,12 @@ mod tests {
         session.armament.stamp_fire();
         session.tick(Controls::default());
         assert_eq!(session.armament.fold().since_fire, 2);
-        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        session.tick_again(
+            Controls::default(),
+            &crate::ai::NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(session.armament.fold().since_fire, 2, "not again");
     }
 

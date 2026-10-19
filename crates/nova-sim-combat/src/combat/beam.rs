@@ -766,7 +766,9 @@ mod tests {
             sprite_x: 24.0,
             sheet: true,
             condition: Condition::Intact,
+            disabled: false,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(id),
         }
     }
 

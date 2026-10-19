@@ -232,6 +232,8 @@ fn seeded() -> MemorySettings {
             fullscreen_kind: FullscreenSetting::Borderless,
             quicktime_movies: true,
             map_borders: true,
+            smoke_trails: true,
+            weapon_effects: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
         })
@@ -475,8 +477,9 @@ fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_rest
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    // Past the display picker and the Scaling list to the music volume.
-    for _ in 0..8 {
+    // Past Weapon Effects, Smoke Trails, the display picker and the
+    // Scaling list to the music volume.
+    for _ in 0..10 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -558,8 +561,9 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    // Past the display picker and the Scaling list to the music volume.
-    for _ in 0..8 {
+    // Past Weapon Effects, Smoke Trails, the display picker and the
+    // Scaling list to the music volume.
+    for _ in 0..10 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -786,6 +790,51 @@ fn quicktime_movies_toggle_by_click_and_key_and_survive_a_restart() {
     assert_eq!(saved(&store)["quicktime_movies"], true);
 }
 
+/// The flight view under the harness.
+fn flight(harness: &Harness) -> &nova_view::flight::FlightView<Rc<GameData>> {
+    harness.app.screen().flight_view().expect("flying")
+}
+
+#[test]
+fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_waits_for_a_restart()
+ {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('f'));
+    harness.fly();
+    assert!(flight(&harness).smoke_trails() && flight(&harness).weapon_effects());
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    let smoke = harness.dialog().smoke_trails().rect().center();
+    harness.click(smoke);
+    assert!(!flight(&harness).smoke_trails(), "at once");
+    assert_eq!(saved(&store)["smoke_trails"], false);
+    let weapons = harness.dialog().weapon_effects().rect().center();
+    harness.click(weapons);
+    assert_eq!(saved(&store)["weapon_effects"], false);
+    assert_eq!(saved(&store)["smoke_trails"], false, "the rest kept");
+    assert!(harness.dialog().relaunch_notice_shown());
+    assert!(
+        texts(&harness.frame())
+            .iter()
+            .any(|text| text.starts_with("(Changes will")),
+        "the notice is drawn"
+    );
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert!(
+        flight(&harness).weapon_effects(),
+        "the running game keeps the glow until the next launch"
+    );
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('f'));
+    again.fly();
+    assert!(!flight(&again).weapon_effects(), "off after a restart");
+    assert!(!flight(&again).smoke_trails());
+}
+
 /// Where flight draws its hover cursor.
 fn cursor(harness: &Harness) -> Option<Point> {
     harness
@@ -846,7 +895,7 @@ fn the_picker_lists_the_monitors_modes_and_ok_enters_the_one_picked_and_saves_it
     );
 
     // Down on the focused picker, then a click on its down arrow.
-    for _ in 0..5 {
+    for _ in 0..7 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -937,7 +986,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..5 {
+        for _ in 0..7 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -1071,7 +1120,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..6 {
+        for _ in 0..8 {
             self.press(Key::Tab);
         }
         for _ in 0..times {

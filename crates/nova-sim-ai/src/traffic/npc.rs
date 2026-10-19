@@ -298,8 +298,10 @@ pub struct Npc {
     pub pick: Option<WeaponId>,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
-    /// Its provocation (the original's +0x96): the shield and armour
-    /// damage it has taken while it fights, or 1 once its government's
+    /// Its provocation (the original's +0x96): the nominal damage of the
+    /// hits it answered while it fights, each mass and energy arg above
+    /// none (see [`react::victim`](crate::ai::react::victim)), not the
+    /// damage it took; or 1 once its government's
     /// 0x0004 word turns it on the player (@0x8b7e5, @0x8cb9d,
     /// [`Decision::provokes`](crate::ai::Decision::provokes)); none once it
     /// goes back to an idle goal or is disabled.
@@ -471,8 +473,12 @@ pub struct Npc {
     /// as the player's hulk, as `_RandomShipSpawn`,
     /// `_GenericRandomShipSpawn`, `_MissionDudeSpawn` and `_LaunchFighter`
     /// set it (@0x3c4b0, @0x3ca48, @0x3cff7, @0x3d8fe), one fewer for each
-    /// pod it ejects (see `nova_sim::npc_escape`). Never saved.
-    pub pods_left: u16,
+    /// pod it ejects (see `nova_sim::npc_escape`). Written raw
+    /// ([`HullSpec::signed_pod_count`]), so a class of negative
+    /// `PodCount` leaves it negative, which a stray beam of `ExitType` 5
+    /// reads when it steps the word (see `nova_sim::stray_words`). Never
+    /// saved.
+    pub pods_left: i16,
     /// The odds against it as its slot caches them (the original's
     /// +0xc914): -1 ([`odds_cache::STALE`](crate::traffic::odds_cache::STALE))
     /// from its spawn until the frame's odds pass reaches its berth, then
@@ -1192,6 +1198,18 @@ impl Npc {
                 | Mode::EnteringGate { .. }
         )
     }
+
+    /// The heading its low level last wanted (+0x68): the last body's
+    /// heading of its pursuit frame while that frame is for its goal
+    /// ([`Pursuit::frame`]); none without such a frame.
+    #[must_use]
+    pub fn wanted_heading(&self) -> Option<i16> {
+        self.pursuit
+            .frame
+            .filter(|frame| frame.goal == self.goal)
+            .and_then(|frame| frame.last())
+            .map(|body| body.heading)
+    }
 }
 
 #[cfg(test)]
@@ -1209,6 +1227,29 @@ mod tests {
         let mut npc = crate::traffic::fixture::npc(1, stats);
         npc.reserves.fuel.now = now;
         npc
+    }
+
+    #[test]
+    fn the_heading_wanted_is_the_last_body_of_a_frame_for_its_goal() {
+        use crate::ai::fire::Manoeuvre;
+        use crate::ai::pursuit::{Body, Frame};
+        let body = |heading| {
+            Some(Body {
+                manoeuvre: Manoeuvre::Dogfight,
+                heading,
+            })
+        };
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
+        assert_eq!(npc.wanted_heading(), None, "no frame");
+        npc.goal = Goal::Attack(ShipRef::Player);
+        npc.pursuit.frame = Some(Frame {
+            goal: npc.goal,
+            bodies: [body(10), body(20)],
+            speed_cap: None,
+        });
+        assert_eq!(npc.wanted_heading(), Some(20), "the last body");
+        npc.goal = Goal::Idle;
+        assert_eq!(npc.wanted_heading(), None, "a frame for another goal");
     }
 
     #[test]

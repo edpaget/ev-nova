@@ -15,8 +15,9 @@ use crate::combat::fixture::strike;
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
 use crate::stats::ShipStats;
+use crate::traffic::autopilot::HIT_WAIT;
 use crate::traffic::fixture::npc;
-use crate::traffic::npc::{AiType, Npc, NpcId};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 use nova_sim_base::fixture::FAST;
 
 fn n(id: u32) -> ShipRef {
@@ -121,14 +122,45 @@ fn an_npc_carriers_fighter_the_player_hits_turns_on_it_and_its_carrier_takes_the
     );
     assert_eq!(ships[1].goal, Goal::Attack(ShipRef::Player), "the fighter");
     assert_eq!(ships[1].target, Some(ShipRef::Player));
-    assert_eq!(ships[1].provoked, 12.0);
+    assert_eq!(ships[1].provoked, 24.0);
     assert_eq!(
         ships[0].target,
         Some(ShipRef::Player),
         "its carrier, the lead"
     );
-    assert_eq!(ships[0].provoked, 12.0);
+    assert_eq!(ships[0].provoked, 24.0);
     assert_eq!(ships[0].goal, Goal::Attack(n(3)), "the lead takes no goal");
+}
+
+#[test]
+fn a_hit_by_no_ship_provokes_and_cuts_the_victims_wait_but_not_its_leads() {
+    // `testw si; jne 0x3be6e` (@0x3bd7e) reaches the wait cut for any
+    // source but slot 0, so a hit by no ship (-1) cuts the victim's; the
+    // lead's part has no cut.
+    let held = Mode::Coasting { ticks_left: 100 };
+    let mut lead = ship(1, AiType::Warship, 0.0, Goal::Idle);
+    lead.mode = held;
+    let mut escort = ship(2, AiType::Warship, 50.0, Goal::Idle);
+    escort.leader = Some(NpcId(1));
+    escort.mode = held;
+    let by_none = Strike {
+        by: None,
+        ..strike(n(2), n(1))
+    };
+    let ships = answered(vec![lead, escort], &[by_none]);
+    assert_eq!(
+        ships[1].mode,
+        Mode::Coasting {
+            ticks_left: HIT_WAIT
+        },
+        "the victim"
+    );
+    assert_eq!(ships[0].mode, held, "its lead");
+    for ship in &ships {
+        assert_eq!(ship.provoked, 24.0, "{:?}", ship.id);
+        assert_eq!(ship.target, None, "{:?}", ship.id);
+        assert_eq!(ship.goal, Goal::Idle, "{:?}", ship.id);
+    }
 }
 
 const TYPES: [AiType; 4] = [
@@ -179,7 +211,7 @@ fn an_npcs_hit_on_an_assister_keeps_its_goal_and_takes_the_attacker_by_ai_type()
         let helper = &traffic.npcs()[0];
         assert_eq!(helper.goal, Goal::Assist(Help::Refuel), "{ai_type:?}");
         assert_eq!(helper.target, Some(n(2)), "{ai_type:?}: @0x3bcf6");
-        assert_eq!(helper.provoked, 12.0, "{ai_type:?}");
+        assert_eq!(helper.provoked, 24.0, "{ai_type:?}");
         assert_eq!(
             helper.docking.map(|docking| docking.ship),
             Some(n(2)),

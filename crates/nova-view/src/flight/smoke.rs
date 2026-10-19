@@ -1,7 +1,17 @@
 //! A shot's smoke trail: the puffs `_HandleShot` leaves at a smoking
-//! shot's centre every live tick (@0x35cc5-0x35d37), as `_SpawnSmoke`
+//! shot's centre on each smoke frame (@0x35cc5-0x35d37), as `_SpawnSmoke`
 //! (@0x3f927-0x3fa04) and `_HandleSmoke` (@0x2e29f-0x2e5a6) keep and
 //! draw them.
+//!
+//! - A smoke frame is a pass whose frame counter is a multiple of 3: the
+//!   byte at `*0x3b555c` `_HandleShot` tests @0x35cc5-0x35ccd, which
+//!   `_PlayGame` sets before each `_DoPlayGameWork` (@0x45b7d-0x45bbe;
+//!   `nova_sim::Session::smoke_frame`). A live shot of a smoking weapon
+//!   leaves no puff on the other frames.
+//! - The Smoke Trails preference off (the original's inverted
+//!   `SmokeTrails` byte set) makes `_SpawnSmoke` return at once
+//!   (@0x3f93d-0x3f951), so no shot leaves a puff; the puffs already left
+//!   go on ageing, as `_HandleSmoke` does not read it.
 //!
 //! - A shot smokes ([`smoke_kind`]) under `Flags` 0x0200 (kind 1) or
 //!   else 0x0400 (kind 0), the kind 2 more under 0x0800 (@0x35cd9-0x35d0c).
@@ -25,10 +35,7 @@
 //! 0x0400, so stock never smokes.
 //!
 //! Left out: the translucency `_HandleSmoke` works out and overwrites at
-//! once (@0x2e308-0x2e33f), which is never seen; the `SmokeTrails`
-//! preference gate (@0x35cc5-0x35ccd, @0x3f93d-0x3f951), which the engine
-//! has no preference for yet
-//! (rdm:phase/weapons-fidelity/phase-35-left-out-of-phase-24); the frozen
+//! once (@0x2e308-0x2e33f), which is never seen; the frozen
 //! frame (@0x35ccf, @0x2e3bc), which the engine never has; and the puffs'
 //! sprite layer, which rdm:task/shots-drawn-in-their-sprite-layers owns:
 //! the view draws them with the other effects.

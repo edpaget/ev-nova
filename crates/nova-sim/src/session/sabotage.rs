@@ -5,9 +5,13 @@
 //! `_ResetPlayerPrecalcedValues` (see the `precalced` module for every
 //! site), so every reset re-derives the cached flag.
 //!
-//! **The tick** runs at the head of [`Session::tick_combat`], after its
-//! return while landed and before the eject check, through a jump too,
-//! skipped
+//! **The tick** runs in `_HandlePlayer`'s place ([`Session::game_work`],
+//! [`Session::tick_again`]): after the player's point defence and before
+//! its trigger, as the block (0x692e5) sits between them (@0x68c74,
+//! @0x6ab55); so a kill that gives up a pre-jump comes after the point
+//! defence rested through it. [`Session::tick_combat`] runs it at its
+//! head, after its return while landed and before the eject check,
+//! through a jump too. It is skipped
 //! while the player is in the escape pod: `_HandlePlayer` reaches the
 //! block (0x692e5) only once the pod's countdown is out (0x68d1d-0x68d25),
 //! and runs it before its death-timer decrement (@0x6d7e6), the klaxon
@@ -54,10 +58,9 @@
 //! saves nothing here, unless that reset's trim cuts the cargo (see the
 //! `precalced` module).
 //!
-//! *Ordering against the original.* The block runs after
-//! [`Session::tick`]'s steering in the same step, where the original runs
-//! it before the steering: a difference inside a frame, which crosses no
-//! boundary the player can see.
+//! *Ordering against the original.* [`Session::game_work`] runs the block
+//! before the player's steering, as the original does; the separate parts
+//! run it after [`Session::tick`]'s steering in the same step.
 
 use super::Session;
 use crate::chance::Chance;

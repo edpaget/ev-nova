@@ -24,12 +24,16 @@
 //! (`_SpawnShotSubmunitions` @0x3f328), so it takes its layer by its own
 //! guidance the same way. `_HandleShipPointDefense` moves a point-defence
 //! shot fired at a ship to 0x3b52f0 (@0x398a7-0x398c2), where nothing
-//! moves it back. No layer choice plays a sound.
+//! moves it back: after `_SpawnShot` put it in 0x3b53bc, so it always
+//! enters 0x3b52f0 at its tail ([`shot_slots`](super::shot_slots)). No
+//! layer choice plays a sound.
 
 use super::weapon::Guidance;
 
-/// The sprite layer a shot's sprite is in (see the module docs).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// The sprite layer a shot's sprite is in (see the module docs). The
+/// layers compare in the order they are drawn, bottom first
+/// ([`SpriteLayer`](crate::sprite_layer::SpriteLayer)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ShotLayer {
     /// Point defence's own layer 0x3b53bc, which only the missile pass
     /// walks (`_DoPlayGameWork` @0x43fff-0x44010) and no ship's contact
@@ -116,5 +120,21 @@ mod tests {
             );
         }
         assert_eq!(ShotLayer::default(), ShotLayer::Shots);
+    }
+
+    #[test]
+    fn the_shot_layers_compare_as_they_are_drawn() {
+        use crate::sprite_layer::SpriteLayer;
+        let layers = [
+            ShotLayer::OverShips,
+            ShotLayer::Homing,
+            ShotLayer::Shots,
+            ShotLayer::PointDefence,
+        ];
+        let mut sorted = layers;
+        sorted.sort();
+        let mut drawn = layers;
+        drawn.sort_by_key(|&layer| SpriteLayer::from(layer));
+        assert_eq!(sorted, drawn);
     }
 }

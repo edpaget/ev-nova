@@ -10,7 +10,8 @@ use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Rulebook, Session,
+    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
+    RuleSource, Rulebook, Session,
 };
 use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
@@ -62,6 +63,7 @@ impl AppScreen {
             spaceport: None,
             sounds: Vec::new(),
             prefs: Prefs::default(),
+            launch_weapon_effects: Prefs::default().weapon_effects,
             preferences: None,
             prefs_change: None,
             display_choice: None,
@@ -347,6 +349,8 @@ impl AppScreen {
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
+            .with_smoke_trails(self.prefs.smoke_trails)
+            .with_weapon_effects(self.flight_weapon_effects())
             .with_sound_prefs(self.prefs.sound)
             .with_double_time(self.double_time)
             .with_find(self.find_template(), self.data.button_style())
@@ -532,11 +536,34 @@ impl AppScreen {
     }
 
     /// The router with the player's preferences, `prefs`, which the
-    /// Preferences dialog opens on.
+    /// Preferences dialog opens on: the game's preferences at launch,
+    /// whose Weapon Effects every flight then takes while a change waits
+    /// for the next launch (`nova_sim::RuleKey::WeaponEffectsNextLaunch`).
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         self.movies.set_on(prefs.quicktime_movies);
-        Self { prefs, ..self }
+        Self {
+            prefs,
+            launch_weapon_effects: prefs.weapon_effects,
+            ..self
+        }
+    }
+
+    /// Whether a change of Weapon Effects waits for the next launch, as
+    /// the original's does: `nova_sim::RuleKey::WeaponEffectsNextLaunch`'s
+    /// engine reading.
+    pub(super) fn weapon_effects_wait(&self) -> bool {
+        self.rules.source_for(RuleKey::WeaponEffectsNextLaunch) == RuleSource::Engine
+    }
+
+    /// The Weapon Effects a flight takes: the launch value while a change
+    /// waits for the next launch, else the one last chosen.
+    pub(super) fn flight_weapon_effects(&self) -> bool {
+        if self.weapon_effects_wait() {
+            self.launch_weapon_effects
+        } else {
+            self.prefs.weapon_effects
+        }
     }
 
     /// The router playing the mission texts' and offers' movies through

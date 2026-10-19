@@ -5,13 +5,15 @@
 //! - A shot is a frame of its weapon's sheet, `spïn` 3000 + `Graphic`
 //!   ([`shot_frame`]): the frame for its heading, `trunc(n x heading /
 //!   360)`, or, for a spinning weapon (`Flags` 0x0001), one frame every
-//!   `BeamWidth` ticks of its age from the index its spin started on,
-//!   wrapping, or holding the last (`Flags2` 0x0002), and frame 0 while
+//!   `BeamWidth` ticks of its age from the index its spin started on, the
+//!   first coming early on the spin timer its shot slot's last spinning
+//!   shot left (`nova_sim::combat::spin_timer`), wrapping, or holding the
+//!   last (`Flags2` 0x0002), and frame 0 while
 //!   its age is below `ProxSafety` (`Flags2` 0x0001). A shot's spin starts
 //!   on a random index, `Rand(36)`, unless its weapon has `Flags` 0x0004
 //!   ([`spin`](super::spin)).
-//! - A shot fades in and out by its `Falloff`, and a translucent one
-//!   (`Flags3` 0x0002) is added to what is under it
+//! - A shot fades in and out by its `Falloff`, crossfaded by OR with what
+//!   is under it, and a translucent one (`Flags3` 0x0002) is added to it
 //!   ([`shot_fade`](super::shot_fade)); a shot far from the player's ship
 //!   in a murky system is darkened ([`murk`](super::murk)).
 //! - A beam is drawn from its start to its end as lines in `BeamColor`
@@ -35,6 +37,7 @@ use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Color, DrawList, ImageKey, Point};
 use nova_sim::combat::projectile::ShotId;
+use nova_sim::combat::spin_timer;
 use nova_sim::sprite_layer::SpriteLayer;
 use nova_sim::{Chance, RuleSource};
 
@@ -71,15 +74,20 @@ const CORONA_END: i32 = 2;
 
 /// The frame of a shot heading `heading` degrees, `age` ticks old, on a
 /// sheet of `frames` frames, of a weapon that looks as `look` says, whose
-/// spin started on index `start` ([`SpinStarts`](super::spin::SpinStarts)).
+/// spin started on index `start` ([`SpinStarts`](super::spin::SpinStarts))
+/// and timer `timer`
+/// ([`Shot::spin_timer`](nova_sim::combat::projectile::Shot::spin_timer)).
 ///
 /// A shot that does not spin shows its heading's frame. A spinning one
 /// (`Flags` 0x0001) shows the index `_HandleShot` holds before its
 /// tick's step (@0x35894), clamped to the sheet (@0x35956-0x3596c): the
 /// shot drawn at `age` is on its `age`-th pass (the session moves it,
-/// and ages it, once a pass), so it has stepped once every `BeamWidth`
-/// passes before, every pass for a `BeamWidth` of 1 or less
-/// (@0x35884-0x358c4). A step past the last frame wraps to 0, or holds
+/// and ages it, once a pass), so it has stepped on each pass before at
+/// which its spin timer, from `timer`, reached `BeamWidth`, every pass
+/// for a `BeamWidth` of 1 or less (@0x35884-0x358c4;
+/// [`spin_timer::steps`](nova_sim::combat::spin_timer::steps)): its first
+/// step comes early on a timer its slot's last spinning shot left. A step
+/// past the last frame wraps to 0, or holds
 /// the last under `Flags2` 0x0002 (@0x358cb-0x358f6). So a start below
 /// the frame count runs from the start; one at or past it shows the last
 /// frame until the first step, then runs from 0 (or holds the last).
@@ -87,7 +95,14 @@ const CORONA_END: i32 = 2;
 /// `ProxSafety`, the index running on beneath; with 0x0002 too, the index
 /// is put back to 0 on each of those passes (@0x35914-0x35932).
 #[must_use]
-pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook, start: u8) -> u16 {
+pub fn shot_frame(
+    heading: f32,
+    age: u32,
+    frames: NonZeroU16,
+    look: &WeaponLook,
+    start: u8,
+    timer: u32,
+) -> u16 {
     let count = u32::from(frames.get());
     let last = count - 1;
     if look.flags & SPINS == 0 {
@@ -107,10 +122,8 @@ pub fn shot_frame(heading: f32, age: u32, frames: NonZeroU16, look: &WeaponLook,
     if age < safety {
         return 0;
     }
-    let every = u32::try_from(look.beam_width).unwrap_or(0).max(1);
-    // The steps made on passes `from` to `to`, a pass being a step's when
-    // it is a multiple of `every`.
-    let steps = |from: u32, to: u32| (to / every).saturating_sub(from.saturating_sub(1) / every);
+    // The steps made on passes `from` to `to`.
+    let steps = |from: u32, to: u32| spin_timer::steps(timer, look.beam_width, from, to);
     let before = age.saturating_sub(1);
     let index = if holds && safety > 1 {
         // Put back to 0 on every pass below the safety; the timer runs on.
@@ -213,6 +226,9 @@ pub struct ShotShown {
     pub layer: SpriteLayer,
     /// The index its spin started on ([`SpinStarts`](super::spin::SpinStarts)).
     pub spin_start: u8,
+    /// The spin timer it started on, its slot's leftover
+    /// ([`Shot::spin_timer`](nova_sim::combat::projectile::Shot::spin_timer)).
+    pub spin_timer: u32,
     /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
     pub murk: u8,
 }
@@ -228,7 +244,9 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
 /// Draws `shot` as its weapon's frame ([`shot_frame`]), shaded as it
 /// fades ([`shot_shade`], by `fade`'s reading of
 /// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
-/// opaque, translucent at alpha (32 − t)/32, or additive,
+/// opaque; translucent by t, crossfaded by OR,
+/// [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade) at alpha
+/// (32 − t)/32 ([`see_through`]); or additive,
 /// [`Blend::Or`](crate::draw::Blend::Or) at [`lights_tint`]`(n)`; each
 /// darkened by its murk ([`murk_tint`]). Nothing for a weapon whose shots
 /// have no graphic, and a crossed box for one whose look or sheet was not
@@ -242,7 +260,8 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
         None => {}
         Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         Some(Ok(sheet)) => {
-            let frame = shot_frame(shot.heading, shot.age, sheet.frames, look, shot.spin_start);
+            let spin = (shot.spin_start, shot.spin_timer);
+            let frame = shot_frame(shot.heading, shot.age, sheet.frames, look, spin.0, spin.1);
             let image = ImageKey::sprite(sheet.image_id, frame);
             match shot_shade(look, shot.age, fade) {
                 ShotShade::Opaque => {
@@ -250,7 +269,7 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
                 }
                 ShotShade::Translucent(t) => {
                     let tint = see_through(t);
-                    list.sprite(image, shot.at, murk_tint(tint, shot.murk));
+                    list.crossfade_sprite(image, shot.at, murk_tint(tint, shot.murk));
                 }
                 ShotShade::Additive(n) => {
                     list.or_sprite(image, shot.at, murk_tint(lights_tint(n), shot.murk));
@@ -333,6 +352,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::draw::Blend;
     use crate::flight::catalog::EffectSheet;
 
     fn n(frames: u16) -> NonZeroU16 {
@@ -357,7 +377,7 @@ mod tests {
     #[test]
     fn a_shot_shows_the_frame_its_heading_truncates_to() {
         let plain = WeaponLook::default();
-        let frame = |heading, frames| shot_frame(heading, 1, n(frames), &plain, 0);
+        let frame = |heading, frames| shot_frame(heading, 1, n(frames), &plain, 0, 0);
         let frames: Vec<u16> = [0.0, 9.9, 10.0, 185.0, 359.9]
             .into_iter()
             .map(|heading| frame(heading, 36))
@@ -375,9 +395,9 @@ mod tests {
         assert_eq!(frame(100.0, 2), 0);
         assert_eq!(frame(190.0, 2), 1);
         assert_eq!(
-            shot_frame(185.0, 9, n(36), &plain, 20),
+            shot_frame(185.0, 9, n(36), &plain, 20, 3),
             18,
-            "a shot that does not spin ignores its start"
+            "a shot that does not spin ignores its start and its timer"
         );
     }
 
@@ -400,7 +420,17 @@ mod tests {
         start: u8,
         ages: std::ops::Range<u32>,
     ) -> Vec<u16> {
-        ages.map(|age| shot_frame(90.0, age, n(frames), look, start))
+        timed(look, frames, (start, 0), ages)
+    }
+
+    /// [`ages_from`] for a shot that started on spin timer `timer`.
+    fn timed(
+        look: &WeaponLook,
+        frames: u16,
+        (start, timer): (u8, u32),
+        ages: std::ops::Range<u32>,
+    ) -> Vec<u16> {
+        ages.map(|age| shot_frame(90.0, age, n(frames), look, start, timer))
             .collect()
     }
 
@@ -463,6 +493,40 @@ mod tests {
             ages_from(&spinning(1, 0, 0), 8, 8, 1..4),
             [7, 0, 1],
             "a start of the frame count is past the sheet"
+        );
+    }
+
+    #[test]
+    fn a_spinning_shot_steps_first_when_the_timer_it_started_on_runs_out() {
+        // A timer of 2 at `BeamWidth` 4 steps on pass 2, shown from age 3,
+        // then every 4; from 0, on pass 4, shown from age 5.
+        let look = spinning(4, 0, 0);
+        assert_eq!(timed(&look, 8, (0, 2), 1..8), [0, 0, 1, 1, 1, 1, 2]);
+        assert_eq!(timed(&look, 8, (0, 0), 1..8), [0, 0, 0, 0, 1, 1, 1]);
+        assert_eq!(
+            timed(&spinning(3, 0, 0), 8, (0, 5), 1..6),
+            [0, 1, 1, 1, 2],
+            "a timer past BeamWidth steps on the first pass"
+        );
+        assert_eq!(
+            timed(&spinning(4, 0, 0), 8, (6, 3), 1..4),
+            [6, 7, 7],
+            "from its start"
+        );
+    }
+
+    #[test]
+    fn put_back_below_its_prox_safety_a_shot_counts_steps_from_its_timer() {
+        // `BeamWidth` 2 and a timer of 1: steps on passes 1, 3, 5 and 7,
+        // the index put back to 0 below the safety of 4.
+        assert_eq!(
+            timed(
+                &spinning(2, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 4),
+                8,
+                (20, 1),
+                1..10
+            ),
+            [0, 0, 0, 0, 0, 1, 1, 2, 2]
         );
     }
 
@@ -757,6 +821,7 @@ mod tests {
         let shot = |x, weapon| ShotShown {
             id: ShotId(1),
             spin_start: 0,
+            spin_timer: 0,
             murk: 0,
             at: at(x, 5.0),
             heading: 90.0,
@@ -793,8 +858,8 @@ mod tests {
     }
 
     /// How a shot of `look` is drawn at `age`, `murk` 32nds murky, by
-    /// `rule`: its tint and whether it is drawn by OR.
-    fn shaded(look: WeaponLook, age: u32, murk: u8, rule: RuleSource) -> (Color, bool) {
+    /// `rule`: its tint and its blend.
+    fn shaded(look: WeaponLook, age: u32, murk: u8, rule: RuleSource) -> (Color, Blend) {
         let looks = looks(&[(
             128,
             WeaponLook {
@@ -810,14 +875,13 @@ mod tests {
             weapon: WeaponId(128),
             layer: SpriteLayer::Shots,
             spin_start: 0,
+            spin_timer: 0,
             murk,
         };
         let mut list = DrawList::new();
         draw_shot(&mut list, &shot, &looks, rule);
         match list.iter().next() {
-            Some(&DrawCommand::Sprite { tint, blend, .. }) => {
-                (tint, blend == crate::draw::Blend::Or)
-            }
+            Some(&DrawCommand::Sprite { tint, blend, .. }) => (tint, blend),
             other => panic!("{other:?}"),
         }
     }
@@ -831,32 +895,35 @@ mod tests {
             ..WeaponLook::default()
         };
         let engine = RuleSource::Engine;
-        assert_eq!(shaded(fading(0), 8, 0, engine), (Color::WHITE, false));
+        assert_eq!(
+            shaded(fading(0), 8, 0, engine),
+            (Color::WHITE, Blend::Normal)
+        );
         assert_eq!(
             shaded(fading(0), 25, 0, engine),
-            (Color::rgba(255, 255, 255, 8), false),
+            (Color::rgba(255, 255, 255, 8), Blend::OrCrossfade),
             "16 ticks into its window: 2 × 16, translucent by 31 at most"
         );
         assert_eq!(
             shaded(fading(0), 12, 0, engine),
-            (see_through(6), false),
-            "translucent by 6"
+            (see_through(6), Blend::OrCrossfade),
+            "translucent by 6, crossfaded by OR"
         );
         assert_eq!(see_through(6), Color::rgba(255, 255, 255, 207));
         assert_eq!(see_through(0), Color::WHITE);
         assert_eq!(
             shaded(fading(TRANSLUCENT), 10, 0, engine),
-            (lights_tint(30), true),
+            (lights_tint(30), Blend::Or),
             "added at 30"
         );
         assert_eq!(
             shaded(fading(TRANSLUCENT), 5, 0, engine),
-            (Color::WHITE, false),
+            (Color::WHITE, Blend::Normal),
             "opaque before its window, by the engine"
         );
         assert_eq!(
             shaded(fading(TRANSLUCENT), 5, 0, RuleSource::Bible),
-            (lights_tint(32), true),
+            (lights_tint(32), Blend::Or),
             "added at 32, by the other reading"
         );
     }
@@ -867,7 +934,7 @@ mod tests {
         let engine = RuleSource::Engine;
         assert_eq!(
             shaded(plain.clone(), 1, 16, engine),
-            (Color::rgba(127, 127, 127, 255), false)
+            (Color::rgba(127, 127, 127, 255), Blend::Normal)
         );
         let added = WeaponLook {
             flags3: TRANSLUCENT,
@@ -875,9 +942,22 @@ mod tests {
         };
         assert_eq!(
             shaded(added, 1, 31, engine),
-            (murk_tint(lights_tint(32), 31), true)
+            (murk_tint(lights_tint(32), 31), Blend::Or)
         );
         assert_eq!(murk_tint(lights_tint(32), 31), Color::rgba(7, 7, 7, 255));
+    }
+
+    #[test]
+    fn a_murky_shot_fading_plainly_is_crossfaded_at_its_darkened_tint() {
+        let fading = WeaponLook {
+            count: 40,
+            shot_falloff: 2,
+            ..WeaponLook::default()
+        };
+        assert_eq!(
+            shaded(fading, 12, 16, RuleSource::Engine),
+            (murk_tint(see_through(6), 16), Blend::OrCrossfade)
+        );
     }
 
     #[test]

@@ -582,6 +582,28 @@ pub struct Surroundings<'a> {
     /// warship of one takes no player candidate from its hunt (see
     /// [`target`]).
     pub iff_marked: &'a BTreeSet<GovtId>,
+    /// Whether a fighter launched now would find a ship slot: a free berth
+    /// below the spawn reserve, as `_LaunchFighter`'s
+    /// `_GenericRandomShipSpawn(govt, 8)` asks (@0x3d648-0x3d662), read
+    /// slot by slot: the traffic sets it before each NPC's trigger, the
+    /// launches of lower berths that tick having taken theirs (see
+    /// `traffic::launch_room`). With none, a goal-4 sniper's launch fails
+    /// and its bay stays ready, so the snipe's own `_AILaunchFighter` makes
+    /// the bay its pick after its passes (see [`fire`]).
+    pub fighter_room: bool,
+    /// Which hit lets a ship keep its own target
+    /// ([`react::keeps_target`],
+    /// [`RuleKey::HitFocus`](crate::RuleKey::HitFocus)): the original's
+    /// test of the ship struck by the engine, the engine's test before
+    /// weapons-fidelity phase 37 by the other reading.
+    pub hit_focus: RuleSource,
+    /// The heading each NPC wanted as the pass of strikes being answered
+    /// began (+0x68, see `traffic::in_turn`), while one is: the focus test
+    /// reads it ([`react::keeps_target`]), as +0x68 is the low level's
+    /// alone and no reaction moves it. An NPC not in it wanted none, and
+    /// the bearing to its target stands in. With none, the test reads
+    /// each NPC's frame as it is now.
+    pub wanted: Option<&'a BTreeMap<NpcId, i16>>,
     /// Who needs a jump's fuel now to jump out ([`leave::can_jump`]), by
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel).
     pub jump_fuel: RuleSource,
@@ -616,9 +638,11 @@ pub static NO_WEAPONS: Arsenal = Arsenal::EMPTY;
 impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
-    /// cloak scanner, no government marked by an IFF scrambler, the
-    /// engine's jump fuel and cached odds, a led speed of 1 and no weapon
-    /// records ([`NO_WEAPONS`]).
+    /// cloak scanner, no government marked by an IFF scrambler, room for
+    /// a fighter, the engine's [`hit_focus`](Surroundings::hit_focus), no
+    /// pass's [`wanted`](Surroundings::wanted) headings, the engine's jump
+    /// fuel and cached odds, a led speed of 1 and no weapon records
+    /// ([`NO_WEAPONS`]).
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -633,6 +657,9 @@ impl<'a> Surroundings<'a> {
             reinforcements: None,
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
+            fighter_room: true,
+            hit_focus: RuleSource::Engine,
+            wanted: None,
             jump_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             led_speed: 1.0,
@@ -784,7 +811,9 @@ impl<'a> Surroundings<'a> {
 pub struct Reaction {
     /// The ship it now targets, if it changes.
     pub target: Option<ShipRef>,
-    /// The damage it adds to its provocation.
+    /// The nominal damage it adds to its provocation: each of the strike's
+    /// nominal mass and energy damage above none
+    /// ([`Strike::nominal`], see [`react::victim`]).
     pub provoked: f32,
     /// The goal it takes at once, if any.
     pub goal: Option<Goal>,

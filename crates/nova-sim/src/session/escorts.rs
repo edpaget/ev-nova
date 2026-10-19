@@ -20,7 +20,11 @@
 //! charge (+0x5c @0x3d543) and leaves its colour (+0xb0), but
 //! `_PrepareAllSprites` runs the display before the first frame
 //! (@0x3a783), which clears the colour of a ship with no charge
-//! (@0x2bf8a), so no frame shows it and no dose ORs into it. At a hypergate or wormhole exit each is placed on its slot
+//! (@0x2bf8a), so no frame shows it and no dose ORs into it. Each keeps
+//! its cloak, fade and direction, as `_RespawnEscort` writes neither
+//! +0x64 nor +0xc8d8, so an escort cloaked or fading when the player
+//! leaves arrives the same way and decides from there on its first
+//! think. At a hypergate or wormhole exit each is placed on its slot
 //! and then comes out of the exit gate after the player (see
 //! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
 //! the record. A trader escort's
@@ -138,6 +142,9 @@ use crate::traffic::table::ShipKind;
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
+    /// Its cloak, fade and direction ([`Npc::cloak`]), as `_RespawnEscort`
+    /// leaves +0x64 and +0xc8d8.
+    pub(super) cloak: Cloak,
     /// Its display state, fold and the anim rolls its spawn still owes,
     /// its ship-table slot's, which `_RespawnEscort` leaves (see the
     /// `ship_display` module); none when its NPC was not in the system,
@@ -187,7 +194,8 @@ impl Session {
     }
 
     /// What each of the fleet's escorts keeps across a setup, by its
-    /// index, from its NPC in the system, if any (none without one).
+    /// index, from its NPC in the system, if any (none, and uncloaked,
+    /// without one).
     ///
     /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
     /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark, and every
@@ -196,7 +204,11 @@ impl Session {
     /// ionization is not kept: `_RespawnEscort` clears the charge
     /// (+0x5c @0x3d543), and the display `_PrepareAllSprites` runs before
     /// the first frame (@0x3a783) clears the colour of a ship with no
-    /// charge (@0x2bf8a).
+    /// charge (@0x2bf8a). Neither `_RespawnEscort` (@0x3d4b8-0x3d62c), its
+    /// tail `_AIMakeEscortFlyInForm` (@0x89b8e-0x89c3d) nor the kept slot
+    /// (@0x3bf7e-0x3bfb6) writes the cloak's fade (+0x64) or direction
+    /// (+0xc8d8), so the escort keeps its cloak as it was, cloaked, fading
+    /// or seen.
     pub(super) fn fleet_kept(&self) -> Vec<KeptEscort> {
         (0..self.pilot.escorts.len())
             .map(|index| {
@@ -215,6 +227,7 @@ impl Session {
                     )),
                     skill: Some(npc.skill),
                     afterburner: Some(npc.afterburner),
+                    cloak: npc.cloak,
                 })
             })
             .collect()
@@ -224,10 +237,10 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark, its skill, its afterburner, and its display and fold, with no
-    /// ionization, or a loaded pilot's fold set with none kept
-    /// ([`Session::loaded_escort_set`]). One that kept no skill rolls one
-    /// on `chance`, and one that kept no afterburner, having no NPC (a
+    /// mark, its skill, its afterburner, its cloak, and its display and
+    /// fold, with no ionization, or a loaded pilot's fold set with none
+    /// kept ([`Session::loaded_escort_set`]). One that kept no skill rolls
+    /// one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
     /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
     pub(super) fn enter_escorts(
@@ -262,6 +275,7 @@ impl Session {
                 if let Some(npc) = self.npc_mut(id) {
                     npc.aux = kept.aux;
                     npc.ion = Ion::default();
+                    npc.cloak = kept.cloak;
                     // `_RespawnEscort` clears its glow (@0x3d505).
                     npc.display.glow = 0;
                     match kept.display {
@@ -400,7 +414,7 @@ impl Session {
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
             // `_RespawnEscort` leaves +0xc908 alone.
-            pods_left: kind.hull.pod_count,
+            pods_left: kind.hull.signed_pod_count,
             warp: crate::traffic::warp_out::Warp::default(),
             // `_SpawnEscort` and a capture's spawn take their slot from
             // `_GenericRandomShipSpawn` (@0x3fe8f, @0x4114d): its glow 32
@@ -1339,6 +1353,9 @@ mod tests {
             .map(|npc| (npc.ship, npc.pods_left))
             .collect();
         assert_eq!(pods, [(WARSHIP, 3), (FREIGHTER, 0)]);
+        catalog.hulls[1].pod_count = -3;
+        let session = flying(&catalog, RuleSource::Engine);
+        assert_eq!(escort_npcs(&session)[0].pods_left, -3, "raw");
     }
 
     #[test]
@@ -1601,6 +1618,96 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         assert_no_ion_colour_left(&mut session, before);
+    }
+
+    /// Checks that, once the fleet has entered a new system, the first
+    /// escort is a new NPC carrying `cloak` exactly, and the second has
+    /// the default.
+    fn assert_cloak_kept(session: &Session, before: NpcId, cloak: Cloak) {
+        let escorts: Vec<NpcId> = session.fleet.iter().copied().flatten().collect();
+        assert_ne!(escorts[0], before, "a new NPC");
+        assert_eq!(session.npc(escorts[0]).expect("there").cloak, cloak);
+        assert_eq!(
+            session.npc(escorts[1]).expect("there").cloak,
+            Cloak::default()
+        );
+    }
+
+    fn cloak_first_escort(session: &mut Session, cloak: Cloak) -> NpcId {
+        let warship = session.fleet[0].expect("placed");
+        session.npc_mut(warship).expect("there").cloak = cloak;
+        warship
+    }
+
+    const FULLY_CLOAKED: Cloak = Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_cloaked_escort_arrives_after_a_jump_cloaked() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let before = cloak_first_escort(&mut session, FULLY_CLOAKED);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_cloak_kept(&session, before, FULLY_CLOAKED);
+        let first = session.fleet[0].expect("placed");
+        assert!(session.npc(first).expect("there").cloak.is_cloaked());
+    }
+
+    #[test]
+    fn a_cloaked_escort_takes_off_cloaked() {
+        let catalog = crate::testkit::far_129_reachable(fleeted());
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let before = cloak_first_escort(&mut session, FULLY_CLOAKED);
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_cloak_kept(&session, before, FULLY_CLOAKED);
+    }
+
+    /// The carried direction, not just the fade, comes through: an escort
+    /// fading in when the player jumps arrives with the same fade and
+    /// direction.
+    #[test]
+    fn an_escort_fading_in_when_the_player_jumps_arrives_fading_in() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let fading = Cloak {
+            fade: 10.0,
+            direction: 1,
+        };
+        let before = cloak_first_escort(&mut session, fading);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_cloak_kept(&session, before, fading);
+    }
+
+    /// An escort's first think in the new system works from the cloak it
+    /// carried, and nothing between its placing and that think resets it:
+    /// the fixture warship has no cloaking device, so its think
+    /// (`_AIHandleCloaking` @0x833e1) uncloaks it, and its fade then steps
+    /// once out from full, leaving it still cloaked.
+    #[test]
+    fn a_cloaked_escort_uncloaks_on_its_first_think_in_the_new_system() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        cloak_first_escort(&mut session, FULLY_CLOAKED);
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        let first = session.fleet[0].expect("placed");
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        // Its display steps the fade (@0x2d088), in the fight's NPC step.
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert_eq!(session.fleet[0], Some(first), "the same escort");
+        let cloak = session.npc(first).expect("there").cloak;
+        assert_eq!(
+            cloak,
+            Cloak {
+                fade: crate::cloak::FADE_FULL - crate::cloak::FADE_RATE,
+                direction: -1,
+            }
+        );
+        assert!(cloak.is_cloaked());
     }
 
     #[test]

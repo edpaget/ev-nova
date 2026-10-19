@@ -62,8 +62,10 @@
 //! player sees. The eject (@0x6f22c) comes after the collapse in
 //! `_HandlePlayer`, so [`Session::eject`] collapses a pre-jump first,
 //! before the hulk takes the player's state and before the class
-//! changes: `eject_on_breakup` runs a later frame's eject early, and can
-//! meet a player still in its pre-jump.
+//! changes. The pass's move collapses it already for a player dying or
+//! disabled as the pass begins; a separate fight tick
+//! ([`Session::tick_combat`]) with no move before it can still meet a
+//! player in its pre-jump at the eject.
 //!
 //! **Left out.**
 //!

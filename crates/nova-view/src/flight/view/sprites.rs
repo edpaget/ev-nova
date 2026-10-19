@@ -7,8 +7,9 @@
 //! a `Flags3` 0x0040 ship's turret shots, as `_SetupSpriteWorld` adds the
 //! layers (@0x21d0c-0x21e24) and `_SpawnShot` fills them
 //! (@0x3f0a9-0x3f143). Each layer keeps the order it is given in: the
-//! ships the session's draw order, the shots the order they are kept. The
-//! view only draws what the stack gives.
+//! ships the session's draw order, the shots the session's
+//! ([`nova_sim::Session::shots_drawn`], each layer in the order its shot
+//! slots entered it). The view only draws what the stack gives.
 
 use nova_sim::ShipRef;
 use nova_sim::ship_layer::ShipLayer;
@@ -51,6 +52,7 @@ mod tests {
         ShotShown {
             id: nova_sim::combat::projectile::ShotId(0),
             spin_start: 0,
+            spin_timer: 0,
             murk: 0,
             at: Point::new(0.0, 0.0),
             heading: 0.0,

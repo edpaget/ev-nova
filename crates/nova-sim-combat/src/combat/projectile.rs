@@ -101,6 +101,7 @@ use crate::cloak::{self, Observer};
 use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::ship_layer::Slot;
 use crate::trig;
 
 /// A freefall bomb's share of its firer's velocity at launch.
@@ -174,10 +175,21 @@ pub struct Target {
     pub sheet: bool,
     /// How it is holding up.
     pub condition: Condition,
+    /// Whether `_IsDisabled` holds for it now (@0x2ce6-0x2e0d): held
+    /// disabled, not intact, or its armour under the line its hull's
+    /// `TOUGH` bit picks. The collision walk refreshes it after every hit
+    /// it lands, so the miss rule reads the armour the pass's earlier hits
+    /// left, while [`Target::condition`] settles after the pass.
+    pub disabled: bool,
     /// Its hull's turret miss class
     /// ([`HullSpec::miss_class`](super::hull::HullSpec::miss_class)): a
     /// shot whose roll is above it misses it while it is intact.
     pub miss_class: u32,
+    /// Its ship slot ([`Fighter::slot`](super::Fighter::slot)): a seeking
+    /// sub-munition that finds two ships equally near takes the one in the
+    /// lower slot, as `_FindNearestValidShotTarget` walks the ship table
+    /// (@0x6abd-0x6ace; see [`submunition`](super::submunition)).
+    pub slot: crate::ship_layer::Slot,
 }
 
 impl Target {
@@ -521,7 +533,8 @@ pub struct Shot {
     /// intact ship of a lower class (see [`sides`](super::sides)). Only a
     /// ship's turret (4) or point-defence (9) shot rolls (`_SpawnShot`
     /// @0x3e89e-0x3e963); any other shot carries none, the original's -1,
-    /// and never misses. A sub-munition carries none too: see
+    /// and never misses. A sub-munition, which writes none, carries the
+    /// roll its slot's last ship-fired shot left: see
     /// [`submunition`](super::submunition).
     pub miss_roll: Option<u32>,
     /// The sprite layer it is in, as `_SpawnShot` puts it
@@ -542,6 +555,23 @@ pub struct Shot {
     /// the collision passes to test (`_SpawnShot` never shows it; the
     /// walks skip a hidden sprite @0xacba3, @0xacbc6).
     pub moved_from: Option<Vec2>,
+    /// The original's shot slot it holds
+    /// ([`ShotSlots`](super::shot_slots::ShotSlots)), which
+    /// [`Combat`](super::Combat) gives it as it puts it in flight: the
+    /// shots in flight are kept in slot order.
+    pub slot: usize,
+    /// The spin timer it started on (the original's +0x1c as it took its
+    /// slot, which `_SpawnShot` never writes), in passes: its slot's
+    /// leftover ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)),
+    /// which [`Combat`](super::Combat) gives it as it puts it in flight.
+    /// The view counts its frame steps from it
+    /// ([`spin_timer::steps`](super::spin_timer::steps)).
+    pub spin_timer: u32,
+    /// The ship slot its firer fired from, which a sub-munition takes from
+    /// its parent (the original's source slot, shot +0x2c): none for a
+    /// shot no ship fired. As it spawns, a sub-munition reads whatever
+    /// ship holds that slot then (see [`submunition`](super::submunition)).
+    pub firer_slot: Option<Slot>,
 }
 
 /// How a freefall bomb (5) or a rocket (6) leaves its ship. `_SpawnShot`
@@ -695,6 +725,9 @@ impl Shot {
             turret_over: false,
             jam_rolls: [0; JAMMING_TYPES],
             moved_from: None,
+            slot: 0,
+            spin_timer: 0,
+            firer_slot: None,
         }
     }
 
@@ -1066,18 +1099,44 @@ impl Shot {
     /// A point-defence shot fired at a ship is in the shot layer, and
     /// touches one.
     ///
-    /// It takes the ship met first along the move; the original's
-    /// contact pass goes in sprite-collision order, which crosses no
-    /// boundary the player sees.
+    /// It takes the ship met first along the move, which [`Shot::hit`]
+    /// asks. The hit pass itself walks the ships as the original's contact
+    /// passes do, in their layers' order, a hidden ship not among them,
+    /// each ship asking [`Shot::touches`]: of two ships a move touches,
+    /// the one walked first takes the shot, wherever it is along the move.
+    /// Point defence's precheck (`touches_a_ship`) asks the same of the
+    /// ships walked.
+    ///
+    /// The engine tests a swept hit radius in place of the original's
+    /// sprite rects and RLE masks (`_SWRadiusCollision`,
+    /// `_SWRLECollision` @0x3700f-0x3704a).
     #[must_use]
     pub fn touched(&self, was: Vec2, sides: &Sides) -> Option<Meeting> {
-        // Point defence's layer is one no ship's collision proc acts on
-        // (see the doc comment).
-        let by_contact = self.layer != ShotLayer::PointDefence;
-        if !by_contact || self.age < self.weapon.prox_safety {
+        if !self.touches_ships() {
             return None;
         }
         self.first_along(was, sides, Fuse::Contact, 0.0)
+    }
+
+    /// Where on its move here from `was` it touched `target`, within its
+    /// hit radius, whether or not it can hit it: one ship's contact, as
+    /// the contact passes test each ship they walk ([`Shot::touched`]).
+    /// None for a shot in point defence's layer, or before its
+    /// `ProxSafety`.
+    #[must_use]
+    pub fn touches(&self, was: Vec2, target: &Target) -> Option<Vec2> {
+        if !self.touches_ships() {
+            return None;
+        }
+        let t = contact(was, self.position, target.position, target.radius)?;
+        Some(was + (self.position - was) * t)
+    }
+
+    /// Whether it can touch a ship at all: it is not in point defence's
+    /// layer, one no ship's collision proc acts on (see
+    /// [`Shot::touched`]), and its age has reached its `ProxSafety`.
+    fn touches_ships(&self) -> bool {
+        self.layer != ShotLayer::PointDefence && self.age >= self.weapon.prox_safety
     }
 
     /// The ship among `sides` that sets its proximity fuse off, its move
@@ -1558,7 +1617,9 @@ mod tests {
             sprite_x: 15.0,
             sheet: true,
             condition,
+            disabled: condition != Condition::Intact,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(id),
         }
     }
 
@@ -1671,6 +1732,47 @@ mod tests {
         assert!(
             (from_20.at.x - first.at.x).abs() < 1e-3 && from_20.at.y.abs() < 1e-3,
             "met at the same point on a shorter way: {from_20:?}"
+        );
+    }
+
+    #[test]
+    fn a_shot_touches_one_ship_where_touched_meets_it_alone() {
+        let shot = passing(3);
+        let lone = target(2, 50.0, 4.9, Condition::Intact);
+        let touched = shot.touched(Vec2::ZERO, &among(&[lone])).expect("touched");
+        assert_eq!(shot.touches(Vec2::ZERO, &lone), Some(touched.at));
+        // Behind a nearer ship it still touches: one ship's contact.
+        assert!(
+            shot.touches(Vec2::ZERO, &target(3, 80.0, 0.0, Condition::Intact))
+                .is_some()
+        );
+        assert_eq!(
+            shot.touches(Vec2::ZERO, &target(2, 50.0, 7.9, Condition::Intact)),
+            None,
+            "within its fuse's reach alone"
+        );
+    }
+
+    #[test]
+    fn a_shot_touches_no_ship_before_its_prox_safety() {
+        let mut shot = passing(0);
+        shot.weapon.prox_safety = 5;
+        shot.age = 4;
+        let on_path = target(2, 50.0, 0.0, Condition::Intact);
+        assert_eq!(shot.touches(Vec2::ZERO, &on_path), None);
+        shot.age = 5;
+        assert!(shot.touches(Vec2::ZERO, &on_path).is_some());
+    }
+
+    #[test]
+    fn a_shot_in_point_defences_layer_touches_no_ship() {
+        let shot = Shot {
+            layer: ShotLayer::PointDefence,
+            ..passing(0)
+        };
+        assert_eq!(
+            shot.touches(Vec2::ZERO, &target(2, 50.0, 0.0, Condition::Intact)),
+            None
         );
     }
 

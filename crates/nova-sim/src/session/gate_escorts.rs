@@ -310,6 +310,26 @@ mod tests {
         }
     }
 
+    /// `_HandlePlayerDockRequest`'s gate exit (@0x672e0) respawns each
+    /// escort through `_RespawnEscort`, which leaves its cloak.
+    #[test]
+    fn a_cloaked_escort_comes_out_of_either_exit_gate_cloaked() {
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let catalog = catalog();
+            let mut session = flying(&catalog, Rulebook::default());
+            let cloaked = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+            let before = session.fleet[0].expect("placed");
+            session.npc_mut(before).expect("here").cloak = cloaked;
+            exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
+            let hired = session.fleet[0].expect("placed");
+            assert_ne!(hired, before, "{kind:?}: a new NPC");
+            assert_eq!(session.npc(hired).expect("here").cloak, cloaked, "{kind:?}");
+        }
+    }
+
     #[test]
     fn like_a_jump_the_led_ships_are_left_as_a_jumps_arrival_leaves_them() {
         let catalog = catalog();

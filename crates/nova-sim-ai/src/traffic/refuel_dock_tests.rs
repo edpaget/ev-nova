@@ -346,7 +346,7 @@ fn an_npcs_hit_turns_a_refueller_onto_its_attacker_which_it_boxes_on_and_refuels
     let turned = ship(&traffic, HELPER);
     assert_eq!(turned.goal, Goal::Assist(Help::Refuel), "no goal write");
     assert_eq!(turned.target, Some(ShipRef::Npc(NpcId(2))), "@0x3bcf6");
-    assert_eq!(turned.provoked, 12.0);
+    assert_eq!(turned.provoked, 24.0, "its nominal damage");
     assert_eq!(ship(&traffic, NpcId(2)).reserves.fuel.now, 100.5);
     assert_eq!(traffic.take_fuel_given(), 0.0, "none to the player");
     tick(&mut traffic, &recording, &world);

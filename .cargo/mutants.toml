@@ -16,6 +16,13 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The ship loop splits an NPC's step from its display only when its
+    # pods or escape may run (`escape_may_run`); splitting every NPC's is
+    # the same fight (`an_npcs_step_then_its_display_match_handling_it`),
+    # its `npc_escape` runs nothing for a ship not dying, and the stray
+    # words it steps early are only another ship's or the player's, which
+    # nothing reads before the frame.
+    "nova-sim/src/session/npc_escape\\.rs:[0-9]+:[0-9]+: replace escape_may_run -> bool with true$",
     # The jump arrival's reverse bearing, (bearing + 180) mod 360: `_Accel`
     # reads it through `_TableSin` and `_TableCos`, which take any whole
     # degree mod 360 (`trig::table_radians`), so bearing + 180 + 360 and
@@ -499,6 +506,17 @@ exclude_re = [
     # 2.999999 move an edge strength by about 1e-7, below what an 8-bit
     # texel shows.
     "nova-render/src/super_xbr\\.rs:442:50: replace \\+ with - in kernel$",
+    # A shot's slot is distinct among the shots in flight (it is the
+    # first not taken), so `insert_seated`'s insertion point never meets
+    # an equal slot, and `<` and `<=` find the same place.
+    "nova-sim-combat/src/combat/shot_slots\\.rs:.*replace < with <= in Combat::insert_seated$",
+    # `_HandleShot`'s walk: one visit past the last slot held or holding a
+    # shot finds neither, and a sub-munition never takes the visited slot,
+    # which its parent still holds as it releases.
+    "nova-sim-combat/src/combat/expiry\\.rs:.*replace < with <= in Combat::visit_slots$",
+    # A berth holds one ship, so a fighter just put in the system never
+    # shares its carrier's: `>` and `>=` pick the same fighters above it.
+    "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",
     # The fold steps only with a direction (`fold.dir == 0` is the other
     # arm), so its tests of `dir > 0` and `dir < 0` read the same as
     # `>= 0` and `<= 0` there.
