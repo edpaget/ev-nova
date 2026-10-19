@@ -50,7 +50,8 @@
 //!   their find, and fires if a pass raised the flag. A goal-4 sniper
 //!   launches there a second time, which does the same when its first
 //!   launch found no ship slot ([`Surroundings::fighter_room`]) and so left
-//!   the bay ready (@0x81421-0x81423).
+//!   the bay ready (@0x81421-0x81423). The high level's launch is
+//!   [`Trigger::bays`], the snipe's [`Trigger::bays_after`].
 //! - **The wait gate** ([`gated`], `_HandleShip` @0x34a54-0x34a72): while
 //!   its AI wait runs ([`Npc::wait_running`]) the fight fires nothing of
 //!   its trigger but its fighter bays and its point defence, and its pick
@@ -546,7 +547,8 @@ pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
     Trigger {
         only,
         keep,
-        bays: bays || after,
+        bays,
+        bays_after: after,
         point_defence: asks_turret(npc, around),
         ..Trigger::default()
     }
@@ -618,6 +620,7 @@ pub fn gated(npc: &Npc) -> Trigger {
     }
     Trigger {
         bays: trigger.bays,
+        bays_after: trigger.bays_after,
         point_defence: trigger.point_defence,
         keep: trigger.keep,
         ..Trigger::default()
@@ -2337,18 +2340,21 @@ mod tests {
         };
         let found = trigger_at_player(&carrier(gun(128, 1, 1), true), 0.0, -200.0);
         assert_eq!(
-            (found.only, found.keep, found.bays),
-            (id(150), id(150), true),
+            (found.only, found.keep, found.bays, found.bays_after),
+            (id(150), id(150), false, true),
             "the gun's flag fires the bay"
         );
         let out = trigger_at_player(&carrier(short(128), true), 0.0, -200.0);
-        assert_eq!((out.only, out.keep, out.bays), (None, id(150), true));
+        assert_eq!(
+            (out.only, out.keep, out.bays, out.bays_after),
+            (None, id(150), false, true)
+        );
         let mut moving = carrier(gun(128, 1, 1), true);
         moving.state.velocity = Vec2::new(0.36, 0.0);
         let braking = trigger_at_player(&moving, 0.0, -200.0);
         assert_eq!(
-            (braking.only, braking.keep, braking.bays),
-            (None, id(150), true)
+            (braking.only, braking.keep, braking.bays, braking.bays_after),
+            (None, id(150), false, true)
         );
         let mut reloading = carrier(gun(128, 1, 1), true);
         reloading.armament.hold(WeaponId(150));
@@ -2360,7 +2366,11 @@ mod tests {
         );
         for (y, what) in [(-200.0, "approaching"), (-100.0, "dogfighting")] {
             let plain = trigger_at_player(&carrier(gun(128, 1, 1), false), 0.0, y);
-            assert_eq!((plain.only, plain.bays), (id(128), false), "{what}");
+            assert_eq!(
+                (plain.only, plain.bays, plain.bays_after),
+                (id(128), false, false),
+                "{what}"
+            );
         }
     }
 
@@ -3170,6 +3180,7 @@ mod tests {
         only: Some(WeaponId(128)),
         turrets_only: true,
         bays: true,
+        bays_after: true,
         point_defence: true,
         keep: Some(WeaponId(128)),
     };
@@ -3195,6 +3206,7 @@ mod tests {
                 gated(&npc),
                 Trigger {
                     bays: true,
+                    bays_after: true,
                     point_defence: true,
                     keep: Some(WeaponId(128)),
                     ..Trigger::default()
@@ -3234,6 +3246,7 @@ mod tests {
             gated(&npc),
             Trigger {
                 bays: true,
+                bays_after: true,
                 point_defence: true,
                 keep: Some(WeaponId(128)),
                 ..Trigger::default()
@@ -3252,7 +3265,9 @@ mod tests {
         // `_LowLevelAIHandler`'s sub-goal 0xe, moving the double 0.35 or
         // more on an axis (see `snipe::moving`), goes straight to
         // `_AILaunchFighter` (@0x87329): no gun, missile or turret pass,
-        // so no point defence (@0x80b0d).
+        // so no point defence (@0x80b0d). With room its high level's
+        // launch (@0x8e6fa) is the one that launches: the bay then
+        // reloads, and the snipe's own call (@0x8732f) launches nothing.
         let sniper = |vx: f32, vy: f32| {
             let mut npc = shooter(&[gun(128, 1, 1), guided(130, 4), bay(150)], SNIPE);
             npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
@@ -3262,10 +3277,11 @@ mod tests {
         for (vx, vy) in [(0.36, 0.0), (0.0, -0.36)] {
             let moving = trigger_at_player(&sniper(vx, vy), 0.0, -100.0);
             assert_eq!(
-                (moving.only, moving.keep, moving.bays, moving.point_defence),
-                (None, id(150), true, false),
+                (moving.only, moving.keep, moving.point_defence),
+                (None, id(150), false),
                 "{vx}, {vy}"
             );
+            assert_eq!((moving.bays, moving.bays_after), (true, false));
         }
         let resting = trigger_at_player(&sniper(0.3, 0.3), 0.0, -100.0);
         assert_eq!(resting.only, id(130), "its turret, after its gun");
@@ -3346,13 +3362,18 @@ mod tests {
         // @0x3d648-0x3d662), setting no reload, so the snipe's own
         // `_AILaunchFighter` (@0x8732f) writes the bay over the gun pass's
         // pick (@0x81411), the flag as the gun pass left it.
+        // Both calls are asked for, and both fail: the traffic's room
+        // ledger clears both (`LaunchRoom::settle`).
         let npc = sniping_carrier();
         let none = trigger_with_room(&npc, false);
-        assert_eq!((none.only, none.keep, none.bays), (id(150), id(150), true));
-        // With room the high level's launch succeeds; the bay then reloads
-        // and the second call writes nothing: the gun pass's find stands.
+        assert_eq!((none.only, none.keep), (id(150), id(150)));
+        assert_eq!((none.bays, none.bays_after), (true, true));
+        // With room the high level's launch (@0x8e6fa) succeeds, blind to
+        // the room as it asks; the bay then reloads and the second call
+        // writes nothing: the gun pass's find stands.
         let room = trigger_with_room(&npc, true);
-        assert_eq!((room.only, room.keep, room.bays), (id(128), id(128), true));
+        assert_eq!((room.only, room.keep), (id(128), id(128)));
+        assert_eq!((room.bays, room.bays_after), (true, false));
     }
 
     #[test]
@@ -3363,10 +3384,8 @@ mod tests {
         let mut npc = sniping_carrier();
         npc.state.velocity = Vec2::new(0.0, 2.0);
         let moving = trigger_with_room(&npc, false);
-        assert_eq!(
-            (moving.only, moving.keep, moving.bays),
-            (None, id(150), true)
-        );
+        assert_eq!((moving.only, moving.keep), (None, id(150)));
+        assert_eq!((moving.bays, moving.bays_after), (true, true));
     }
 
     #[test]

@@ -400,6 +400,7 @@ mod tests {
         only: None,
         turrets_only: true,
         bays: false,
+        bays_after: false,
         point_defence: true,
         keep: None,
     };
@@ -855,6 +856,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: true,
             keep: None,
         },

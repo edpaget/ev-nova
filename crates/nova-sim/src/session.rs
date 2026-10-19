@@ -16081,6 +16081,7 @@ pub(super) mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        bays_after: false,
         point_defence: false,
         keep: None,
     };

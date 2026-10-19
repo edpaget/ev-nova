@@ -1288,6 +1288,7 @@ impl Behaviour for LandingFiring {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: false,
             keep: None,
         }
@@ -2827,6 +2828,7 @@ impl Behaviour for Attacking {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: false,
             keep: None,
         }

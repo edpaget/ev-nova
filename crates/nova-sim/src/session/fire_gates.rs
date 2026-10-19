@@ -32,6 +32,7 @@ const PICKED: Trigger = Trigger {
     only: Some(WeaponId(128)),
     turrets_only: false,
     bays: false,
+    bays_after: false,
     point_defence: false,
     keep: Some(WeaponId(128)),
 };

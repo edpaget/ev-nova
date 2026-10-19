@@ -228,10 +228,16 @@ pub struct Trigger {
     /// Only the turrets (guidance 3, 4, 7 and 8) of what the rest of the
     /// trigger fires: an escort keeping formation.
     pub turrets_only: bool,
-    /// The fighter bays too, whatever `only` says: an NPC attacking
-    /// launches its fighters (see the module docs). The player's trigger
-    /// never sets it.
+    /// The fighter bays too, whatever `only` says: an NPC attacking or
+    /// sniping launches its fighters, its high level's `_AILaunchFighter`
+    /// (@0x8e6fa), before its point defence (see the module docs). The
+    /// player's trigger never sets it.
     pub bays: bool,
+    /// The fighter bays again, after its point defence: the snipe's own
+    /// `_AILaunchFighter` after its turret (@0x8732f), a plunderer's only
+    /// launch, and a goal-4 sniper's second when its first found no ship
+    /// slot. The player's trigger never sets it.
+    pub bays_after: bool,
     /// This tick the ship's point defence runs: the player's every tick,
     /// an NPC's when its AI asks for a turret (`_AIFireTurret` @0x80b0d).
     /// [`Trigger::fires`] ignores it.
@@ -244,15 +250,17 @@ pub struct Trigger {
 }
 
 impl Trigger {
-    /// Whether it fires `weapon`: a fighter bay with `bays`, as the
-    /// secondary on the secondary trigger, or as `only`, never on the
-    /// primary; otherwise `only` that weapon when set, or the secondary on
-    /// the secondary trigger and the rest on the primary, only the turrets
-    /// among them when `turrets_only`.
+    /// Whether it fires `weapon`: a fighter bay with `bays` or
+    /// `bays_after`, as the secondary on the secondary trigger, or as
+    /// `only`, never on the primary; otherwise `only` that weapon when set,
+    /// or the secondary on the secondary trigger and the rest on the
+    /// primary, only the turrets among them when `turrets_only`.
     #[must_use]
     pub fn fires(self, weapon: &WeaponSpec) -> bool {
         if weapon.is_bay() {
-            return self.bays || self.only == Some(weapon.id) || self.secondary == Some(weapon.id);
+            return self.launches()
+                || self.only == Some(weapon.id)
+                || self.secondary == Some(weapon.id);
         }
         if let Some(only) = self.only {
             return weapon.id == only;
@@ -265,6 +273,13 @@ impl Trigger {
         } else {
             self.primary
         }
+    }
+
+    /// Whether it launches the fighter bays at all: `bays` or
+    /// `bays_after`.
+    #[must_use]
+    pub fn launches(self) -> bool {
+        self.bays || self.bays_after
     }
 }
 
@@ -764,7 +779,7 @@ impl Armament {
             if !trigger.fires(&mount.spec) || mount.reload > 0.0 {
                 continue;
             }
-            let bay_launch = mount.spec.is_bay() && trigger.bays;
+            let bay_launch = mount.spec.is_bay() && trigger.launches();
             if bay_launch && launching != Some(mount.spec.id) {
                 continue;
             }
@@ -1212,7 +1227,7 @@ impl Armament {
     /// lowest weapon ID holding rounds of its own, ready or not; none
     /// without `bays`.
     fn launching_bay(&self, trigger: Trigger, rounds: &dyn Rounds) -> Option<WeaponId> {
-        if !trigger.bays {
+        if !trigger.launches() {
             return None;
         }
         self.first_bay(rounds)
@@ -1846,6 +1861,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        bays_after: false,
         point_defence: false,
         keep: None,
     };
@@ -2197,6 +2213,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: false,
             keep: None,
         };
@@ -2207,6 +2224,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: false,
             keep: None,
         };
@@ -2217,6 +2235,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            bays_after: false,
             point_defence: false,
             keep: None,
         };
@@ -5205,6 +5224,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: true,
+        bays_after: false,
         point_defence: false,
         keep: None,
     };
