@@ -504,6 +504,7 @@ use crate::combat::jamming::{Halving, Jamming};
 use crate::combat::projectile::{DecayStep, Shot};
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::sides::PassThrough;
+use crate::combat::stellar_hazards::HazardResistance;
 use crate::combat::{
     Combat, CombatEvent, Downed, Field, Fighter, GamePass, Rules, Scenery, ShipRef, Shove, Strike,
 };
@@ -590,6 +591,8 @@ struct FightTerms {
     drawn_heading: f32,
     /// How strongly it jams ([`Fighter::jamming`]).
     jamming: Jamming,
+    /// Which stellar hazards it resists ([`Fighter::resists`]).
+    resists: HazardResistance,
 }
 
 impl FightTerms {
@@ -666,6 +669,7 @@ impl FightTerms {
             armament,
             rounds,
             drawn_heading: self.drawn_heading,
+            resists: self.resists,
         }
     }
 }
@@ -2830,8 +2834,6 @@ impl Session {
     /// module): the fight's tick ([`Combat::tick_on`]) and everything that
     /// follows from it.
     fn fight(&mut self, pass: GamePass, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        let was_destroyed = self.condition == Condition::Destroyed;
-        let was_dying = matches!(self.condition, Condition::Dying { .. });
         let player_was = self.condition;
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let (player_terms, terms) = self.fight_terms();
@@ -2843,6 +2845,7 @@ impl Session {
         // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
         // (see the `afterburner` module).
         let knockback = self.afterburner_knockback();
+        let hazards = self.stellar_hazards();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -2888,6 +2891,7 @@ impl Session {
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
             docked: false,
+            resists: player_terms.resists,
         }];
         let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -2901,19 +2905,21 @@ impl Session {
             Scenery {
                 stellars: &mut stellars,
                 asteroids: &mut rocks,
+                hazards: Some(&hazards),
             },
             chance,
         );
+        let player_killed = self.settle_stellar_kills(&mut &mut *chance);
         self.traffic.after_firing(&self.arsenal);
         self.traffic.keep_berth_exits();
         // The lines are `_DamageShip`'s, said as each hit lands, so before
         // the eject below can take the player into a new ship.
         let strikes = self.combat.take_strikes();
         let struck = struck_npcs(&strikes);
-        self.player_downed(player_was, &strikes, &mut &mut *chance);
+        self.player_downed(player_was, player_killed, &strikes, &mut &mut *chance);
         self.take_shoves();
         self.eject_on_breakup(pass, &mut &mut *chance);
-        self.settle_player_explosion(was_destroyed, was_dying);
+        self.settle_player_explosion(player_was, player_killed.is_some());
         self.raise_disabled(&was, &mut &mut *chance);
         self.settle_strikes(strikes, &was, rules.law, &mut &mut *chance);
         let sorties = self.combat.take_sorties();
@@ -2923,7 +2929,6 @@ impl Session {
         self.lose_escorts(&was, &struck);
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
-        self.stellar_hazards();
         self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
@@ -2948,13 +2953,18 @@ impl Session {
             .collect();
     }
 
-    /// The fight's end for the player, its ship destroyed before it as
-    /// `was_destroyed` says and dying as `was_dying` says: an explosion
-    /// this tick holds the game's end; the klaxon sounds
+    /// The fight's end for the player, its ship's condition `was` before
+    /// it: an explosion this tick holds the game's end; the klaxon sounds
     /// ([`Session::sound_the_klaxon`]); and an explosion halts
-    /// [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS).
-    fn settle_player_explosion(&mut self, was_destroyed: bool, was_dying: bool) {
-        let exploded = !was_destroyed && self.condition == Condition::Destroyed;
+    /// [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS). A
+    /// deadly stellar's kill, as `stellar_killed` says, is no explosion of
+    /// the ship's: it holds the game's end itself, and sounds and halts
+    /// nothing (see the `deadly_stellars` module).
+    fn settle_player_explosion(&mut self, was: Condition, stellar_killed: bool) {
+        let was_dying = matches!(was, Condition::Dying { .. });
+        let exploded = was != Condition::Destroyed
+            && !stellar_killed
+            && self.condition == Condition::Destroyed;
         if exploded {
             // Set only, never cleared here: double time's second pass
             // keeps an explosion the advance pass saw (see
@@ -3065,6 +3075,7 @@ impl Session {
             top_speed: self.top_speed(),
             drawn_heading: drawn(ShipRef::Player, self.player.heading),
             jamming: self.player_jamming(),
+            resists: self.player_hazard_resistance(),
         };
         let led_speed = self.led_speed();
         let npcs = self
@@ -3079,6 +3090,7 @@ impl Session {
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
                 jamming: self.npc_jamming(npc),
+                resists: self.npc_hazard_resistance(npc),
             })
             .collect();
         (player, npcs)
@@ -22613,6 +22625,7 @@ pub(super) mod tests {
             top_speed: 0.0,
             drawn_heading: 0.0,
             jamming: Jamming([5, 0, 0, 9]),
+            resists: HazardResistance::default(),
         };
         let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
         let player = ShipRef::Player;

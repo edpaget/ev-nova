@@ -1434,6 +1434,7 @@ impl Combatant {
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,
             docked: false,
+            resists: nova_sim::combat::stellar_hazards::HazardResistance::default(),
         }
     }
 }

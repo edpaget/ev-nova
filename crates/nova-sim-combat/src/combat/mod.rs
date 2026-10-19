@@ -40,6 +40,8 @@
 //!   governments and `düde`s.
 //! - [`stellar`]: which shots hit a destroyable stellar, and what they
 //!   take off it.
+//! - [`stellar_hazards`]: gravity's pull and the deadly stellars' kills
+//!   inside the tick, before the beams.
 //! - [`submunition`]: the shots a shot releases on a hit and at the end
 //!   of its life.
 //!
@@ -195,6 +197,11 @@
 //!    answers ([`Strike::lock`]). Each shot of a weapon that fires one shot
 //!    at a time (`Flags3` 0x0004) holds its firer's reload for it at its
 //!    `Reload` ([`Armament::hold`]).
+//!
+//!    6b. The [`Scenery`]'s stellar hazards: gravity pulls, then the deadly
+//!    stellars kill ([`stellar_hazards`]), before every beam step, so a
+//!    ship a deadly stellar kills is out of the beams, the shockwaves and
+//!    the death timer.
 //! 7. A point-defence beam hits the missile it is held on the same way as
 //!    a point-defence shot; a missile downed leaves the fight before the
 //!    next hit pass tests its move, as `_HandleBeams` runs last in the
@@ -318,6 +325,7 @@ pub mod shockwave;
 pub mod shot_layer;
 pub mod sides;
 pub mod stellar;
+pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
 pub mod weapon;
@@ -346,6 +354,7 @@ use projectile::{
 use report::{Reports, SimDiagnostic};
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
+use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
 
 use crate::bay::FIGHTER_BAY;
@@ -623,6 +632,9 @@ pub struct Scenery<'a> {
     pub stellars: &'a mut [StellarTarget],
     /// The asteroids ([`asteroid_hit`]).
     pub asteroids: &'a mut [AsteroidTarget],
+    /// The stellar hazards ([`stellar_hazards`]): none when there are
+    /// none.
+    pub hazards: Option<&'a StellarHazards>,
 }
 
 /// How a strike left the ship it hit.
@@ -879,6 +891,8 @@ pub struct Fighter<'a> {
     /// (`_DoPlayGameWork` @0x43e19-0x43e29, @0x44483-0x444ad; see
     /// [`exits`]).
     pub drawn_heading: f32,
+    /// Which stellar hazards it resists ([`stellar_hazards`]).
+    pub resists: HazardResistance,
 }
 
 /// The rules a fight is fought by: when a ship is disabled, which
@@ -1109,6 +1123,9 @@ pub struct Combat {
     /// caps each still holds its slot through the next tick's firing (see
     /// [`Combat::beam_room`]).
     ended_beams: usize,
+    /// The ships deadly stellars killed since they were last taken
+    /// ([`Combat::take_stellar_kills`]).
+    stellar_kills: Vec<StellarKill>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -1175,6 +1192,7 @@ impl Combat {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = field;
+        let hazards = scenery.hazards;
         // A `dyn` source over the caller's, which may be unsized.
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
@@ -1199,11 +1217,6 @@ impl Combat {
         // (@0x44483), reading the conditions the pass left, as `_HandleShip`
         // reads `_IsDisabled` after the passes.
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let sides = Sides {
-            targets: &targets,
-            govts,
-            pass_through: self.pass_through,
-        };
         self.defend(
             fighters,
             &targets,
@@ -1218,6 +1231,19 @@ impl Combat {
         // Step 6.
         let beams_held = self.beams.len();
         self.fly(fighters, &targets, chance);
+        // Step 6b, the ships it kills gone from the beams and step 8.
+        let targets: Vec<Target> = match hazards {
+            Some(hazards) => {
+                self.stellar_hazards(fighters, hazards);
+                fighters.iter().map(Fighter::as_target).collect()
+            }
+            None => targets,
+        };
+        let sides = Sides {
+            targets: &targets,
+            govts,
+            pass_through: self.pass_through,
+        };
         self.move_beams(fighters, &targets, pass, chance);
         if pass.beams_act() {
             self.stamp_beam_firers(fighters);
@@ -2308,6 +2334,7 @@ impl Combat {
         let Scenery {
             stellars,
             asteroids,
+            hazards: _,
         } = scenery;
         let now: Vec<Vec2> = fighters
             .iter()
@@ -3732,6 +3759,7 @@ mod tests {
     mod fold_stamp;
     mod ion_lockout_tick;
     mod plunder_fire;
+    mod stellar_hazards;
     mod strike_terms;
     mod weapon_glow;
 
@@ -3774,6 +3802,7 @@ mod tests {
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
         drawn_heading: Option<f32>,
+        resists: HazardResistance,
     }
 
     /// A trigger holding no weapon, its point defence running, as a test
@@ -3833,6 +3862,7 @@ mod tests {
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
+                resists: HazardResistance::default(),
             }
         }
 
@@ -3890,6 +3920,7 @@ mod tests {
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
+                resists: self.resists,
             }
         }
     }
