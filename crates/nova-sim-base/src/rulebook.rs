@@ -131,6 +131,7 @@
 //! | [`CrossedRankTags`](RuleKey::CrossedRankTags) | `crossed_rank_tags` | `<PRKnnn>` and `<SRKnnn>` read the governments the last tags of their kind named, remembered between texts and reset only as a `dësc` loads, crossed: `<PRKnnn>` the `<SRKnnn>` government's rank and `<SRKnnn>` the `<PRKnnn>` one's (`_ParseTextDescription` @0x14f34-0x15055, `_MungeBriefing` @0x9d53d-0x9d5a5; see `nova_sim::text_tags`) | each reads government nnn's own rank |
 //! | [`OfferingShipName`](RuleKey::OfferingShipName) | `offering_ship_name` | `<OSN>` names the person of the ship last hailed with a `LinkMission`, kept after the dialog until a quote, a board or a new pilot clears it, so a later text names it (`_HandlePlayerCommunication` @0x621de, @0x625a4; `_MungeBriefing` @0x9cebe-0x9cf28; see `nova_sim::text_tags`) | only the person offering while its offer is open, "only works when offering a mission from a ship" |
 //! | [`CachedAvailBits`](RuleKey::CachedAvailBits) | `cached_avail_bits` | a person's 0x0400 hail quote filter reads its mission's `AvailBits` verdict as cached at the last landing, arrival, load or check of it, so a bit changed in flight goes unseen until then (`_IsMissionAvailable` @0x9b4af-0x9b4f5, `_HandleShip` @0x33e1d) | the bits are tested now\* |
+//! | [`SpawnAvailability`](RuleKey::SpawnAvailability) | `spawn_availability` | a shïp's or flët's `AppearOn` and a randomly drawn përs's `ActiveOn` are read as the last galaxy refresh (a landing, a jump's arrival, a new pilot or a load) evaluated them, a drawn person's also now, so a bit set in between brings those ships only from the next refresh; a system's person slots read `ActiveOn` now (`_PropagateMissionBitEffects` @0x997c3-0x9987a, `_SpawnPerson` @0x409b5, @0x40b5d; see the session's `spawn_availability` module) | every test is read now, at each spawn\* |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see `nova_sim::mission::ships`) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see `nova_sim::red_alert`) | the icon blinks with every alert\* |
@@ -291,7 +292,7 @@
 //! `reused_slot_exits`, `reused_slot_search`, `stray_beam_exit`,
 //! `sound_voices`, `looped_sound_wait`, `bomb_heading_wrap`, `translucent_shot_fade`,
 //! `lightning_zig_zag`, `independent_kin`,
-//! `cached_avail_bits`,
+//! `cached_avail_bits`, `spawn_availability`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box`, `eject_velocity`, `rescue_armor`,
@@ -2013,6 +2014,27 @@ rule_keys! {
     /// are tested now. The Bible says nothing of it, so the other reading is
     /// the intended behaviour, not anything the Bible says.
     CachedAvailBits => "cached_avail_bits",
+    /// When a ship type's or fleet's `AppearOn`, and a randomly drawn
+    /// person's `ActiveOn`, are read (see the session's
+    /// `spawn_availability` module, `nova_sim_ai::spawn` and
+    /// `nova_sim_ai::traffic::persons`). By the engine, as
+    /// `_PropagateMissionBitEffects` caches them at each galaxy refresh (a
+    /// landing, a jump's arrival, a new pilot and a load; shïp +0xa41
+    /// @0x997c3-0x99800, përs +0x622 @0x99802-0x99840, flët +0x122
+    /// @0x99842-0x9987a) and the spawners read only the cache
+    /// (`_SelectShipFieldFromDude`, `_HyperSpawnFleet`,
+    /// `_SelectFleetFromSystem`, `_SpawnFleet`): the tests are read
+    /// against the player as the last refresh saw them, so a bit set in
+    /// between brings those ships only from the next refresh, and a bit
+    /// cleared lets them keep coming until then. A drawn person
+    /// (`_SpawnPerson` @0x409b5) is also tested now (@0x40b5d-0x40b6d), so
+    /// it needs both verdicts; a system's person slots are tested now
+    /// alone (`_SetupShipsInSystem` @0x4334d-0x4335d). Under
+    /// `visibility_refresh = bible`, the refresh after every settled
+    /// script takes the snapshot too. By the other reading every test is
+    /// read now, at each spawn. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
+    SpawnAvailability => "spawn_availability",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
     /// `TickCount` units: the radar's blips every 15 Mac ticks
@@ -3639,7 +3661,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(154),
+            RuleKey::ALL.iter().rev().nth(155),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -3656,7 +3678,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(153),
+            RuleKey::ALL.iter().rev().nth(154),
             Some(&RuleKey::StartOutsideDialog)
         );
     }
@@ -3670,7 +3692,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(152),
+            RuleKey::ALL.iter().rev().nth(153),
             Some(&RuleKey::OfferShift)
         );
     }
@@ -3687,7 +3709,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(151),
+            RuleKey::ALL.iter().rev().nth(152),
             Some(&RuleKey::DescMovieGlobals)
         );
     }
@@ -3727,7 +3749,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(150),
+            RuleKey::ALL.iter().rev().nth(151),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -3749,7 +3771,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(149),
+            RuleKey::ALL.iter().rev().nth(150),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -3774,7 +3796,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(148),
+            RuleKey::ALL.iter().rev().nth(149),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -3800,7 +3822,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(147),
+            RuleKey::ALL.iter().rev().nth(148),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -3820,7 +3842,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(146),
+            RuleKey::ALL.iter().rev().nth(147),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -3837,7 +3859,7 @@ mod tests {
             Some(RuleKey::MissionAllyIndex)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(145),
+            RuleKey::ALL.iter().rev().nth(146),
             Some(&RuleKey::MissionAllyIndex)
         );
         assert_eq!(
@@ -3857,7 +3879,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(144),
+            RuleKey::ALL.iter().rev().nth(145),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -3877,7 +3899,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(141),
+            RuleKey::ALL.iter().rev().nth(142),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -3899,7 +3921,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(140),
+            RuleKey::ALL.iter().rev().nth(141),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -4737,7 +4759,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(139), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(140), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -4752,7 +4774,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(138),
+            RuleKey::ALL.iter().rev().nth(139),
             Some(&RuleKey::AuxAbortFallThrough)
         );
     }
@@ -4769,7 +4791,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(137),
+            RuleKey::ALL.iter().rev().nth(138),
             Some(&RuleKey::PlainBoardCounts)
         );
     }
@@ -4786,7 +4808,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(136),
+            RuleKey::ALL.iter().rev().nth(137),
             Some(&RuleKey::HiddenLossFails)
         );
     }
@@ -4803,7 +4825,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(135),
+            RuleKey::ALL.iter().rev().nth(136),
             Some(&RuleKey::ShipDoneOnce)
         );
     }
@@ -4820,7 +4842,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(134),
+            RuleKey::ALL.iter().rev().nth(135),
             Some(&RuleKey::SwapArrives)
         );
     }
@@ -4837,7 +4859,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(133),
+            RuleKey::ALL.iter().rev().nth(134),
             Some(&RuleKey::SmugglingShipName)
         );
     }
@@ -4854,7 +4876,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(132),
+            RuleKey::ALL.iter().rev().nth(133),
             Some(&RuleKey::PaySlotOffset)
         );
     }
@@ -4871,7 +4893,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(131),
+            RuleKey::ALL.iter().rev().nth(132),
             Some(&RuleKey::MissionlessTags)
         );
     }
@@ -4885,7 +4907,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(130),
+            RuleKey::ALL.iter().rev().nth(131),
             Some(&RuleKey::PrkNnnName)
         );
     }
@@ -4902,7 +4924,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(129),
+            RuleKey::ALL.iter().rev().nth(130),
             Some(&RuleKey::CrossedRankTags)
         );
     }
@@ -4919,7 +4941,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(128),
+            RuleKey::ALL.iter().rev().nth(129),
             Some(&RuleKey::OfferingShipName)
         );
     }
@@ -4936,8 +4958,31 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(127),
+            RuleKey::ALL.iter().rev().nth(128),
             Some(&RuleKey::CachedAvailBits)
+        );
+    }
+
+    #[test]
+    fn the_spawn_availability_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::SpawnAvailability.key(), "spawn_availability");
+        assert_eq!(
+            RuleKey::from_key("spawn_availability"),
+            Some(RuleKey::SpawnAvailability)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::SpawnAvailability),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            Rulebook::default()
+                .with_override(RuleKey::SpawnAvailability, RuleSource::Bible)
+                .source_for(RuleKey::SpawnAvailability),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(127),
+            Some(&RuleKey::SpawnAvailability)
         );
     }
 
@@ -4977,7 +5022,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(143),
+            RuleKey::ALL.iter().rev().nth(144),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -5438,7 +5483,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(156),
+            RuleKey::ALL.iter().rev().nth(157),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -5608,6 +5653,7 @@ mod tests {
                 RuleKey::CrossedRankTags,
                 RuleKey::OfferingShipName,
                 RuleKey::CachedAvailBits,
+                RuleKey::SpawnAvailability,
                 RuleKey::HudCadence,
                 RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,
