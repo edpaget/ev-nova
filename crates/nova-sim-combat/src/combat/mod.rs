@@ -527,8 +527,10 @@ pub enum CombatEvent {
     /// A ship's weapon glow lit (`Flags2` 0x0200, ship +0xc8e8 = 32.0):
     /// the view shows its `shän` `WeapImageID` sprite at full and lets it
     /// fade by its `WeapDecay`. The player's call that fired a glow weapon
-    /// lights it (`_FirePlayerWeapon` @0x62c78-0x62c98, a fighter bay's
-    /// launch too, @0x62c61-0x62c6e), and an NPC's pick that spawned one
+    /// lights it (`_FirePlayerWeapon` @0x62c78-0x62c98); a fighter bay's
+    /// call only once a fighter it launched is put in the system
+    /// (@0x62c61-0x62c6e), which the session decides and lights through
+    /// [`Combat::light_glow`]; and an NPC's pick that spawned one
     /// (`_FireAIShipWeapon` @0x88dc0-0x88de4), once a call; and each
     /// live beam of one, on every advance-pass tick, for its firer
     /// (`_HandleBeams` @0x30b1f-0x30b37), but a point-defence beam's at a
@@ -2058,6 +2060,9 @@ impl Combat {
     ///   quietly ([`Combat::launch`]) though it was spent and counted.
     /// - A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns destroys the
     ///   player ([`self_destruct`]).
+    /// - A glow weapon lights the player's weapon glow ([`Combat::glow`]),
+    ///   but a fighter bay, whose glow waits on its fighter being put in
+    ///   the system, which the session lights ([`Combat::light_glow`]).
     /// - A `Recoil` above none pushes the player back, opposite its heading,
     ///   by `Recoil` over its mass up to its class speed, once a call
     ///   (@0x62ea2-0x62f35, the signed `jle` @0x62eb5), reported as a
@@ -2093,7 +2098,11 @@ impl Combat {
             };
             let sound = first_copy_sounds_at(player_fire_priority(&volley.weapon));
             self.launch_volley(fighter, &volley.launches, sound, targets, chance);
-            self.glow(fighter.ship, &volley.weapon);
+            // A bay's call glows only for a fighter put in the system,
+            // which the session decides (`Combat::light_glow`).
+            if volley.weapon.carried.is_none() {
+                self.glow(fighter.ship, &volley.weapon);
+            }
             let recoils = match self.forward_recoil {
                 RuleSource::Engine => volley.weapon.recoil > 0.0,
                 RuleSource::Bible => volley.weapon.recoils(),
@@ -3123,6 +3132,16 @@ impl Combat {
             explosion,
             size: 0.0,
         });
+    }
+
+    /// Lights `ship`'s weapon glow, shown the frame it is lit
+    /// ([`CombatEvent::WeaponGlow`]): the player's fighter bay's, once the
+    /// session has put a fighter it launched in the system, as
+    /// `_FirePlayerWeapon` reaches the glow from a bay only when
+    /// `_LaunchFighter` returns one (@0x62c61-0x62c6e, @0x62c78-0x62c98).
+    pub fn light_glow(&mut self, ship: ShipRef) {
+        self.events
+            .push(CombatEvent::WeaponGlow { ship, late: false });
     }
 
     /// Reports an escape pod `ship` ejected at `at`, moving at `velocity`

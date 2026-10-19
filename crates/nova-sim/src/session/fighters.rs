@@ -9,7 +9,8 @@
 //! reserve `_LaunchFighter` leaves (8 @0x3d648, so it stops at 55 NPCs,
 //! as [`RuleKey::SpawnReserve`] reads; see
 //! [`SPAWN_RESERVE`]), or no record of its
-//! ship type, it goes back into its bay, a round again.
+//! ship type, it goes back into its bay, a round again. The player's
+//! glow bay lights the weapon glow only for a fighter put in the system.
 //!
 //! - **The player's fighter** joins the fleet as a carried escort
 //!   ([`Escort::carried`]), of no government, on its formation slot, as
@@ -46,6 +47,7 @@ use crate::chance::Chance;
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
+use crate::combat::weapon::WeaponSpec;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
@@ -62,11 +64,28 @@ impl Session {
     /// Puts each fighter of `sorties` in the system (see the module
     /// docs); one with no room, or whose ship type has no record, goes
     /// back into its bay. Each rolls its afterburner on `chance`.
+    ///
+    /// Once one of the player's, from a glow bay (`Flags2` 0x0200), is put
+    /// in the system, the player's weapon glow lights, once
+    /// ([`Combat::light_glow`](crate::combat::Combat::light_glow)), as
+    /// `_FirePlayerWeapon` reaches the glow from a bay only when
+    /// `_LaunchFighter` returns a fighter (@0x62c61-0x62c6e,
+    /// @0x62c78-0x62c98). An NPC's launch never lights it, as
+    /// `_AILaunchFighter` never writes it.
     pub(super) fn launch_fighters(&mut self, sorties: &[Sortie], chance: &mut dyn Chance) {
+        let mut glows = false;
         for sortie in sorties {
             if self.launch_fighter(sortie, chance).is_none() {
                 self.put_back(sortie);
+            } else if sortie.carrier == ShipRef::Player {
+                glows |= self
+                    .arsenal
+                    .weapon(sortie.bay)
+                    .is_some_and(WeaponSpec::glows);
             }
+        }
+        if glows {
+            self.combat.light_glow(ShipRef::Player);
         }
     }
 
@@ -1116,6 +1135,77 @@ mod tests {
         assert_eq!(session.npcs().len(), 63, "by the Bible, the table full");
     }
 
+    /// [`carrying`] with the Viper Bay a glow weapon (`Flags2` 0x0200).
+    fn carrying_a_glow_bay() -> FakePilotCatalog {
+        let mut catalog = carrying();
+        catalog.weapons[0].flags2 |= crate::combat::weapon::GLOWS;
+        catalog
+    }
+
+    /// The weapon glows among `events`: each ship's, and whether late.
+    fn glows(events: &[CombatEvent]) -> Vec<(ShipRef, bool)> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::WeaponGlow { ship, late } => Some((ship, late)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_players_glow_bay_glows_only_for_a_fighter_put_in_the_system() {
+        let catalog = carrying_a_glow_bay();
+        let launched = |ships: u32, reserve: RuleSource| {
+            let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+            session.rules = Rulebook::default().with_override(RuleKey::SpawnReserve, reserve);
+            for n in 0..ships {
+                pirate(&mut session, 1000.0 + n as f32, 1000.0);
+            }
+            launch(&mut session);
+            let glows = glows(&session.take_combat_events());
+            (glows, session.npcs().len(), session.pilot().owned(VIPERS))
+        };
+        assert_eq!(
+            launched(55, RuleSource::Engine),
+            (Vec::new(), 55, 2),
+            "no slot: the round put back and no glow"
+        );
+        assert_eq!(
+            launched(54, RuleSource::Engine),
+            (vec![(ShipRef::Player, false)], 55, 1),
+            "the last slot: the frame it launched"
+        );
+        assert_eq!(
+            launched(55, RuleSource::Bible),
+            (vec![(ShipRef::Player, false)], 56, 1),
+            "by the other reading, any slot"
+        );
+    }
+
+    #[test]
+    fn two_fighters_launched_in_one_call_glow_once() {
+        let mut catalog = carrying_a_glow_bay();
+        catalog.weapons[0].flags |= crate::combat::weapon::SIMULTANEOUS;
+        catalog.hulls[0].weapons[0].count = 2;
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        launch(&mut session);
+        assert_eq!(vipers(&session).len(), 2, "two at once");
+        assert_eq!(
+            glows(&session.take_combat_events()),
+            [(ShipRef::Player, false)]
+        );
+    }
+
+    #[test]
+    fn a_bay_without_the_flag_glows_never() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);
+        launch(&mut session);
+        assert_eq!(vipers(&session).len(), 1, "launched");
+        assert_eq!(glows(&session.take_combat_events()), []);
+    }
+
     #[test]
     fn a_ship_left_behind_takes_a_slot_from_the_fighters() {
         let catalog = carrying();
@@ -1476,6 +1566,19 @@ mod tests {
         let lead = pirate(&mut session, 2000.0, 2000.0);
         let raider = carrier(&mut session, lead, 2);
         (session, raider, lead)
+    }
+
+    #[test]
+    fn an_npc_carriers_glow_bay_glows_never() {
+        let catalog = carrying_a_glow_bay();
+        let (mut session, raider, _) = raided(&catalog);
+        let glow_bay = crate::combat::weapon::WeaponSpec::new(&catalog.weapons[0]);
+        assert!(glow_bay.glows());
+        session.npc_mut(raider).expect("there").armament =
+            crate::combat::armament::Armament::new([(glow_bay, 1)]);
+        fight(&mut session, &catalog, &raiding_ai());
+        assert_eq!(vipers(&session).len(), 1, "launched");
+        assert_eq!(glows(&session.take_combat_events()), [], "_AILaunchFighter");
     }
 
     #[test]

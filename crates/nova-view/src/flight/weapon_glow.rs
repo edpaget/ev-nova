@@ -4,7 +4,9 @@
 //!
 //! - The fight lights it at 32.0 ([`CombatEvent::WeaponGlow`](nova_sim::CombatEvent::WeaponGlow)):
 //!   a call that fired the weapon, before its ship's display, so it shows
-//!   that frame; and each live beam of it for its firer, after every
+//!   that frame (the player's fighter bay's only once the session puts a
+//!   fighter it launched in the system, the same frame); and each live
+//!   beam of it for its firer, after every
 //!   display (`_HandleBeams` @0x4453d), so it shows the next frame
 //!   (`late`).
 //! - While the glow is above 0.0 the sprite shows at level
