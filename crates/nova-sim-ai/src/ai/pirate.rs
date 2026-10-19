@@ -107,7 +107,7 @@
 //! rdm:task/planet-domination owns.
 
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
-use crate::ai::odds::hopeless_chase;
+use crate::ai::odds::{hopeless_chase, state4_attack};
 use crate::ai::target::{TargetRules, pick_target, spares};
 use crate::ai::travel::TravelWrite;
 use crate::ai::{
@@ -289,7 +289,7 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
             ..if dry {
                 dry_dropped
             } else {
-                of(attacked(npc, target, around))
+                of(state4_attack(npc, target, around))
             }
         },
         Class::Attack => {
@@ -309,7 +309,7 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
             } else if gone_or_dying(target, around) {
                 keeps
             } else {
-                of(attacked(npc, target, around))
+                of(state4_attack(npc, target, around))
             }
         }
     }
@@ -380,16 +380,6 @@ fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> 
             && other.former.is_none()
             && (!fire::destroys(npc) || ammo_left(npc) == AmmoLeft::Dry)
     })
-}
-
-/// How `npc` attacks `target` among `around`, as goal 4's high level
-/// flies it: a snipe for a hopeless chase, unless it stands off.
-fn attacked(npc: &Npc, target: ShipRef, around: &Surroundings) -> Goal {
-    if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
-        Goal::Snipe(target)
-    } else {
-        Goal::Attack(target)
-    }
 }
 
 /// Whether `target` is outside [`DOGFIGHT_BOX`] of `npc` on either axis,

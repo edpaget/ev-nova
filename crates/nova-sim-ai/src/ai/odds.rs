@@ -97,9 +97,9 @@
 //!   original compares the two angles without wrapping them; here they are
 //!   compared the short way round.
 
-use crate::ai::Surroundings;
 use crate::ai::fire::{has_ammo, suitable_missile};
 use crate::ai::threatened::threatened_by_enemy_of;
+use crate::ai::{Goal, Surroundings};
 use crate::combat::ShipRef;
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::hull::Condition;
@@ -304,7 +304,7 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
             None => return false,
         },
         ShipRef::Npc(id) => match around.npc(id) {
-            Some(other) if matches!(other.goal, crate::ai::Goal::Flee(_)) => {
+            Some(other) if matches!(other.goal, Goal::Flee(_)) => {
                 (other.state, other.stats.handling, other.hull.class_speed)
             }
             _ => return false,
@@ -340,6 +340,20 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
         speed < top_speed
     } else {
         speed <= top_speed
+    }
+}
+
+/// How `npc` flies an attack on `target` among `around`, as
+/// `_HighLevelAIHandler`'s state-4 block takes it: it asks
+/// `_AIEvalHopelessChase` of every state-4 target, past a stand-off hull
+/// (@0x8e48e), and snipes in a hopeless chase ([`hopeless_chase`]);
+/// otherwise it attacks.
+#[must_use]
+pub fn state4_attack(npc: &Npc, target: ShipRef, around: &Surroundings) -> Goal {
+    if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
+        Goal::Snipe(target)
+    } else {
+        Goal::Attack(target)
     }
 }
 

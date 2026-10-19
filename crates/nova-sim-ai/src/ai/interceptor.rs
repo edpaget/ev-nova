@@ -78,7 +78,7 @@
 //!   player scans nothing ([`Decision::re_picked`]).
 
 use crate::ai::fire::FireRules;
-use crate::ai::odds::hopeless_chase;
+use crate::ai::odds::state4_attack;
 use crate::ai::target::{TargetRules, dropped, re_pick_target};
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
@@ -275,10 +275,8 @@ fn re_pick(
         (Goal::Inspect(pick.ship), false)
     } else if dropped(npc, pick.ship, around, rules) {
         (Goal::Idle, true)
-    } else if !npc.hull.stands_off && hopeless_chase(npc, pick.ship, around) {
-        (Goal::Snipe(pick.ship), false)
     } else {
-        (Goal::Attack(pick.ship), false)
+        (state4_attack(npc, pick.ship, around), false)
     };
     Decision {
         goal,

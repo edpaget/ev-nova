@@ -102,8 +102,9 @@
 //! - **The out-of-ammo retreat** (@0x8bf3e-0x8bf83), after those, by its
 //!   hull's `Flags2` 0x0080 rather than its government: short of
 //!   ammunition, it flees its target (see [`out_of_ammo`]).
-//! - **A hopeless chase** ([`hopeless_chase`]) stands off and snipes;
-//!   anything else is attacked. A stand-off ship (`shïp` `Flags2`
+//! - **A hopeless chase**
+//!   ([`hopeless_chase`](crate::ai::odds::hopeless_chase), asked by
+//!   [`state4_attack`]) stands off and snipes; anything else is attacked. A stand-off ship (`shïp` `Flags2`
 //!   0x0002) never asks: `_HighLevelAIHandler` tests the bit first and
 //!   jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its band
 //!   instead (see [`stand_off`](super::stand_off)).
@@ -136,7 +137,7 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::interceptor::inspection_holds;
-use crate::ai::odds::{cached_odds, hopeless_chase};
+use crate::ai::odds::{cached_odds, state4_attack};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
@@ -377,10 +378,8 @@ impl Hunt {
 fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
     if retreats(npc, around, retreat) || (retreat.out_of_ammo && out_of_ammo::retreats(npc)) {
         Goal::Flee(target)
-    } else if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
-        Goal::Snipe(target)
     } else {
-        Goal::Attack(target)
+        state4_attack(npc, target, around)
     }
 }
 
