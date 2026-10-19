@@ -60,7 +60,9 @@
 //! what they will do, said of a command given while a jump is under way
 //! ([`EscortCommand::will`], `_IssueNewEscortCommand` @0x66461-0x664e5).
 
+use crate::ai::Surroundings;
 pub use crate::catalog::{EscortClass, FIGHTER_MASS, FREIGHTER_AI, MEDIUM_MASS};
+use crate::combat::ShipRef;
 pub use crate::fleet::EscortOrder;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
@@ -353,44 +355,55 @@ pub const DEFEND_RADIUS: f32 = 550.0;
 /// keeps its target (408375.0 @0xdda28, about 639 pixels).
 pub const DEFEND_KEEP_SQ: f32 = 408_375.0;
 
-/// The ships among `npcs` that threaten the player, which `escort` may
-/// fight (`_AIFightThreatToParent` @0x81de6): any that threatens the
-/// player or a ship the player leads ([`Npc::threatens_player_among`]),
-/// but never `escort` itself or a fellow escort, hired or a mission
-/// escort ([`Npc::escorts_player`]). With the player the parent, the
-/// original asks `_ExtendedIsThreatToPlayer` @0x81b70, whose target test
-/// counts a ship led by the player (@0x81c2e-0x81c4a); the rest of that
-/// test (visibility, +0x8c, the ship's own escorts' threats) is
-/// crons-news-ranks-fidelity phase 5's.
-pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a Npc> + 'a {
-    npcs.iter().filter(move |candidate| {
-        candidate.id != escort.id
-            && !candidate.escorts_player()
-            && candidate.threatens_player_among(npcs)
-    })
+/// The ships among `around` that threaten the player, which `escort` may
+/// fight (`_AIFightThreatToParent` @0x81de6, with the player the parent):
+/// any but `escort` itself that `_ExtendedIsThreatToPlayer` @0x81b70
+/// holds for (@0x81e5c, @0x81e96, @0x81f29, @0x81f7d), read whole as
+/// [`Npc::threatens_player_extended`] with the player's sight of it
+/// ([`Surroundings::seen_by_player`]). So a ship the player can't see is
+/// none, nor is a fellow escort, hired or a mission escort (@0x81b9f); a
+/// ship attacking the player or a ship it leads, one whose hit's target
+/// is the player, and a lead whose escort fights the player are. The
+/// stellar-defender clause (+0x8c, @0x81bd3) is left out, as the engine
+/// has no defence ships (rdm:task/planet-domination).
+/// `_AIFightThreatToParent` makes no sight test of its own.
+pub fn threats<'a>(
+    escort: &'a Npc,
+    around: &'a Surroundings<'_>,
+) -> impl Iterator<Item = &'a Npc> + 'a {
+    around
+        .npcs
+        .iter()
+        .filter(move |candidate| candidate.id != escort.id && threatens(candidate, around))
+}
+
+/// Whether `candidate` threatens the player among `around`, as
+/// `_ExtendedIsThreatToPlayer` asks it with the player's sight of it.
+fn threatens(candidate: &Npc, around: &Surroundings) -> bool {
+    candidate.threatens_player_extended(around.npcs, around.seen_by_player(candidate))
 }
 
 /// How strongly `escort` takes `candidate` for a threat to the player at
-/// `player`, among `npcs` (`_IsShipANearbyThreatToParent` @0x836a4); the
-/// lowest wins, and none is no threat (see [`threats`]: the same
-/// `_ExtendedIsThreatToPlayer` test). The score is the distance
+/// `player`, among `around` (`_IsShipANearbyThreatToParent` @0x836a4); the
+/// lowest wins, and none is no threat. The candidate must be one the
+/// escort sees (`_ShipVisibleToShip(candidate, escort)` @0x8370e,
+/// [`Surroundings::sees`]) that threatens the player as [`threats`] asks
+/// it (`_ExtendedIsThreatToPlayer` @0x83744). The score is the distance
 /// squared from the escort; with a `radius` around the player, the
 /// candidate must be within it, and its distance squared from the player
 /// is added. It is halved for a candidate of another class than the
 /// escort's, and halved again for a fighter against a warship escort.
-/// The original's visibility test (`_ShipVisibleToShip` @0x8370e, the
-/// escort observing) is not modelled: NPCs see cloaked ships.
 #[must_use]
 pub fn threat_score(
     escort: &Npc,
     candidate: &Npc,
-    npcs: &[Npc],
+    around: &Surroundings,
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<f32> {
     if candidate.id == escort.id
-        || candidate.escorts_player()
-        || !candidate.threatens_player_among(npcs)
+        || !around.sees(escort, ShipRef::Npc(candidate.id))
+        || !threatens(candidate, around)
     {
         return None;
     }
@@ -417,13 +430,13 @@ pub fn threat_score(
 #[must_use]
 pub fn best_threat(
     escort: &Npc,
-    npcs: &[Npc],
+    around: &Surroundings,
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<NpcId> {
     let mut best: Option<(NpcId, f32)> = None;
-    for candidate in npcs {
-        let Some(score) = threat_score(escort, candidate, npcs, player, radius) else {
+    for candidate in around.npcs {
+        let Some(score) = threat_score(escort, candidate, around, player, radius) else {
             continue;
         };
         if best.is_none_or(|(_, lowest)| score < lowest) {
@@ -670,6 +683,17 @@ mod tests {
 
     const MEDIUM: EscortClass = EscortClass::Medium;
 
+    /// Surroundings of no ships.
+    fn none() -> Surroundings<'static> {
+        Surroundings::new(&[], &[])
+    }
+
+    /// Surroundings of `npcs`, the player at the centre and scanning for
+    /// no cloaks.
+    fn among(npcs: &[Npc]) -> Surroundings<'_> {
+        Surroundings::new(&[], npcs)
+    }
+
     #[test]
     fn with_no_radius_the_nearer_threat_wins() {
         let player = ShipState::default();
@@ -680,20 +704,23 @@ mod tests {
             ship(4, MEDIUM, 0.0, 100.0, false),
         ];
         assert_eq!(
-            threat_score(&escort, &npcs[0], &[], &player, None),
+            threat_score(&escort, &npcs[0], &none(), &player, None),
             Some(90_000.0)
         );
         assert_eq!(
-            threat_score(&escort, &npcs[1], &[], &player, None),
+            threat_score(&escort, &npcs[1], &none(), &player, None),
             Some(40_000.0)
         );
-        assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(3)));
+        assert_eq!(
+            best_threat(&escort, &among(&npcs), &player, None),
+            Some(NpcId(3))
+        );
         let far = ShipState {
             position: Vec2::new(5000.0, 0.0),
             ..ShipState::default()
         };
         assert_eq!(
-            best_threat(&escort, &npcs, &far, None),
+            best_threat(&escort, &among(&npcs), &far, None),
             Some(NpcId(3)),
             "anywhere"
         );
@@ -708,25 +735,25 @@ mod tests {
         let escort = ship(1, MEDIUM, 0.0, 0.0, false);
         let inside = ship(2, MEDIUM, 650.0, 0.0, true);
         assert_eq!(
-            threat_score(&escort, &inside, &[], &player, Some(DEFEND_RADIUS)),
+            threat_score(&escort, &inside, &none(), &player, Some(DEFEND_RADIUS)),
             Some(650.0 * 650.0 + 550.0 * 550.0)
         );
         let outside = ship(3, MEDIUM, 651.0, 0.0, true);
         assert_eq!(
-            threat_score(&escort, &outside, &[], &player, Some(DEFEND_RADIUS)),
+            threat_score(&escort, &outside, &none(), &player, Some(DEFEND_RADIUS)),
             None
         );
         assert_eq!(
             best_threat(
                 &escort,
-                &[outside.clone(), inside],
+                &among(&[outside.clone(), inside]),
                 &player,
                 Some(DEFEND_RADIUS)
             ),
             Some(NpcId(2))
         );
         assert_eq!(
-            best_threat(&escort, &[outside], &player, Some(DEFEND_RADIUS)),
+            best_threat(&escort, &among(&[outside]), &player, Some(DEFEND_RADIUS)),
             None
         );
         assert_eq!((DEFEND_RADIUS, DEFEND_KEEP_SQ), (550.0, 408_375.0));
@@ -739,16 +766,16 @@ mod tests {
         let same = ship(2, MEDIUM, 100.0, 0.0, true);
         let other = ship(3, EscortClass::Freighter, 140.0, 0.0, true);
         assert_eq!(
-            threat_score(&medium, &other, &[], &player, None),
+            threat_score(&medium, &other, &none(), &player, None),
             Some(9800.0)
         );
         assert_eq!(
-            best_threat(&medium, &[same.clone(), other], &player, None),
+            best_threat(&medium, &among(&[same.clone(), other]), &player, None),
             Some(NpcId(3))
         );
         let other = ship(3, EscortClass::Freighter, 142.0, 0.0, true);
         assert_eq!(
-            best_threat(&medium, &[same, other], &player, None),
+            best_threat(&medium, &among(&[same, other]), &player, None),
             Some(NpcId(2))
         );
         let warship = ship(1, EscortClass::Warship, 0.0, 0.0, false);
@@ -756,28 +783,43 @@ mod tests {
         let medium_threat = ship(5, MEDIUM, 141.0, 0.0, true);
         let warship_threat = ship(6, EscortClass::Warship, 100.0, 0.0, true);
         assert_eq!(
-            threat_score(&warship, &fighter, &[], &player, None),
+            threat_score(&warship, &fighter, &none(), &player, None),
             Some(199.0 * 199.0 / 4.0)
         );
         assert_eq!(
-            best_threat(&warship, &[warship_threat.clone(), fighter], &player, None),
+            best_threat(
+                &warship,
+                &among(&[warship_threat.clone(), fighter]),
+                &player,
+                None
+            ),
             Some(NpcId(4)),
             "up to four times"
         );
         let fighter = ship(4, EscortClass::Fighter, 201.0, 0.0, true);
         assert_eq!(
-            best_threat(&warship, &[warship_threat.clone(), fighter], &player, None),
+            best_threat(
+                &warship,
+                &among(&[warship_threat.clone(), fighter]),
+                &player,
+                None
+            ),
             Some(NpcId(6))
         );
         assert_eq!(
-            best_threat(&warship, &[warship_threat, medium_threat], &player, None),
+            best_threat(
+                &warship,
+                &among(&[warship_threat, medium_threat]),
+                &player,
+                None
+            ),
             Some(NpcId(5)),
             "a medium ship counts half"
         );
         let fighter_escort = ship(1, EscortClass::Fighter, 0.0, 0.0, false);
         let warship_threat = ship(6, EscortClass::Warship, 100.0, 0.0, true);
         assert_eq!(
-            threat_score(&fighter_escort, &warship_threat, &[], &player, None),
+            threat_score(&fighter_escort, &warship_threat, &none(), &player, None),
             Some(5000.0),
             "not the other way round"
         );
@@ -792,16 +834,16 @@ mod tests {
         let escort = ship(1, MEDIUM, 100.0, -40.0, false);
         let candidate = ship(2, MEDIUM, 130.0, 0.0, true);
         assert_eq!(
-            threat_score(&escort, &candidate, &[], &player, None),
+            threat_score(&escort, &candidate, &none(), &player, None),
             Some(2500.0)
         );
         assert_eq!(
-            threat_score(&escort, &candidate, &[], &player, Some(DEFEND_RADIUS)),
+            threat_score(&escort, &candidate, &none(), &player, Some(DEFEND_RADIUS)),
             Some(2500.0 + 180.0 * 180.0 + 30.0 * 30.0)
         );
         let warship = ship(1, EscortClass::Warship, 100.0, -40.0, false);
         assert_eq!(
-            threat_score(&warship, &candidate, &[], &player, None),
+            threat_score(&warship, &candidate, &none(), &player, None),
             Some(1250.0),
             "a medium ship against a warship: half"
         );
@@ -815,7 +857,10 @@ mod tests {
             ship(2, MEDIUM, 0.0, 100.0, true),
             ship(3, MEDIUM, 100.0, 0.0, true),
         ];
-        assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(2)));
+        assert_eq!(
+            best_threat(&escort, &among(&npcs), &player, None),
+            Some(NpcId(2))
+        );
     }
 
     #[test]
@@ -840,7 +885,10 @@ mod tests {
             formation: Some(FormationSlot::default()),
         });
         for candidate in [&escort, &fellow, &calm, &mission_escort] {
-            assert_eq!(threat_score(&escort, candidate, &[], &player, None), None);
+            assert_eq!(
+                threat_score(&escort, candidate, &none(), &player, None),
+                None
+            );
         }
         let npcs = [
             escort.clone(),
@@ -849,9 +897,12 @@ mod tests {
             mission_escort,
             ship(4, MEDIUM, 900.0, 0.0, true),
         ];
-        assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(4)));
         assert_eq!(
-            threats(&escort, &npcs)
+            best_threat(&escort, &among(&npcs), &player, None),
+            Some(NpcId(4))
+        );
+        assert_eq!(
+            threats(&escort, &among(&npcs))
                 .map(|npc| npc.id)
                 .collect::<Vec<_>>(),
             [NpcId(4)]
@@ -873,9 +924,12 @@ mod tests {
         turncoat.id = NpcId(4);
         turncoat.goal = raider.goal;
         let npcs = [escort.clone(), fellow, raider, turncoat];
-        assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(3)));
         assert_eq!(
-            threats(&escort, &npcs)
+            best_threat(&escort, &among(&npcs), &player, None),
+            Some(NpcId(3))
+        );
+        assert_eq!(
+            threats(&escort, &among(&npcs))
                 .map(|npc| npc.id)
                 .collect::<Vec<_>>(),
             [NpcId(3)],
@@ -886,8 +940,91 @@ mod tests {
             ship(2, MEDIUM, 10.0, 0.0, false),
             npcs[2].clone(),
         ];
-        assert_eq!(best_threat(&escort, &unled, &player, None), None);
-        assert_eq!(threats(&escort, &unled).count(), 0);
+        assert_eq!(best_threat(&escort, &among(&unled), &player, None), None);
+        assert_eq!(threats(&escort, &among(&unled)).count(), 0);
+    }
+
+    fn cloaked(mut npc: Npc) -> Npc {
+        npc.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        npc
+    }
+
+    /// The ids `escort` takes for threats among `around`: those
+    /// [`threats`] yields, and [`best_threat`]'s pick.
+    fn taken(escort: &Npc, around: &Surroundings) -> (Vec<NpcId>, Option<NpcId>) {
+        (
+            threats(escort, around).map(|npc| npc.id).collect(),
+            best_threat(escort, around, &ShipState::default(), None),
+        )
+    }
+
+    #[test]
+    fn a_cloaked_attacker_the_player_cannot_see_is_no_threat_to_fight() {
+        // The escort scans, so only the player's sight decides.
+        let mut escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        escort.cloak_gear.scanner.on_screen = true;
+        let npcs = [escort.clone(), cloaked(ship(2, MEDIUM, 50.0, 0.0, true))];
+        assert_eq!(taken(&escort, &among(&npcs)), (vec![], None), "unseen");
+        let scanning = Surroundings {
+            cloak_scanner: true,
+            ..among(&npcs)
+        };
+        assert_eq!(
+            taken(&escort, &scanning),
+            (vec![NpcId(2)], Some(NpcId(2))),
+            "the player scanning on screen"
+        );
+    }
+
+    #[test]
+    fn a_lead_whose_escort_attacks_the_player_and_a_hit_aimed_at_it_are_threats() {
+        let escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        let mut lead = ship(2, MEDIUM, 100.0, 0.0, false);
+        lead.target = Some(crate::combat::ShipRef::Npc(NpcId(9)));
+        let mut its_escort = ship(3, MEDIUM, 900.0, 0.0, true);
+        its_escort.leader = Some(NpcId(2));
+        let mut hit = ship(4, MEDIUM, 50.0, 0.0, false);
+        hit.target = Some(crate::combat::ShipRef::Player);
+        let npcs = [escort.clone(), lead, its_escort, hit];
+        assert_eq!(
+            taken(&escort, &among(&npcs)),
+            (vec![NpcId(2), NpcId(3), NpcId(4)], Some(NpcId(4)))
+        );
+        let no_hit = [npcs[0].clone(), npcs[1].clone(), npcs[2].clone()];
+        assert_eq!(
+            best_threat(&escort, &among(&no_hit), &ShipState::default(), None),
+            Some(NpcId(2)),
+            "the lead, nearer than its escort"
+        );
+    }
+
+    #[test]
+    fn the_escort_takes_no_nearby_threat_it_cannot_see_itself() {
+        let mut escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        let npcs = [escort.clone(), cloaked(ship(2, MEDIUM, 50.0, 0.0, true))];
+        let seen_by_player = Surroundings {
+            cloak_scanner: true,
+            ..among(&npcs)
+        };
+        let player = ShipState::default();
+        assert_eq!(
+            threat_score(&escort, &npcs[1], &seen_by_player, &player, None),
+            None,
+            "the escort scans for no cloaks"
+        );
+        assert_eq!(best_threat(&escort, &seen_by_player, &player, None), None);
+        escort.cloak_gear.scanner.on_screen = true;
+        assert_eq!(
+            threat_score(&escort, &npcs[1], &seen_by_player, &player, None),
+            Some(2500.0)
+        );
+        assert_eq!(
+            best_threat(&escort, &seen_by_player, &player, None),
+            Some(NpcId(2))
+        );
     }
 
     #[test]
