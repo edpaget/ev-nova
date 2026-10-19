@@ -221,6 +221,41 @@ fn a_remembered_directory_that_no_longer_loads_gives_one_warnings_alert() {
 }
 
 #[test]
+fn a_good_pick_that_cannot_be_saved_starts_and_warns_in_the_log_and_the_alert() {
+    let store = MemorySettings::new();
+    store.fail_writes(true);
+    let app = Path::new("/Games").join("EV Nova.app");
+    let nova_files = resolve_pick(&app);
+    let mut machine = Machine::new(&store, &[&nova_files], &[&app]);
+    let mut started = machine.launch().expect("starts");
+    assert_eq!(started.dir, nova_files);
+    let warning = "nova: cannot save the settings: the disk is full";
+    assert_eq!(started.report.take_alert().as_deref(), Some(warning));
+    assert!(
+        machine.log.0.borrow().iter().any(|line| line == warning),
+        "logged: {:?}",
+        machine.log.0.borrow()
+    );
+    assert_eq!(store.text(), None, "nothing was saved");
+}
+
+#[test]
+fn a_bad_rules_value_warns_in_the_log_and_the_alert() {
+    let store = MemorySettings::holding(r#"{"rules": "nonsense"}"#);
+    let found = usual()[0].clone();
+    let mut machine = Machine::new(&store, &[&found], &[]);
+    let mut started = machine.launch().expect("starts");
+    assert_eq!(started.dir, found);
+    let warning = "nova: the saved \"rules\" in memory is not \"engine\" or \"bible\"; ignoring it";
+    assert_eq!(started.report.take_alert().as_deref(), Some(warning));
+    assert!(
+        machine.log.0.borrow().iter().any(|line| line == warning),
+        "logged: {:?}",
+        machine.log.0.borrow()
+    );
+}
+
+#[test]
 fn a_named_directory_wins_over_the_remembered_one() {
     let store = MemorySettings::holding(r#"{"nova_files": "/remembered"}"#);
     let named = PathBuf::from("/named");
