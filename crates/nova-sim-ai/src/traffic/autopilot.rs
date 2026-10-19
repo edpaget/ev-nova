@@ -79,7 +79,9 @@
 //!   engine, its target's lead) and thrusting within its turn rate and
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
-//!   sub-goal 0xe, @0x8709d-0x87334).
+//!   sub-goal 0xe, @0x8709d-0x87334). Moving and inertialess, it takes a
+//!   whole tick's acceleration off its speed with no turn
+//!   ([`snipe::inertialess_brake`], @0x8710f-0x8713a).
 //! - [`Goal::Plunder`] of an intact ship flies as an attack, or as a
 //!   snipe when hopeless, by its frame (see [`pursuit`]); a disabled one it
 //!   docks with, as the traffic flies its [`Npc::docking`] (see
@@ -671,9 +673,7 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// sniping, it flies as [`snipe::fly`] says, a moving sniper with a last
 /// gun turning as `snipe_lead` says. It flies under `flight` as
 /// `flown_by` says ([`step`]); a moving inertialess sniper brakes as
-/// substate 1 does ([`inertialess::brake`]) until
-/// rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit
-/// ports substate 0xe's inertialess brake.
+/// substate 0xe does ([`snipe::inertialess_brake`]).
 fn fight(
     npc: &mut Npc,
     target: &ShipState,
@@ -690,8 +690,8 @@ fn fight(
         Manoeuvre::BreakOff | Manoeuvre::Rush => f32::INFINITY,
         Manoeuvre::Snipe => {
             let controls = match flown_by.inertia {
-                Inertia::Inertialess { .. } if inertialess::moving(npc.state.velocity) => {
-                    inertialess::brake(&npc.state)
+                Inertia::Inertialess { .. } if snipe::moving(&npc.state) => {
+                    snipe::inertialess_brake(npc, handling)
                 }
                 _ => snipe::fly(npc, Some(target), handling, snipe_lead),
             };

@@ -3281,6 +3281,29 @@ mod tests {
         assert!(resting.point_defence && resting.bays);
     }
 
+    #[test]
+    fn a_moving_inertialess_sniper_also_runs_no_pass_and_launches_its_fighters() {
+        // Its brake (@0x8710f-0x87137) jumps to `_AILaunchFighter` too
+        // (@0x8713a → @0x87329).
+        let mut npc = shooter(&[gun(128, 1, 1), guided(130, 4), bay(150)], SNIPE);
+        npc.stats = ShipStats::new(
+            nova_sim_base::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        assert!(npc.flies_inertialess(None, crate::inertialess::InertialDampener::PlayerOnly));
+        npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+        npc.state.velocity = Vec2::new(0.0, -0.36);
+        npc.speed = 0.36;
+        let moving = trigger_at_player(&npc, 0.0, -100.0);
+        assert_eq!(
+            (moving.only, moving.keep, moving.bays, moving.point_defence),
+            (None, id(150), true, false)
+        );
+    }
+
     /// What `npc` fires at the player 100 above [`SHOOTER`], crossing right
     /// at 5 a tick: its gun (10 a tick) leads it at 26.57 degrees.
     fn fired_at_crossing(npc: &Npc) -> Option<WeaponId> {
