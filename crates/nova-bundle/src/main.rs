@@ -14,10 +14,6 @@ use nova_bundle::host::host;
 use nova_bundle::system::{StdFiles, StdProcess};
 
 fn main() -> ExitCode {
-    if !cfg!(target_os = "macos") {
-        eprintln!("nova-bundle: bundling needs macOS's lipo, codesign and hdiutil");
-        return ExitCode::from(2);
-    }
     let cwd = match env::current_dir() {
         Ok(cwd) => cwd,
         Err(e) => {
@@ -30,6 +26,7 @@ fn main() -> ExitCode {
         env::var_os("CARGO"),
         env::var("MACOSX_DEPLOYMENT_TARGET").ok(),
         &cwd,
+        env::consts::OS,
     ) {
         Ok(host) => host,
         Err(e) => {
