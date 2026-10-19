@@ -80,6 +80,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         marines: ClassMarines::default(),
         pods_left: 0,
         odds: 0.0,
+        no_ai: false,
     }
 }
 

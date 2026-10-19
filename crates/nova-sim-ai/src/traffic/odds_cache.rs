@@ -9,9 +9,11 @@
 //! (@0x442d4-0x442db). It marks the next slot stale (@0x442e3; slot 1
 //! after slot 63, @0x442ef), then works out the odds of the ship there
 //! (`_AICalculateOddsAgainst` @0x4454e, which writes +0xc914 @0x84c27)
-//! and stops, when the slot is active, of AI type above 0 and in the
-//! player's system (@0x442fe-0x44319); otherwise it zeroes the slot
-//! (@0x4431f) and walks on, through the slot it just marked. So each
+//! and stops, when the slot is active, of AI type above 0
+//! ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai) not: the player's
+//! eject hulk has -1) and in the player's system (@0x442fe-0x44319);
+//! otherwise it zeroes the slot (@0x4431f) and walks on, through the
+//! slot it just marked. So each
 //! ship's odds refresh once a round of the table, reading -1 from its
 //! spawn until the walk reaches it, and 0 in a slot no live ship holds.
 //! The walk never wraps within a frame, and a second stale slot waits for
@@ -41,9 +43,7 @@
 //!
 //! The cache lives as long as the [`Traffic`] holding it, as the berths'
 //! picks do: across systems, but not across a new traffic. The original
-//! keeps it through a pilot load or a new game until the app quits, and
-//! gives the player's eject hulk (AI type -1, @0x6f31f) a 0 where the
-//! engine works its odds out (@0x44307), which nothing reads; both are
+//! keeps it through a pilot load or a new game until the app quits,
 //! recorded in rdm phase combat-ai-fidelity/phase-23-left-out-of-phase-16.
 //!
 //! Which odds the readers read, the cache's or fresh ones, is
@@ -116,16 +116,18 @@ impl Traffic {
     }
 
     /// The frame's odds pass in `world` (see the module docs): a berth is
-    /// live when an NPC in the system holds it, and its odds are
-    /// [`odds_against`] it as the NPCs stand now, after the frame's goals.
-    /// A berth held only by a ship left behind, or by none, reads 0. Each
-    /// write lands on the ships at its berth too.
+    /// live when an NPC in the system with an AI
+    /// ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai) not) holds it, and
+    /// its odds are [`odds_against`] it as the NPCs stand now, after the
+    /// frame's goals. A berth held only by a ship left behind, by the
+    /// player's eject hulk (AI type -1, @0x44307-0x4430f), or by none,
+    /// reads 0. Each write lands on the ships at its berth too.
     pub fn refresh_odds(&mut self, world: &World) {
         let around = world.around(&self.npcs);
         let npcs = &self.npcs;
         let writes = self.odds.pass(|berth| {
             npcs.iter()
-                .find(|npc| npc.berth == berth)
+                .find(|npc| npc.berth == berth && !npc.no_ai)
                 .map(|npc| odds_against(npc, &around))
         });
         for (berth, odds) in writes {

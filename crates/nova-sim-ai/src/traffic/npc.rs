@@ -458,6 +458,17 @@ pub struct Npc {
     /// and its calls for reinforcements read by the engine
     /// ([`cached_odds`](crate::ai::odds::cached_odds)). Never saved.
     pub odds: f32,
+    /// Whether it has no AI: the original's AI type 0 or below (+0x88),
+    /// which only the player's eject hulk has, -1 (`_HandlePlayer`
+    /// @0x6f31f). Its [`ai_type`](Npc::ai_type) stays its class's
+    /// `InherentAI`, as the engine's [`AiType`] has no "none". A ship
+    /// with no AI never thinks (`_AIDispatch`'s gate, `_DoPlayGameWork`
+    /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers
+    /// no hit (`_DamageShip` @0x3b459), and reads as no AI type to the
+    /// readers that test another ship's (`_InterceptorAI` @0x8cd4e,
+    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad).
+    /// Never saved.
+    pub no_ai: bool,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).

@@ -426,6 +426,15 @@ fn starting_reserves(
     (reserves, condition)
 }
 
+/// The mode a new ship coming in by `entry` starts in ([`Traffic::add`]).
+fn starting_mode(entry: Entry) -> Mode {
+    match entry {
+        Entry::Placed => Mode::Flying,
+        Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
+        Entry::Emerging { ticks_left, .. } => Mode::Emerging { ticks_left },
+    }
+}
+
 /// The cloak a new ship starts with ([`Traffic::add`]): fading in when
 /// set up `cloaked` ([`NewShip::cloaked`]), else none.
 fn starting_cloak(cloaked: bool) -> Cloak {
@@ -2262,11 +2271,7 @@ impl Traffic {
                 // escort copies its lead's (`_HyperSpawnFleet` @0x423dd-0x423e7),
                 // as freshly zeroed.
                 speed: 0.0,
-                mode: match ship.entry {
-                    Entry::Placed => Mode::Flying,
-                    Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
-                    Entry::Emerging { ticks_left, .. } => Mode::Emerging { ticks_left },
-                },
+                mode: starting_mode(ship.entry),
                 goal: starting_goal(hunts, ship.held),
                 condition,
                 hull: kind.hull,
@@ -2322,6 +2327,7 @@ impl Traffic {
                 marines: kind.marines,
                 pods_left: kind.hull.pod_count,
                 odds: odds_cache::STALE,
+                no_ai: false,
             };
             self.write_berth_person(berth, name);
             self.mark_spawned(berth);

@@ -418,6 +418,7 @@ impl Session {
             pods_left: kind.hull.pod_count,
             // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
             odds: crate::traffic::odds_cache::STALE,
+            no_ai: false,
         }
     }
 

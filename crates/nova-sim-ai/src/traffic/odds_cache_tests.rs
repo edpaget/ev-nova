@@ -216,3 +216,20 @@ fn caching_odds_writes_the_ship_and_its_berth() {
     traffic.cache_odds(NpcId(9), 3.0);
     assert!(mirrored(&traffic), "a ship not here changes nothing");
 }
+
+#[test]
+fn a_stale_berth_held_by_a_ship_with_no_ai_reads_zero_and_the_walk_goes_on_to_the_next_ship() {
+    let mut traffic = traffic(&[100.0, 50.0, 25.0]);
+    traffic.npcs[0].no_ai = true;
+    attack(&mut traffic, 2, 1);
+    traffic.refresh_odds(&World::new(&[]));
+    assert_eq!(
+        traffic.berth_odds(1),
+        0.0,
+        "zeroed, as AI type -1 is (@0x4431f)"
+    );
+    assert_eq!(ship(&traffic, 0).odds, 0.0);
+    assert_eq!(ship(&traffic, 1).odds, 0.5, "worked out in the same pass");
+    assert!(stale(ship(&traffic, 2).odds), "marked, and the walk stops");
+    assert!(mirrored(&traffic));
+}
