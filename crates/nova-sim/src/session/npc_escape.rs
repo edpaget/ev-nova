@@ -1001,6 +1001,30 @@ mod tests {
         assert!(struck);
     }
 
+    #[test]
+    fn a_dying_npcs_crew_pod_comes_out_in_its_turn_of_the_ship_loop() {
+        // `_HandleShip`'s pod block (@0x352bf-0x352c9) reads the death
+        // timer the pass began with, less its tick: 51 to 50, half its
+        // `DeathDelay` of 100, where the first crew pod comes out.
+        let starting = Condition::Dying {
+            ticks_left: 51,
+            starting: false,
+        };
+        let (catalog, mut session, carrier) = dying_carrier(1, 100, starting);
+        let npc = session.npc_mut(carrier).expect("there");
+        npc.hull.pod_count = 2;
+        npc.pods_left = 2;
+        session.take_combat_events();
+        let mut chance = Rolls::launching(1, 0);
+        let controls = crate::flight::Controls::default();
+        assert!(!session.game_work(controls, &catalog, &Keep, Rules::default(), &mut chance));
+        let ejected = session.take_combat_events().into_iter().any(|event| {
+            matches!(event, CombatEvent::PodEjected { ship, .. } if ship == ShipRef::Npc(carrier))
+        });
+        assert!(ejected);
+        assert_eq!(session.npc(carrier).map(|npc| npc.pods_left), Some(1));
+    }
+
     /// The test-support `fixture::place`, which only other crates' tests
     /// call, tested here where a session's traffic can be reached.
     #[test]

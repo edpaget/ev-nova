@@ -16,6 +16,13 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The ship loop splits an NPC's step from its display only when its
+    # pods or escape may run (`escape_may_run`); splitting every NPC's is
+    # the same fight (`an_npcs_step_then_its_display_match_handling_it`),
+    # its `npc_escape` runs nothing for a ship not dying, and the stray
+    # words it steps early are only another ship's or the player's, which
+    # nothing reads before the frame.
+    "nova-sim/src/session/npc_escape\\.rs:[0-9]+:[0-9]+: replace escape_may_run -> bool with true$",
     # `_ShipTurnRate`'s player floor (`floored_turn`) sets a rate below 1.0
     # to 1.0; at exactly 1.0, `<=` sets it to 1.0 too.
     "handling.rs:[0-9]+:[0-9]+: replace < with <= in floored_turn",
