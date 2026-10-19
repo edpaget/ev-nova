@@ -691,6 +691,10 @@ fn a_fight_starts_from_the_shot_slots_an_earlier_one_left_none_held() {
     earlier.slots.hold(1);
     let history = earlier.shot_slots();
     assert!(!history.is_held(1), "the history holds none");
+    assert_eq!(
+        history.rank(0).map(|(layer, _)| layer),
+        Some(ShotLayer::Homing)
+    );
     let mut held = history.clone();
     held.hold(5);
     let mut later = Combat::default();

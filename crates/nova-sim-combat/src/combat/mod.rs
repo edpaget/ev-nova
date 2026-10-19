@@ -3170,7 +3170,7 @@ impl Combat {
         });
     }
 
-    /// The shots in flight.
+    /// The shots in flight, in slot order ([`Shot::slot`]).
     #[must_use]
     pub fn shots(&self) -> &[Shot] {
         &self.shots
