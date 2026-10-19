@@ -470,6 +470,37 @@ mod tests {
     }
 
     #[test]
+    fn a_destroyed_player_is_not_killed_again_on_later_passes() {
+        let catalog = armed();
+        let on_the_player = deadly_at(140, 0.0, 40.0);
+        let mut session = among(&catalog, &[on_the_player], 1, Rulebook::default());
+        fight(&mut session);
+        assert_eq!(session.condition, Condition::Destroyed);
+        let mut events = session.take_combat_events();
+        session.tick(Controls::default());
+        fight(&mut session);
+        session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        events.extend(session.take_combat_events());
+        assert_eq!(exploded(&events).len(), 1, "{events:?}");
+        let Some(Ending::Holding { ticks_left }) = session.player_end else {
+            panic!("holding: {:?}", session.player_end);
+        };
+        assert!(ticks_left < HOLD_TICKS, "counting down: {ticks_left}");
+    }
+
+    #[test]
+    fn by_the_other_reading_an_npc_one_stellar_destroys_is_not_exploded_by_another() {
+        let catalog = armed();
+        let overlapping = [on_the_npc(), deadly_at(141, 0.0, -140.0)];
+        let mut session = among(&catalog, &overlapping, 2, destroyed_reading());
+        fight(&mut session);
+        assert_eq!(session.npcs(), []);
+        let events = session.take_combat_events();
+        assert_eq!(exploded(&events).len(), 1, "{events:?}");
+        assert_eq!(fates(&session).len(), 1, "one fate");
+    }
+
+    #[test]
     fn the_second_pass_kills_too() {
         let catalog = armed();
         let mut session = among(
