@@ -426,6 +426,10 @@ fn with_weapon_effects_off_no_ship_draws_its_weapon_glow() {
         weap_decay: 6,
         ..sheet()
     });
+    assert!(
+        fighting(armed(0, &[BLASTER]), &[]).weapon_effects(),
+        "on by default"
+    );
     let mut view = fighting(catalog, &[]).with_weapon_effects(false);
     assert!(!view.weapon_effects());
     view.input(&key(FIRE_KEY, true));

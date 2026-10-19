@@ -27,7 +27,8 @@
 pub fn pass(timer: u32, beam_width: i16) -> (u32, bool) {
     let timer = timer.saturating_add(1);
     match u32::try_from(beam_width) {
-        Ok(width) if width > 0 && timer < width => (timer, false),
+        // A `BeamWidth` of none steps too: no timer is below it.
+        Ok(width) if timer < width => (timer, false),
         _ => (0, true),
     }
 }
