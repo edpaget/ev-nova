@@ -79,7 +79,7 @@ use super::Session;
 use super::missions::TextSource;
 use crate::ai::Goal;
 use crate::board::MAX_ESCORTS;
-use crate::catalog::{CommCatalog, MissionId, StellarId};
+use crate::catalog::{CommCatalog, MissionId, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -657,22 +657,28 @@ impl Session {
                 done.push((npc.id, npc.ship));
             }
         }
-        let ship_name = self.pilot.ship_name().unwrap_or_default().to_owned();
         for (from, ship) in done {
-            let note = CommNote {
-                from,
-                comm_name: self
-                    .ship_record(ship)
-                    .map(|record| record.comm_name.clone())
-                    .unwrap_or_default(),
-                ship_name: ship_name.clone(),
-                done: Help::Refuel,
-            };
-            self.comm_line.show(note.ticks());
-            self.comm.push(note);
             // `_beepSnd[1]` (@0x8f585-0x8f5b0), with the line.
-            self.sounds.push(SimSound::EnergyTransferComplete);
+            self.say_help_done(from, ship, Help::Refuel, SimSound::EnergyTransferComplete);
         }
+    }
+
+    /// NPC `from`, of ship type `ship`, says it has `done` its help
+    /// ("`CommName`:  `done`, `ship name`.", a [`CommNote`]), holding the
+    /// message line for the note's ticks, with `sound`.
+    pub(super) fn say_help_done(&mut self, from: NpcId, ship: ShipId, done: Help, sound: SimSound) {
+        let note = CommNote {
+            from,
+            comm_name: self
+                .ship_record(ship)
+                .map(|record| record.comm_name.clone())
+                .unwrap_or_default(),
+            ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
+            done,
+        };
+        self.comm_line.show(note.ticks());
+        self.comm.push(note);
+        self.sounds.push(sound);
     }
 
     /// What the NPCs assisting the player have done since this was last

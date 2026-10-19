@@ -28,7 +28,9 @@
 use super::Session;
 use crate::catalog::ShipId;
 use crate::combat::hull::{Condition, DisableRule, HullSpec};
-use crate::hail::{CommNote, Help};
+#[cfg(doc)]
+use crate::hail::CommNote;
+use crate::hail::Help;
 use crate::reserves::Gauge;
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
@@ -49,18 +51,7 @@ impl Session {
                 self.condition = Condition::Intact;
             }
         }
-        let note = CommNote {
-            from: helper,
-            comm_name: self
-                .ship_record(ship)
-                .map(|record| record.comm_name.clone())
-                .unwrap_or_default(),
-            ship_name: self.pilot.ship_name().unwrap_or_default().to_owned(),
-            done: Help::Repair,
-        };
-        self.comm_line.show(note.ticks());
-        self.comm.push(note);
-        self.sounds.push(SimSound::RepairsComplete);
+        self.say_help_done(helper, ship, Help::Repair, SimSound::RepairsComplete);
     }
 }
 
@@ -86,6 +77,7 @@ mod tests {
     use crate::ai::wimpy::WimpyTrader;
     use crate::combat::ShipRef;
     use crate::geometry::Vec2;
+    use crate::hail::CommNote;
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{Draws, FakePilotCatalog};
     use crate::traffic::plunder::PirateEvent;
