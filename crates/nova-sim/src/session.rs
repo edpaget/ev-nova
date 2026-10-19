@@ -2916,7 +2916,7 @@ impl Session {
             },
             chance,
         );
-        let player_killed = self.settle_stellar_kills(&mut &mut *chance);
+        let player_killed = self.hold_stellar_kills();
         self.traffic.after_firing(&self.arsenal);
         self.traffic.keep_berth_exits();
         // The lines are `_DamageShip`'s, said as each hit lands, so before
@@ -2936,7 +2936,7 @@ impl Session {
         self.lose_escorts(&was, &struck);
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
-        self.take_out_the_destroyed(&mut &mut *chance);
+        self.take_out_the_killed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);

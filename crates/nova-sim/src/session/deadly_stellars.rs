@@ -27,9 +27,15 @@
 //! there is no breakup, shockwave, debris, crime, kill credit or escape
 //! pod; and as `_HandleBeams` runs after it (@0x4453d), no beam follows or
 //! hits the ship that tick, so a beam on it makes no strike, crime or
-//! answer, and one it fired stays where it was. The session settles each
-//! kill ([`Session::settle_stellar_kills`]) straight after the tick, before
-//! it reads the tick's strikes.
+//! answer, and one it fired stays where it was. Straight after the tick,
+//! before it reads the tick's strikes, the session starts the player's
+//! hold ([`Session::hold_stellar_kills`]). An NPC killed reads as the
+//! tick's hits left it through the fight's housekeeping, so a hit that
+//! disabled it before the kill raises its disabled fate, counts a mission
+//! ship disabled and loses an escort with its share of the cargo, as the
+//! hit's `_DamageShip` did before `_HandleDeadlyStellars` ran. It then
+//! vanishes or is destroyed ([`Session::take_out_the_killed`]) before the
+//! destroyed ships are taken out.
 //! - **An NPC** vanishes by [`RuleKey::DeadlyStellarKill`]'s engine
 //!   reading: taken out of the system with no fate, no mission count and
 //!   its person living on. By the other reading it is destroyed, and
@@ -84,8 +90,8 @@
 //! **Ordering.** The original's hold starts on the next `_HandlePlayer`,
 //! and its killed NPC was laid out by `_HandleShipDisplay` before it went
 //! inactive; here the hold starts at the kill and the NPC is taken out
-//! before the frame is drawn, by the other reading with its fate raised
-//! at once rather than with the fight's other destroyed ships. Neither
+//! at the end of the fight's housekeeping, before the frame is drawn.
+//! Neither
 //! crosses a drawn frame with different state, beyond the explosion that
 //! covers it. A hit on the player earlier in the tick speaks its lines as
 //! the hit left the ship, not as the kill did, and the kill sounds no
@@ -100,7 +106,6 @@ use crate::combat::hull::Condition;
 use crate::deadly_stellar::DeadlyStellarKill;
 use crate::player_fate::{Ending, HOLD_TICKS};
 use crate::rulebook::RuleKey;
-use crate::story::{Fate, StoryEvent};
 use crate::traffic::npc::NpcId;
 #[cfg(doc)]
 use crate::{
@@ -109,35 +114,69 @@ use crate::{
 };
 
 impl Session {
-    /// Settles the fight's kills by deadly stellars
-    /// ([`Combat::take_stellar_kills`]; see the module docs), drawing on
-    /// `chance`: the player's hold starts and its pod
-    /// ends; each NPC vanishes or is destroyed and taken out, by
-    /// [`RuleKey::DeadlyStellarKill`]; the escorts it was leave the fleet
-    /// and the rest re-form. The player's condition just before its kill,
-    /// when it was killed.
-    pub(super) fn settle_stellar_kills(&mut self, chance: &mut dyn Chance) -> Option<Condition> {
-        let kills = self.combat.take_stellar_kills();
-        let rule = DeadlyStellarKill::from(self.rules.source_for(RuleKey::DeadlyStellarKill));
-        let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
+    /// The part of the fight's kills by deadly stellars
+    /// ([`Combat::stellar_kills`]) that settles straight after the tick
+    /// (see the module docs): the player's hold starts and its pod ends,
+    /// and each NPC killed reads, until [`Session::take_out_the_killed`],
+    /// as the tick's hits left it. The player's condition just before its
+    /// kill, when it was killed.
+    pub(super) fn hold_stellar_kills(&mut self) -> Option<Condition> {
+        let kills = self.combat.stellar_kills().to_vec();
         let mut player = None;
-        let mut killed = BTreeSet::new();
-        for kill in &kills {
+        for kill in kills {
             match kill.ship {
                 ShipRef::Player => {
                     self.kill_player_by_stellar();
                     player = Some(kill.was);
                 }
                 ShipRef::Npc(id) => {
-                    if rule == DeadlyStellarKill::Vanishes {
-                        self.traffic.remove(id);
+                    if let Some(npc) = self.npc_mut(id) {
+                        npc.condition = kill.was;
                     }
-                    killed.insert(id);
                 }
             }
         }
+        player
+    }
+
+    /// The fight's housekeeping's end (see the module docs), drawing on
+    /// `chance`: each NPC a deadly stellar killed this tick vanishes or is
+    /// destroyed, by [`RuleKey::DeadlyStellarKill`], the escorts it was
+    /// leave the fleet and the rest re-form; then every NPC destroyed is
+    /// taken out ([`Session::take_out_the_destroyed`]).
+    pub(super) fn take_out_the_killed(&mut self, chance: &mut dyn Chance) {
+        self.settle_stellar_kills();
+        self.take_out_the_destroyed(chance);
+    }
+
+    /// Each NPC among the fight's kills by deadly stellars
+    /// ([`Combat::take_stellar_kills`]) still here vanishes or is
+    /// destroyed, as [`Session::take_out_the_killed`] says.
+    fn settle_stellar_kills(&mut self) {
+        let rule = DeadlyStellarKill::from(self.rules.source_for(RuleKey::DeadlyStellarKill));
+        let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
+        let killed: BTreeSet<NpcId> = self
+            .combat
+            .take_stellar_kills()
+            .into_iter()
+            .filter_map(|kill| match kill.ship {
+                ShipRef::Npc(id) => Some(id),
+                ShipRef::Player => None,
+            })
+            .filter(|&id| self.npc(id).is_some())
+            .collect();
         if killed.is_empty() {
-            return player;
+            return;
+        }
+        for &id in &killed {
+            match rule {
+                DeadlyStellarKill::Vanishes => self.traffic.remove(id),
+                DeadlyStellarKill::Destroyed => {
+                    if let Some(npc) = self.npc_mut(id) {
+                        npc.condition = Condition::Destroyed;
+                    }
+                }
+            }
         }
         self.lose_escorts(&[], &killed);
         if rule == DeadlyStellarKill::Destroyed {
@@ -146,12 +185,6 @@ impl Session {
         if !killed.is_disjoint(&led) {
             self.reform();
         }
-        if rule == DeadlyStellarKill::Destroyed {
-            for &id in &killed {
-                self.take_out_stellar_kill(id, chance);
-            }
-        }
-        player
     }
 
     /// The player's ship, destroyed by a deadly stellar, ends its pod and
@@ -163,26 +196,11 @@ impl Session {
             ticks_left: HOLD_TICKS,
         });
     }
-
-    /// NPC `id`, destroyed by a deadly stellar by the other reading, is
-    /// taken out at once as a ship destroyed in the fight: its fate, its
-    /// mission's count and its person, drawing on `chance`.
-    fn take_out_stellar_kill(&mut self, id: NpcId, chance: &mut dyn Chance) {
-        if self.npc(id).is_none() {
-            return;
-        }
-        self.raise(StoryEvent::ShipFate {
-            ship: id,
-            fate: Fate::Destroyed,
-        });
-        self.count_lost_mission_ship(id, chance);
-        self.lose_destroyed(id);
-    }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{LandingSite, OutfitId, ShipId};
     use crate::chance::NeverFires;
@@ -750,5 +768,91 @@ mod tests {
             )),
             "{sounds:?}"
         );
+    }
+
+    /// Who fires the shot in [`disabled_then_killed`].
+    pub(in crate::session) enum Gunner {
+        /// The player.
+        Player,
+        /// A new independent NPC.
+        Npc,
+    }
+
+    /// NPC `target`, its shields none and its armour low, is struck by a
+    /// blaster shot of `gunner`'s, fired from 60 behind it along its
+    /// heading, and on the tick the shot disables it a deadly stellar
+    /// covering it kills it.
+    pub(in crate::session) fn disabled_then_killed(
+        session: &mut Session,
+        target: NpcId,
+        gunner: &Gunner,
+    ) {
+        let spec = crate::combat::weapon::WeaponSpec::new(&crate::session::tests::blaster());
+        let weapon = spec.id;
+        let npc = session.npc_mut(target).expect("there");
+        npc.reserves.shield.now = 0.0;
+        // Just above the third of its armour that disables it.
+        npc.reserves.armor.now = npc.reserves.armor.max / 3.0 + 3.0;
+        let at = npc.state.position;
+        let heading = match gunner {
+            Gunner::Player => session.player.heading,
+            Gunner::Npc => 0.0,
+        };
+        let from = at - crate::flight::facing(heading) * 60.0;
+        let armed = || crate::combat::armament::Armament::new([(spec, 1)]);
+        let gun = match gunner {
+            Gunner::Player => {
+                session.player.position = from;
+                session.player.velocity = Vec2::ZERO;
+                session.armament = armed();
+                session.hold_trigger(crate::session::tests::FIRE);
+                None
+            }
+            Gunner::Npc => {
+                let mut npc = crate::testkit::npc(90, crate::stats::ShipStats::default());
+                npc.state.position = from;
+                npc.state.velocity = Vec2::ZERO;
+                npc.state.heading = heading;
+                npc.armament = armed();
+                npc.target = Some(ShipRef::Npc(target));
+                Some(session.traffic.add_npc(npc))
+            }
+        };
+        let fire = |session: &mut Session| {
+            if let Some(gun) = gun
+                && let Some(npc) = session.npc_mut(gun)
+            {
+                npc.trigger = crate::combat::armament::Trigger {
+                    only: Some(weapon),
+                    ..crate::combat::armament::Trigger::default()
+                };
+            }
+        };
+        for _ in 0..40 {
+            fire(session);
+            let mut trial = session.clone();
+            fight(&mut trial);
+            let now = trial.npc(target).map(|npc| npc.condition);
+            if now != Some(Condition::Intact) {
+                assert_eq!(now, Some(Condition::Disabled), "the hit disables it");
+                assert!(
+                    trial
+                        .strikes
+                        .iter()
+                        .any(|strike| strike.ship == ShipRef::Npc(target)),
+                    "by a strike"
+                );
+                let at = session.npc(target).expect("there").state.position;
+                session.sites = vec![LandingSite {
+                    frame_size: Some((2, 2)),
+                    ..deadly_at(160, at.x, at.y)
+                }];
+                session.listed = session.sites.clone();
+                fight(session);
+                return;
+            }
+            *session = trial;
+        }
+        panic!("never disabled");
     }
 }

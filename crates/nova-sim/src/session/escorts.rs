@@ -1973,6 +1973,42 @@ mod tests {
         }
     }
 
+    /// A trader escort a hit disables on the tick a deadly stellar kills it
+    /// takes its share of the cargo as it leaves, by either reading, as the
+    /// hit's `_DamageShip` takes it (@0x3afdd, @0x3b013) before
+    /// `_HandleDeadlyStellars` runs.
+    #[test]
+    fn a_trader_escort_disabled_on_the_tick_a_deadly_stellar_kills_it_takes_its_share() {
+        use crate::session::deadly_stellars::tests::{Gunner, disabled_then_killed};
+        let catalog = fleeted();
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+            let rules = session
+                .rules
+                .with_override(RuleKey::DeadlyStellarKill, reading);
+            let mut session = session.with_rules(rules);
+            let id = session.fleet[1].expect("placed");
+            session.story_raised();
+            disabled_then_killed(&mut session, id, &Gunner::Npc);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(session.pilot().escorts().len(), 2, "{reading:?}: lost");
+            assert_eq!(
+                cargo(&session),
+                BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+                "{reading:?}: its share"
+            );
+            assert!(
+                session
+                    .story_raised()
+                    .contains(&crate::story::StoryEvent::ShipFate {
+                        ship: id,
+                        fate: crate::story::Fate::Disabled,
+                    }),
+                "{reading:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_lost_escort_trims_the_cargo_to_the_fleets_holds() {
         let catalog = fleeted();

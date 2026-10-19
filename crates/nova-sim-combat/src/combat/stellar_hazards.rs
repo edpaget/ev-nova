@@ -142,6 +142,13 @@ impl Combat {
     }
 
     /// The ships deadly stellars killed since they were last taken, in
+    /// order, left in place.
+    #[must_use]
+    pub fn stellar_kills(&self) -> &[StellarKill] {
+        &self.stellar_kills
+    }
+
+    /// The ships deadly stellars killed since they were last taken, in
     /// order; taking them empties the list.
     pub fn take_stellar_kills(&mut self) -> Vec<StellarKill> {
         std::mem::take(&mut self.stellar_kills)

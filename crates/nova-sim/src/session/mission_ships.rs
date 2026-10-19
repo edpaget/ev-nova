@@ -2524,6 +2524,38 @@ pub(super) mod tests {
         }
     }
 
+    /// A mission ship a shot disables on the tick a deadly stellar kills it
+    /// is counted disabled and raises its disabled fate first, by either
+    /// reading, as the hit's `_DamageShip` counts it before
+    /// `_HandleDeadlyStellars` runs.
+    #[test]
+    fn a_ship_disabled_on_the_tick_a_deadly_stellar_kills_it_is_counted_disabled() {
+        use crate::session::deadly_stellars::tests::{Gunner, disabled_then_killed};
+        let catalog = ships_catalog(shipping(-1, 0));
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = accepted(&catalog);
+            take_off(&mut session, &catalog);
+            session.rules = session
+                .rules
+                .with_override(crate::RuleKey::DeadlyStellarKill, reading);
+            let id = session.npcs()[0].id;
+            assert!(session.npcs()[0].mission.is_some(), "a mission ship");
+            session.story_raised();
+            disabled_then_killed(&mut session, id, &Gunner::Player);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(ships_of(&session).disabled, 1, "{reading:?}");
+            assert!(
+                session
+                    .story_raised()
+                    .contains(&crate::story::StoryEvent::ShipFate {
+                        ship: id,
+                        fate: crate::story::Fate::Disabled,
+                    }),
+                "{reading:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_ship_that_is_not_a_mission_ship_counts_nothing() {
         let catalog = ships_catalog(shipping(-1, 0));
