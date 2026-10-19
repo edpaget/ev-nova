@@ -240,7 +240,10 @@ pub struct ShipStats {
 
 /// What a ship's ion capacity and deionization rate are worked out from:
 /// its class's, and its [`ION_ABSORBER`]s' and [`ION_DISSIPATER`]s',
-/// which count for the player alone (see the module docs).
+/// which count for the player alone (see the module docs), or for an NPC
+/// too by the other reading of
+/// [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems)
+/// ([`ShipStats::for_npc`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct IonStats {
     /// Its class's `IonizeMax`, as a float (@0x3246-0x324e).
@@ -252,6 +255,8 @@ pub struct IonStats {
     pub class_rate: f32,
     /// Its dissipaters' `ModVal` x 0.01 x count, summed.
     pub dissipaters: f64,
+    /// Whether its absorbers and dissipaters count for an NPC too.
+    pub npc_counts: bool,
 }
 
 impl IonStats {
@@ -276,7 +281,15 @@ impl IonStats {
                 1.0
             },
             dissipaters,
+            npc_counts: false,
         }
+    }
+
+    /// Whether a ship flown by `flyer` counts its absorbers and
+    /// dissipaters: the player always, an NPC when
+    /// [`npc_counts`](Self::npc_counts).
+    fn counts(&self, flyer: Flyer) -> bool {
+        flyer == Flyer::Player || self.npc_counts
     }
 
     /// The ion charge at which a ship flown by `flyer` is fully ionized,
@@ -284,9 +297,10 @@ impl IonStats {
     /// class's `IonizeMax`, and for the player its absorbers'.
     #[must_use]
     pub fn capacity(&self, flyer: Flyer) -> f32 {
-        match flyer {
-            Flyer::Player => self.class_capacity + self.absorbers,
-            Flyer::Npc => self.class_capacity,
+        if self.counts(flyer) {
+            self.class_capacity + self.absorbers
+        } else {
+            self.class_capacity
         }
     }
 
@@ -295,9 +309,10 @@ impl IonStats {
     /// the player its dissipaters', added in doubles.
     #[must_use]
     pub fn rate(&self, flyer: Flyer) -> f32 {
-        match flyer {
-            Flyer::Player => (f64::from(self.class_rate) + self.dissipaters) as f32,
-            Flyer::Npc => self.class_rate,
+        if self.counts(flyer) {
+            (f64::from(self.class_rate) + self.dissipaters) as f32
+        } else {
+            self.class_rate
         }
     }
 }

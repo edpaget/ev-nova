@@ -1299,15 +1299,16 @@ mod tests {
         )
     }
 
-    /// `FAST` carrying a speed booster.
+    /// `FAST` carrying a speed booster that counts, by the other reading.
     fn boosted() -> ShipStats {
-        ShipStats::new(
+        ShipStats::for_npc(
             FAST,
             &[crate::fuel::OutfitMod {
                 mod_type: MORE_SPEED,
                 mod_val: 100,
                 count: 1,
             }],
+            RuleSource::Bible,
         )
     }
 
@@ -1521,8 +1522,50 @@ mod tests {
             ..ship(204, FAST)
         };
         let outfits = [outfit(300, &[(crate::stats::MORE_ARMOR, 50)])];
-        let kind = kind(&plated, &outfits, &arsenal(), RuleSource::Engine);
-        assert_eq!((kind.stats.armor, kind.base_armor), (150.0, 100.0));
+        let read = |items| {
+            let kind = kind(&plated, &outfits, &arsenal(), items);
+            (kind.stats.armor, kind.base_armor)
+        };
+        assert_eq!(read(RuleSource::Bible), (150.0, 100.0));
+        assert_eq!(
+            read(RuleSource::Engine),
+            (100.0, 100.0),
+            "the class's alone"
+        );
+    }
+
+    #[test]
+    fn a_persons_shield_mod_scales_its_classs_reserves_alone_by_the_engine() {
+        // Its class carries shield (+50) and armour (+20) by default; its
+        // `ShieldMod` doubles both.
+        let shielded = ShipRecord {
+            defaults: vec![(OutfitId(300), 1)],
+            ..ship(204, FAST)
+        };
+        let outfits = [outfit(
+            300,
+            &[
+                (crate::stats::MORE_SHIELD, 50),
+                (crate::stats::MORE_ARMOR, 20),
+            ],
+        )];
+        let person = PersonRecord {
+            shield_mod: 200,
+            ..person(510, 204)
+        };
+        let fitted = |items| {
+            let (kind, reserves, _) = persons::fit(
+                &kind(&shielded, &outfits, &arsenal(), items),
+                &person,
+                &arsenal(),
+                RuleSource::Engine,
+                false,
+            );
+            assert_eq!(reserves, kind.stats.full());
+            (kind.stats.shield, kind.stats.armor)
+        };
+        assert_eq!(fitted(RuleSource::Engine), (60.0, 90.0));
+        assert_eq!(fitted(RuleSource::Bible), (160.0, 130.0));
     }
 
     #[test]

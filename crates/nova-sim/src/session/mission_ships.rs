@@ -5000,7 +5000,14 @@ pub(super) mod tests {
             &[(crate::stats::MORE_ARMOR, 500)],
         ));
         catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(300), 1)];
-        let session = in_flight(&catalog);
+        // By the other reading of `npc_default_items` the default armour
+        // counts toward its most, but not toward the cut.
+        let mut session =
+            accepted(&catalog).with_rules(crate::rulebook::Rulebook::default().with_override(
+                crate::rulebook::RuleKey::NpcDefaultItems,
+                crate::rulebook::RuleSource::Bible,
+            ));
+        take_off_unaborted(&mut session, &catalog);
         assert_eq!(conditions(&session), [Condition::Disabled; 2]);
         for npc in session.npcs() {
             assert_eq!(npc.stats.armor, f32::from(FAST.armor) + 500.0);
@@ -5009,6 +5016,11 @@ pub(super) mod tests {
                 "{}",
                 npc.reserves.armor.now
             );
+        }
+        // By the engine its most is its class's alone.
+        let session = in_flight(&catalog);
+        for npc in session.npcs() {
+            assert_eq!(npc.stats.armor, f32::from(FAST.armor));
         }
     }
 

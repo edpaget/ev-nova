@@ -740,6 +740,29 @@ mod tests {
     }
 
     #[test]
+    fn the_players_hulk_holds_its_classs_fuel_alone_by_the_engine() {
+        // The player's class carries a tank (+100) by default.
+        let mut catalog = ejecting(100);
+        catalog
+            .outfits
+            .push(outfit(340, &[(crate::stats::MORE_FUEL, 100)]));
+        for ship in &mut catalog.ship_records {
+            if ship.id == ShipId(128) {
+                ship.defaults = vec![(OutfitId(340), 1)];
+            }
+        }
+        for (items, fuel) in [(RuleSource::Engine, 300.0), (RuleSource::Bible, 400.0)] {
+            let mut session = flying(&catalog, &[POD, AUTO]).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::rulebook::RuleKey::NpcDefaultItems, items),
+            );
+            to_the_breakup(&mut session, &catalog, false);
+            assert!(in_the_pod(&session));
+            assert_eq!(hulk(&session).reserves.fuel.max, fuel, "{items:?}");
+        }
+    }
+
+    #[test]
     fn the_players_hulk_rolls_its_skill_of_no_government() {
         let mut catalog = ejecting(100);
         for ship in &mut catalog.ship_records {

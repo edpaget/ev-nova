@@ -168,11 +168,17 @@ impl Session {
     }
 
     /// The record of the player's old ship as it joins the fleet on "Use
-    /// As My Ship": of the player's class, stock and full, but for its
-    /// fuel, its class's bare `Fuel`, as an NPC's capacity is
-    /// (`_ShipFuelCapacity` @0x2f47, @0x414a7; see the module docs).
+    /// As My Ship": of the player's class, stock and full as an NPC's
+    /// stats are ([`ShipStats::for_npc`], by the engine its class's
+    /// alone), but for its fuel, its class's bare `Fuel`, as an NPC's
+    /// capacity is (`_ShipFuelCapacity` @0x2f47, @0x414a7; see the module
+    /// docs).
     pub(super) fn old_ship_escort(&self) -> Escort {
-        let stock = ShipStats::new(self.fields, &outfit_mods(&self.defaults, &self.outfits));
+        let stock = ShipStats::for_npc(
+            self.fields,
+            &outfit_mods(&self.defaults, &self.outfits),
+            self.npc_items(),
+        );
         let mut reserves = stock.full();
         reserves.fuel.now = f32::from(self.fields.fuel.max(0));
         Escort {
@@ -604,6 +610,39 @@ mod tests {
     }
 
     #[test]
+    fn the_old_ships_reserves_are_its_classs_alone_by_the_engine() {
+        // The player's class carries armour plating (+50) and a tank (+50)
+        // by default.
+        let mut catalog = boardable();
+        catalog.outfits.extend([
+            crate::testkit::outfit(330, &[(MORE_FUEL, 50)]),
+            crate::testkit::outfit(331, &[(crate::stats::MORE_ARMOR, 50)]),
+        ]);
+        catalog.defaults = vec![(ShipId(128), vec![(OutfitId(330), 1), (OutfitId(331), 1)])];
+        for ship in &mut catalog.ship_records {
+            if ship.id == ShipId(128) {
+                ship.defaults = vec![(OutfitId(330), 1), (OutfitId(331), 1)];
+            }
+        }
+        for (items, more) in [(RuleSource::Engine, 0.0), (RuleSource::Bible, 50.0)] {
+            let session = alongside(&catalog).with_rules(
+                crate::rulebook::Rulebook::default().with_override(RuleKey::NpcDefaultItems, items),
+            );
+            let armor = f32::from(session.fields.armor) + more;
+            let fuel = f32::from(session.fields.fuel) + more;
+            assert_eq!(session.fields.fuel, 300);
+            let record = session.old_ship_escort();
+            assert_eq!(
+                (record.reserves.armor.max, record.reserves.fuel.max),
+                (armor, fuel),
+                "{items:?}"
+            );
+            assert_eq!(record.reserves.armor.now, armor, "full");
+            assert_eq!(record.reserves.fuel.now, 300.0, "its class's bare Fuel");
+        }
+    }
+
+    #[test]
     fn the_old_ship_rolls_its_skill_of_no_government() {
         let mut catalog = boardable();
         for ship in &mut catalog.ship_records {
@@ -662,8 +701,8 @@ mod tests {
         assert_eq!(old.state, left, "the player's place, velocity and heading");
         assert_eq!(
             (old.reserves.fuel.now, old.reserves.fuel.max),
-            (300.0, 350.0),
-            "its class's bare Fuel (@0x414a7), its tank left out"
+            (300.0, 300.0),
+            "its class's bare Fuel (@0x414a7), its tank left out of both by the engine"
         );
         assert_eq!(
             session.pilot().escorts()[0].reserves.fuel.now,

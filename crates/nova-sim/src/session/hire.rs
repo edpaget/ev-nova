@@ -860,6 +860,30 @@ mod tests {
     }
 
     #[test]
+    fn a_hired_escort_comes_with_its_classs_reserves_alone_by_the_engine() {
+        // Ship 129 carries a tank (+100 fuel) by default.
+        let mut catalog = barred(vec![ShipRecord {
+            defaults: vec![(crate::catalog::OutfitId(330), 1)],
+            ..hireable(129, 100)
+        }]);
+        catalog.outfits.push(crate::testkit::outfit(
+            330,
+            &[(crate::stats::MORE_FUEL, 100)],
+        ));
+        for (items, fuel) in [(RuleSource::Engine, 300.0), (RuleSource::Bible, 400.0)] {
+            let mut session = landed(&catalog, 25_000)
+                .with_rules(Rulebook::default().with_override(RuleKey::NpcDefaultItems, items));
+            assert!(session.hire(ShipId(129), &mut NeverFires).is_ok());
+            let reserves = session.pilot().escorts()[0].reserves;
+            assert_eq!(
+                (reserves.fuel.now, reserves.fuel.max),
+                (fuel, fuel),
+                "{items:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_hired_escort_rolls_its_skill_and_flies_of_no_government() {
         // `SkillVar` 37: 75 sides, the first 0.63.
         let catalog = barred(vec![ShipRecord {

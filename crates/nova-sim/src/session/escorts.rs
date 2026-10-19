@@ -1397,6 +1397,32 @@ mod tests {
     }
 
     #[test]
+    fn a_take_off_restocks_an_escort_to_its_classs_reserves_alone_by_the_engine() {
+        // The warship carries armour plating (+50) by default.
+        let mut catalog = fleeted();
+        catalog
+            .outfits
+            .push(outfit(331, &[(crate::stats::MORE_ARMOR, 50)]));
+        catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(331), 1)];
+        for (items, armor) in [(RuleSource::Engine, 45.0), (RuleSource::Bible, 95.0)] {
+            let mut session = Session::fly(&catalog, escorted(&catalog))
+                .expect("flies")
+                .with_rules(Rulebook::default().with_override(RuleKey::NpcDefaultItems, items));
+            tick(&mut session, &catalog);
+            land_now(&mut session).expect("lands");
+            session
+                .take_off(&catalog, &mut NeverFires)
+                .expect("takes off");
+            let reserves = session.pilot().escorts()[0].reserves;
+            assert_eq!(
+                (reserves.armor.now, reserves.armor.max),
+                (armor, armor),
+                "{items:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_ship_enlisted_keeps_its_skill_and_drops_its_governments_factor() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
