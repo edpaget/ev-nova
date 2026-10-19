@@ -2284,6 +2284,9 @@ mod tests {
         assert_eq!(session.pilot().owned(VIPERS), 0);
         assert!(session.facts().has_outfit(VIPERS), "out of its bay");
         assert!(!session.facts().has_outfit(OutfitId(159)));
+        let snapshot = super::super::spawn_availability::RefreshedFacts::of(&session.facts());
+        assert!(snapshot.has_outfit(VIPERS), "the snapshot counts it too");
+        assert!(!snapshot.has_outfit(OutfitId(159)));
         // A carried escort of a type no bay launches docks into nothing.
         let stray = Escort {
             ship: WARSHIP,

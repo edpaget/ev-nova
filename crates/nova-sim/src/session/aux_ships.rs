@@ -127,7 +127,8 @@ impl Session {
             dude,
             count: coming,
         };
-        let ships = spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.gate(), chance);
+        let ships =
+            spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.appear_gate(), chance);
         let came = self.traffic.bring_in_within(
             ships,
             self.spawn_reserve(SPAWN_RESERVE),

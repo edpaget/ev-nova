@@ -72,7 +72,7 @@ impl Facts<'_> {
     /// The outfit a carried fighter of ship type `ship` docks back into:
     /// the first bay launching it, that bay's ammunition outfit of lowest
     /// ID, the routing [`Armament::stow`] takes.
-    fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
+    pub(super) fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
         let bay = self.armament.bay_of(ship)?;
         lowest_ammo_outfit(self.ammo_outfits, bay)
     }

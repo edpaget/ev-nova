@@ -160,8 +160,11 @@
 //!
 //! **One ship type** (mission `Flags` 0x0800): at accept, before
 //! `OnAccept`, the slot draws one type from its `düde` as the session
-//! read it at start, among the types whose `AppearOn` holds then, or
-//! with none among them all ([`Session::ships_at_accept`]); every ship of
+//! read it at start, among the types whose `AppearOn` holds for the
+//! player as the last galaxy refresh read them (by the engine; now by the
+//! other reading of [`RuleKey::SpawnAvailability`]; see the
+//! `spawn_availability` module), or with none among them all
+//! ([`Session::ships_at_accept`]); every ship of
 //! the slot then flies it, on all three paths. A slot of the flag with
 //! no type (a save from before it was kept, or a `düde` the catalog
 //! could not give at start) draws it at its next spawn from the
@@ -302,8 +305,9 @@ impl Session {
     /// the overlaid map and the governments, their names from the string
     /// lists ([`Session::strings`]), drawing on `chance`. Under `Flags`
     /// 0x0800 their one type is drawn from their `düde` as the session
-    /// read it ([`dude_ship_type`]), its `AppearOn` read now, before
-    /// `OnAccept` runs.
+    /// read it ([`dude_ship_type`]), its `AppearOn` read through
+    /// [`Session::appear_gate`] (by the engine as the last galaxy refresh
+    /// cached it, @0xa0bc5), before `OnAccept` runs.
     pub(super) fn ships_at_accept(
         &self,
         record: &MissionRecord,
@@ -319,7 +323,12 @@ impl Session {
         };
         let mut draw_type = |dude: DudeId, chance: &mut dyn Chance| {
             let dude = self.uniform_dudes.get(&dude)?;
-            dude_ship_type(dude, |ship| self.appear_on(ship), self.gate(), chance)
+            dude_ship_type(
+                dude,
+                |ship| self.appear_on(ship),
+                self.appear_gate(),
+                chance,
+            )
         };
         SpecialShips::at_accept(
             &record.ships,
@@ -608,7 +617,12 @@ impl Session {
                 preset,
                 expired,
             };
-            ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
+            ships.extend(spawn::mission_ships(
+                table,
+                &spawn,
+                self.appear_gate(),
+                chance,
+            ));
         }
         (ships, set_up)
     }
@@ -649,7 +663,12 @@ impl Session {
         }
         let table = table.unwrap_or_else(|| self.traffic.table());
         let dude = table.dude_records.get(&record.ships.dude?)?;
-        let drawn = dude_ship_type(dude, |ship| table.appear_on(ship), self.gate(), chance);
+        let drawn = dude_ship_type(
+            dude,
+            |ship| table.appear_on(ship),
+            self.appear_gate(),
+            chance,
+        );
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.ships.uniform_type = drawn;
         }
@@ -877,7 +896,7 @@ impl Session {
             self.traffic.table(),
             &spawn,
             self.way_back(),
-            self.gate(),
+            self.appear_gate(),
             chance,
         );
         let last = self.last_npc();
@@ -988,7 +1007,7 @@ impl Session {
             &spawn,
             state,
             preset,
-            self.gate(),
+            self.appear_gate(),
             chance,
         ) else {
             return;
@@ -5800,6 +5819,39 @@ pub(super) mod tests {
             Some(ShipId(129)),
             "200 could not appear yet"
         );
+    }
+
+    #[test]
+    fn the_accept_draw_reads_appear_on_as_the_last_galaxy_refresh_saw_it_by_the_engine() {
+        // `_LoadCurrentMissionData` reads shïp +0xa41 (@0xa0bc5), cached at
+        // the landing's refresh, so a bit set since is unseen.
+        let mut catalog = two_types(0x0800, 0);
+        for record in &mut catalog.ship_records {
+            match record.id.0 {
+                129 => record.appear_on = Test::parse("!b5"),
+                200 => record.appear_on = Test::parse("b5"),
+                _ => {}
+            }
+        }
+        let bit = crate::control::Bit::new(5).expect("a bit");
+        for (source, drawn) in [(RuleSource::Engine, 129), (RuleSource::Bible, 200)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_strings(Rc::new(Names))
+                .with_rules(
+                    crate::Rulebook::default().with_override(RuleKey::SpawnAvailability, source),
+                );
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            settle(&mut session, &catalog);
+            session.set_control_bit(bit, true);
+            let mut chance = Alternating::default();
+            assert_eq!(session.accept_mission(MissionId(140), &mut chance), Ok(0));
+            assert_eq!(
+                ships_of(&session).uniform_type,
+                Some(ShipId(drawn)),
+                "{source:?}"
+            );
+        }
     }
 
     #[test]
