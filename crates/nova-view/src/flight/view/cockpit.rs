@@ -217,7 +217,14 @@ impl<C> FlightView<C> {
     /// it was first seen, each rolled on its own, its weapon glow while lit
     /// ([`weapon_glow`](crate::flight::weapon_glow)), its alt layer, and
     /// its shield layer while it flashes.
-    fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
+    pub(super) fn draw_npc(
+        &self,
+        list: &mut DrawList,
+        session: &Session,
+        npc: &Npc,
+        at: Point,
+        heading: f32,
+    ) {
         let shown = session.cloak_shown(npc);
         let Some(cloak) = cloak_alpha(shown) else {
             return;

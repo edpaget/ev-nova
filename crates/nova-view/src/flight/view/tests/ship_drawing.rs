@@ -430,3 +430,68 @@ fn each_npc_is_noted_on_the_tick_it_was_first_seen_until_it_leaves() {
     view.tick(TICK);
     assert_eq!(view.appeared.get(&gone), None, "forgotten once gone");
 }
+
+/// The hull of `npc` as `view` draws it: its frame's tint, if drawn.
+fn npc_hull(view: &View, npc: &nova_sim::Npc) -> Option<Color> {
+    let session = view.session().expect("flying");
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, npc, VIEW_CENTER, npc.state.heading);
+    list.iter().find_map(|command| match *command {
+        DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(tint),
+        _ => None,
+    })
+}
+
+#[test]
+fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
+    let sheet = ShipSheet {
+        base_transp: 10,
+        ..npc_sheet()
+    };
+    let view = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(sheet)),
+        0,
+        Rc::new(Still),
+        &[],
+    );
+    let base = crate::flight::ship_layers::base_alpha(10);
+    let mut npc = npc_of(&view);
+    assert_eq!(
+        npc_hull(&view, &npc).map(|tint| tint.a),
+        Some(base),
+        "opaque: 22/32"
+    );
+    // Waiting at its gate, fading in, its fade's alpha in place of it.
+    for ticks_left in [1, 3] {
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left };
+        let faded = npc_tint(&npc).expect("shown").a;
+        assert_ne!(faded, base, "{ticks_left}");
+        assert_eq!(
+            npc_hull(&view, &npc).map(|tint| tint.a),
+            Some(faded),
+            "{ticks_left}"
+        );
+    }
+    npc.mode = nova_sim::traffic::npc::Mode::EnteringGate {
+        gate: StellarId(128),
+        ticks_left: 8,
+    };
+    let entering = npc_tint(&npc).expect("shown").a;
+    assert_ne!(entering, base);
+    assert_eq!(npc_hull(&view, &npc).map(|tint| tint.a), Some(entering));
+    // Fully cloaked, its cloak decides: hidden, or, led by the player,
+    // faint at its full fade's translucency.
+    npc.mode = nova_sim::traffic::npc::Mode::Flying;
+    npc.cloak = CLOAKED;
+    assert_eq!(npc_hull(&view, &npc), None);
+    npc.escort = Some(nova_sim::escort::EscortDuty {
+        formation: nova_sim::escort::FormationSlot::default(),
+        order: None,
+    });
+    let session = view.session().expect("flying");
+    let shown = session.cloak_shown(&npc);
+    assert_eq!(shown, CloakShown::Translucent(0x1e));
+    let cloaked = cloak_alpha(shown).expect("seen");
+    assert_ne!(cloaked, base);
+    assert_eq!(npc_hull(&view, &npc).map(|tint| tint.a), Some(cloaked));
+}
