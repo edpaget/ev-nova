@@ -1457,7 +1457,8 @@ impl Traffic {
     /// Releases the followers of each NPC that reached its gate's box this
     /// tick, not `entering` one as the tick began (see
     /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
-    /// loses its lead, its carrier, its target and its provocation, takes
+    /// loses its lead, its carrier and its target, its provocation -1
+    /// ([`gate_entry::RELEASED_PROVOCATION`]), takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
     /// and heads into the same gate on its own, its mode as it was. A
     /// fighter so freed decides by its own AI type, as the original's AI
@@ -1483,7 +1484,7 @@ impl Traffic {
                 follower.carrier = None;
                 follower.ai_type = gate_entry::released_ai_type(ai_type);
                 follower.target = None;
-                follower.provoked = 0.0;
+                follower.provoked = gate_entry::RELEASED_PROVOCATION;
                 follower.goal = Goal::EnterGate(gate);
             }
         }
@@ -3881,7 +3882,7 @@ mod tests {
                 "{:?}",
                 follower.id
             );
-            assert_eq!(follower.provoked, 0.0);
+            assert_eq!(follower.provoked, -1.0, "+0x96 -1 (@0x8dd14)");
             assert_eq!(follower.goal, Goal::EnterGate(GATE));
             assert_eq!(follower.ai_type, AiType::Warship, "an interceptor's");
             assert_eq!(follower.mode, Mode::Flying, "it enters on its own");

@@ -18,17 +18,24 @@
 //! writes no +0x96).
 //!
 //! - **The high level** ([`Decision::forgets_provocation`], [`take`]):
-//!   `_HighLevelAIHandler` zeroes it in two blocks, after the type's think
-//!   in the same dispatch:
-//!   - state 3 with no target (@0x8dff6 → @0x8e228-0x8e23d), which an
-//!     interceptor's out-of-ammunition retreat with nothing to flee makes
+//!   `_HighLevelAIHandler` first makes the target -1 when its slot is
+//!   gone (+0xb8 clear, @0x8d4e4-0x8d50d), and then zeroes the provocation
+//!   in two blocks, after the type's think in the same dispatch:
+//!   - state 3 with no target (@0x8dff6 → @0x8e228-0x8e23d): a flight
+//!     from a ship gone, whatever its type ([`flight_ended`], which
+//!     `NovaAi` adds after every type's think, as the handler runs after
+//!     each, `_AIDispatch` @0x901e5), and an interceptor's
+//!     out-of-ammunition retreat with nothing to flee
 //!     ([`out_of_ammo::stops`]);
-//!   - state 4 on a ship gone or breaking up (@0x8e3e6 → @0x8e714-0x8e726),
-//!     which the brave trader's and the interceptor's thinks leave it in,
-//!     having no drop of their own ([`attack_gone`]). The warship and the
-//!     pirate drop such a target themselves, writing goal 0 and target -1
-//!     but no +0x96 (`_WarshipAI` @0x8bc67-0x8bca9, `_PirateWarshipAI`
-//!     @0x8c315-0x8c330), so theirs is kept.
+//!   - state 4 on a ship breaking up, still in its slot (@0x8e3e6 →
+//!     @0x8e714-0x8e726), which the brave trader's and the interceptor's
+//!     thinks leave it in, having no drop of their own
+//!     ([`attack_breaking_up`]). The warship and the pirate drop such a
+//!     target themselves, writing goal 0 and target -1 but no +0x96
+//!     (`_WarshipAI` @0x8bc67-0x8bca9, `_PirateWarshipAI`
+//!     @0x8c315-0x8c330), so theirs is kept. An attack on a ship gone
+//!     from its slot, as one that has jumped out or landed, has target -1
+//!     by then, and its goal-0 drop (@0x8e263 → @0x8e731) zeroes nothing.
 //!
 //!   A word that provokes the ship (+0x96 = 1, @0x8b7e5, @0x8cb9d) is
 //!   written in the think, before the block, which then finds the player
@@ -36,40 +43,59 @@
 //!   never reached: state 4 with no leader, target -1 and +0x8c -1
 //!   (@0x8e39e-0x8e3c1), as every path there has passed the target -1
 //!   test at @0x8e263; and the plunder's (state 0xd) target gone
-//!   (@0x8e85d → @0x8eb3c-0x8eb54), as the pirate's head drop clears such
-//!   a target first. The block's other goal-0 writes zero nothing: an
-//!   attack with target -1 (@0x8e731), the ally drop (@0x8e2d2), the fleet
-//!   drops (@0x8e381, @0x8e7af, @0x8e820), the flee drop (@0x8e81d) and
-//!   the plunder's (@0x8eb5f). The ally and fleet drops come before the
+//!   (@0x8e85d → @0x8eb3c-0x8eb54), as the slot test at @0x8d4e4 has made
+//!   such a target -1 and the pirate's head drop clears one breaking up
+//!   first. The block's other goal-0 writes zero nothing: an attack with
+//!   target -1 (@0x8e731), the ally drop (@0x8e2d2), the fleet drops
+//!   (@0x8e381, @0x8e7af, @0x8e820), the flee drop (@0x8e81d) and the
+//!   plunder's (@0x8eb5f). The ally and fleet drops come before the
 //!   liveness test, but the engine keeps no attack on a ship it spares
 //!   ([`spares`](crate::ai::target::spares)), so the order shows nowhere.
-//!   A brave trader whose attacker has gone reads the gone slot's last
-//!   place and attacks it within 1250 (then zeroed) or flees it beyond
-//!   (kept); here it decides again, its provocation zeroed either way, as
-//!   the engine keeps no gone ship's place. Only a later hit of no damage
-//!   on a trader that fled a ship already gone shows it.
+//!
+//!   One difference is left: a brave trader whose attacker is breaking
+//!   up, or has just gone, reads the slot's last place, and attacks it
+//!   within 1250 or flees it beyond, so whether it zeroes then turns on
+//!   that place; here it decides again at once (its
+//!   [`provoked_by`](crate::ai::provoked_by) needs a live ship), and its
+//!   flight from a ship gone zeroes as any does. The engine keeps no gone
+//!   ship's place, and only a later hit of no damage on such a trader
+//!   shows which it did.
 //! - **The rest of the traffic**: the count wait's start (@0x8c713,
 //!   [`board_wait::enter`]); a ship not intact (`_AIDispatch` @0x8feef,
-//!   the tick's third step); and a pirate's capture of a ship, for each
-//!   ship then targeting it (`_AIPlunderShipContents` @0x84872-0x8489b,
-//!   [`plunder`](crate::traffic::plunder)).
+//!   the tick's third step); a pirate's capture of a ship, for each ship
+//!   then targeting it (`_AIPlunderShipContents` @0x84872-0x8489b,
+//!   [`plunder`](crate::traffic::plunder)); and -1 for each follower a
+//!   lead entering its gate releases (@0x8dd14,
+//!   [`gate_entry::RELEASED_PROVOCATION`]).
 
 #[cfg(doc)]
 use crate::ai::out_of_ammo;
-use crate::ai::{Decision, Surroundings};
-#[cfg(doc)]
-use crate::traffic::board_wait;
+use crate::ai::{Decision, Goal, Surroundings};
+use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
+#[cfg(doc)]
+use crate::traffic::{board_wait, gate_entry};
 
-/// Whether `npc`'s attack (state 4, [`Goal::attacking`]) is on a ship gone
-/// or breaking up among `around`: not [`live`](Surroundings::live), as
-/// the high level tests the slot's +0xb8 and `_IsDying` (@0x8e3df-0x8e3f6).
-/// A disabled ship is there.
-///
-/// [`Goal::attacking`]: crate::ai::Goal::attacking
+/// Whether `npc`'s attack (state 4, [`Goal::attacking`]) is on a ship
+/// breaking up among `around`, which the high level tests with `_IsDying`
+/// (@0x8e3ef). A ship gone from the system is no longer in its slot, its
+/// target -1 by then (@0x8d4e4-0x8d50d); a disabled one is there.
 #[must_use]
-pub(crate) fn attack_gone(npc: &Npc, around: &Surroundings) -> bool {
-    npc.goal.attacking().is_some_and(|ship| !around.live(ship))
+pub(crate) fn attack_breaking_up(npc: &Npc, around: &Surroundings) -> bool {
+    npc.goal
+        .attacking()
+        .is_some_and(|ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. })))
+}
+
+/// Whether `npc`'s flight (state 3) is from a ship gone from its slot
+/// among `around`: out of the system or destroyed, not
+/// [`active`](Condition::active). The high level makes its target -1
+/// (@0x8d4e4-0x8d50d) and then state 0, zeroing its provocation
+/// (@0x8dff6 → @0x8e228-0x8e23d).
+#[must_use]
+pub(crate) fn flight_ended(npc: &Npc, around: &Surroundings) -> bool {
+    matches!(npc.goal, Goal::Flee(ship)
+        if !around.condition_of(ship).is_some_and(Condition::active))
 }
 
 /// `npc` takes `decision`'s writes of its provocation: zeroed where the
@@ -172,24 +198,46 @@ mod tests {
         npc
     }
 
+    fn breaking_up(npc: Npc) -> Npc {
+        Npc {
+            condition: Condition::Dying {
+                ticks_left: 10,
+                starting: false,
+            },
+            ..npc
+        }
+    }
+
     #[test]
     fn a_fight_given_up_for_a_target_gone_forgets_its_provocation() {
         // A brave trader's and an interceptor's thinks keep goal 4 on a
-        // ship gone, and the high level ends it (@0x8e3e6 → @0x8e714).
+        // ship breaking up, and the high level ends it (@0x8e3ef →
+        // @0x8e714).
+        let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
+        let dying = breaking_up(foe.clone());
         let brave = BraveTrader::default();
+        let brave_one = attacking(AiType::BraveTrader, TRADERS);
         assert!(
-            decided(&brave, &attacking(AiType::BraveTrader, TRADERS), &[]).forgets_provocation,
+            decided(&brave, &brave_one, std::slice::from_ref(&dying)).forgets_provocation,
             "a brave trader"
         );
         let police = Interceptor::default();
+        let police_one = attacking(AiType::Interceptor, POLICE);
         assert!(
-            decided(&police, &attacking(AiType::Interceptor, POLICE), &[]).forgets_provocation,
+            decided(&police, &police_one, std::slice::from_ref(&dying)).forgets_provocation,
             "an interceptor"
         );
-        let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
         assert!(
-            !decided(&brave, &attacking(AiType::BraveTrader, TRADERS), &[foe]).forgets_provocation,
+            !decided(&brave, &brave_one, std::slice::from_ref(&foe)).forgets_provocation,
             "its attacker still there"
+        );
+        assert!(
+            !decided(&brave, &brave_one, &[]).forgets_provocation,
+            "its attacker gone from its slot: target -1, @0x8e731"
+        );
+        assert!(
+            !decided(&police, &police_one, &[]).forgets_provocation,
+            "@0x8e731 for an interceptor too"
         );
         // Short of ammunition with no target: state 3, which the high level
         // makes 0 at once (@0x8dff6 → @0x8e228-0x8e23d).
@@ -211,19 +259,56 @@ mod tests {
     }
 
     #[test]
-    fn a_warship_or_pirate_drops_a_target_gone_itself_and_keeps_its_provocation() {
+    fn a_flight_from_a_ship_gone_from_its_slot_forgets_its_provocation_whatever_its_type() {
+        // The slot test makes the target -1 (@0x8d4e4-0x8d50d), and state
+        // 3 with none is state 0, +0x96 0 (@0x8e228-0x8e23d), after every
+        // type's think.
+        let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
+        for ai_type in [
+            AiType::WimpyTrader,
+            AiType::BraveTrader,
+            AiType::Warship,
+            AiType::Interceptor,
+        ] {
+            let mut fleeing = attacking(ai_type, TRADERS);
+            fleeing.goal = Goal::Flee(n(2));
+            let ai = crate::ai::NovaAi::default();
+            assert!(
+                decided(&ai, &fleeing, &[]).forgets_provocation,
+                "{ai_type:?}, gone"
+            );
+            let destroyed = Npc {
+                condition: Condition::Destroyed,
+                ..foe.clone()
+            };
+            assert!(
+                decided(&ai, &fleeing, &[destroyed]).forgets_provocation,
+                "{ai_type:?}, destroyed"
+            );
+            for there in [foe.clone(), breaking_up(foe.clone())] {
+                assert!(
+                    !decided(&ai, &fleeing, &[there]).forgets_provocation,
+                    "{ai_type:?}, in its slot"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_warship_or_pirate_drops_a_target_breaking_up_itself_and_keeps_its_provocation() {
         // `_WarshipAI` @0x8bc67-0x8bca9 and `_PirateWarshipAI`
         // @0x8c315-0x8c330 write goal 0 and target -1, and no +0x96.
+        let dying = [breaking_up(ship(2, PIRATES, AiType::Warship, 100.0, 0.0))];
         let warship = decided(
             &Warship::default(),
             &attacking(AiType::Warship, POLICE),
-            &[],
+            &dying,
         );
         assert!(!warship.forgets_provocation, "{warship:?}");
         let pirate = decided(
             &PirateWarship::default(),
             &attacking(AiType::Warship, PIRATES),
-            &[],
+            &dying,
         );
         assert!(!pirate.forgets_provocation, "{pirate:?}");
     }
@@ -262,31 +347,26 @@ mod tests {
     }
 
     #[test]
-    fn an_attack_is_on_a_ship_gone_when_it_is_out_of_the_system_or_breaking_up() {
+    fn an_attack_is_on_a_ship_breaking_up_and_a_flight_from_one_gone_from_its_slot() {
         let (sites, govts) = (sites(), govts(0, 0));
         let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
-        let gone = |npc: &Npc, foe: Option<&Npc>| {
+        let tested = |test: fn(&Npc, &Surroundings) -> bool, npc: &Npc, foe: Option<&Npc>| {
             let npcs: Vec<Npc> = std::iter::once(npc.clone()).chain(foe.cloned()).collect();
-            attack_gone(npc, &around(&sites, &npcs, &govts, (0.0, -500.0), 0))
+            test(npc, &around(&sites, &npcs, &govts, (0.0, -500.0), 0))
         };
         let attacking = provoked(Goal::Attack(n(2)));
-        assert!(!gone(&attacking, Some(&foe)), "there");
-        assert!(gone(&attacking, None), "gone (+0xb8 0, @0x8e3e6)");
-        let dying = Npc {
-            condition: Condition::Dying {
-                ticks_left: 10,
-                starting: false,
-            },
-            ..foe.clone()
-        };
-        assert!(gone(&attacking, Some(&dying)), "breaking up (@0x8e3ef)");
+        let breaking = |npc: &Npc, foe| tested(attack_breaking_up, npc, foe);
+        assert!(!breaking(&attacking, Some(&foe)), "there");
+        assert!(!breaking(&attacking, None), "gone: target -1 (@0x8d50d)");
+        let dying = breaking_up(foe.clone());
+        assert!(breaking(&attacking, Some(&dying)), "@0x8e3ef");
         let disabled = Npc {
             condition: Condition::Disabled,
             ..foe.clone()
         };
-        assert!(!gone(&attacking, Some(&disabled)), "disabled is there");
+        assert!(!breaking(&attacking, Some(&disabled)), "disabled is there");
         assert!(
-            gone(&provoked(Goal::Snipe(n(2))), None),
+            breaking(&provoked(Goal::Snipe(n(2))), Some(&dying)),
             "a snipe is goal 4"
         );
         for goal in [
@@ -296,9 +376,18 @@ mod tests {
                 hopeless: false,
             },
             Goal::Inspect(n(2)),
-            Goal::Idle,
         ] {
-            assert!(!gone(&provoked(goal), None), "{goal:?} is no attack");
+            assert!(!breaking(&provoked(goal), Some(&dying)), "{goal:?}");
         }
+        let fleeing = provoked(Goal::Flee(n(2)));
+        let ended = |npc: &Npc, foe| tested(flight_ended, npc, foe);
+        assert!(ended(&fleeing, None), "gone");
+        assert!(!ended(&fleeing, Some(&foe)), "there");
+        assert!(
+            !ended(&fleeing, Some(&dying)),
+            "breaking up, still in its slot"
+        );
+        assert!(!ended(&attacking, None), "no flight");
+        assert!(!ended(&provoked(Goal::Flee(ShipRef::Player)), Some(&foe)));
     }
 }

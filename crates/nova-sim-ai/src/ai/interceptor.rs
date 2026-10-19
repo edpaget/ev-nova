@@ -93,7 +93,7 @@ use crate::geometry::Vec2;
 use crate::govt::INTERCEPTORS_RETREAT;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc};
-use crate::traffic::provocation::attack_gone;
+use crate::traffic::provocation::attack_breaking_up;
 
 /// How near, in pixels on either axis, an interceptor comes to the ship
 /// it inspects (100.0 @0xdd060).
@@ -163,9 +163,9 @@ impl Behaviour for Interceptor {
     /// through each; then an inspection of a ship it no longer sees is
     /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee). The
     /// high level ends with its provocation a retreat with no target
-    /// ([`out_of_ammo::stops`]) and an attack on a ship gone
-    /// ([`attack_gone`]: `_InterceptorAI` has no drop of its own, so goal 4
-    /// reaches @0x8e714).
+    /// ([`out_of_ammo::stops`]) and an attack on a ship breaking up
+    /// ([`attack_breaking_up`]: `_InterceptorAI` has no drop of its own,
+    /// so goal 4 reaches @0x8e714).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
@@ -191,7 +191,7 @@ impl Behaviour for Interceptor {
             npc,
             Decision {
                 comm_call,
-                forgets_provocation: stops || attack_gone(npc, around),
+                forgets_provocation: stops || attack_breaking_up(npc, around),
                 ..decision
             },
             around,

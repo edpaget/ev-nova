@@ -288,7 +288,10 @@ impl Behaviour for NovaAi {
     /// follows ([`lost_sight::after_think`], @0x8d6ef-0x8d8ae): a ship
     /// that can't see its target searches, gives up, leaves or waits.
     /// Unless that search or give-up ended the handler
-    /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), its flee
+    /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), a flight
+    /// from a ship gone from its slot ends with its provocation
+    /// ([`flight_ended`](crate::traffic::provocation::flight_ended),
+    /// @0x8d4e4-0x8d50d → @0x8e228-0x8e23d), and its flee
     /// drop ([`flee_drop::with_flee_drop`]) and its call for
     /// reinforcements end the think
     /// ([`reinforcements::with_high_level_call`]), whatever type decided,
@@ -325,6 +328,11 @@ impl Behaviour for NovaAi {
         if lost_sight::ends_high_level(&decision) {
             return decision;
         }
+        let decision = Decision {
+            forgets_provocation: decision.forgets_provocation
+                || crate::traffic::provocation::flight_ended(npc, around),
+            ..decision
+        };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
         reinforcements::with_high_level_call(npc, decision, around)
     }
