@@ -166,10 +166,16 @@
 //!   test of its class is
 //!   rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate.
 //!   A pirate's count wait (goal 22) is exempt ([`gated`]).
-//! - `_ShipTurnRate`'s own factors but its floor, a tractor's hold and
-//!   ionization, which [`suitable_missile`] reads through the target's
-//!   turn rate: an NPC's class rate without its outfits
-//!   (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
+//! - `_ShipTurnRate`'s nag-ship +1, which [`suitable_missile`] would read
+//!   through the target's turn rate: no ship of ours is the nag. Every
+//!   other factor is read: an NPC's rate is its class's alone by the
+//!   engine reading of
+//!   [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems), its
+//!   default items counted by the other
+//!   ([`ShipStats::for_npc`](crate::stats::ShipStats::for_npc)), floored
+//!   ([`floored_turn`](crate::handling::floored_turn)), a third under a
+//!   tractor's hold ([`Npc::own_handling`]) and slowed by its ion charge
+//!   ([`Npc::turn_rate`]).
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
@@ -427,16 +433,18 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
 /// turns [`SLOW_MISSILE_TURN`] or less.
 ///
 /// The original asks `_ShipTurnRate` of the target; here the target's
-/// [`Handling::turn_rate`](crate::handling::Handling) stands in for it,
-/// floored as `_ShipTurnRate` floors it
+/// [`Handling::turn_rate`](crate::handling::Handling) stands in for it:
+/// an NPC's its class's alone by the engine reading of
+/// [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems), with its
+/// default items by the other
+/// ([`ShipStats::for_npc`](crate::stats::ShipStats::for_npc)), floored as
+/// `_ShipTurnRate` floors it
 /// ([`floored_turn`](crate::handling::floored_turn)), a third for an NPC
 /// another ship holds in a tractor beam
 /// ([`Npc::own_handling`](crate::traffic::npc::Npc::own_handling)), and
 /// slowed by its ion charge ([`Npc::turn_rate`],
-/// [`PlayerSide::handling`]). Its other factors are left out: an NPC's
-/// class rate without its outfits
-/// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves),
-/// and the nag ship's +1, which no ship of ours is.
+/// [`PlayerSide::handling`]). Only the nag ship's +1 is left out, as no
+/// ship of ours is the nag.
 #[must_use]
 pub fn suitable_missile(spec: &WeaponSpec, target_turn_rate: f32) -> bool {
     let fast = target_turn_rate.trunc() > FAST_TARGET_TURN;

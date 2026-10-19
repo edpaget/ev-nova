@@ -2,8 +2,13 @@
 //! `shïp`'s fields and the outfits it carries, in one place.
 //!
 //! Every reader of a ship's performance (flight, the exchange, the
-//! outfitter and, later, combat) goes through [`ShipStats::new`]; nothing
-//! else reads the `shïp`'s performance fields. Each outfit is an
+//! outfitter and, later, combat) goes through [`ShipStats::new`], or for
+//! an NPC [`ShipStats::for_npc`], which by the engine reading of
+//! [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) leaves
+//! its default items out of its handling and reserves, as the original's
+//! `_Ship*` functions count the outfits for the player alone (see the
+//! [`class_stats`](crate::class_stats) module); nothing else reads the
+//! `shïp`'s performance fields. Each outfit is an
 //! [`OutfitMod`], its `ModType` and `ModVal` with how many are carried,
 //! and each total is `ModVal` x count summed over every outfit of its
 //! `ModType` (the Bible's `oütf`):
@@ -75,7 +80,8 @@
 //!   adds `ModVal` x 0.01 x count to the class's deionization rate
 //!   (`_ShipDeionizationRate` @0x6f3f-0x6f5e). Both count for the player
 //!   alone: an NPC's capacity and rate are its class's
-//!   ([`IonStats::capacity`], [`IonStats::rate`]). The original caches
+//!   ([`IonStats::capacity`], [`IonStats::rate`]), but by the other
+//!   reading of `npc_default_items` ([`IonStats::npc_counts`]). The original caches
 //!   the player's sums (0x3b5068, 0x3b50a8), which the stats, worked out
 //!   afresh, need no copy of.
 //!

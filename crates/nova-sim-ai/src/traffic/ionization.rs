@@ -5,8 +5,10 @@
 //! **The capacity and rate** ([`Npc::ion_factor`]): its class's
 //! `IonizeMax` and deionization rate alone. `_ShipIonizationFactor` and
 //! `_ShipDeionizationRate` count the Ion Absorbers and Dissipaters for the
-//! player only (+0x86 == 0, @0x3260, @0x6ee9), so an NPC's default items
-//! never count (`nova_sim::stats::IonStats`).
+//! player only (+0x86 == 0, @0x3260, @0x6ee9), so by the engine reading
+//! of [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) an
+//! NPC's default items never count; by the other they do
+//! (`nova_sim::stats::IonStats`).
 //!
 //! **The turn and thrust** ([`Npc::ionized_handling`],
 //! [`Npc::flying_handling`], [`Npc::turn_rate`]): every reader of an NPC's

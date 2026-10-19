@@ -295,7 +295,7 @@ pub struct ShipKind {
     /// it spawns ([`random_skill_level`](crate::skill::random_skill_level)).
     pub skill_var: i16,
     /// Whether its `shïp` `Flags` hold
-    /// [`STILL_HULL`](crate::skill::STILL_HULL): its ships neither move
+    /// [`STILL_HULL`]: its ships neither move
     /// nor thrust (see the [`skill`](crate::traffic::skill) module).
     pub still: bool,
     /// Its `Strength` and the marines its default items give a pirate's

@@ -109,10 +109,11 @@ pub const MIN_TURN_RATE: f32 = 1.0;
 /// (`nova_sim::combat::tractor_hold::held_handling`). Left out: the nag
 /// ship's +1, which no ship of ours is. Ionization comes after them,
 /// applied to the floored rate as the ship flies
-/// ([`ionized`](crate::ionization::ionized)). The
-/// original's NPC rate is its class's alone, with no outfits, where ours
-/// counts them
-/// (rdm:phase/ship-handling-fidelity/phase-15-npc-skill-speed-and-reserves).
+/// ([`ionized`](crate::ionization::ionized)). The original's NPC rate is
+/// its class's alone, with no outfits: by the engine reading of
+/// [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) so is
+/// ours, and by the other its default items count
+/// (`nova_sim::stats::ShipStats::for_npc`).
 #[must_use]
 pub fn floored_turn(class_rate: f32, rate: f32, flyer: Flyer) -> f32 {
     let mut rate = rate;

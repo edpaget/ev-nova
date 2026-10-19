@@ -25,12 +25,15 @@
 //!   `_AdjustedAccel(heading, max, max, &vel)` (@0x2ae4b), which adds to
 //!   the velocity while it is short of the top speed: from rest, exactly
 //!   the top speed along the heading. The top speed is ship-class +0x40,
-//!   `shïp` `Speed` / 100 (`_LoadObjectData` @0x7a0db-0x7a0ef), here the
-//!   ship's [`Handling::max_speed`](crate::handling::Handling::max_speed)
-//!   with the outfits it flies with: a `düde` ship's default items, or a
-//!   person's fitted ship. The original reads the bare `Speed`; each ship
-//!   here still starts at exactly its own top speed. A `LinkSyst` fleet
-//!   gets none: it comes by hyperspace.
+//!   `shïp` `Speed` / 100 (`_LoadObjectData` @0x7a0db-0x7a0ef), here its
+//!   kind's [`Handling::max_speed`](crate::handling::Handling::max_speed):
+//!   by the engine reading of
+//!   [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) its
+//!   class's bare `Speed`, as the original reads it, and by the other
+//!   with its default items ([`ShipKind`]).
+//!   No skill, government factor or `Flags` 0x0400 applies, as the
+//!   original reads the class field and not `_ShipMaxSpeed`. A `LinkSyst`
+//!   fleet gets none: it comes by hyperspace.
 //! - **Derelicts.** A person of a derelict government (`gövt` `Flags`
 //!   0x0800) brought by a pass has its velocity zeroed (@0x43245-0x4325b),
 //!   but the code jumps on to the pass's shared `_AdjustedAccel`
