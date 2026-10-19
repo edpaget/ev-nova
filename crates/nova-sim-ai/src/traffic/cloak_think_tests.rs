@@ -1,0 +1,80 @@
+//! The traffic's cloak think through goal 8: `_AIDispatch` calls
+//! `_AIHandleCloaking` whenever the AI wait +0x4c is 0 or below
+//! (@0x8fc9e-0x8fcaa), which it is through a hyperspace arrival's glide
+//! and a gate burst (see [`cloak_situation`](super::cloak_situation)).
+
+use super::{Traffic, World};
+use crate::ai::{Behaviour, Goal, Surroundings};
+use crate::chance::Chance;
+use crate::cloak::{CLOAK_JUMPING, Cloak, CloakGear, FADE_FULL};
+use crate::stats::ShipStats;
+use crate::traffic::fixture::npc;
+use crate::traffic::npc::{Mode, Npc};
+use nova_sim_base::fixture::Draws;
+
+/// Keeps each NPC's goal.
+#[derive(Debug)]
+struct Keep;
+
+impl Behaviour for Keep {
+    fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+        npc.goal
+    }
+}
+
+const CLOAKED: Cloak = Cloak {
+    fade: FADE_FULL,
+    direction: 0,
+};
+
+/// The cloak, after one think half, of an NPC in `mode` whose ship type
+/// carries a cloak and `flags2`, starting at `start`.
+fn thought(mode: Mode, flags2: u16, start: Cloak) -> Cloak {
+    let mut ship = npc(1, ShipStats::default());
+    ship.mode = mode;
+    ship.cloak = start;
+    ship.cloak_gear = CloakGear {
+        device: true,
+        flags2,
+        ..CloakGear::default()
+    };
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship];
+    traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+    traffic.npcs()[0].cloak
+}
+
+#[test]
+fn a_ship_cloaking_when_it_jumps_cloaks_through_its_glide_in() {
+    for tick in [0, 12] {
+        let mode = Mode::JumpingIn { tick };
+        assert_eq!(
+            thought(mode, CLOAK_JUMPING, Cloak::default()),
+            Cloak {
+                fade: 0.0,
+                direction: 1
+            },
+            "{mode:?}"
+        );
+        assert_eq!(thought(mode, CLOAK_JUMPING, CLOAKED), CLOAKED, "{mode:?}");
+    }
+}
+
+#[test]
+fn a_ship_cloaking_when_it_jumps_cloaks_through_its_gate_burst_from_its_first_moving_tick() {
+    for tick in [1, 5] {
+        let mode = Mode::LeavingGate { tick };
+        assert_eq!(thought(mode, CLOAK_JUMPING, CLOAKED), CLOAKED, "{mode:?}");
+    }
+    assert_eq!(
+        thought(Mode::LeavingGate { tick: 0 }, CLOAK_JUMPING, CLOAKED).direction,
+        -1,
+        "tick 0 is still goal 0x15"
+    );
+}
+
+#[test]
+fn a_cloaked_ship_with_nothing_to_keep_it_uncloaks_in_its_glide() {
+    let gliding = thought(Mode::JumpingIn { tick: 3 }, 0, CLOAKED);
+    assert_eq!(gliding.direction, -1);
+}

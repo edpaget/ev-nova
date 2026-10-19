@@ -57,19 +57,38 @@
 //! Each think, `_AIHandleCloaking` (@0x833e1, [`think`]) uncloaks a ship
 //! with no cloak or a disabled one (@0x833f3-0x8341d), and otherwise
 //! cloaks it while one of its ship type's AI-cloak conditions holds and
-//! uncloaks it while none does (@0x83682, @0x83694). Built here are the
-//! conditions the stock Zephyr (ship 375 and 376, the ships of missions
-//! 603 and 604, `Flags2` 0x5282) carries:
+//! uncloaks it while none does (@0x83682, @0x83694). The conditions OR
+//! together, in the original's order:
 //!
+//! - [`CLOAK_RELOADING`] (`Flags2` 0x0100, @0x8345d-0x834b3): while a
+//!   weapon it carries reloads past its `Reload`
+//!   ([`Situation::reloading`]; the Nova Bible reads it as a burst
+//!   reload, a rulebook choice the caller makes).
 //! - [`CLOAK_RETREATING`] (`Flags2` 0x0200, @0x834b7-0x834e3): while it
-//!   retreats (AI state 3, [`Situation::retreating`]).
+//!   retreats (AI state 3, [`Situation::retreating`]), or as a miner
+//!   chasing its rock (state 0x10, order 0x13, [`MineOrder::Chase`]).
+//! - [`CLOAK_JUMPING`] (`Flags2` 0x0400, @0x834e6-0x8350b): through its
+//!   own jump (sub-goal 4), a hyperspace arrival or gate burst (goal 8),
+//!   or a jump with its parent (goal 0xb) ([`Situation::jumping`]).
+//! - [`CLOAK_TRAVELLING`] (`Flags2` 0x0800, @0x8350f-0x83542): while it
+//!   lands, waits, enters a gate, inspects or flies in formation (goals
+//!   1, 6, 0x14, 7 and 0xa, [`Situation::travelling`]).
 //! - [`CLOAK_PRESSING`] (`Flags2` 0x1000, @0x83546-0x835fd): once
 //!   cloaked, while it attacks a ship more than [`PRESS_RANGE`] (165)
 //!   away on either axis ([`Situation::attacking`]); closer, it uncloaks
-//!   to fight.
+//!   to fight. Once cloaked, too, while it mines on any order but
+//!   [`MineOrder::Close`] (@0x835dd-0x835fd): this keeps a miner's cloak.
+//! - [`CLOAK_IDLE`] (`Flags2` 0x2000, shïp +0x9eb bit 0x20,
+//!   @0x83605-0x83630): while it idles (goal 0, [`Situation::idle`]; the
+//!   Bible says "when docking"). No stock ship carries it.
 //! - [`CLOAK_WHEN_HIT`] (`Flags2` 0x4000, `_DamageShip` @0x3bb95-0x3bbdd,
 //!   [`hit`]): hit by a ship it is not attacking (`_IsShipFightingMe`
 //!   @0x827fa), while it can cloak.
+//!
+//! Whatever those say, a ship of AI type above 4 keeping close formation
+//! (sub-goal 0xc) with a cloaked parent cloaks
+//! ([`Situation::close_to_cloaked_parent`], @0x83633-0x8366d). The think
+//! raises no sound: its cloak and uncloak sound only for the player.
 //!
 //! Every frame, too, a cloaked ship that can no longer cloak
 //! ([`CloakGear::can_cloak`], `_ShipCanCloak` @0x553c: not disabled, a
@@ -96,14 +115,8 @@
 //!
 //! # Not modelled
 //!
-//! The other AI-cloak conditions, which no stock mission ship carries:
-//! `Flags2` 0x0100 (a weapon reloading past its `Reload`), 0x0400, 0x0800
-//! and 0x2000, the parent-cloaked rule (@0x83633-0x8366d), 0x0200's
-//! state 0x10 substate 0x13 and 0x1000's state 0x10 case (a miner on an
-//! asteroid); `_AIForceBurstReload` as a ship cloaks when hit (the
-//! Zephyr's weapons have no burst); the think's 30-59 frame delay after a
-//! ship's hyperspace glide (`_HandleShip` @0x34d74); a cloak's fuel
-//! upkeep (the uncloak @0x83422-0x8343a and the drain @0x34164-0x341ac),
+//! The think's 30-59 frame delay after a ship's hyperspace glide
+//! (`_HandleShip` @0x34d74); a cloak's fuel upkeep (the uncloak @0x83422-0x8343a and the drain @0x34164-0x341ac),
 //! which no NPC pays (`_CloakFuelUsage` @0x3e25 is 0 for one,
 //! @0x3e31-0x3e39); `_DoShipCloak`'s `_statusRedraw[1]` (@0xdf35-0xdf4b),
 //! player-only, as the HUD is drawn every frame; the player's own cloak,
@@ -210,8 +223,22 @@ pub const FAST_FADE: u16 = 0x0001;
 /// The `Flags2` bit that makes a ship type untargetable without a
 /// scanner's [`SCAN_UNTARGETABLE`] (see [`CloakGear::untargetable`]).
 pub const UNTARGETABLE: u16 = 0x0004;
-/// The `Flags2` bit that cloaks a ship while it retreats.
+/// The `Flags2` bit that cloaks a ship while one of its weapons reloads
+/// past its `Reload` ([`Situation::reloading`]).
+pub const CLOAK_RELOADING: u16 = 0x0100;
+/// The `Flags2` bit that cloaks a ship while it retreats, or while it
+/// chases its rock as a miner.
 pub const CLOAK_RETREATING: u16 = 0x0200;
+/// The `Flags2` bit that cloaks a ship through a jump
+/// ([`Situation::jumping`]).
+pub const CLOAK_JUMPING: u16 = 0x0400;
+/// The `Flags2` bit that cloaks a ship while it travels: lands, waits,
+/// enters a gate, inspects or flies in formation
+/// ([`Situation::travelling`]).
+pub const CLOAK_TRAVELLING: u16 = 0x0800;
+/// The `Flags2` bit (shïp +0x9eb bit 0x20) that cloaks a ship while it
+/// idles ([`Situation::idle`]).
+pub const CLOAK_IDLE: u16 = 0x2000;
 /// The `Flags2` bit that keeps a ship cloaked while it presses an attack
 /// from beyond [`PRESS_RANGE`].
 pub const CLOAK_PRESSING: u16 = 0x1000;
@@ -562,6 +589,7 @@ pub fn seen(cloaked: bool, at: Vec2, emerging: bool, observer: Observer) -> bool
 }
 
 /// What an NPC's think knows of itself, for [`think`].
+#[allow(clippy::struct_excessive_bools)] // Each is one condition the think reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Situation {
     /// Whether it is disabled.
@@ -570,6 +598,33 @@ pub struct Situation {
     pub retreating: bool,
     /// Where the ship it attacks is from it, if it attacks one.
     pub attacking: Option<Vec2>,
+    /// Whether one of the weapons it carries reloads past its `Reload`
+    /// (`Flags2` 0x0100, as the caller reads it under the rulebook).
+    pub reloading: bool,
+    /// Whether it jumps: its own jump (sub-goal 4), a hyperspace arrival
+    /// or gate burst (goal 8), or a jump with its parent (goal 0xb).
+    pub jumping: bool,
+    /// Whether it lands, waits, enters a gate, inspects or flies in
+    /// formation (goals 1, 6, 0x14, 7 and 0xa).
+    pub travelling: bool,
+    /// Whether it idles (goal 0).
+    pub idle: bool,
+    /// Its mining order, if it mines (goal 0x10).
+    pub mining: Option<MineOrder>,
+    /// Whether it keeps close formation (sub-goal 0xc) with a cloaked
+    /// parent, its AI type above 4.
+    pub close_to_cloaked_parent: bool,
+}
+
+/// A miner's order (goal 0x10's sub-goal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MineOrder {
+    /// Order 1: stop, as with no rock in slot 0.
+    Stop,
+    /// Order 0x13: chase the rock in slot 0.
+    Chase,
+    /// Order 0x14: inside the rock's box.
+    Close,
 }
 
 /// `cloak` and `shield` after `_DoShipCloak` on a ship of `gear`
@@ -601,13 +656,23 @@ pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation, shield: &
         cloak.uncloak();
         return;
     }
-    let retreating = gear.has(CLOAK_RETREATING) && situation.retreating;
+    let mining = situation.mining;
+    let reloading = gear.has(CLOAK_RELOADING) && situation.reloading;
+    let retreating =
+        gear.has(CLOAK_RETREATING) && (situation.retreating || mining == Some(MineOrder::Chase));
+    let jumping = gear.has(CLOAK_JUMPING) && situation.jumping;
+    let travelling = gear.has(CLOAK_TRAVELLING) && situation.travelling;
+    let cloaked = cloak.is_cloaked();
     let pressing = gear.has(CLOAK_PRESSING)
-        && cloak.is_cloaked()
-        && situation
+        && cloaked
+        && (situation
             .attacking
-            .is_some_and(|off| off.x.abs() > PRESS_RANGE || off.y.abs() > PRESS_RANGE);
-    if retreating || pressing {
+            .is_some_and(|off| off.x.abs() > PRESS_RANGE || off.y.abs() > PRESS_RANGE)
+            || mining.is_some_and(|order| order != MineOrder::Close));
+    let idle = gear.has(CLOAK_IDLE) && situation.idle;
+    let flag = reloading || retreating || jumping || travelling || pressing || idle;
+    // The parent rule (@0x83633-0x8366d) cloaks whatever the flag says.
+    if situation.close_to_cloaked_parent || flag {
         cloak_ship(cloak, gear, shield);
     } else {
         cloak.uncloak();
@@ -1618,5 +1683,164 @@ mod tests {
         drain_shield(&mut shield, 15, true);
         assert_eq!(shield, 0.1);
         assert_eq!(CLOAK_UPKEEP_RATE, 0.03333);
+    }
+
+    /// The cloak after one think of a ship with a cloak and
+    /// `flags2`, starting at `start`, in `situation`.
+    fn thought(flags2: u16, start: Cloak, situation: Situation) -> Cloak {
+        let gear = CloakGear {
+            device: true,
+            flags2,
+            ..CloakGear::default()
+        };
+        let mut cloak = start;
+        think(&mut cloak, gear, situation, &mut 0.0);
+        cloak
+    }
+
+    /// Checks that `bit` cloaks a ship at rest and keeps a cloaked one
+    /// cloaked in `holds`, and that the ship uncloaks without the bit or
+    /// in a default situation.
+    fn cloaks_by(bit: u16, holds: Situation, what: &str) {
+        assert_eq!(
+            thought(bit, Cloak::default(), holds),
+            at(0.0, 1),
+            "{what}: cloaks"
+        );
+        assert_eq!(thought(bit, CLOAKED, holds), CLOAKED, "{what}: keeps it");
+        assert_eq!(
+            thought(bit, CLOAKED, Situation::default()),
+            at(FADE_FULL, -1),
+            "{what}: uncloaks once it no longer holds"
+        );
+        assert_eq!(
+            thought(0, CLOAKED, holds),
+            at(FADE_FULL, -1),
+            "{what}: without the bit"
+        );
+        // 0x1000 keeps a cloaked miner's cloak on its own.
+        assert_eq!(
+            thought(!(bit | CLOAK_PRESSING), CLOAKED, holds),
+            at(FADE_FULL, -1),
+            "{what}: every other bit"
+        );
+    }
+
+    #[test]
+    fn a_ship_whose_flags2_cloak_it_reloading_cloaks_while_a_weapon_reloads() {
+        let reloading = Situation {
+            reloading: true,
+            ..Situation::default()
+        };
+        cloaks_by(CLOAK_RELOADING, reloading, "0x0100");
+        assert_eq!(CLOAK_RELOADING, 0x0100);
+    }
+
+    #[test]
+    fn a_ship_whose_flags2_cloak_it_jumping_cloaks_through_a_jump() {
+        let jumping = Situation {
+            jumping: true,
+            ..Situation::default()
+        };
+        cloaks_by(CLOAK_JUMPING, jumping, "0x0400");
+        assert_eq!(CLOAK_JUMPING, 0x0400);
+    }
+
+    #[test]
+    fn a_ship_whose_flags2_cloak_it_travelling_cloaks_while_it_travels() {
+        let travelling = Situation {
+            travelling: true,
+            ..Situation::default()
+        };
+        cloaks_by(CLOAK_TRAVELLING, travelling, "0x0800");
+        assert_eq!(CLOAK_TRAVELLING, 0x0800);
+    }
+
+    #[test]
+    fn a_ship_whose_flags2_cloak_it_idle_cloaks_while_it_idles() {
+        let idle = Situation {
+            idle: true,
+            ..Situation::default()
+        };
+        cloaks_by(CLOAK_IDLE, idle, "0x2000");
+        assert_eq!(CLOAK_IDLE, 0x2000);
+    }
+
+    #[test]
+    fn a_miner_chasing_its_rock_cloaks_by_0x0200() {
+        let mining = |order| Situation {
+            mining: Some(order),
+            ..Situation::default()
+        };
+        cloaks_by(CLOAK_RETREATING, mining(MineOrder::Chase), "chase");
+        for order in [MineOrder::Stop, MineOrder::Close] {
+            assert_eq!(
+                thought(CLOAK_RETREATING, Cloak::default(), mining(order)),
+                Cloak::default(),
+                "{order:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cloaked_miner_keeps_its_cloak_by_0x1000_until_it_closes() {
+        let mining = |order| Situation {
+            mining: Some(order),
+            ..Situation::default()
+        };
+        for order in [MineOrder::Stop, MineOrder::Chase] {
+            let bit = CLOAK_PRESSING;
+            assert_eq!(thought(bit, CLOAKED, mining(order)), CLOAKED, "{order:?}");
+            assert_eq!(
+                thought(bit, Cloak::default(), mining(order)),
+                Cloak::default(),
+                "{order:?}: only a cloaked miner keeps it"
+            );
+            assert_eq!(
+                thought(0, CLOAKED, mining(order)),
+                at(FADE_FULL, -1),
+                "{order:?}: no bit"
+            );
+        }
+        assert_eq!(
+            thought(CLOAK_PRESSING, CLOAKED, mining(MineOrder::Close)),
+            at(FADE_FULL, -1),
+            "inside the box it uncloaks"
+        );
+    }
+
+    #[test]
+    fn an_escort_close_to_its_cloaked_parent_cloaks_whatever_its_bits() {
+        let close = Situation {
+            close_to_cloaked_parent: true,
+            ..Situation::default()
+        };
+        assert_eq!(thought(0, Cloak::default(), close), at(0.0, 1));
+        assert_eq!(thought(0, CLOAKED, close), CLOAKED);
+        assert_eq!(
+            thought(0, CLOAKED, Situation::default()),
+            at(FADE_FULL, -1),
+            "not close: no cloak"
+        );
+        let mut none = CLOAKED;
+        think(&mut none, CloakGear::default(), close, &mut 0.0);
+        assert_eq!(none, at(FADE_FULL, -1), "no cloak");
+        let disabled = Situation {
+            disabled: true,
+            ..close
+        };
+        assert_eq!(thought(0, CLOAKED, disabled), at(FADE_FULL, -1), "disabled");
+        let costly = CloakGear {
+            device: true,
+            shield_usage: 4,
+            ..CloakGear::default()
+        };
+        let mut drained = CLOAKED;
+        think(&mut drained, costly, close, &mut 0.0);
+        assert_eq!(drained, at(FADE_FULL, -1), "no shield to pay");
+        let mut shield = 30.0;
+        let mut cloak = Cloak::default();
+        think(&mut cloak, zeroing(), close, &mut shield);
+        assert_eq!((cloak, shield), (at(0.0, 1), 0.0), "zeroes the shield");
     }
 }

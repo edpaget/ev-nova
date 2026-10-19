@@ -449,4 +449,79 @@ mod tests {
             "{sounds:?}"
         );
     }
+
+    /// Keeps each NPC's goal.
+    #[derive(Debug)]
+    struct Keep;
+
+    impl crate::ai::Behaviour for Keep {
+        fn decide(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            _: &crate::ai::Surroundings,
+            _: &mut dyn crate::chance::Chance,
+        ) -> crate::ai::Goal {
+            npc.goal
+        }
+    }
+
+    /// NPC 0's cloak after `ticks` of the traffic, keeping its goal
+    /// `goal`, set up cloaked with a ship type's `Flags2` `flags2`.
+    fn cloak_after(goal: crate::ai::Goal, flags2: u16, ticks: u32) -> crate::cloak::Cloak {
+        use nova_sim_base::fixture::Draws;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            flags2,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        npc.goal = goal;
+        for _ in 0..ticks {
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+        }
+        session.npcs()[0].cloak
+    }
+
+    #[test]
+    fn a_cloaked_npc_cloaking_as_it_travels_stays_cloaked_landing_and_a_plain_one_uncloaks() {
+        use crate::ai::Goal;
+        use crate::catalog::StellarId;
+        use crate::cloak::CLOAK_TRAVELLING;
+        let landing = Goal::Land(StellarId(128));
+        assert_eq!(cloak_after(landing, CLOAK_TRAVELLING, 5), CLOAKED);
+        assert_eq!(cloak_after(landing, 0, 1).direction, -1);
+    }
+
+    #[test]
+    fn the_traffic_thinks_cloaks_in_a_world_holding_the_rulebooks_cloak_on_reload() {
+        use crate::cloak::CLOAK_RELOADING;
+        use crate::combat::armament::Armament;
+        use crate::combat::weapon::WeaponSpec;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        use nova_sim_base::fixture::Draws;
+        // A blaster whose burst reload is its `Reload`: past `Reload` by
+        // neither reading's timer, on its burst reload by the Bible's.
+        let mut catalog = armed();
+        catalog.weapons[0].burst_count = 3;
+        catalog.weapons[0].burst_reload = catalog.weapons[0].reload;
+        for (source, cloaks) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let rules = Rulebook::default().with_override(RuleKey::CloakOnReload, source);
+            let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+            assert_eq!(session.world().cloak_on_reload, source);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.cloak_gear = crate::cloak::CloakGear {
+                flags2: CLOAK_RELOADING,
+                ..CAN_CLOAK
+            };
+            npc.goal = crate::ai::Goal::Hold;
+            let mut armament = Armament::new([(WeaponSpec::new(&catalog.weapons[0]), 1)]);
+            let class = armament.clone();
+            armament.force_burst_reload(&class);
+            npc.armament = armament;
+            session.tick_traffic(&catalog, &Keep, &mut Draws::of(&[0; 64]));
+            assert_eq!(session.npcs()[0].cloak.direction == 1, cloaks, "{source:?}");
+        }
+    }
 }

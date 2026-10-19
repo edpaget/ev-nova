@@ -159,6 +159,9 @@ pub mod berth_kept;
 pub mod berth_picks;
 pub mod berth_search;
 pub mod board_wait;
+pub mod cloak_situation;
+#[cfg(test)]
+mod cloak_think_tests;
 #[cfg(test)]
 mod comm_call_tests;
 #[cfg(test)]
@@ -559,6 +562,11 @@ pub struct World<'a> {
     /// engine; capped at the tank, a full tank done too, by the other
     /// reading ([`RuleKey::RefuelCap`](crate::RuleKey::RefuelCap)).
     pub refuel_cap: RuleSource,
+    /// When a weapon reloads, for a ship type's `Flags2` 0x0100 cloak
+    /// ([`cloak_situation::Around::cloak_on_reload`]): past its `Reload`
+    /// by the engine, on a burst reload by the Bible
+    /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
+    pub cloak_on_reload: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -654,6 +662,7 @@ impl<'a> World<'a> {
             npc_jump_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             refuel_cap: RuleSource::Engine,
+            cloak_on_reload: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
@@ -1269,8 +1278,7 @@ impl Traffic {
             }
         }
         self.take_gate_waits(behaviour, world, &picked);
-        let player = world.player.map(|player| player.state);
-        self.think_cloaks(player, &picked);
+        self.think_cloaks(world, &picked);
         room
     }
 
@@ -1611,31 +1619,46 @@ impl Traffic {
             .collect()
     }
 
-    /// Each flying NPC `picked` says (one flag an NPC) thinks its cloak
-    /// (`_AIHandleCloaking`, see [`cloak`]),
-    /// knowing whether it is disabled, retreats (fleeing), and where the
-    /// ship it attacks is, among the NPCs and the `player`.
-    fn think_cloaks(&mut self, player: Option<ShipState>, picked: &[bool]) {
-        let states: Vec<(NpcId, ShipState)> =
-            self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
-        for (npc, _) in self
+    /// Each NPC `picked` says (one flag an NPC) that is flying, gliding
+    /// in from hyperspace or bursting out of a gate thinks its cloak
+    /// (`_AIHandleCloaking`, see [`cloak`]), in the
+    /// [situation](cloak_situation::situation) it reads in `world`: where
+    /// the ship it attacks is, among the NPCs and the player, its NPC
+    /// leader and that leader's cloak (the player has no cloak here yet,
+    /// rdm:phase/cloaking-fidelity/phase-8-cloaking-device), and the
+    /// asteroid in slot 0. The original thinks a glide and a burst too
+    /// (their AI wait +0x4c is 0, `_AIDispatch` @0x8fc9e-0x8fcaa); a ship
+    /// emerging, held at its gate, coasting, entering a gate or adrift
+    /// waits out +0x4c, so its cloak doesn't think.
+    fn think_cloaks(&mut self, world: &World, picked: &[bool]) {
+        let player = world.player.map(|player| player.state);
+        let ships: Vec<(NpcId, ShipState, Cloak)> = self
             .npcs
-            .iter_mut()
-            .zip(picked)
-            .filter(|(npc, picked)| **picked && npc.mode == Mode::Flying)
-        {
+            .iter()
+            .map(|npc| (npc.id, npc.state, npc.cloak))
+            .collect();
+        let npc_at = |id: NpcId| ships.iter().find(|(other, ..)| *other == id);
+        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(npc, picked)| {
+            **picked
+                && matches!(
+                    npc.mode,
+                    Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
+                )
+        }) {
             let attacking = npc.goal.attacking().and_then(|ship| match ship {
                 ShipRef::Player => player,
-                ShipRef::Npc(id) => states
-                    .iter()
-                    .find(|(other, _)| *other == id)
-                    .map(|(_, state)| *state),
+                ShipRef::Npc(id) => npc_at(id).map(|&(_, state, _)| state),
             });
-            let situation = cloak::Situation {
-                disabled: npc.condition == Condition::Disabled,
-                retreating: matches!(npc.goal, Goal::Flee(_)),
+            let around = cloak_situation::Around {
                 attacking: attacking.map(|state| state.position - npc.state.position),
+                leader: npc
+                    .leader
+                    .and_then(npc_at)
+                    .map(|&(_, state, cloak)| (state, cloak)),
+                mining_rock: world.mining_rock.is_some(),
+                cloak_on_reload: world.cloak_on_reload,
             };
+            let situation = cloak_situation::situation(npc, around);
             cloak::think(
                 &mut npc.cloak,
                 npc.cloak_gear,
@@ -3131,7 +3154,7 @@ mod tests {
             fade: FADE_FULL,
             direction: 0,
         };
-        npc.mode = Mode::JumpingIn { tick: 0 };
+        npc.mode = Mode::Coasting { ticks_left: 30 };
         npc.reserves.fuel.now = 0.0;
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.direction, 0, "not held yet");
@@ -6447,7 +6470,7 @@ mod tests {
                 fade: FADE_FULL,
                 direction: 0,
             };
-            npc.mode = Mode::JumpingIn { tick: 0 };
+            npc.mode = Mode::Coasting { ticks_left: 30 };
             npc.reserves.fuel.now = fuel;
             if disabled {
                 npc.condition = Condition::Disabled;
@@ -6460,7 +6483,7 @@ mod tests {
             );
         }
         for mode in [
-            Mode::JumpingIn { tick: 0 },
+            Mode::Emerging { ticks_left: 30 },
             Mode::Coasting { ticks_left: 30 },
         ] {
             let mut able = with_mission_ship(ZEPHYR, false, 0.0);
