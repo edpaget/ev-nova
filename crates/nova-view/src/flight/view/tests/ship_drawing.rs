@@ -443,6 +443,71 @@ fn the_alt_layer_is_drawn_at_its_own_set_with_the_hulls_tint() {
     );
 }
 
+/// Each sprite of `image` drawn: its frame and centre.
+fn placed_of(view: &View, image: i16) -> Vec<(u16, Point)> {
+    sprites(&drawn(view))
+        .into_iter()
+        .filter(|(key, _)| key.id == image)
+        .map(|(key, at)| (key.frame, at))
+        .collect()
+}
+
+/// A flight whose NPC is of 0x0020 with a two-set plug-in alt layer
+/// (`rlëD` 2401), the held alt read by `reading`.
+fn holding_alt(reading: RuleSource) -> View {
+    let npc = ShipDisplay {
+        alt_sets: 2,
+        alt_image: true,
+        ..display(0x0020, 1, 0)
+    };
+    let sheet = ShipSheet {
+        alt: Some(layer(2401, 144)),
+        ..npc_sheet()
+    };
+    let catalog = shown(display(0, 1, 0), npc, Some(sheet));
+    flying_with(catalog, 0, Rc::new(Still), &[])
+        .with_rules(Rulebook::default().with_override(RuleKey::DisabledAltHeld, reading))
+}
+
+#[test]
+fn a_disabled_0x0020_npcs_alt_stays_where_it_was_drawn_as_the_player_flies_on() {
+    let mut view = holding_alt(RuleSource::Engine);
+    view.tick(TICK);
+    let before = placed_of(&view, 2401);
+    assert_eq!(before.len(), 1, "drawn live");
+    assert_eq!(before[0].1, placed_of(&view, 2001)[0].1, "on its hull");
+    let id = npc_of(&view).id;
+    if let Ok(session) = &mut view.session {
+        nova_sim::fixture::disable(session, id);
+    }
+    view.input(&key(Key::Up, true));
+    ticks(&mut view, 10);
+    let hull = placed_of(&view, 2001)[0].1;
+    assert_ne!(hull, before[0].1, "the view moved on");
+    assert_eq!(placed_of(&view, 2401), before, "its alt held on screen");
+    // Repaired, it is drawn live on its hull again.
+    if let Ok(session) = &mut view.session {
+        nova_sim::fixture::repair(session, id);
+    }
+    view.tick(TICK);
+    let hull = placed_of(&view, 2001)[0].1;
+    assert_eq!(placed_of(&view, 2401)[0].1, hull);
+}
+
+#[test]
+fn by_the_other_reading_a_disabled_0x0020_npcs_alt_is_hidden() {
+    let mut view = holding_alt(RuleSource::Bible);
+    view.tick(TICK);
+    assert_eq!(placed_of(&view, 2401).len(), 1);
+    let id = npc_of(&view).id;
+    if let Ok(session) = &mut view.session {
+        nova_sim::fixture::disable(session, id);
+    }
+    view.tick(TICK);
+    assert_eq!(placed_of(&view, 2401), [], "hidden");
+    assert_eq!(placed_of(&view, 2001).len(), 1, "its hull still drawn");
+}
+
 /// The hull of `npc` as `view` draws it: its frame's tint, if drawn.
 fn npc_hull(view: &View, npc: &nova_sim::Npc) -> Option<Color> {
     let session = view.session().expect("flying");
@@ -611,7 +676,7 @@ fn murky_ionizing(rules: Option<nova_sim::Rulebook>) -> View {
 fn an_ionized_npc_draws_its_hull_and_layers_colorized_in_its_ion_colour_at_its_unmurked_tint() {
     let mut view = murky_ionizing(None);
     let mut npc = npc_of(&view);
-    npc.display.drawn.alt_set = Some(0);
+    npc.display.drawn.alt = nova_sim::combat::ship_frames::Alt::Drawn(0);
     let shield = flashing(&mut view, ShipRef::Npc(npc.id));
     let (list, murk) =
         npc_drawn_ionized(&view, &npc, Some(ION), nova_sim::Vec2::new(100.0, -100.0));

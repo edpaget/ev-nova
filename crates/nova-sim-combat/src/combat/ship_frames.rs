@@ -47,9 +47,8 @@
 //! (`_SWSetCurrentFrameIndex` @0xa90d4-0xa90ee); the shield layer by its
 //! own rule ([`FrameSpec::shield_frame`]).
 //!
-//! **The alt layer** (@0x2c97d-0x2cb11), drawn for a class with an alt
-//! sprite unless the ship is disabled and of 0x0020
-//! ([`ALT_HIDDEN_WHILE_DISABLED`], @0x2b6b7-0x2b705): the animation timer
+//! **The alt layer** (@0x2c97d-0x2cb11), for a class with an alt sprite
+//! ([`Alt`]): the animation timer
 //! grows by a frame again, unless still as above (@0x2c9aa-0x2c9d6).
 //! Unless the set came by the 0x0008 path, past `AnimDelay` the timer
 //! zeroes and the alt set (+0xc8f4) steps; by that path, it steps when the
@@ -60,6 +59,17 @@
 //! [`RuleKey::ShipAnimationDoubleStep`](crate::RuleKey::ShipAnimationDoubleStep)
 //! says by the engine; by the other reading, once. No stock ship does:
 //! the Thunderforge (380), the one with an alt sprite, has one base set.
+//!
+//! A disabled ship of 0x0020 ([`ALT_HIDDEN_WHILE_DISABLED`]) skips the
+//! whole alt block without hiding the sprite (@0x2b6b7-0x2b705; only the
+//! no-alt-master path hides it, @0x2b6e8-0x2b700): no timer step, no set
+//! step, no frame, tint or place (@0x2cecb-0x2cf5a). So by
+//! [`RuleKey::DisabledAltHeld`](crate::RuleKey::DisabledAltHeld)'s engine
+//! reading its alt layer is held ([`Alt::Held`]) at the frame, tint and
+//! screen place it was last drawn at, which the view keeps; by the other
+//! it is hidden ([`Alt::None`]). Either way its set and timer resume from
+//! where they stopped on repair. No stock `shän` of 0x0020 has an alt
+//! image.
 //!
 //! The frame's `_gSpeedMult` is 1.0, the engine's fixed step. No sound
 //! plays in any of it.
@@ -92,7 +102,8 @@ pub const KEY_CARRIED: u16 = 0x0004;
 pub const ANIMATED: u16 = 0x0008;
 /// `Flags` 0x0010: its animation stops while it is disabled.
 pub const STILL_WHILE_DISABLED: u16 = 0x0010;
-/// `Flags` 0x0020: its alt layer is hidden while it is disabled.
+/// `Flags` 0x0020: its alt layer stops while it is disabled, held as it
+/// was last drawn (see the module docs; the Bible says hidden).
 pub const ALT_HIDDEN_WHILE_DISABLED: u16 = 0x0020;
 /// `Flags` 0x0040: its running lights go out while it is disabled
 /// (@0x2c56c-0x2c593).
@@ -337,6 +348,10 @@ pub struct DisplayRules {
     /// says: again by the engine, not again after the set block moved it
     /// by the other reading.
     pub double_step: RuleSource,
+    /// Whether a disabled 0x0020 ship's alt layer is held as last drawn, as
+    /// [`RuleKey::DisabledAltHeld`](crate::RuleKey::DisabledAltHeld) says:
+    /// by the engine, or hidden by the other reading.
+    pub alt_held: RuleSource,
     /// Whether lights out writes the intensity 0 into its lights state, as
     /// [`RuleKey::LightsOutZeroesBlink`](crate::RuleKey::LightsOutZeroesBlink)
     /// says: by the engine, or only hides the layer by the other reading
@@ -348,6 +363,7 @@ impl DisplayRules {
     /// Every reading the engine's.
     pub const ENGINE: Self = Self {
         double_step: RuleSource::Engine,
+        alt_held: RuleSource::Engine,
         lights_zeroed: RuleSource::Engine,
     };
 }
@@ -364,14 +380,28 @@ pub struct Moment {
     pub rules: DisplayRules,
 }
 
+/// What a ship's alt layer shows this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Alt {
+    /// Drawn on this alt set.
+    Drawn(u16),
+    /// Left as it was last drawn: its frame, tint and screen place (see
+    /// the module docs).
+    Held,
+    /// Not drawn: no alt sprite, or hidden by the other reading of
+    /// [`RuleKey::DisabledAltHeld`](crate::RuleKey::DisabledAltHeld).
+    #[default]
+    None,
+}
+
 /// The sets a ship is drawn on this frame, and its lights' level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Drawn {
     /// The hull's set, which its glow, lights, weapon and shield layers
     /// follow.
     pub set: u16,
-    /// The alt layer's set, while the alt layer is drawn.
-    pub alt_set: Option<u16>,
+    /// What its alt layer shows.
+    pub alt: Alt,
     /// The level its lights layer is drawn at, if drawn: its lights
     /// block's ([`ShipFrames::light`]), which [`ShipFrames::step`] leaves
     /// to its caller.
@@ -427,34 +457,53 @@ impl ShipFrames {
         } else {
             0
         };
-        let alt_drawn =
-            spec.alt_sets > 0 && !(spec.has(ALT_HIDDEN_WHILE_DISABLED) && moment.disabled);
-        let alt_set = alt_drawn.then(|| {
-            let again = !animated || moment.rules.double_step == RuleSource::Engine;
-            if !still && again {
-                self.anim_timer += SPEED_MULT;
+        let alt = if spec.alt_sets == 0 {
+            Alt::None
+        } else if spec.has(ALT_HIDDEN_WHILE_DISABLED) && moment.disabled {
+            match moment.rules.alt_held {
+                RuleSource::Engine => Alt::Held,
+                RuleSource::Bible => Alt::None,
             }
-            let step_alt = if animated {
-                stepped
-            } else if self.anim_timer > f32::from(spec.anim_delay) {
-                self.anim_timer = 0.0;
-                true
-            } else {
-                false
-            };
-            if step_alt {
-                self.alt_set += 1;
-                if i32::from(self.alt_set) >= i32::from(spec.alt_sets) {
-                    self.alt_set = 0;
-                }
-            }
-            u16::try_from(self.alt_set).unwrap_or(0)
-        });
+        } else {
+            Alt::Drawn(self.alt_step(spec, moment, still, animated, stepped))
+        };
         Drawn {
             set,
-            alt_set,
+            alt,
             lights: None,
         }
+    }
+
+    /// The alt block (@0x2c97d-0x2cb11) of a ship of class `spec` in the
+    /// `moment`, still when `still`, its set by the 0x0008 path when
+    /// `animated`, that path's set having `stepped`: the alt set drawn.
+    fn alt_step(
+        &mut self,
+        spec: &FrameSpec,
+        moment: Moment,
+        still: bool,
+        animated: bool,
+        stepped: bool,
+    ) -> u16 {
+        let again = !animated || moment.rules.double_step == RuleSource::Engine;
+        if !still && again {
+            self.anim_timer += SPEED_MULT;
+        }
+        let step_alt = if animated {
+            stepped
+        } else if self.anim_timer > f32::from(spec.anim_delay) {
+            self.anim_timer = 0.0;
+            true
+        } else {
+            false
+        };
+        if step_alt {
+            self.alt_set += 1;
+            if i32::from(self.alt_set) >= i32::from(spec.alt_sets) {
+                self.alt_set = 0;
+            }
+        }
+        u16::try_from(self.alt_set).unwrap_or(0)
     }
 
     /// The 0x0002 block (@0x2b894-0x2b9f1): `fold`'s set steps toward its
@@ -838,11 +887,30 @@ mod tests {
         assert_eq!(ship.step(&spec, &mut Fold::default(), MOMENT).set, 0);
     }
 
+    /// The alt set `drawn` draws its alt layer on, if drawn on one.
+    fn alt_set(drawn: Drawn) -> Option<u16> {
+        match drawn.alt {
+            Alt::Drawn(set) => Some(set),
+            Alt::Held | Alt::None => None,
+        }
+    }
+
     /// The alt sets `ship` draws over `n` frames of `spec`.
     fn alts(ship: &mut ShipFrames, spec: &FrameSpec, n: usize, moment: Moment) -> Vec<Option<u16>> {
+        alt_layers(ship, spec, n, moment)
+            .into_iter()
+            .map(|alt| match alt {
+                Alt::Drawn(set) => Some(set),
+                Alt::Held | Alt::None => None,
+            })
+            .collect()
+    }
+
+    /// What `ship`'s alt layer shows over `n` frames of `spec`.
+    fn alt_layers(ship: &mut ShipFrames, spec: &FrameSpec, n: usize, moment: Moment) -> Vec<Alt> {
         let mut fold = Fold::default();
         (0..n)
-            .map(|_| ship.step(spec, &mut fold, moment).alt_set)
+            .map(|_| ship.step(spec, &mut fold, moment).alt)
             .collect()
     }
 
@@ -882,7 +950,7 @@ mod tests {
         let engine: Vec<(u16, Option<u16>)> = (0..6)
             .map(|_| {
                 let drawn = ship.step(&spec, &mut fold, MOMENT);
-                (drawn.set, drawn.alt_set)
+                (drawn.set, alt_set(drawn))
             })
             .collect();
         assert_eq!(
@@ -902,7 +970,7 @@ mod tests {
         let once: Vec<(u16, Option<u16>)> = (0..8)
             .map(|_| {
                 let drawn = ship.step(&spec, &mut fold, bible);
-                (drawn.set, drawn.alt_set)
+                (drawn.set, alt_set(drawn))
             })
             .collect();
         assert_eq!(
@@ -921,16 +989,74 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_alt_layer_hides_while_a_0x0020_ship_is_disabled_and_stops_for_0x0010() {
-        let hidden = FrameSpec {
+    /// A class of 0x0020 with four alt sets and `AnimDelay` 0.
+    fn alt_held() -> FrameSpec {
+        FrameSpec {
             alt_sets: 4,
             ..spec(ALT_HIDDEN_WHILE_DISABLED, 1, 0)
+        }
+    }
+
+    /// The moment, disabled, the held alt read by `reading`.
+    fn disabled_reading(reading: RuleSource) -> Moment {
+        Moment {
+            rules: DisplayRules {
+                alt_held: reading,
+                ..DisplayRules::ENGINE
+            },
+            ..disabled()
+        }
+    }
+
+    #[test]
+    fn a_disabled_0x0020_ship_holds_its_alt_set_and_timer() {
+        let held = alt_held();
+        let mut ship = ShipFrames::default();
+        assert_eq!(alts(&mut ship, &held, 2, MOMENT), [Some(1), Some(2)]);
+        let before = ship;
+        assert_eq!(
+            alt_layers(&mut ship, &held, 3, disabled()),
+            [Alt::Held; 3],
+            "held as last drawn"
+        );
+        assert_eq!(ship, before, "no timer or set step");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_disabled_0x0020_ships_alt_layer_is_hidden() {
+        let held = alt_held();
+        let mut ship = ShipFrames::default();
+        let bible = disabled_reading(RuleSource::Bible);
+        assert_eq!(alt_layers(&mut ship, &held, 2, bible), [Alt::None; 2]);
+        assert_eq!(ship.anim_timer, 0.0, "a hidden layer moves no timer");
+        assert_eq!(
+            alt_layers(&mut ship, &held, 1, disabled_reading(RuleSource::Engine)),
+            [Alt::Held]
+        );
+    }
+
+    #[test]
+    fn a_repaired_ship_resumes_its_alt_from_where_it_was_held() {
+        let held = FrameSpec {
+            anim_delay: 2,
+            ..alt_held()
         };
         let mut ship = ShipFrames::default();
-        assert_eq!(alts(&mut ship, &hidden, 2, disabled()), [None, None]);
-        assert_eq!(ship.anim_timer, 0.0, "a hidden layer moves no timer");
-        assert_eq!(alts(&mut ship, &hidden, 2, MOMENT), [Some(1), Some(2)]);
+        assert_eq!(
+            alts(&mut ship, &held, 4, MOMENT),
+            [Some(0), Some(0), Some(1), Some(1)]
+        );
+        assert_eq!(ship.anim_timer, 1.0);
+        alt_layers(&mut ship, &held, 5, disabled());
+        assert_eq!(
+            alts(&mut ship, &held, 3, MOMENT),
+            [Some(1), Some(2), Some(2)],
+            "a frame from its step, as before it was disabled"
+        );
+    }
+
+    #[test]
+    fn a_disabled_0x0010_ships_alt_layer_is_drawn_still() {
         let still = FrameSpec {
             alt_sets: 4,
             ..spec(STILL_WHILE_DISABLED, 1, 0)
@@ -939,9 +1065,14 @@ mod tests {
         assert_eq!(alts(&mut ship, &still, 2, disabled()), [Some(0), Some(0)]);
         assert_eq!(FrameSpec::NONE.alt_sets, 0);
         assert_eq!(
-            alts(&mut ship, &FrameSpec::NONE, 1, MOMENT),
-            [None],
+            alt_layers(&mut ship, &FrameSpec::NONE, 1, MOMENT),
+            [Alt::None],
             "no alt sprite"
+        );
+        assert_eq!(
+            alt_layers(&mut ship, &FrameSpec::NONE, 1, disabled()),
+            [Alt::None],
+            "no alt sprite, disabled"
         );
     }
 

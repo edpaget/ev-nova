@@ -265,6 +265,7 @@ impl Session {
     fn display_rules(&self) -> DisplayRules {
         DisplayRules {
             double_step: self.rules.source_for(RuleKey::ShipAnimationDoubleStep),
+            alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
             lights_zeroed: self.rules.source_for(RuleKey::LightsOutZeroesBlink),
         }
     }
@@ -645,7 +646,11 @@ mod tests {
             sets.push(session.player_drawn().set);
         }
         assert_eq!(sets, [0, 0, 0, 0, 0, 1, 1], "past 5 it steps");
-        assert_eq!(session.player_drawn().alt_set, None, "no alt sprite");
+        assert_eq!(
+            session.player_drawn().alt,
+            crate::combat::ship_frames::Alt::None,
+            "no alt sprite"
+        );
     }
 
     #[test]

@@ -936,6 +936,7 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.flashes.clear();
+        self.held_alts.get_mut().clear();
         self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
@@ -1259,6 +1260,7 @@ impl<
                 self.blank_message();
                 self.effects.clear();
                 self.flashes.clear();
+                self.held_alts.get_mut().clear();
                 self.glows.clear();
                 self.shot_looks.clear();
                 self.redraw_status();

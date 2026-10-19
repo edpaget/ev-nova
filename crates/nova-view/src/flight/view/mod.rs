@@ -1146,6 +1146,10 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
+    /// Each ship's alt layer as last drawn, which a disabled 0x0020 ship
+    /// keeps showing ([`HeldAlts`](crate::flight::held_alt::HeldAlts));
+    /// kept as each frame draws it.
+    held_alts: RefCell<crate::flight::held_alt::HeldAlts>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
     /// What the view keeps of the shots in flight, drawn on the effects'

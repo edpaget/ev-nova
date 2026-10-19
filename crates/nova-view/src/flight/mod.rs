@@ -18,6 +18,8 @@
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
 //! - [`flash`]: a ship's shield flash, the timer a hit sets and the level
 //!   its shield layer shows.
+//! - [`held_alt`]: a ship's alt layer as last drawn, which a disabled
+//!   ship of `shän` `Flags` 0x0020 keeps showing where it was.
 //! - [`floating`]: the floating map shown while H or `\` is held: its
 //!   frame, clock, zoom and click boxes, and the pass that clips and
 //!   fades it.
@@ -60,6 +62,7 @@ pub mod effects;
 pub mod escorts;
 pub mod flash;
 pub mod floating;
+pub mod held_alt;
 pub mod hud;
 pub mod ion_tint;
 pub mod jump;

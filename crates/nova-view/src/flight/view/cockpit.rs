@@ -227,10 +227,14 @@ impl<C> FlightView<C> {
         heading: f32,
     ) {
         let shown = session.cloak_shown(npc);
+        let ship_ref = ShipRef::Npc(npc.id);
+        // Fully faded, a cloak's or a gate's: its held alt is forgotten.
         let Some(cloak) = cloak_alpha(shown) else {
+            self.held_alts.borrow_mut().forget(ship_ref);
             return;
         };
         let Some(tint) = npc_tint(npc) else {
+            self.held_alts.borrow_mut().forget(ship_ref);
             return;
         };
         let alpha = (u16::from(tint.a) * u16::from(cloak) + 127) / 255;
@@ -275,7 +279,12 @@ impl<C> FlightView<C> {
                     shield: self.shield_drawn(ShipRef::Npc(npc.id)),
                     colorize,
                 };
-                ship.draw(list, at);
+                let live = ship.live_alt(at);
+                let alt =
+                    self.held_alts
+                        .borrow_mut()
+                        .shown(ship_ref, ship.drawn.alt, live, ship.hull);
+                ship.draw(list, at, alt);
             }
             _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -1122,6 +1131,7 @@ impl<C> FlightView<C> {
     /// drawn in full has one.
     fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
         if drawn == ShipDrawn::Hidden {
+            self.held_alts.borrow_mut().forget(ShipRef::Player);
             return;
         }
         match &self.sheet {
@@ -1151,7 +1161,14 @@ impl<C> FlightView<C> {
                         hull_colorize(0, session.player_ion_tint(), session.ion_tint_murk_colour())
                     }),
                 };
-                ship.draw(list, at);
+                let live = ship.live_alt(at);
+                let alt = self.held_alts.borrow_mut().shown(
+                    ShipRef::Player,
+                    ship.drawn.alt,
+                    live,
+                    ship.hull,
+                );
+                ship.draw(list, at, alt);
             }
             Err(_) if drawn != ShipDrawn::Full => {}
             Err(reason) => {

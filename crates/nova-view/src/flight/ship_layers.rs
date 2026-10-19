@@ -8,7 +8,8 @@
 //!   (`_SWSetCurrentFrameIndex` @0xa90d4-0xa90ee); the shield layer by its
 //!   own rule ([`FrameSpec::shield_frame`]); the alt layer at its own set's
 //!   frame, with the hull's tint (@0x2caa1-0x2cb0a), while the session
-//!   draws it.
+//!   draws it ([`ShipDraw::live_alt`]), or as it was last drawn while the
+//!   session holds it ([`held_alt`](super::held_alt)).
 //! - **The hull's translucency** ([`base_alpha`]): `BaseTransp` t
 //!   (@0x2bdb2-0x2bdce), its channel factors 0 unpainted, draws as
 //!   `(src × (32 − t)) >> 5 | (dst × t) >> 5`
@@ -45,10 +46,11 @@
 //! plainly.
 
 use nova_sim::HashedRolls;
-use nova_sim::combat::ship_frames::{Drawn, FrameSpec};
+use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 use nova_sim::traffic::npc::NpcId;
 
 use super::catalog::{LayerSheet, ShipSheet};
+use super::held_alt::AltLayer;
 use super::murk::murk_tint;
 use super::weapon_glow::npc_glow_level;
 use crate::draw::lights_tint;
@@ -156,17 +158,41 @@ impl ShipDraw<'_> {
         turning(self.spec, self.sheet).index(self.drawn.set, self.heading)
     }
 
-    /// Draws it at `at`: its hull, glow, lights, weapon glow, alt and shield
-    /// layers, in the order `_HandleShipDisplay` puts them in their layer
-    /// (@0x2bd58-0x2bdad).
-    pub fn draw(&self, list: &mut DrawList, at: Point) {
-        let frame = self.frame();
-        // The hull's tint and colorize: its unmurked tint colorized by its
-        // ion tint, or its murk.
-        let (hull_tint, colorize) = match self.colorize {
+    /// The hull's tint and colorize: its unmurked tint colorized by its
+    /// ion tint, or its murk.
+    fn hull_tint(&self) -> (Color, Option<Colorize>) {
+        match self.colorize {
             Some(colorize) => (self.tint, Some(colorize)),
             None => (murk_tint(self.tint, self.murk), None),
+        }
+    }
+
+    /// Its alt layer as drawn at `at` this frame, when its hull is drawn
+    /// and the session draws the layer on a set: its own set's frame, with
+    /// the hull's tint and colorize.
+    #[must_use]
+    pub fn live_alt(&self, at: Point) -> Option<AltLayer> {
+        let (Some(layer), Alt::Drawn(set), true) = (self.sheet.alt, self.drawn.alt, self.hull)
+        else {
+            return None;
         };
+        let frame = turning(self.spec, self.sheet).index(set, self.heading) % layer.frames.get();
+        let (tint, colorize) = self.hull_tint();
+        Some(AltLayer {
+            image: ImageKey::sprite(layer.image_id, frame),
+            at,
+            tint,
+            colorize,
+        })
+    }
+
+    /// Draws it at `at`: its hull, glow, lights, weapon glow, alt layer
+    /// `alt` (live or held, see [`ShipDraw::live_alt`]) and shield layer,
+    /// in the order `_HandleShipDisplay` puts them in their layer
+    /// (@0x2bd58-0x2bdad).
+    pub fn draw(&self, list: &mut DrawList, at: Point, alt: Option<AltLayer>) {
+        let frame = self.frame();
+        let (hull_tint, colorize) = self.hull_tint();
         if self.hull {
             let hull = ImageKey::sprite(self.sheet.image_id, frame);
             draw_layer(list, (hull, at, hull_tint, Blend::Normal), colorize);
@@ -209,12 +235,9 @@ impl ShipDraw<'_> {
         let weapon = self.weapon.map(|level| held(level, murk));
         add(list, self.sheet.weapon, weapon, murk, frame);
         let spec = turning(self.spec, self.sheet);
-        if self.hull
-            && let (Some(layer), Some(set)) = (self.sheet.alt, self.drawn.alt_set)
-        {
-            let alt = spec.index(set, self.heading) % layer.frames.get();
-            let alt = ImageKey::sprite(layer.image_id, alt);
-            draw_layer(list, (alt, at, hull_tint, Blend::Normal), colorize);
+        if let Some(alt) = alt {
+            let blend = Blend::Normal;
+            draw_layer(list, (alt.image, alt.at, alt.tint, blend), alt.colorize);
         }
         if let (Some(layer), Some(level)) = (self.sheet.shield, self.shield) {
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
