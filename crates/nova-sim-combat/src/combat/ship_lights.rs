@@ -102,10 +102,7 @@ impl ShipLights {
 
     /// Mode 1 (@0x2c31a-0x2c40f).
     fn square(&mut self, blink: &Blink) {
-        let longest = f32::from(blink.b.max(blink.d));
-        if self.timer > longest {
-            self.timer = longest;
-        }
+        self.timer = self.timer.min(f32::from(blink.b.max(blink.d)));
         if self.count < blink.c {
             if self.timer < 0.0 {
                 if self.intensity > 0.0 {
@@ -147,7 +144,9 @@ impl ShipLights {
             }
             f64::from(blink.d) * FALL_STEP
         };
-        self.intensity = (f64::from(self.intensity) + step * f64::from(SPEED_MULT)) as f32;
+        // The step is B or D hundredths times `_gSpeedMult`, which is 1.0
+        // ([`SPEED_MULT`]).
+        self.intensity = (f64::from(self.intensity) + step) as f32;
     }
 
     /// Mode 3 (@0x2c4c0-0x2c563).
@@ -155,9 +154,7 @@ impl ShipLights {
         let hold = f32::from(blink.c);
         if self.timer > 0.0 {
             self.fall();
-            if self.timer > hold {
-                self.timer = hold;
-            }
+            self.timer = self.timer.min(hold);
             return;
         }
         let bottom = i32::from(blink.a);
@@ -470,6 +467,27 @@ mod tests {
             "dark until it rolls again"
         );
         assert_eq!(sides, [8, 8]);
+    }
+
+    #[test]
+    fn a_random_light_on_a_longer_timer_falls_a_frame_then_holds_to_c() {
+        // A slot's last ship left its timer at 20; this one rolls every 4.
+        let random = blink(3, 5, 12, 3, 0);
+        let mut lights = ShipLights {
+            timer: 20.0,
+            ..ShipLights::default()
+        };
+        lights.step(&random, |_| 0);
+        assert_eq!(lights.timer, 3.0, "19, held to C");
+        lights.step(&random, |_| 0);
+        assert_eq!(lights.timer, 2.0);
+        // A square wave's timer is held to max(B, D) before it falls.
+        let mut square = ShipLights {
+            timer: 30.0,
+            ..ShipLights::default()
+        };
+        square.step(&SHUTTLE, |_| 0);
+        assert_eq!(square.timer, 19.0, "20, then a frame");
     }
 
     #[test]

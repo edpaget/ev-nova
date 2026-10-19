@@ -836,6 +836,33 @@ mod tests {
     }
 
     #[test]
+    fn the_fixtures_disable_an_npc_and_repair_it_full() {
+        let mut session = Session::start(&displaying(0, 1)).expect("starts");
+        let stats = crate::stats::ShipStats {
+            shield: 50.0,
+            armor: 80.0,
+            ..crate::stats::ShipStats::default()
+        };
+        let id = session
+            .traffic
+            .add_npc(crate::traffic::fixture::npc(0, stats));
+        crate::fixture::disable(&mut session, id);
+        let npc = session.npc(id).expect("there");
+        assert_eq!(npc.condition, crate::combat::hull::Condition::Disabled);
+        assert_eq!(
+            (npc.reserves.shield.now, npc.reserves.armor.now),
+            (0.0, 1.0)
+        );
+        crate::fixture::repair(&mut session, id);
+        let npc = session.npc(id).expect("there");
+        assert_eq!(npc.condition, crate::combat::hull::Condition::Intact);
+        assert_eq!(
+            (npc.reserves.shield.now, npc.reserves.armor.now),
+            (50.0, 80.0)
+        );
+    }
+
+    #[test]
     fn a_classs_own_shield_is_its_loaded_shield() {
         let mut catalog = displaying(0, 1);
         let mut record = ship(129, FAST);

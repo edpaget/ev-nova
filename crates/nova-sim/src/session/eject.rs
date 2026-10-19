@@ -168,7 +168,7 @@ use crate::ship_layer::Slot;
 use crate::skill::random_skill_level;
 use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
-use crate::traffic::ship_display::{AnimRoll, NpcDisplay, Spawn};
+use crate::traffic::ship_display::{NpcDisplay, Spawn};
 
 impl Session {
     /// Holds the eject chord, Command and the eject key down together, or
@@ -354,11 +354,8 @@ impl Session {
         // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
         // anim set and timer after (@0x6f3a3, @0x6f3bb; see
         // `nova_sim::traffic::ship_display`).
-        let spawn = Spawn {
-            anim: AnimRoll::None,
-            ..Spawn::default()
-        };
-        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, spawn);
+        // A spawn of no origin rolls none (`AnimRoll::None`).
+        let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());
         let mut reserves = kind.stats.full();
         reserves.shield = self.pilot.reserves.shield;
         reserves.armor = self.pilot.reserves.armor;
@@ -828,7 +825,7 @@ mod tests {
         );
         assert_eq!(
             hulk.display.rolls.anim,
-            AnimRoll::None,
+            crate::traffic::ship_display::AnimRoll::None,
             "its anim set and timer zeroed"
         );
     }
