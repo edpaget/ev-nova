@@ -52,14 +52,16 @@
 //!   liveness test, but the engine keeps no attack on a ship it spares
 //!   ([`spares`](crate::ai::target::spares)), so the order shows nowhere.
 //!
-//!   One difference is left: a brave trader whose attacker is breaking
-//!   up, or has just gone, reads the slot's last place, and attacks it
-//!   within 1250 or flees it beyond, so whether it zeroes then turns on
-//!   that place; here it decides again at once (its
-//!   [`provoked_by`](crate::ai::provoked_by) needs a live ship), and its
-//!   flight from a ship gone zeroes as any does. The engine keeps no gone
-//!   ship's place, and only a later hit of no damage on such a trader
-//!   shows which it did.
+//!   A brave trader whose attacker is breaking up reads the slot's place
+//!   ([`BraveTrader`](crate::ai::brave::BraveTrader)): within 1250 it
+//!   attacks it and the high level ends that with its provocation, beyond
+//!   it flees it and keeps it. One difference is left: an attacker gone
+//!   from the system, whose place the original's slot still holds, so the
+//!   trader attacks it near (target -1, no zero, @0x8e731) or flees it far
+//!   (zeroed, @0x8e228-0x8e23d); here it decides again at once, and its
+//!   flight from a ship gone zeroes as any does. The engine keeps no place
+//!   for a ship that has left, and only a later hit of no damage on such
+//!   a trader shows which it did.
 //! - **The rest of the traffic**: the count wait's start (@0x8c713,
 //!   [`board_wait::enter`]); a ship not intact (`_AIDispatch` @0x8feef,
 //!   the tick's third step); a pirate's capture of a ship, for each ship
@@ -308,8 +310,13 @@ mod tests {
                 "{ai_type:?}, destroyed"
             );
             for there in [foe.clone(), breaking_up(foe.clone())] {
-                assert!(
-                    !decided(&ai, &fleeing, &[there]).forgets_provocation,
+                // A brave trader's think reads a ship breaking up near as
+                // one to attack (@0x8b616), which the high level ends with
+                // its provocation (@0x8e714).
+                let attacks = ai_type == AiType::BraveTrader && there.condition != foe.condition;
+                assert_eq!(
+                    decided(&ai, &fleeing, &[there]).forgets_provocation,
+                    attacks,
                     "{ai_type:?}, in its slot"
                 );
             }
