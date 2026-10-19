@@ -254,6 +254,12 @@ impl Harness {
         Self::with_table(store, SoundTable::ORIGINAL)
     }
 
+    /// The game started over `store` as [`Harness::new`] starts it, but
+    /// running on `os`.
+    fn on_os(store: &MemorySettings, os: Os) -> Self {
+        Self::build(store, SoundTable::ORIGINAL, false, os)
+    }
+
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
         Self::build(store, table, false, Os::Windows)
@@ -989,6 +995,47 @@ fn after_a_fallback_launch_the_stock_dialog_saves_borderless_or_the_mode_picked(
     let (relaunched, warnings) = Harness::launched(&store);
     assert_eq!(warnings, Vec::<String>::new());
     assert_eq!(relaunched.window.fullscreen, [fhd], "reopens in the mode");
+}
+
+#[test]
+fn on_macos_a_saved_exclusive_mode_opens_native_fullscreen_and_the_picker_offers_only_it() {
+    let store = seeded();
+    let (mut keeper, _) = SettingsKeeper::open(store.clone());
+    let saved_kind = FullscreenSetting::Exclusive {
+        mode: mode(1920, 1080, 60_000),
+        monitor: Some(MONITOR.to_owned()),
+    };
+    let settings = GameSettings {
+        fullscreen: true,
+        fullscreen_kind: saved_kind.clone(),
+        ..keeper.settings()
+    };
+    keeper.change(settings).expect("seeds");
+    let mut harness = Harness::on_os(&store, Os::MacOs);
+    harness.app.restore_window(&mut harness.window);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new(), "quiet");
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Borderless)],
+        "the native Space"
+    );
+    harness.command_comma();
+    assert_eq!(harness.showing(), Showing::Preferences);
+    assert_eq!(
+        harness.dialog().display().entries(),
+        [FullscreenKind::Borderless]
+    );
+    assert_eq!(
+        harness.dialog().display().selected(),
+        FullscreenKind::Borderless
+    );
+    harness.press(Key::Enter);
+    assert_eq!(
+        harness.window.fullscreen,
+        [Some(FullscreenKind::Borderless)]
+    );
+    let (kept, _) = SettingsKeeper::open(store.clone());
+    assert_eq!(kept.settings().fullscreen_kind, saved_kind, "not migrated");
 }
 
 const NATIVE: Upscaler = Upscaler::Native;

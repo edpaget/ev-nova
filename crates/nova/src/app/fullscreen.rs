@@ -1,6 +1,6 @@
-//! Fullscreen: borderless, or exclusive in a display mode the player
-//! picked. The platform's shortcut toggles it, and the window's size
-//! before it is given back on leaving.
+//! Fullscreen: borderless, or, off macOS, exclusive in a display mode
+//! the player picked. The platform's shortcut toggles it, and the
+//! window's size before it is given back on leaving.
 //!
 //! [`Fullscreen`] holds the decisions; the window adapter only carries
 //! them out. The shortcut is the platform's usual one: Control+Command+F
@@ -21,6 +21,12 @@
 //! is kept through the fallback, so the Preferences dialog shows it, and
 //! picking borderless there is a change, saved.
 //!
+//! macOS has only the native Space, which is borderless: no exclusive
+//! modes are listed there, and a saved exclusive kind enters borderless,
+//! quietly, and is shown as borderless. Its exclusive fullscreen would
+//! capture the display and change the desktop's mode, which leaves other
+//! apps' text blurry after the game until they are clicked.
+//!
 //! # Focus and exit
 //!
 //! Losing focus while exclusive leaves the mode, so the desktop gets its
@@ -28,7 +34,8 @@
 //! fullscreen is then expected, and changes nothing. Gaining focus enters
 //! the same mode again. Exiting leaves an exclusive mode too, and after
 //! it the system's reports are ignored, so the state saved is the one
-//! the player quit in.
+//! the player quit in. On macOS, never exclusive, focus and exit leave
+//! the native Space alone.
 
 use nova_view::{FullscreenKind, Key, VideoMode, listed_modes};
 
@@ -118,17 +125,49 @@ impl Fullscreen {
         self.fell_back = false;
     }
 
-    /// The kind entering enters now: borderless after a fallback, and the
-    /// chosen kind otherwise.
+    /// Whether the platform offers exclusive modes: macOS has only the
+    /// native Space (borderless), since its exclusive fullscreen captures
+    /// the display and changes the desktop's mode. Asked when deciding,
+    /// not when storing, so it holds whichever of the OS and the kind is
+    /// set first.
+    fn offers_exclusive(&self) -> bool {
+        self.os != Os::MacOs
+    }
+
+    /// The exclusive modes to offer the player on `window`'s monitor
+    /// ([`listed_modes`]): none on macOS.
+    pub(crate) fn listed_modes(&self, window: &impl WindowPort) -> Vec<VideoMode> {
+        if self.offers_exclusive() {
+            listed_modes(&window.video_modes())
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The kind entering enters now: borderless on macOS and after a
+    /// fallback, and the chosen kind otherwise.
     pub(crate) fn live_kind(&self) -> FullscreenKind {
-        if self.fell_back {
+        if self.fell_back || !self.offers_exclusive() {
             FullscreenKind::Borderless
         } else {
             self.kind.kind()
         }
     }
 
-    /// The kind the player chose, kept through a fallback.
+    /// The chosen kind as the Preferences dialog shows it: the saved one,
+    /// kept through a fallback, except on macOS, where it is always
+    /// borderless.
+    pub(crate) fn chosen_kind(&self) -> FullscreenKind {
+        if self.offers_exclusive() {
+            self.kind.kind()
+        } else {
+            FullscreenKind::Borderless
+        }
+    }
+
+    /// The kind the player chose, kept through a fallback, and on macOS
+    /// as saved, though it enters borderless there.
+    #[cfg(test)]
     pub(crate) fn kind(&self) -> &FullscreenSetting {
         &self.kind
     }
@@ -251,11 +290,14 @@ impl Fullscreen {
 
     /// Asks `window` for the chosen kind, falling back to borderless, for
     /// the rest of the session, when its monitor does not offer the
-    /// kind's mode.
+    /// kind's mode. On macOS it is borderless, quietly: no exclusive kind
+    /// is offered there to fall back from.
     fn enter(&mut self, window: &mut impl WindowPort) -> Option<String> {
         let warning = match &self.kind {
             FullscreenSetting::Exclusive { mode, monitor }
-                if !self.fell_back && !offered(window, mode, monitor.as_deref()) =>
+                if self.offers_exclusive()
+                    && !self.fell_back
+                    && !offered(window, mode, monitor.as_deref()) =>
             {
                 let on = monitor
                     .as_ref()
@@ -867,5 +909,95 @@ mod tests {
         fullscreen.focus_lost(&mut window);
         assert_eq!(window.calls, [], "not exclusive");
         assert_eq!(*fullscreen.kind(), exclusive(fhd(), Some(MONITOR)));
+    }
+
+    /// Windowed in a 1024x768 window on macOS, its saved kind `kind`.
+    fn on_macos(kind: FullscreenSetting) -> Fullscreen {
+        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
+        fullscreen.set_kind(kind);
+        fullscreen
+    }
+
+    #[test]
+    fn macos_lists_no_modes_and_other_platforms_list_the_monitors() {
+        let window = RecordingWindow::new((1024, 768));
+        assert_eq!(
+            Fullscreen::new(Os::MacOs, (1024, 768)).listed_modes(&window),
+            []
+        );
+        for os in [Os::Windows, Os::Other] {
+            assert_eq!(
+                Fullscreen::new(os, (1024, 768)).listed_modes(&window),
+                [qhd(), fhd()],
+                "{os:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_saved_exclusive_kind_enters_borderless_on_macos_without_a_warning() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = on_macos(exclusive(fhd(), Some(MONITOR)));
+        assert_eq!(fullscreen.live_kind(), FullscreenKind::Borderless);
+        assert_eq!(fullscreen.chosen_kind(), FullscreenKind::Borderless);
+        assert_eq!(fullscreen.toggle(&mut window), None, "no warning");
+        assert_eq!(window.calls, [BORDERLESS]);
+        assert_eq!(fullscreen.live_kind(), FullscreenKind::Borderless);
+        assert_eq!(fullscreen.chosen_kind(), FullscreenKind::Borderless);
+        assert_eq!(
+            *fullscreen.kind(),
+            exclusive(fhd(), Some(MONITOR)),
+            "the saved setting is left as it is"
+        );
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut gone = on_macos(exclusive(fhd(), Some("LG HDR 4K")));
+        assert_eq!(gone.toggle(&mut window), None, "not offered: still quiet");
+        assert_eq!(
+            gone.choose(exclusive(qhd(), Some(MONITOR)), &mut window),
+            None,
+            "a stray exclusive choice"
+        );
+        assert_eq!(window.calls, [BORDERLESS, BORDERLESS]);
+    }
+
+    #[test]
+    fn on_macos_focus_loss_and_exit_leave_native_fullscreen_alone() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = on_macos(exclusive(fhd(), Some(MONITOR)));
+        fullscreen.toggle(&mut window);
+        fullscreen.focus_lost(&mut window);
+        fullscreen.focus_gained(&mut window);
+        fullscreen.exiting(&mut window);
+        assert_eq!(window.calls, [BORDERLESS], "the display mode never changes");
+    }
+
+    #[test]
+    fn the_rule_holds_whichever_order_os_and_kind_are_set() {
+        let mut kind_first = Fullscreen::new(Os::Windows, (1024, 768));
+        kind_first.set_kind(exclusive(fhd(), Some(MONITOR)));
+        assert_eq!(kind_first.chosen_kind(), FullscreenKind::Exclusive(fhd()));
+        kind_first.set_os(Os::MacOs);
+        let mut os_first = Fullscreen::new(Os::Windows, (1024, 768));
+        os_first.set_os(Os::MacOs);
+        os_first.set_kind(exclusive(fhd(), Some(MONITOR)));
+        for mut fullscreen in [kind_first, os_first] {
+            assert_eq!(fullscreen.live_kind(), FullscreenKind::Borderless);
+            assert_eq!(fullscreen.chosen_kind(), FullscreenKind::Borderless);
+            let mut window = RecordingWindow::new((1024, 768));
+            fullscreen.toggle(&mut window);
+            assert_eq!(window.calls, [BORDERLESS]);
+        }
+    }
+
+    #[test]
+    fn elsewhere_the_chosen_kind_is_the_saved_one_through_a_fallback() {
+        let mut window = RecordingWindow::new((1024, 768));
+        let mut fullscreen = set_to(exclusive(fhd(), Some("LG HDR 4K")));
+        assert!(fullscreen.toggle(&mut window).is_some());
+        assert_eq!(fullscreen.chosen_kind(), FullscreenKind::Exclusive(fhd()));
+        assert_eq!(
+            set_to(FullscreenSetting::Borderless).chosen_kind(),
+            FullscreenKind::Borderless
+        );
     }
 }

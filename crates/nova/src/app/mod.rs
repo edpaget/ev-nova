@@ -59,8 +59,10 @@
 //!
 //! - **The picker.** Each time the Preferences dialog opens, the app
 //!   offers it the modes the window's monitor lists
-//!   ([`listed_modes`]), the kind fullscreen runs in, and the kind chosen
-//!   ([`Screen::offer_display`]). A kind the player picks there
+//!   ([`listed_modes`](nova_view::listed_modes)), the kind fullscreen
+//!   runs in, and the kind chosen ([`Screen::offer_display`]). On macOS
+//!   it offers no modes and borderless, the native Space, as both kinds:
+//!   a saved exclusive kind opens borderless there, quietly. A kind the player picks there
 //!   ([`Screen::take_display_choice`]) is entered once the event is
 //!   handled, and saved, with the monitor's name, as
 //!   [`GameSettings::fullscreen_kind`].
@@ -141,7 +143,7 @@ use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
 use nova_view::view_shape::widened_size;
 use nova_view::{
     DrawList, FullscreenKind, ImageKey, Input, Key, MonitorMode, MouseButton, Point, Screen,
-    ScreenAction, ViewShape, listed_modes,
+    ScreenAction, ViewShape,
 };
 
 mod fullscreen;
@@ -406,12 +408,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Offers the Preferences dialog, once each time it opens, the modes
     /// the window's monitor lists, the kind fullscreen runs in, and the
     /// kind chosen, the saved one even when this session fell back from it
-    /// ([`Screen::offer_display`]).
+    /// ([`Screen::offer_display`]). On macOS, no modes and borderless.
     fn offer_display(&mut self, window: &impl WindowPort) {
         let open = self.screen.now_showing() == Some(Showing::Preferences);
         if open && !self.display_offered {
-            let modes = listed_modes(&window.video_modes());
-            let chosen = self.fullscreen.kind().kind();
+            let modes = self.fullscreen.listed_modes(window);
+            let chosen = self.fullscreen.chosen_kind();
             self.screen
                 .offer_display(&modes, self.fullscreen.live_kind(), chosen);
         }
@@ -3407,6 +3409,22 @@ mod tests {
                 FullscreenKind::Exclusive(fhd())
             ),
             "offered again, with no modes from a monitor listing none"
+        );
+    }
+
+    #[test]
+    fn opening_preferences_on_macos_offers_no_modes_and_borderless() {
+        let mut window = on_monitor();
+        let mut app = display_app(&window, &[]).with_os(Os::MacOs);
+        app.fullscreen.set_kind(fhd_on(DELL));
+        press_on(&mut app, &mut window, Key::Char('p'));
+        assert_eq!(
+            app.screen().offers,
+            [(
+                vec![],
+                FullscreenKind::Borderless,
+                FullscreenKind::Borderless
+            )]
         );
     }
 
