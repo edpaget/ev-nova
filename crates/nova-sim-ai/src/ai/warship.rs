@@ -135,6 +135,7 @@
 //! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
+use crate::ai::interceptor::inspection_holds;
 use crate::ai::odds::{cached_odds, hopeless_chase};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
@@ -262,9 +263,10 @@ pub fn hunt(
             // Held, inspecting (an interceptor's state 7: its search needs
             // state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; its re-pick
             // comes after, see `interceptor`), or waiting without a
-            // search, it answers only its provoker.
+            // search, it answers only its provoker. An inspection this
+            // think ends (within reach or gone) leaves it the search.
             if npc.goal == Goal::Hold
-                || matches!(npc.goal, Goal::Inspect(_))
+                || inspection_holds(npc, around)
                 || (npc.goal == Goal::Wait && !retreat.searches_waiting)
             {
                 return Hunt {

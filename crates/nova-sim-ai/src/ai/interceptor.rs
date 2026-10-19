@@ -62,7 +62,10 @@
 //!   the out-of-ammo retreat turned into a flight is left alone.
 //! - Inspecting (state 7) it runs no search of its own (the block needs
 //!   state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; [`hunt`] answers only
-//!   its provoker), but last in its think, with a government (+0x98,
+//!   its provoker) while the inspection holds ([`inspection_holds`]): one
+//!   that ends this think, within reach or gone, is let go as state 0
+//!   (@0x8f391) and the hunt runs its full search, attacking any pick
+//!   (@0x8cce6-0x8cd02). Holding, last in its think, with a government (+0x98,
 //!   @0x8d404), it re-picks ([`re_pick`], `_SelectWarshipTarget` @0x8d41e):
 //!   a pick that writes state 4 itself (a grudge, a mission hunter's, the
 //!   help, or the player through `_AIMakeShipAttackPlayer`) it attacks;
@@ -99,6 +102,23 @@ pub const INSPECT_REACH: f32 = 100.0;
 #[must_use]
 pub fn within_reach(off: Vec2) -> bool {
     off.x.abs() <= INSPECT_REACH && off.y.abs() <= INSPECT_REACH
+}
+
+/// Whether `npc` inspects a ship (state 7) that its think doesn't end:
+/// one live among `around` and out of its reach ([`within_reach`]). Within
+/// reach, `_HighLevelAIHandler`'s state-7 block lets it go (@0x8f11e,
+/// @0x8f391: state 0, +0x70 -1), and so it does a ship gone; either way
+/// the think goes on as from state 0, with the hunt's full search
+/// (`_InterceptorAI` @0x8cc6d, `_SelectWarshipTarget` @0x8cce6).
+#[must_use]
+pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
+    let Goal::Inspect(ship) = npc.goal else {
+        return false;
+    };
+    around
+        .state_of(ship)
+        .filter(|_| around.live(ship))
+        .is_some_and(|state| !within_reach(state.position - npc.state.position))
 }
 
 /// An interceptor's retreat: when outnumbered, by `Flags` 0x0100, and
@@ -194,11 +214,8 @@ impl Interceptor {
         around: &Surroundings,
         chance: &mut dyn Chance,
     ) -> (Goal, Option<CommCall>) {
-        if let Goal::Inspect(ship) = npc.goal
-            && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
-            && !within_reach(state.position - npc.state.position)
-        {
-            return (Goal::Inspect(ship), None);
+        if inspection_holds(npc, around) {
+            return (npc.goal, None);
         }
         if matches!(npc.goal, Goal::Hold | Goal::Wait) {
             // The patrol and inspect block needs goal 1 or below, or
@@ -1109,6 +1126,45 @@ mod tests {
             &mut chance,
         );
         assert_eq!(first.goal, Some(Goal::Attack(n(2))), "the provoker stands");
+    }
+
+    // An inspection that ends this think, within reach (the state-7 block
+    // @0x8f391 lets it go: state 0, +0x70 -1) or gone, leaves the hunt its
+    // full search (@0x8cc6d, `_SelectWarshipTarget` @0x8cce6), whose any
+    // pick it attacks (state 4 @0x8cd02), threats asked.
+
+    #[test]
+    fn an_interceptor_within_reach_of_its_inspection_attacks_its_hunts_pick() {
+        let (cop, _) = trader_cop_inspecting();
+        let near = ship(2, TRADERS, AiType::WimpyTrader, 50.0, -50.0);
+        let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 300.0);
+        let (decision, _) = re_picked(cop.clone(), &[near.clone(), pirate], 0, None, &[0]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)), "not a fresh inspection");
+        assert!(!decision.re_picked);
+        let mut threat = ship(3, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        threat.goal = Goal::Attack(n(1));
+        let (decision, _) = re_picked(cop, &[near, threat], 0, None, &[0]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)), "the threat step runs");
+    }
+
+    #[test]
+    fn an_interceptor_that_has_scanned_the_player_attacks_its_hunts_pick() {
+        let (mut cop, _) = trader_cop_inspecting();
+        cop.goal = Goal::Inspect(P);
+        let npcs = [cop, ship(3, PIRATES, AiType::Warship, 0.0, 300.0)];
+        let (sites, govts) = (sites(), govts(0, 0));
+        let seen = around(&sites, &npcs, &govts, (0.0, 50.0), 0);
+        let decision = Interceptor::default().decision(&npcs[0], &seen, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Attack(n(3)));
+    }
+
+    #[test]
+    fn an_interceptor_whose_inspected_ship_has_gone_attacks_its_hunts_pick() {
+        let (mut cop, _) = trader_cop_inspecting();
+        cop.goal = Goal::Inspect(n(9));
+        let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 300.0);
+        let (decision, _) = re_picked(cop, &[pirate], 0, None, &[0]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)));
     }
 
     #[test]
