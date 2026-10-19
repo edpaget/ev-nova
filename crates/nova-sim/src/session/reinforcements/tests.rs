@@ -213,6 +213,20 @@ fn a_think_at_stale_odds_calls_nothing_and_its_think_after_the_refresh_calls() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_odds_cache() {
+    let catalog = reinforced();
+    for source in RuleSource::ALL {
+        let mut session = flying(&catalog);
+        session.rules =
+            crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, source);
+        assert_eq!(session.world().odds_cache, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.odds_cache));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
 fn a_call_takes_its_thinks_odds_over_the_cache() {
     let catalog = reinforced();
     let mut session = flying(&catalog);

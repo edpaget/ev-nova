@@ -13,6 +13,7 @@ mod idle_block;
 mod landing;
 mod lost_sight;
 mod missions;
+mod odds_cache;
 mod plugin_strings;
 mod stock;
 mod stock_afterburner;
