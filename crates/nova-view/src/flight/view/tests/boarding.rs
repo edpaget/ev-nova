@@ -354,10 +354,11 @@ fn use_as_my_ship_flies_and_draws_the_captured_ship() {
         .filter(|&(_, center)| center == VIEW_CENTER)
         .map(|(image, _)| image)
         .collect::<Vec<_>>();
+    // Its lights come with its display: none has run since the capture.
     assert_eq!(
         drawn_player,
-        [ImageKey::sprite(2001, 0), ImageKey::sprite(2201, 0)],
-        "ship 129's sheet, and its lights"
+        [ImageKey::sprite(2001, 0)],
+        "ship 129's sheet"
     );
     assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
     assert_lasts(&mut view, RETAINED_OLD_SHIP, 360);

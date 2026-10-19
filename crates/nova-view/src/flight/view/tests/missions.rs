@@ -1466,6 +1466,8 @@ fn an_h_from_a_set_expression_redraws_the_new_hull_once_settled() {
         *view.catalog().sheets_asked.borrow(),
         [ShipId(128), ShipId(129)]
     );
+    // Its lights from its first display.
+    view.tick(TICK);
     let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
     assert_eq!(ids, [2001, 2201], "ship 129's sheet, and its lights");
     assert_eq!(view.frame(), Some(0), "of 72 rotations");

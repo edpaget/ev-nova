@@ -23,8 +23,10 @@
 //!   and weapon glow are held to trunc(32 − 1.5 × their murk)
 //!   ([`npc_glow_level`]); the shield is not (@0x2c91b-0x2c939). The
 //!   player's murk is 0.
-//! - **Lights out** ([`lights_out`]): a ship of `shän` `Flags` 0x0040 shows
-//!   no lights while disabled, the player too (@0x2c56c-0x2c593).
+//! - **The lights**: drawn at the level the session's display drew them
+//!   ([`Drawn::lights`], `nova_sim::combat::ship_lights`), which is none
+//!   while a disabled ship of `shän` `Flags` 0x0040 has them out, the
+//!   player too (@0x2c56c-0x2c593).
 //! - **The ion tint** ([`ShipDraw::colorize`], see
 //!   [`ion_tint`](super::ion_tint)): an ionized ship's hull is colorized
 //!   in place of its murk, drawn at its unmurked tint, and the layers that
@@ -42,9 +44,9 @@
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
 //! plainly.
 
-use nova_sim::combat::ship_frames::{Drawn, FrameSpec, LIGHTS_OUT_WHILE_DISABLED};
+use nova_sim::HashedRolls;
+use nova_sim::combat::ship_frames::{Drawn, FrameSpec};
 use nova_sim::traffic::npc::NpcId;
-use nova_sim::{Condition, HashedRolls};
 
 use super::catalog::{LayerSheet, ShipSheet};
 use super::murk::murk_tint;
@@ -72,13 +74,6 @@ pub fn base_alpha(base_transp: i16) -> u8 {
     alpha
 }
 
-/// Whether a ship of `shän` `Flags` `flags` in `condition` shows no lights:
-/// of 0x0040 and disabled (`_IsDisabled`).
-#[must_use]
-pub fn lights_out(flags: u16, condition: Condition) -> bool {
-    flags & LIGHTS_OUT_WHILE_DISABLED != 0 && condition.disabled()
-}
-
 /// An NPC's lights' murk at a sprite murk of `murk`: trunc(murk × 0.333).
 #[must_use]
 pub fn lights_murk(murk: u8) -> u8 {
@@ -88,13 +83,11 @@ pub fn lights_murk(murk: u8) -> u8 {
     level
 }
 
-/// The rolls NPC `id`'s engine glow and running lights flicker on: its
-/// own, seeds 2 + 2·id and 3 + 2·id, so no two ships flicker alike, nor
-/// any like the player's (seeds 1 and 0).
+/// The rolls NPC `id`'s engine glow flickers on: its own, seed 2 + 2·id,
+/// so no two ships flicker alike, nor any like the player's (seed 1).
 #[must_use]
-pub fn npc_rolls(id: NpcId) -> (HashedRolls, HashedRolls) {
-    let seed = 2 + 2 * u64::from(id.0);
-    (HashedRolls::new(seed), HashedRolls::new(seed + 1))
+pub fn npc_glow_rolls(id: NpcId) -> HashedRolls {
+    HashedRolls::new(2 + 2 * u64::from(id.0))
 }
 
 /// One ship as it is drawn this frame (see the module docs).
@@ -120,7 +113,7 @@ pub struct ShipDraw<'a> {
     pub held: bool,
     /// Its engine glow's level, if shown.
     pub glow: Option<u8>,
-    /// Its lights' level, if shown.
+    /// Its lights' level, if shown: its display's ([`Drawn::lights`]).
     pub lights: Option<u8>,
     /// Its weapon glow's level, if lit.
     pub weapon: Option<u8>,
@@ -251,50 +244,16 @@ mod tests {
     }
 
     #[test]
-    fn the_lights_go_out_on_a_disabled_ship_of_0x0040() {
-        assert!(lights_out(0x0040, Condition::Disabled));
-        assert!(lights_out(0x0058, Condition::Disabled));
-        assert!(!lights_out(0x0040, Condition::Intact));
-        assert!(!lights_out(0x0018, Condition::Disabled));
-        assert!(lights_out(
-            0x0040,
-            Condition::Dying {
-                ticks_left: 3,
-                starting: false
-            }
-        ));
-    }
-
-    #[test]
-    fn each_npc_rolls_on_its_own_seeds() {
+    fn each_npcs_glow_rolls_on_its_own_seed() {
         use nova_sim::BlinkChance;
-        let rolls = |id| {
-            let (glow, blink) = npc_rolls(NpcId(id));
-            (0..8)
-                .map(|change| (glow.roll(change, 100), blink.roll(change, 100)))
-                .collect::<Vec<_>>()
-        };
-        assert_ne!(rolls(0), rolls(1));
-        let (glow, blink) = npc_rolls(NpcId(4));
-        let seeded = |seed| {
-            let rolls = HashedRolls::new(seed);
-            (0..8).map(|c| rolls.roll(c, 100)).collect::<Vec<_>>()
-        };
         let of = |rolls: &HashedRolls| (0..8).map(|c| rolls.roll(c, 100)).collect::<Vec<_>>();
+        assert_ne!(of(&npc_glow_rolls(NpcId(0))), of(&npc_glow_rolls(NpcId(1))));
         assert_eq!(
-            (of(&glow), of(&blink)),
-            (seeded(10), seeded(11)),
-            "2 + 2·4, 3 + 2·4"
+            of(&npc_glow_rolls(NpcId(4))),
+            of(&HashedRolls::new(10)),
+            "2 + 2·4"
         );
-        let player = HashedRolls::new(1);
-        assert_ne!(
-            (0..8).map(|c| glow.roll(c, 100)).collect::<Vec<_>>(),
-            (0..8).map(|c| player.roll(c, 100)).collect::<Vec<_>>()
-        );
-        assert_ne!(
-            (0..8).map(|c| glow.roll(c, 100)).collect::<Vec<_>>(),
-            (0..8).map(|c| blink.roll(c, 100)).collect::<Vec<_>>()
-        );
+        assert_ne!(of(&npc_glow_rolls(NpcId(0))), of(&HashedRolls::new(1)));
     }
 
     #[test]

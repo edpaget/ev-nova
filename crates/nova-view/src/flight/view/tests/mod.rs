@@ -55,8 +55,8 @@ use crate::system::catalog::{
 };
 use crate::{Blend, DrawCommand, Font};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{BoardRefusal, DockKind, MissionBoardLine};
+use nova_sim::{GLOW_CRUISE, HashedRolls, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
 mod boarding;
@@ -288,10 +288,8 @@ fn sheet() -> ShipSheet {
         frame_height: 40,
         glow: None,
         lights: None,
-        blink: Blink::STEADY,
         alt: None,
         shield: None,
-        flags: 0,
         base_transp: 0,
     }
 }
@@ -331,7 +329,7 @@ fn catalog() -> FakeCatalog {
         traffic: Vec::new(),
         dudes: Vec::new(),
         weapons: Vec::new(),
-        hulls: Vec::new(),
+        hulls: vec![hull_of(128, &[]), hull_of(129, &[]), hull_of(130, &[])],
         govts: Vec::new(),
         ranks: Vec::new(),
         looks: Vec::new(),
@@ -1196,10 +1194,27 @@ fn blinking(blink: Blink) -> FakeCatalog {
         sheet: Ok(ShipSheet {
             glow: Some(layer(2100, 36)),
             lights: Some(layer(2200, 12)),
-            blink,
             ..sheet()
         }),
+        hulls: vec![lit_hull(hull_of(128, &[]), blink)],
         ..catalog()
+    }
+}
+
+/// `hull` with a lights sprite blinking `blink`, as its `shän` names one,
+/// which the session's display steps (`nova_sim::combat::ship_lights`).
+fn lit_hull(hull: nova_sim::HullRecord, blink: Blink) -> nova_sim::HullRecord {
+    let display = hull.display.unwrap_or(nova_sim::catalog::ShipDisplay {
+        base_sets: 1,
+        ..nova_sim::catalog::ShipDisplay::default()
+    });
+    nova_sim::HullRecord {
+        display: Some(nova_sim::catalog::ShipDisplay {
+            blink,
+            lights_image: true,
+            ..display
+        }),
+        ..hull
     }
 }
 
@@ -2246,7 +2261,12 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         cost: 0,
         speed: 0,
         exits: None,
-        display: None,
+        // Steady lights, drawn where its sheet has a lights layer.
+        display: Some(nova_sim::catalog::ShipDisplay {
+            base_sets: 1,
+            lights_image: true,
+            ..nova_sim::catalog::ShipDisplay::default()
+        }),
         escort_class: nova_sim::EscortClass::Freighter,
     }
 }

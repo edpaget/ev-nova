@@ -6,17 +6,19 @@
 
 use super::*;
 use crate::flight::murk::{murk_tint, sprite_murk};
-use crate::flight::ship_layers::{lights_murk, npc_rolls};
+use crate::flight::ship_layers::{lights_murk, npc_glow_rolls};
 use crate::flight::weapon_glow::npc_glow_level;
 use nova_sim::catalog::{ShipDisplay, ShipExits};
 use nova_sim::combat::ship_frames::{ANIMATED, BANKS};
 
-/// A `shän` display of `flags`, `sets` base sets and `AnimDelay` `delay`.
+/// A `shän` display of `flags`, `sets` base sets and `AnimDelay` `delay`,
+/// its lights sprite steady.
 fn display(flags: u16, sets: i16, delay: i16) -> ShipDisplay {
     ShipDisplay {
         flags,
         base_sets: sets,
         anim_delay: delay,
+        lights_image: true,
         ..ShipDisplay::default()
     }
 }
@@ -198,7 +200,7 @@ fn an_npcs_glow_brightens_under_thrust_and_fades_coasting_murked() {
     let level = glow_level(
         nova_sim::glow::drawn_base(npc.display.glow),
         now(&view),
-        &npc_rolls(npc.id).0,
+        &npc_glow_rolls(npc.id),
     )
     .expect("lit");
     let tint = murk_tint(lights_tint(npc_glow_level(level, murk)), murk);
@@ -283,34 +285,66 @@ fn an_asteroid_miner_unfolds_to_fire_and_refolds_45_mac_ticks_after() {
     assert_eq!(first_up, 22 + 6, "{sets:?}");
 }
 
-#[test]
-fn a_disabled_0x0040_ships_lights_go_out() {
-    let lit_sheet = ShipSheet {
-        lights: Some(layer(2200, 36)),
-        flags: 0x0040,
-        ..sheet()
+/// The stock triangle, 10 to 31.
+const TRIANGLE: Blink = Blink {
+    mode: 2,
+    a: 10,
+    b: 75,
+    c: 32,
+    d: 75,
+};
+
+/// The player's and the NPC's lights as drawn: each tint, if drawn.
+fn lights_drawn(view: &View) -> (Option<Color>, Option<Color>) {
+    let tint = |image| drawn_of(view, image).first().map(|&(_, tint, _)| tint);
+    (tint(2200), tint(2201))
+}
+
+/// Sets the player's and the NPC's conditions in `view` to `to`, the
+/// player held there.
+fn both(view: &mut View, to: Condition) {
+    condition(view, to);
+    view.disable_rule = if to == Condition::Disabled {
+        Rc::new(Disabling)
+    } else {
+        Rc::new(nova_sim::NovaDisable)
     };
-    let mut catalog = shown(
-        display(0x0040, 1, 0),
-        display(0x0040, 1, 0),
-        Some(ShipSheet {
-            flags: 0x0040,
-            ..npc_sheet()
-        }),
-    );
-    catalog.sheet = Ok(lit_sheet);
-    let mut view = flying_with(catalog, 0, Rc::new(Still), &[]);
-    view.tick(TICK);
-    assert_eq!(drawn_of(&view, 2200).len(), 1, "the player's, intact");
-    assert_eq!(drawn_of(&view, 2201).len(), 1, "the NPC's, intact");
-    let id = npc_of(&view).id;
+    let id = npc_of(view).id;
     if let Ok(session) = &mut view.session {
-        nova_sim::fixture::disable(session, id);
+        if to == Condition::Disabled {
+            nova_sim::fixture::disable(session, id);
+        } else {
+            nova_sim::fixture::repair(session, id);
+        }
     }
+}
+
+#[test]
+fn a_disabled_0x0040_ships_lights_go_out_and_climb_back_from_nothing() {
+    let lit = ShipDisplay {
+        blink: TRIANGLE,
+        ..display(0x0040, 1, 0)
+    };
+    let mut catalog = shown(lit, lit, Some(npc_sheet()));
+    catalog.sheet = Ok(ShipSheet {
+        lights: Some(layer(2200, 36)),
+        ..sheet()
+    });
+    let mut view = flying_with(catalog, 0, Rc::new(Still), &[]);
+    ticks(&mut view, 29);
+    let level = Some(lights_tint(22));
+    assert_eq!(lights_drawn(&view), (level, level), "rising, intact");
+    both(&mut view, Condition::Disabled);
     view.tick(TICK);
-    condition(&mut view, Condition::Disabled);
-    assert_eq!(drawn_of(&view, 2200), [], "the player's out");
-    assert_eq!(drawn_of(&view, 2201), [], "the NPC's out");
+    assert_eq!(lights_drawn(&view), (None, None), "both out");
+    ticks(&mut view, 4);
+    assert_eq!(lights_drawn(&view), (None, None), "still out");
+    both(&mut view, Condition::Intact);
+    view.tick(TICK);
+    assert_eq!(lights_drawn(&view), (None, None), "0.75: dark for a step");
+    view.tick(TICK);
+    let one = Some(lights_tint(1));
+    assert_eq!(lights_drawn(&view), (one, one), "climbing from nothing");
 }
 
 #[test]
@@ -407,28 +441,6 @@ fn the_alt_layer_is_drawn_at_its_own_set_with_the_hulls_tint() {
         [0, 0, 0, 0, 1, 1, 1],
         "every 6 frames"
     );
-}
-
-#[test]
-fn each_npc_is_noted_on_the_tick_it_was_first_seen_until_it_leaves() {
-    let mut view = flying_with(
-        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
-        0,
-        Rc::new(Still),
-        &[],
-    );
-    let id = npc_of(&view).id;
-    let first = view.appeared.get(&id).copied().expect("noted");
-    ticks(&mut view, 3);
-    assert_eq!(
-        view.appeared.get(&id),
-        Some(&first),
-        "kept from its first tick"
-    );
-    let gone = NpcId(99);
-    view.appeared.insert(gone, 0);
-    view.tick(TICK);
-    assert_eq!(view.appeared.get(&gone), None, "forgotten once gone");
 }
 
 /// The hull of `npc` as `view` draws it: its frame's tint, if drawn.

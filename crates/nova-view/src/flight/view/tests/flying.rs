@@ -719,6 +719,12 @@ fn a_coasting_ship_draws_its_lights_over_it_and_no_glow() {
     let mut view = FlightView::new(layered());
     assert_eq!(
         ship_sprites(&view),
+        [(ImageKey::sprite(2000, 0), VIEW_CENTER)],
+        "no display yet: no lights"
+    );
+    ticks(&mut view, 1);
+    assert_eq!(
+        ship_sprites(&view),
         [
             (ImageKey::sprite(2000, 0), VIEW_CENTER),
             (ImageKey::sprite(2200, 0), VIEW_CENTER),
@@ -984,8 +990,12 @@ fn lights_alphas(view: &View) -> Vec<u8> {
 #[test]
 fn the_shuttles_lights_blink_with_game_time() {
     let mut view = FlightView::new(blinking(SHUTTLE));
-    assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 0: off");
+    assert_eq!(lights_alphas(&view), [0_u8; 0], "no display yet");
     assert_eq!(ship_sprites(&view)[0].0.id, 2000, "the ship is drawn");
+    // Each step's display draws the next tick of the wave, the first
+    // tick 0.
+    ticks(&mut view, 1);
+    assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 0: off");
     ticks(&mut view, 1);
     assert_eq!(lights_tints(&view), [Color::WHITE], "tick 1: on");
     ticks(&mut view, 3);
@@ -1007,6 +1017,7 @@ fn a_pulsing_light_is_ored_at_its_level() {
         d: 75,
     };
     let mut view = FlightView::new(blinking(triangle));
+    ticks(&mut view, 1);
     assert_eq!(lights_alphas(&view), [0_u8; 0], "0.75: not drawn");
     ticks(&mut view, 1);
     assert_eq!(lights_alphas(&view), [8], "level 1");
@@ -1047,6 +1058,7 @@ fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
     };
     let rolls = HashedRolls::new(0);
     let mut view = FlightView::new(blinking(triangle));
+    ticks(&mut view, 1);
     let mut levels = Vec::new();
     for tick in 0..=101 {
         let level = lights_level(&triangle, tick, &rolls);
@@ -1062,13 +1074,16 @@ fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
     assert!(levels.contains(&31), "the highest level is drawn");
 
     // A steady light is full: ORed whole.
-    let view = FlightView::new(blinking(Blink::STEADY));
+    let mut view = FlightView::new(blinking(Blink::STEADY));
+    ticks(&mut view, 1);
     assert_eq!(lights_commands(&view), [lights_at(Color::WHITE)]);
 }
 
 #[test]
-fn steady_lights_are_ored_at_full_from_the_start() {
-    let view = FlightView::new(blinking(Blink::STEADY));
+fn steady_lights_are_ored_at_full_from_the_first_display() {
+    let mut view = FlightView::new(blinking(Blink::STEADY));
+    assert_eq!(lights_tints(&view), [], "no display yet");
+    ticks(&mut view, 1);
     assert_eq!(lights_tints(&view), [Color::WHITE]);
 }
 
@@ -1076,9 +1091,9 @@ fn steady_lights_are_ored_at_full_from_the_start() {
 fn the_glow_still_shows_while_the_lights_are_off() {
     let mut view = FlightView::new(blinking(SHUTTLE));
     view.input(&key(Key::Up, true));
-    // Tick 13: the Shuttle's lights are dark, and a base of 13 always
-    // shows the glow.
-    ticks(&mut view, 13);
+    // Tick 13 of the wave, the 14th display: the Shuttle's lights are
+    // dark, and a base of 14 always shows the glow.
+    ticks(&mut view, 14);
     assert!(view.session().expect("flying").thrusting());
     assert_eq!(
         ship_blends(&view),
@@ -1088,14 +1103,14 @@ fn the_glow_still_shows_while_the_lights_are_off() {
         DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),
         _ => None,
     });
-    let level = glow_level(13, 13, &view.glow_rolls).expect("drawn");
+    let level = glow_level(14, 14, &view.glow_rolls).expect("drawn");
     assert_eq!(glow, Some(lights_tint(level)));
 }
 
 #[test]
 fn the_blink_pauses_while_the_map_is_open() {
     let mut view = FlightView::new(blinking(SHUTTLE));
-    ticks(&mut view, 3);
+    ticks(&mut view, 4);
     assert_eq!(lights_alphas(&view), [255], "tick 3");
     view.input(&key(MAP_KEY, true));
     assert!(view.map_open());
@@ -1108,8 +1123,9 @@ fn the_blink_pauses_while_the_map_is_open() {
 }
 
 #[test]
-fn random_lights_roll_on_hashed_rolls() {
-    // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks.
+fn random_lights_roll_on_the_flights_chance() {
+    // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks, each roll the
+    // second outcome.
     let random = Blink {
         mode: 3,
         a: 5,
@@ -1117,12 +1133,11 @@ fn random_lights_roll_on_hashed_rolls() {
         c: 3,
         d: 0,
     };
-    let rolls = HashedRolls::new(0);
-    let expected = |change| lights_tint(5 + rolls.roll(change, 8) as u8).a;
-    let mut view = FlightView::new(blinking(random));
-    assert_eq!(lights_alphas(&view), [expected(0)]);
+    let mut view = FlightView::new(blinking(random)).with_chance(rolling_one());
+    ticks(&mut view, 1);
+    assert_eq!(lights_alphas(&view), [lights_tint(6).a]);
     ticks(&mut view, 4);
-    assert_eq!(lights_alphas(&view), [expected(1)]);
+    assert_eq!(lights_alphas(&view), [lights_tint(6).a]);
 }
 
 // The HUD.

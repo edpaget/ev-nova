@@ -26,8 +26,8 @@ pub struct LayerSheet {
 }
 
 /// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
-/// turn, each frame's size, the engine glow and running lights drawn over
-/// it, and how the lights blink.
+/// turn, each frame's size, and the engine glow and running lights drawn
+/// over it.
 ///
 /// A layer the `shän` names but whose image cannot be resolved is `None`,
 /// like a layer it does not name: flight draws the ship without it and
@@ -46,11 +46,9 @@ pub struct ShipSheet {
     /// The engine glow, drawn at the level [`nova_sim::glow_level`] gives
     /// for the ship's glow base, which thrust ramps up.
     pub glow: Option<LayerSheet>,
-    /// The running lights, drawn at the level [`nova_sim::lights_level`]
-    /// gives for `blink`.
+    /// The running lights, drawn at the level the session's display drew
+    /// them (`nova_sim::combat::ship_lights`).
     pub lights: Option<LayerSheet>,
-    /// The `shän`'s blink fields, which the lights blink by.
-    pub blink: Blink,
     /// The weapon glow (`WeapImageID`), drawn while a `Flags2` 0x0200
     /// weapon's glow lasts (see the `weapon_glow` module).
     pub weapon: Option<LayerSheet>,
@@ -63,9 +61,6 @@ pub struct ShipSheet {
     /// The shield layer (`ShieldImageID`), flashed on a hit (see
     /// [`ShieldFlash`](super::flash::ShieldFlash)).
     pub shield: Option<LayerSheet>,
-    /// The `shän`'s `Flags`, raw: 0x0040 puts its lights out while it is
-    /// disabled (see `nova_sim::combat::ship_frames`).
-    pub flags: u16,
     /// The `shän`'s `BaseTransp`, raw: the hull's translucency in 32nds,
     /// drawn at (32 − it)/32 (see the flight view's ship drawing).
     pub base_transp: i16,
@@ -604,10 +599,8 @@ mod tests {
                 frame_height: 48,
                 glow: None,
                 lights: None,
-                blink: Blink::STEADY,
                 alt: None,
                 shield: None,
-                flags: 0,
                 base_transp: 0,
             })
         }

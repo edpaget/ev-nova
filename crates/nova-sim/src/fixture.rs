@@ -46,6 +46,17 @@ pub fn disable(session: &mut Session, id: NpcId) {
     }
 }
 
+/// Repairs NPC `id` in `session`, if it is in the system, its shield and
+/// armour full and intact: for a test that needs a disabled ship well
+/// again without its repair.
+pub fn repair(session: &mut Session, id: NpcId) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.reserves.shield.now = npc.reserves.shield.max;
+        npc.reserves.armor.now = npc.reserves.armor.max;
+        npc.condition = Condition::Intact;
+    }
+}
+
 /// Sets the player's condition in `session` to `to`: for a test that
 /// needs the player disabled or breaking up, or made intact again,
 /// without a fight.

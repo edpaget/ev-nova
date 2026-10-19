@@ -6,7 +6,7 @@ use nova_sim::Drawn as ShipDrawn;
 use nova_sim::PlayerCommand;
 use nova_sim::{
     ClassRow, Condition, Controls, EscortCommand, Face, NavMode, Npc, Reserves, Session, ShipRef,
-    ShipState, StellarPick, SystemId, TargetPick, Turn, Vec2, glow_level, lights_level,
+    ShipState, StellarPick, SystemId, TargetPick, Turn, Vec2, glow_level,
 };
 
 use crate::draw::crossed_box;
@@ -23,7 +23,7 @@ use crate::flight::floating::{self, Hit};
 use crate::flight::hud::{self, HudState, STATUS_BAR_WIDTH, StatusBar};
 use crate::flight::ion_tint::hull_colorize;
 use crate::flight::murk::{self, sprite_murk};
-use crate::flight::ship_layers::{ShipDraw, base_alpha, lights_out, npc_rolls, turning};
+use crate::flight::ship_layers::{ShipDraw, base_alpha, npc_glow_rolls, turning};
 use crate::flight::sprite::rotation_frame;
 use crate::flight::target::{self};
 use crate::flight::weapons::{self, BeamShown, ShotShown};
@@ -214,8 +214,8 @@ impl<C> FlightView<C> {
     /// translucent as its `BaseTransp` ([`base_alpha`]). Its hull and
     /// layers are drawn on the frames its display picked and murked (see
     /// the [`ship_layers`](crate::flight::ship_layers) module): its engine
-    /// glow from its glow base, its running lights blinking from the tick
-    /// it was first seen, each rolled on its own, its weapon glow while lit
+    /// glow from its glow base, rolled on its own, its running lights at
+    /// the level its display drew them, its weapon glow while lit
     /// ([`weapon_glow`](crate::flight::weapon_glow)), its alt layer, and
     /// its shield layer while it flashes.
     pub(super) fn draw_npc(
@@ -250,9 +250,7 @@ impl<C> FlightView<C> {
                 let viewer = session.player().position;
                 let murk = sprite_murk(npc.state.position, viewer, session.effective_murk());
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-                let since =
-                    tick.saturating_sub(self.appeared.get(&npc.id).copied().unwrap_or(tick));
-                let (glow_rolls, blink_rolls) = npc_rolls(npc.id);
+                let glow_rolls = npc_glow_rolls(npc.id);
                 // A gate's fade writes the hull's colorize after the ion
                 // tint, so none shows while it fades (`_HandleShipDisplay`
                 // @0x2bfa5-0x2c17b).
@@ -262,9 +260,6 @@ impl<C> FlightView<C> {
                     })
                     .flatten();
                 let base = nova_sim::glow::drawn_base(npc.display.glow);
-                let lights = (!lights_out(sheet.flags, npc.condition))
-                    .then(|| lights_level(&sheet.blink, since, &blink_rolls))
-                    .flatten();
                 let ship = ShipDraw {
                     sheet,
                     spec: &npc.hull.frames,
@@ -275,7 +270,7 @@ impl<C> FlightView<C> {
                     murk,
                     held: true,
                     glow: glow_level(base, tick, &glow_rolls),
-                    lights,
+                    lights: npc.display.drawn.lights,
                     weapon: self.glows.drawn(ShipRef::Npc(npc.id)),
                     shield: self.shield_drawn(ShipRef::Npc(npc.id)),
                     colorize,
@@ -1117,8 +1112,8 @@ impl<C> FlightView<C> {
 
     /// Draws the player's ship at `at`, as much of it as `drawn` says
     /// (see [`nova_sim::player_fate`]): its hull, as translucent as its
-    /// `BaseTransp`, its engine glow, running lights (out while a ship of
-    /// `shän` `Flags` 0x0040 is disabled), weapon glow
+    /// `BaseTransp`, its engine glow, running lights at the level its
+    /// display drew them (`nova_sim::combat::ship_lights`), weapon glow
     /// ([`weapon_glow`](crate::flight::weapon_glow)), alt layer and shield
     /// flash, never murked, on the frames its display picked (see the
     /// [`ship_layers`](crate::flight::ship_layers) module); or, when its
@@ -1134,15 +1129,12 @@ impl<C> FlightView<C> {
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
                 let session = self.session.as_ref().ok();
                 let base = session.map_or(0, Session::engine_glow);
-                let condition = session.map_or(Condition::Intact, Session::player_condition);
-                let lights = (!lights_out(sheet.flags, condition))
-                    .then(|| lights_level(&sheet.blink, tick, &self.blink_rolls))
-                    .flatten();
+                let sets = session.map_or(Drawn::default(), Session::player_drawn);
                 let spec = session.map_or(FrameSpec::NONE, |session| session.hull().frames);
                 let ship = ShipDraw {
                     sheet,
                     spec: &spec,
-                    drawn: session.map_or(Drawn::default(), Session::player_drawn),
+                    drawn: sets,
                     heading: self.shown_heading(),
                     tint: Color {
                         a: base_alpha(sheet.base_transp),
@@ -1152,7 +1144,7 @@ impl<C> FlightView<C> {
                     murk: 0,
                     held: false,
                     glow: glow_level(base, tick, &self.glow_rolls),
-                    lights,
+                    lights: sets.lights,
                     weapon: self.glows.drawn(ShipRef::Player),
                     shield: self.shield_drawn(ShipRef::Player),
                     colorize: session.and_then(|session| {

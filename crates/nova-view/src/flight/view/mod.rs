@@ -202,8 +202,10 @@
 //! glow base ([`Session::engine_glow`]) at the flight's time in ticks: it
 //! fades in over 24 ticks of thrust, flickers, and fades out over 24
 //! ticks after Up is released, and landing and beginning a jump put it
-//! out. The lights are drawn at the level [`nova_sim::lights_level`]
-//! gives for the sheet's blink at the flight's time in ticks. Each is
+//! out. The lights are drawn at the level the session's display drew
+//! them ([`Session::player_drawn`]'s, and each NPC's `drawn`), its
+//! ported lights state stepped each display (`nova_sim::combat::ship_lights`,
+//! random lights rolling on the flight's chance). Each is
 //! drawn at [`lights_tint`](crate::draw::lights_tint) of its level, or not at all while it is hidden
 //! or off. Both are combined by OR with what is beneath
 //! ([`Blend::Or`](crate::Blend::Or)) at every level, scaled by level/32,
@@ -211,8 +213,8 @@
 //! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`](crate::draw::lights_tint) for the
 //! full record. The flight's time
 //! stops while the course map is open, so the lights blink and the glow
-//! flickers in game time. Random blinking rolls on [`HashedRolls`] from
-//! seed 0, and the glow's flicker on [`HashedRolls`] from seed 1. A layer
+//! flickers in game time. The glow's flicker rolls on [`HashedRolls`]
+//! from seed 1. A layer
 //! that cannot be shown is left out silently.
 //!
 //! Input, the original's default keys:
@@ -1116,10 +1118,7 @@ pub struct FlightView<C> {
     double_time: bool,
     /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
-    /// What random running lights roll on.
-    blink_rolls: HashedRolls,
-    /// What the engine glow's flicker rolls on: seed 1, so it never
-    /// mirrors random-mode lights, which roll on seed 0.
+    /// What the player's engine glow's flicker rolls on: seed 1.
     glow_rolls: HashedRolls,
     /// How the NPCs decide.
     behaviour: Rc<dyn Behaviour>,
@@ -1147,9 +1146,6 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
-    /// The flight tick each NPC in the system was first seen on, which
-    /// its running lights blink from ([`track_appeared`]).
-    appeared: BTreeMap<NpcId, u64>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
     /// What the view keeps of the shots in flight, drawn on the effects'
@@ -1517,18 +1513,6 @@ fn glow_decay(
         }
     };
     Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
-}
-
-/// Notes the flight tick `now` as the first seen of each NPC in
-/// `session` not yet among `appeared`, and forgets those gone, as the
-/// original's lights start blinking as each ship is set up
-/// (`_InitObjects` @0x1c423; see `nova_sim::blink`).
-fn track_appeared(appeared: &mut BTreeMap<NpcId, u64>, session: &Session, now: u64) {
-    let here: BTreeSet<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
-    appeared.retain(|id, _| here.contains(id));
-    for id in here {
-        appeared.entry(id).or_insert(now);
-    }
 }
 
 /// The player's sheet and each NPC ship type's, or why each cannot be

@@ -20,7 +20,6 @@ use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
 use nova_sim::data::FIRST_ASTEROID_SPIN;
-use nova_sim::data::ship_blink;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
@@ -63,12 +62,10 @@ impl ShipSprites for GameData {
             frame_height: sheet.frame_height(),
             glow,
             lights,
-            blink: ship_blink(self, id.0),
             weapon,
             weap_decay: field(|anim| anim.weap_decay),
             alt,
             shield,
-            flags: anim.map_or(0, |anim| anim.record.flags.bits()),
             base_transp: field(|anim| anim.base_transp),
         })
     }
@@ -365,7 +362,6 @@ mod tests {
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
-    use nova_sim::Blink;
 
     use super::*;
 
@@ -458,12 +454,10 @@ mod tests {
                 frame_height: 2,
                 glow: None,
                 lights: None,
-                blink: Blink::STEADY,
                 weapon: None,
                 weap_decay: 0,
                 alt: None,
                 shield: None,
-                flags: 0,
                 base_transp: 0,
             })
         );
@@ -496,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ships_sheet_carries_its_alt_and_shield_layers_flags_and_translucency() {
+    fn a_ships_sheet_carries_its_alt_and_shield_layers_and_translucency() {
         // The Thunderforge's: `Flags` 0x58, alt 1330 of 6 sets; and a
         // plug-in shield 1500, `BaseTransp` 10.
         let mut shan = anim(1000, 1, 8);
@@ -515,7 +509,7 @@ mod tests {
         let found = data.ship_sheet(ShipId(128)).expect("a sheet");
         assert_eq!(found.alt, Some(layer(1330, 48)));
         assert_eq!(found.shield, Some(layer(1500, 8)));
-        assert_eq!((found.flags, found.base_transp), (0x58, 10));
+        assert_eq!(found.base_transp, 10);
         let plain = store(&[
             (Ship::TYPE, 128, ship()),
             (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
@@ -523,32 +517,7 @@ mod tests {
         ]);
         let found = plain.ship_sheet(ShipId(128)).expect("a sheet");
         assert_eq!((found.alt, found.shield), (None, None));
-        assert_eq!((found.flags, found.base_transp), (0, 0));
-    }
-
-    #[test]
-    fn a_ships_sheet_carries_its_shans_blink() {
-        // The Shuttle's: mode 1, A=4 B=1 C=2 D=20.
-        let mut shan = layered(1000, 1, 8, 0, 1200);
-        for (at, value) in [(0x36, 1), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
-            put_i16(&mut shan, at, value);
-        }
-        let data = store(&[
-            (Ship::TYPE, 128, ship()),
-            (ShipAnim::TYPE, 128, shan),
-            (RLED, 1000, sheet(8)),
-            (RLED, 1200, sheet(8)),
-        ]);
-        assert_eq!(
-            data.ship_sheet(ShipId(128)).map(|sheet| sheet.blink),
-            Ok(Blink {
-                mode: 1,
-                a: 4,
-                b: 1,
-                c: 2,
-                d: 20,
-            })
-        );
+        assert_eq!(found.base_transp, 0);
     }
 
     #[test]
