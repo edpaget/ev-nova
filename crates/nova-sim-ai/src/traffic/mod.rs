@@ -149,6 +149,7 @@ pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod gate_entry;
+pub mod gone;
 #[cfg(test)]
 mod hit_goal_tests;
 pub mod inertialess;
@@ -210,6 +211,7 @@ use autopilot::{Outcome, TopSpeeds};
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use berth_search::BerthSearch;
+use gone::{Freed, GoneShips};
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use odds_cache::OddsCache;
@@ -651,6 +653,7 @@ impl<'a> World<'a> {
             odds_cache: self.odds_cache,
             led_speed: self.led_speed,
             weapons: self.weapons,
+            gone: &[],
         }
     }
 }
@@ -673,6 +676,9 @@ pub struct Traffic {
     interval: u32,
     /// The NPCs that left on the last tick, and how.
     departed: Vec<(NpcId, Outcome)>,
+    /// The ships gone since the last decision pass whose slots a think may
+    /// still read ([`gone`]).
+    gone: GoneShips,
     /// The frame's work on the message line, in slot order, since it was
     /// last taken ([`Traffic::take_on_line`]): the calls the decisions
     /// made, the scans of the player, what the pirates and repairers did
@@ -771,6 +777,7 @@ impl Traffic {
             ticks: 0,
             interval,
             departed: Vec::new(),
+            gone: GoneShips::default(),
             on_line: LineQueue::default(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
@@ -839,6 +846,7 @@ impl Traffic {
         self.npcs.clear();
         self.left_behind.clear();
         self.departed.clear();
+        self.gone.clear();
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -934,6 +942,7 @@ impl Traffic {
             }
         }
         self.departed.clear();
+        self.gone.clear();
         self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
@@ -992,7 +1001,13 @@ impl Traffic {
                     && decision_due(self.ticks, npc.id, self.interval)
             })
             .collect();
-        let around = world.around(&self.npcs);
+        // The decisions are the last thinks that can read a gone ship's
+        // slot ([`gone`]).
+        let gone = self.gone.take();
+        let around = Surroundings {
+            gone: &gone,
+            ..world.around(&self.npcs)
+        };
         let mut decisions: Vec<Option<Decision>> = self
             .npcs
             .iter()
@@ -1207,6 +1222,7 @@ impl Traffic {
     /// begun. The ships an in-flight move left behind stay until the next
     /// advance pass frees them, as none of them is drawn.
     pub fn move_in(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
+        self.gone.ship_pass();
         self.fly(&world, false, &BTreeSet::new(), chance);
     }
 
@@ -1238,6 +1254,11 @@ impl Traffic {
             .filter(|(_, outcome)| **outcome != Outcome::Flying)
             .map(|(npc, outcome)| (npc.id, *outcome))
             .collect();
+        for (npc, &outcome) in self.npcs.iter().zip(&outcomes) {
+            if let Some(freed) = Freed::by(outcome) {
+                self.gone.record(npc.clone(), freed);
+            }
+        }
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
@@ -2018,6 +2039,17 @@ impl Traffic {
     /// Takes NPC `id` out of the system, if it is there.
     pub fn remove(&mut self, id: NpcId) {
         self.npcs.retain(|npc| npc.id != id);
+    }
+
+    /// Takes NPC `id`, destroyed, out of the system, if it is there: its
+    /// slot freed as its last explosion ends (`_HandleShipDisplay`
+    /// @0x2dee0), its record kept for the thinks that still read it
+    /// ([`gone`], [`Freed::InShipPass`]).
+    pub fn remove_destroyed(&mut self, id: NpcId) {
+        if let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) {
+            self.gone.record(npc.clone(), Freed::InShipPass);
+        }
+        self.remove(id);
     }
 
     /// The NPCs that left on the last tick, and how.

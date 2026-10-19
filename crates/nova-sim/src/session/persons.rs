@@ -391,9 +391,11 @@ impl Session {
         self.pilot.grudges.remove(&id);
     }
 
-    /// NPC `id`, destroyed, is taken out of the system: a person without
-    /// an escape pod is gone for good (`_HandleShipDisplay`
-    /// @0x2dc4a-0x2dca1).
+    /// NPC `id`, destroyed, is taken out of the system, its record kept
+    /// for the thinks that still read its slot
+    /// ([`Traffic::remove_destroyed`](crate::traffic::Traffic::remove_destroyed)):
+    /// a person without an escape pod is gone for good
+    /// (`_HandleShipDisplay` @0x2dc4a-0x2dca1).
     pub(super) fn lose_destroyed(&mut self, id: NpcId) {
         let person = self
             .npcs()
@@ -403,7 +405,7 @@ impl Session {
         if let Some(person) = person.filter(|person| person.flags & ESCAPE_POD == 0) {
             self.go(person.id);
         }
-        self.traffic.remove(id);
+        self.traffic.remove_destroyed(id);
     }
 
     /// NPC `id`, captured, no longer flies as its person, who is gone for
@@ -490,6 +492,42 @@ mod tests {
     use crate::rulebook::RuleSource;
     use crate::rulebook::{RuleKey, Rulebook};
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
+
+    #[test]
+    fn a_destroyed_ships_place_is_read_by_the_brave_trader_it_provoked() {
+        // `_HandleShipDisplay` frees the slot as the last explosion ends
+        // (@0x2dee0) but keeps its record: a brave trader in an earlier
+        // slot, fleeing it, reads its place on its next think, attacks it
+        // within 1250 (@0x8b616-0x8b68d), and the high level ends that
+        // attack keeping the provocation (@0x8e731).
+        use crate::ai::Goal;
+        use crate::flight::Controls;
+        use crate::stats::ShipStats;
+        use crate::traffic::npc::AiType;
+
+        let catalog = crate::testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let ai = crate::ai::NovaAi::default();
+        session.tick(Controls::default());
+        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        let mut attacker = crate::traffic::fixture::npc(0, ShipStats::default());
+        attacker.ai_type = AiType::Warship;
+        attacker.state.position = crate::geometry::Vec2::new(300.0, 0.0);
+        let attacker = session.traffic.add_npc_at(attacker, 2);
+        let mut trader = crate::traffic::fixture::npc(1, ShipStats::default());
+        trader.ai_type = AiType::BraveTrader;
+        trader.provoked = 10.0;
+        trader.target = Some(ShipRef::Npc(attacker));
+        trader.goal = Goal::Flee(ShipRef::Npc(attacker));
+        let trader = session.traffic.add_npc_at(trader, 1);
+        session.npc_mut(attacker).expect("there").condition = Condition::Destroyed;
+        session.take_out_the_destroyed(&mut NeverFires);
+        session.tick(Controls::default());
+        session.tick_traffic(&catalog, &ai, &mut NeverFires);
+        let after = session.npc(trader).expect("stays");
+        assert_eq!((after.goal, after.target), (Goal::Idle, None));
+        assert!((after.provoked - 10.0).abs() < f32::EPSILON, "kept");
+    }
 
     #[test]
     fn a_quote_shows_for_420_ticks() {

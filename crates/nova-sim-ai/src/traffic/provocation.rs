@@ -55,13 +55,13 @@
 //!   A brave trader whose attacker is breaking up reads the slot's place
 //!   ([`BraveTrader`](crate::ai::brave::BraveTrader)): within 1250 it
 //!   attacks it and the high level ends that with its provocation, beyond
-//!   it flees it and keeps it. One difference is left: an attacker gone
-//!   from the system, whose place the original's slot still holds, so the
-//!   trader attacks it near (target -1, no zero, @0x8e731) or flees it far
-//!   (zeroed, @0x8e228-0x8e23d); here it decides again at once, and its
-//!   flight from a ship gone zeroes as any does. The engine keeps no place
-//!   for a ship that has left, and only a later hit of no damage on such
-//!   a trader shows which it did.
+//!   it flees it and keeps it. One whose attacker has gone from the
+//!   system reads the freed slot's last place while its target still names
+//!   it ([`gone`](crate::traffic::gone)): within 1250 it attacks it, which
+//!   the slot test turns into an attack with target -1, keeping the
+//!   provocation (@0x8e731), and beyond it flees it, which ends zeroed
+//!   (@0x8e228-0x8e23d) ([`fight_on_gone`]). A think that ends its own
+//!   fight so leaves no flight of its old goal for [`flight_ended`].
 //! - **The rest of the traffic**: the count wait's start (@0x8c713,
 //!   [`board_wait::enter`]); a ship not intact (`_AIDispatch` @0x8feef,
 //!   the tick's third step); a pirate's capture of a ship, for each ship
@@ -104,7 +104,10 @@ pub(crate) fn attack_breaking_up(npc: &Npc, decided: Goal, around: &Surroundings
 /// provocation (@0x8dff6 → @0x8e228-0x8e23d). A think that turns on
 /// another ship leaves no such flight; one that lets the fight go stands
 /// for the original's, which keeps goal 3 on +0x70, so the flight it had
-/// before is the one tested (see [`attack_breaking_up`]).
+/// before is the one tested (see [`attack_breaking_up`]). `NovaAi` asks
+/// it only of a think that keeps its target: one that clears it
+/// ([`Decision::clears_target`]) has ended its own fight, as a brave
+/// trader's on a gone attacker does ([`fight_on_gone`]).
 #[must_use]
 pub(crate) fn flight_ended(npc: &Npc, decided: Goal, around: &Surroundings) -> bool {
     let gone = |ship| !around.condition_of(ship).is_some_and(Condition::active);
@@ -112,6 +115,25 @@ pub(crate) fn flight_ended(npc: &Npc, decided: Goal, around: &Surroundings) -> b
         Some(_) => matches!(decided, Goal::Flee(ship) if gone(ship)),
         None => matches!(npc.goal, Goal::Flee(ship) if gone(ship)),
     }
+}
+
+/// What the high level makes of a think that `decided` to fight a ship
+/// gone from its slot, read at its last place among `around`'s gone ships
+/// ([`Surroundings::held_gone`]): its slot test makes the target -1
+/// (@0x8d4e4-0x8d50d), then a flight with no target ends in state 0,
+/// zeroing the provocation (@0x8dff6 → @0x8e228-0x8e23d), and an attack
+/// with none in state 0, keeping it (@0x8e263 → @0x8e731). Whether the
+/// provocation is zeroed, or `None` for a think that fights no gone ship.
+#[must_use]
+pub(crate) fn fight_on_gone(decided: Goal, around: &Surroundings) -> Option<bool> {
+    let ship = fought(decided)?;
+    let gone = match ship {
+        crate::combat::ShipRef::Npc(id) => {
+            around.npc(id).is_none() && around.gone_npc(id).is_some()
+        }
+        crate::combat::ShipRef::Player => false,
+    };
+    gone.then_some(matches!(decided, Goal::Flee(_)))
 }
 
 /// The ship `goal` flees or attacks, the fight the high level then sees.

@@ -90,6 +90,7 @@ use crate::landing::is_landable as landable;
 use crate::reserves::Reserves;
 use crate::rulebook::RuleSource;
 use crate::traffic::destination;
+use crate::traffic::gone::GoneShip;
 use crate::traffic::npc::{Npc, NpcId};
 use nova_sim_combat::asteroid::Asteroid;
 
@@ -594,6 +595,11 @@ pub struct Surroundings<'a> {
     /// it carries the weapon (@0x85e4c-0x85e59, @0x2b06a-0x2b075; see
     /// [`fire::dogfight_lead`]).
     pub weapons: &'a Arsenal,
+    /// The ships gone from the system since the last decision pass, their
+    /// records as they left, whose slots a ship's target may still name
+    /// ([`gone`](crate::traffic::gone)): what a brave trader reads of a
+    /// gone attacker ([`Surroundings::held_gone`]).
+    pub gone: &'a [GoneShip],
 }
 
 /// No government marked by an IFF scrambler.
@@ -627,6 +633,7 @@ impl<'a> Surroundings<'a> {
             odds_cache: RuleSource::Engine,
             led_speed: 1.0,
             weapons: &NO_WEAPONS,
+            gone: &[],
         }
     }
 
@@ -700,6 +707,27 @@ impl<'a> Surroundings<'a> {
     #[must_use]
     pub fn npc(&self, id: NpcId) -> Option<&'a Npc> {
         self.npcs.iter().find(|npc| npc.id == id)
+    }
+
+    /// NPC `id`'s record as it left, if it is gone from the system since
+    /// the last decision pass ([`Surroundings::gone`]).
+    #[must_use]
+    pub fn gone_npc(&self, id: NpcId) -> Option<&'a Npc> {
+        self.gone
+            .iter()
+            .find(|gone| gone.ship.id == id)
+            .map(|gone| &gone.ship)
+    }
+
+    /// The record of the gone ship `npc`'s target still names, no slot
+    /// test having cleared it ([`GoneShip::held_by`]): what `npc`'s think
+    /// reads of its target, though the ship has left.
+    #[must_use]
+    pub fn held_gone(&self, npc: &Npc) -> Option<&'a Npc> {
+        self.gone
+            .iter()
+            .find(|gone| gone.held_by(npc))
+            .map(|gone| &gone.ship)
     }
 
     /// Where `ship` is and how it moves, if it is in the system.

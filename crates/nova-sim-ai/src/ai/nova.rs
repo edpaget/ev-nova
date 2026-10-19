@@ -328,9 +328,12 @@ impl Behaviour for NovaAi {
         if lost_sight::ends_high_level(&decision) {
             return decision;
         }
+        // A think that clears its target has ended its fight itself, so
+        // the high level finds no flight of the old goal's to end.
         let decision = Decision {
             forgets_provocation: decision.forgets_provocation
-                || crate::traffic::provocation::flight_ended(npc, decision.goal, around),
+                || (!decision.clears_target
+                    && crate::traffic::provocation::flight_ended(npc, decision.goal, around)),
             ..decision
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);

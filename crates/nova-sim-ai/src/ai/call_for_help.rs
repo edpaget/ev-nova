@@ -51,13 +51,16 @@ pub fn when_fleeing(goal: Goal) -> Option<CommCall> {
 /// distress call fleeing (state 3, @0x8b6bc-0x8b6cc), or attacking an NPC
 /// of AI type above 2, a warship or an interceptor (state 4, a target
 /// neither -1 nor the player, @0x8b6e3-0x8b71c); a ship with no AI
-/// ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), -1) is neither.
+/// ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), -1) is neither. A
+/// ship gone from its slot is read in its record as it left
+/// ([`Surroundings::gone_npc`]), which the freed slot still holds.
 #[must_use]
 pub fn brave_call(goal: Goal, around: &Surroundings) -> Option<CommCall> {
     match goal {
         Goal::Flee(_) => Some(CommCall::Distress),
         Goal::Attack(ShipRef::Npc(id)) => around
             .npc(id)
+            .or_else(|| around.gone_npc(id))
             .filter(|target| {
                 !target.no_ai && matches!(target.ai_type, AiType::Warship | AiType::Interceptor)
             })
