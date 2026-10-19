@@ -2861,6 +2861,12 @@ impl Session {
             // tick queued still settles (see `take_scans`), and the pass's
             // asteroid work runs (see the `asteroids` module).
             self.take_scans(rules.law, &mut &mut *chance);
+            // The traffic flies the warp's lead-in, so each NPC's display
+            // still steps its fade (@0x2d088-0x2d164, see
+            // `Traffic::step_fades`).
+            if self.landed.is_none() && self.in_warp_lead_in() {
+                self.traffic.step_fades();
+            }
             self.drawn.clear();
             self.tick_asteroids(&mut *chance);
             return;
@@ -18330,20 +18336,23 @@ pub(super) mod tests {
         session.traffic.npcs_mut()[0].cloak = CLOAKED;
         session.watch_ship(NpcId(0));
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(fates(&session), [], "cloaked, and no scanner");
         assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        // The sighting (`_MissionHandler` @0x44214) reads the fade the last
+        // pass's display left (@0x444ad, @0x2d088): seen on the first pass
+        // that finds it uncloaked.
         let mut ticks = 1;
         while fates(&session).is_empty() {
-            assert!(
-                session.npcs()[0].cloak.is_cloaked(),
-                "seen at once uncloaked"
-            );
+            let cloaked = session.npcs()[0].cloak.is_cloaked();
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            assert_eq!(fates(&session).is_empty(), cloaked, "seen once uncloaked");
+            session.tick_combat(Rules::default(), &mut NeverFires);
             ticks += 1;
         }
         assert_eq!(
-            ticks, 32,
-            "fading out from 32 at 0.75 a tick, cloaked above 8"
+            ticks, 33,
+            "fading out from 32 at 0.75 a tick, cloaked above 8, seen the pass after"
         );
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
         assert!(session.story.watched.is_empty(), "forgotten once seen");

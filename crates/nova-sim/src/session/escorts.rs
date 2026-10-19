@@ -1452,6 +1452,8 @@ mod tests {
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         let first = session.fleet[0].expect("placed");
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        // Its display steps the fade (@0x2d088), in the fight's NPC step.
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
         assert_eq!(session.fleet[0], Some(first), "the same escort");
         let cloak = session.npc(first).expect("there").cloak;
         assert_eq!(

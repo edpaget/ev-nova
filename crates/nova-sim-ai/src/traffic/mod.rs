@@ -1163,7 +1163,7 @@ impl Traffic {
     }
 
     /// Steps 6 to 8 of a tick in `world` (see the module docs), rolling on
-    /// `chance`: every NPC's cloak held and faded ([`Traffic::hold_cloaks`]),
+    /// `chance`: every NPC's cloak held ([`Traffic::hold_cloaks`]),
     /// then the autopilot, a flight step, the followers of a ship that
     /// reached its gate released ([`Traffic::release_followers`]), the
     /// departures, but for the NPCs in `still`, which keep their place,
@@ -1452,18 +1452,32 @@ impl Traffic {
         }
     }
 
-    /// Each NPC's cloak a tick on in `_HandleShip` (see [`cloak`]): one
-    /// cloaked that can no longer cloak uncloaks (@0x3413d), and its fade
-    /// steps. Whether it is cloaked is read now, after the frame's think:
-    /// a think moves only the way the fade goes ([`cloak::think`]), and
-    /// whether a ship is cloaked turns on its fade, so it reads as it did
-    /// before the think.
+    /// Each NPC's cloak held in `_HandleShip` (see [`cloak`]): one cloaked
+    /// that can no longer cloak uncloaks (@0x3413d). Whether it is
+    /// cloaked is read now, after the frame's think: a think moves only
+    /// the way the fade goes ([`cloak::think`]), and whether a ship is
+    /// cloaked turns on its fade, so it reads as it did before the think.
+    /// The fade steps at the ship's display step
+    /// ([`Traffic::step_fades`]).
     fn hold_cloaks(&mut self) {
         for npc in &mut self.npcs {
             if npc.cloak.is_cloaked() {
                 let able = npc.can_cloak();
                 cloak::hold(&mut npc.cloak, able);
             }
+        }
+    }
+
+    /// Each NPC's cloak fade a tick on ([`Cloak::step`](cloak::Cloak::step)),
+    /// as `_HandleShipDisplay` steps it once a frame (@0x2d088-0x2d164),
+    /// right after the ship's own `_HandleShip` (@0x444ad): so after its
+    /// pick. The session runs it once after the whole NPC loop
+    /// (`nova_sim::Session::handle_npcs`), on both passes. Stepping after
+    /// the loop gives every reader what the per-slot step gives: a pick
+    /// reads only its own ship's cloak (`Shooter::cloaked`), and the aim
+    /// reads the targets' conditions, not their cloaks.
+    pub fn step_fades(&mut self) {
+        for npc in &mut self.npcs {
             npc.cloak.step(npc.cloak_gear.fast());
         }
     }
@@ -2806,11 +2820,12 @@ mod tests {
     }
 
     #[test]
-    fn the_cloak_think_is_the_think_halfs_and_the_hold_and_fade_the_fly_halfs() {
+    fn the_cloak_think_is_the_think_halfs_the_hold_the_fly_halfs_and_the_fade_the_displays() {
         // `_AIDispatch` runs `_AIHandleCloaking` (@0x8fcaa); `_HandleShip`
-        // holds a cloak that can no longer cloak (@0x3413d) and steps the
-        // fade. A think sets only the way the fade moves, never whether
-        // the ship is cloaked (see `cloak::think`).
+        // holds a cloak that can no longer cloak (@0x3413d), and
+        // `_HandleShipDisplay` steps the fade (@0x2d088). A think sets
+        // only the way the fade moves, never whether the ship is cloaked
+        // (see `cloak::think`).
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
         let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
         traffic.think_holding(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
@@ -2823,6 +2838,12 @@ mod tests {
             "thought, not faded"
         );
         traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[0].cloak.fade,
+            0.0,
+            "not faded in the fly half"
+        );
+        traffic.step_fades();
         assert_eq!(traffic.npcs()[0].cloak.fade, 0.75, "faded a step");
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
         let npc = &mut traffic.npcs[0];
@@ -2839,7 +2860,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_again_steps_and_holds_cloaks_but_does_not_think() {
+    fn moving_again_holds_cloaks_but_does_not_think_and_the_display_steps_the_fade() {
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
         traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
@@ -2849,6 +2870,9 @@ mod tests {
             direction: 1,
         };
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.fade, 0.75, "not in the move");
+        // `_HandleShipDisplay` steps it (@0x2d088), after `_HandleShip`.
+        traffic.step_fades();
         assert_eq!(traffic.npcs()[0].cloak.fade, 1.5, "its fade steps");
         let npc = &mut traffic.npcs[0];
         npc.cloak = Cloak {
@@ -5861,21 +5885,29 @@ mod tests {
         assert_eq!((npc.miner, npc.can_scoop, npc.holds), (0, false, 0));
     }
 
+    /// A tick of `traffic` deciding as `behaviour` says, then its
+    /// display steps' fades, as the session runs them after the NPCs'
+    /// `_HandleShip` (`_HandleShipDisplay` @0x2d088).
+    fn displayed(traffic: &mut Traffic, behaviour: &impl Behaviour) {
+        traffic.tick_in(behaviour, World::new(&[]), &[], &mut Draws::of(&[]));
+        traffic.step_fades();
+    }
+
     #[test]
     fn a_ship_set_up_cloaked_with_nothing_to_keep_it_uncloaks_on_its_first_think_that_finds_it_cloaked()
      {
         let mut traffic = with_mission_ship(ZEPHYR, true, 0.0);
         for _ in 0..22 {
-            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            displayed(&mut traffic, &Keep);
         }
         let cloak = traffic.npcs()[0].cloak;
         assert_eq!(cloak.direction, 1, "an early uncloak does nothing");
         assert!(cloak.is_cloaked(), "{cloak:?}");
-        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        displayed(&mut traffic, &Keep);
         assert_eq!(traffic.npcs()[0].cloak.direction, -1);
         let mut ticks = 1;
         while traffic.npcs()[0].cloak.is_cloaked() {
-            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            displayed(&mut traffic, &Keep);
             ticks += 1;
         }
         assert_eq!(ticks, 12, "at 0.75 a tick, from 16.5 to 8");
@@ -5885,7 +5917,7 @@ mod tests {
     fn a_ship_without_a_cloak_set_up_cloaked_uncloaks_all_the_same() {
         let mut traffic = with_mission_ship(CloakGear::default(), true, 0.0);
         for _ in 0..23 {
-            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            displayed(&mut traffic, &Keep);
         }
         assert_eq!(traffic.npcs()[0].cloak.direction, -1);
     }
@@ -5894,7 +5926,7 @@ mod tests {
     fn a_mission_ship_come_in_uncloaked_cloaks_on_its_think_while_it_retreats_and_uncloaks_after() {
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
         let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
-        traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        displayed(&mut traffic, &fleeing);
         assert_eq!(
             traffic.npcs()[0].cloak,
             Cloak {
@@ -5904,11 +5936,11 @@ mod tests {
             "thinks, then fades a step"
         );
         for _ in 0..21 {
-            traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+            displayed(&mut traffic, &fleeing);
         }
         assert!(traffic.npcs()[0].cloak.is_cloaked());
         let calm = Recording::deciding(Goal::Idle);
-        traffic.tick_in(&calm, World::new(&[]), &[], &mut Draws::of(&[]));
+        displayed(&mut traffic, &calm);
         assert_eq!(
             traffic.npcs()[0].cloak.direction,
             -1,
@@ -5922,7 +5954,7 @@ mod tests {
             false,
             0.0,
         );
-        plain.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        displayed(&mut plain, &fleeing);
         assert_eq!(plain.npcs()[0].cloak, Cloak::default(), "no bit");
     }
 

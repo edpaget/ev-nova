@@ -3657,17 +3657,21 @@ pub(super) mod tests {
         for npc in session.traffic.npcs_mut() {
             npc.cloak = full;
         }
+        // The sighting (`_MissionHandler` @0x44214) reads the fades the
+        // last pass's displays left (@0x444ad, @0x2d088).
         let mut ticks = 0;
         while !goals_met(&session) {
-            assert!(
-                session.npcs().iter().all(|npc| npc.cloak.is_cloaked()),
-                "met only once seen"
-            );
+            let cloaked = session.npcs().iter().all(|npc| npc.cloak.is_cloaked());
             tick(&mut session, &catalog);
             settle(&mut session, &catalog);
+            assert_eq!(!goals_met(&session), cloaked, "met only once seen");
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
             ticks += 1;
         }
-        assert_eq!(ticks, 32, "each uncloaks on its think, and fades out");
+        assert_eq!(
+            ticks, 33,
+            "each uncloaks on its think, and fades out, seen the pass after"
+        );
     }
 
     #[test]

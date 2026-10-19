@@ -275,7 +275,10 @@ impl Session {
     /// down, it regenerates, it fires its pick, its death timer ticks and
     /// it is displayed ([`Combat::handle_npcs`]), a final explosion's
     /// shockwave striking at once, its strikes settled
-    /// ([`Session::land_phase`]); and the pick fired is cleared or kept
+    /// ([`Session::land_phase`]), and laid out
+    /// ([`Session::lay_out_displayed`]); every NPC's cloak fade steps
+    /// ([`Traffic::step_fades`](crate::traffic::Traffic::step_fades)); and
+    /// the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
     pub(super) fn handle_npcs(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         self.traffic.ease_stray();
@@ -283,6 +286,7 @@ impl Session {
             combat.handle_npcs(fighters, arena, chance);
         });
         self.lay_out_displayed();
+        self.traffic.step_fades();
         self.traffic.after_firing(&self.arsenal);
     }
 
@@ -878,6 +882,40 @@ mod tests {
         );
         assert_eq!(session.npcs()[0].reserves.shield.now, npc_full - 5.0);
         assert_eq!(session.reserves().shield.now, full - 5.0);
+    }
+
+    #[test]
+    fn an_npc_whose_fade_crosses_into_its_cloak_this_pass_still_fires_its_pick() {
+        // `_HandleShipDisplay` steps the fade (@0x2d088-0x2d164) after the
+        // NPC's `_HandleShip` has fired its pick (@0x34ffd, @0x444ad): at
+        // 15.5 rising by 0.75, its blaster (no `Flags2` 0x0100) fires, and
+        // the ship reads cloaked after.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak {
+            fade: 15.5,
+            direction: 1,
+        };
+        session.take_combat_events();
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &crate::session::tests::Firing,
+        );
+        let fired = session.take_combat_events().iter().any(|event| {
+            matches!(
+                event,
+                crate::combat::CombatEvent::Fired {
+                    ship: ShipRef::Npc(NpcId(0)),
+                    ..
+                }
+            )
+        });
+        assert!(fired, "its pick");
+        let cloak = session.npcs()[0].cloak;
+        assert_eq!(cloak.fade, 16.25);
+        assert!(cloak.is_cloaked(), "cloaked after");
     }
 
     #[test]
