@@ -715,6 +715,37 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_escort_a_deadly_stellar_kills_leaves_the_rest_to_re_form() {
+        let kept = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
+        let shared = BTreeMap::from([(FOOD, 5), (OPALS, 2)]);
+        for (reading, cargo, destroyed) in [
+            (RuleSource::Engine, kept, 0),
+            (RuleSource::Bible, shared, 1),
+        ] {
+            let mut session = laden(1, RuleSource::Engine);
+            session.rules = session
+                .rules
+                .with_override(RuleKey::DeadlyStellarKill, reading);
+            assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+            // Apart from the other escort and the player.
+            let at = crate::geometry::Vec2::new(3000.0, 3000.0);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            npc.state.position = at;
+            let id = npc.id;
+            session.sites = vec![crate::catalog::LandingSite {
+                flags2: crate::deadly_stellar::DEADLY_STELLAR,
+                frame_size: Some((2, 2)),
+                ..crate::testkit::planet(160, at.x, at.y)
+            }];
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            assert!(session.npc(id).is_none(), "{reading:?}: killed");
+            assert_eq!(slots(&session), [(2, 2)], "{reading:?}: re-formed");
+            assert_eq!(session.pilot.cargo, cargo, "{reading:?}");
+            assert_eq!(ships_of(&session).destroyed, destroyed, "{reading:?}");
+        }
+    }
+
+    #[test]
     fn a_dying_trader_mission_escort_resets_as_it_takes_its_share() {
         use crate::scan::Latches;
         use crate::session::precalced::tests::convicted;

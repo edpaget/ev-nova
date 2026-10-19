@@ -42,6 +42,17 @@
 //!   sound, which belong to the breakup. A player in its escape pod is
 //!   killed too, and its pod's countdown ends.
 //!
+//! - **A mission escort** leaves the formation, and the ships the player
+//!   leads re-form without it, by either reading: `_AICalcFormationPositions`
+//!   numbers the formation afresh every frame over the active slots whose
+//!   parent is the player (the +0xb8 test @0x8515d), so a slot freed with
+//!   no death drops out of it on the next frame, though
+//!   `_HandleDeadlyStellars` itself calls no re-form. By the engine reading
+//!   it takes no share of the fleet's cargo, as `_HandleShip`'s dying
+//!   branch (@0x350d9-0x350f4) never runs for it; by the other reading,
+//!   destroyed, it takes its share and its AI resets as any mission
+//!   escort destroyed ([`Session::lose_dying_mission_escorts`]).
+//!
 //! **Ordering.** The original's hold starts on the next `_HandlePlayer`,
 //! and its killed NPC was laid out by `_HandleShipDisplay` before it went
 //! inactive; here the hold starts at the kill and the NPC is taken out
@@ -77,6 +88,7 @@ impl Session {
             })
             .collect();
         let rule = DeadlyStellarKill::from(self.rules.source_for(RuleKey::DeadlyStellarKill));
+        let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
         let mut killed = BTreeSet::new();
         for (at, radius) in deadly {
             if self.player_touches_deadly(at, radius) {
@@ -103,8 +115,15 @@ impl Session {
                 killed.insert(id);
             }
         }
-        if !killed.is_empty() {
-            self.lose_escorts(&[], &killed);
+        if killed.is_empty() {
+            return;
+        }
+        self.lose_escorts(&[], &killed);
+        if rule == DeadlyStellarKill::Destroyed {
+            self.lose_dying_mission_escorts();
+        }
+        if !killed.is_disjoint(&led) {
+            self.reform();
         }
     }
 
