@@ -1575,6 +1575,32 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_of_a_folding_class_launches_folded_to_its_last_set() {
+        let mut catalog = carrying();
+        catalog.hulls[1].display = Some(crate::catalog::ShipDisplay {
+            flags: crate::combat::ship_frames::FOLDS,
+            base_sets: 3,
+            ..crate::catalog::ShipDisplay::default()
+        });
+        let (mut session, raider, _) = raided(&catalog);
+        let sortie = Sortie {
+            carrier: ShipRef::Npc(raider),
+            bay: BAY,
+            ship: VIPER,
+            from: ShipState::default(),
+            heading: 0.0,
+            target: None,
+        };
+        assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+        let fold = session.npcs().last().expect("launched").armament.fold();
+        assert_eq!(
+            (fold.set, fold.dir),
+            (2, 0),
+            "`_LaunchFighter`'s BaseSets - 1"
+        );
+    }
+
+    #[test]
     fn a_fighter_takes_its_carriers_speed_along_its_heading() {
         let catalog = carrying();
         let (mut session, raider, _) = raided(&catalog);

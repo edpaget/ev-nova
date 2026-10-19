@@ -748,6 +748,31 @@ mod tests {
     }
 
     #[test]
+    fn the_players_hulk_spawns_glowing_and_folded_to_its_last_set() {
+        let mut catalog = ejecting(100);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.display = Some(crate::catalog::ShipDisplay {
+                    flags: crate::combat::ship_frames::FOLDS,
+                    base_sets: 4,
+                    ..crate::catalog::ShipDisplay::default()
+                });
+            }
+        }
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        let hulk = hulk(&session);
+        let fold = hulk.armament.fold();
+        assert_eq!((fold.set, fold.dir), (3, 0), "BaseSets - 1");
+        assert_eq!(
+            hulk.display.glow,
+            crate::traffic::ship_display::GLOW_SPAWN,
+            "`_GenericRandomShipSpawn`'s"
+        );
+    }
+
+    #[test]
     fn a_dying_hulk_of_a_pod_carrying_class_ejects_its_crew_pods() {
         let mut catalog = ejecting(100);
         for hull in &mut catalog.hulls {
