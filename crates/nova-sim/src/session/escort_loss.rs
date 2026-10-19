@@ -8,15 +8,17 @@ use std::cell::RefCell;
 
 use crate::ai::{Behaviour, Goal, NovaAi, Surroundings};
 use crate::chance::{Chance, NeverFires};
-use crate::combat::projectile::Source;
+use crate::combat::projectile::{ShotId, Source};
 use crate::combat::{Rules, ShipRef};
+use crate::escort::FormationSlot;
 use crate::fleet::Escort;
 use crate::flight::Controls;
 use crate::geometry::Vec2;
+use crate::mission::ships::ShipBehav;
 use crate::session::Session;
 use crate::session::tests::{FIRE, armed, facing_an_npc};
 use crate::testkit::FakePilotCatalog;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::{MissionMark, Npc, NpcId};
 
 /// Nova's AI, recording on each decision which ships the player leads.
 #[derive(Debug, Default)]
@@ -138,4 +140,129 @@ fn a_trader_escort_disabled_in_the_passes_takes_its_cargo_share_once() {
     }
     assert!(held[0] < 10, "its share went as it was lost: {held:?}");
     assert_eq!(held[1..], [held[0], held[0]], "once: {held:?}");
+}
+
+/// [`escorted`], but with NPC 0 a mission escort that has joined the
+/// player's formation in place of an enlisted one, its mission held in
+/// slot 0.
+fn mission_escorted(catalog: &FakePilotCatalog) -> Session {
+    let mut session = facing_an_npc(catalog, 180);
+    let mut bystander = session.npcs()[0].clone();
+    bystander.state.position.x += 3000.0;
+    bystander.goal = Goal::Idle;
+    session.traffic.add_npc(bystander);
+    assert!(
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 0))
+    );
+    let npc = session.npc_mut(NpcId(0)).expect("there");
+    npc.mission = Some(MissionMark {
+        slot: 0,
+        behav: ShipBehav::EscortPlayer,
+        formation: Some(FormationSlot::default()),
+        order: None,
+    });
+    npc.reserves.shield.now = 0.0;
+    npc.reserves.armor.now = (npc.reserves.armor.max * 0.34).ceil();
+    assert!(session.npcs()[0].escorts_player());
+    session
+}
+
+/// The player fires until two of its shots are in flight, both then set
+/// on a move into NPC 0 for the
+/// next pass's collision passes to land: the first made no ship's, so it
+/// hits whatever it meets, and the second left the player's own, which
+/// passes through a ship the player leads. Gives the second shot's id.
+fn two_shots_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) -> ShotId {
+    session.hold_trigger(FIRE);
+    let players = |session: &Session| {
+        session
+            .combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.firer == ShipRef::Player)
+            .count()
+    };
+    for _ in 0..60 {
+        if players(session) >= 2 {
+            break;
+        }
+        session.game_work(
+            Controls::default(),
+            catalog,
+            &Watching::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+    }
+    session.hold_trigger(crate::combat::armament::Trigger::default());
+    assert!(session.npcs()[0].escorts_player(), "still led");
+    let at = session.npc(NpcId(0)).expect("there").state.position;
+    let mut shots = session
+        .combat
+        .shots_mut()
+        .iter_mut()
+        .filter(|shot| shot.firer == ShipRef::Player);
+    let first = shots.next().expect("a first shot");
+    first.source = Source::Other;
+    first.aimed_at = None;
+    first.moved_from = Some(at + Vec2::new(0.0, 20.0));
+    first.position = at;
+    let second = shots.next().expect("a second shot");
+    second.moved_from = Some(at + Vec2::new(0.0, 20.0));
+    second.position = at;
+    second.id
+}
+
+/// Whether the shot `id` is still in flight after the next pass.
+fn passes_through(session: &mut Session, catalog: &FakePilotCatalog, id: ShotId) -> bool {
+    session.game_work(
+        Controls::default(),
+        catalog,
+        &Watching::default(),
+        Rules::default(),
+        &mut NeverFires,
+    );
+    assert_ne!(
+        session.npc(NpcId(0)).expect("still here").condition,
+        crate::combat::hull::Condition::Intact,
+        "the first shot disabled it"
+    );
+    session.combat.shots().iter().any(|shot| shot.id == id)
+}
+
+#[test]
+fn the_players_next_shot_in_the_pass_strikes_an_enlisted_escort_just_disabled() {
+    let catalog = armed();
+    let mut session = escorted(&catalog);
+    let second = two_shots_into_the_escort(&mut session, &catalog);
+    assert!(!passes_through(&mut session, &catalog, second));
+}
+
+#[test]
+fn the_players_next_shot_in_the_pass_still_passes_a_mission_escort_just_disabled() {
+    let catalog = armed();
+    let mut session = mission_escorted(&catalog);
+    let second = two_shots_into_the_escort(&mut session, &catalog);
+    assert!(passes_through(&mut session, &catalog, second));
+}
+
+#[test]
+fn only_an_enlisted_escort_fights_as_a_ship_of_the_fleet() {
+    let catalog = armed();
+    let enlisted = escorted(&catalog);
+    let (player, npcs) = enlisted.fight_terms();
+    assert!(!player.fleet_escort);
+    let fleet: Vec<bool> = npcs.iter().map(|terms| terms.fleet_escort).collect();
+    assert_eq!(fleet, [true, false], "the escort, then the bystander");
+    let mission = mission_escorted(&catalog);
+    let (_, npcs) = mission.fight_terms();
+    let fleet: Vec<bool> = npcs.iter().map(|terms| terms.fleet_escort).collect();
+    assert_eq!(
+        fleet,
+        [false, false],
+        "the mission escort, then the bystander"
+    );
 }
