@@ -12,7 +12,10 @@
 //!    it moves ([`Session::player_fires`]).
 //! 2. The move, the turn, thrust and position step (@0x6c770-0x6d4eb),
 //!    or the escape pod's flight; the rescue, which ends the pass
-//!    (@0x68ddd); then the eject check (@0x6f22c).
+//!    (@0x68ddd); then the player's display step: its death timer's tick
+//!    (@0x6d7e6), the klaxon (@0x6f1e4), the eject check (@0x6f22c) and
+//!    its display (@0x43e29), which starts its breakup's countdown or
+//!    explodes it ([`Session::player_display_step`]).
 //! 3. The collision passes (@0x43e70-0x44015), their hits settled and
 //!    answered at once, as `_DamageShip`'s reaction block runs in them.
 //! 4. The advance pass's AI (@0x44223-0x442ae): the traffic's think half,
@@ -26,9 +29,11 @@
 //! 5. `_HandleShot` (@0x44385): the ends of life, the moves and the
 //!    locks, their hits settled and answered.
 //! 6. `_HandleShip` (@0x44483): the traffic's fly half and the session's
-//!    work after it, the assistance, then each NPC's reloads,
-//!    regeneration and fire, slot by slot ([`Session::handle_npcs`]).
-//! 7. `_HandleBeams` (@0x4453d) and the fight's late steps, then what the
+//!    work after it, the assistance, then, slot by slot, each NPC's
+//!    reloads, regeneration, fire and death timer's tick, then its
+//!    display (@0x444ad), which starts its breakup's countdown or
+//!    explodes it ([`Session::handle_npcs`]).
+//! 7. `_HandleBeams` (@0x4453d), its hits settled, then what the
 //!    pass leaves ([`Session::fight_tail`]), then the asteroids
 //!    (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids` @0x444f5, after
 //!    the passes).
@@ -43,6 +48,11 @@
 //! **What remains**, none crossing a boundary the player sees, so none
 //! filed:
 //!
+//! - A final explosion's session work (the fates, a mission ship lost, a
+//!   person gone, the take-out) runs in [`Session::fight_tail`], later in
+//!   the same pass and before the frame is drawn, where
+//!   `_HandleShipDisplay` runs it at the ship's display
+//!   (@0x2daa2-0x2dcfc).
 //! - Every NPC's point defence and launches run after every NPC's
 //!   decision, where `_AIDispatch` interleaves them slot by slot.
 //! - What the close strikes (the beams, the shockwaves) is answered by the
@@ -79,13 +89,8 @@ use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
 
-/// What a pass's fight reads of the session as it began: whether the
-/// player was destroyed or dying, and every NPC.
+/// What a pass's fight reads of the session as it began: every NPC.
 pub(super) struct PassStart {
-    /// Whether the player's ship was destroyed.
-    was_destroyed: bool,
-    /// Whether the player's ship was breaking up.
-    was_dying: bool,
     /// Every NPC.
     npcs: Vec<NpcBefore>,
 }
@@ -94,8 +99,6 @@ impl PassStart {
     /// `session` as its pass's fight begins.
     pub(super) fn of(session: &Session) -> Self {
         Self {
-            was_destroyed: session.condition == Condition::Destroyed,
-            was_dying: matches!(session.condition, Condition::Dying { .. }),
             npcs: session.npcs_before(),
         }
     }
@@ -160,7 +163,8 @@ impl Session {
         false
     }
 
-    /// The rest of a pass of the game's work after the player's move, on
+    /// The rest of a pass of the game's work after the player's move, from
+    /// the player's display step ([`Session::player_display_step`]) on, on
     /// `pass` by `rules`, against the session as the pass `start`ed, the
     /// NPCs answering its hits as `behaviour` says, drawing on `chance`:
     /// both passes run it, [`Session::game_work`] and
@@ -186,7 +190,8 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        self.eject_before_fight(chance);
+        // The end of `_HandlePlayer` and its display (@0x43e29).
+        self.player_display_step(pass, rules, chance);
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(pass, rules, chance);
         self.answer_strikes(behaviour);
@@ -223,7 +228,7 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(start, pass, rules, chance);
+        self.fight_tail(start, rules, chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
         // come after the collision passes (see the `asteroids` module).
         self.tick_asteroids(chance);
@@ -263,16 +268,18 @@ impl Session {
         });
     }
 
-    /// `_HandleShip`'s fight on `pass` by `rules`, drawing on `chance`:
-    /// every NPC's stray provocation eases (@0x35374-0x353b2), after the
-    /// collision passes and the shots and before the beams, then, slot by
-    /// slot, each NPC's reloads count down, it regenerates and it fires
-    /// its pick ([`Combat::handle_npcs`]), and the pick fired is cleared
-    /// or kept
+    /// `_HandleShip` and `_HandleShipDisplay` for each NPC on `pass` by
+    /// `rules`, drawing on `chance`: every NPC's stray provocation eases
+    /// (@0x35374-0x353b2), after the collision passes and the shots and
+    /// before the beams; then, slot by slot, each NPC's reloads count
+    /// down, it regenerates, it fires its pick, its death timer ticks and
+    /// it is displayed ([`Combat::handle_npcs`]), a final explosion's
+    /// shockwave striking at once, its strikes settled
+    /// ([`Session::land_phase`]); and the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
     pub(super) fn handle_npcs(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
         self.traffic.ease_stray();
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.handle_npcs(fighters, arena, chance);
         });
         self.traffic.after_firing(&self.arsenal);
@@ -469,29 +476,17 @@ impl Session {
         self.settle_asteroid_hits(&rocks, chance);
     }
 
-    /// What a pass's fight on `pass` leaves, settled once after its last
-    /// phase, by `rules`, drawing on `chance`, against the session as the
-    /// pass `start`ed: each NPC's exit cursors kept for its berth; the
-    /// eject on a breakup's first tick, which runs the next pass's eject
-    /// early, so after the whole fight (see the `eject` module); the
-    /// player's explosion, and the klaxon of its breakup
-    /// ([`Session::settle_player_explosion`]); the fighters launched from
+    /// What a pass's fight leaves, settled once after its last phase, by
+    /// `rules`, drawing on `chance`, against the session as the pass
+    /// `start`ed: each NPC's exit cursors kept for its berth; the fighters launched from
     /// bays put in the system (see the `fighters` module); each dying
     /// NPC's escape pods (see the `npc_escape` module); the fleet kept in
     /// step; the escorts lost; the NPCs' self-repair; each NPC destroyed
     /// taken out; the fighters orphaned; a target lost let go; the
     /// stellars seen; the ships laid out; and the heading each ship is
     /// drawn at noted, which its next tick's shots leave from.
-    pub(super) fn fight_tail(
-        &mut self,
-        start: &PassStart,
-        pass: GamePass,
-        rules: Rules,
-        chance: &mut dyn Chance,
-    ) {
+    pub(super) fn fight_tail(&mut self, start: &PassStart, rules: Rules, chance: &mut dyn Chance) {
         self.traffic.keep_berth_exits();
-        self.eject_on_breakup(pass, chance);
-        self.settle_player_explosion(start.was_destroyed, start.was_dying);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
         // The words the pass's stray beams stepped, before the NPCs'

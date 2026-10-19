@@ -8,7 +8,7 @@
 
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Landed, Rules, Scenery, ShipRef, Sides, Target, lock,
-    regenerate, regenerate_player, truncate_downed_player,
+    regenerate, regenerate_player,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
@@ -146,7 +146,10 @@ impl Combat {
     /// (@0x34424-0x34677, `regenerate`); then it fires the weapons its
     /// trigger holds that are ready (`_FireAIShipWeapon` @0x34ffd,
     /// @0x3500a), at the ships as the slots before it left them, drawing
-    /// on `chance`.
+    /// on `chance`; then its death timer ticks (@0x35083,
+    /// [`Condition::count_down`](super::hull::Condition::count_down)), and
+    /// its display step runs (@0x444ad, see the `display` module), its
+    /// wreck's shockwave striking at once.
     pub fn handle_npcs(
         &mut self,
         fighters: &mut [Fighter],
@@ -162,12 +165,17 @@ impl Combat {
             .collect();
         order.sort_by_key(|&index| fighters[index].slot);
         let rule = arena.rules.disable;
+        // The player's display ran before the collision passes.
+        let mut shown = vec![ShipRef::Player];
         for index in order {
             let fighter = &mut fighters[index];
             fighter.armament.reload();
             regenerate(fighter, rule);
             let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
             self.fire_one(&mut fighters[index], &targets, chance);
+            fighters[index].condition.count_down();
+            self.display(fighters, index, rule, &shown);
+            shown.push(fighters[index].ship);
         }
     }
 
@@ -231,14 +239,12 @@ impl Combat {
     /// `_HandleBeams` (@0x4453d), step 6's beams and the late steps 7 to
     /// 9: the beams follow their firers among `fighters`, drawing on
     /// `chance`, point-defence beams hit their missiles, the beams' hits
-    /// land, conditions follow the damage, the shockwaves go off, and
-    /// where each ship stands is kept for the next tick's collision
-    /// passes. Each ship has regenerated already, at its own step
-    /// ([`Combat::regenerate_player`], [`Combat::handle_npcs`]).
-    ///
-    /// The original starts a breakup's countdown in `_HandleShipDisplay`,
-    /// before `_HandleBeams`; here it comes after the beams' hits
-    /// (weapons-fidelity's phase 39).
+    /// land, each ship they struck settles its condition (truncated first
+    /// for a newly downed player), and where each ship stands is kept for
+    /// the next tick's collision passes. Every ship has regenerated and
+    /// been displayed already, at its own step ([`Combat::display_player`],
+    /// [`Combat::handle_npcs`]): a breakup a beam begins starts at the
+    /// ship's next display step.
     pub fn close_tick(
         &mut self,
         fighters: &mut [Fighter],
@@ -269,24 +275,9 @@ impl Combat {
             hits.extend(self.beam_hits(fighters, &sides, pass.beam_damage()));
         }
         self.land(fighters, hits, rule);
-        // Steps 9 to 10.
-        let begun = std::mem::take(&mut self.begun);
-        for fighter in fighters.iter_mut() {
-            let struck = self.strikes[first_strike..]
-                .iter()
-                .any(|strike| strike.ship == fighter.ship);
-            if struck {
-                truncate_downed_player(fighter, rule);
-            }
-            // A breakup the collision passes began takes no tick off on
-            // its first tick (@0x2d834-0x2d850).
-            if begun.contains(&fighter.ship) {
-                continue;
-            }
-            let downed = self.update_condition(fighter, rule);
-            self.mark_downed(first_strike, fighter.ship, downed);
-        }
-        self.shock(fighters, rule);
+        // Step 9: each ship struck settles; a breakup begun here starts at
+        // the ship's next display step.
+        self.settle_struck(fighters, first_strike, rule);
         self.ended_beams = beams_held.saturating_sub(self.beams.len());
         self.stood = fighters
             .iter()

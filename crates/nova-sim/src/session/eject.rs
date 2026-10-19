@@ -6,8 +6,8 @@
 //! the eject key held together ([`Session::hold_eject`], @0x6f29e-0x6f2c1),
 //! which the session takes only while the player's fate takes
 //! [`PlayerCommand::Eject`]. Auto-eject is armed only while dying and with
-//! an auto-eject outfit ([`has_auto_eject`], @0x6f293), on the breakup's
-//! first tick whatever its countdown, and later once the countdown, after
+//! an auto-eject outfit ([`has_auto_eject`], @0x6f293), while the timer is
+//! unset whatever its `DeathDelay`, and later once the countdown, after
 //! the tick's decrement, is at or below max(`DeathDelay` x 0.5, 30)
 //! ([`auto_eject_armed`]). Armed, it then needs an escape pod or an escape
 //! ship ([`has_escape_pod`], [`escape_ship_type`], @0x6f2d9), and a free
@@ -15,32 +15,31 @@
 //! (@0x6f2f8-0x6f308, [`MAX_SHIPS_IN_SYSTEM`] counting the player): with
 //! none the eject is cancelled and the player goes on dying.
 //!
-//! **Ordering against the original.** `_HandlePlayer` takes the death
-//! timer down (@0x6d7e6), sounds the klaxon (@0x6f1e4) and runs the eject
-//! (@0x6f22c), all before `_HandleShipDisplay` (@0x43e29) sets a new
-//! breakup's timer or explodes a ship at the end of its countdown. The
-//! engine's fight does both the decrement and the display step, so the
-//! check runs twice a pass ([`Session::game_work`], [`Session::tick_again`]
-//! and [`Session::tick_combat`]):
+//! **Where it runs.** `_HandlePlayer` takes the death timer down
+//! (@0x6d7e6), sounds the klaxon (@0x6f1e4) and runs the eject (@0x6f22c),
+//! all before `_HandleShipDisplay` (@0x43e29) sets a new breakup's timer
+//! or explodes a ship at the end of its countdown. The engine runs one
+//! check a pass in the same place, the player's display step after its
+//! move ([`Session::eject_check`], see the `ship_display` module), on
+//! both passes and in [`Session::tick_combat`]:
 //!
-//! - Before the fight's collision passes, after the player's move, for a
-//!   player who enters the pass disabled or dying
-//!   ([`Session::eject_before_fight`]). The threshold reads the countdown
-//!   less one, the original's timer after its decrement. A dying player
-//!   who ejects here first sounds the klaxon when that is above 1, as the
-//!   original does earlier in the same frame. The hulk takes the
-//!   countdown as it stands, so the fight carries it on a tick: it explodes
-//!   on the tick the player would have, even on the explosion tick itself.
-//! - After the fight, on the breakup's first tick
-//!   ([`Session::eject_on_breakup`]): the original's frame in which
-//!   `_HandlePlayer` sees the ship dying with its timer not yet set, so
-//!   auto-eject is armed whatever the threshold. The hulk is an NPC on its
-//!   own breakup's first tick, its countdown the old class's `DeathDelay`
-//!   (`_HandleShipDisplay` @0x444ad sets it for the NPC), and explodes
+//! - It reads the player as `_IsDying` (@0x253d) does, its armour live,
+//!   so a sabotage kill this pass is seen dying though no display has
+//!   settled its condition.
+//! - A breakup a hit began (in the last pass's collision passes, shots or
+//!   beams) has its timer unset, and is first seen here on the next pass:
+//!   auto-eject is armed whatever the threshold, the original's frame in
+//!   which `_HandlePlayer` sees the ship dying with its timer at 0.0. The
+//!   hulk takes the unset timer, and its own display that pass sets it
+//!   to the old class's `DeathDelay` (@0x444ad); it explodes
 //!   `DeathDelay` - 2 ticks later. A breakup that stalls
-//!   ([`Breakup::Stalls`](crate::combat::hull::Breakup::Stalls)) sets its
-//!   first tick again every tick, re-arming it as the original's timer at
-//!   or below 0 does.
+//!   ([`Breakup::Stalls`](crate::combat::hull::Breakup::Stalls)) finds
+//!   its timer run down every pass, re-arming it as the original's timer
+//!   at or below 0 does.
+//! - Otherwise the threshold reads the timer as its tick left it, and the
+//!   hulk takes it as it stands (@0x6f365); the hulk's own step ticks it
+//!   again that pass (@0x35083), so it explodes on the tick the player
+//!   would have, even on the explosion tick itself.
 //!
 //! **The hand-off** (0x6f30e-0x6f40a). The hulk is an NPC of the old
 //! class, with the player's position, velocity, heading, shield and
@@ -154,9 +153,9 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
+use crate::combat::ShipRef;
 use crate::combat::armament::{Trigger, fit_stock, outfit_rounds};
 use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
-use crate::combat::{GamePass, ShipRef};
 use crate::escape::{
     ESCAPE_FLOOR, ESCAPE_ROLL, auto_eject_armed, escape_ship_type, has_auto_eject, has_escape_pod,
 };
@@ -180,41 +179,38 @@ impl Session {
         self.eject_held = held;
     }
 
-    /// The eject check before the fight, for a player who enters the tick
-    /// disabled or dying (see the module docs), drawing on `chance`.
-    pub(super) fn eject_before_fight(&mut self, chance: &mut dyn Chance) {
-        let (hulk, after) = match self.condition {
-            Condition::Disabled => (Condition::Disabled, None),
-            Condition::Dying { ticks_left, .. } => (
+    /// The eject check (@0x6f22c), in the player's display step after
+    /// its death timer's tick and the klaxon, before its display (see the
+    /// `ship_display` module and the module docs), drawing on `chance`.
+    ///
+    /// It reads the player as `_IsDisabled` and `_IsDying` (@0x253d) do,
+    /// the armour live: a player whose armour is gone is dying though no
+    /// display has settled its condition yet (a sabotage kill this pass),
+    /// its timer unset. Dying with the timer unset (0) arms auto-eject
+    /// whatever the threshold, as the original's first frame of a breakup
+    /// does, and so does a stalled breakup's; otherwise the threshold
+    /// reads the timer as its tick left it. The hulk takes the condition
+    /// as it stands (@0x6f365), and its own step ticks and displays it
+    /// again this pass.
+    pub(super) fn eject_check(&mut self, chance: &mut dyn Chance) {
+        let armor = self.pilot.reserves.armor;
+        let armour_gone = armor.now <= 0.0 && armor.max > 0.0;
+        let (hulk, timer) = match self.condition {
+            Condition::Dying { ticks_left, .. } => (self.condition, Some(ticks_left)),
+            Condition::Intact | Condition::Disabled if armour_gone => (
                 Condition::Dying {
-                    ticks_left,
-                    starting: false,
+                    ticks_left: 0,
+                    starting: true,
                 },
-                Some(ticks_left.saturating_sub(1)),
+                Some(0),
             ),
+            Condition::Disabled => (Condition::Disabled, None),
             Condition::Intact | Condition::Destroyed => return,
         };
-        let auto = after.is_some_and(|after| auto_eject_armed(after, self.hull.death_delay));
-        let klaxon = after.is_some_and(|after| after > 1);
+        let auto = timer.is_some_and(|timer| auto_eject_armed(timer, self.hull.death_delay));
         // The pass's move has collapsed any pre-jump of a player disabled
         // or dying, so the collapse's clock is never read here.
-        self.try_eject(auto, hulk, klaxon, false, chance);
-    }
-
-    /// The eject check after the fight on `pass`, on the breakup's first
-    /// tick (see the module docs), drawing on `chance`. It runs the next
-    /// pass's eject early, and with it that pass's collapse of a pre-jump
-    /// still on, whose clock reads as the next pass's: double time's
-    /// second pass after an advance pass in double time.
-    pub(super) fn eject_on_breakup(&mut self, pass: GamePass, chance: &mut dyn Chance) {
-        if let Condition::Dying { starting: true, .. } = self.condition {
-            let hulk = Condition::Dying {
-                ticks_left: self.hull.death_delay,
-                starting: true,
-            };
-            let again = pass == GamePass::Advance { double_time: true };
-            self.try_eject(true, hulk, false, again, chance);
-        }
+        self.try_eject(auto, hulk, chance);
     }
 
     /// The escape ship the player can eject into now, if any
@@ -227,17 +223,9 @@ impl Session {
 
     /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`, while
     /// auto-eject is, or the chord held) and the player can: an escape pod
-    /// or ship, a free ship slot and a record of the class it flies. A
-    /// `klaxon` sounds first. A pre-jump still on collapses as on double
-    /// time's second pass when `again`. Whether it ejected.
-    fn try_eject(
-        &mut self,
-        auto: bool,
-        hulk: Condition,
-        klaxon: bool,
-        again: bool,
-        chance: &mut dyn Chance,
-    ) -> bool {
+    /// or ship, a free ship slot and a record of the class it flies.
+    /// Whether it ejected.
+    fn try_eject(&mut self, auto: bool, hulk: Condition, chance: &mut dyn Chance) -> bool {
         let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.outfits))
             || (self.eject_held && self.takes(PlayerCommand::Eject));
         if !armed
@@ -249,18 +237,14 @@ impl Session {
         let Some(old) = self.ship_record(self.pilot.ship).cloned() else {
             return false;
         };
-        if klaxon {
-            self.sounds.push(SimSound::Klaxon);
-        }
-        self.eject(&old, hulk, again, chance);
+        self.eject(&old, hulk, chance);
         true
     }
 
     /// The eject itself, from a ship of class `old`, leaving a hulk in
-    /// `hulk` (see the module docs), a pre-jump still on collapsing as on
-    /// double time's second pass when `again`.
-    fn eject(&mut self, old: &ShipRecord, hulk: Condition, again: bool, chance: &mut dyn Chance) {
-        self.collapse_jump(again);
+    /// `hulk` (see the module docs), a pre-jump still on collapsing first.
+    fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
+        self.collapse_jump(false);
         let save_due = self.save_due;
         let hulk = self.traffic.add_npc(self.hulk(old, hulk));
         if let Some(slot) = self.npc(hulk).map(slot_of) {
@@ -666,6 +650,29 @@ mod tests {
         panic!("the player's armour never went");
     }
 
+    /// Ticks under fire to the breakup, as [`to_the_breakup`], and one
+    /// tick more: the breakup's collision passes leave the timer unset,
+    /// and the next tick's eject check (@0x6f22c) is the first to see the
+    /// player dying, before its display sets the timer (@0x43e29; see the
+    /// `ship_display` module). Gives the breakup tick's sounds, then the
+    /// next tick's.
+    fn to_the_first_check(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        chord: bool,
+    ) -> (Vec<SimSound>, Vec<SimSound>) {
+        let breakup = to_the_breakup(session, catalog, chord);
+        assert_eq!(
+            session.condition,
+            Condition::Dying {
+                ticks_left: 0,
+                starting: true
+            },
+            "unset"
+        );
+        (breakup, tick(session, catalog, chord))
+    }
+
     /// A fight tick with no traffic tick, the chord held or not: its
     /// sounds and fight events.
     fn fight(session: &mut Session, chord: bool) -> (Vec<SimSound>, Vec<CombatEvent>) {
@@ -726,7 +733,7 @@ mod tests {
             colour: 0x00ff_0000,
         };
         session.ion = ionized;
-        to_the_breakup(&mut session, &catalog, false);
+        to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
         assert_eq!(hulk(&session).ion, Ion::default());
@@ -741,7 +748,7 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        to_the_breakup(&mut session, &catalog, false);
+        to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert_eq!(hulk(&session).pods_left, 3);
         for hull in &mut catalog.hulls {
@@ -750,7 +757,7 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        to_the_breakup(&mut session, &catalog, false);
+        to_the_first_check(&mut session, &catalog, false);
         assert_eq!(hulk(&session).pods_left, -3, "raw");
     }
 
@@ -760,7 +767,7 @@ mod tests {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, AUTO]);
         session.pod_zeroed = true;
-        to_the_breakup(&mut session, &catalog, false);
+        to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         assert!(!session.pod_zeroed);
         // Into an escape ship: -1 (@0x6f563).
@@ -778,7 +785,7 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        to_the_breakup(&mut session, &catalog, false);
+        to_the_first_check(&mut session, &catalog, false);
         let left = hulk(&session).id;
         let mut pods = 0;
         for _ in 0..400 {
@@ -806,7 +813,7 @@ mod tests {
             let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
             let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
             session.armament.exit_cursors_mut().step(ExitKind::Gun);
-            to_the_breakup(&mut session, &catalog, false);
+            to_the_first_check(&mut session, &catalog, false);
             assert!(in_the_pod(&session));
             assert_eq!(
                 session.armament.exit_cursors().next(ExitKind::Gun),
@@ -824,7 +831,7 @@ mod tests {
             let rules = Rulebook::default().with_override(RuleKey::ReusedSlotExits, reading);
             let mut session = flying(&catalog, &[POD, AUTO]).with_rules(rules);
             session.armament = session.armament.clone().with_fold_set(2);
-            to_the_breakup(&mut session, &catalog, false);
+            to_the_first_check(&mut session, &catalog, false);
             assert!(in_the_pod(&session));
             assert_eq!(session.armament.fold_set(), 0, "{reading:?}");
         }
@@ -850,7 +857,9 @@ mod tests {
         let mut session = flying(&catalog, &[POD]);
         let sounds = to_the_breakup(&mut session, &catalog, false);
         assert!(!sounds.contains(&SimSound::Ejected));
-        for _ in 0..100 {
+        // The timer of 120 is set on the tick after the breakup's
+        // (@0x43e29), then ticks 100 times (@0x6d7e6).
+        for _ in 0..101 {
             tick(&mut session, &catalog, false);
         }
         assert_eq!(
@@ -871,12 +880,9 @@ mod tests {
      {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD, AUTO]);
-        let sounds = to_the_breakup(&mut session, &catalog, false);
-        assert_eq!(
-            sounds,
-            [DOWNED.as_slice(), EJECTED.as_slice()].concat(),
-            "the downed lines' beeps, and no klaxon"
-        );
+        let (breakup, check) = to_the_first_check(&mut session, &catalog, false);
+        assert_eq!(breakup, DOWNED, "the downed lines' beeps");
+        assert_eq!(check, EJECTED, "the next tick's eject check, and no klaxon");
         assert!(in_the_pod(&session));
         assert!(!matches!(session.condition, Condition::Dying { .. }));
         assert_eq!(
@@ -909,8 +915,9 @@ mod tests {
     fn the_chord_held_on_the_first_dying_tick_ejects_before_any_breakup() {
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);
-        let sounds = to_the_breakup(&mut session, &catalog, true);
-        assert_eq!(sounds, [DOWNED.as_slice(), EJECTED.as_slice()].concat());
+        let (breakup, check) = to_the_first_check(&mut session, &catalog, true);
+        assert_eq!(breakup, DOWNED);
+        assert_eq!(check, EJECTED);
         assert!(in_the_pod(&session));
         assert_eq!(
             hulk(&session).condition,
@@ -927,7 +934,7 @@ mod tests {
         let catalog = ejecting(death_delay);
         let mut session = flying(&catalog, &[POD, AUTO]);
         let extra = fill(&mut session);
-        let sounds = to_the_breakup(&mut session, &catalog, false);
+        let (_, sounds) = to_the_first_check(&mut session, &catalog, false);
         assert!(!sounds.contains(&SimSound::Ejected), "no slot");
         let three = u32::try_from(death_delay).expect("positive") * 3;
         assert_eq!(
@@ -957,10 +964,12 @@ mod tests {
             last = ticks_left;
         }
         assert_eq!(last, threshold + 1, "{death_delay}: not before");
+        // The hulk takes the timer after the player's tick (@0x6f365),
+        // and its own `_HandleShip` ticks it again (@0x35083).
         assert_eq!(
             hulk(&session).condition,
             Condition::Dying {
-                ticks_left: threshold,
+                ticks_left: threshold - 1,
                 starting: false
             },
             "{death_delay}: the hulk carries on the player's countdown"
@@ -1013,7 +1022,9 @@ mod tests {
         let mut session = flying(&catalog, &[POD]);
         fill(&mut session);
         let mut sounds = to_the_breakup(&mut session, &catalog, true);
-        for _ in 0..10 {
+        // The timer of 30 is set on the tick after the breakup's
+        // (@0x43e29), then ticks 10 times (@0x6d7e6).
+        for _ in 0..11 {
             sounds.extend(fight(&mut session, true).0);
         }
         assert!(!sounds.contains(&SimSound::Ejected));
@@ -1191,13 +1202,12 @@ mod tests {
         session.warp_sounds[0] = 9;
         session.jump = Some(BRAKING);
         session.take_messages();
-        let sounds = to_the_breakup(&mut session, &catalog, false);
+        let (breakup, check) = to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
+        assert_eq!(breakup, DOWNED);
         assert_eq!(
-            sounds,
+            check,
             [
-                SimSound::ShipDowned,
-                SimSound::ShipDowned,
                 SimSound::Halt(&WARP_UP_HALTS),
                 SimSound::JumpCollapsed,
                 SimSound::Ejected,
@@ -1258,10 +1268,11 @@ mod tests {
 
     #[test]
     fn in_double_time_a_collapse_on_the_advance_passs_breakup_reads_the_second_passs_clock() {
-        // The eject on the breakup runs the next pass's eject early, and
-        // with it that pass's collapse: in double time the second pass, on
-        // which a braking ship's stamp is the frame's own, so t = 0 and the
-        // collapse gives no speed, where the next frame's reads 2.
+        // A breakup on the advance pass leaves the timer unset; the
+        // second pass's move collapses the pre-jump (@0x688aa), on which
+        // a braking ship's stamp is the frame's own, so t = 0 and the
+        // collapse gives no speed, and its eject check (@0x6f22c) then
+        // ejects.
         let mut catalog = ejecting(100);
         for record in &mut catalog.ship_records {
             if record.id == ShipId(128) {
@@ -1273,9 +1284,19 @@ mod tests {
         assert!(crate::warp::lead_in_speed(2, w, 9) > 0.0);
         let mut session = flying(&catalog, &[POD, AUTO]);
         session.set_double_time_key(true);
-        session.warp_sounds[1] = 9;
+        session.warp_sounds = [9, 9];
         session.jump = Some(BRAKING);
-        to_the_breakup(&mut session, &catalog, false);
+        session.pilot.reserves.armor.now = 0.0;
+        session.condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        session.tick_again(
+            crate::flight::Controls::default(),
+            &Firing,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(in_the_pod(&session));
         assert_eq!(session.jump, None, "collapsed");
         assert_eq!(hulk(&session).state.velocity, Vec2::ZERO, "no speed");
@@ -1285,7 +1306,7 @@ mod tests {
     fn a_dying_players_hulk_explodes_and_a_disabled_ones_stays_a_derelict() {
         let catalog = ejecting(10);
         let mut session = flying(&catalog, &[POD, AUTO]);
-        to_the_breakup(&mut session, &catalog, false);
+        to_the_first_check(&mut session, &catalog, false);
         assert!(in_the_pod(&session));
         let exploded = (0..20).any(|_| hulk_destroyed(&fight(&mut session, false).1));
         assert!(exploded, "the dying player's hulk explodes");
@@ -1869,5 +1890,143 @@ mod tests {
             "@0x6f768"
         );
         assert_eq!(session.framed_by(ShipRef::Player), Some(ShipId(VIPER)));
+    }
+
+    // The eject check in the player's display step (weapons-fidelity
+    // phase 39, see the `ship_display` module).
+
+    /// One pass of the game's work under fire from `catalog`'s NPC, the
+    /// chord held or not: the session's sounds from it.
+    fn work(session: &mut Session, catalog: &FakePilotCatalog, chord: bool) -> Vec<SimSound> {
+        session.take_sounds();
+        session.hold_eject(chord);
+        let rescued = session.game_work(
+            crate::flight::Controls::default(),
+            catalog,
+            &Firing,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(!rescued);
+        session.take_sounds()
+    }
+
+    #[test]
+    fn the_first_tick_eject_runs_in_the_next_passs_eject_check_before_its_collision_passes() {
+        // The pass whose collision passes break the player up leaves its
+        // timer unset; the next pass's eject check (@0x6f22c) sees it
+        // dying with the timer at 0.0, auto-eject armed whatever the
+        // threshold, before its display (@0x43e29) would set it. The hulk
+        // takes the unset timer (@0x6f365), and its own display that pass
+        // (@0x444ad) sets it to the old class's `DeathDelay`.
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        let mut passes = 0;
+        while matches!(session.condition, Condition::Intact | Condition::Disabled) {
+            work(&mut session, &catalog, false);
+            passes += 1;
+            assert!(passes < 200, "the player's armour never went");
+        }
+        assert_eq!(
+            session.condition,
+            Condition::Dying {
+                ticks_left: 0,
+                starting: true
+            },
+            "unset"
+        );
+        assert!(!in_the_pod(&session));
+        let sounds = work(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert_eq!(sounds, EJECTED, "no klaxon for an unset timer");
+        assert_eq!(
+            hulk(&session).condition,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: true
+            }
+        );
+    }
+
+    #[test]
+    fn an_ejected_dying_players_hulk_takes_the_timer_after_the_players_tick_and_ticks_again_in_its_own_step()
+     {
+        // `_HandlePlayer` ticks the timer (@0x6d7e6), sounds the klaxon
+        // (@0x6f1e4), then ejects; the hulk copies the timer (@0x6f365),
+        // and its own `_HandleShip` ticks it again that frame (@0x35083).
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        session.pilot.reserves.armor.now = 0.0;
+        session.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let sounds = work(&mut session, &catalog, true);
+        assert!(in_the_pod(&session));
+        assert_eq!(sounds, [vec![SimSound::Klaxon], EJECTED.to_vec()].concat());
+        assert_eq!(
+            hulk(&session).condition,
+            Condition::Dying {
+                ticks_left: 8,
+                starting: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_sabotage_kill_breaks_up_at_the_players_display_and_arms_the_eject_that_pass() {
+        // The kill sets the armour to -1.0 (@0x693a0) after the point
+        // defence and before the trigger; the eject check reads the
+        // armour live, as `_IsDying` does (@0x253d), so it finds the
+        // player dying with its timer unset and auto-eject armed, in the
+        // same pass. The hulk breaks up at its own display.
+        use crate::sabotage::{FUSE, SABOTAGE_KILL};
+        const KILLER: i16 = 303;
+        let mut catalog = ejecting(100);
+        catalog.outfits.push(outfit(KILLER, &[(SABOTAGE_KILL, 0)]));
+        let mut session = flying(&catalog, &[POD, AUTO, KILLER]);
+        session.reset_precalced();
+        work(&mut session, &catalog, false);
+        session.sabotage.set_counter(FUSE);
+        let sounds = work(&mut session, &catalog, false);
+        assert!(in_the_pod(&session), "{:?}", session.condition);
+        assert_eq!(
+            sounds,
+            [
+                SimSound::OnboardExplosion,
+                SimSound::Halt(&WARP_UP_HALTS),
+                SimSound::Ejected,
+                SimSound::Halt(&WARP_UP_HALTS),
+            ]
+        );
+        assert_eq!(
+            hulk(&session).condition,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_sabotage_kill_without_an_eject_breaks_up_at_the_players_display() {
+        // With no eject, the player's own display that pass (@0x43e29)
+        // finds the armour gone and sets its timer.
+        use crate::sabotage::{FUSE, SABOTAGE_KILL};
+        const KILLER: i16 = 303;
+        let mut catalog = ejecting(100);
+        catalog.outfits.push(outfit(KILLER, &[(SABOTAGE_KILL, 0)]));
+        let mut session = flying(&catalog, &[KILLER]);
+        session.reset_precalced();
+        work(&mut session, &catalog, false);
+        session.sabotage.set_counter(FUSE);
+        work(&mut session, &catalog, false);
+        assert_eq!(
+            session.condition,
+            Condition::Dying {
+                ticks_left: 300,
+                starting: true
+            }
+        );
     }
 }

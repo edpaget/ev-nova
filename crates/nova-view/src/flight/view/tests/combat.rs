@@ -1631,8 +1631,8 @@ fn the_players_ship_is_drawn_whole_while_breaking_up_then_loses_its_sprite_then_
 
 #[test]
 fn the_explosion_tick_sounds_the_klaxon_then_halts_it_before_the_explosion() {
-    // DeathDelay 2: a timer of 6, so 3 ticks of klaxon, then the
-    // explosion's.
+    // DeathDelay 2: a timer of 6, set on the tick after the hit
+    // (@0x43e29), so 3 ticks of klaxon, then the explosion's.
     let mut view = fighting(killed_in(2), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
     let klaxon = Sound::Sim(SimSound::Klaxon);
     let mut breaking_up = Vec::new();
@@ -1644,7 +1644,11 @@ fn the_explosion_tick_sounds_the_klaxon_then_halts_it_before_the_explosion() {
                 breaking_up.push(sounds.iter().filter(|&&sound| sound == klaxon).count());
             }
             PlayerFate::Exploded => {
-                assert_eq!(breaking_up, [0, 1, 1, 1], "none as it starts");
+                assert_eq!(
+                    breaking_up,
+                    [0, 0, 1, 1, 1],
+                    "none as it starts, nor as its timer is set"
+                );
                 let first_combat = sounds
                     .iter()
                     .position(|sound| matches!(sound, Sound::Combat(_)));

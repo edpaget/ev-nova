@@ -424,6 +424,7 @@ mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
+mod ship_display;
 mod shot_slots;
 mod smoke_frame;
 mod status_cargo;
@@ -2826,10 +2827,10 @@ impl Session {
     /// while the ship jumps. The stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
-    /// module). While the player's ship breaks up, the klaxon sounds
-    /// first among the tick's sounds (see `sound_the_klaxon`), and on the
-    /// player's explosion tick a [`SimSound::Halt`] of the klaxon and the
-    /// warp sounds follows it
+    /// module). While the player's ship breaks up, the klaxon sounds in
+    /// its display step, after its fire (see the `ship_display` module),
+    /// and on the player's explosion tick a [`SimSound::Halt`] of the
+    /// klaxon and the warp sounds follows it
     /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). Every
     /// hit, blast and beam tick of a weapon with an `Impact`, a tractor
     /// beam's self-pull, and the shockwave of a heavy ship's final
@@ -2839,11 +2840,12 @@ impl Session {
     /// beam sets the lock of the ship it holds, the player's
     /// ([`Session::tractor`]) or an NPC's. Before anything else,
     /// unless landed or jumping, the sabotage clock ticks, and what it sets
-    /// off goes off (see the `sabotage` module), and the eject is checked
-    /// (see the `eject` module), both before the scans. The player's
-    /// "Ship disabled." and "Ship destroyed." lines are spoken as the
-    /// fight's hits leave it (see the `player_downed` module), before the
-    /// eject on a breakup's first tick takes it into a new ship. After
+    /// off goes off (see the `sabotage` module), before the scans; the
+    /// eject is checked in the player's display step (see the `eject`
+    /// module). The player's "Ship disabled." and "Ship destroyed." lines
+    /// are spoken as the fight's hits leave it (see the `player_downed`
+    /// module), before the next pass's eject check takes it into a new
+    /// ship. After
     /// all of it, landed or jumping, the pass's asteroid work runs
     /// ([`Session::tick_asteroids`]), so the shots meet the asteroids
     /// where the last pass left them, as the frame before drew them, and
@@ -2877,13 +2879,12 @@ impl Session {
     /// `_HandlePlayer`'s part of a game-work pass that comes before the
     /// fight, on either pass (see the `double_time` module): the repair
     /// inhibit's countdown and the disabled player's self-repair (see the
-    /// `player_repair` module), the sabotage clock's tick (see the
-    /// `sabotage` module), then the eject check for a player who enters it
-    /// disabled or dying (see the `eject` module), drawing on `chance`.
+    /// `player_repair` module) and the sabotage clock's tick (see the
+    /// `sabotage` module), drawing on `chance`. The eject check comes in
+    /// the player's display step, after its fire ([`Session::fight`]).
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
         self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
-        self.eject_before_fight(chance);
     }
 
     /// The fight's part of a game-work pass on `pass` (see
@@ -2900,6 +2901,7 @@ impl Session {
             combat.fire_player(fighters, arena, chance);
             combat.regenerate_player(fighters, arena);
         });
+        self.player_display_step(pass, rules, chance);
         self.collision_passes(pass, rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_npcs(fighters, arena, chance);
@@ -2911,7 +2913,7 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(&start, pass, rules, chance);
+        self.fight_tail(&start, rules, chance);
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
@@ -2925,60 +2927,6 @@ impl Session {
                     .map(|npc| (ShipRef::Npc(npc.id), npc.state.heading)),
             )
             .collect();
-    }
-
-    /// The fight's end for the player, its ship destroyed before it as
-    /// `was_destroyed` says and dying as `was_dying` says: an explosion
-    /// this tick holds the game's end; the klaxon sounds
-    /// ([`Session::sound_the_klaxon`]); and an explosion halts
-    /// [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS).
-    fn settle_player_explosion(&mut self, was_destroyed: bool, was_dying: bool) {
-        let exploded = !was_destroyed && self.condition == Condition::Destroyed;
-        if exploded {
-            // Set only, never cleared here: double time's second pass
-            // keeps an explosion the advance pass saw (see
-            // `player_exploded_this_tick`).
-            self.player_exploded_this_tick = true;
-            self.player_end = Some(Ending::Holding {
-                ticks_left: HOLD_TICKS,
-            });
-        }
-        self.sound_the_klaxon(was_dying, exploded);
-        if exploded {
-            self.halt_sounds(&crate::sound::PLAYER_EXPLOSION_HALTS);
-        }
-    }
-
-    /// Raises [`SimSound::Klaxon`] while the player's ship breaks up, as
-    /// `_HandlePlayer` plays `_klaxxonSnd` (@0x6f1e4-0x6f227) while the
-    /// death timer, after its decrement, is above 1.0: on every tick of
-    /// the countdown but the one it is set on (`starting`), and on the
-    /// explosion tick of a ship that `was_dying` before it and has
-    /// `exploded` on it, whose timer came down to 2.0. The original's `> 1.0` test always holds for a
-    /// countdown that is not starting: a timer at
-    /// [`EXPLOSION_BAND`](crate::combat::hull::EXPLOSION_BAND) or below
-    /// explodes, so one still counting down is at 3 or more. No klaxon
-    /// sounds on the breakup tick, nor on a stalled breakup's ticks, each
-    /// of which sets the timer again.
-    ///
-    /// It comes straight after the fight, ahead of every other sound of
-    /// the tick, so that on the explosion tick the
-    /// [`SimSound::Halt`] of [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)
-    /// that the fight raises next comes after it and wins,
-    /// as `_HandlePlayer` (@0x43e19) runs before `_HandleShipDisplay`
-    /// (@0x43e29). The view puts the session's sounds before the fight's,
-    /// so the explosion's booms come after it too.
-    fn sound_the_klaxon(&mut self, was_dying: bool, exploded: bool) {
-        let counting_down = matches!(
-            self.condition,
-            Condition::Dying {
-                starting: false,
-                ..
-            }
-        );
-        if counting_down || (exploded && was_dying) {
-            self.sounds.push(SimSound::Klaxon);
-        }
     }
 
     /// When and where the fight is fought this tick ([`Field`]): the frame
@@ -20524,33 +20472,34 @@ pub(super) mod tests {
 
     #[test]
     fn the_player_breaking_up_raises_the_klaxon_from_the_tick_after_to_the_explosion() {
-        // DeathDelay 2: a timer of 6, exploding 4 ticks after the breakup.
+        // DeathDelay 2: a timer of 6, set at the display (@0x43e29) of the
+        // tick after the breakup, exploding 4 ticks after that.
         let catalog = deadly_in(2);
         let mut session = facing_an_npc(&catalog, 180);
-        let seen = from_the_breakup(&mut session, &catalog, 7);
+        let seen = from_the_breakup(&mut session, &catalog, 8);
         let klaxon = || vec![SimSound::Klaxon];
         let dying = |ticks_left| Condition::Dying {
             ticks_left,
             starting: false,
         };
+        let set = |ticks_left| Condition::Dying {
+            ticks_left,
+            starting: true,
+        };
         assert_eq!(
-            seen[..4],
+            seen[..5],
             [
-                (
-                    Condition::Dying {
-                        ticks_left: 6,
-                        starting: true
-                    },
-                    vec![SimSound::ShipDowned, SimSound::ShipDowned]
-                ),
+                (set(0), vec![SimSound::ShipDowned, SimSound::ShipDowned]),
+                (set(6), vec![]),
                 (dying(5), klaxon()),
                 (dying(4), klaxon()),
                 (dying(3), klaxon()),
             ],
             "none on the breakup tick, but the downed lines' beeps (see the \
-             `player_downed` module), then one each tick"
+             `player_downed` module), nor on the tick the timer is set, then \
+             one each tick (@0x6f1e4)"
         );
-        let (exploded, sounds) = &seen[4];
+        let (exploded, sounds) = &seen[5];
         assert_eq!(*exploded, Condition::Destroyed);
         assert_eq!(
             sounds.first(),
@@ -20558,7 +20507,7 @@ pub(super) mod tests {
             "first on the explosion's tick"
         );
         assert_eq!(
-            seen[5..],
+            seen[6..],
             [
                 (Condition::Destroyed, vec![]),
                 (Condition::Destroyed, vec![])
@@ -20597,17 +20546,22 @@ pub(super) mod tests {
         let by_default = facing_an_npc(&catalog, 180);
         let mut session = by_default.clone();
         assert_eq!(
-            from_the_breakup(&mut session, &catalog, 1),
-            [(
-                Condition::Destroyed,
-                vec![
-                    SimSound::ShipDowned,
-                    SimSound::ShipDowned,
-                    SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS)
-                ]
-            )],
-            "by default, destroyed as it breaks up, halting its sounds after \
-             the downed lines' beeps"
+            from_the_breakup(&mut session, &catalog, 2),
+            [
+                (
+                    Condition::Dying {
+                        ticks_left: 0,
+                        starting: true
+                    },
+                    vec![SimSound::ShipDowned, SimSound::ShipDowned]
+                ),
+                (
+                    Condition::Destroyed,
+                    vec![SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS)]
+                )
+            ],
+            "by default, destroyed at its next display (@0x43e29), which \
+             finds no timer to set, halting its sounds"
         );
         let mut session = by_default.with_rules(
             crate::rulebook::Rulebook::default()

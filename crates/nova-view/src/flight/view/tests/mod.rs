@@ -2506,14 +2506,17 @@ fn ejecting_view(catalog: FakeCatalog, keys: &[Key]) -> View {
 }
 
 /// Ticks `view` until the player is in the escape pod, or for 60
-/// ticks: whether it got there, and whether it was seen breaking up.
+/// ticks: whether it got there, and whether it was seen breaking up with
+/// its countdown begun. The frame of the hit that breaks it up shows it
+/// dying with the timer unset; the next frame's eject check (@0x6f22c)
+/// comes before its display sets the timer (@0x43e29).
 fn until_ejected(view: &mut View) -> (bool, bool) {
     let mut broke_up = false;
     for _ in 0..60 {
         view.tick(TICK);
         match view.session().expect("flying").player_fate() {
             PlayerFate::Ejected { .. } => return (true, broke_up),
-            PlayerFate::BreakingUp { .. } => broke_up = true,
+            PlayerFate::BreakingUp { ticks_left, .. } if ticks_left > 0 => broke_up = true,
             _ => {}
         }
     }
@@ -2549,13 +2552,14 @@ fn until_the_player_explodes(view: &mut View, breaking_up: impl Fn(&View)) {
 }
 
 /// A flight under fire from [`killed_in`]`(30)`'s NPC, stepped until
-/// the player's ship breaks up: a breakup of 90 ticks, so it is still
+/// the player's ship breaks up and its display has set the timer, on the
+/// frame after the hit (@0x43e29): a breakup of 90 ticks, so it is still
 /// breaking up for the test.
 fn breaking_up() -> View {
     let mut view = fighting(killed_in(30), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
     for _ in 0..60 {
         view.tick(TICK);
-        if matches!(fate_of(&view), PlayerFate::BreakingUp { .. }) {
+        if matches!(fate_of(&view), PlayerFate::BreakingUp { ticks_left, .. } if ticks_left > 0) {
             return view;
         }
     }

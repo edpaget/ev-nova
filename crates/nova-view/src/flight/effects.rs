@@ -281,9 +281,10 @@ pub struct Dying {
     /// Its `Explode1`, if any.
     pub explosion: Option<Blast>,
     /// Its death timer: the original's countdown, exploding at 2 or
-    /// below.
+    /// below; 0 while it is unset.
     pub ticks_left: u32,
-    /// Whether the timer was set on this tick, the breakup's first.
+    /// Whether the timer is unset, or its display step set it on this
+    /// tick.
     pub starting: bool,
 }
 

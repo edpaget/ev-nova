@@ -77,7 +77,7 @@
 //!    a call at [`PLAYER_FIRE_PRIORITY`] or
 //!    [`PLAYER_SECONDARY_FIRE_PRIORITY`], and a `Recoil` above none pushing
 //!    it back. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns destroys
-//!    its firer, which breaks up in step 9. Under the original's caps
+//!    its firer, which breaks up at its display step (step 9). Under the original's caps
 //!    ([`RuleKey::CombatCaps`](crate::RuleKey::CombatCaps)'s engine
 //!    reading, not the default) a shot or beam finding its table full
 //!    ([`MAX_SHOTS`], [`MAX_BEAMS`]) fails quietly, still spent and heard.
@@ -220,7 +220,8 @@
 //!    its trigger holds that are ready, as in step 1 (but no fighter
 //!    bay's launch, which step 4 made), reading the conditions the passes
 //!    and the ends of life left, and the ships as the slots before it
-//!    left them. Its shots first move in the next tick's
+//!    left them; then its death timer ticks and its display step runs
+//!    (step 9). Its shots first move in the next tick's
 //!    step 5. An NPC fires its pick as `_FireAIShipWeapon` does
 //!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
 //!    engine, and a recoil sets the firer's velocity, reported as a
@@ -267,30 +268,37 @@
 //!    `Ionization` in its `IonizeColor` ([`ion`]): a shot's direct hit and
 //!    a beam's tick wholly, however decayed, a blast by its share over its
 //!    circle; the escape pod too, which nothing else here touches.
-//! 9. Conditions follow the damage: a ship with no armour left (of the
-//!    armour it holds) starts breaking up, and any other that holds armour
-//!    is disabled, or not, as the [`DisableRule`](hull::DisableRule) says;
-//!    a ship that holds none is never disabled. A ship held disabled
-//!    ([`Fighter::held_disabled`], a rescue mission's ship not yet
-//!    boarded, as `_IsDisabled` reads it @0x2d24-0x2d69) is kept disabled
-//!    at any armour, and is never newly disabled, so it reports no
-//!    [`CombatEvent::Disabled`]; once it is no longer held, its armour
-//!    decides again, with no event as it comes back intact. A ship
-//!    breaking up counts down the original's death timer, its
-//!    `DeathDelay` (three times it for the player), set on the breakup's
-//!    first tick, on which nothing is taken off (a breakup the hit pass
-//!    began included), and is destroyed once it is down to 2; a timer that
-//!    never rises above 0 goes as the fight's [`Breakup`](hull::Breakup)
-//!    says (see `update_condition`, `_HandleShipDisplay`
-//!    @0x2d80d-0x2d85a).
+//! 9. Conditions follow the damage, settled after each step that lands
+//!    hits, for each ship struck: a ship with no armour left (of the
+//!    armour it holds) starts breaking up, its death timer unset, and any
+//!    other that holds armour is disabled, or not, as the
+//!    [`DisableRule`](hull::DisableRule) says; a ship that holds none is
+//!    never disabled. A ship held disabled ([`Fighter::held_disabled`], a
+//!    rescue mission's ship not yet boarded, as `_IsDisabled` reads it
+//!    @0x2d24-0x2d69) is kept disabled at any armour, and is never newly
+//!    disabled, so it reports no [`CombatEvent::Disabled`]; once it is no
+//!    longer held, its armour decides again, with no event as it comes
+//!    back intact.
 //!
-//!    9b. Each ship destroyed this tick that is heavy enough sends out a
-//!    shockwave ([`shockwave`]): every ship within its explosion's size,
-//!    breaking up or not, takes its damage, never destroyed or newly
-//!    disabled by it, and is pushed away from the wreck. The session takes
-//!    each push as a [`Shove`] ([`Combat::take_shoves`]) and sets the
-//!    ship's velocity. Each intact or disabled ship hit then settles its
-//!    condition as in step 9.
+//!    Each ship's display step (`_HandleShipDisplay`, the `display`
+//!    module) runs the countdown: the player's before the hit pass
+//!    ([`Combat::display_player`], @0x43e29), each NPC's after its own
+//!    step 6 (@0x444ad). It settles the ship's condition from its armour
+//!    (catching armour lost with no hit), sets an unset timer to its
+//!    `DeathDelay` (three times it for the player), and destroys a ship
+//!    whose timer is down to 2; a timer that never rises above 0 goes as
+//!    the fight's [`Breakup`](hull::Breakup) says. The timer ticks at the
+//!    ship's own step before its display (@0x6d7e6, @0x35083). So a
+//!    breakup begun after a ship's display (a hit on the player, a beam)
+//!    starts at its next display.
+//!
+//!    9b. Each ship destroyed at its display that is heavy enough sends
+//!    out a shockwave at once ([`shockwave`]): every ship within its
+//!    explosion's size, breaking up or not, takes its damage, never
+//!    destroyed or newly disabled by it, and is pushed away from the
+//!    wreck. The session takes each push as a [`Shove`]
+//!    ([`Combat::take_shoves`]) and sets the ship's velocity. Each intact
+//!    or disabled ship hit then settles its condition as in step 9.
 //! 10. Shields and armour regenerate only on an intact ship, each up to
 //!     what it holds: a disabled or breaking-up one regenerates neither.
 //!     Each ship regenerates at its own step, before the beams' hits: the
@@ -309,9 +317,11 @@
 //! @0x43e70-0x44010, `_CheckShotProximities` @0x44015), testing tick
 //! t−1's moves; step 4 `_AIDispatch`'s point defence (@0x4429d); step 5
 //! `_HandleShot` (@0x44385): the ends of life (@0x36195), the moves and
-//! the locks (@0x35855); step 6 `_HandleShip`'s countdown and fire
-//! (@0x33896, @0x34ffd, loop @0x44483) and `_HandleBeams`' moves; steps 7
-//! and 8 `_HandleBeams`' hits (@0x4453d). So a shot that meets a ship is
+//! the locks (@0x35855); step 6 `_HandleShip`'s countdown, regeneration
+//! and fire (@0x33896, @0x34424, @0x34ffd, loop @0x44483), each NPC's
+//! display (@0x444ad) and `_HandleBeams`' moves; steps 7 and 8
+//! `_HandleBeams`' hits (@0x4453d). The player's display step (@0x43e29)
+//! comes between steps 1 and 2. So a shot that meets a ship is
 //! drawn over it, or at its last point, for a frame before its hit, as
 //! the original draws it, and an NPC's shot is drawn where it left for a
 //! frame before it moves.
@@ -329,11 +339,10 @@
 //! - Step 4 runs after every NPC's decision, where `_AIDispatch`
 //!   interleaves them slot by slot.
 //!
-//! When a breakup's countdown starts differs from the original's
-//! `_HandleShipDisplay` per-slot loop (weapons-fidelity's phase 39). The ships within the hit
-//! pass are walked in the layers the last tick's layout left, which puts
-//! a ship the beams or the late steps disabled in its new layer a frame
-//! early (weapons-fidelity phase 39, item 3). See the `collision` module.
+//! The ships within the hit pass are walked in the layers the last tick's
+//! layout left, which puts a ship the beams or the late steps disabled in
+//! its new layer a frame early (weapons-fidelity phase 39, item 3). See
+//! the `collision` module.
 
 //! A tick runs on a [`GamePass`] ([`Combat::tick_on`]): double time's second
 //! pass runs every step but the NPCs' point defence, which it skips, and
@@ -364,6 +373,7 @@ pub mod beam;
 mod collision;
 pub mod damage;
 pub mod defence;
+mod display;
 pub mod exits;
 mod expiry;
 #[cfg(any(test, feature = "fixture"))]
@@ -397,11 +407,9 @@ use beam::{Aiming, Beam, BeamHitTest, BeamRules, ConeAngle};
 pub use collision::SpriteRank;
 use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
+pub use display::Displayed;
 use exits::{Compression, ExitCursors, ExitPoints, StrayWord, drawn_frame, frame_angle};
-use hull::{
-    Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
-    never_breaks_up,
-};
+use hull::{Breakup, Condition, DisableRule, HullSpec, immune, never_breaks_up};
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
 use jamming::Jamming;
@@ -1105,9 +1113,9 @@ pub struct Combat {
     stray_steps: Vec<(ShipRef, StrayWord)>,
     sorties: Vec<Sortie>,
     shoves: Vec<Shove>,
-    /// The ships destroyed this tick, in order, whose shockwaves are yet
-    /// to go off (step 9b).
-    wrecks: Vec<ShipRef>,
+    /// The display steps run since they were last taken
+    /// ([`Combat::take_displays`]).
+    displays: Vec<Displayed>,
     reports: Reports,
     /// The next shot's number.
     next_shot: u32,
@@ -1218,10 +1226,6 @@ pub struct Combat {
     /// caps each still holds its slot through the next tick's firing (see
     /// [`Combat::beam_room`]).
     ended_beams: usize,
-    /// The ships whose breakup the collision passes began this tick, whose
-    /// first tick takes no tick off (step 9); the close of the tick
-    /// clears them.
-    begun: Vec<ShipRef>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -1294,9 +1298,17 @@ impl Combat {
             rules,
             field,
         };
+        self.displays.clear();
         self.defend_player(fighters, arena, chance);
         self.fire_player(fighters, arena, chance);
         self.regenerate_player(fighters, arena);
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.ship == ShipRef::Player)
+        {
+            fighter.condition.count_down();
+        }
+        self.display_player(fighters, arena);
         self.test_hits(fighters, arena, scenery, chance);
         self.defend_npcs(fighters, arena, chance);
         self.fly_shots(fighters, arena, chance);
@@ -1393,99 +1405,102 @@ impl Combat {
         }
     }
 
-    /// Step 9b: the shockwave of each ship destroyed this tick, in the
-    /// order they were destroyed ([`shockwave`]). It reaches every ship
-    /// not destroyed, breaking up or not, within the wreck's
+    /// The shockwave of `wreck`'s final explosion, at its display step
+    /// ([`shockwave`], `_HandleShipDisplay` @0x2d8ef-0x2da9c), the ships in
+    /// `shown` displayed before it this pass. It reaches every ship not
+    /// destroyed, breaking up or not, within the wreck's
     /// [`HullSpec::death_size`] on each axis, the wreck spared; each takes
     /// [`shockwave::hit`] as a [`Strike`] by the wreck, neither direct nor
     /// intended, and is pushed by [`shockwave::IMPACT`] from the wreck
     /// ([`impact::push`]), reported as a [`Shove`]; an escape pod or a
-    /// later class ([`immune`]) is neither hit nor pushed. Then each intact or disabled ship hit settles its
-    /// condition as step 9 does, its strike marked when it is newly
-    /// disabled; a breaking-up one is not counted down again.
+    /// later class ([`immune`]) is neither hit nor pushed. Each intact or
+    /// disabled ship hit then settles its condition
+    /// ([`Combat::settle_condition`]), its strike marked when it is newly
+    /// disabled. A hit on a ship in `shown` flashes the next frame
+    /// ([`CombatEvent::Hit`]'s `late`): the player, for an NPC's wreck, and
+    /// every NPC in a lower slot.
     ///
-    /// The original runs the shockwave inside `_HandleShipDisplay` as each
-    /// ship's final explosion goes off (0x2d8ef-0x2da9c), so a ship later
-    /// in the table has already had its own condition and movement that
-    /// frame; here it comes after every ship's condition update, and its
-    /// push takes effect on the next movement. The difference stays within
-    /// the tick and crosses no boundary the player sees.
-    fn shock(&mut self, fighters: &mut [Fighter], rule: &dyn DisableRule) {
-        for wreck in std::mem::take(&mut self.wrecks) {
-            let Some((at, hull)) = fighters
+    /// The ship loop interleaves each NPC's move with the displays, so a
+    /// later slot's ship moves by the push in the same frame; the engine
+    /// moves every NPC first, in the traffic's fly half, so the push moves
+    /// it the next (filed as
+    /// rdm:phase/weapons-fidelity/phase-46-left-out-of-phase-39).
+    fn shock(
+        &mut self,
+        fighters: &mut [Fighter],
+        wreck: ShipRef,
+        shown: &[ShipRef],
+        rule: &dyn DisableRule,
+    ) {
+        let Some((at, hull)) = fighters
+            .iter()
+            .find(|fighter| fighter.ship == wreck)
+            .map(|fighter| (fighter.state.position, fighter.hull))
+        else {
+            return;
+        };
+        let blast = Blast {
+            at,
+            radius: hull.death_size(),
+            direct: None,
+            firer: Some(wreck),
+            spares_player: true,
+        };
+        let reached = blast.reaches(
+            fighters
                 .iter()
-                .find(|fighter| fighter.ship == wreck)
-                .map(|fighter| (fighter.state.position, fighter.hull))
-            else {
+                .filter(|fighter| *fighter.condition != Condition::Destroyed)
+                .map(|fighter| (fighter.ship, fighter.state.position)),
+        );
+        let damage = shockwave::damage(&hull);
+        for ship in reached {
+            let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
                 continue;
             };
-            let blast = Blast {
-                at,
-                radius: hull.death_size(),
-                direct: None,
-                firer: Some(wreck),
-                spares_player: true,
-            };
-            let reached = blast.reaches(
-                fighters
-                    .iter()
-                    .filter(|fighter| *fighter.condition != Condition::Destroyed)
-                    .map(|fighter| (fighter.ship, fighter.state.position)),
-            );
-            let damage = shockwave::damage(&hull);
-            let wreck_at = fighters.iter().position(|fighter| fighter.ship == wreck);
-            for ship in reached {
-                let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
-                    continue;
-                };
-                // A ship already shown this frame: the player, or one
-                // before the wreck in the table.
-                let late = ship == ShipRef::Player || wreck_at.is_some_and(|wreck| index < wreck);
-                let fighter = &mut fighters[index];
-                let condition = *fighter.condition;
-                let before = taken(fighter.reserves);
-                let hurt = !immune(fighter.ship_type);
-                if hurt {
-                    shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
-                }
-                if !hurt {
-                    continue;
-                }
-                // `_DamageShip` @0x2da89 passes no pass-through flag.
-                self.events.push(CombatEvent::Hit {
-                    ship,
-                    weapon: None,
-                    at,
-                    passes_shields: false,
-                    late,
-                });
-                let cap = self.speed_cap;
-                if let Some(velocity) =
-                    impact::push(&fighter.body(), at, shockwave::IMPACT, None, cap)
-                {
-                    self.shove(fighter, velocity);
-                }
-                let downed = if condition.standing() {
-                    self.update_condition(fighter, rule)
-                } else {
-                    None
-                };
-                self.strikes.push(Strike {
-                    ship,
-                    by: Some(wreck),
-                    damage: before - taken(fighter.reserves),
-                    downed,
-                    direct: false,
-                    intended: false,
-                    lock: false,
-                    nominal: Nominal {
-                        mass: damage,
-                        energy: damage,
-                    },
-                    weight: 0.0,
-                    answered: false,
-                });
+            let late = shown.contains(&ship);
+            let fighter = &mut fighters[index];
+            let condition = *fighter.condition;
+            let before = taken(fighter.reserves);
+            let hurt = !immune(fighter.ship_type);
+            if hurt {
+                shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
             }
+            if !hurt {
+                continue;
+            }
+            // `_DamageShip` @0x2da89 passes no pass-through flag.
+            self.events.push(CombatEvent::Hit {
+                ship,
+                weapon: None,
+                at,
+                passes_shields: false,
+                late,
+            });
+            let cap = self.speed_cap;
+            if let Some(velocity) = impact::push(&fighter.body(), at, shockwave::IMPACT, None, cap)
+            {
+                self.shove(fighter, velocity);
+            }
+            let downed = if condition.standing() {
+                self.settle_condition(fighter, rule)
+            } else {
+                None
+            };
+            self.strikes.push(Strike {
+                ship,
+                by: Some(wreck),
+                damage: before - taken(fighter.reserves),
+                downed,
+                direct: false,
+                intended: false,
+                lock: false,
+                nominal: Nominal {
+                    mass: damage,
+                    energy: damage,
+                },
+                weight: 0.0,
+                answered: false,
+            });
         }
     }
 
@@ -2455,10 +2470,10 @@ impl Combat {
     }
 
     /// Each ship among `fighters` struck since `first_strike` and still
-    /// standing settles its condition as step 9 does, as `rule` says, but
-    /// for a breakup's countdown, its last strike marked as downing it: a
-    /// breakup it begins is kept, whose first tick takes no tick off
-    /// (`begun`, step 9).
+    /// standing settles its condition as step 9 does, as `rule` says
+    /// ([`Combat::settle_condition`]), its last strike marked as downing
+    /// it: a breakup it begins is left unset, for the ship's next display
+    /// step to start (see the `display` module).
     fn settle_struck(
         &mut self,
         fighters: &mut [Fighter],
@@ -2473,11 +2488,8 @@ impl Combat {
                 continue;
             }
             truncate_downed_player(fighter, rule);
-            let downed = self.update_condition(fighter, rule);
+            let downed = self.settle_condition(fighter, rule);
             self.mark_downed(first_strike, fighter.ship, downed);
-            if downed == Some(Downed::BreakingUp) {
-                self.begun.push(fighter.ship);
-            }
         }
     }
 
@@ -3006,40 +3018,25 @@ impl Combat {
         placed
     }
 
-    /// Step 9, and the hit pass's settling: `fighter`'s condition follows its damage, as `rule`
-    /// says, and a ship breaking up counts down to its destruction. How
-    /// it was downed, if it was this tick.
+    /// Step 9, and every settling of a ship's condition (the hit pass's,
+    /// the shots', a shockwave's, the display step's): `fighter`'s
+    /// condition follows its armour, as `rule` says. How it was downed,
+    /// if it was.
     ///
-    /// The countdown is the original's death timer (field 0x3c), as
-    /// `_HandleShipDisplay` reads it (@0x2d80d-0x2d85a):
-    ///
-    /// - On the breakup's first tick the timer is set to the ship's
-    ///   `DeathDelay`, times [`PLAYER_BREAKUP_FACTOR`] for the player
-    ///   (@0x2d834-0x2d850), and nothing else happens (both paths jump to
-    ///   0x2def0): the ship is `Dying` with `starting` set, and no tick is
-    ///   taken off.
-    /// - Each later tick takes 1 off a timer above 0 (the player's
-    ///   `_HandlePlayer` @0x6d7e6-0x6d7f8, an NPC's `_HandleShip`
-    ///   @0x35083-0x350a3, each before the display check), and the ship
-    ///   is destroyed once it is at [`EXPLOSION_BAND`] or below
-    ///   (@0x2d85a). So the player explodes 3d - 2 ticks after its
-    ///   breakup tick, and an NPC d - 2 ticks after, or 1 tick after for
-    ///   d = 2.
-    /// - A timer that never rises above 0 by the check (d <= 0, or d = 1
-    ///   for an NPC) goes as the fight's [`Breakup`] says: destroyed on
-    ///   the breakup tick (d <= 0) or the tick after (d = 1) by default;
-    ///   set again, `starting` again, every tick under
-    ///   [`Breakup::Stalls`], the original's reset (@0x2d80d-0x2d83d).
+    /// - Intact or disabled with no armour left, it starts breaking up:
+    ///   [`CombatEvent::BreakingUp`], and `Dying` with its timer unset,
+    ///   which its next display step sets (see the `display` module).
+    /// - Held disabled ([`Fighter::held_disabled`]), it is kept disabled.
+    /// - Otherwise it is disabled, or intact, as `rule` says, a ship that
+    ///   holds no armour never disabled; newly disabled, it raises
+    ///   [`CombatEvent::Disabled`].
+    /// - Breaking up or destroyed, it is left as it is: the countdown is
+    ///   the ship's own step's and its display's.
     ///
     /// Class 0x2ff, the escape pod, skips the whole dying block
     /// (`_HandleShipDisplay` @0x2d803, [`never_breaks_up`]): with its
-    /// armour gone its condition stays as it is, with no breakup, no
-    /// countdown and no explosion.
-    ///
-    /// Left out: `_HandleShip` skips the NPC decrement while
-    /// `_gameFrozen` is set (@0x35091-0x35099), and the engine has no
-    /// frozen game.
-    fn update_condition(
+    /// armour gone its condition stays as it is, with no breakup.
+    fn settle_condition(
         &mut self,
         fighter: &mut Fighter,
         rule: &dyn DisableRule,
@@ -3048,28 +3045,17 @@ impl Combat {
             return None;
         }
         let ship = fighter.ship;
-        let at = fighter.state.position;
-        let timer = if ship == ShipRef::Player {
-            fighter.hull.death_delay * PLAYER_BREAKUP_FACTOR
-        } else {
-            fighter.hull.death_delay
-        };
-        let starting = Condition::Dying {
-            ticks_left: timer,
-            starting: true,
-        };
         match *fighter.condition {
             Condition::Intact | Condition::Disabled if armour_gone(fighter.reserves.armor) => {
                 self.events.push(CombatEvent::BreakingUp {
                     ship,
-                    at,
+                    at: fighter.state.position,
                     explosion: fighter.hull.breakup,
                 });
-                if timer == 0 && self.breakup == Breakup::Explodes {
-                    self.destroy(fighter);
-                } else {
-                    *fighter.condition = starting;
-                }
+                *fighter.condition = Condition::Dying {
+                    ticks_left: 0,
+                    starting: true,
+                };
                 Some(Downed::BreakingUp)
             }
             Condition::Intact | Condition::Disabled if fighter.held_disabled => {
@@ -3090,28 +3076,13 @@ impl Combat {
                 };
                 downed
             }
-            Condition::Dying { ticks_left, .. } => {
-                let left = ticks_left.saturating_sub(1);
-                if left == 0 && self.breakup == Breakup::Stalls {
-                    *fighter.condition = starting;
-                } else if left <= EXPLOSION_BAND {
-                    self.destroy(fighter);
-                } else {
-                    *fighter.condition = Condition::Dying {
-                        ticks_left: left,
-                        starting: false,
-                    };
-                }
-                None
-            }
-            Condition::Destroyed => None,
+            Condition::Dying { .. } | Condition::Destroyed => None,
         }
     }
 
     /// Destroys `fighter`, raising its [`CombatEvent::Destroyed`].
     fn destroy(&mut self, fighter: &mut Fighter) {
         *fighter.condition = Condition::Destroyed;
-        self.wrecks.push(fighter.ship);
         self.events.push(CombatEvent::Destroyed {
             ship: fighter.ship,
             ship_type: fighter.ship_type,
@@ -3237,7 +3208,6 @@ impl Combat {
         self.slots.clear();
         self.ended_beams = 0;
         self.stood.clear();
-        self.begun.clear();
     }
 }
 
@@ -3711,7 +3681,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::defence::Side;
     use crate::combat::exits::{Compression, ExitCursors, ExitKind, ExitPoints};
-    use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, NovaDisable};
+    use crate::combat::hull::{DEFAULT_HIT_RADIUS, ESCAPE_POD_SHIP, EXPLOSION_BAND, NovaDisable};
     use crate::combat::weapon::{
         LOSES_LOCK_OFF_AHEAD, SENSOR_INTERFERENCE, TURNS_ON_FIRER, WeaponSpec,
     };
@@ -3722,6 +3692,7 @@ mod tests {
 
     mod ai_dispatch;
     mod collision_walk;
+    mod display_step;
     mod exit_steps;
     mod hidden_shots;
     mod plunder_fire;
@@ -4884,13 +4855,12 @@ mod tests {
         };
         tick(&mut combat, &mut ships, &rule);
         let asked = rule.asked.take();
-        // Of the tough ship at its `_HandleShip`'s regeneration, which
-        // reads `_IsDisabled` live (@0x34424), its armour short of full;
-        // then of A and the tough ship as their conditions settle; never
-        // of the dying.
+        // Slot by slot (@0x4445c): A at its display, its condition
+        // settled; the tough ship at its `_HandleShip`'s regeneration,
+        // which reads `_IsDisabled` live (@0x34424), its armour short of
+        // full, then at its display; never the dying.
         assert_eq!(asked.len(), 3, "not of the dying");
-        assert_eq!(asked[0].0, asked[2].0, "the tough ship's regeneration");
-        let asked = &asked[1..];
+        assert_eq!(asked[1].0, asked[2].0, "the tough ship's regeneration");
         assert_eq!(
             asked[1].0,
             Gauge {
@@ -12638,26 +12608,6 @@ mod tests {
             events.extend(combat.take_events());
         }
         assert_eq!(lateness(&events), [(ShipRef::Player, true)]);
-    }
-
-    #[test]
-    fn a_shockwave_shows_its_flash_the_next_frame_on_a_ship_before_its_wreck() {
-        for (wreck_first, late) in [(true, false), (false, true)] {
-            let mut combat = Combat::default();
-            let wreck = wreck(WRECK, 200.0, 0.0, 0.0);
-            let near = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
-            let mut ships = if wreck_first {
-                [wreck, near]
-            } else {
-                [near, wreck]
-            };
-            tick(&mut combat, &mut ships, &NovaDisable);
-            assert_eq!(
-                lateness(&combat.take_events()),
-                [(A, late)],
-                "wreck first: {wreck_first}"
-            );
-        }
     }
 
     #[test]

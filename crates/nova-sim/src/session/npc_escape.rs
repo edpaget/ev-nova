@@ -3,13 +3,16 @@
 //! [`npc_escape`](crate::npc_escape).
 //!
 //! **The death timer.** The fight counts an NPC's breakup down
-//! ([`Condition::Dying`]'s `ticks_left`). `_HandleShip` takes a tick off
-//! the timer before its checks, and only while it is above 0
+//! ([`Condition::Dying`]'s `ticks_left`): the NPC's own step takes a tick
+//! off it (`Condition::count_down`), and its display step sets an unset
+//! one (see the fight's `display` module). `_HandleShip` takes the tick
+//! off before its checks, and only while the timer is above 0
 //! (@0x35083-0x350a3), so the pod checks read `ticks_left - 1` of an NPC
-//! that was `Dying { ticks_left > 0 }` before the fight's tick, and run on
-//! no other: not on the breakup's first tick, whose timer is still the
-//! spawn's 0 (`jbe 0x35305` @0x3508b skips the whole pod block), nor on a
-//! stalled breakup's ([`Breakup`](crate::combat::hull::Breakup)). The escape
+//! that was `Dying { ticks_left > 0 }` before the pass's fight, and run on
+//! no other: not while the timer is unset, on the pass a hit breaks it up
+//! and the one its display sets it on (`jbe 0x35305` @0x3508b skips the
+//! whole pod block), nor on a stalled breakup's
+//! ([`Breakup`](crate::combat::hull::Breakup)). The escape
 //! ship's check sits outside that guard and asks only `_IsDying`
 //! (@0x253d): it reads the same timer, or 0 on the breakup's first tick
 //! or a stalled one. An NPC the fight destroys this tick is still here,

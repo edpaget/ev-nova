@@ -417,21 +417,25 @@ pub enum Condition {
     Disabled,
     /// Its armour is gone, and it breaks up, counting down the original's
     /// death timer (field 0x3c) to its final explosion (see
-    /// [`Combat`](super::Combat)'s step 9).
+    /// [`Combat`](super::Combat)'s step 9 and its display step,
+    /// `_HandleShipDisplay` @0x2d7ef-0x2dcfc).
     Dying {
-        /// The death timer: its `DeathDelay`, times
-        /// [`PLAYER_BREAKUP_FACTOR`] for the player, as set on the
-        /// breakup's first tick, less a tick for each tick since. The ship
-        /// explodes on the tick it comes down to [`EXPLOSION_BAND`] or
-        /// below.
+        /// The death timer: 0 while it is unset (the original's 0.0 or
+        /// below), as a hit or any loss of armour leaves it; its
+        /// `DeathDelay`, times [`PLAYER_BREAKUP_FACTOR`] for the player,
+        /// once the ship's display step sets it (@0x2d834-0x2d850); less
+        /// a tick for each of the ship's own steps since
+        /// ([`Condition::count_down`]). The display step explodes the
+        /// ship once it is at 1 to [`EXPLOSION_BAND`].
         ticks_left: u32,
-        /// Whether the timer was set on this tick: the original's "dying,
-        /// timer not yet set" frame, on which `_HandleShipDisplay` sets it
-        /// (@0x2d834-0x2d850) and does nothing else. False from the next
-        /// tick on; under [`Breakup::Stalls`], true again on every tick
-        /// the timer is set again. Phase 9's eject reads it, as
-        /// `_HandlePlayer` (@0x6f248-0x6f286) runs before
-        /// `_HandleShipDisplay` sets the timer.
+        /// Whether the timer is unset, or this pass's display step set it:
+        /// the original's "dying, timer not yet set" frame, on which
+        /// `_HandleShipDisplay` sets it and does nothing else. The ship's
+        /// next death-timer tick clears it; under [`Breakup::Stalls`] the
+        /// display sets it again every time it finds the timer run down.
+        /// The eject reads it, as `_HandlePlayer` (@0x6f248-0x6f286) runs
+        /// before `_HandleShipDisplay` sets the timer, and so does the
+        /// view's breakup puffs.
         starting: bool,
     },
     /// Destroyed.
@@ -455,6 +459,25 @@ impl Condition {
     #[must_use]
     pub fn active(self) -> bool {
         self != Self::Destroyed
+    }
+
+    /// The death timer's tick at the ship's own step, the player's in
+    /// `_HandlePlayer` (@0x6d7e6-0x6d7f8), an NPC's in `_HandleShip` after
+    /// its pick (@0x35083-0x350a3): a timer above 0 loses a tick, and the
+    /// display step's set (`starting`) is past. Anything else is left as
+    /// it is.
+    ///
+    /// Left out: `_HandleShip` skips the NPC's tick while `_gameFrozen` is
+    /// set (@0x35091-0x35099), and the engine has no frozen game.
+    pub fn count_down(&mut self) {
+        if let Self::Dying { ticks_left, .. } = *self
+            && ticks_left > 0
+        {
+            *self = Self::Dying {
+                ticks_left: ticks_left - 1,
+                starting: false,
+            };
+        }
     }
 
     /// Whether it is disabled as the original's `_IsDisabled` reads it:
@@ -1066,5 +1089,27 @@ mod tests {
         assert_eq!(Breakup::from(RuleSource::Bible), Breakup::Explodes);
         assert_eq!(Breakup::default(), Breakup::Explodes);
         assert_eq!((PLAYER_BREAKUP_FACTOR, EXPLOSION_BAND), (3, 2));
+    }
+
+    #[test]
+    fn the_death_timer_ticks_only_while_it_is_set() {
+        // `_HandlePlayer` @0x6d7e6 and `_HandleShip` @0x35083 take 1.0
+        // off a timer above 0 and leave any other.
+        let dying = |ticks_left, starting| Condition::Dying {
+            ticks_left,
+            starting,
+        };
+        let ticked = |mut condition: Condition| {
+            condition.count_down();
+            condition
+        };
+        assert_eq!(ticked(dying(5, true)), dying(4, false), "set: ticks");
+        assert_eq!(ticked(dying(3, false)), dying(2, false));
+        assert_eq!(ticked(dying(1, false)), dying(0, false), "runs down");
+        assert_eq!(ticked(dying(0, true)), dying(0, true), "unset: kept");
+        assert_eq!(ticked(dying(0, false)), dying(0, false));
+        for kept in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
+            assert_eq!(ticked(kept), kept);
+        }
     }
 }
