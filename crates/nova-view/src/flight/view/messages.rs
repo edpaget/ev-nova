@@ -5,7 +5,8 @@ use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::text_tags::comma_number;
 use nova_sim::{
     Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, Good, HailRefusal, Help,
-    JumpRefusal, LandingRefusal, OutfitId, Session, ShipId, SimMessage, StellarId, Taken,
+    JumpRefusal, LandingRefusal, OutfitId, SelfDestructLine, Session, ShipId, SimMessage,
+    StellarId, Taken,
 };
 use nova_sim::{MissionBoardLine, PayNote, RuleSource, TagNames, TutorialHint};
 
@@ -208,6 +209,23 @@ pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 /// `STR#` 2002 #35: a disabled player's pre-jump collapsed
 /// (`_HandlePlayer` `_GetIndString` @0x68a04).
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
+/// `STR#` 2002 #385: what each of the self-destruct's lines but the last
+/// begins with (`_HandlePlayer` @0x6fe3f, @0x6ff8a, @0x700ea).
+pub const SELF_DESTRUCT_LEAD: &str = "Self-destruct";
+/// `STR#` 2002 #386: the self-destruct began (@0x6fe65).
+pub const SEQUENCE_INITIATED: &str = "sequence initiated.";
+/// `STR#` 2002 #387: the self-destruct was let go (@0x70110).
+pub const SEQUENCE_CANCELLED: &str = "sequence cancelled.";
+/// `STR#` 2002 #395: the countdown line's "in" (@0x6ffb0).
+pub const SELF_DESTRUCT_IN: &str = "in";
+/// `STR#` 2002 #388: "second", which the original never says; the
+/// countdown's last line says it only by the other reading of
+/// `nova_sim::RuleKey::SelfDestructSecond`.
+pub const SECOND: &str = "second";
+/// `STR#` 2002 #389: the countdown line's "seconds" (@0x70014).
+pub const SECONDS: &str = "seconds";
+/// `STR#` 2002 #390: the self-destruct's last words (@0x70203).
+pub const HAVE_A_NICE_DAY: &str = "Have a nice day.";
 /// `STR#` 2002 #39: what comes before a sabotage outfit that went off.
 pub const YOUR: &str = "Your";
 /// `STR#` 2002 #40: what follows one sabotage outfit that went off.
@@ -313,6 +331,27 @@ pub fn illegal_outfit_message(
     )
 }
 
+/// The ejected player's line: "Escaping in", a space, the escape ship's
+/// long name and a full stop (`_HandlePlayer` @0x6f5ad-0x6f5f3).
+fn escaping_in_text(ship: ShipId, session: &Session) -> String {
+    let name = session.ship_long_name(ship).unwrap_or_default();
+    format!("{ESCAPING_IN} {name}.")
+}
+
+/// The self-destruct's lines (`_HandlePlayer` block Z): each but the last
+/// is "Self-destruct" (#385) and a space before its own words.
+fn self_destruct_text(line: SelfDestructLine) -> String {
+    match line {
+        SelfDestructLine::Initiated => format!("{SELF_DESTRUCT_LEAD} {SEQUENCE_INITIATED}"),
+        SelfDestructLine::In { seconds, singular } => {
+            let unit = if singular { SECOND } else { SECONDS };
+            format!("{SELF_DESTRUCT_LEAD} {SELF_DESTRUCT_IN} {seconds} {unit}.")
+        }
+        SelfDestructLine::Cancelled => format!("{SELF_DESTRUCT_LEAD} {SEQUENCE_CANCELLED}"),
+        SelfDestructLine::NiceDay => HAVE_A_NICE_DAY.to_owned(),
+    }
+}
+
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `session`: none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
@@ -361,12 +400,8 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         | SimMessage::ScanHail(text)
         | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
-        SimMessage::EscapingIn { ship } => {
-            // "Escaping in", a space, the long name and a full stop
-            // (@0x6f5ad-0x6f5f3).
-            let name = session.ship_long_name(*ship).unwrap_or_default();
-            return Some(format!("{ESCAPING_IN} {name}."));
-        }
+        SimMessage::SelfDestruct(line) => return Some(self_destruct_text(*line)),
+        SimMessage::EscapingIn { ship } => return Some(escaping_in_text(*ship, session)),
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
         SimMessage::BombSetUp => BOMB_SET_UP,
         SimMessage::Sabotaged {
@@ -722,6 +757,7 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::ScanHail(_)
         | SimMessage::ReinforcementsApproaching(_)
         | SimMessage::JumpCollapsed
+        | SimMessage::SelfDestruct(_)
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
         | SimMessage::BombSetUp
