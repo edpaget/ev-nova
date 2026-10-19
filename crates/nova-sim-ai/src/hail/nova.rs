@@ -125,9 +125,9 @@
 use super::reply::{
     self, BAD_MOOD, BUSY, CANT_DO_THAT, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU,
     IN_YOUR_DREAMS, JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST,
-    PLEASURE, RATHER_NOT, RELEASED, WASTING_TIME,
+    PLEASURE, RELEASED, WASTING_TIME,
 };
-use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
+use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply, battle};
 use crate::catalog::GovtId;
 use crate::chance::Chance;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -314,7 +314,7 @@ impl HailOption for RequestAssistance {
             return Answer::say(Reply::Comm(group));
         }
         if hail.player_threatened {
-            return defend(hail, chance);
+            return battle::defend(hail, chance);
         }
         let Some(need) = hail.need else {
             return Answer::say(Reply::Comm(NOT_IN_TROUBLE));
@@ -339,38 +339,6 @@ impl HailOption for RequestAssistance {
             }),
             ..Answer::say(price)
         }
-    }
-}
-
-/// Request Assistance while the player is threatened (`_DoCommDialog`
-/// @0x96310-0x96372; see the module docs' item 4): "In your dreams, pal."
-/// unless an enemy of the ship's threatens the player (@0x9632f); with
-/// battle help (@0x96335), "Okay, I'm on my way." and it fights a threat
-/// picked on `chance`; else "I'd rather not.", in place of the AI-type
-/// ladder (@0x9638e-0x96514) that is deferred.
-///
-/// `_AIFightEnemyThreatToPlayer` (@0x82c80-0x82dba) draws `Rand(63)+1`
-/// until a slot holds a threat (@0x82d24-0x82d99): a uniform pick among
-/// every ship that threatens the player, with no government test, here
-/// one draw below their count. An enemy threatening the player is among
-/// them, so the list is never empty here; were it, nothing is drawn and
-/// the ship only says it is on its way, as the original sets no target
-/// (@0x82daa).
-fn defend(hail: &Hail, chance: &mut dyn Chance) -> Answer {
-    if !hail.threatened_by_enemy {
-        return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
-    }
-    if !hail.dispositions.battle_help {
-        return Answer::say(Reply::Comm(RATHER_NOT));
-    }
-    let threats: Vec<_> = hail.threats_to_player().map(|npc| npc.id).collect();
-    let count = u32::try_from(threats.len()).unwrap_or(u32::MAX);
-    let target = (count > 0)
-        .then(|| threats.get(chance.below(count) as usize).copied())
-        .flatten();
-    Answer {
-        deed: target.map(Deed::Defend),
-        ..Answer::say(Reply::Comm(ON_MY_WAY))
     }
 }
 
@@ -513,7 +481,8 @@ impl HailOption for JoinFleet {
 #[cfg(test)]
 mod tests {
     use super::super::fixture::{hail, ship};
-    use super::super::{Dispositions, Help, MissionHail};
+    use super::super::reply::RATHER_NOT;
+    use super::super::{Defence, Dispositions, Help, MissionHail};
     use super::*;
     use crate::ai::Goal;
     use crate::combat::ShipRef;
@@ -1036,7 +1005,11 @@ mod tests {
                     Answer {
                         first: None,
                         reply: Some(Reply::Comm(ON_MY_WAY)),
-                        deed: Some(Deed::Defend(NpcId(2))),
+                        deed: Some(Deed::Defend(Defence {
+                            threat: Some(NpcId(2)),
+                            reinforce: true,
+                            drop_travel: false
+                        })),
                         ask: None,
                     },
                     "{:?} {need:?}",
@@ -1054,7 +1027,15 @@ mod tests {
         let hail = helping(&npcs[0], &npcs, None);
         for (draw, picked) in [(0, NpcId(2)), (1, NpcId(3))] {
             let (answer, asked) = press_drawing(&hail, &[draw]);
-            assert_eq!(answer.deed, Some(Deed::Defend(picked)), "{draw}");
+            assert_eq!(
+                answer.deed,
+                Some(Deed::Defend(Defence {
+                    threat: Some(picked),
+                    reinforce: true,
+                    drop_travel: false
+                })),
+                "{draw}"
+            );
             assert_eq!(asked, [2]);
         }
     }

@@ -604,10 +604,14 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
             }
             Deed::Release | Deed::Join => {}
-            Deed::Defend(threat) => {
-                npc.goal = Goal::Attack(ShipRef::Npc(threat));
-                npc.target = Some(ShipRef::Npc(threat));
-                self.call_for_battle_help_reinforcements(id);
+            Deed::Defend(defence) => {
+                if let Some(threat) = defence.threat {
+                    npc.goal = Goal::Attack(ShipRef::Npc(threat));
+                    npc.target = Some(ShipRef::Npc(threat));
+                }
+                if defence.reinforce {
+                    self.call_for_battle_help_reinforcements(id);
+                }
             }
             Deed::Help(help) => {
                 npc.goal = Goal::Assist(help);

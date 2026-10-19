@@ -46,6 +46,7 @@
 //! ship must still like the player and be free.
 
 pub mod assist;
+pub mod battle;
 pub mod deal;
 pub mod like;
 pub mod nova;
@@ -203,6 +204,10 @@ pub struct Hail<'a> {
     /// slot's `ShipGoal` and its mark's `ShipBehav`. The session sets it;
     /// none otherwise.
     pub mission: Option<MissionHail>,
+    /// The governments, which a helper's pick of an enemy threat reads
+    /// under [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget)'s
+    /// other reading (see [`battle`]).
+    pub govts: &'a Governments,
 }
 
 impl Hail<'_> {
@@ -323,6 +328,7 @@ impl<'a> Hail<'a> {
             quote: None,
             joins: false,
             mission,
+            govts: around.govts,
         }
     }
 }
@@ -342,10 +348,28 @@ pub enum Deed {
     Release,
     /// The person hailed joins the player's fleet, as itself, at once.
     Join,
-    /// It attacks this NPC, a threat to the player
-    /// (`_AIFightEnemyThreatToPlayer` @0x82c80), and calls for
-    /// reinforcements (`_AICallForReinforcements` @0x9636d).
-    Defend(NpcId),
+    /// It fights a threat to the player, as [`Defence`] says.
+    Defend(Defence),
+}
+
+/// How a ship sent to fight a threat to the player does it (see
+/// [`battle`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defence {
+    /// The NPC it attacks, its target set and its AI state attack
+    /// (+0x70, +0xc8c8 = 4); none when the pick found no threat, which
+    /// clears its target (+0x70 = -1) and changes nothing else
+    /// (`_AIFightEnemyThreatToPlayer` @0x82daa, `_AIFightThreatToPlayer`
+    /// @0x8195e).
+    pub threat: Option<NpcId>,
+    /// Whether it then calls for reinforcements, forced past their
+    /// strength test (`_AICallForReinforcements(ship, 1)` @0x9636d):
+    /// rank battle help alone does, whatever the pick found.
+    pub reinforce: bool,
+    /// Whether its travel stellar is dropped (+0x6c = -1, `Npc::travel_set`
+    /// false) as it takes a threat: `_AIFightThreatToPlayer` does
+    /// (@0x81949), `_AIFightEnemyThreatToPlayer` doesn't.
+    pub drop_travel: bool,
 }
 
 /// A price a ship asks, and what it says and does as the haggling ends.
@@ -619,8 +643,12 @@ pub(crate) mod fixture {
             quote: None,
             joins: false,
             mission: None,
+            govts: &NO_GOVERNMENTS,
         }
     }
+
+    /// No governments at all.
+    static NO_GOVERNMENTS: Governments = Governments::empty();
 }
 
 #[cfg(test)]
