@@ -657,6 +657,16 @@ impl<'a> Surroundings<'a> {
         crate::cloak::visible(npc.cloak, npc.state.position, npc.emerging(), observer)
     }
 
+    /// Whether `npc` threatens the player among these ships, as
+    /// `_ExtendedIsThreatToPlayer` @0x81b70 asks it: read whole as
+    /// [`Npc::threatens_player_extended`] over [`npcs`](Surroundings::npcs),
+    /// with the player's sight of it ([`Surroundings::seen_by_player`],
+    /// @0x81bc6).
+    #[must_use]
+    pub fn threatens_player(&self, npc: &Npc) -> bool {
+        npc.threatens_player_extended(self.npcs, self.seen_by_player(npc))
+    }
+
     /// Whether `govt` is marked by an IFF scrambler: never an independent.
     #[must_use]
     pub fn iff_marked(&self, govt: Option<GovtId>) -> bool {
@@ -1129,6 +1139,37 @@ mod tests {
             assert!(!goal.scooping(), "{goal:?}");
         }
         assert!(!npc(1, AiType::WimpyTrader).is_scooping());
+    }
+
+    #[test]
+    fn threatens_player_asks_the_extended_test_among_around_with_the_players_sight() {
+        let mut escort = npc(1, AiType::Warship);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let mut at_escort = npc(2, AiType::Warship);
+        at_escort.goal = Goal::Attack(ShipRef::Npc(NpcId(1)));
+        let led = [escort, at_escort.clone()];
+        assert!(Surroundings::new(&[], &led).threatens_player(&at_escort));
+        assert!(
+            !Surroundings::new(&[], std::slice::from_ref(&at_escort)).threatens_player(&at_escort),
+            "the ship it attacks is not among around"
+        );
+        at_escort.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        let unseen = [led[0].clone(), at_escort.clone()];
+        assert!(
+            !Surroundings::new(&[], &unseen).threatens_player(&at_escort),
+            "the player can't see it"
+        );
+        let scanned = Surroundings {
+            cloak_scanner: true,
+            ..Surroundings::new(&[], &unseen)
+        };
+        assert!(scanned.threatens_player(&at_escort));
     }
 
     #[test]

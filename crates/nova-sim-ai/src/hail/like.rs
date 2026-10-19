@@ -79,7 +79,7 @@ pub enum Attitude {
 /// behaviour), none otherwise.
 #[must_use]
 pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> bool {
-    if threatens(npc, around) {
+    if around.threatens_player(npc) {
         return false;
     }
     if npc.escorts_player() || around.blessed(npc.govt) {
@@ -118,19 +118,13 @@ pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHai
 /// [`likes_player`] and the module docs).
 #[must_use]
 pub fn attitude(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> Attitude {
-    if threatens(npc, around) {
+    if around.threatens_player(npc) {
         Attitude::Hostile
     } else if likes_player(npc, around, mission) {
         Attitude::Friendly
     } else {
         Attitude::Unfriendly
     }
-}
-
-/// Rule 1: whether `npc` threatens the player among `around`, as
-/// `_ExtendedIsThreatToPlayer` asks it with the player's sight of it.
-fn threatens(npc: &Npc, around: &Surroundings) -> bool {
-    npc.threatens_player_extended(around.npcs, around.seen_by_player(npc))
 }
 
 #[cfg(test)]

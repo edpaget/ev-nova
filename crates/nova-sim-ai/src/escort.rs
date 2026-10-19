@@ -374,13 +374,7 @@ pub fn threats<'a>(
     around
         .npcs
         .iter()
-        .filter(move |candidate| candidate.id != escort.id && threatens(candidate, around))
-}
-
-/// Whether `candidate` threatens the player among `around`, as
-/// `_ExtendedIsThreatToPlayer` asks it with the player's sight of it.
-fn threatens(candidate: &Npc, around: &Surroundings) -> bool {
-    candidate.threatens_player_extended(around.npcs, around.seen_by_player(candidate))
+        .filter(move |candidate| candidate.id != escort.id && around.threatens_player(candidate))
 }
 
 /// How strongly `escort` takes `candidate` for a threat to the player at
@@ -403,7 +397,7 @@ pub fn threat_score(
 ) -> Option<f32> {
     if candidate.id == escort.id
         || !around.sees(escort, ShipRef::Npc(candidate.id))
-        || !threatens(candidate, around)
+        || !around.threatens_player(candidate)
     {
         return None;
     }
@@ -425,8 +419,11 @@ pub fn threat_score(
     Some(score)
 }
 
-/// The threat to the player at `player` among `npcs` that `escort` takes
-/// ([`threat_score`]): the lowest score, the first of a tie.
+/// The threat to the player at `player` among `around` that `escort` takes:
+/// the lowest [`threat_score`], the first of a tie. Only candidates
+/// [`threat_score`] accepts count, so both the escort's sight of a
+/// candidate ([`Surroundings::sees`]) and the player's
+/// ([`Surroundings::seen_by_player`]) gate the pick.
 #[must_use]
 pub fn best_threat(
     escort: &Npc,
