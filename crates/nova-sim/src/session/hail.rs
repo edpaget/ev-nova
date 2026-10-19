@@ -1377,6 +1377,20 @@ mod tests {
         assert_eq!(greeted(&mut session, &catalog, 1), "f2");
     }
 
+    /// The government hail line (STR# 7000+) is filled like any comm
+    /// text: stock STR# 7022 carries `<PN>`.
+    #[test]
+    fn a_governments_hail_line_fills_its_tags() {
+        let mut catalog = hailable();
+        catalog.strings[2].1[6] = "To: Captain <PN>, off to <DST>".to_owned();
+        let mut session = targeting(&catalog);
+        session.pilot.name = "Stock".to_owned();
+        assert_eq!(
+            greeted(&mut session, &catalog, 1),
+            "To: Captain Stock, off to [Error]"
+        );
+    }
+
     #[test]
     fn a_hail_line_passed_over_or_missing_is_nice_to_meet_you() {
         let long = "x".repeat(42);
