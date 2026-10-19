@@ -88,7 +88,7 @@
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
 //!    and, the player within its reach, has scanned the player
-//!    ([`Traffic::take_scans`]). Then each ship waiting in its gate or held
+//!    ([`Traffic::take_on_line`]). Then each ship waiting in its gate or held
 //!    at it holds only what the behaviour gives it for the wait
 //!    ([`Behaviour::gate_wait`], `_AIEscortFireUnprovoked`), dropping its
 //!    target if the behaviour says so;
@@ -151,6 +151,7 @@ pub mod leave_flight;
 #[cfg(test)]
 mod lost_sight_tests;
 pub mod npc;
+pub mod on_line;
 pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
@@ -194,6 +195,7 @@ use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use nova_sim_combat::asteroid::Asteroid;
 use npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
+use on_line::{LineQueue, OnLine};
 use persons::{GateView, PersonWorld, derelict_armor};
 use plunder::{HighLevel, PirateEvent};
 use plunder_dock::DockOutcome;
@@ -631,9 +633,10 @@ pub struct Traffic {
     interval: u32,
     /// The NPCs that left on the last tick, and how.
     departed: Vec<(NpcId, Outcome)>,
-    /// The NPCs that have looked the player over since the scans were
-    /// last taken, in order.
-    scans: Vec<NpcId>,
+    /// The calls the decisions made on the message line and the scans of
+    /// the player, in slot order, since they were last taken
+    /// ([`Traffic::take_comm_calls`], [`Traffic::take_on_line`]).
+    on_line: LineQueue,
     /// The `STR#`s of the arrival quotes of the fleets added since the
     /// quotes were last taken, in order ([`NewShip::quote`]).
     quotes: Vec<i16>,
@@ -641,9 +644,6 @@ pub struct Traffic {
     /// at once, since they were last taken, in order
     /// ([`Traffic::take_attack_quotes`]).
     attack_quotes: Vec<NpcId>,
-    /// The calls the decisions made on the message line since they were
-    /// last taken, in NPC order ([`Traffic::take_comm_calls`]).
-    comm_calls: Vec<(NpcId, CommCall)>,
     /// What the pirates did since it was last taken, for the session to
     /// answer, in order ([`Traffic::take_pirate_events`]).
     pirate_events: Vec<PirateEvent>,
@@ -723,10 +723,9 @@ impl Traffic {
             ticks: 0,
             interval,
             departed: Vec::new(),
-            scans: Vec::new(),
+            on_line: LineQueue::default(),
             quotes: Vec::new(),
             attack_quotes: Vec::new(),
-            comm_calls: Vec::new(),
             pirate_events: Vec::new(),
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
@@ -791,10 +790,9 @@ impl Traffic {
         self.npcs.clear();
         self.left_behind.clear();
         self.departed.clear();
-        self.scans.clear();
+        self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
-        self.comm_calls.clear();
         self.pirate_events.clear();
         self.add(
             missions,
@@ -888,10 +886,9 @@ impl Traffic {
             }
         }
         self.departed.clear();
-        self.scans.clear();
+        self.on_line.clear();
         self.quotes.clear();
         self.attack_quotes.clear();
-        self.comm_calls.clear();
         self.pirate_events.clear();
     }
 
@@ -967,7 +964,6 @@ impl Traffic {
                     .map(|decision| (npc.id, decision.dropped_target))
             })
             .collect();
-        self.queue_comm_calls(&decisions);
         let view = world.gate_view();
         for (id, dropped_target) in turning {
             self.ask_quote_gate(id, dropped_target, view);
@@ -1924,32 +1920,36 @@ impl Traffic {
     /// it was when the block did not run.
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
-            let Some(Decision {
+            let Some(decision) = decision else {
+                continue;
+            };
+            let calls = decision.comm_call.into_iter().chain(
+                decision
+                    .calls_reinforcements
+                    .then_some(CommCall::Reinforcements),
+            );
+            let Decision {
                 goal,
                 provokes,
                 clears_target,
                 lost_sight,
                 ..
-            }) = decision
-            else {
-                continue;
-            };
+            } = decision;
             if let Some(write) = lost_sight {
                 npc.lost_sight = match write {
                     LostSight::Searching(left) => Some(left),
                     LostSight::Seen | LostSight::GaveUp => None,
                 };
             }
+            let mut scans = false;
             if let Goal::Inspect(ship) = npc.goal
                 && goal != npc.goal
             {
                 npc.inspected = Some(ship);
-                let scans = ship == ShipRef::Player
+                scans = ship == ShipRef::Player
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
-                if scans {
-                    self.scans.push(npc.id);
-                }
             }
+            self.on_line.push_think(npc.id, calls, scans);
             if provokes {
                 npc.provoked = 1.0;
             }
@@ -1969,13 +1969,22 @@ impl Traffic {
         }
     }
 
-    /// The NPCs that have looked the player over since this was last
-    /// called, in order: each that stopped inspecting the player while
-    /// within an interceptor's reach of it (`_HighLevelAIHandler`
-    /// @0x8f11e-0x8f38a calls `_ScanPlayer` there). Taking them empties
-    /// the list.
-    pub fn take_scans(&mut self) -> Vec<NpcId> {
-        std::mem::take(&mut self.scans)
+    /// The frame's work on the message line held behind its first scan,
+    /// in slot order ([`on_line`]), with every call and scan queued since
+    /// [`Traffic::take_comm_calls`] was last called: each NPC that stopped
+    /// inspecting the player while within an interceptor's reach of it
+    /// scans it (`_HighLevelAIHandler` @0x8f11e-0x8f38a calls
+    /// `_ScanPlayer` there), after its own think's calls. Taking it
+    /// empties the queue; entering or going on into another system drops
+    /// it.
+    pub fn take_on_line(&mut self) -> Vec<OnLine> {
+        self.on_line.take_all()
+    }
+
+    /// Whether any call or scan is queued, not yet taken.
+    #[must_use]
+    pub fn holds_line_work(&self) -> bool {
+        self.on_line.holds_any()
     }
 
     /// The `STR#`s of the arrival quotes of the fleets added since this
@@ -1995,36 +2004,17 @@ impl Traffic {
         std::mem::take(&mut self.attack_quotes)
     }
 
-    /// The calls the decisions made on the message line since this was
-    /// last called, in NPC order within a tick ([`Decision::comm_call`]),
-    /// each think's call for reinforcements after its own call
-    /// ([`Decision::calls_reinforcements`], [`CommCall::Reinforcements`]),
-    /// for the session to answer. Taking them empties the list; entering
-    /// or going on into another system drops them.
+    /// The calls the decisions made on the message line ahead of the
+    /// first scan queued, in NPC order within a tick
+    /// ([`Decision::comm_call`]), each think's call for reinforcements
+    /// after its own call ([`Decision::calls_reinforcements`],
+    /// [`CommCall::Reinforcements`]), for the session to answer. Taking
+    /// them leaves the first scan and everything after it held for
+    /// [`Traffic::take_on_line`], as that scan's line comes first in the
+    /// original's slot order (see [`on_line`]); entering or going on into
+    /// another system drops them.
     pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall)> {
-        std::mem::take(&mut self.comm_calls)
-    }
-
-    /// Queues the calls `decisions`, one for each NPC in order, made on
-    /// the message line ([`Traffic::take_comm_calls`]): each think's own
-    /// call, then its call for reinforcements.
-    fn queue_comm_calls(&mut self, decisions: &[Option<Decision>]) {
-        self.comm_calls.extend(
-            self.npcs
-                .iter()
-                .zip(decisions)
-                .filter_map(|(npc, decision)| decision.map(|decision| (npc.id, decision)))
-                .flat_map(|(id, decision)| {
-                    let reinforcements = decision
-                        .calls_reinforcements
-                        .then_some(CommCall::Reinforcements);
-                    decision
-                        .comm_call
-                        .into_iter()
-                        .chain(reinforcements)
-                        .map(move |call| (id, call))
-                }),
-        );
+        self.on_line.take_ahead_of_scans()
     }
 
     /// The ship types the system's traffic can spawn, by ascending ID.
@@ -4998,7 +4988,7 @@ mod tests {
         };
         let still = Fighting::deciding(Goal::Inspect(ShipRef::Player));
         traffic.tick_in(&still, world, &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.take_scans(), [], "still at it");
+        assert_eq!(traffic.take_on_line(), [], "still at it");
         for npc in traffic.npcs_mut() {
             npc.state.position = Vec2::ZERO;
             npc.state.velocity = Vec2::ZERO;
@@ -5008,15 +4998,15 @@ mod tests {
         let done = Fighting::deciding(Goal::Idle);
         traffic.tick_in(&done, world, &[], &mut Draws::of(&[]));
         assert_eq!(
-            traffic.take_scans(),
-            [NpcId(0)],
+            traffic.take_on_line(),
+            [OnLine::Scan(NpcId(0))],
             "100 off on each axis is in reach; 101 is not; an NPC is no scan"
         );
-        assert_eq!(traffic.take_scans(), [], "taken");
+        assert_eq!(traffic.take_on_line(), [], "taken");
         let mut alone = populated(1, 1);
         alone.npcs[0].goal = Goal::Inspect(ShipRef::Player);
         alone.tick_in(&done, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(alone.take_scans(), [], "no player");
+        assert_eq!(alone.take_on_line(), [], "no player");
     }
 
     /// The scans wait for the session's combat tick; a system left first
@@ -5036,7 +5026,7 @@ mod tests {
         };
         let mut entered = scanned();
         entered.enter(SpawnTable::default(), &mut Draws::of(&[]));
-        assert_eq!(entered.take_scans(), []);
+        assert_eq!(entered.take_on_line(), []);
         let mut left = scanned();
         let kept = left.npcs()[0].id;
         left.retarget(
@@ -5044,8 +5034,8 @@ mod tests {
             &BTreeSet::from([kept]),
             Leave::Dropped,
         );
-        assert_eq!(left.take_scans(), [], "even the scanner kept");
-        assert_eq!(scanned().take_scans(), [NpcId(0)], "queued");
+        assert_eq!(left.take_on_line(), [], "even the scanner kept");
+        assert_eq!(scanned().take_on_line(), [OnLine::Scan(NpcId(0))], "queued");
     }
 
     /// The player at (`x`, `y`), at rest.

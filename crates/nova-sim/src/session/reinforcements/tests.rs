@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::*;
-use crate::ai::{Behaviour, Decision, Goal, Peaceful, Surroundings, Warship};
+use crate::ai::{Behaviour, CommCall, Decision, Goal, Peaceful, Surroundings, Warship};
 use crate::catalog::{
     CommCatalog, FleetId, FleetRecord, GovtRecord, OutfitId, ShipId, SystemReinforcements,
     SystemTraffic,
@@ -624,4 +624,145 @@ fn a_warship_holds_at_odds_below_twice_max_odds_while_its_fleet_comes() {
         !matches!(goal, Goal::Flee(_)),
         "no retreat below twice 1 while the fleet comes: {goal:?}"
     );
+}
+
+// The clock held behind the frame's calls held behind a scan (see the
+// `comm_calls` module).
+
+/// Every NPC keeps its goal but the scanner, which gives its inspection
+/// of the player up; each of `calls` calls for reinforcements and each of
+/// `flees` flees the pirate, calling for help.
+#[derive(Debug)]
+struct ScanFirst {
+    scanner: NpcId,
+    calls: Vec<NpcId>,
+    flees: Vec<(NpcId, NpcId)>,
+}
+
+impl Behaviour for ScanFirst {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    fn decision(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Decision {
+        let flees = self.flees.iter().find(|(id, _)| *id == npc.id);
+        let goal = if npc.id == self.scanner {
+            Goal::Idle
+        } else if let Some(&(_, pirate)) = flees {
+            Goal::Flee(ShipRef::Npc(pirate))
+        } else {
+            npc.goal
+        };
+        Decision {
+            goal,
+            calls_reinforcements: self.calls.contains(&npc.id),
+            comm_call: flees.map(|_| CommCall::Distress),
+            ..Decision::default()
+        }
+    }
+}
+
+/// Adds an interceptor at the player's side inspecting it, of a
+/// government the catalog has no record of, so it is nobody's ally and
+/// its scan finds nothing.
+fn scanner(session: &mut Session) -> NpcId {
+    let scanner = add(session, GovtId(131), 100.0, Goal::Inspect(ShipRef::Player));
+    if let Some(npc) = npc_mut(session, scanner) {
+        npc.ai_type = AiType::Interceptor;
+    }
+    scanner
+}
+
+/// The scanner inspects the player again, at its side.
+fn inspect_again(session: &mut Session, scanner: NpcId) {
+    let at = session.player.position;
+    if let Some(npc) = npc_mut(session, scanner) {
+        npc.goal = Goal::Inspect(ShipRef::Player);
+        npc.state.position = at;
+    }
+}
+
+#[test]
+fn a_call_held_behind_a_scan_still_starts_the_timer_the_clock_ticks_on_that_frame() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let scanner = scanner(&mut session);
+    let warship = fight(&mut session, FED, 100.0);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: vec![warship],
+        flees: Vec::new(),
+    };
+    for _ in 0..20 {
+        inspect_again(&mut session, scanner);
+        session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        if timer(&session) > 0 {
+            break;
+        }
+    }
+    assert_eq!(timer(&session), i32::from(TIME) - 1, "its first tick");
+}
+
+#[test]
+fn a_frames_announcement_comes_after_its_held_distress_call() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false);
+    for _ in 1..31 {
+        ticked(&mut session, &catalog);
+    }
+    assert_eq!(timer(&session), 10, "one tick from announcing");
+    let scanner = scanner(&mut session);
+    let pirate = add(&mut session, PIRATES, 100.0, Goal::Idle);
+    let trader = add(&mut session, FED, 100.0, Goal::Idle);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: Vec::new(),
+        flees: vec![(trader, pirate)],
+    };
+    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+    assert_eq!(session.take_messages(), [], "the call and the clock held");
+    assert_eq!(timer(&session), 10);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    let messages = session.take_messages();
+    assert!(
+        matches!(messages.as_slice(), [SimMessage::CallForHelp(_), announcement] if *announcement == announced()[0]),
+        "help first: {messages:?}"
+    );
+    assert_eq!(
+        session.take_sounds(),
+        [SimSound::CallForHelp, SimSound::ReinforcementsApproaching]
+    );
+    assert_eq!(timer(&session), 9);
+}
+
+#[test]
+fn a_held_clock_tick_is_not_lost_when_no_combat_tick_follows() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false);
+    let scanner = scanner(&mut session);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: Vec::new(),
+        flees: Vec::new(),
+    };
+    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME), "held");
+    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME) - 1, "the held tick ran");
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(
+        timer(&session),
+        i32::from(TIME) - 2,
+        "held again behind the scan still queued, then settled"
+    );
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME) - 2, "once only");
+    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME) - 3, "back in place");
 }

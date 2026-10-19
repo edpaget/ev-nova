@@ -12,7 +12,7 @@
 //! |---|---|
 //! | `_BraveTraderAI` @0x8b6dc, `_HighLevelAIHandler` @0x8e0d7 and @0x8e70d, in each think | the think's [`Decision::calls_reinforcements`](crate::ai::Decision::calls_reinforcements), answered with the frame's other calls ([`Session::answer_comm_calls`]), unforced |
 //! | `_DoCommDialog` @0x9636d, battle help | the hail's Defend, forced (`Session::act`) |
-//! | `_HandleReinforcements` @0x44504, on both passes of `_DoPlayGameWork` | [`Session::tick_reinforcements`]: in [`Session::tick_traffic`] after the frame's calls, on every tick in flight, a jump's included; and after double time's second pass ([`Session::tick_again`]) |
+//! | `_HandleReinforcements` @0x44504, on both passes of `_DoPlayGameWork` | [`Session::tick_reinforcements`]: in [`Session::tick_traffic`] after the frame's calls, on every tick in flight, a jump's included, or held behind calls held behind a scan into [`Session::tick_combat`] (see the `comm_calls` module); and after double time's second pass ([`Session::tick_again`]) |
 //! | `_IncrementGameTime` @0xb724-0xb759 | the daily step's reinforcements ([`Session::reinforcements_day`]) |
 //! | `_ResetPlayerPrecalcedValues` @0xc628-0xc68f | [`Session::reset_precalced`], after the sabotage clock and before the trim |
 //! | `_WarshipAI` @0x8bd36-0x8bdc8, `_InterceptorAI` @0x8d1de-0x8d27e | the coming fleet in the traffic's [`World`](crate::traffic::World) ([`Session::reinforcements_coming`]) |

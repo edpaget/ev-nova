@@ -38,9 +38,8 @@
 //!
 //! **The calls.** Each think's call ([`Decision::comm_call`](crate::ai::Decision::comm_call),
 //! gathered by [`Traffic::take_comm_calls`](crate::traffic::Traffic::take_comm_calls))
-//! is answered in [`Session::answer_comm_calls`], in NPC order, right
-//! after the frame's decisions and fleet arrivals, so one call's line
-//! keeps the next one in the same frame off the line:
+//! is answered in NPC order, so one call's line keeps the next one in the
+//! same frame off the line (see "Slot order" below for where):
 //!
 //! - **A distress call** is made when [`calls_for_help`] says so of the
 //!   ship's facts as the session finds them ([`DistressFacts`]): its
@@ -59,13 +58,41 @@
 //!   the think's own call) is `_AICallForReinforcements(ship, 0)`, which
 //!   says nothing on the line itself (see the `reinforcements` module).
 //!
-//! The original makes each call inside its ship's think, against the
-//! ships as the earlier slots' thinks left them; the engine answers the
-//! frame's calls together, against the ships as the frame's traffic left
-//! them, before the frame is drawn. A ship that left the system in the
-//! frame calls nothing. A scan line from an earlier slot that would keep
-//! a call off the line in the original is answered later here, in
-//! [`Session::tick_combat`]: rdm:phase/combat-ai-fidelity/phase-15-comm-calls-in-slot-order.
+//! **Slot order.** The original makes each call inside its ship's think,
+//! against the ships as the earlier slots' thinks left them, and each
+//! ship's scan of the player after its own calls (`_AIDispatch` runs the
+//! type AI before `_HighLevelAIHandler` @0x901e5, whose `_ScanPlayer`
+//! runs from @0x8f11e-0x8f38a). A scan's line sets `_commCount` at once
+//! (`_DisplayComm` @0x9024b), so it keeps a later slot's call off the
+//! line. The traffic queues each think's calls, then its scan, in slot
+//! order (see `nova_sim::traffic::on_line`):
+//!
+//! - [`Session::answer_comm_calls`] answers the calls ahead of the frame's
+//!   first scan in [`Session::tick_traffic`], right after the frame's
+//!   decisions and fleet arrivals, against the ships as the frame's
+//!   traffic left them. A frame with no scan answers all its calls here.
+//! - [`Session::settle_line_queue`] settles the rest in
+//!   [`Session::tick_combat`], scans and calls interleaved in slot order,
+//!   where the scans' law is at hand, so an earlier slot's scan line keeps
+//!   a later slot's distress call and pre-scan hail off, and their
+//!   `snd ` 154, while a call from an earlier slot still shows and a later
+//!   slot's scan replaces it.
+//! - The reinforcement clock ticks after the frame's calls, as
+//!   `_HandleReinforcements` (@0x44504) runs after the `_AIDispatch` loop
+//!   (@0x4429d), so on a frame whose calls are held its tick is held too,
+//!   and runs right after they settle: a `ReinfTime` 1 call's fleet still
+//!   arrives in its frame, and the frame's announcement still follows its
+//!   calls.
+//!
+//! The held calls settle later in the step than the original makes
+//! them: after the flight's `Session::tick_assistance` (whose comm notes
+//! `_HighLevelAIHandler` raises inside a think, @0x8f32c, @0x8f6a1) and
+//! after `before_fight`'s sabotage and eject lines (raised in
+//! `_HandlePlayer`, before the loop), but before the fight, the frame's
+//! drawing and any dialog, landing, jump or save, so the deferral crosses
+//! no boundary the player sees. The lines that stay out of slot order with
+//! the calls either way are rdm:phase/combat-ai-fidelity/phase-22-frame-lines-in-slot-order.
+//! A ship that left the system in the frame calls nothing.
 
 use super::Session;
 use crate::ai::CommCall;
@@ -74,10 +101,12 @@ use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::comm_line::CommLine;
 use crate::hail::{QUIET, likes_player};
+use crate::legal::LegalCode;
 use crate::message::SimMessage;
 use crate::mission::hail_finds;
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
+use crate::traffic::on_line::OnLine;
 
 /// The `STR#` of the twenty distress lines, `_shipHelpRequests`
 /// (`_LoadStrings` @0x71bf3-0x71c27).
@@ -140,11 +169,51 @@ impl Session {
     /// docs).
     pub(super) fn answer_comm_calls(&mut self, chance: &mut (impl Chance + ?Sized)) {
         for (id, call) in self.traffic.take_comm_calls() {
-            match call {
-                CommCall::Distress => self.call_for_help(id, chance),
-                CommCall::PreScan => self.hail_before_scan(id, chance),
-                CommCall::Reinforcements => self.call_for_reinforcements(id, false),
+            self.answer_call(id, call, chance);
+        }
+    }
+
+    /// Answers NPC `id`'s `call`, drawing on `chance`.
+    fn answer_call(&mut self, id: NpcId, call: CommCall, chance: &mut (impl Chance + ?Sized)) {
+        match call {
+            CommCall::Distress => self.call_for_help(id, chance),
+            CommCall::PreScan => self.hail_before_scan(id, chance),
+            CommCall::Reinforcements => self.call_for_reinforcements(id, false),
+        }
+    }
+
+    /// Settles the frame's work on the message line held behind its first
+    /// scan ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)),
+    /// in slot order: each scan of the player ([`Session::scanned_by`]),
+    /// convicting by `law`, and each call, drawing on `chance`, so an
+    /// earlier slot's scan line keeps a later slot's call off as the
+    /// original's does (see the module docs). Then the reinforcement
+    /// clock's tick held behind them runs, if one was (see
+    /// [`Session::tick_traffic`]). Nothing settles while the player is
+    /// landed.
+    ///
+    /// `Session::tick_combat` settles it first, jumping or not, after
+    /// `before_fight`; each scan is held past the warp's lead-in by
+    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
+    /// [`Session::scanned_by`]). The work waits from the traffic tick that
+    /// queued it to the combat tick of the same step, so it settles before
+    /// the frame is drawn. In the warp the view steps the session only
+    /// while its lead-in lasts, and the arrival comes after its last step,
+    /// so work queued in the lead-in settles before the arrival too. Work
+    /// the arrival would cut off is dropped with the system's traffic, as
+    /// the original's would be held.
+    pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
+        if self.landed.is_some() {
+            return;
+        }
+        for work in self.traffic.take_on_line() {
+            match work {
+                OnLine::Scan(id) => self.scanned_by(id, law, chance),
+                OnLine::Call(id, call) => self.answer_call(id, call, chance),
             }
+        }
+        if std::mem::take(&mut self.reinforcements_held) {
+            self.tick_reinforcements(chance);
         }
     }
 
@@ -228,7 +297,8 @@ mod tests {
     use super::*;
     use crate::ai::{Behaviour, Decision, Goal, Surroundings};
     use crate::catalog::{
-        CommCatalog, GovtId, GovtRecord, MissionRecord, MissionShip, ShipId, ShipRecord,
+        CommCatalog, GovtId, GovtRecord, MissionRecord, MissionShip, Penalties, ShipId, ShipRecord,
+        SystemId,
     };
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -244,6 +314,9 @@ mod tests {
     const TRADERS: GovtId = GovtId(128);
     /// A quiet government (`Flags2` 0x0008).
     const QUIETS: GovtId = GovtId(129);
+    /// The police, scanning for bit 0x0004 and punishing smuggling, its
+    /// fine 500.
+    const POLICE: GovtId = GovtId(130);
     /// The class of the ships that call.
     const CALLER: ShipId = ShipId(129);
     /// A class whose inherent government is quiet.
@@ -271,10 +344,10 @@ mod tests {
         }
     }
 
-    /// Each NPC listed decides its goal and makes its call; the others
-    /// idle, calling nothing.
+    /// Each NPC listed decides its goal and makes its call, if any; the
+    /// others idle, calling nothing.
     #[derive(Debug, Default)]
-    struct Calling(BTreeMap<NpcId, (Goal, CommCall)>);
+    struct Calling(BTreeMap<NpcId, (Goal, Option<CommCall>)>);
 
     impl Behaviour for Calling {
         fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -287,10 +360,7 @@ mod tests {
             _around: &Surroundings,
             _chance: &mut dyn Chance,
         ) -> Decision {
-            let (goal, call) = self
-                .0
-                .get(&npc.id)
-                .map_or((Goal::Idle, None), |&(goal, call)| (goal, Some(call)));
+            let (goal, call) = self.0.get(&npc.id).copied().unwrap_or((Goal::Idle, None));
             Decision {
                 goal,
                 comm_call: call,
@@ -300,7 +370,7 @@ mod tests {
     }
 
     /// The catalog: ships 128-130 (130's inherent government quiet), the
-    /// traders and the quiet government, and mission 140 escorting the
+    /// traders, the quiet government and the police, and mission 140 escorting the
     /// player's way (`ShipGoal` 3), its cargo masked 0x0006.
     fn calling_catalog() -> FakePilotCatalog {
         FakePilotCatalog {
@@ -320,6 +390,15 @@ mod tests {
                 GovtRecord {
                     flags2: QUIET,
                     ..govt(129)
+                },
+                GovtRecord {
+                    scan_mask: 0x0004,
+                    scan_fine: 500,
+                    penalties: Penalties {
+                        smuggle: 5,
+                        ..Penalties::default()
+                    },
+                    ..govt(130)
                 },
             ],
             missions: vec![MissionRecord {
@@ -363,7 +442,7 @@ mod tests {
     fn fleeing(session: &mut Session, govt: Option<GovtId>, class: ShipId) -> (NpcId, Calling) {
         let pirate = add(session, None, ShipId(128));
         let trader = add(session, govt, class);
-        let flees = (Goal::Flee(ShipRef::Npc(pirate)), CommCall::Distress);
+        let flees = (Goal::Flee(ShipRef::Npc(pirate)), Some(CommCall::Distress));
         (trader, Calling(BTreeMap::from([(trader, flees)])))
     }
 
@@ -576,7 +655,7 @@ mod tests {
         if counted {
             session.count_down_comm_line();
         }
-        let picks = (Goal::Inspect(ShipRef::Player), CommCall::PreScan);
+        let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
         ticked(
             &mut session,
             &catalog,
@@ -677,5 +756,132 @@ mod tests {
         assert!(!session.comm_line().free_for_calls(), "399 counted");
         session.tick_quotes(&catalog, &mut NeverFires);
         assert!(session.comm_line().free_for_calls(), "400 counted");
+    }
+
+    // The calls and scans in slot order (see the module docs).
+
+    /// Adds an interceptor of the police at the player's side, inspecting
+    /// the player; it gives the inspection up on its next think.
+    fn scanner(session: &mut Session) -> NpcId {
+        let police = add(session, Some(POLICE), CALLER);
+        let npc = session.npc_mut(police).expect("there");
+        npc.ai_type = AiType::Interceptor;
+        npc.goal = Goal::Inspect(ShipRef::Player);
+        police
+    }
+
+    /// A traffic tick, then the combat tick of the same step, as
+    /// `behaviour` decides, drawing `draws`: the messages and sounds they
+    /// raised, and the bounds asked.
+    fn stepped(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        behaviour: &Calling,
+        draws: &[u32],
+    ) -> (Vec<SimMessage>, Vec<SimSound>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        session.tick_traffic(catalog, behaviour, &mut chance);
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        (session.take_messages(), session.take_sounds(), chance.asked)
+    }
+
+    /// The police's find of mission 140's cargo: the fine, told.
+    fn smuggling() -> SimMessage {
+        SimMessage::Smuggling {
+            scanner: CALLER,
+            ship_name: None,
+            fine: 500,
+        }
+    }
+
+    #[test]
+    fn an_earlier_slots_scan_line_keeps_a_later_slots_distress_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        scanner(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, [smuggling()], "no call for help");
+        assert_eq!(sounds, [SimSound::Smuggling], "no snd 154");
+        assert_eq!(asked, [100], "the scan's roll, no distress line drawn");
+    }
+
+    #[test]
+    fn a_call_by_an_earlier_slot_shows_and_a_later_slots_scan_replaces_it() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        scanner(&mut session);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(
+            messages,
+            [help("Ship 129:  Help 1"), vec![smuggling()]].concat()
+        );
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::Smuggling]);
+        assert_eq!(asked, [DISTRESS_LINE_COUNT, 100]);
+        let mut line = CommLine::default();
+        line.show(smuggling().ticks());
+        assert_eq!(session.comm_line(), line, "the scan's count");
+    }
+
+    #[test]
+    fn an_earlier_slots_scan_line_keeps_a_later_interceptors_pre_scan_hail_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.pilot.missions.put(0, carrying(140, 4));
+        scanner(&mut session);
+        let hailer = add(&mut session, Some(TRADERS), CALLER);
+        session.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
+        session.count_down_comm_line();
+        assert!(session.comm_line().idle());
+        let picks = (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan));
+        let calls = Calling(BTreeMap::from([(hailer, picks)]));
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
+        assert_eq!(messages, [smuggling()], "no hail");
+        assert_eq!(sounds, [SimSound::Smuggling], "no snd 154");
+        assert_eq!(asked, [100]);
+    }
+
+    #[test]
+    fn a_call_held_behind_a_scan_that_finds_nothing_is_still_made_in_the_combat_tick() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        scanner(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let mut chance = Draws::of(&[0, 2]);
+        session.tick_traffic(&catalog, &calls, &mut chance);
+        assert_eq!(session.take_messages(), [], "held");
+        assert_eq!(session.take_sounds(), []);
+        assert!(chance.asked.is_empty(), "nothing drawn yet");
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        assert_eq!(session.take_messages(), help("Ship 129:  Help 3"));
+        assert_eq!(session.take_sounds(), [SimSound::CallForHelp]);
+        assert_eq!(chance.asked, [100, DISTRESS_LINE_COUNT], "scan, then call");
+    }
+
+    #[test]
+    fn a_held_call_settles_on_a_jumping_step_too() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player = crate::flight::ShipState {
+            position: crate::geometry::Vec2::new(0.0, -5000.0),
+            velocity: crate::geometry::Vec2::ZERO,
+            heading: 90.0,
+        };
+        session.begin_jump().expect("jumps");
+        assert!(session.in_warp_lead_in());
+        let _ = (session.take_messages(), session.take_sounds());
+        scanner(&mut session);
+        let (_, calls) = fleeing(&mut session, Some(TRADERS), CALLER);
+        let mut chance = Draws::of(&[0, 0]);
+        session.tick_traffic(&catalog, &calls, &mut chance);
+        assert_eq!(session.take_messages(), [], "held");
+        session.tick_combat(crate::Rules::default(), &mut chance);
+        assert!(session.jumping().is_some(), "still jumping");
+        assert_eq!(session.take_messages(), help("Ship 129:  Help 1"));
+        assert_eq!(session.take_sounds(), [SimSound::CallForHelp]);
     }
 }

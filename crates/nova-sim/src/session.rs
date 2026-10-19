@@ -835,6 +835,10 @@ pub struct Session {
     /// `reinforcements` module); never saved, as the original saves
     /// neither.
     reinforcements: reinforcements::Reinforcements,
+    /// Whether the reinforcement clock's tick of the last traffic tick is
+    /// held behind the frame's calls held behind a scan, for
+    /// `settle_line_queue` to run (see [`Session::tick_traffic`]).
+    reinforcements_held: bool,
     /// The governments an IFF scrambler has marked (see the
     /// `iff_scramblers` module); never saved, as the original saves none.
     iff_marked: BTreeSet<GovtId>,
@@ -1633,6 +1637,7 @@ impl Session {
             quote_clock: persons::QuoteClock::default(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
+            reinforcements_held: false,
             iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
@@ -2412,7 +2417,11 @@ impl Session {
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
     /// while a jump plays too; before that, in flight or jumping, the
     /// player's system's reinforcement clock ticks, after the frame's
-    /// calls (see the `reinforcements` module). The traffic ticks in the same [`World`] the
+    /// calls (see the `reinforcements` module), unless calls or scans are
+    /// held behind the frame's first scan: then its tick is held, and runs
+    /// in [`Session::tick_combat`] right after they settle (see the
+    /// `comm_calls` module), or, if no combat tick came between, first
+    /// thing in the next traffic tick. The traffic ticks in the same [`World`] the
     /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
@@ -2420,6 +2429,9 @@ impl Session {
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        if std::mem::take(&mut self.reinforcements_held) {
+            self.tick_reinforcements(chance);
+        }
         let flying = self.jumping().is_none() || self.in_warp_lead_in();
         if self.landed.is_none() && flying {
             if self.traffic_due {
@@ -2448,7 +2460,11 @@ impl Session {
                 self.observe_watched();
             }
         }
-        self.tick_reinforcements(chance);
+        if self.traffic.holds_line_work() {
+            self.reinforcements_held = true;
+        } else {
+            self.tick_reinforcements(chance);
+        }
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
@@ -2735,7 +2751,10 @@ impl Session {
     /// ([`Session::tractor`]) or an NPC's. Before anything else,
     /// unless landed or jumping, the sabotage clock ticks, and what it sets
     /// off goes off (see the `sabotage` module), and the eject is checked
-    /// (see the `eject` module), both before the scans. The player's
+    /// (see the `eject` module), both before the scans. Then the frame's
+    /// calls and scans held behind its first scan settle in slot order,
+    /// with the reinforcement clock's tick held behind them, jumping or
+    /// not (see the `comm_calls` module). The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
     /// fight's hits leave it (see the `player_downed` module), before the
     /// eject on a breakup's first tick takes it into a new ship. After
@@ -2750,16 +2769,17 @@ impl Session {
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
-            // The fight stands still, but a scan a lead-in step's traffic
-            // tick queued still settles (see `take_scans`), and the pass's
-            // asteroid work runs (see the `asteroids` module).
-            self.take_scans(rules.law, &mut &mut *chance);
+            // The fight stands still, but the scans and calls a lead-in
+            // step's traffic tick held still settle (see
+            // `settle_line_queue`), and the pass's asteroid work runs (see
+            // the `asteroids` module).
+            self.settle_line_queue(rules.law, &mut &mut *chance);
             self.drawn.clear();
             self.tick_asteroids(&mut *chance);
             return;
         }
         self.before_fight(rules, &mut &mut *chance);
-        self.take_scans(rules.law, &mut &mut *chance);
+        self.settle_line_queue(rules.law, &mut &mut *chance);
         let pass = GamePass::Advance {
             double_time: self.double_time,
         };

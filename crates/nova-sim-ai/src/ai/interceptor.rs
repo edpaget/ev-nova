@@ -23,7 +23,7 @@
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
 //!   looked the player over, it has scanned the player
-//!   ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)): the
+//!   ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)): the
 //!   session checks the player's mission cargo against the interceptor's
 //!   government (`_ScanPlayer` @0x7e46e; see the
 //!   `nova_sim::mission` module's "Cargo"), failing a mission
