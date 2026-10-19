@@ -174,6 +174,12 @@ pub struct Target {
     pub sheet: bool,
     /// How it is holding up.
     pub condition: Condition,
+    /// Whether `_IsDisabled` holds for it now (@0x2ce6-0x2e0d): held
+    /// disabled, not intact, or its armour under the line its hull's
+    /// `TOUGH` bit picks. The collision walk refreshes it after every hit
+    /// it lands, so the miss rule reads the armour the pass's earlier hits
+    /// left, while [`Target::condition`] settles after the pass.
+    pub disabled: bool,
     /// Its hull's turret miss class
     /// ([`HullSpec::miss_class`](super::hull::HullSpec::miss_class)): a
     /// shot whose roll is above it misses it while it is intact.
@@ -1558,6 +1564,7 @@ mod tests {
             sprite_x: 15.0,
             sheet: true,
             condition,
+            disabled: condition != Condition::Intact,
             miss_class: 100,
         }
     }

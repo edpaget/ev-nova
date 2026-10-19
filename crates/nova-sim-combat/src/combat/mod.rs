@@ -3328,6 +3328,7 @@ impl Fighter<'_> {
             sprite_x: self.hull.sprite_size.unwrap_or(beam::NO_SPRITE_WIDTH),
             sheet: self.hull.sprite_size.is_some(),
             condition: *self.condition,
+            disabled: self.held_disabled || *self.condition != Condition::Intact,
             miss_class: self.hull.miss_class,
         }
     }

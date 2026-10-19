@@ -225,6 +225,7 @@ mod tests {
             sprite_x: 30.0,
             sheet: true,
             condition: Condition::Intact,
+            disabled: false,
             miss_class: 100,
         }
     }

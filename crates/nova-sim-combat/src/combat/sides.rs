@@ -33,13 +33,15 @@
 //! - with the same leader as its firer (6a, @0x44846-0x44873);
 //! - of its firer's government (6b, @0x44879-0x4488d), an independent's
 //!   and the player's excepted;
-//! - that is intact and of a turret miss class below the shot's miss roll
-//!   (6d, @0x448ad-0x448d5): `_SpawnShot` rolls a ship's turret (4) and
+//! - that is of a turret miss class below the shot's miss roll and not
+//!   disabled as `_IsDisabled` reads it now (6d, @0x448ad-0x448d5;
+//!   [`Target::disabled`]): `_SpawnShot` rolls a ship's turret (4) and
 //!   point-defence (9) shots 1 to its firer's class
 //!   ([`Shot::miss_roll`]), so a heavy firer's misses Fighter-class (80)
 //!   and Medium (90) ships on its high rolls; an equal roll hits, and so
 //!   does every roll on a disabled or breaking-up ship (`_IsDisabled`, true
-//!   at armour 0 or less), whose [`Condition`] is anything but intact. Any
+//!   at armour 0 or less), whose [`Condition`] is anything but intact, and
+//!   on one an earlier hit this pass took under the armour line. Any
 //!   other shot carries the original's -1 and is never missed, a
 //!   sub-munition too (see [`submunition`](super::submunition));
 //! - that is an escort's fighter (its leader's leader the player), allied
@@ -85,11 +87,13 @@
 //! A shot on the move that spends it is not tested at all (@0x447c2): its
 //! end of life takes it ([`Combat`](super::Combat)'s step 5).
 //!
-//! The rules read each ship as it was when the hit pass began
-//! ([`Combat`](super::Combat)'s step 2), where the original reads it as
-//! each hit before it in the frame has left it: a turret shot rolling over
-//! a fighter that an earlier shot that tick disabled passes it here, and
-//! hits it there (weapons-fidelity phase 21).
+//! The rules read each ship as the pass's earlier hits have left it, as
+//! the original does: the collision walk lands each hit as it finds it
+//! and refreshes [`Target::disabled`] after it
+//! ([`Combat`](super::Combat)'s step 2), so a turret shot rolling over a
+//! fighter that an earlier shot that tick disabled hits it. Its
+//! [`Condition`] still settles after the pass; the rules read it only for
+//! whether the ship is destroyed, which no hit in the pass changes.
 //!
 //! Left out, each with its owner: the nag ship (@0x44803), as there is
 //! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
@@ -101,7 +105,9 @@
 
 use super::ShipRef;
 use super::beam::Beam;
-use super::hull::{Condition, ESCAPE_POD_SHIP};
+#[cfg(doc)]
+use super::hull::Condition;
+use super::hull::ESCAPE_POD_SHIP;
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
 use crate::catalog::GovtId;
@@ -200,9 +206,7 @@ impl Sides<'_> {
         {
             return false;
         }
-        if shot.miss_roll.is_some_and(|roll| roll > target.miss_class)
-            && target.condition == Condition::Intact
-        {
+        if shot.miss_roll.is_some_and(|roll| roll > target.miss_class) && !target.disabled {
             return false;
         }
         let allied = self.allied_with_player(target.ship, theirs.leader);
@@ -371,6 +375,7 @@ mod tests {
     use crate::catalog::ShipId;
     use crate::combat::NpcId;
     use crate::combat::fixture::among;
+    use crate::combat::hull::Condition;
     use crate::combat::projectile::Jam;
     use crate::combat::weapon::WeaponSpec;
     use crate::flight::ShipState;
@@ -397,6 +402,7 @@ mod tests {
             sprite_x: 15.0,
             sheet: true,
             condition: Condition::Intact,
+            disabled: false,
             miss_class: 100,
         }
     }
@@ -507,6 +513,7 @@ mod tests {
         Target {
             miss_class: class,
             condition,
+            disabled: condition != Condition::Intact,
             ..ship(npc(2), None)
         }
     }
@@ -541,6 +548,26 @@ mod tests {
                 "{condition:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_turret_shot_rolling_over_hits_an_intact_ship_counted_disabled() {
+        // An earlier hit this pass took the ship under the line: still
+        // intact until the pass settles, but `_IsDisabled` holds now.
+        let target = Target {
+            disabled: true,
+            ..classed(80, Condition::Intact)
+        };
+        assert!(among(&[]).shot_can_hit(&rolled(Some(81)), &target));
+    }
+
+    #[test]
+    fn a_turret_shot_rolling_over_misses_an_intact_ship_not_counted_disabled() {
+        let target = Target {
+            disabled: false,
+            ..classed(80, Condition::Intact)
+        };
+        assert!(!among(&[]).shot_can_hit(&rolled(Some(81)), &target));
     }
 
     #[test]
