@@ -3205,12 +3205,20 @@ impl Fighter<'_> {
         Sight {
             ship: self.ship,
             jamming: self.jamming,
-            disabled: self.held_disabled || *self.condition != Condition::Intact,
+            disabled: self.disabled_as_tick_began(),
             cloaked: self.cloaked,
             emerging: self.emerging,
             scanner: self.cloak_scanner,
             has_cloak: self.has_cloak,
         }
+    }
+
+    /// Whether `_IsDisabled` (@0x2ce6-0x2e0d) held for the ship as the
+    /// tick began, its condition read for its armour: held disabled, or
+    /// not intact. [`Fighter::sight`] and [`Fighter::as_target`] read it,
+    /// and [`Fighter::disabled_now`] adds the armour the pass's hits left.
+    fn disabled_as_tick_began(&self) -> bool {
+        self.held_disabled || *self.condition != Condition::Intact
     }
 
     /// Whether `_IsDisabled` holds for the ship now (@0x2ce6-0x2e0d), as
@@ -3219,9 +3227,7 @@ impl Fighter<'_> {
     /// reads the armour the hits landed so far have left, before its
     /// condition settles.
     fn disabled_now(&self, rule: &dyn DisableRule) -> bool {
-        self.held_disabled
-            || *self.condition != Condition::Intact
-            || damage::disabled(self.reserves.armor, &self.hull, rule)
+        self.disabled_as_tick_began() || damage::disabled(self.reserves.armor, &self.hull, rule)
     }
 
     /// The ship as shots and beams see it.
@@ -3237,7 +3243,7 @@ impl Fighter<'_> {
             sprite_x: self.hull.sprite_size.unwrap_or(beam::NO_SPRITE_WIDTH),
             sheet: self.hull.sprite_size.is_some(),
             condition: *self.condition,
-            disabled: self.held_disabled || *self.condition != Condition::Intact,
+            disabled: self.disabled_as_tick_began(),
             miss_class: self.hull.miss_class,
         }
     }
