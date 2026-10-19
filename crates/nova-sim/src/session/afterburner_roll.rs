@@ -78,6 +78,7 @@ mod tests {
     use crate::catalog::{HullRecord, ShipId, ShipRecord, SystemId};
     use crate::combat::hull::{AFTERBURNER_ALWAYS, AFTERBURNER_BY_RATING};
     use crate::pilot::{Escort, Pilot};
+    use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::{Assigned, Assignment};
     use crate::testkit::{
         FAST, FakePilotCatalog, Ranged, bar, catalog, hull, jump_with, land_now, planet, ship,
@@ -157,6 +158,27 @@ mod tests {
         assert!(chance.was_asked(u32::from(RATING_ROLL)));
         let mut session = landed(&catalog);
         assert_eq!(hired(&mut session, &mut Ranged::of(&[FAILS])), Some(false));
+    }
+
+    #[test]
+    fn a_hired_escorts_roll_is_measured_by_the_yardstick_the_rulebook_reads() {
+        // Ship 129's class is of `Strength` 2, the player's 1: a rating of
+        // 1000 is 1000 over the engine's yardstick, 500 over the Bible's.
+        // `Rand(1344)` of 300 needs 556, which only the engine's reaches.
+        let mut catalog = barred(AFTERBURNER_BY_RATING);
+        let own = catalog
+            .hulls
+            .iter_mut()
+            .find(|record| record.id == HIRED)
+            .expect("the hired class");
+        own.strength = 2;
+        for (source, has) in [(RuleSource::Engine, true), (RuleSource::Bible, false)] {
+            let mut session = landed(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::AfterburnerYardstick, source),
+            );
+            let mut chance = Ranged::of(&[(u32::from(RATING_ROLL), 300)]);
+            assert_eq!(hired(&mut session, &mut chance), Some(has), "{source:?}");
+        }
     }
 
     #[test]
