@@ -146,7 +146,11 @@ fn a_ship_and_a_stellar_600_left_of_the_player_are_drawn_on_screen() {
         .filter(|&(_, center)| center == at(82.0, 384.0))
         .map(|(image, _)| image)
         .collect();
-    assert_eq!(at_82.len(), 2, "the stellar and the ship: {list:?}");
+    assert_eq!(
+        at_82.len(),
+        4,
+        "the stellar, and the ship with its glow and lights: {list:?}"
+    );
     let session = view.session().expect("flying");
     assert!(
         session.on_screen(&session.npcs()[0]),

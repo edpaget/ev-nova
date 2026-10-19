@@ -1206,6 +1206,8 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
+                let derelict = world.govts.derelict(npc.govt);
+                ship_display::settle_spawn(npc, derelict, &mut *chance);
                 let held = ship_display::held(npc);
                 let outcome = Self::fly_one(
                     npc,
@@ -1218,7 +1220,6 @@ impl Traffic {
                     &mut docked,
                     &mut *chance,
                 );
-                let derelict = world.govts.derelict(npc.govt);
                 ship_display::bank_and_glow(npc, held, derelict, Some(world.warp.player.glow));
                 outcome
             })

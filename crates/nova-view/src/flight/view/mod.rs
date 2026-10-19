@@ -1135,6 +1135,9 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
+    /// The flight tick each NPC in the system was first seen on, which
+    /// its running lights blink from ([`track_appeared`]).
+    appeared: BTreeMap<NpcId, u64>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
     /// What the view keeps of the shots in flight, drawn on the effects'
@@ -1453,7 +1456,7 @@ fn show_combat(
     session: &mut Session,
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
-    looks: &Looks,
+    (looks, sheets): (&Looks, Sheets<'_>),
     chance: &mut dyn Chance,
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
@@ -1477,7 +1480,7 @@ fn show_combat(
         }
         effects.apply(&event, scene, looks, chance);
     }
-    step_flashes(flashes, session);
+    step_flashes(flashes, session, sheets);
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
@@ -1504,30 +1507,53 @@ fn glow_decay(
     Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
 }
 
+/// Notes the flight tick `now` as the first seen of each NPC in
+/// `session` not yet among `appeared`, and forgets those gone, as the
+/// original's lights start blinking as each ship is set up
+/// (`_InitObjects` @0x1c423; see `nova_sim::blink`).
+fn track_appeared(appeared: &mut BTreeMap<NpcId, u64>, session: &Session, now: u64) {
+    let here: BTreeSet<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+    appeared.retain(|id, _| here.contains(id));
+    for id in here {
+        appeared.entry(id).or_insert(now);
+    }
+}
+
+/// The player's sheet and each NPC ship type's, or why each cannot be
+/// read.
+type Sheets<'a> = (
+    &'a Result<ShipSheet, String>,
+    &'a BTreeMap<ShipId, Result<ShipSheet, String>>,
+);
+
 /// Steps each ship's shield flash among `flashes` a frame by its shield
-/// in `session` ([`ShieldFlash::step`]), dropping the flashes of ships no
-/// longer in the system and those run out.
-///
-/// No class has a shield layer yet: the shän shield layer is
-/// rdm:phase/ship-handling-fidelity/phase-10's, and no stock `shän` has
-/// one, so each flash only runs down, and the base it is given, which
-/// only a drawn layer reads, is the ship's shield capacity for now. That
-/// phase passes the class's own loaded `Shield` (class +0x5c @0x2c8aa)
-/// with the layer.
-fn step_flashes(flashes: &mut BTreeMap<ShipRef, ShieldFlash>, session: &Session) {
-    let shield = |ship: ShipRef| match ship {
-        ShipRef::Player => Some(session.reserves().shield),
-        ShipRef::Npc(id) => session
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .map(|npc| npc.reserves.shield),
+/// in `session` ([`ShieldFlash::step`]), whether its class's sheet among
+/// `sheets` has a shield layer, and its class's own loaded `Shield`
+/// (class +0x5c @0x2c8aa, [`Session::class_shield`]), dropping the
+/// flashes of ships no longer in the system and those run out.
+fn step_flashes(
+    flashes: &mut BTreeMap<ShipRef, ShieldFlash>,
+    session: &Session,
+    (player, sheets): Sheets<'_>,
+) {
+    let of = |ship: ShipRef| match ship {
+        ShipRef::Player => Some((
+            session.reserves().shield,
+            session.ship(),
+            player.as_ref().ok(),
+        )),
+        ShipRef::Npc(id) => session.npcs().iter().find(|npc| npc.id == id).map(|npc| {
+            let sheet = sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok());
+            (npc.reserves.shield, npc.ship, sheet)
+        }),
     };
     flashes.retain(|&ship, flash| {
-        let Some(gauge) = shield(ship) else {
+        let Some((gauge, class, sheet)) = of(ship) else {
             return false;
         };
-        flash.step(gauge.now, gauge.max, false);
+        let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
+        let base = session.class_shield(class).unwrap_or(gauge.max);
+        flash.step(gauge.now, base, has_layer);
         flash.shown() > 0.0
     });
 }

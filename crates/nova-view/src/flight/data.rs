@@ -43,17 +43,19 @@ impl ShipSprites for GameData {
             .expect("a sheet layout has at least one column");
         // A layer that cannot be resolved is drawn as no layer; the ship
         // browser is where its error is shown.
-        let (glow, lights, weapon) = self.ship_layers(id).map_or((None, None, None), |layers| {
-            (
-                layers.glow.and_then(layer_sheet),
-                layers.lights.and_then(layer_sheet),
-                layers.weapon.and_then(layer_sheet),
-            )
-        });
-        let weap_decay = self
-            .get::<ShipAnim>(id.0)
-            .and_then(Result::ok)
-            .map_or(0, |anim| anim.record.weap_decay);
+        let [glow, lights, weapon, alt, shield] =
+            self.ship_layers(id).map_or([None; 5], |layers| {
+                [
+                    layers.glow,
+                    layers.lights,
+                    layers.weapon,
+                    layers.alt,
+                    layers.shield,
+                ]
+                .map(|layer| layer.and_then(layer_sheet))
+            });
+        let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
+        let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
         Ok(ShipSheet {
             image_id: sprite.image_id,
             rotations,
@@ -63,7 +65,11 @@ impl ShipSprites for GameData {
             lights,
             blink: ship_blink(self, id.0),
             weapon,
-            weap_decay,
+            weap_decay: field(|anim| anim.weap_decay),
+            alt,
+            shield,
+            flags: anim.map_or(0, |anim| anim.record.flags.bits()),
+            base_transp: field(|anim| anim.base_transp),
         })
     }
 }
@@ -455,6 +461,10 @@ mod tests {
                 blink: Blink::STEADY,
                 weapon: None,
                 weap_decay: 0,
+                alt: None,
+                shield: None,
+                flags: 0,
+                base_transp: 0,
             })
         );
     }
@@ -483,6 +493,37 @@ mod tests {
             (RLED, 1000, sheet(8)),
         ]);
         assert_eq!(data.ship_sheet(ShipId(128)).expect("a sheet").weapon, None);
+    }
+
+    #[test]
+    fn a_ships_sheet_carries_its_alt_and_shield_layers_flags_and_translucency() {
+        // The Thunderforge's: `Flags` 0x58, alt 1330 of 6 sets; and a
+        // plug-in shield 1500, `BaseTransp` 10.
+        let mut shan = anim(1000, 1, 8);
+        put_i16(&mut shan, 0x0A, 10);
+        put_i16(&mut shan, 0x0C, 1330);
+        put_i16(&mut shan, 0x10, 6);
+        put_i16(&mut shan, 0x2E, 0x58);
+        put_i16(&mut shan, 0x40, 1500);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, sheet(8)),
+            (RLED, 1330, sheet(48)),
+            (RLED, 1500, sheet(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!(found.alt, Some(layer(1330, 48)));
+        assert_eq!(found.shield, Some(layer(1500, 8)));
+        assert_eq!((found.flags, found.base_transp), (0x58, 10));
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        let found = plain.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!((found.alt, found.shield), (None, None));
+        assert_eq!((found.flags, found.base_transp), (0, 0));
     }
 
     #[test]

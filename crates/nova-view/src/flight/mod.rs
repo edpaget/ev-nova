@@ -67,6 +67,7 @@ pub mod murk;
 pub(crate) mod pen;
 pub mod pods;
 pub mod radar;
+pub mod ship_layers;
 pub mod shot_fade;
 pub mod smoke;
 pub mod spin;

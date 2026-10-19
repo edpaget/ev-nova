@@ -397,6 +397,32 @@ pub fn landing_unfold(npc: &mut Npc) {
     }
 }
 
+/// What `npc`'s spawn owes it, made before anything reads it, as its
+/// first flight or display begins (see the module docs): its glow of 0
+/// when its government is `derelict`, and its rolls on `chance`. A roll no
+/// reader of its class reads, or of one outcome, is not made: the anim
+/// set's but on the 0x0008 path, the animation timer's but there or with
+/// an alt layer, and a jump in's but for a ship that banks or folds.
+pub fn settle_spawn(npc: &mut Npc, derelict: bool, chance: &mut (impl Chance + ?Sized)) {
+    let spec = npc.hull.frames;
+    let rolls = std::mem::take(&mut npc.display.rolls);
+    if rolls.derelict_glow && derelict {
+        npc.display.glow = 0;
+    }
+    let mut roll = |sides: u16| if sides > 1 { chance.roll(sides) } else { 0 };
+    let frames = &mut npc.display.frames;
+    let animated = spec.anim_path();
+    if rolls.anim && animated {
+        frames.anim_set = i16::try_from(roll(spec.base_sets)).unwrap_or(0);
+    }
+    if rolls.anim && (animated || spec.alt_sets > 0) {
+        frames.anim_timer = f32::from(roll(u16::try_from(spec.anim_delay).unwrap_or(0)));
+    }
+    if rolls.jump_in && (spec.has(BANKS) || spec.has(FOLDS)) {
+        frames.bank = -f32::from(roll(JUMP_IN_SPREAD));
+    }
+}
+
 /// `_HandleShipDisplay`'s frame for `npc`, its alt layer stepping as
 /// `double_step` says, what its spawn owes made first: its glow of 0 when
 /// its government is `derelict`, and its rolls on `chance` (see the module
@@ -407,20 +433,8 @@ pub fn display(
     double_step: RuleSource,
     chance: &mut (impl Chance + ?Sized),
 ) {
+    settle_spawn(npc, derelict, chance);
     let spec = npc.hull.frames;
-    let rolls = std::mem::take(&mut npc.display.rolls);
-    if rolls.derelict_glow && derelict {
-        npc.display.glow = 0;
-    }
-    let frames = &mut npc.display.frames;
-    if rolls.anim {
-        frames.anim_set = i16::try_from(chance.roll(spec.base_sets)).unwrap_or(0);
-        let delay = u16::try_from(spec.anim_delay).unwrap_or(0);
-        frames.anim_timer = f32::from(chance.roll(delay));
-    }
-    if rolls.jump_in {
-        frames.bank = -f32::from(chance.roll(JUMP_IN_SPREAD));
-    }
     let moment = Moment {
         disabled: npc.condition.disabled(),
         key_aboard: npc
@@ -856,19 +870,51 @@ mod tests {
             jump_in: true,
             derelict_glow: false,
         };
-        let mut draws = Draws::of(&[2, 3, 7]);
+        let mut draws = Draws::of(&[2, 3]);
         display(&mut ship, false, RuleSource::Engine, &mut draws);
-        assert_eq!(
-            draws.asked,
-            [4, 5, 10],
-            "Rand(BaseSets), Rand(AnimDelay), Rand(10)"
-        );
-        assert_eq!(ship.display.frames.bank, -7.0);
+        assert_eq!(draws.asked, [4, 5], "Rand(BaseSets), Rand(AnimDelay)");
+        assert_eq!(ship.display.frames.bank, 0.0, "no bank or fold to roll");
         assert_eq!(ship.display.frames.anim_timer, 4.0, "3, then a frame");
         assert_eq!(ship.display.drawn.set, 2);
         assert_eq!(ship.display.rolls, Rolls::default());
         display(&mut ship, false, RuleSource::Engine, &mut draws);
-        assert_eq!(draws.asked.len(), 3, "once");
+        assert_eq!(draws.asked.len(), 2, "once");
+        let owed = Rolls {
+            anim: true,
+            jump_in: true,
+            derelict_glow: false,
+        };
+        // A banking ship jumping in rolls its bank; a plain one nothing.
+        let mut banking = folding(BANKS, 3);
+        banking.display.rolls = owed;
+        let mut draws = Draws::of(&[7]);
+        settle_spawn(&mut banking, false, &mut draws);
+        assert_eq!(draws.asked, [10], "Rand(10) alone");
+        assert_eq!(banking.display.frames.bank, -7.0);
+        let mut plain = folding(0, 1);
+        plain.display.rolls = owed;
+        let mut draws = Draws::of(&[]);
+        settle_spawn(&mut plain, false, &mut draws);
+        assert_eq!(
+            draws.asked,
+            Vec::<u32>::new(),
+            "nothing read: nothing drawn"
+        );
+        // An alt layer reads the timer alone.
+        let mut alt = folding(0, 1);
+        alt.hull.frames.alt_sets = 6;
+        alt.display.rolls = owed;
+        let mut draws = Draws::of(&[4]);
+        settle_spawn(&mut alt, false, &mut draws);
+        assert_eq!(draws.asked, [5]);
+        assert_eq!(alt.display.frames.anim_timer, 4.0);
+        // A delay of 1 or less has one outcome.
+        let mut quick = folding(ANIMATED, 4);
+        quick.hull.frames.anim_delay = 1;
+        quick.display.rolls = owed;
+        let mut draws = Draws::of(&[3]);
+        settle_spawn(&mut quick, false, &mut draws);
+        assert_eq!(draws.asked, [4], "Rand(BaseSets) alone");
     }
 
     #[test]

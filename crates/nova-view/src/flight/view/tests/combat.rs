@@ -46,9 +46,11 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
             (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
             (ImageKey::sprite(1129, 1), at(812.0, 184.0)),
             (ImageKey::sprite(2001, frame), at(612.0, 284.0)),
+            (ImageKey::sprite(2101, frame), at(612.0, 284.0)),
+            (ImageKey::sprite(2201, frame), at(612.0, 284.0)),
             (ImageKey::sprite(2000, 0), VIEW_CENTER),
         ],
-        "after the stellars, before the player"
+        "after the stellars, before the player, its glow and lights over it"
     );
 }
 

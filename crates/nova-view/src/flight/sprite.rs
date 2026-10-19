@@ -2,7 +2,9 @@
 //!
 //! A ship's sheet holds one frame per rotation in each set, as many as
 //! its `shän`'s frames per rotation. Frame 0 faces up and the frames turn
-//! clockwise in equal steps, as Nova's ship sheets do. Flight shows set 0.
+//! clockwise in equal steps, as Nova's ship sheets do. Flight draws the
+//! set the session's display picked on top of it (see the
+//! [`ship_layers`](super::ship_layers) module).
 //!
 //! The frame is the simulation's ([`drawn_frame`]): the heading's share of
 //! a turn truncated, as `_HandleShipDisplay` picks it, so the ship is

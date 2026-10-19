@@ -258,6 +258,17 @@ impl FrameSpec {
         self.base_sets > 1
     }
 
+    /// Whether its set comes by the 0x0008 path: of more than one set,
+    /// animated and of none of the flags before it in the chain.
+    #[must_use]
+    pub fn anim_path(&self) -> bool {
+        self.multi_set()
+            && self.has(ANIMATED)
+            && !self.has(BANKS)
+            && !self.has(FOLDS)
+            && !self.has(KEY_CARRIED)
+    }
+
     /// Its `BaseSets` when it unfolds to fire, `Flags` 0x0002 and 0x0080:
     /// what the fold-before-fire gates read (see
     /// [`Armament::fire_pick`](super::armament::Armament::fire_pick)).
@@ -735,6 +746,16 @@ mod tests {
             ..MOMENT
         };
         assert_eq!(ship.step(&spec, &mut fold, aboard).set, 1);
+    }
+
+    #[test]
+    fn the_anim_path_is_an_animated_multi_set_ship_of_no_earlier_flag() {
+        assert!(spec(ANIMATED, 2, 0).anim_path());
+        assert!(!spec(ANIMATED, 1, 0).anim_path(), "one set");
+        for earlier in [BANKS, FOLDS, KEY_CARRIED] {
+            assert!(!spec(ANIMATED | earlier, 3, 0).anim_path(), "{earlier:#x}");
+        }
+        assert!(!spec(0, 3, 0).anim_path());
     }
 
     #[test]

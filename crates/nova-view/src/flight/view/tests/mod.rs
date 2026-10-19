@@ -76,6 +76,7 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod ship_drawing;
 mod shots;
 mod stellars;
 mod widescreen;
@@ -168,6 +169,9 @@ struct FakeCatalog {
     persons: Vec<nova_sim::PersonRecord>,
     /// Ship 128's default items: none, by default.
     defaults: Vec<(OutfitId, u16)>,
+    /// Ship 129's sheet in place of the one [`FakeCatalog::ship_sheet`]
+    /// gives: none, by default.
+    npc_sheet: Option<ShipSheet>,
     /// Whether Alpha Centauri links on to Barnard, which has no
     /// stellars: not by default.
     onward: bool,
@@ -282,6 +286,10 @@ fn sheet() -> ShipSheet {
         glow: None,
         lights: None,
         blink: Blink::STEADY,
+        alt: None,
+        shield: None,
+        flags: 0,
+        base_transp: 0,
     }
 }
 
@@ -343,6 +351,7 @@ fn catalog() -> FakeCatalog {
         persons: Vec::new(),
         defaults: Vec::new(),
         onward: false,
+        npc_sheet: None,
         fan: false,
         near: false,
         reborn: false,
@@ -817,6 +826,7 @@ impl ShipSprites for FakeCatalog {
         match id.0 {
             128 => self.sheet.clone(),
             895 => Err("no shän 895".to_owned()),
+            129 if self.npc_sheet.is_some() => self.npc_sheet.ok_or_else(String::new),
             129 => Ok(ShipSheet {
                 image_id: 2001,
                 rotations: NonZeroU16::new(72).expect("non-zero"),

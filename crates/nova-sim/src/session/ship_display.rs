@@ -256,6 +256,20 @@ impl Session {
     pub fn player_drawn(&self) -> Drawn {
         self.ship_display.drawn
     }
+
+    /// Ship class `ship`'s own `Shield` as the original loads it (class
+    /// +0x5c: a negative one 5 times its size,
+    /// [`shield_points`](crate::reserves::shield_points)), none of its
+    /// outfits': what a shield flash's level is a share of
+    /// (`_HandleShipDisplay` @0x2c8aa); none for a class the session has
+    /// no record of.
+    #[must_use]
+    pub fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
+        // A `Shield` within an `i16` × 5: exact in an `f32`.
+        #[allow(clippy::cast_precision_loss)]
+        self.ship_record(ship)
+            .map(|record| crate::reserves::shield_points(record.fields.shield) as f32)
+    }
 }
 
 #[cfg(test)]
@@ -604,5 +618,16 @@ mod tests {
         assert_eq!((fold.set, fold.dir), (1, -1), "kept");
         assert_eq!(escort.display.frames.anim_set, 2);
         assert_eq!(escort.display.glow, 0, "cleared again");
+    }
+
+    #[test]
+    fn a_classs_own_shield_is_its_loaded_shield() {
+        let mut catalog = displaying(0, 1);
+        let mut record = ship(129, FAST);
+        record.fields.shield = -40;
+        catalog.ship_records.push(record);
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.class_shield(ShipId(129)), Some(200.0), "5 × 40");
+        assert_eq!(session.class_shield(ShipId(999)), None);
     }
 }

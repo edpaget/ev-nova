@@ -26,11 +26,13 @@
 //! and show a frame later
 //! ([`CombatEvent::Hit::late`](nova_sim::CombatEvent::Hit)).
 //!
-//! No ship's layer is drawn yet: the shän shield layer is
-//! rdm:phase/ship-handling-fidelity/phase-10's, which only has to supply
-//! whether a class has it and draw it at the level [`ShieldFlash::step`]
-//! gives. Until then the flight view steps every flash with no layer, so
-//! the timer runs down unseen.
+//! The flight view steps each ship's flash with whether its class has a
+//! shän shield layer (`_masterShipShieldSprite[class]`, @0x2b754-0x2b791)
+//! and its class's own `Shield`, and draws the layer at the level
+//! [`ShieldFlash::step`] gives ([`ShieldFlash::drawn`]), by OR, its frame
+//! the hull's by the layer's rule, with the hull's murk and no hold (see
+//! the [`ship_layers`](super::ship_layers) module). No stock `shän` has a
+//! shield image: the plug-ins' do.
 
 /// The timer a hit sets: 32 frames (the float 32.0 @0x3bf02).
 pub const FLASH_TICKS: f32 = 32.0;
@@ -71,6 +73,8 @@ pub struct ShieldFlash {
     /// The timer as the last frame showed it: after its clamp, before
     /// its drop.
     shown: f32,
+    /// The level the last frame drew its layer at, if it drew it.
+    drawn: Option<u8>,
 }
 
 impl ShieldFlash {
@@ -96,10 +100,18 @@ impl ShieldFlash {
             None
         };
         self.shown = self.timer;
+        self.drawn = level;
         if self.timer > 0.0 {
             self.timer -= 1.0;
         }
         level
+    }
+
+    /// The level the last frame drew its layer at ([`ShieldFlash::step`]'s),
+    /// if it drew it.
+    #[must_use]
+    pub fn drawn(&self) -> Option<u8> {
+        self.drawn
     }
 
     /// The timer as the last frame showed it, after its clamp and before
@@ -180,9 +192,13 @@ mod tests {
         let mut flash = ShieldFlash {
             timer: 0.5,
             shown: 0.0,
+            drawn: None,
         };
         assert_eq!(flash.step(100.0, 100.0, true), Some(1));
+        assert_eq!(flash.drawn(), Some(1), "the level kept for the draw");
         assert!(flash.spent());
+        assert_eq!(flash.step(100.0, 100.0, true), None);
+        assert_eq!(flash.drawn(), None);
     }
 
     #[test]

@@ -33,8 +33,9 @@ use super::{
     comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
     jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
     point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
-    stellar_name,
+    stellar_name, track_appeared,
 };
+use crate::time::ticks;
 
 impl<
     C: PilotCatalog
@@ -611,7 +612,10 @@ impl<
                     let scene = effects_scene(session);
                     self.effects.step(&dying, &scene, &self.looks, chance);
                     let shown = (&mut self.effects, &mut self.flashes);
-                    let lit = show_combat(session, &scene, shown, &self.looks, chance);
+                    let sheets = (&self.sheet, &self.npc_sheets);
+                    let lit = show_combat(session, &scene, shown, (&self.looks, sheets), chance);
+                    let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                    track_appeared(&mut self.appeared, session, now);
                     let (player, sheets) = (&self.sheet, &self.npc_sheets);
                     let session_now: &Session = session;
                     self.glows
@@ -931,6 +935,7 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.flashes.clear();
+        self.appeared.clear();
         self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
@@ -1254,6 +1259,7 @@ impl<
                 self.blank_message();
                 self.effects.clear();
                 self.flashes.clear();
+                self.appeared.clear();
                 self.glows.clear();
                 self.shot_looks.clear();
                 self.redraw_status();

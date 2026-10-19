@@ -57,6 +57,18 @@ pub struct ShipSheet {
     /// The `shän`'s `WeapDecay`, raw: how fast the weapon glow fades
     /// ([`ShipSheet::weapon_decay`]).
     pub weap_decay: i16,
+    /// The alt layer (`AltImageID`, loaded only with an `AltSetCount` above
+    /// 0), drawn at its own set with the hull's tint.
+    pub alt: Option<LayerSheet>,
+    /// The shield layer (`ShieldImageID`), flashed on a hit (see
+    /// [`ShieldFlash`](super::flash::ShieldFlash)).
+    pub shield: Option<LayerSheet>,
+    /// The `shän`'s `Flags`, raw: 0x0040 puts its lights out while it is
+    /// disabled (see `nova_sim::combat::ship_frames`).
+    pub flags: u16,
+    /// The `shän`'s `BaseTransp`, raw: the hull's translucency in 32nds,
+    /// drawn at (32 − it)/32 (see the flight view's ship drawing).
+    pub base_transp: i16,
 }
 
 /// What `WeapDecay` is multiplied by for the glow's fall a tick
@@ -593,6 +605,10 @@ mod tests {
                 glow: None,
                 lights: None,
                 blink: Blink::STEADY,
+                alt: None,
+                shield: None,
+                flags: 0,
+                base_transp: 0,
             })
         }
     }
