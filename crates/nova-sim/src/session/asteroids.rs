@@ -51,7 +51,7 @@
 
 use std::collections::BTreeMap;
 
-use super::Session;
+use super::{Session, Setup};
 use crate::asteroid::{Asteroid, AsteroidType, FieldSpec, Origin, Ring};
 use crate::catalog::{AsteroidFieldRecord, SystemId};
 use crate::chance::Chance;
@@ -125,7 +125,7 @@ impl Session {
         if !std::mem::take(&mut self.asteroid_field_due) || self.landed.is_some() {
             return;
         }
-        if self.places_asteroids() {
+        if self.setup.places_asteroids() {
             self.place_asteroids(chance);
         }
     }
@@ -152,12 +152,6 @@ impl Session {
             self.play_area,
             chance,
         );
-    }
-
-    /// Whether an arrival keeps the field `_CreateAsteroids` places, as
-    /// [`RuleKey::AsteroidEntryField`] reads.
-    pub(super) fn places_asteroids(&self) -> bool {
-        self.setup.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
     }
 
     /// The asteroids shots may hit this tick, slot by slot, each with its
@@ -239,6 +233,14 @@ impl Session {
             .get(&self.pilot.system)
             .copied()
             .unwrap_or(FieldSpec::NONE)
+    }
+}
+
+impl Setup {
+    /// Whether an arrival keeps the field `_CreateAsteroids` places, as
+    /// [`RuleKey::AsteroidEntryField`] reads.
+    pub(super) fn places_asteroids(&self) -> bool {
+        self.rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible
     }
 }
 

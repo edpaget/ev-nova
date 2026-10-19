@@ -14,7 +14,7 @@ impl Session {
     /// reads taken from `catalog`. Reading it changes nothing.
     #[must_use]
     pub fn pilot_panel(&self, catalog: &impl PilotCatalog) -> PilotPanel {
-        let words = self.player_info_words();
+        let words = self.setup.player_info_words();
         let rating = string_index(self.pilot.combat_rating());
         PilotPanel {
             pilot_name: self.pilot.name().to_owned(),
@@ -26,6 +26,7 @@ impl Session {
             ship: self.pilot.ship,
             legal_status: self.legal_status(catalog, &words),
             combat_rating: self
+                .setup
                 .nth_string(RATING_STRINGS, rating + 1)
                 .unwrap_or_default(),
             date: self.med_date_text(),
@@ -113,7 +114,7 @@ mod tests {
         );
         assert_eq!(
             panel.legal_status,
-            session.legal_status_in(&catalog, SystemId(131), &session.player_info_words())
+            session.legal_status_in(&catalog, SystemId(131), &session.setup.player_info_words())
         );
         assert!(panel.legal_status.starts_with("status "), "{panel:?}");
     }

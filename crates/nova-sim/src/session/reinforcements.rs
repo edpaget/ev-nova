@@ -216,7 +216,8 @@ impl Session {
         match event {
             Some(Event::Announce) => {
                 let line = |entry| {
-                    self.nth_string(REINFORCEMENT_LINES, entry)
+                    self.setup
+                        .nth_string(REINFORCEMENT_LINES, entry)
                         .unwrap_or_default()
                 };
                 let text = format!(

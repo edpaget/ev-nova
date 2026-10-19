@@ -113,7 +113,7 @@ impl Session {
         let Some(dude) = aux_dude(&record.aux) else {
             return;
         };
-        let items = self.npc_items();
+        let items = self.setup.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
@@ -130,7 +130,7 @@ impl Session {
         let ships = spawn::arriving_aux_ships(self.traffic.table(), &spawn, self.gate(), chance);
         let came = self.traffic.bring_in_within(
             ships,
-            self.spawn_reserve(SPAWN_RESERVE),
+            self.setup.spawn_reserve(SPAWN_RESERVE),
             &self.statics.govts,
             &mut *chance,
         );

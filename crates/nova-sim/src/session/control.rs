@@ -163,11 +163,11 @@ impl Session {
             SetOp::Explore(system) => self.explore_system(*system),
             SetOp::ChangeShip(ship) => self.change_ship(*ship, OutfitCarry::Keep, false),
             SetOp::ChangeShipWithDefaults(ship) => {
-                let clamp = self.ship_change_rules().clamps();
+                let clamp = self.setup.ship_change_rules().clamps();
                 self.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
             }
             SetOp::ReplaceShip(ship) => {
-                let rules = self.ship_change_rules();
+                let rules = self.setup.ship_change_rules();
                 let carry = OutfitCarry::Persistent {
                     mask: rules.persistent(),
                 };
@@ -220,7 +220,7 @@ impl Session {
     fn out_of_range(&mut self, op: SetOpKind) {
         match op {
             SetOpKind::MoveKeepPosition
-                if self.script_effect_rules().out_of_range_move == RuleSource::Engine =>
+                if self.setup.script_effect_rules().out_of_range_move == RuleSource::Engine =>
             {
                 self.queued.moves.push(ScriptMove::Stay);
             }

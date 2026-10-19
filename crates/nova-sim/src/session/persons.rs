@@ -75,7 +75,7 @@
 use std::rc::Rc;
 
 use super::missions::TextSource;
-use super::{Session, hire};
+use super::{Session, Setup, hire};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -149,7 +149,7 @@ impl Session {
     /// How persons appear.
     #[must_use]
     pub fn person_rules(&self) -> &dyn PersonRules {
-        &*self.setup.person_rules.0
+        self.setup.person_rules()
     }
 
     /// `npc`'s comm quote, an entry in `STR#` 7100, when it is a person
@@ -500,6 +500,14 @@ impl Session {
                 strike.downed = None;
             }
         }
+    }
+}
+
+impl Setup {
+    /// How persons appear.
+    #[must_use]
+    fn person_rules(&self) -> &dyn PersonRules {
+        &*self.person_rules.0
     }
 }
 

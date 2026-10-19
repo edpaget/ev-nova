@@ -124,14 +124,16 @@ impl Session {
         sortie: &Sortie,
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
-        let berth = self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
+        let berth = self
+            .traffic
+            .free_berth(self.setup.spawn_reserve(SPAWN_RESERVE))?;
         let record = self.statics.ship_record(sortie.ship).cloned()?;
         let push = self
             .statics
             .arsenal
             .weapon(sortie.bay)
             .map_or(0.0, |bay| bay.speed);
-        let kind = self.ship_kind(&record);
+        let kind = self.setup.ship_kind(&self.statics, &record);
         let carrier = Carrier {
             ship: sortie.carrier,
             window: dock_window(record.fields.maneuver),

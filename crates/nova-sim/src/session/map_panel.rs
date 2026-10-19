@@ -136,7 +136,7 @@ impl Session {
                 map.stellars(system),
                 self.setup.rules.source_for(RuleKey::MapExplore),
             ),
-            legal: self.legal_status_in(catalog, system, &self.player_info_words()),
+            legal: self.legal_status_in(catalog, system, &self.setup.player_info_words()),
         }
     }
 }

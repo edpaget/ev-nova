@@ -349,7 +349,7 @@ impl Session {
     /// (see the module docs), of no government, its skill rolled on
     /// `chance` as its spawn rolls it.
     fn hulk(&self, old: &ShipRecord, condition: Condition, chance: &mut dyn Chance) -> Npc {
-        let kind = self.ship_kind(old);
+        let kind = self.setup.ship_kind(&self.statics, old);
         // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
         // glow and fold, but no anim rolls, as `_HandlePlayer` zeroes its
         // anim set and timer after (@0x6f3a3, @0x6f3bb; see

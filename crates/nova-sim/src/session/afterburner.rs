@@ -59,7 +59,8 @@ impl Session {
     /// system, and any other's as [`RuleKey::GravityAfterburner`] reads
     /// (see the `gravity` module).
     pub(super) fn afterburner_knockback(&self) -> KnockbackCaps {
-        self.gravity_afterburner()
+        self.setup
+            .gravity_afterburner()
             .knockback(self.afterburner_on, self.gravity_sources_present())
     }
 
@@ -88,6 +89,7 @@ impl Session {
         let top = self.top_speed();
         Caps {
             thrust_top: if self
+                .setup
                 .gravity_afterburner()
                 .thrust_widens(self.afterburner_on, self.gravity_sources_present())
             {
@@ -115,6 +117,7 @@ impl Session {
             return;
         }
         let gravity = self
+            .setup
             .gravity_afterburner()
             .box_gravity(self.gravity_sources_present());
         self.player_max_vel.burn(top, gravity);

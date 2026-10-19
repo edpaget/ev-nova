@@ -162,7 +162,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use super::hire::Shared;
-use super::{ReservePolicy, Session, SessionEvent};
+use super::{ReservePolicy, Session, SessionEvent, Setup};
 use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
@@ -327,12 +327,6 @@ impl CommCatalog for NoStrings {
 }
 
 impl Session {
-    /// The rules the ship-change set operators follow, projected from
-    /// the session's rule set ([`Session::with_rules`]).
-    pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
-        ShipChangeRules::from_rulebook(&self.setup.rules)
-    }
-
     /// This session with `rule` saying when the player's ship is
     /// disabled after a change of ship (see the module docs):
     /// [`NovaDisable`] by default. The fight's own rule is given each
@@ -347,7 +341,7 @@ impl Session {
     /// change of ship.
     #[must_use]
     pub fn disable_rule(&self) -> &dyn DisableRule {
-        &*self.setup.disable_rule.0
+        self.setup.disable_rule()
     }
 
     /// This session with `T` reading its names from `strings`' string
@@ -366,7 +360,7 @@ impl Session {
     /// The string lists `T` reads its names from.
     #[must_use]
     pub fn strings(&self) -> &dyn CommCatalog {
-        &*self.setup.strings.0
+        self.setup.strings()
     }
 
     /// The disable rule a session starts with.
@@ -425,7 +419,7 @@ impl Session {
         let Some(record) = self.statics.ship_record(ship).cloned() else {
             return;
         };
-        let rules = self.ship_change_rules();
+        let rules = self.setup.ship_change_rules();
         let defaults = pilot::tally(record.defaults.iter().copied());
         // `E` and `H` add the stock weapons and their `AmmoLoad` to the
         // weapon and rounds arrays and fold them into the outfits after
@@ -508,11 +502,32 @@ impl Session {
     /// `T`: renames the ship from `STR#` `list`, drawing on `chance` (see
     /// the module docs).
     pub(super) fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
-        let Some(pick) = self.pick_string(list, chance) else {
+        let Some(pick) = self.setup.pick_string(list, chance) else {
             return;
         };
         let previous = self.pilot.ship_name.as_deref().unwrap_or_default();
         self.pilot.ship_name = Some(pick.replace('*', previous));
+    }
+}
+
+impl Setup {
+    /// The rules the ship-change set operators follow, projected from
+    /// the session's rule set ([`Session::with_rules`]).
+    pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
+        ShipChangeRules::from_rulebook(&self.rules)
+    }
+
+    /// The rule that says when the player's ship is disabled after a
+    /// change of ship.
+    #[must_use]
+    fn disable_rule(&self) -> &dyn DisableRule {
+        &*self.disable_rule.0
+    }
+
+    /// The string lists `T` reads its names from.
+    #[must_use]
+    pub(super) fn strings(&self) -> &dyn CommCatalog {
+        &*self.strings.0
     }
 
     /// One of `STR#` `list`'s strings, from the session's string lists,
@@ -523,7 +538,7 @@ impl Session {
     /// fleet's arrival quote and [`pick_string`](Self::pick_string) all
     /// draw through it.
     pub(super) fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
-        let strings = self.setup.strings.0.string_list(list);
+        let strings = self.strings.0.string_list(list);
         if strings.is_empty() {
             return None;
         }
@@ -535,7 +550,7 @@ impl Session {
     /// string lists, if it has one: what the bar's news and the rank tags
     /// read through.
     pub(super) fn nth_string(&self, list: i16, index: usize) -> Option<String> {
-        let mut strings = self.setup.strings.0.string_list(list);
+        let mut strings = self.strings.0.string_list(list);
         let at = index.checked_sub(1)?;
         (at < strings.len()).then(|| strings.swap_remove(at))
     }

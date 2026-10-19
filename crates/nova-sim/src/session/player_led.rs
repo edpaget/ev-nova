@@ -70,7 +70,7 @@
 //! is cleared as it is disabled or starts to break up. None of them plays
 //! a sound.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::ShipId;
 use crate::combat::ShipRef;
 use crate::combat::hull::HullSpec;
@@ -131,14 +131,14 @@ impl Session {
                     let npcs = self
                         .npcs()
                         .iter()
-                        .filter(|npc| self.shown(&npc.hull))
+                        .filter(|npc| self.setup.shown(&npc.hull))
                         .filter(|npc| self.is_displayed(ShipRef::Npc(npc.id), slot_of(npc)))
                         .map(|npc| {
                             let layer =
                                 ShipLayer::of(disabled(npc.condition), npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
-                    let player = (self.shown(&self.hull)
+                    let player = (self.setup.shown(&self.hull)
                         && self.is_displayed(ShipRef::Player, Slot::Player))
                     .then(|| (ShipRef::Player, self.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
@@ -166,7 +166,7 @@ impl Session {
             ShipRef::Player => Some(self.hull),
             ShipRef::Npc(id) => self.npc(id).map(|npc| npc.hull),
         };
-        hull.is_some_and(|hull| !self.shown(&hull))
+        hull.is_some_and(|hull| !self.setup.shown(&hull))
     }
 
     /// The ship type whose frames `ship`'s slot sprite holds, the sheet
@@ -191,7 +191,7 @@ impl Session {
                 (slot_of(npc), npc.ship, npc.hull)
             }
         };
-        let hidden = !self.shown(&hull)
+        let hidden = !self.setup.shown(&hull)
             && self.setup.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
         let stale = hidden || !self.is_laid_out(ship, slot);
         Some(if stale {
@@ -214,12 +214,6 @@ impl Session {
             .iter()
             .filter_map(|npc| self.framed_by(ShipRef::Npc(npc.id)));
         player.into_iter().chain(npcs)
-    }
-
-    /// Whether a ship of `hull` is drawn and laid out (see
-    /// [`Session::is_hidden`]).
-    fn shown(&self, hull: &HullSpec) -> bool {
-        !hull.hidden || self.setup.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
     }
 
     /// Each ship slot's draw layer and when it entered it, as the last
@@ -316,13 +310,14 @@ impl Session {
         let mut npcs: Vec<&Npc> = self
             .npcs()
             .iter()
-            .filter(|npc| self.shown(&npc.hull))
+            .filter(|npc| self.setup.shown(&npc.hull))
             .collect();
         npcs.sort_by_key(|npc| npc.berth);
         let npcs = npcs
             .into_iter()
             .map(|npc| (ShipRef::Npc(npc.id), slot_of(npc)));
         let player = self
+            .setup
             .shown(&self.hull)
             .then_some((ShipRef::Player, Slot::Player));
         player.into_iter().chain(npcs).collect()
@@ -331,6 +326,14 @@ impl Session {
     /// The layer the player stands in: never led.
     fn player_layer(&self) -> ShipLayer {
         ShipLayer::of(disabled(self.player_condition()), false)
+    }
+}
+
+impl Setup {
+    /// Whether a ship of `hull` is drawn and laid out (see
+    /// [`Session::is_hidden`]).
+    fn shown(&self, hull: &HullSpec) -> bool {
+        !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
     }
 }
 

@@ -66,8 +66,9 @@ impl Session {
         };
         self.bar_nav = Some(self.nav);
         let commercial = self
+            .setup
             .pick_string(COMMERCIALS, chance)
-            .or_else(|| self.nth_string(MISC_STRINGS, TOP_NEWS))
+            .or_else(|| self.setup.nth_string(MISC_STRINGS, TOP_NEWS))
             .unwrap_or_default();
         let mut story = self.disaster_story(site.id, chance);
         let found = candidates().of(&NewsFacts {
@@ -84,12 +85,13 @@ impl Session {
         };
         if !pool.is_empty() {
             let (_, list) = pool[pick(pool.len(), chance)];
-            story = self.random_string(list, chance).unwrap_or_default();
+            story = self.setup.random_string(list, chance).unwrap_or_default();
         }
         if story.is_empty() {
             story = self
+                .setup
                 .pick_string(GENERIC_NEWS, chance)
-                .or_else(|| self.nth_string(MISC_STRINGS, NO_NEWS))
+                .or_else(|| self.setup.nth_string(MISC_STRINGS, NO_NEWS))
                 .unwrap_or_default();
         }
         self.bar_news = Some(News { commercial, story });

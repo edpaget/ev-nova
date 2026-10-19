@@ -32,7 +32,7 @@
 //! The pull is a shove the session sets after the tick, with the hits'.
 //! None of this plays a sound.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::combat::ShipRef;
 use crate::combat::stellar_hazards::{GravitySource, HazardResistance, StellarHazards};
 use crate::deadly_stellar::resists_deadly;
@@ -51,12 +51,6 @@ impl Session {
     #[must_use]
     pub fn gravity_sources_present(&self) -> bool {
         self.listed.iter().any(|site| site.gravity != 0)
-    }
-
-    /// Which of the afterburner's widenings a gravity source keeps plain,
-    /// by [`RuleKey::GravityAfterburner`].
-    pub(super) fn gravity_afterburner(&self) -> GravityAfterburner {
-        GravityAfterburner::from(self.setup.rules.source_for(RuleKey::GravityAfterburner))
     }
 
     /// `_HandleGravity`'s sources (see the module docs): each listed
@@ -89,7 +83,7 @@ impl Session {
         let leader = self.leader_state(npc);
         resists_gravity(
             npc.hull.stellar_immune,
-            npc.flies_inertialess(leader.as_ref(), self.flight_rules().inertial_dampener),
+            npc.flies_inertialess(leader.as_ref(), self.setup.flight_rules().inertial_dampener),
             npc.stats.gravity_resistance,
             Flyer::Npc,
         )
@@ -141,6 +135,14 @@ impl Session {
                 Flyer::Npc,
             ),
         }
+    }
+}
+
+impl Setup {
+    /// Which of the afterburner's widenings a gravity source keeps plain,
+    /// by [`RuleKey::GravityAfterburner`].
+    pub(super) fn gravity_afterburner(&self) -> GravityAfterburner {
+        GravityAfterburner::from(self.rules.source_for(RuleKey::GravityAfterburner))
     }
 }
 

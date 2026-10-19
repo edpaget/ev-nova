@@ -68,8 +68,12 @@ impl Session {
             return;
         };
         let record = self.statics.lifecycle_record(active.mission);
-        let at_destination = self.docked_at_stop(active.destination, stellar);
-        let at_return = self.docked_at_stop(active.return_to, stellar);
+        let at_destination = self
+            .setup
+            .docked_at_stop(&self.statics, active.destination, stellar);
+        let at_return = self
+            .setup
+            .docked_at_stop(&self.statics, active.return_to, stellar);
         if at_destination {
             let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot, chance);
             if let Some(active) = self.slot_holding(slot, record.id)

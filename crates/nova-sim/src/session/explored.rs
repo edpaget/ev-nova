@@ -75,23 +75,17 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::SystemId;
 use crate::exploration::{explored_with, known_from, shared_by_place, start_neighbours};
 use crate::pilot::ExploredLevel;
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
-    /// How the session shares exploration by place
-    /// ([`RuleKey::ExploredByPlace`]).
-    fn explored_by_place(&self) -> RuleSource {
-        self.setup.rules.source_for(RuleKey::ExploredByPlace)
-    }
-
     /// Raises `system` and, by the engine, its place's head to `level`
     /// when lower (see the module docs). Raises no event.
     pub(super) fn explore_place(&mut self, system: SystemId, level: ExploredLevel) {
-        let source = self.explored_by_place();
+        let source = self.setup.explored_by_place();
         for explored in explored_with(system, self.galaxy.map().places(), source) {
             self.pilot.raise_explored(explored, level);
         }
@@ -101,7 +95,7 @@ impl Session {
     /// every system at an explored head's place is raised to the head's
     /// level. Raises no event.
     pub(super) fn share_explored(&mut self) {
-        let source = self.explored_by_place();
+        let source = self.setup.explored_by_place();
         let places = self.galaxy.map().places();
         let explored = shared_by_place(&self.pilot.explored, places, source);
         let charted = shared_by_place(&self.pilot.charted, places, source);
@@ -152,7 +146,7 @@ impl Session {
     /// system's Con slots naming a visible system explores, by the
     /// engine, that system's head, and by the other reading the system.
     pub(super) fn explore_start_neighbours(&mut self) {
-        let source = self.explored_by_place();
+        let source = self.setup.explored_by_place();
         let galaxy = &self.galaxy;
         let neighbours = start_neighbours(
             galaxy.con_slots(self.pilot.system),
@@ -163,6 +157,14 @@ impl Session {
         for system in neighbours {
             self.pilot.explore(system);
         }
+    }
+}
+
+impl Setup {
+    /// How the session shares exploration by place
+    /// ([`RuleKey::ExploredByPlace`]).
+    fn explored_by_place(&self) -> RuleSource {
+        self.rules.source_for(RuleKey::ExploredByPlace)
     }
 }
 

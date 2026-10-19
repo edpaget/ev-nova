@@ -25,7 +25,7 @@
 //! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
 //! is read from the holder's stellars in `catalog`.
 
-use super::{Session, overlaid_sites};
+use super::{Session, Setup, overlaid_sites};
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, SystemId};
 use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
@@ -115,7 +115,7 @@ impl Session {
     /// [`Session::open_player_info`].
     #[must_use]
     pub fn player_info(&self, catalog: &impl PilotCatalog) -> PlayerInfo {
-        let words = self.player_info_words();
+        let words = self.setup.player_info_words();
         let cargo_names = self.strings().string_list(CARGO_NAMES);
         let cargo = self.held_cargo(&cargo_names);
         let reserves = self.reserves();
@@ -188,12 +188,6 @@ impl Session {
             jettisonable: player_info::has_jettisonable_cargo(&cargo),
             words,
         }
-    }
-
-    /// The `STR#` 2002 strings the player info shows, from the session's
-    /// string lists; a missing one reads empty.
-    pub(super) fn player_info_words(&self) -> Words {
-        Words::from_list(&self.strings().string_list(MISC_STRINGS))
     }
 
     /// The cargo the Cargo text lists, its types named by `cargo_names`.
@@ -329,10 +323,19 @@ impl Session {
         );
         match index {
             Some(index) => self
+                .setup
                 .nth_string(LEGAL_STATUS_STRINGS, index + 1)
                 .unwrap_or_default(),
             None => words.not_available.to_string(),
         }
+    }
+}
+
+impl Setup {
+    /// The `STR#` 2002 strings the player info shows, from the session's
+    /// string lists; a missing one reads empty.
+    pub(super) fn player_info_words(&self) -> Words {
+        Words::from_list(&self.strings().string_list(MISC_STRINGS))
     }
 }
 
@@ -385,12 +388,13 @@ mod tests {
         let session = Session::start(&catalog())
             .expect("starts")
             .with_strings(Rc::new(Lists));
-        let words = session.player_info_words();
+        let words = session.setup.player_info_words();
         assert_eq!(&*words.and, "und");
         assert_eq!(&*words.ton, "");
         assert_eq!(
             Session::start(&catalog())
                 .expect("starts")
+                .setup
                 .player_info_words(),
             Words::from_list(&[]),
             "no lists"

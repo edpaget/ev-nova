@@ -316,7 +316,7 @@ impl Session {
             .position(|&placed| placed == Some(npc.id))
             .and_then(|index| self.pilot.escorts.get(index))
             .filter(|escort| escort.hired())
-            .map(|escort| self.paid_wage(escort));
+            .map(|escort| self.setup.paid_wage(&self.statics, escort));
         Some(EscortStatus { wage })
     }
 

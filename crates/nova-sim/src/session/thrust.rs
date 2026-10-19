@@ -1,7 +1,7 @@
 //! Tests of the thrust every ship flies with and the cap on its speed:
 //! `Accel` / the [`RuleValue::ThrustDivisor`] and the
 //! [`RuleKey::SpeedCap`] reading, read from the session's rules at each
-//! use ([`Session::flight_rules`]) for the player and, through the
+//! use ([`Setup::flight_rules`](super::setup::Setup::flight_rules)) for the player and, through the
 //! traffic's world, for every NPC; the pushes' clamp, which
 //! [`Session::with_rules`] hands the fight; and an escort of an immobile
 //! class, which no push moves.

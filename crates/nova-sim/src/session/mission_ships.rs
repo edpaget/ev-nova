@@ -32,7 +32,7 @@
 //! the restart of every slot whose ships follow the player (`ShipSyst`
 //! -6, @0x6716a-0x67294), so, as the engine reads
 //! [`RuleKey::GateFollow`], the hook leaves such a slot alone there
-//! ([`Session::gate_decides`]).
+//! ([`Setup::gate_decides`](super::setup::Setup::gate_decides)).
 //!
 //! **Following through a gate** is the [`gate_follow`](super::gate_follow)
 //! module's: at a gate's exit a -6 slot of escorts is set up at once, one
@@ -71,7 +71,7 @@
 //! original aborts each slot inside setup's slot loop; here the aborts
 //! follow once the system's ships are all in, in slot order.
 //! Each mission ship takes a ship-table slot below the spawn reserve
-//! (`_MissionDudeSpawn` @0x3cd50, [`Session::spawn_reserve`]); one that
+//! (`_MissionDudeSpawn` @0x3cd50, [`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)); one that
 //! finds none does not come and changes no count: the setup goes on to
 //! the next ship (@0x43128), and the timer, spent all the same, counts
 //! as arrived only the ships that came (@0x43971), so with `ShipStart` 1
@@ -362,14 +362,14 @@ impl Session {
     /// on, `ShipStart` 1, ships left, and the player in their system
     /// (@0x99f5b-0x99f8a). Not on a gate's exit for ships following the
     /// player while the exit decides for them
-    /// ([`Session::gate_decides`]), as the original's loop A overwrites
+    /// ([`Setup::gate_decides`](super::setup::Setup::gate_decides)), as the original's loop A overwrites
     /// the restart.
     fn hook_restarts(&self, record: &MissionRecord, active: &ActiveMission, how: Entrance) -> bool {
         restarts_on(how)
             && ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
             && active.ships.left > 0
             && self.ships_here(active.ships.system)
-            && !self.gate_decides(how, active.ships.system)
+            && !self.setup.gate_decides(how, active.ships.system)
     }
 
     /// Slot `id.record`'s hook `id.hook` on `event`, drawing on `chance`
@@ -833,7 +833,7 @@ impl Session {
     /// their `düde`'s ships read from `catalog`, drawing on `chance`
     /// (@0x43821-0x43aa5): how many came, none for a mission of no
     /// `düde`. Each takes a slot below the spawn reserve
-    /// ([`Session::spawn_reserve`]), and one that finds none does not come
+    /// ([`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)), and one that finds none does not come
     /// and is not counted, as `_EnterMoreShips` skips the count and the
     /// placement on `_MissionDudeSpawn`'s -1 (@0x43964 → @0x43aaa).
     fn bring_in_mission_ships(
@@ -848,7 +848,7 @@ impl Session {
         let Some(dude) = record.ships.dude else {
             return 0;
         };
-        let items = self.npc_items();
+        let items = self.setup.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
@@ -881,7 +881,7 @@ impl Session {
         let last = self.last_npc();
         let came = self.traffic.bring_in_within(
             ships,
-            self.spawn_reserve(SPAWN_RESERVE),
+            self.setup.spawn_reserve(SPAWN_RESERVE),
             &self.statics.govts,
             &mut *chance,
         );
@@ -908,7 +908,7 @@ impl Session {
     /// timer runs on; by the other, the ship is the timer's arrival: the
     /// timer stops and, for `ShipStart` 1, the arrived count goes up by
     /// one. The ship takes its slot below the spawn reserve
-    /// ([`Session::spawn_reserve`]) while the person still holds its own,
+    /// ([`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)) while the person still holds its own,
     /// as the original frees the person's slot only after the spawn
     /// (@0x62520). Nothing when the NPC is no longer here, the slot no
     /// longer holds a mission of a `düde`, or the ship cannot be spawned
@@ -945,7 +945,7 @@ impl Session {
             .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
             .unwrap_or_default();
         let swapped = swapped_ship_type(record.flags, &dude_ships, person_ship);
-        let items = self.npc_items();
+        let items = self.setup.npc_items();
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
@@ -957,7 +957,7 @@ impl Session {
         // `_MissionDudeSpawn` finds its slot (@0x3cd50) before it hands the
         // slot the person's type (@0x3cd7e) or draws one (@0x3cdea): with
         // no slot nothing of the mission changes.
-        let reserve = self.spawn_reserve(SPAWN_RESERVE);
+        let reserve = self.setup.spawn_reserve(SPAWN_RESERVE);
         if self.traffic.free_berth(reserve).is_none() {
             return;
         }

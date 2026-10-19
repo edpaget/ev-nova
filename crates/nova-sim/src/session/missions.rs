@@ -73,7 +73,7 @@
 use std::collections::BTreeMap;
 
 use super::mission_screens::MissionTextKind;
-use super::{Session, Statics};
+use super::{Session, Setup, Statics};
 use crate::catalog::{
     AuxShip, DescMovie, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId,
     SystemId,
@@ -245,30 +245,14 @@ fn post_days(days: i16) -> u32 {
 }
 
 impl Session {
-    /// Whether the stellar `docked` at is a mission's `stop`, as
-    /// `_MissionLandCargoCheck` (@0x9edfd, @0x9f01d) and
-    /// `_MissionLandCheck` (@0xa1a37) ask `_StellarsAreIdentical`: by
-    /// [`RuleKey::MissionStellarIdentity`]'s engine reading, also a
-    /// stellar of another ID at the same place with the same name, read
-    /// as [`RuleKey::StellarIdentityRecord`] says
-    /// ([`StellarMarks::identical`](crate::mission::StellarMarks::identical)). No stop is never docked at.
-    pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
-        let rules = IdentityRules::of(&self.setup.rules);
-        stop.is_some_and(|stop| {
-            self.statics
-                .stellar_marks
-                .identical(stop.stellar, docked, rules)
-        })
-    }
-
     /// Whether the ship is docked at a mission's `stop`, as
-    /// [`Session::docked_at_stop`] matches it: what tells a mission
+    /// [`Setup::docked_at_stop`](super::setup::Setup::docked_at_stop) matches it: what tells a mission
     /// gone at its return from one aborted. Built only for the
     /// storyline walker (`fixture`), its one caller.
     #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn docked_at_mission_stop(&self, stop: Stop) -> bool {
         self.landed
-            .is_some_and(|docked| self.docked_at_stop(Some(stop), docked))
+            .is_some_and(|docked| self.setup.docked_at_stop(&self.statics, Some(stop), docked))
     }
 
     /// Where a mission's `stop` is landed at, as a player can reach it:
@@ -1010,7 +994,8 @@ impl Session {
     /// ([`success_records`]), its pay, the offers' stellar forgotten, and
     /// a re-offer due.
     fn mission_return_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
-        if !self.docked_at_stop(
+        if !self.setup.docked_at_stop(
+            &self.statics,
             self.pilot
                 .missions
                 .get(slot)
@@ -1604,6 +1589,25 @@ impl Session {
     pub fn plain_text(&self, text: &str) -> String {
         let context = self.tag_context(None, None, self.rank_govts);
         text_tags::expand(text, &context, self)
+    }
+}
+
+impl Setup {
+    /// Whether the stellar `docked` at is a mission's `stop`, as
+    /// `_MissionLandCargoCheck` (@0x9edfd, @0x9f01d) and
+    /// `_MissionLandCheck` (@0xa1a37) ask `_StellarsAreIdentical`: by
+    /// [`RuleKey::MissionStellarIdentity`]'s engine reading, also a
+    /// stellar of another ID at the same place with the same name, read
+    /// as [`RuleKey::StellarIdentityRecord`] says
+    /// ([`StellarMarks::identical`](crate::mission::StellarMarks::identical)). No stop is never docked at.
+    pub(super) fn docked_at_stop(
+        &self,
+        statics: &Statics,
+        stop: Option<Stop>,
+        docked: StellarId,
+    ) -> bool {
+        let rules = IdentityRules::of(&self.rules);
+        stop.is_some_and(|stop| statics.stellar_marks.identical(stop.stellar, docked, rules))
     }
 }
 

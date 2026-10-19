@@ -59,7 +59,7 @@ impl Session {
             self.stats.dampener,
             Flyer::Player,
             false,
-            self.flight_rules().inertial_dampener,
+            self.setup.flight_rules().inertial_dampener,
         )
     }
 
@@ -82,7 +82,7 @@ impl Session {
             drag(&mut self.player);
             self.player_speed = self.player_speed.min(caps.max_vel) * PLAYER_DISABLED_DECAY;
         }
-        let flight = self.flight_rules();
+        let flight = self.setup.flight_rules();
         inertialess_player_step(
             &mut self.player,
             &mut self.player_speed,

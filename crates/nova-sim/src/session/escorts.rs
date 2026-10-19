@@ -339,7 +339,7 @@ impl Session {
             });
         let (kind, person) = match fitted {
             Some((kind, person)) => (kind, Some(person)),
-            None => (self.ship_kind(record), None),
+            None => (self.setup.ship_kind(&self.statics, record), None),
         };
         if self.restock_persons && person.is_some() {
             restock(&mut escort.reserves, &kind);
@@ -577,7 +577,7 @@ impl Session {
             let Some(record) = self.statics.ship_record(ship) else {
                 continue;
             };
-            let kind = self.ship_kind(record);
+            let kind = self.setup.ship_kind(&self.statics, record);
             restock(&mut self.pilot.escorts[index].reserves, &kind);
         }
         self.restock_persons = true;

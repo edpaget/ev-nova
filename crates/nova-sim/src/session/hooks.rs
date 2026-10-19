@@ -40,7 +40,7 @@
 //! operators `C`, `E` and `H` run no hook at all (`_EvalSetExp` never
 //! calls `_EvalMissionBitSetString`; see the `ship_change` module).
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::{PilotCatalog, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
@@ -90,12 +90,6 @@ pub(super) enum ShipHook {
 }
 
 impl Session {
-    /// The rules the hooks follow, projected from the session's rule set
-    /// ([`Session::with_rules`]).
-    pub(super) fn hook_rules(&self) -> HookRules {
-        HookRules::from_rulebook(&self.setup.rules)
-    }
-
     /// Runs `script` on the session (see the module docs), drawing
     /// `R(...)` on `chance`: nothing at all when its text was empty, and
     /// no operator but the reset its end runs when it did not parse
@@ -202,7 +196,7 @@ impl Session {
                     &self.statics.govts,
                 );
             }
-            if self.hook_rules().start_ship_purchase == RuleSource::Bible {
+            if self.setup.hook_rules().start_ship_purchase == RuleSource::Bible {
                 self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
             }
             self.run_script(&start.on_start, chance);
@@ -225,6 +219,14 @@ impl Session {
         // drawing it last settles the same table before the first frame
         // and the first save.
         self.draw_offer_rolls(chance);
+    }
+}
+
+impl Setup {
+    /// The rules the hooks follow, projected from the session's rule set
+    /// ([`Session::with_rules`]).
+    pub(super) fn hook_rules(&self) -> HookRules {
+        HookRules::from_rulebook(&self.rules)
     }
 }
 

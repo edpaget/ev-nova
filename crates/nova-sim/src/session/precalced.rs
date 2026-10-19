@@ -82,7 +82,7 @@
 //! (`_screenFaded` @0x5a013, `_fadePending` @0x5a052-0x5a064), which are
 //! the screens' state, not the session's.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::market;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::scan::Latches;
@@ -144,7 +144,7 @@ impl Session {
     }
 
     /// Whether the reset for `cause` trims the commodities: never through
-    /// an outfit sale that keeps the cargo ([`Session::sell_keeps_cargo`]).
+    /// an outfit sale that keeps the cargo ([`Setup::sell_keeps_cargo`](super::setup::Setup::sell_keeps_cargo)).
     fn trims(&self, cause: ResetCause) -> bool {
         if self.sale_keeps_cargo {
             return false;
@@ -156,13 +156,6 @@ impl Session {
             ResetCause::Purchase => false,
             ResetCause::Other => true,
         }
-    }
-
-    /// Whether the outfit sale about to run keeps the cargo past the holds
-    /// through its resets, `OnSell`'s included: by the other reading of
-    /// [`RuleKey::OutfitSaleCargo`].
-    pub(super) fn sell_keeps_cargo(&self) -> bool {
-        self.setup.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
     }
 
     /// The reset's trim of the commodities (see
@@ -178,6 +171,15 @@ impl Session {
         if self.pilot.cargo != before {
             self.save_due = true;
         }
+    }
+}
+
+impl Setup {
+    /// Whether the outfit sale about to run keeps the cargo past the holds
+    /// through its resets, `OnSell`'s included: by the other reading of
+    /// [`RuleKey::OutfitSaleCargo`].
+    pub(super) fn sell_keeps_cargo(&self) -> bool {
+        self.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
     }
 }
 

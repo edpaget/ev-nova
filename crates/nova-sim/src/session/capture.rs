@@ -61,7 +61,7 @@
 //! alive, keeps its grudge and can appear again; by the other it is gone,
 //! as Use As My Ship has it.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::board::MAX_ESCORTS;
 use crate::catalog::{ShipId, ShipRecord, outfit_mods};
 use crate::chance::Chance;
@@ -179,7 +179,7 @@ impl Session {
         let stock = ShipStats::for_npc(
             self.fields,
             &outfit_mods(&self.defaults, &self.statics.outfits),
-            self.npc_items(),
+            self.setup.npc_items(),
         );
         let mut reserves = stock.full();
         reserves.fuel.now = f32::from(self.fields.fuel.max(0));
@@ -221,11 +221,13 @@ impl Session {
             }
         }
     }
+}
 
+impl Setup {
     /// Whether a person captured as an escort is gone for good, as
     /// [`RuleKey::CapturedPerson`] reads: by the engine it lives on.
     pub(super) fn escort_capture_loses_person(&self) -> bool {
-        self.setup.rules.source_for(RuleKey::CapturedPerson) == RuleSource::Bible
+        self.rules.source_for(RuleKey::CapturedPerson) == RuleSource::Bible
     }
 }
 
@@ -476,7 +478,7 @@ mod tests {
                 let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, order);
                 let mut session = alongside(&catalog).with_rules(rules);
                 session.pilot.outfits.insert(OutfitId(330), 1);
-                session.refit(true, session.script_reserves());
+                session.refit(true, session.setup.script_reserves());
                 board_by(&mut session, &NovaLaw::default()).expect("boards");
                 assert_eq!(
                     take(&mut session, Take::Capture, &[43, 1]).0,

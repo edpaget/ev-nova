@@ -22,7 +22,7 @@
 //!
 //! By the other reading the exit leaves the slots as a jump does.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::{StellarId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::flight::ShipState;
@@ -42,15 +42,6 @@ const EMERGE_LEAST: u32 = 100;
 const EMERGE_PROVOCATION: f32 = -1.0;
 
 impl Session {
-    /// Whether the engine's reading of [`RuleKey::GateFollow`] decides
-    /// what an entry `how` does to ships in `system`: a gate's exit, the
-    /// ships following the player.
-    pub(super) fn gate_decides(&self, how: Entrance, system: ShipSystem) -> bool {
-        how == Entrance::Gate
-            && system == ShipSystem::FollowsPlayer
-            && self.setup.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine
-    }
-
     /// The player's exit from a gate of `kind`, before the system is
     /// entered: under the engine's reading of [`RuleKey::GateFollow`],
     /// each active slot, in order, gets the appear timer and arrived count
@@ -184,6 +175,17 @@ impl Session {
             let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
             npc.emerge_from_gate(gate, wait);
         }
+    }
+}
+
+impl Setup {
+    /// Whether the engine's reading of [`RuleKey::GateFollow`] decides
+    /// what an entry `how` does to ships in `system`: a gate's exit, the
+    /// ships following the player.
+    pub(super) fn gate_decides(&self, how: Entrance, system: ShipSystem) -> bool {
+        how == Entrance::Gate
+            && system == ShipSystem::FollowsPlayer
+            && self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine
     }
 }
 

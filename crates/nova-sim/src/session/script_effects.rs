@@ -220,8 +220,8 @@
 //! ([`is_dockable_destroyed_or_not`]), as the original docks there; only
 //! a gate or a stellar without the can-land flag leaves it on none.
 
-use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
+use super::{Session, Setup};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
@@ -326,12 +326,6 @@ pub struct Departure {
 }
 
 impl Session {
-    /// The rules the moving set operators follow, projected from the
-    /// session's rule set ([`Session::with_rules`]).
-    pub(super) fn script_effect_rules(&self) -> ScriptEffectRules {
-        ScriptEffectRules::from_rulebook(&self.setup.rules)
-    }
-
     /// Applies what the set expressions run since the last settling
     /// queued (see the module docs): first a person's swap for its
     /// mission's ship that an accept on its hail made due (see the
@@ -402,7 +396,7 @@ impl Session {
             if catalog.system_exists(system) {
                 self.move_to(system, keep, catalog, chance);
                 settled.moved = Some(self.pilot.system);
-            } else if self.script_effect_rules().missing_system_move == RuleSource::Engine {
+            } else if self.setup.script_effect_rules().missing_system_move == RuleSource::Engine {
                 self.stay(catalog, chance);
             }
         }
@@ -503,7 +497,7 @@ impl Session {
     /// `P`: plays `sound`, held to the next flight tick or at once, as
     /// [`ScriptEffectRules::sound`] says (see the module docs).
     pub(super) fn play_script_sound(&mut self, sound: SoundId) {
-        match self.script_effect_rules().sound {
+        match self.setup.script_effect_rules().sound {
             RuleSource::Engine => self.queued.sound = Some(sound),
             RuleSource::Bible => self.sounds.push(SimSound::Script {
                 sound,
@@ -529,25 +523,20 @@ impl Session {
     /// Bible reading.
     pub(super) fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
         let picked = self
+            .setup
             .pick_string(list, chance)
             .map(|text| match self.script_slot {
                 Some(slot) => self.mission_text(slot, &text),
                 None => text,
             });
-        self.queued.leave = picked.or_else(|| self.blank_leave());
-    }
-
-    /// A blank `Q`'s leave: none, cancelling an earlier `Q`, or one with
-    /// no message by [`ScriptEffectRules::blank_leave`]'s Bible reading.
-    fn blank_leave(&self) -> Option<String> {
-        (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
+        self.queued.leave = picked.or_else(|| self.setup.blank_leave());
     }
 
     /// A `Q` whose list is past 32767, the engine's widest ID, so names
     /// none: a blank `Q`, as `_GetRandomIndString` (@0x72ef7) leaves
     /// `_absquatulateStr` empty for a missing list (@0x72f0f).
     pub(super) fn leave_on_no_list(&mut self) {
-        self.queued.leave = self.blank_leave();
+        self.queued.leave = self.setup.blank_leave();
     }
 
     /// A `P` whose sound is past 32767, the engine's widest ID, so names
@@ -557,7 +546,7 @@ impl Session {
     /// load (`_ST_LoadSndResource` @0x4631b-0x46348); by the other, there
     /// is nothing to sound.
     pub(super) fn drop_script_sound(&mut self) {
-        if self.script_effect_rules().sound == RuleSource::Engine {
+        if self.setup.script_effect_rules().sound == RuleSource::Engine {
             self.queued.sound = None;
         }
     }
@@ -607,7 +596,7 @@ impl Session {
             let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
             (site.position, dock)
         });
-        let rules = self.script_effect_rules();
+        let rules = self.setup.script_effect_rules();
         let landed = self.landed.is_some();
         let ship = match first {
             _ if keep => ShipPlacement::Keep,
@@ -635,6 +624,20 @@ impl Session {
             catalog,
             chance,
         );
+    }
+}
+
+impl Setup {
+    /// The rules the moving set operators follow, projected from the
+    /// session's rule set ([`Session::with_rules`]).
+    pub(super) fn script_effect_rules(&self) -> ScriptEffectRules {
+        ScriptEffectRules::from_rulebook(&self.rules)
+    }
+
+    /// A blank `Q`'s leave: none, cancelling an earlier `Q`, or one with
+    /// no message by [`ScriptEffectRules::blank_leave`]'s Bible reading.
+    fn blank_leave(&self) -> Option<String> {
+        (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
     }
 }
 

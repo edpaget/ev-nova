@@ -367,8 +367,9 @@
 //! - `statics: Rc<statics::Statics>` (`statics` module; phase 1, done):
 //!   the catalog data read once at load, shared by every clone; tests
 //!   change it only through `statics_mut`.
-//! - `setup: setup::Setup` (`setup` module; phase 2, to come): the rule
-//!   set and the strategy ports the `with_*` builders set.
+//! - `setup: setup::Setup` (`setup` module; phase 2, done): the rule set
+//!   and the strategy ports the `with_*` builders set, written only by
+//!   those builders and `set_sound_quiet`.
 //! - `out: outbox::Outbox` (`outbox` module; phase 3, to come): what the
 //!   view takes each frame.
 //! - `ship: player_ship::PlayerShip` (`player_ship` module; phase 4, to
@@ -1886,7 +1887,7 @@ impl Session {
     /// How each disputed rule reads (see [`Session::with_rules`]).
     #[must_use]
     pub fn rules(&self) -> &Rulebook {
-        &self.setup.rules
+        self.setup.rules()
     }
 
     /// This session with multi-jumps following `rule`; the engine's by
@@ -1950,12 +1951,6 @@ impl Session {
             self.fields,
             &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
         )
-    }
-
-    /// The policy `G`, `D` and boarding refit by: the rule set's reading
-    /// of [`RuleKey::RefitReserves`].
-    fn script_reserves(&self) -> ReservePolicy {
-        ReservePolicy::reading(self.outfit_rules().refit_reserves)
     }
 
     /// Recomputes the stats from the outfits the pilot owns: each gauge
@@ -2197,7 +2192,7 @@ impl Session {
                     if self.player_fate().row().drag {
                         crate::flight::drag(&mut self.player);
                     }
-                    let flight = self.flight_rules();
+                    let flight = self.setup.flight_rules();
                     let caps = self.player_caps();
                     player_step(&mut self.player, &handling, controls, aim, caps, flight);
                 }
@@ -2421,7 +2416,7 @@ impl Session {
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
-            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
             // No tractor's step: the entry flies no ship.
             ..World::new(&self.sites)
         };
@@ -2465,7 +2460,7 @@ impl Session {
                 .iter()
                 .filter_map(|escort| escort.person)
                 .collect(),
-            self.npc_items(),
+            self.setup.npc_items(),
         );
         table.add_mission_dudes(
             catalog,
@@ -2473,7 +2468,7 @@ impl Session {
             &self.statics.ships,
             &self.statics.outfits,
             &self.statics.arsenal,
-            self.npc_items(),
+            self.setup.npc_items(),
         );
         table
     }
@@ -2657,10 +2652,10 @@ impl Session {
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.statics.ships),
             led_speed: self.led_speed(),
-            flight: self.flight_rules(),
+            flight: self.setup.flight_rules(),
             targeted: &targeted,
             type_widths: &type_widths,
-            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
@@ -2694,20 +2689,10 @@ impl Session {
         stepped
     }
 
-    /// The ship-table slots a spawn whose original leaves `reserve` free
-    /// leaves free, as [`RuleKey::SpawnReserve`] reads: `reserve` by the
-    /// engine, none by the Bible.
-    pub(crate) fn spawn_reserve(&self, reserve: u32) -> u32 {
-        match self.setup.rules.source_for(RuleKey::SpawnReserve) {
-            RuleSource::Engine => reserve,
-            RuleSource::Bible => 0,
-        }
-    }
-
     /// Shows the arrival quote of each announced fleet the traffic brought
     /// in, and beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4): a line
     /// of its `STR#` picked from the session's string lists
-    /// ([`random_string`](Self::random_string), `_GetRandomIndString`
+    /// ([`random_string`](setup::Setup::random_string), `_GetRandomIndString`
     /// @0x42642), its '#'s filled with digits
     /// ([`fill_digits`](crate::traffic::quote::fill_digits)), both drawn on
     /// `chance`. A missing or empty list gives an empty line, which is
@@ -2716,6 +2701,7 @@ impl Session {
     fn announce_fleets(&mut self, chance: &mut (impl Chance + ?Sized)) {
         for list in self.traffic.take_quotes() {
             let line = self
+                .setup
                 .random_string(list, &mut &mut *chance)
                 .unwrap_or_default();
             let text = crate::traffic::quote::fill_digits(&line, chance);
@@ -2750,10 +2736,10 @@ impl Session {
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.statics.ships),
             led_speed: self.led_speed(),
-            flight: self.flight_rules(),
+            flight: self.setup.flight_rules(),
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
-            spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
+            spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
@@ -3050,28 +3036,6 @@ impl Session {
         )
     }
 
-    /// How strongly `npc` jams, as `_ShipECM` works it out
-    /// ([`Jamming::of_npc`]): its class's `InherentGovt`'s `InhJam` and its
-    /// class's default items, halved as its government's `Flags` 0x0080
-    /// says by [`RuleKey::JamHalving`]; none without a class record.
-    fn npc_jamming(&self, npc: &Npc) -> Jamming {
-        let Some(record) = self.statics.ship_record(npc.ship) else {
-            return Jamming::NONE;
-        };
-        let freighter = npc.ai_type.trades();
-        let halving = Halving::of(
-            self.statics.govts.flag(npc.govt, HALF_JAMMING),
-            freighter,
-            self.setup.rules.source_for(RuleKey::JamHalving),
-        );
-        Jamming::of_npc(
-            self.statics.govts.inh_jam(record.inherent_govt),
-            &record.defaults,
-            &self.statics.outfits,
-            halving,
-        )
-    }
-
     /// What the fight needs of the player's ship and of each NPC, in
     /// order, that the ship does not carry: whether it is held disabled
     /// ([`Session::held_disabled`]; the player never is), whether it is a
@@ -3113,7 +3077,7 @@ impl Session {
                 class_speed: self.statics.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
-                jamming: self.npc_jamming(npc),
+                jamming: self.setup.npc_jamming(&self.statics, npc),
                 sprite: sprite(ShipRef::Npc(npc.id)),
                 resists: self.npc_hazard_resistance(npc),
             })
@@ -3682,7 +3646,7 @@ impl Session {
             &handling,
             bearing,
             !self.stats.fast_jump,
-            self.flight_rules().player_turn,
+            self.setup.flight_rules().player_turn,
             self.player_inertialess(),
         );
         let started = warp.is_none() && stage != PreJump::Brake;
@@ -5226,7 +5190,7 @@ impl Session {
                 }
             }
             Direction::Sell => {
-                self.sale_keeps_cargo = self.sell_keeps_cargo();
+                self.sale_keeps_cargo = self.setup.sell_keeps_cargo();
                 // The sale lets go of the secondary selected, before
                 // `OnSell` runs, as `SecondarySale` reads (see [`launches`]
                 // and [`carries`]).
@@ -5424,7 +5388,7 @@ impl Session {
             trade_in: shipyard.trade_in,
         };
         self.ship_hook(self.pilot.ship, ShipHook::Retire, chance);
-        let paint_last = self.hook_rules().purchase_paint_order == RuleSource::Engine;
+        let paint_last = self.setup.hook_rules().purchase_paint_order == RuleSource::Engine;
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
@@ -5624,13 +5588,6 @@ impl Session {
         top_speed::led_speed(&self.setup.rules, self.pilot.strict_play())
     }
 
-    /// The flight rules every ship flies by, read from the rules at each
-    /// use, as the led speed is: the thrust's divisor (see
-    /// [`FlightRules`]).
-    pub(crate) fn flight_rules(&self) -> FlightRules {
-        FlightRules::from_rulebook(&self.setup.rules)
-    }
-
     /// How the player's ship flies in flight: its own handling at
     /// [`Session::top_speed`], its thrust under the flight rules
     /// ([`FlightRules::handling`]), its turn and thrust slowed by its ion
@@ -5638,7 +5595,7 @@ impl Session {
     fn flying_handling(&self) -> Handling {
         Handling {
             max_speed: self.top_speed(),
-            ..self.ionized(self.flight_rules().handling(self.stats.handling))
+            ..self.ionized(self.setup.flight_rules().handling(self.stats.handling))
         }
     }
 
@@ -5844,7 +5801,7 @@ impl Session {
             &grant,
             &stock,
             self.free_mass(),
-            self.outfit_rules().grant_max,
+            self.setup.outfit_rules().grant_max,
             chance,
         )?;
         // The dialog's reset once an outfit is picked, before its count
@@ -5858,7 +5815,7 @@ impl Session {
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
-        self.refit(true, self.script_reserves());
+        self.refit(true, self.setup.script_reserves());
         // And again once it is granted (@0x93226).
         self.reset_precalced();
         // The grant line's beep, only for a count above none (@0x933fe;
@@ -6142,7 +6099,7 @@ impl Session {
             // The reset after each round (@0x93dcb).
             self.reset_precalced();
         }
-        self.refit(true, self.script_reserves());
+        self.refit(true, self.setup.script_reserves());
         count
     }
 
@@ -6218,7 +6175,7 @@ impl Session {
     /// and joins as a mission escort (`_DoPlunderDialog`
     /// @0x9459b-0x947cf; see the `captured_mission_ship` module).
     fn join_fleet(&mut self, id: NpcId) {
-        self.lose_captured(id, self.escort_capture_loses_person());
+        self.lose_captured(id, self.setup.escort_capture_loses_person());
         self.clear_quarry_travel(id);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
@@ -6346,12 +6303,12 @@ impl Session {
             return Some(Assigned::Escort);
         }
         let record = self.statics.ship_record(npc.ship).cloned();
-        let reserve = self.spawn_reserve(CAPTURE_RESERVE);
+        let reserve = self.setup.spawn_reserve(CAPTURE_RESERVE);
         let Some(record) = record.filter(|_| self.traffic.free_berth(reserve).is_some()) else {
             self.close_plunder();
             return Some(Assigned::Abandoned);
         };
-        let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
+        let hooks_first = self.setup.hook_rules().capture_hook_order == RuleSource::Engine;
         // Where the player was, which the old ship takes (@0x411bd-0x411ea).
         let left = self.player;
         let old = self.old_ship_escort();
@@ -6542,6 +6499,59 @@ impl Statics {
     /// Ship class `ship`'s `Crew`; none without a record.
     fn crew(&self, ship: ShipId) -> i16 {
         self.ship_record(ship).map_or(0, |record| record.crew)
+    }
+}
+
+impl Setup {
+    /// How each disputed rule reads (see [`Session::with_rules`]).
+    #[must_use]
+    fn rules(&self) -> &Rulebook {
+        &self.rules
+    }
+
+    /// The policy `G`, `D` and boarding refit by: the rule set's reading
+    /// of [`RuleKey::RefitReserves`].
+    fn script_reserves(&self) -> ReservePolicy {
+        ReservePolicy::reading(self.outfit_rules().refit_reserves)
+    }
+
+    /// The ship-table slots a spawn whose original leaves `reserve` free
+    /// leaves free, as [`RuleKey::SpawnReserve`] reads: `reserve` by the
+    /// engine, none by the Bible.
+    pub(crate) fn spawn_reserve(&self, reserve: u32) -> u32 {
+        match self.rules.source_for(RuleKey::SpawnReserve) {
+            RuleSource::Engine => reserve,
+            RuleSource::Bible => 0,
+        }
+    }
+
+    /// How strongly `npc` jams, as `_ShipECM` works it out
+    /// ([`Jamming::of_npc`]): its class's `InherentGovt`'s `InhJam` and its
+    /// class's default items, halved as its government's `Flags` 0x0080
+    /// says by [`RuleKey::JamHalving`]; none without a class record.
+    fn npc_jamming(&self, statics: &Statics, npc: &Npc) -> Jamming {
+        let Some(record) = statics.ship_record(npc.ship) else {
+            return Jamming::NONE;
+        };
+        let freighter = npc.ai_type.trades();
+        let halving = Halving::of(
+            statics.govts.flag(npc.govt, HALF_JAMMING),
+            freighter,
+            self.rules.source_for(RuleKey::JamHalving),
+        );
+        Jamming::of_npc(
+            statics.govts.inh_jam(record.inherent_govt),
+            &record.defaults,
+            &statics.outfits,
+            halving,
+        )
+    }
+
+    /// The flight rules every ship flies by, read from the rules at each
+    /// use, as the led speed is: the thrust's divisor (see
+    /// [`FlightRules`]).
+    pub(crate) fn flight_rules(&self) -> FlightRules {
+        FlightRules::from_rulebook(&self.rules)
     }
 }
 

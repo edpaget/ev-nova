@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn an_ionized_player_turns_slower_and_at_most_by_0_7() {
         let session = flying(&ionizing(), 200.0);
-        let own = session.flight_rules().handling(session.handling());
+        let own = session.setup.flight_rules().handling(session.handling());
         let flying = session.flying_handling();
         assert_eq!(flying.turn_rate, own.turn_rate * 0.5);
         assert_eq!(flying.accel, (f64::from(own.accel) * 0.5) as f32);
@@ -417,7 +417,11 @@ mod tests {
         };
         // 0.25 sheds to below none before the push: a full push.
         let mut session = flying(&catalog, 0.25);
-        let full = session.flight_rules().handling(session.handling()).accel;
+        let full = session
+            .setup
+            .flight_rules()
+            .handling(session.handling())
+            .accel;
         session.tick(afterburner);
         assert!(session.afterburner_on());
         let pushed = session.player.velocity.length();

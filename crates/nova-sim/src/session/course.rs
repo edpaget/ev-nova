@@ -23,17 +23,12 @@
 //! [`SessionEvent::SystemChanged`](super::SessionEvent::SystemChanged),
 //! from which the view lays the course out again.
 
-use super::Session;
+use super::{Session, Setup};
 use crate::catalog::SystemId;
 use crate::course;
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
-    /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
-    fn route_rewrite(&self) -> RuleSource {
-        self.setup.rules.source_for(RuleKey::RouteRewrite)
-    }
-
     /// A rebuild point's rewrite (see the module docs): by the engine,
     /// each hidden hop rewritten to the system at its place and the
     /// course cut at the first with none. Raises no event.
@@ -41,7 +36,7 @@ impl Session {
         self.pilot.course = course::rewritten(
             &self.pilot.course,
             self.galaxy.map().places(),
-            self.route_rewrite(),
+            self.setup.route_rewrite(),
         );
     }
 
@@ -53,8 +48,15 @@ impl Session {
             hops,
             arrived,
             self.galaxy.map().places(),
-            self.route_rewrite(),
+            self.setup.route_rewrite(),
         );
+    }
+}
+
+impl Setup {
+    /// How the session rewrites the course ([`RuleKey::RouteRewrite`]).
+    fn route_rewrite(&self) -> RuleSource {
+        self.rules.source_for(RuleKey::RouteRewrite)
     }
 }
 

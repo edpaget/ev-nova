@@ -233,6 +233,7 @@ impl Session {
             active: &self.pilot.ranks,
             recent: self.recent_rank,
             fallback: self
+                .setup
                 .nth_string(MISC_STRINGS, NO_RANK_STRING)
                 .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
         }
@@ -247,6 +248,7 @@ impl Session {
     #[must_use]
     pub fn pilot_info_ranks(&self) -> PilotInfoRanks {
         let and = self
+            .setup
             .nth_string(MISC_STRINGS, AND_STRING)
             .unwrap_or_default();
         rank::pilot_info(

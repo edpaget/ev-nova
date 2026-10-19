@@ -239,7 +239,7 @@ impl Session {
         // module).
         self.jump_unfold();
         let handling = self.flying_handling();
-        let flight = self.flight_rules();
+        let flight = self.setup.flight_rules();
         let way;
         (self.player.heading, way) = turn(
             self.player.heading,
@@ -296,7 +296,7 @@ impl Session {
     ) {
         let handling = self.flying_handling();
         let slow_down = !self.stats.fast_jump;
-        let flight = self.flight_rules();
+        let flight = self.setup.flight_rules();
         let inertialess = self.player_inertialess();
         let stage = pre_jump::stage(
             &self.player,
@@ -584,7 +584,7 @@ mod tests {
         session.engine_glow = 10;
         let handling = session.flying_handling();
         let caps = session.player_caps();
-        let flight = session.flight_rules();
+        let flight = session.setup.flight_rules();
         let mut dragged = session.player;
         dragged.velocity = drag_by(dragged.velocity, WARP_DRAG);
         let mut inertialess = dragged;

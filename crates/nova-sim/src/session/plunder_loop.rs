@@ -259,7 +259,7 @@ mod tests {
         session.take_sounds();
         while session
             .traffic
-            .free_berth(session.spawn_reserve(crate::traffic::CAPTURE_RESERVE))
+            .free_berth(session.setup.spawn_reserve(crate::traffic::CAPTURE_RESERVE))
             .is_some()
         {
             let filler = session.traffic.npcs()[1].clone();

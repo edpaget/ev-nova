@@ -709,7 +709,7 @@ mod tests {
             let (mut session, id) = carrier(&catalog, cut, 1);
             while session
                 .traffic
-                .free_berth(session.spawn_reserve(SPAWN_RESERVE))
+                .free_berth(session.setup.spawn_reserve(SPAWN_RESERVE))
                 .is_some()
             {
                 let mut far = npc(0, ShipStats::default());

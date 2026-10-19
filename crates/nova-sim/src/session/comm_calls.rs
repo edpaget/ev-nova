@@ -286,6 +286,7 @@ impl Session {
         let name = self.npc_name(npc).unwrap_or_default().to_owned();
         let pick = chance.below(DISTRESS_LINE_COUNT) as usize;
         let line = self
+            .setup
             .nth_string(DISTRESS_LINES, 1 + pick)
             .unwrap_or_default();
         self.sounds.push(SimSound::CallForHelp);
@@ -312,6 +313,7 @@ impl Session {
         let ship_name = self.pilot.ship_name().unwrap_or_default();
         let pick = chance.below(SCAN_HAIL_COUNT) as usize;
         let words = self
+            .setup
             .nth_string(SCAN_HAIL_LINES, SCAN_HAIL_FIRST + pick)
             .unwrap_or_default();
         let text = format!("{class}:  {ship_name}, {words}.");

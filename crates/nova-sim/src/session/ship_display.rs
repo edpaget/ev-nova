@@ -72,7 +72,7 @@
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
 
-use super::{Session, Statics};
+use super::{Session, Setup, Statics};
 use crate::Chance;
 use crate::RuleKey;
 use crate::combat::armament::{Fold, OutfitRounds};
@@ -161,7 +161,7 @@ impl Session {
     /// block does ([`player_turn::turn`](crate::player_turn::turn)).
     pub(super) fn turn_way(&self, controls: crate::flight::Controls, aim: Option<i16>) -> Turn {
         let rate = self.flying_handling().turn_rate;
-        let rule = self.flight_rules().player_turn;
+        let rule = self.setup.flight_rules().player_turn;
         crate::player_turn::turn(self.player.heading, rate, aim, controls.turn, rule).1
     }
 
@@ -254,7 +254,7 @@ impl Session {
     /// pass's fight (see the module docs), the NPCs' spawn rolls made on
     /// `chance`.
     pub(super) fn display_ships(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let rules = self.display_rules();
+        let rules = self.setup.display_rules();
         let spec = self.hull.frames;
         let rounds = OutfitRounds {
             owned: &mut self.pilot.outfits,
@@ -292,7 +292,7 @@ impl Session {
         let moment = Moment {
             disabled: self.condition.disabled(),
             key_aboard: false,
-            rules: self.display_rules(),
+            rules: self.setup.display_rules(),
         };
         let rolls = crate::blink::HashedRolls::new(0);
         let frames = &mut self.ship_display.frames;
@@ -309,19 +309,6 @@ impl Session {
             .hull(crate::catalog::ShipId(128))
             .frames;
         self.traffic.set_first_class(first);
-    }
-
-    /// The readings every ship's display runs by, from the session's
-    /// rulebook.
-    fn display_rules(&self) -> DisplayRules {
-        DisplayRules {
-            double_step: self
-                .setup
-                .rules
-                .source_for(RuleKey::ShipAnimationDoubleStep),
-            alt_held: self.setup.rules.source_for(RuleKey::DisabledAltHeld),
-            lights_zeroed: self.setup.rules.source_for(RuleKey::LightsOutZeroesBlink),
-        }
     }
 
     /// The sets the player's ship was last drawn on: its hull's, and its
@@ -342,7 +329,7 @@ impl Session {
     /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
     #[must_use]
     pub fn ion_tint_murk_colour(&self) -> RuleSource {
-        self.setup.rules.source_for(RuleKey::IonTintMurkColour)
+        self.setup.ion_tint_murk_colour()
     }
 
     /// Ship class `ship`'s own `Shield` as the original loads it (class
@@ -354,6 +341,25 @@ impl Session {
     #[must_use]
     pub fn class_shield(&self, ship: crate::catalog::ShipId) -> Option<f32> {
         self.statics.class_shield(ship)
+    }
+}
+
+impl Setup {
+    /// The readings every ship's display runs by, from the session's
+    /// rulebook.
+    fn display_rules(&self) -> DisplayRules {
+        DisplayRules {
+            double_step: self.rules.source_for(RuleKey::ShipAnimationDoubleStep),
+            alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
+            lights_zeroed: self.rules.source_for(RuleKey::LightsOutZeroesBlink),
+        }
+    }
+
+    /// How a murk-colorized ionized ship's tint takes its colour
+    /// ([`RuleKey::IonTintMurkColour`]), which the view reads.
+    #[must_use]
+    fn ion_tint_murk_colour(&self) -> RuleSource {
+        self.rules.source_for(RuleKey::IonTintMurkColour)
     }
 }
 

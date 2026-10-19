@@ -72,7 +72,7 @@
 //!   systems are one set, where the original keeps `X`'s level 1 apart
 //!   from a map's level 2.
 
-use super::{Session, Statics, clamp_i16};
+use super::{Session, Setup, Statics, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
@@ -138,26 +138,6 @@ fn take_one(pilot: &mut Pilot, outfit: OutfitId) -> bool {
 }
 
 impl Session {
-    /// The rules granting and removing outfits follow, projected from
-    /// the session's rule set ([`Session::with_rules`]).
-    pub(super) fn outfit_rules(&self) -> OutfitRules {
-        OutfitRules::from_rulebook(&self.setup.rules)
-    }
-
-    /// What granting one of `outfit` does: a plain item's when it has no
-    /// record.
-    fn grant_effect(&self, outfit: OutfitId) -> GrantEffect {
-        self.statics.outfit_record(outfit).map_or(
-            GrantEffect {
-                map: None,
-                paint: None,
-                clean: Vec::new(),
-                added: true,
-            },
-            |record| GrantEffect::of(record, self.outfit_rules().invalid_map),
-        )
-    }
-
     /// `record` as a grant sees it on the pilot's ship, its `Max` as the
     /// `ModType` 27 outfits owned raise it.
     pub(crate) fn grant_stock(&self, record: &OutfitRecord) -> GrantStock {
@@ -189,7 +169,7 @@ impl Session {
         if !OUTFIT_IDS.contains(&outfit.0) {
             return false;
         }
-        let effect = self.grant_effect(outfit);
+        let effect = self.setup.grant_effect(&self.statics, outfit);
         if let Some(reach) = effect.map {
             let reached = map_reveals(
                 reach,
@@ -197,7 +177,7 @@ impl Session {
                 self.galaxy.map(),
                 self.setup.hyperlinks,
                 &self.statics.govts,
-                self.outfit_rules().map_explore,
+                self.setup.outfit_rules().map_explore,
             );
             for system in reached {
                 // At level 2, with its place's head, by the engine
@@ -236,13 +216,18 @@ impl Session {
     /// grant would add it and [`held_to_max`] holds a grant of one to
     /// none, as a boarding grant is held.
     fn script_may_grant(&self, outfit: OutfitId) -> bool {
-        if !self.grant_effect(outfit).added {
+        if !self.setup.grant_effect(&self.statics, outfit).added {
             return true;
         }
         self.statics.outfit_record(outfit).is_none_or(|record| {
             let stock = self.grant_stock(record);
-            held_to_max(self.outfit_rules().grant_max, 1, &stock, self.free_mass())
-                .is_none_or(|count| count > 0)
+            held_to_max(
+                self.setup.outfit_rules().grant_max,
+                1,
+                &stock,
+                self.free_mass(),
+            )
+            .is_none_or(|count| count > 0)
         })
     }
 
@@ -250,7 +235,7 @@ impl Session {
     pub(super) fn script_grant(&mut self, outfit: OutfitId) {
         if self.script_may_grant(outfit) {
             self.grant_outfit(outfit);
-            self.refit(true, self.script_reserves());
+            self.refit(true, self.setup.script_reserves());
         }
     }
 
@@ -260,13 +245,13 @@ impl Session {
         if !OUTFIT_IDS.contains(&outfit.0) || !take_one(&mut self.pilot, outfit) {
             return;
         }
-        if self.outfit_rules().remove_refund == RuleSource::Bible {
+        if self.setup.outfit_rules().remove_refund == RuleSource::Bible {
             let price = self.statics.outfit_record(outfit).map_or(0, |record| {
                 unit_price(record, self.fields.mass, &self.setup.rules)
             });
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }
-        self.refit(false, self.script_reserves());
+        self.refit(false, self.setup.script_reserves());
     }
 
     /// `X`: explores `system` when it is in the catalog's galaxy, hidden
@@ -282,6 +267,28 @@ impl Session {
     /// remove it after purchase (see the module docs).
     pub(crate) fn remove_after_purchase(&mut self, outfit: OutfitId) {
         take_one(&mut self.pilot, outfit);
+    }
+}
+
+impl Setup {
+    /// The rules granting and removing outfits follow, projected from
+    /// the session's rule set ([`Session::with_rules`]).
+    pub(super) fn outfit_rules(&self) -> OutfitRules {
+        OutfitRules::from_rulebook(&self.rules)
+    }
+
+    /// What granting one of `outfit` does: a plain item's when it has no
+    /// record.
+    fn grant_effect(&self, statics: &Statics, outfit: OutfitId) -> GrantEffect {
+        statics.outfit_record(outfit).map_or(
+            GrantEffect {
+                map: None,
+                paint: None,
+                clean: Vec::new(),
+                added: true,
+            },
+            |record| GrantEffect::of(record, self.outfit_rules().invalid_map),
+        )
     }
 }
 

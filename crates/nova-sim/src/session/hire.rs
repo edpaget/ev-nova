@@ -31,7 +31,7 @@
 //! escorts not placed yet keep the berths they will take. So it keeps
 //! that berth at take-off, and a mission escort set up then can come
 //! before it in the formation. The berth must be below the spawn reserve
-//! ([`Session::spawn_reserve`]), as `_SpawnEscort` passes 8 (@0x3fe73).
+//! ([`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)), as `_SpawnEscort` passes 8 (@0x3fe73).
 //! With none free, by the engine reading of
 //! [`RuleKey::HireNoSlot`](crate::RuleKey::HireNoSlot), the hire still
 //! takes the fee, so a save is due, and draws the class's roll again,
@@ -61,8 +61,8 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use super::Session;
 use super::control::Facts;
+use super::{Session, Setup, Statics};
 use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
 use crate::control::ControlBits;
@@ -120,22 +120,6 @@ impl Session {
         std::mem::take(&mut self.pay_notes)
     }
 
-    /// The wage hired `escort` is paid a day (see
-    /// [`RuleKey::EscortWage`]): by the engine, the terms' wage of
-    /// its ship type's record, or the wage it was hired at when there is
-    /// none; otherwise the wage it was hired at. None for an escort not
-    /// hired.
-    pub(super) fn paid_wage(&self, escort: &Escort) -> i64 {
-        let kept = escort.wage.unwrap_or(0);
-        match self.setup.rules.source_for(RuleKey::EscortWage) {
-            RuleSource::Engine => self
-                .statics
-                .ship_record(escort.ship)
-                .map_or(kept, |record| self.setup.hire_terms.0.wage(record)),
-            RuleSource::Bible => kept,
-        }
-    }
-
     /// Pays every hired escort its wage for each of `days`, in fleet
     /// order (see [`hire`](crate::hire)): one the cash does not cover
     /// defects, a trader first taking its share of the fleet's cargo, its
@@ -153,7 +137,7 @@ impl Session {
                     index += 1;
                     continue;
                 }
-                let wage = self.paid_wage(&escort);
+                let wage = self.setup.paid_wage(&self.statics, &escort);
                 if wage <= self.pilot.cash {
                     self.pilot.cash -= wage;
                     index += 1;
@@ -247,7 +231,7 @@ impl Session {
             self.pilot.cash,
         );
         let wage = self.setup.hire_terms.0.wage(&record);
-        let reserves = self.ship_kind(&record).stats.full();
+        let reserves = self.setup.ship_kind(&self.statics, &record).stats.full();
         let berth = self.hire_berth();
         self.transact(|pilot| {
             pilot.cash -= fee;
@@ -283,7 +267,7 @@ impl Session {
     }
 
     /// The berth a ship hired now takes: the first free one below the
-    /// spawn reserve ([`Session::spawn_reserve`]), as `_SpawnEscort`
+    /// spawn reserve ([`Setup::spawn_reserve`](super::setup::Setup::spawn_reserve)), as `_SpawnEscort`
     /// passes 8 (@0x3fe73), skipping the berths a loaded pilot's escorts
     /// not placed yet will take, which the original's table already
     /// holds; `None` when there is none.
@@ -296,7 +280,24 @@ impl Session {
             .map(|(_, &berth)| berth)
             .collect();
         self.traffic
-            .free_berth_skipping(self.spawn_reserve(SPAWN_RESERVE), &unplaced)
+            .free_berth_skipping(self.setup.spawn_reserve(SPAWN_RESERVE), &unplaced)
+    }
+}
+
+impl Setup {
+    /// The wage hired `escort` is paid a day (see
+    /// [`RuleKey::EscortWage`]): by the engine, the terms' wage of
+    /// its ship type's record, or the wage it was hired at when there is
+    /// none; otherwise the wage it was hired at. None for an escort not
+    /// hired.
+    pub(super) fn paid_wage(&self, statics: &Statics, escort: &Escort) -> i64 {
+        let kept = escort.wage.unwrap_or(0);
+        match self.rules.source_for(RuleKey::EscortWage) {
+            RuleSource::Engine => statics
+                .ship_record(escort.ship)
+                .map_or(kept, |record| self.hire_terms.0.wage(record)),
+            RuleSource::Bible => kept,
+        }
     }
 }
 
