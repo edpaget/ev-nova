@@ -18,8 +18,9 @@
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
 //!   ship picked at random among the others in the system (the player
 //!   first, then the NPCs in order), but not the one it last inspected
-//!   nor another interceptor (the original retries `Rand(64)` slots; here
-//!   one draw among them). Within [`INSPECT_REACH`] of it on both axes
+//!   nor another interceptor (AI type 4, @0x8cd4e, @0x8cdfe: a ship with
+//!   no AI, [`Npc::no_ai`], reads as none, whatever its class); the
+//!   original retries `Rand(64)` slots, here one draw among them. Within [`INSPECT_REACH`] of it on both axes
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
 //!   looked the player over, it has scanned the player
@@ -296,7 +297,7 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
     let npcs = around
         .npcs
         .iter()
-        .filter(|other| other.id != npc.id && other.ai_type != AiType::Interceptor)
+        .filter(|other| other.id != npc.id && (other.no_ai || other.ai_type != AiType::Interceptor))
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| around.live(ship));
     let candidates: Vec<ShipRef> = player
@@ -445,6 +446,21 @@ mod tests {
                 "the player and two NPCs; not another interceptor"
             );
         }
+    }
+
+    #[test]
+    fn it_may_inspect_a_ship_with_no_ai_whatever_its_class() {
+        let mut hulk = ship(2, POLICE, AiType::Interceptor, 500.0, 0.0);
+        hulk.no_ai = true;
+        hulk.govt = None;
+        hulk.condition = crate::combat::hull::Condition::Disabled;
+        let npcs = [police(), hulk];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[1]);
+        assert_eq!(
+            (goal, asked),
+            (Goal::Inspect(n(2)), vec![2]),
+            "AI type -1 is not 4 (@0x8cd4e)"
+        );
     }
 
     #[test]

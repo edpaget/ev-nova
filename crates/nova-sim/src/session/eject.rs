@@ -45,11 +45,15 @@
 //! armour, no government, boarded (+0xb9 = 1, so it can't be boarded),
 //! on no escort or mission duty. The original also gives it AI type -1
 //! (+0x88 = -1, @0x6f31f), which the engine's [`AiType`] has no value
-//! for: the hulk takes its class's `InherentAI`, which nothing reads, as
-//! a hulk is never intact and so never thinks. The odds pass's zero for
-//! it (@0x44307) is recorded in rdm phase
-//! combat-ai-fidelity/phase-23-left-out-of-phase-16. A disabled player's hulk is a
-//! disabled derelict; a dying one's breaks up and explodes. Its other
+//! for: the hulk keeps its class's `InherentAI` and has
+//! [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai). So it never thinks
+//! (@0x4427e), the odds pass zeroes its berth and walks on (@0x44307),
+//! a hit on it is never answered (`_DamageShip` @0x3b459), and the
+//! readers of another ship's AI type read it as none: an interceptor may
+//! inspect it (@0x8cd4e), a brave trader attacking it calls for no help
+//! (@0x8b707), and a pirate reads it as no warship (@0x7fdad). A
+//! disabled player's hulk is a disabled derelict; a dying one's breaks
+//! up and explodes. Its other
 //! fields the original zeroes (+0x5c, +0x60, +0xb0, +0xc8d6, +0xc8e0,
 //! +0xc8f4-+0xc8f8) are the ionisation, cloak-fade and display state
 //! `_HandleShipDisplay` and `_IonizeShip` keep; the engine's NPC models
@@ -418,7 +422,8 @@ impl Session {
             pods_left: kind.hull.pod_count,
             // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
             odds: crate::traffic::odds_cache::STALE,
-            no_ai: false,
+            // AI type -1 (@0x6f31f).
+            no_ai: true,
         }
     }
 
@@ -737,6 +742,15 @@ mod tests {
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
         assert_eq!(hulk(&session).ion, Ion::default());
+    }
+
+    #[test]
+    fn the_players_hulk_has_no_ai() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert!(hulk(&session).no_ai, "AI type -1 (@0x6f31f)");
     }
 
     #[test]

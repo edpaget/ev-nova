@@ -18,7 +18,7 @@
 //!
 //! | Branch | Addresses | What it does |
 //! |---|---|---|
-//! | Entry gate | @0x3b408-0x3b46e | only a direct hit ([`Strike::direct`]) on an NPC, not by itself, is weighed; anything else gives no answer and no provocation |
+//! | Entry gate | @0x3b408-0x3b46e | only a direct hit ([`Strike::direct`]) on an NPC, not by itself, is weighed, and not on a ship with no AI ([`Npc::no_ai`], +0x88 at or below 0 @0x3b459: the player's eject hulk); anything else gives no answer and no provocation |
 //! | Kin | @0x3b4cd-0x3b4fc | set when a ship of another government hit it, the governments compared as raw words, so two independents are kin ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin)); clear for no ship |
 //! | Leaders | @0x3b503-0x3b571 | for a led ship (leader L, the player included): set when `si` isn't L, or a ship whose own leader isn't L hit it |
 //! | The record | @0x3b577-0x3b67e | a governed ship, in a governed system, not the player's target, cleared for the player or a ship it leads while the player's record there is at least twice its government's `CrimeTol` ([`Surroundings::record`]); then cleared for a ship of its own government. An independent ship: set for the player or a ship it leads |
@@ -41,8 +41,6 @@
 //! - **The jump-out stage** (+0x50 above 0): the entry gate's test
 //!   (@0x3b46a), arriving (@0x3b97e, dead code after the gate) and a
 //!   victim whose leader jumps out (@0x3bab7-0x3bae4).
-//! - **A victim of AI type -1** (+0x88 at or below 0, @0x3b459): the
-//!   ejected hulk, which is never intact.
 //! - **The nag ship**'s damage rewrite (@0x3a8bb-0x3a954) and its test in
 //!   `_IsShipMyEnemy` (@0x819a4).
 //!
@@ -165,7 +163,9 @@ pub fn verdict(
     let Some(victim) = around.npc(id) else {
         return Verdict::default();
     };
-    if !strike.direct || strike.by == Some(strike.ship) {
+    // A victim of AI type -1 skips the whole block, its stray
+    // provocation too (@0x3b459-0x3b461).
+    if !strike.direct || strike.by == Some(strike.ship) || victim.no_ai {
         return Verdict::default();
     }
     let attacker = Attacker::of(strike, around);
@@ -684,6 +684,26 @@ mod tests {
         assert!(scene.answers(&strike(n(1), n(2))), "its escort");
         assert!(scene.answers(&strike(n(1), n(3))), "a governed ship");
         assert!(!scene.answers(&strike(n(1), n(4))), "an independent");
+    }
+
+    #[test]
+    fn a_hit_on_a_ship_with_no_ai_is_never_answered_and_adds_no_stray_provocation() {
+        let govts = govts(0, 0);
+        let mut hulk = of(1, None);
+        hulk.no_ai = true;
+        let npcs = [hulk, of(2, Some(PIRATES))];
+        let scene = Scene::new(&npcs, &govts);
+        let weighty = |by| Strike {
+            weight: 10.0,
+            ..astray(strike(n(1), by))
+        };
+        for hit in [strike(n(1), P), strike(n(1), n(2)), weighty(P)] {
+            assert_eq!(
+                scene.judge(&hit, &[]),
+                (Verdict::default(), vec![]),
+                "{hit:?}"
+            );
+        }
     }
 
     // No damage.

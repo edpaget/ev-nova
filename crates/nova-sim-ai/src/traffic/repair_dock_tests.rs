@@ -267,6 +267,24 @@ fn a_repairer_coasting_or_disabled_flies_no_high_level() {
 }
 
 #[test]
+fn a_repairer_with_no_ai_flies_no_high_level() {
+    let mut traffic = repairing(1000.0, 0.0);
+    traffic.npcs[0].no_ai = true;
+    tick(
+        &mut traffic,
+        &Recording::default(),
+        Condition::Disabled,
+        &[],
+    );
+    let ship = helper(&traffic);
+    assert_eq!(
+        ship.docking, None,
+        "AI type -1 is never dispatched (@0x4427e)"
+    );
+    assert_eq!(ship.goal, Goal::Assist(Help::Repair));
+}
+
+#[test]
 fn a_repairer_flies_its_high_level_only_on_its_due_ticks() {
     // NPC 1 of traffic deciding every 4 ticks is due on ticks 1, 5, ...
     let mut traffic = Traffic::with_interval(4);

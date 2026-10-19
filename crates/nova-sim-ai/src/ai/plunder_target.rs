@@ -87,9 +87,10 @@ fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> b
 
 /// Whether `other` reads as an AI type above 2 (+0x88): a carried fighter
 /// (5), any other ship with a leader (6), a warship (3) or an interceptor
-/// (4).
+/// (4); never a ship with no AI ([`Npc::no_ai`], -1).
 pub(crate) fn reads_above_trader(other: &Npc) -> bool {
-    other.carrier.is_some() || other.leader_ref().is_some() || !other.ai_type.trades()
+    !other.no_ai
+        && (other.carrier.is_some() || other.leader_ref().is_some() || !other.ai_type.trades())
 }
 
 /// `off`'s square, as a float, truncated to a whole number
@@ -326,6 +327,19 @@ mod tests {
             1,
         )]);
         assert_eq!(found(&[armed, typed(AiType::Warship, 3)]), Some(n(2)));
+    }
+
+    #[test]
+    fn a_ship_with_no_ai_reads_as_no_type_above_a_trader_whatever_its_class() {
+        let mut hulk = wreck(2, 100.0);
+        hulk.ai_type = AiType::Warship;
+        hulk.hull.inherent_ai = 3;
+        hulk.no_ai = true;
+        assert_eq!(
+            found(&[pirate(), hulk]),
+            Some(n(2)),
+            "AI type -1 is not above 2 (@0x7fdad)"
+        );
     }
 
     /// A former escort record, of ship 128.

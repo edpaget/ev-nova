@@ -982,6 +982,7 @@ impl Traffic {
             .map(|npc| {
                 matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
                     && npc.condition == Condition::Intact
+                    && !npc.no_ai
                     && !pod_flight::is_pod(npc)
                     && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
                     && decision_due(self.ticks, npc.id, self.interval)
@@ -1115,6 +1116,7 @@ impl Traffic {
                     && npc.provoked <= 0.0
                     && npc.mode == Mode::Flying
                     && npc.condition == Condition::Intact
+                    && !npc.no_ai
                     && decision_due(self.ticks, npc.id, self.interval))
             })
             .collect()
@@ -3092,6 +3094,23 @@ mod tests {
         traffic.tick(&letting_go, &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].target, None);
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_ship_with_no_ai_never_thinks() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].no_ai = true;
+        traffic.npcs[0].goal = Goal::Wait;
+        let behaviour = Recording::deciding(Goal::Idle);
+        for _ in 0..4 {
+            traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+        }
+        assert_eq!(
+            behaviour.take(),
+            [],
+            "AI type -1 is never dispatched (@0x4427e)"
+        );
+        assert_eq!(traffic.npcs()[0].goal, Goal::Wait);
     }
 
     #[test]
