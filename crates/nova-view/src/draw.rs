@@ -728,6 +728,11 @@ mod tests {
         assert_eq!(translucent_tint(32, 32), Color::WHITE);
         assert_eq!(translucent_tint(40, 0), Color::rgba(255, 255, 255, 0));
         assert!(Blend::OrTranslucent.reads_backdrop());
+        let mut list = DrawList::new();
+        let tint = translucent_tint(4, 30);
+        list.translucent_sprite(ImageKey::sprite(1, 0), at(1.0, 2.0), tint)
+            .translucent_sprite(ImageKey::sprite(2, 0), at(3.0, 4.0), tint);
+        assert_eq!(list.iter().count(), 2, "chained onto the list");
     }
 
     #[test]

@@ -1051,7 +1051,7 @@ fn globals_buffer(
     let globals = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("nova globals"),
         size: 16,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM.union(wgpu::BufferUsages::COPY_DST),
         mapped_at_creation: false,
     });
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {

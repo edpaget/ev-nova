@@ -102,7 +102,7 @@ pub fn weapon_cap(fade: f32) -> u8 {
 /// The rolls NPC `id`'s cloak jitters on: its own, apart from its glow's.
 #[must_use]
 pub fn cloak_rolls(id: NpcId) -> HashedRolls {
-    HashedRolls::new(0x434c_4f41_4b00_0000 ^ u64::from(id.0))
+    HashedRolls::new(0x434c_4f41_4b00_0000_u64.wrapping_add(u64::from(id.0)))
 }
 
 /// The jitter of reach `reach` at `tick`, rolled on `rolls`: n −
