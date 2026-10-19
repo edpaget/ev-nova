@@ -941,6 +941,7 @@ mod tests {
         let quarry = session.traffic.add_npc(quarry);
         let ace = &mut session.traffic.npcs_mut()[0];
         ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
+        ace.target = Some(ShipRef::Npc(quarry));
         ace.state.heading = 0.0;
         ace.pursuit.frame = None;
         session
@@ -989,6 +990,7 @@ mod tests {
         let quarry = session.traffic.add_npc(ship);
         let ace = &mut session.traffic.npcs_mut()[0];
         ace.goal = crate::ai::Goal::Attack(ShipRef::Npc(quarry));
+        ace.target = Some(ShipRef::Npc(quarry));
         ace.pursuit.frame = None;
         for _ in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;

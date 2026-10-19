@@ -312,7 +312,12 @@ fn squared(npc: &Npc, ship: ShipRef, around: &Surroundings) -> Option<(f32, Vec2
 /// The original's focus test of `hit`, the ship struck by `attacker`
 /// (see [`keeps_target`]).
 fn focused(hit: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
-    let Some(own) = hit.goal.attacking().filter(|&own| around.live(own)) else {
+    let Some(own) = hit
+        .goal
+        .attacking()
+        .and(hit.target)
+        .filter(|&own| around.live(own))
+    else {
         return false;
     };
     let (Some((target, at)), Some((by, _))) =
@@ -545,6 +550,7 @@ mod tests {
         let govts = relations(0, 0);
         let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
         hunter.goal = Goal::Attack(n(2));
+        hunter.target = Some(n(2));
         let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
         quarry.state.position = Vec2::new(0.0, -10.0);
         let npcs = [hunter, quarry];
@@ -567,6 +573,7 @@ mod tests {
         let govts = relations(0, 0);
         let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
         hunter.goal = Goal::Attack(n(2));
+        hunter.target = Some(n(2));
         let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
         quarry.state.position = Vec2::new(0.0, -10.0);
         let npcs = [hunter, quarry];
@@ -810,6 +817,7 @@ mod tests {
     fn hunted(x: f32) -> [Npc; 3] {
         let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
         hunter.goal = Goal::Attack(n(2));
+        hunter.target = Some(n(2));
         let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
         quarry.state.position = Vec2::new(0.0, -50.0);
         [hunter, quarry, ship(3, Some(PIRATES), AiType::Warship, x)]
@@ -842,6 +850,7 @@ mod tests {
         );
         let mut gone = hunted(100.0);
         gone[0].goal = Goal::Attack(n(9));
+        gone[0].target = Some(n(9));
         assert_eq!(engine(&gone), TAKES(n(3)), "its target gone");
         let mut shifted = hunted(100.0);
         for npc in &mut shifted {
@@ -856,11 +865,40 @@ mod tests {
     }
 
     #[test]
+    fn the_focus_measures_against_the_target_a_hit_set_not_the_goals_quarry() {
+        // T is the ship in +0x70 (@0x3bbf3), not a quarry stored in the
+        // goal: `_IsShipAttacking` tests the goal word alone (@0x82f6a).
+        // A hit that set +0x70 to A (@0x3bcf6) leaves goal 4, so the next
+        // hit measures against A. Here the goal's quarry (2) is 50 above,
+        // the target A (4) 10 above, the attacker (3) 20 right: 400 is
+        // above 0.25 × 100 but not above 0.25 × 2500.
+        let govts = relations(0, 0);
+        let mut npcs = hunted(20.0).to_vec();
+        let mut near = ship(4, Some(PIRATES), AiType::Warship, 0.0);
+        near.state.position = Vec2::new(0.0, -10.0);
+        npcs.push(near);
+        npcs[0].target = Some(n(4));
+        let hit = strike(n(1), n(3));
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit),
+            Reaction::default(),
+            "kept against its target"
+        );
+        npcs[0].target = None;
+        assert_eq!(
+            focused_by(RuleSource::Engine, &govts, &npcs, 0, &hit),
+            TAKES(n(3)),
+            "no target, no keep"
+        );
+    }
+
+    #[test]
     fn a_ship_hit_by_the_ship_it_attacks_keeps_at_it_quietly() {
         // A == T, so A > 0.25 T: no +0x96, no target, no wait cut.
         let govts = relations(0, 0);
         let mut npcs = hunted(0.0);
         npcs[0].goal = Goal::Attack(n(3));
+        npcs[0].target = Some(n(3));
         npcs[2].state.position = Vec2::new(0.0, -50.0);
         let hit = strike(n(1), n(3));
         assert_eq!(
@@ -883,6 +921,7 @@ mod tests {
         let mut escort = ship(2, Some(POLICE), AiType::Warship, 50.0);
         escort.leader = Some(NpcId(1));
         escort.goal = Goal::Attack(n(4));
+        escort.target = Some(n(4));
         let mut quarry = ship(4, Some(PIRATES), AiType::Warship, 50.0);
         quarry.state.position = Vec2::new(50.0, -50.0);
         let npcs = [
@@ -910,6 +949,7 @@ mod tests {
         // The lead attacking a quarry 10 above itself; its escort idle.
         let mut turned = npcs.clone();
         turned[0].goal = Goal::Attack(n(4));
+        turned[0].target = Some(n(4));
         turned[1].goal = Goal::Idle;
         turned[3].state.position = Vec2::new(0.0, -10.0);
         assert_eq!(
@@ -1036,6 +1076,7 @@ mod tests {
         // The ship faces up; its target 50 above, the attacker 100 right.
         let mut hunter = ship(1, Some(POLICE), AiType::Warship, 0.0);
         hunter.goal = Goal::Attack(n(2));
+        hunter.target = Some(n(2));
         let mut quarry = ship(2, Some(PIRATES), AiType::Warship, 0.0);
         quarry.state.position = Vec2::new(0.0, -49.9);
         let attacker = ship(3, Some(PIRATES), AiType::Warship, 100.0);
@@ -1053,6 +1094,7 @@ mod tests {
         assert_eq!(bible(&govts, &aside, 0, &hit), Reaction::default());
         let mut gone = npcs.clone();
         gone[0].goal = Goal::Attack(n(9));
+        gone[0].target = Some(n(9));
         assert_eq!(
             bible(&govts, &gone, 0, &hit),
             TAKES(n(3)),
@@ -1076,6 +1118,7 @@ mod tests {
         assert_eq!(bible(&govts, &shift(&farther), 0, &hit), TAKES(n(3)));
         let mut by_its_target = npcs.clone();
         by_its_target[0].goal = Goal::Attack(n(3));
+        by_its_target[0].target = Some(n(3));
         assert_eq!(
             bible(&govts, &by_its_target, 0, &hit),
             TAKES(n(3)),
@@ -1197,6 +1240,7 @@ mod tests {
             ship(2, Some(POLICE), AiType::Warship, 3000.0),
         ];
         npcs[1].goal = Goal::Attack(n(9));
+        npcs[1].target = Some(n(9));
         let hit = strike(n(1), ShipRef::Player);
         assert_eq!(answered(&govts, &npcs, 1, &hit), Reaction::default());
         npcs[1].goal = Goal::Snipe(n(9));
@@ -1477,6 +1521,7 @@ mod tests {
         let hit = strike(n(2), ShipRef::Player);
         let mut attacking = escorted(AiType::Warship);
         attacking[0].goal = Goal::Attack(n(9));
+        attacking[0].target = Some(n(9));
         assert_eq!(
             answered(&govts, &attacking, 0, &hit),
             TAKES(ShipRef::Player),
@@ -1531,6 +1576,7 @@ mod tests {
         let mut escort = ship(2, Some(POLICE), AiType::Warship, 50.0);
         escort.leader = Some(NpcId(1));
         escort.goal = Goal::Attack(n(4));
+        escort.target = Some(n(4));
         let mut quarry = ship(4, Some(PIRATES), AiType::Warship, 50.0);
         quarry.state.position = Vec2::new(50.0, -50.0);
         let npcs = [ship(1, Some(POLICE), AiType::Warship, 0.0), escort, quarry];
@@ -1552,6 +1598,7 @@ mod tests {
         // The lead attacking a quarry 10 above itself.
         let mut turned = npcs.clone();
         turned[0].goal = Goal::Attack(n(4));
+        turned[0].target = Some(n(4));
         turned[2].state.position = Vec2::new(0.0, -10.0);
         assert_eq!(
             bible(&turned, 0),

@@ -469,6 +469,7 @@ mod tests {
         let sites = sites();
         let mut hunter = police();
         hunter.goal = Goal::Attack(P);
+        hunter.target = Some(P);
         hunter.armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
                 speed: 1000,
