@@ -480,6 +480,11 @@ pub struct World<'a> {
     /// that starts with zero fuel by the engine, every NPC by the other
     /// reading ([`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
     pub npc_jump_fuel: RuleSource,
+    /// Which odds the odds' readers read
+    /// ([`cached_odds`](crate::ai::odds::cached_odds)): the cache's by the
+    /// engine, fresh by the other reading
+    /// ([`RuleKey::OddsCache`](crate::RuleKey::OddsCache)).
+    pub odds_cache: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -557,6 +562,7 @@ impl<'a> World<'a> {
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
             npc_jump_fuel: RuleSource::Engine,
+            odds_cache: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
@@ -614,6 +620,7 @@ impl<'a> World<'a> {
             cloak_scanner: self.cloak_scanner,
             iff_marked: self.iff_marked,
             jump_fuel: self.npc_jump_fuel,
+            odds_cache: self.odds_cache,
             led_speed: self.led_speed,
         }
     }
@@ -1966,7 +1973,8 @@ impl Traffic {
                 scans = ship == ShipRef::Player
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
             }
-            self.on_line.push_think(npc.id, calls, scans);
+            // The calls carry the odds the think read, before the pass.
+            self.on_line.push_think(npc.id, calls, npc.odds, scans);
             if provokes {
                 npc.provoked = 1.0;
             }
@@ -2029,8 +2037,10 @@ impl Traffic {
     /// them leaves the first scan and everything after it held for
     /// [`Traffic::take_on_line`], as that scan's line comes first in the
     /// original's slot order (see [`on_line`]); entering or going on into
-    /// another system drops them.
-    pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall)> {
+    /// another system drops them. Each comes with the odds against its
+    /// caller its think read ([`Npc::odds`], before the tick's odds
+    /// pass).
+    pub fn take_comm_calls(&mut self) -> Vec<(NpcId, CommCall, f32)> {
         self.on_line.take_ahead_of_scans()
     }
 

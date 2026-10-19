@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(traffic.npcs()[1].target, None);
         assert_eq!(
             traffic.take_comm_calls(),
-            [(NpcId(1), CommCall::Reinforcements)],
+            [(NpcId(1), CommCall::Reinforcements, 0.0)],
             "the waiting pirate calls for none"
         );
     }

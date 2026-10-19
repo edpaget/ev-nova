@@ -66,6 +66,20 @@
 //!   With a yardstick of 0 the original would divide by zero; here, as
 //!   for one below 0, the factor is 1. Only the odds weigh the rating, not
 //!   [`friend_strength`].
+//! - **The odds read** ([`cached_odds`]): no reader works the odds out
+//!   fresh in the original. Each reads the ship's slot's cached odds
+//!   (+0xc914, [`Npc::odds`]), which every spawn sets to -1 and
+//!   `_DoPlayGameWork`'s odds pass refreshes one slot a frame after the
+//!   thinks (see [`odds_cache`](crate::traffic::odds_cache)): the
+//!   warship's and interceptor's odds retreat (`_WarshipAI` @0x8bd22,
+//!   @0x8bdab, @0x8bdd3; `_InterceptorAI` @0x8d1cd, @0x8d271, @0x8d2ac;
+//!   see [`warship`](crate::ai::warship)), the call for reinforcements
+//!   (`_AICallForReinforcements` @0x7f60d, @0x7f69b; see
+//!   [`reinforcements`](crate::ai::reinforcements)) and a fleet leader's
+//!   escort orders (`_AIIssueEscortOrders` @0x89a5d, which the engine
+//!   does not build yet). By the other reading of
+//!   [`RuleKey::OddsCache`](crate::RuleKey::OddsCache) each works them
+//!   out fresh ([`odds_against`]).
 //! - **A hopeless chase** ([`hopeless_chase`]): the target is the player
 //!   or is fleeing; the chaser is over [`HEAVY`] tons; their relative
 //!   velocity (the target's less the chaser's) has a component over
@@ -254,6 +268,18 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     enemies / friends.max(1.0)
 }
 
+/// The odds against `npc` its readers read (see the module docs): its
+/// cached odds ([`Npc::odds`]) by the engine's reading of
+/// [`RuleKey::OddsCache`](crate::RuleKey::OddsCache), else
+/// [`odds_against`] it among `around` now.
+#[must_use]
+pub fn cached_odds(npc: &Npc, around: &Surroundings) -> f32 {
+    match around.odds_cache {
+        RuleSource::Engine => npc.odds,
+        RuleSource::Bible => odds_against(npc, around),
+    }
+}
+
 /// Whether `npc`'s chase of `target` among `around` is hopeless (see the
 /// module docs).
 #[must_use]
@@ -356,6 +382,28 @@ mod tests {
 
     fn n(id: u32) -> ShipRef {
         ShipRef::Npc(NpcId(id))
+    }
+
+    #[test]
+    fn by_the_engine_the_odds_read_are_the_cached_ones_and_by_the_other_reading_fresh() {
+        let mut me = ship(1, 140, 100.0);
+        me.odds = 0.25;
+        let npcs = [me, ship(2, 142, 150.0)];
+        let govts = govts();
+        let cached = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(cached_odds(&npcs[0], &cached), 0.25, "as the pass left it");
+        let fresh = Surroundings {
+            odds_cache: RuleSource::Bible,
+            ..cached
+        };
+        assert_eq!(
+            cached_odds(&npcs[0], &fresh),
+            1.5,
+            "its enemy's 150 over 100"
+        );
     }
 
     /// The player at the centre, of `strength`, its shields full.

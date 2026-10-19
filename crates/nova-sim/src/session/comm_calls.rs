@@ -168,17 +168,24 @@ impl Session {
     /// last taken, in order, each drawing on `chance` (see the module
     /// docs).
     pub(super) fn answer_comm_calls(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        for (id, call) in self.traffic.take_comm_calls() {
-            self.answer_call(id, call, chance);
+        for (id, call, odds) in self.traffic.take_comm_calls() {
+            self.answer_call(id, call, odds, chance);
         }
     }
 
-    /// Answers NPC `id`'s `call`, drawing on `chance`.
-    fn answer_call(&mut self, id: NpcId, call: CommCall, chance: &mut (impl Chance + ?Sized)) {
+    /// Answers NPC `id`'s `call`, made by a think that read the `odds`
+    /// against it, drawing on `chance`.
+    fn answer_call(
+        &mut self,
+        id: NpcId,
+        call: CommCall,
+        odds: f32,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         match call {
             CommCall::Distress => self.call_for_help(id, chance),
             CommCall::PreScan => self.hail_before_scan(id, chance),
-            CommCall::Reinforcements => self.call_for_reinforcements(id, false),
+            CommCall::Reinforcements => self.call_for_reinforcements(id, false, Some(odds)),
         }
     }
 
@@ -209,7 +216,7 @@ impl Session {
         for work in self.traffic.take_on_line() {
             match work {
                 OnLine::Scan(id) => self.scanned_by(id, law, chance),
-                OnLine::Call(id, call) => self.answer_call(id, call, chance),
+                OnLine::Call(id, call, odds) => self.answer_call(id, call, odds, chance),
             }
         }
         if std::mem::take(&mut self.reinforcements_held) {

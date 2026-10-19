@@ -572,6 +572,11 @@ pub struct Surroundings<'a> {
     /// Who needs a jump's fuel now to jump out ([`leave::can_jump`]), by
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel).
     pub jump_fuel: RuleSource,
+    /// Which odds the odds' readers read ([`odds::cached_odds`]): each
+    /// ship's cached odds ([`Npc::odds`]) by the engine, worked out fresh
+    /// by the other reading, by
+    /// [`RuleKey::OddsCache`](crate::RuleKey::OddsCache).
+    pub odds_cache: RuleSource,
     /// The factor on the top speed of the player and of every ship it
     /// leads ([`World::led_speed`](crate::traffic::World::led_speed)), as
     /// a swarmer's `_ShipMaxSpeed` reads it ([`swarm::lead`]).
@@ -585,7 +590,7 @@ impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
     /// cloak scanner, no government marked by an IFF scrambler, the
-    /// engine's jump fuel and a led speed of 1.
+    /// engine's jump fuel and cached odds, and a led speed of 1.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -601,6 +606,7 @@ impl<'a> Surroundings<'a> {
             cloak_scanner: false,
             iff_marked: &NO_IFF_MARKS,
             jump_fuel: RuleSource::Engine,
+            odds_cache: RuleSource::Engine,
             led_speed: 1.0,
         }
     }

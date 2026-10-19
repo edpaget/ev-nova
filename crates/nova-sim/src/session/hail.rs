@@ -614,7 +614,8 @@ impl Session {
     /// (`_DoCommDialog` @0x9636d), after its goal is set (see the
     /// `reinforcements` module).
     fn call_for_battle_help_reinforcements(&mut self, id: NpcId) {
-        self.call_for_reinforcements(id, true);
+        // Between frames, after the frame's odds pass: the cached odds.
+        self.call_for_reinforcements(id, true, None);
     }
 
     /// Gives a tick of the help each NPC assisting the player gives (see
@@ -1972,6 +1973,10 @@ mod tests {
             ..session.npcs()[0].clone()
         };
         session.traffic.add_npc(pirate);
+        // Its odds as the frame's pass left them: the pirate's 20 over
+        // its 100 (see `odds_cache`).
+        let hailed = session.npcs()[0].id;
+        session.traffic.cache_odds(hailed, 0.2);
         assert_eq!(session.reinforcements_coming(), None);
         hail(&mut session, &catalog);
         press(&mut session, &catalog, 1, 0);

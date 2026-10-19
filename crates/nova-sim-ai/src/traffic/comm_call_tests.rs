@@ -56,8 +56,8 @@ fn the_ticks_calls_are_taken_in_npc_order_once() {
     assert_eq!(
         traffic.take_comm_calls(),
         [
-            (NpcId(0), CommCall::Distress),
-            (NpcId(2), CommCall::PreScan)
+            (NpcId(0), CommCall::Distress, 0.0),
+            (NpcId(2), CommCall::PreScan, 0.0)
         ]
     );
     assert_eq!(traffic.take_comm_calls(), [], "taken");
@@ -89,9 +89,9 @@ fn a_call_for_reinforcements_follows_the_thinks_own_call() {
     assert_eq!(
         traffic.take_comm_calls(),
         [
-            (NpcId(0), CommCall::Distress),
-            (NpcId(0), CommCall::Reinforcements),
-            (NpcId(1), CommCall::Reinforcements),
+            (NpcId(0), CommCall::Distress, 0.0),
+            (NpcId(0), CommCall::Reinforcements, 0.0),
+            (NpcId(1), CommCall::Reinforcements, 0.0),
         ]
     );
 }
@@ -102,7 +102,10 @@ fn a_ship_whose_think_is_not_due_calls_nothing() {
     traffic.interval = 3;
     traffic.ticks = 2;
     traffic.tick_in(&calls(), World::new(&[]), &[], &mut Draws::of(&[]));
-    assert_eq!(traffic.take_comm_calls(), [(NpcId(2), CommCall::PreScan)]);
+    assert_eq!(
+        traffic.take_comm_calls(),
+        [(NpcId(2), CommCall::PreScan, 0.0)]
+    );
 }
 
 #[test]
@@ -155,7 +158,7 @@ fn a_scan_by_an_earlier_slot_holds_a_later_slots_call() {
         traffic.take_on_line(),
         [
             OnLine::Scan(NpcId(0)),
-            OnLine::Call(NpcId(1), CommCall::Distress)
+            OnLine::Call(NpcId(1), CommCall::Distress, 0.0)
         ]
     );
     assert!(!traffic.holds_line_work(), "taken");
@@ -169,7 +172,10 @@ fn a_call_by_an_earlier_slot_is_taken_ahead_of_a_later_slots_scan() {
         &mut traffic,
         &Calls(BTreeMap::from([(NpcId(0), CommCall::Distress)])),
     );
-    assert_eq!(traffic.take_comm_calls(), [(NpcId(0), CommCall::Distress)]);
+    assert_eq!(
+        traffic.take_comm_calls(),
+        [(NpcId(0), CommCall::Distress, 0.0)]
+    );
     assert_eq!(traffic.take_on_line(), [OnLine::Scan(NpcId(1))]);
 }
 
@@ -180,7 +186,10 @@ fn one_ships_call_comes_before_its_own_scan() {
         &mut traffic,
         &Calls(BTreeMap::from([(NpcId(0), CommCall::Distress)])),
     );
-    assert_eq!(traffic.take_comm_calls(), [(NpcId(0), CommCall::Distress)]);
+    assert_eq!(
+        traffic.take_comm_calls(),
+        [(NpcId(0), CommCall::Distress, 0.0)]
+    );
     assert!(traffic.holds_line_work(), "the scan");
     assert_eq!(traffic.take_on_line(), [OnLine::Scan(NpcId(0))]);
 }
@@ -193,4 +202,26 @@ fn with_no_scan_no_line_work_is_held() {
     assert_eq!(traffic.take_comm_calls().len(), 2);
     assert!(!traffic.holds_line_work());
     assert_eq!(traffic.take_on_line(), []);
+}
+
+#[test]
+fn a_call_carries_the_odds_its_think_read_not_the_passs() {
+    let mut traffic = Traffic::with_interval(1);
+    for _ in 0..2 {
+        traffic.add_npc(npc(0, ShipStats::new(FAST, &[])));
+    }
+    traffic.tick_in(&Reinforced, World::new(&[]), &[], &mut Draws::of(&[]));
+    assert!(
+        traffic.npcs()[0].odds.abs() < f32::EPSILON,
+        "refreshed by the pass"
+    );
+    assert_eq!(
+        traffic.take_comm_calls(),
+        [
+            (NpcId(0), CommCall::Distress, -1.0),
+            (NpcId(0), CommCall::Reinforcements, -1.0),
+            (NpcId(1), CommCall::Reinforcements, -1.0),
+        ],
+        "stale at their thinks"
+    );
 }

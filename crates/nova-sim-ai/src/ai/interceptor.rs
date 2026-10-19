@@ -307,6 +307,8 @@ mod tests {
         let mut hunter = police();
         hunter.goal = Goal::Attack(n(2));
         hunter.reserves.shield.now = shield;
+        // The odds the scene gives, as the pass cached them.
+        hunter.odds = foe / 100.0;
         let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         pirate.hull.strength = foe;
         pirate.goal = Goal::Attack(n(1));

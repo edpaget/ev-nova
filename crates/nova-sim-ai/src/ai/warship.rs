@@ -78,7 +78,14 @@
 //!     it above its government's `MaxOdds`, twice that while a
 //!     reinforcement fleet allied with it is coming to the system
 //!     (@0x8bd36-0x8bdc8, `_InterceptorAI` @0x8d1de-0x8d27e;
-//!     [`odds_factor`]);
+//!     [`odds_factor`]). The odds are its slot's cached ones by the
+//!     engine (+0xc914 @0x8bd22, @0x8bdab, @0x8bdd3; `_InterceptorAI`
+//!     @0x8d1cd, @0x8d271, @0x8d2ac; [`cached_odds`]), refreshed one slot
+//!     a frame after the thinks, so the think's own word or retarget
+//!     doesn't reach them; a stale slot's -1 skips the retreat (@0x8bd30,
+//!     @0x8d1d8). By the other reading of
+//!     [`RuleKey::OddsCache`](crate::RuleKey::OddsCache) they are worked
+//!     out fresh at the think;
 //!   - the shield retreat (@0x8be36), for a warship with no fleet lead:
 //!     shields below [`AGGRESSION_1_SHIELDS`] of their most at aggression
 //!     1, or [`AGGRESSION_2_SHIELDS`] at aggression 2. Any other
@@ -128,7 +135,7 @@
 //! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
-use crate::ai::odds::{hopeless_chase, odds_against};
+use crate::ai::odds::{cached_odds, hopeless_chase};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
@@ -401,10 +408,15 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
     let govts = around.govts;
     let shield = npc.reserves.shield;
     let below = |share: f32| shield.now < share * shield.max;
+    let odds = cached_odds(npc, around);
     let outnumbered = govts.flag(npc.govt, retreat.odds_flag)
         && npc.goal.attacking().is_some()
         && below(ODDS_RETREAT_SHIELDS)
-        && odds_against(npc, around) > govts.max_odds(npc.govt) * odds_factor(npc, around);
+        // A stale slot (-1) skips the odds retreat (@0x8bd30, @0x8d1d8).
+        // A `MaxOdds` is no less than 0.01, so -1 is never above it
+        // anyway.
+        && odds >= 0.0
+        && odds > govts.max_odds(npc.govt) * odds_factor(npc, around);
     let by_government = retreat.shields && govts.flag(npc.govt, WARSHIPS_RETREAT);
     let worn = npc.leader.is_none()
         && match npc.person {
@@ -687,6 +699,8 @@ mod tests {
         hunter.goal = Goal::Attack(n(2));
         hunter.reserves.shield.now = shield;
         hunter.aggression = aggression;
+        // The odds the scene gives, as the pass cached them.
+        hunter.odds = foe / 100.0;
         let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         pirate.hull.strength = foe;
         pirate.goal = Goal::Attack(n(1));
@@ -695,17 +709,41 @@ mod tests {
 
     /// The police warship, its shields below half, fighting a pirate of
     /// strength `foe` against its 100 (its `MaxOdds` 1), while the fleet
-    /// of `coming`, if any, is on its way: whether it retreats.
+    /// of `coming`, if any, is on its way, its odds cached as the scene
+    /// gives them: whether it retreats.
     fn retreats_with_coming(
         behaviour: &dyn Behaviour,
         retreat_flag: u16,
         foe: f32,
         coming: Option<crate::ai::reinforcements::Coming>,
     ) -> bool {
+        retreats_at(
+            behaviour,
+            retreat_flag,
+            foe,
+            foe / 100.0,
+            RuleSource::Engine,
+            coming,
+        )
+    }
+
+    /// The police warship, its shields below half, fighting a pirate of
+    /// strength `foe` against its 100 (its `MaxOdds` 1), its cached odds
+    /// `odds`, reading them as `odds_cache` says, while the fleet of
+    /// `coming`, if any, is on its way: whether it retreats.
+    fn retreats_at(
+        behaviour: &dyn Behaviour,
+        retreat_flag: u16,
+        foe: f32,
+        odds: f32,
+        odds_cache: RuleSource,
+        coming: Option<crate::ai::reinforcements::Coming>,
+    ) -> bool {
         let mut hunter = police();
         hunter.goal = Goal::Attack(n(2));
         hunter.reserves.shield.now = 14.9;
         hunter.aggression = 3;
+        hunter.odds = odds;
         let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         pirate.hull.strength = foe;
         pirate.goal = Goal::Attack(n(1));
@@ -714,7 +752,66 @@ mod tests {
         let sites = sites();
         let mut around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         around.reinforcements = coming;
+        around.odds_cache = odds_cache;
         behaviour.decide(&npcs[0], &around, &mut Draws::of(&[0])) == Goal::Flee(n(2))
+    }
+
+    #[test]
+    fn by_the_engine_a_warship_retreats_by_its_cached_odds_not_the_scenes() {
+        let warship = Warship::default();
+        let retreats = |foe, odds| {
+            retreats_at(
+                &warship,
+                WARSHIPS_RETREAT,
+                foe,
+                odds,
+                RuleSource::Engine,
+                None,
+            )
+        };
+        assert!(!retreats(150.0, 0.0), "outnumbered, but cached at 0");
+        assert!(retreats(50.0, 3.0), "not outnumbered, but cached at 3");
+        assert!(!retreats(50.0, 1.0), "cached at its MaxOdds");
+    }
+
+    #[test]
+    fn a_stale_slot_never_retreats_by_its_odds() {
+        let warship = Warship::default();
+        let interceptor = crate::ai::Interceptor::default();
+        for (behaviour, flag) in [
+            (&warship as &dyn Behaviour, WARSHIPS_RETREAT),
+            (&interceptor, crate::govt::INTERCEPTORS_RETREAT),
+        ] {
+            assert!(!retreats_at(
+                behaviour,
+                flag,
+                500.0,
+                crate::traffic::odds_cache::STALE,
+                RuleSource::Engine,
+                None
+            ));
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_warship_retreats_by_the_scenes_odds() {
+        let warship = Warship::default();
+        let retreats = |foe, odds| {
+            retreats_at(
+                &warship,
+                WARSHIPS_RETREAT,
+                foe,
+                odds,
+                RuleSource::Bible,
+                None,
+            )
+        };
+        assert!(retreats(150.0, 0.0), "outnumbered now");
+        assert!(!retreats(50.0, 3.0), "not now");
+        assert!(
+            retreats(150.0, crate::traffic::odds_cache::STALE),
+            "stale or not"
+        );
     }
 
     /// The fleet of `govt` coming.
@@ -1118,9 +1215,20 @@ mod tests {
     /// The decision of `npcs[0]`, a warship of the police with `flags`, the
     /// player 100 above in `condition`, or not in the system without one.
     fn worded(flags: u16, npcs: &[Npc], condition: Option<Condition>) -> Goal {
+        worded_reading(flags, npcs, condition, RuleSource::Engine)
+    }
+
+    /// The decision [`worded`] gives, the odds read as `odds_cache` says.
+    fn worded_reading(
+        flags: u16,
+        npcs: &[Npc],
+        condition: Option<Condition>,
+        odds_cache: RuleSource,
+    ) -> Goal {
         let govts = govts(0, flags);
         let sites = sites();
         let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        seen.odds_cache = odds_cache;
         match condition {
             Some(condition) => {
                 if let Some(player) = seen.player.as_mut() {
@@ -1135,6 +1243,9 @@ mod tests {
     const ALWAYS: u16 = crate::govt::ALWAYS_ATTACKS_PLAYER;
     const NEVER: u16 = crate::govt::NEVER_ATTACKS_PLAYER;
     const INTACT: Option<Condition> = Some(Condition::Intact);
+    /// The odds worked out fresh at the think: the other reading of
+    /// `odds_cache`.
+    const FRESH: RuleSource = RuleSource::Bible;
     const IDLE: Goal = Goal::Land(StellarId(128));
 
     #[test]
@@ -1383,6 +1494,11 @@ mod tests {
         hunter
     }
 
+    /// `npc` with the odds 101 against its 100 give cached.
+    fn outnumbered(npc: Npc) -> Npc {
+        Npc { odds: 1.01, ..npc }
+    }
+
     #[test]
     fn a_warship_its_government_turns_on_the_player_still_retreats_and_keeps_fleeing() {
         let flags = ALWAYS | WARSHIPS_RETREAT;
@@ -1395,11 +1511,14 @@ mod tests {
             ..pirate()
         };
         strong.hull.strength = 101.0;
-        let npcs = [worn(14.9, 3, Goal::Attack(n(2))), strong.clone()];
+        let npcs = [
+            outnumbered(worn(14.9, 3, Goal::Attack(n(2)))),
+            strong.clone(),
+        ];
         assert_eq!(worded(flags, &npcs, INTACT), Goal::Flee(P), "odds");
         // Fleeing the player is a threat to it (state 3 is none
         // `_IsThreatToPlayer` excludes), so the word passes it by.
-        let fled = [worn(14.9, 3, Goal::Flee(P)), strong];
+        let fled = [outnumbered(worn(14.9, 3, Goal::Flee(P))), strong];
         assert_eq!(
             worded(flags, &fled, INTACT),
             Goal::Flee(P),
@@ -1435,7 +1554,11 @@ mod tests {
             ..pirate()
         };
         strong.hull.strength = 101.0;
-        let npcs = [worn(14.9, 3, Goal::Attack(n(3))), hired(), strong];
+        let npcs = [
+            outnumbered(worn(14.9, 3, Goal::Attack(n(3)))),
+            hired(),
+            strong,
+        ];
         assert_eq!(
             worded(NEVER | WARSHIPS_RETREAT, &npcs, INTACT),
             Goal::Flee(n(2)),
@@ -1452,8 +1575,31 @@ mod tests {
 
     // The retreat judges the goal the word has just chosen: the original
     // sets the target and state 4 at once (@0x8b7da-0x8b7e5, @0x8b800 and
-    // @0x8b875-0x8b881), so the odds later in the same think
-    // (`_ExtendedIsThreatToShip` asking `_IsThreatToPlayer`) see it.
+    // @0x8b875-0x8b881). Its odds are its slot's cached ones (+0xc914),
+    // which the think's word cannot change, so by the engine the word's
+    // turn reaches the odds only at the slot's next refresh. By the other
+    // reading of `odds_cache` the odds are worked out fresh at the think,
+    // after the word (`_ExtendedIsThreatToShip` asking
+    // `_IsThreatToPlayer`), and see it.
+
+    #[test]
+    fn by_the_engine_the_words_turn_does_not_reach_the_odds_in_the_same_think() {
+        // A raider of 1 against it: odds of 0.01, cached before the word.
+        let mut raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        raider.hull.strength = 1.0;
+        let hunter = Npc {
+            odds: 0.01,
+            ..worn(14.9, 3, Goal::Attack(n(2)))
+        };
+        assert_eq!(
+            worded(ALWAYS | WARSHIPS_RETREAT, &[hunter, raider], INTACT),
+            Goal::Attack(P),
+            "the player's 100 not yet among them"
+        );
+    }
 
     #[test]
     fn a_warship_that_drops_a_led_target_weighs_its_odds_without_the_player() {
@@ -1464,7 +1610,7 @@ mod tests {
         };
         let npcs = [worn(14.9, 3, Goal::Attack(n(3))), hired(), raider];
         assert_eq!(
-            worded(NEVER | WARSHIPS_RETREAT, &npcs, INTACT),
+            worded_reading(NEVER | WARSHIPS_RETREAT, &npcs, INTACT, FRESH),
             Goal::Attack(n(2)),
             "even odds: it fights the ship it picked afresh"
         );
@@ -1480,13 +1626,13 @@ mod tests {
         raider.hull.strength = 1.0;
         let npcs = [worn(14.9, 3, Goal::Attack(n(2))), raider];
         assert_eq!(
-            worded(ALWAYS | WARSHIPS_RETREAT, &npcs, INTACT),
+            worded_reading(ALWAYS | WARSHIPS_RETREAT, &npcs, INTACT, FRESH),
             Goal::Flee(P),
             "101 against 100"
         );
         let idle = [worn(14.9, 3, Goal::Idle), npcs[1].clone()];
         assert_eq!(
-            worded(ALWAYS | WARSHIPS_RETREAT, &idle, INTACT),
+            worded_reading(ALWAYS | WARSHIPS_RETREAT, &idle, INTACT, FRESH),
             Goal::Flee(P),
             "state 4 at once, from no fight"
         );
