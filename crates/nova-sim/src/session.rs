@@ -19298,6 +19298,7 @@ pub(super) mod tests {
     const IONIZED: Ion = Ion {
         charge: 40.0,
         colour: 0x00ff_0000,
+        shed: 0.0,
     };
 
     #[test]
@@ -19311,7 +19312,8 @@ pub(super) mod tests {
             session.ion(),
             Ion {
                 charge: 30.0,
-                colour: 0x0000_ff00
+                colour: 0x0000_ff00,
+                ..Ion::default()
             }
         );
         assert_eq!(session.npcs()[0].ion, Ion::default());

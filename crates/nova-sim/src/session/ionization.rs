@@ -87,12 +87,17 @@ impl Session {
     /// The player's frame's ion block (see the module docs): a charge
     /// above none sheds the rate and the velocity is pulled toward the top
     /// speed lowered by the charge left; one at or below none is cleared.
+    /// What it took off is kept in the ion's `shed`, for the fight's
+    /// lockout ([`Ion::as_block_found`](crate::combat::ion::Ion::as_block_found)).
     pub(super) fn ionize_tick(&mut self) {
-        let Some(charge) = deionize(self.ion.charge, self.ion_rate()) else {
+        let found = self.ion.charge;
+        let Some(charge) = deionize(found, self.ion_rate()) else {
             self.ion.charge = 0.0;
+            self.ion.shed = found;
             return;
         };
         self.ion.charge = charge;
+        self.ion.shed = found - charge;
         let cap = lowered_top(self.top_speed(), self.ion_factor());
         self.player.velocity = pull(self.player.velocity, cap);
     }
@@ -103,7 +108,9 @@ impl Session {
 mod tests {
     use super::*;
     use crate::catalog::{OutfitId, ShipId, SystemId};
+    use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
+    use crate::combat::projectile::ShotId;
     use crate::flight::{Controls, Face, Turn};
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
@@ -181,6 +188,29 @@ mod tests {
         assert_eq!(session.ion().charge, -0.25);
         session.tick(Controls::default());
         assert_eq!(session.ion().charge, 0.0);
+    }
+
+    #[test]
+    fn the_block_records_what_it_took_off_the_charge() {
+        let catalog = FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    ionize_max: 100,
+                    deionize: 100,
+                    ..FAST
+                }),
+            )],
+            ..catalog()
+        };
+        let mut session = flying(&catalog, 3.0);
+        assert_eq!(session.ion_rate(), 1.0);
+        session.tick(Controls::default());
+        assert_eq!((session.ion().charge, session.ion().shed), (2.0, 1.0));
+        // A charge at or below none is cleared: the whole of it is shed.
+        let mut cleared = flying(&catalog, -0.5);
+        cleared.tick(Controls::default());
+        assert_eq!((cleared.ion().charge, cleared.ion().shed), (0.0, -0.5));
     }
 
     #[test]
@@ -488,10 +518,154 @@ mod tests {
     #[test]
     fn an_ionized_players_seeker_0x0020_gun_is_held_until_its_charge_is_shed() {
         assert_eq!(fired_ticks(0.0), [1, 3, 5, 7], "uncharged, every 2");
-        // Shed to 2, 1, then 0 on tick 3, whose reload the hold no longer
-        // tops up: the first held tick is 2, and it fires again on tick 4.
-        assert_eq!(fired_ticks(3.0), [1, 4, 6, 8]);
-        assert_eq!(fired_ticks(6.0), [1, 7]);
+        // Its hold reads the charge as each tick's block found it: 3, 2
+        // and 1 on ticks 1 to 3, each holding it, then 0 on tick 4, which
+        // frees it. So it fires on tick 1, before its first hold, is held
+        // through tick 4 (the hold's 1.0 counting down on tick 4), and
+        // fires again on tick 5, then every 2.
+        assert_eq!(fired_ticks(3.0), [1, 5, 7]);
+        // Found at 6 to 1 on ticks 1 to 6, 0 on tick 7: fires on tick 8.
+        assert_eq!(fired_ticks(6.0), [1, 8]);
+    }
+
+    /// The new shots `firer` has in flight among `seen`'s, which it adds
+    /// them to.
+    fn new_shots(session: &Session, firer: ShipRef, seen: &mut Vec<ShotId>) -> usize {
+        let fresh: Vec<ShotId> = session
+            .shots()
+            .iter()
+            .filter(|shot| shot.firer == firer && !seen.contains(&shot.id))
+            .map(|shot| shot.id)
+            .collect();
+        seen.extend(&fresh);
+        fresh.len()
+    }
+
+    /// A `Seeker` 0x0020 blaster firing every tick.
+    fn held_gun() -> crate::catalog::WeaponRecord {
+        crate::catalog::WeaponRecord {
+            reload: 0,
+            seeker: crate::combat::ion::CANT_FIRE_IONIZED,
+            ..crate::session::tests::blaster()
+        }
+    }
+
+    /// An ionizing blaster: a factor of 1 for a ship of `IonizeMax` 100.
+    fn ion_bolt() -> crate::catalog::WeaponRecord {
+        crate::catalog::WeaponRecord {
+            ionization: 100,
+            ..crate::session::tests::blaster()
+        }
+    }
+
+    /// `armed()` with the player's class and NPC 0's of `IonizeMax` 100.
+    fn of_ionize_max_100() -> FakePilotCatalog {
+        use crate::session::tests::armed;
+        use crate::testkit::ship;
+        let fields = ShipFields {
+            ionize_max: 100,
+            ..FAST
+        };
+        FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(fields))],
+            ship_records: vec![ship(129, fields)],
+            ..armed()
+        }
+    }
+
+    /// The fights, from 1, on which `gunner` fires, and the first fight
+    /// after which `charged` holds, over 12 fights of `session`.
+    fn fired_around_the_hit(
+        session: &mut Session,
+        gunner: ShipRef,
+        charged: impl Fn(&Session) -> bool,
+    ) -> (Vec<u32>, u32) {
+        let mut seen = Vec::new();
+        let mut fired = Vec::new();
+        let mut hit = None;
+        for fight in 1..=12 {
+            session.tick_combat(
+                crate::combat::Rules::default(),
+                &mut crate::chance::NeverFires,
+            );
+            if new_shots(session, gunner, &mut seen) > 0 {
+                fired.push(fight);
+            }
+            if hit.is_none() && charged(session) {
+                hit = Some(fight);
+            }
+        }
+        (fired, hit.expect("dosed"))
+    }
+
+    #[test]
+    fn a_hit_holds_the_players_seeker_0x0020_gun_from_the_second_tick_after_it() {
+        use crate::session::tests::knocking;
+        let catalog = of_ionize_max_100();
+        let mut session = knocking(
+            &catalog,
+            (Some(held_gun()), 100.0),
+            (Some(ion_bolt()), 100.0),
+        );
+        assert_eq!(session.ion_capacity(), 100.0);
+        let (fired, hit) = fired_around_the_hit(&mut session, ShipRef::Player, |session| {
+            session.ion().charge > 0.0
+        });
+        let hit_and_after: Vec<u32> = (1..=hit + 1).collect();
+        assert_eq!(
+            fired, hit_and_after,
+            "fires on the hit's fight and the next"
+        );
+    }
+
+    #[test]
+    fn a_hit_holds_an_npcs_seeker_0x0020_gun_on_the_tick_it_lands() {
+        use crate::session::tests::knocking;
+        let catalog = of_ionize_max_100();
+        let mut session = knocking(
+            &catalog,
+            (Some(ion_bolt()), 100.0),
+            (Some(held_gun()), 100.0),
+        );
+        let npc = ShipRef::Npc(session.npcs()[0].id);
+        let (fired, hit) = fired_around_the_hit(&mut session, npc, |session| {
+            session.npcs()[0].ion_factor() >= 1.0
+        });
+        let before_the_hit: Vec<u32> = (1..hit).collect();
+        assert_eq!(fired, before_the_hit, "held from the hit's own fight");
+    }
+
+    #[test]
+    fn double_times_second_pass_holds_on_the_charge_as_its_own_block_found_it() {
+        use crate::session::tests::armed;
+        let mut catalog = armed();
+        catalog.weapons[0] = held_gun();
+        catalog.ships = vec![(
+            ShipId(128),
+            Ok(ShipFields {
+                ionize_max: 100,
+                deionize: 100,
+                ..FAST
+            }),
+        )];
+        let mut session = Session::start(&catalog).expect("starts");
+        session.ion.charge = 1.5;
+        session.hold_fire(true, false);
+        session.tick(Controls::default());
+        session.tick_combat(
+            crate::combat::Rules::default(),
+            &mut crate::chance::NeverFires,
+        );
+        // The second pass's block finds 0.5 and sheds it to -0.5: the
+        // hold reads the 0.5, so the gun is held.
+        session.tick_again(
+            Controls::default(),
+            crate::combat::Rules::default(),
+            &mut crate::chance::NeverFires,
+        );
+        assert_eq!(session.ion().charge, -0.5);
+        let reload = session.armament.mounts()[0].reload;
+        assert_eq!(reload, crate::combat::ion::HELD_RELOAD);
     }
 
     /// The fights, from 1, on which NPC 0, of class `IonizeMax` 100 and
@@ -535,9 +709,10 @@ mod tests {
 
     #[test]
     fn an_npcs_seeker_0x0020_gun_is_held_from_a_factor_of_1_of_its_class_ionize_max() {
-        // Its first shot leaves before any reload step can hold it.
-        assert_eq!(npc_fired_ticks(100.0), (vec![1], 1.0), "factor 1: held");
-        assert_eq!(npc_fired_ticks(250.0), (vec![1], 1.0), "factor 2.5: held");
+        // Its hold comes before its fire, so even its first shot is held,
+        // and the reload step counts the hold's 1.0 down.
+        assert_eq!(npc_fired_ticks(100.0), (vec![], 0.0), "factor 1: held");
+        assert_eq!(npc_fired_ticks(250.0), (vec![], 0.0), "factor 2.5: held");
         assert_eq!(npc_fired_ticks(99.0), (vec![1, 3], 1.0), "0.99: fires");
         assert_eq!(npc_fired_ticks(0.0), (vec![1, 3], 1.0), "uncharged");
     }

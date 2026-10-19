@@ -260,6 +260,7 @@ mod tests {
         let ion = crate::combat::ion::Ion {
             charge: 12.0,
             colour: 0x0000_80ff,
+            ..crate::combat::ion::Ion::default()
         };
         set_player_ion(&mut session, ion);
         assert_eq!(session.ion(), ion);

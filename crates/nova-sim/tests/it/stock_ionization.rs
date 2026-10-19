@@ -119,6 +119,7 @@ fn an_ion_cannons_charge_slows_the_stock_first_ships_thrust_and_sheds() {
             Ion {
                 charge,
                 colour: cannon.ionize_colour,
+                ..Ion::default()
             },
         );
         session.tick(thrust);

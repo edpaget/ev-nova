@@ -814,6 +814,7 @@ fn an_ionized_player_draws_its_hull_colorized_and_its_glow_plainly() {
         nova_sim::combat::ion::Ion {
             charge: 200.0,
             colour: 0x0000_80ff,
+            ..nova_sim::combat::ion::Ion::default()
         },
     );
     view.tick(TICK);

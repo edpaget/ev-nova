@@ -351,7 +351,7 @@ use weapon::{Explosion, Guidance};
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::flight::{Flyer, ShipState, normalized};
+use crate::flight::{ShipState, normalized};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
@@ -1189,6 +1189,8 @@ impl Combat {
             Firers::Player,
         );
         self.fire(fighters, &targets, chance, Firers::Player);
+        // Its ionized weapons' hold decided ([`IonLockout`]).
+        let player_factor = IonLockout::player_factor(fighters);
         // Steps 2 and 3: the last tick's moves tested, and the struck
         // ships' conditions settled.
         let begun = self.hit_pass(fighters, (govts, arsenal), rules.disable, scenery, chance);
@@ -1209,15 +1211,10 @@ impl Combat {
             chance,
             Firers::Npcs,
         );
+        self.ion_lockout.hold_npcs(fighters);
         self.fire(fighters, &targets, chance, Firers::Npcs);
-        // Step 5, its ionized weapons held ([`IonLockout`]).
-        let lockout = self.ion_lockout;
-        for fighter in fighters.iter_mut() {
-            let (flyer, factor) = fighter.ion_factor();
-            fighter
-                .armament
-                .reload_holding(|spec| lockout.holds(spec, flyer, factor));
-        }
+        // Step 5, the player's ionized weapons held ([`IonLockout`]).
+        self.ion_lockout.reload(fighters, player_factor);
         // Step 6.
         let beams_held = self.beams.len();
         self.fly(fighters, &targets, chance);
@@ -1267,6 +1264,7 @@ impl Combat {
             .iter()
             .map(|fighter| (fighter.ship, fighter.state.position))
             .collect();
+        IonLockout::clear_shed(fighters);
     }
 
     /// Marks the last strike on `ship` since `first_strike`, but a missile
@@ -3340,18 +3338,6 @@ impl Fighter<'_> {
         }
     }
 
-    /// Who flies it, and its ionization factor
-    /// ([`factor`](crate::ionization::factor)) as the reload loops read it.
-    fn ion_factor(&self) -> (Flyer, f32) {
-        let flyer = if self.ship == ShipRef::Player {
-            Flyer::Player
-        } else {
-            Flyer::Npc
-        };
-        let factor = crate::ionization::factor(self.ion.charge, self.ion_capacity);
-        (flyer, factor)
-    }
-
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
@@ -3744,6 +3730,7 @@ mod tests {
 
     mod exit_steps;
     mod fold_stamp;
+    mod ion_lockout_tick;
     mod plunder_fire;
     mod strike_terms;
     mod weapon_glow;
@@ -4225,8 +4212,9 @@ mod tests {
 
     /// The reload a ship's `Seeker` 0x0020 blaster (reload 0) is left at
     /// after a tick's fire and reload, its ship `player` or an NPC of
-    /// ionization factor `factor`, under `lockout`.
-    fn ion_held_reload(player: bool, factor: f32, lockout: RuleSource) -> f32 {
+    /// ionization factor `factor`, under `lockout`; and how many shots it
+    /// fired.
+    fn ion_held_reload(player: bool, factor: f32, lockout: RuleSource) -> (f32, usize) {
         let mut combat = Combat::default();
         combat.set_ion_lockout(lockout);
         let mut ship = Ship::at(1, 0.0, 0.0).armed(WeaponRecord {
@@ -4240,9 +4228,11 @@ mod tests {
         }
         ship.ion_capacity = 100.0;
         ship.ion.charge = factor * 100.0;
+        let id = ship.id;
         let mut ships = [ship];
         tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].armament.mounts()[0].reload
+        let shots = fired(&combat.take_events(), id);
+        (ships[0].armament.mounts()[0].reload, shots)
     }
 
     #[test]
@@ -4250,14 +4240,20 @@ mod tests {
         let engine = RuleSource::Engine;
         assert_eq!(
             ion_held_reload(true, 0.5, engine),
-            ion::HELD_RELOAD,
-            "player"
+            (ion::HELD_RELOAD, 1),
+            "player: fires, then held"
         );
-        assert_eq!(ion_held_reload(false, 0.5, engine), 0.0, "an NPC under 1");
-        assert_eq!(ion_held_reload(false, 1.0, engine), 1.0, "an NPC at 1");
+        assert_eq!(
+            ion_held_reload(false, 0.5, engine),
+            (0.0, 1),
+            "an NPC under 1"
+        );
+        // An NPC's hold comes before its fire, and the reload step counts
+        // its 1.0 down.
+        assert_eq!(ion_held_reload(false, 1.0, engine), (0.0, 0), "an NPC at 1");
         let bible = RuleSource::Bible;
-        assert_eq!(ion_held_reload(true, 1.0, bible), 0.0, "unguided");
-        assert_eq!(ion_held_reload(false, 1.0, bible), 0.0, "unguided");
+        assert_eq!(ion_held_reload(true, 1.0, bible), (0.0, 1), "unguided");
+        assert_eq!(ion_held_reload(false, 1.0, bible), (0.0, 1), "unguided");
     }
 
     #[test]
@@ -10408,7 +10404,8 @@ mod tests {
             ships[1].ion,
             Ion {
                 charge: 30.0,
-                colour: GREEN
+                colour: GREEN,
+                ..Ion::default()
             }
         );
         assert_eq!(ships[0].ion, Ion::default(), "not its firer");
@@ -10475,7 +10472,8 @@ mod tests {
             ships[2].ion,
             Ion {
                 charge: expected,
-                colour: GREEN
+                colour: GREEN,
+                ..Ion::default()
             }
         );
         let corner = Vec2::new(100.0, -28.0) - at;

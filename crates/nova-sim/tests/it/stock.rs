@@ -2481,7 +2481,8 @@ fn the_stock_emp_torpedo_ionizes_the_ship_it_hits_and_its_blasts_circle() {
         ships[1].ion,
         Ion {
             charge: 100.0,
-            colour: 0x00d4_ffff
+            colour: 0x00d4_ffff,
+            ..Ion::default()
         }
     );
     let mut ships = [
@@ -2497,7 +2498,8 @@ fn the_stock_emp_torpedo_ionizes_the_ship_it_hits_and_its_blasts_circle() {
         ships[2].ion,
         Ion {
             charge: 75.0,
-            colour: 0x00d4_ffff
+            colour: 0x00d4_ffff,
+            ..Ion::default()
         }
     );
     let shuttle = class(&data, &arsenal, ShipId(128)).reserves.shield.now;
@@ -2590,7 +2592,8 @@ fn the_stock_pulse_laser_ionizes_by_4_on_every_hit_tick() {
         ships[1].ion,
         Ion {
             charge: 4.0 * f32::from(hits),
-            colour: 0x00ff_00ff
+            colour: 0x00ff_00ff,
+            ..Ion::default()
         }
     );
 }

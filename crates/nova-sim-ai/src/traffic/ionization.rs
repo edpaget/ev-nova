@@ -88,14 +88,20 @@ impl Npc {
 /// `npc`'s frame's ion block, at top speed `top_speed` (see the module
 /// docs): a charge above none sheds its class's rate, unfloored, and its
 /// velocity is pulled toward the top speed lowered by the charge left;
-/// one at or below none is cleared.
+/// one at or below none is cleared. What it took off is kept in the ion's
+/// `shed`, for the fight's lockout ([`Ion::as_block_found`]).
+///
+/// [`Ion::as_block_found`]: crate::combat::ion::Ion::as_block_found
 pub fn deionize(npc: &mut Npc, top_speed: f32) {
     let rate = npc.stats.ion.rate(Flyer::Npc);
-    let Some(charge) = crate::ionization::deionize(npc.ion.charge, rate) else {
+    let found = npc.ion.charge;
+    let Some(charge) = crate::ionization::deionize(found, rate) else {
         npc.ion.charge = 0.0;
+        npc.ion.shed = found;
         return;
     };
     npc.ion.charge = charge;
+    npc.ion.shed = found - charge;
     let cap = lowered_top(top_speed, npc.ion_factor());
     npc.state.velocity = pull(npc.state.velocity, cap);
 }
@@ -142,6 +148,22 @@ mod tests {
         assert_eq!(ship.ion.charge, -0.25);
         deionize(&mut ship, 6.0);
         assert_eq!(ship.ion.charge, 0.0);
+    }
+
+    #[test]
+    fn the_block_records_what_it_took_off_the_charge() {
+        let mut ship = charged(3.0);
+        deionize(&mut ship, 6.0);
+        assert_eq!((ship.ion.charge, ship.ion.shed), (2.5, 0.5));
+        assert_eq!(ship.ion.as_block_found(), 3.0);
+        // A charge at or below none is cleared: the whole of it is shed.
+        let mut cleared = charged(-0.5);
+        deionize(&mut cleared, 6.0);
+        assert_eq!((cleared.ion.charge, cleared.ion.shed), (0.0, -0.5));
+        let mut none = charged(0.0);
+        none.ion.shed = 7.0;
+        deionize(&mut none, 6.0);
+        assert_eq!((none.ion.charge, none.ion.shed), (0.0, 0.0));
     }
 
     #[test]

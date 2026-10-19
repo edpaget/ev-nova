@@ -1408,24 +1408,33 @@ impl Armament {
     }
 
     /// [`Armament::reload`], then each weapon `held` says can't fire held
-    /// at [`HELD_RELOAD`](super::ion::HELD_RELOAD), as the reload loops
-    /// hold an ionized ship's `Seeker` 0x0020 weapons
-    /// ([`IonLockout`](super::ion::IonLockout)).
-    ///
-    /// The original's reload loops read the factor before their frame's
-    /// ion block (`_HandlePlayer` @0x6ae20 before @0x6d7fd, `_HandleShip`
-    /// @0x3383e before @0x342b2), and the player's fire (@0x6ab55) comes
-    /// before its loop. The engine sheds the charge in each ship's flight,
-    /// before the fight, and holds at the fight's step 5 on the charge
-    /// left, so a held weapon is released a tick sooner than the
-    /// original's (rdm:phase/ship-handling-fidelity/phase-23-left-out-of-phase-11).
+    /// at [`HELD_RELOAD`](super::ion::HELD_RELOAD), as the player's reload
+    /// loop holds an ionized ship's `Seeker` 0x0020 weapons
+    /// ([`IonLockout`](super::ion::IonLockout)). The fight decides the
+    /// player's hold after its fire, on the charge as its frame's ion
+    /// block found it, and applies it here at step 5.
     pub fn reload_holding(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
+        self.reload_and_hold(true, held);
+    }
+
+    /// Each weapon `held` says can't fire held at
+    /// [`HELD_RELOAD`](super::ion::HELD_RELOAD), with no countdown: an
+    /// NPC's hold, which the fight applies before its fire and whose 1.0
+    /// the reload step counts down after it
+    /// ([`IonLockout`](super::ion::IonLockout)).
+    pub fn hold_ionized(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
+        self.reload_and_hold(false, held);
+    }
+
+    fn reload_and_hold(&mut self, count_down: bool, held: impl Fn(&WeaponSpec) -> bool) {
         for mount in &mut self.mounts {
-            mount.reload = if mount.reload > 0.0 {
-                mount.reload - 1.0
-            } else {
-                0.0
-            };
+            if count_down {
+                mount.reload = if mount.reload > 0.0 {
+                    mount.reload - 1.0
+                } else {
+                    0.0
+                };
+            }
             if held(&mount.spec) {
                 mount.reload = super::ion::HELD_RELOAD;
             }

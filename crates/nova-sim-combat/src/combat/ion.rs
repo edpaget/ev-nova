@@ -49,6 +49,7 @@
 //! colour outlives its charge by a frame at most. Nothing here is saved.
 
 use super::weapon::{Guidance, WeaponSpec};
+use super::{Fighter, ShipRef};
 use crate::flight::Flyer;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -61,7 +62,35 @@ pub const CANT_FIRE_IONIZED: u16 = 0x0020;
 /// [`RuleKey::IonFireLockout`](crate::RuleKey::IonFireLockout) reads: the
 /// reload loops' hold (`_HandlePlayer` @0x6ae73-0x6ae9c, `_HandleShip`
 /// @0x338d6-0x338f0), which sets a held weapon's reload to 1.0 after its
-/// countdown ([`Armament::reload_holding`](super::armament::Armament::reload_holding)).
+/// countdown.
+///
+/// **When it reads the charge.** The original's loops read the factor
+/// before their frame's ion block sheds it (`_HandlePlayer` @0x6ae20
+/// before @0x6d7fd, `_HandleShip` @0x3383e before @0x342b2). The
+/// player's loop follows its fire (@0x6ab55) and comes before the
+/// frame's hits (`_HandleShot` @0x44385); an NPC's follows the hits and
+/// comes before its fire (`_FireAIShipWeapon` @0x34ffd). The engine sheds
+/// the charge in each ship's flight, before the fight, and keeps what it
+/// shed ([`Ion::shed`]), so the fight reads the charge as the block found
+/// it ([`Ion::as_block_found`]):
+/// - the player's hold is decided at step 1, after its fire and before
+///   the hit pass's doses ([`IonLockout::player_factor`]), and applied
+///   with its countdown at step 5 ([`IonLockout::reload`],
+///   [`Armament::reload_holding`]). So a hit holds its fire from the
+///   second tick after it, and a charge shed away frees it a tick after
+///   the charge as a frame began reaches none.
+/// - an NPC's hold is decided and applied at step 4, after its point
+///   defence and before its fire, on that charge plus the pass's doses
+///   ([`IonLockout::hold_npcs`], [`Armament::hold_ionized`]). So it is
+///   held on the fight a hit lands. Step 5 only counts its reloads down:
+///   the hold's 1.0 counts to none there, as the original's next loop
+///   counts it, so a freed weapon fires on the next fight.
+///
+/// Double time's second pass runs both blocks again, so each pass reads
+/// the charge as its own block found it.
+///
+/// [`Armament::reload_holding`]: super::armament::Armament::reload_holding
+/// [`Armament::hold_ionized`]: super::armament::Armament::hold_ionized
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IonLockout(RuleSource);
 
@@ -95,6 +124,66 @@ impl IonLockout {
             RuleSource::Bible => spec.guidance == Guidance::Homing && factor >= 1.0,
         }
     }
+
+    /// Step 1, after the player's fire: the player's factor on its charge
+    /// as its block found it, which its hold at step 5 reads; none when
+    /// the player isn't among `fighters`.
+    pub(super) fn player_factor(fighters: &[Fighter]) -> Option<f32> {
+        fighters
+            .iter()
+            .map(Fighter::lockout_factor)
+            .find_map(|(flyer, factor)| (flyer == Flyer::Player).then_some(factor))
+    }
+
+    /// Step 4, before the NPCs' fire: each NPC's weapons it holds, held
+    /// on its charge as its block found it plus the pass's doses.
+    pub(super) fn hold_npcs(self, fighters: &mut [Fighter]) {
+        for fighter in fighters.iter_mut() {
+            let (flyer, factor) = fighter.lockout_factor();
+            if flyer == Flyer::Npc {
+                fighter
+                    .armament
+                    .hold_ionized(|spec| self.holds(spec, flyer, factor));
+            }
+        }
+    }
+
+    /// Step 5: every weapon's reload counts down, and the player's held
+    /// by the factor `player` step 1 read ([`IonLockout::player_factor`]).
+    pub(super) fn reload(self, fighters: &mut [Fighter], player: Option<f32>) {
+        for fighter in fighters.iter_mut() {
+            match (fighter.ship == ShipRef::Player, player) {
+                (true, Some(factor)) => fighter
+                    .armament
+                    .reload_holding(|spec| self.holds(spec, Flyer::Player, factor)),
+                _ => fighter.armament.reload(),
+            }
+        }
+    }
+
+    /// As the fight's tick ends: every fighter's [`Ion::shed`] cleared, so
+    /// a fight run with no ion block before it reads the plain charge.
+    pub(super) fn clear_shed(fighters: &mut [Fighter]) {
+        for fighter in fighters.iter_mut() {
+            fighter.ion.shed = 0.0;
+        }
+    }
+}
+
+impl Fighter<'_> {
+    /// Who flies it, and its ionization factor
+    /// ([`factor`](crate::ionization::factor)) on its charge as its
+    /// block found it, plus the pass's doses so far
+    /// ([`Ion::as_block_found`]): as the reload loops read it.
+    fn lockout_factor(&self) -> (Flyer, f32) {
+        let flyer = if self.ship == ShipRef::Player {
+            Flyer::Player
+        } else {
+            Flyer::Npc
+        };
+        let factor = crate::ionization::factor(self.ion.as_block_found(), self.ion_capacity);
+        (flyer, factor)
+    }
 }
 
 /// A ship's ionization (the original's +0x5c and +0xb0): none as it
@@ -106,6 +195,14 @@ pub struct Ion {
     /// Its ion colour, `00RRGGBB`: every colour it has been ionized with,
     /// OR-ed together.
     pub colour: u32,
+    /// What this pass's ion block took off the charge: the rate it shed,
+    /// or the whole charge when it cleared one at or below none. None on
+    /// a pass whose block didn't run (a jump's arrival frame). A dose
+    /// leaves it alone, so `charge + shed` ([`Ion::as_block_found`]) is
+    /// the charge as the block found it, plus the pass's doses. The
+    /// fight reads it for the lockout ([`IonLockout`]) and clears it as
+    /// its tick ends.
+    pub shed: f32,
 }
 
 /// What a hit that landed ionizes its ship by: `_IonizeShip`'s weapon and
@@ -143,6 +240,14 @@ impl Dose {
 }
 
 impl Ion {
+    /// The charge as this pass's ion block found it, plus the doses the
+    /// pass has landed since: `charge + shed`, which the reload loops'
+    /// lockout reads (see [`IonLockout`]).
+    #[must_use]
+    pub fn as_block_found(&self) -> f32 {
+        self.charge + self.shed
+    }
+
     /// Takes `dose` on a ship at `at` (see the module docs).
     pub fn take(&mut self, dose: Dose, at: Vec2) {
         let amount = match dose.blast {
@@ -268,6 +373,24 @@ mod tests {
     }
 
     #[test]
+    fn an_npcs_hold_sets_its_held_mounts_at_1_and_counts_nothing_down() {
+        use super::super::armament::Armament;
+        let record = |id, seeker| crate::catalog::WeaponRecord {
+            reload: 5,
+            seeker,
+            ..nova_sim_catalog::fixture::weapon(id)
+        };
+        let held = WeaponSpec::new(&record(128, CANT_FIRE_IONIZED));
+        let free = WeaponSpec::new(&record(129, 0));
+        let mut armament = Armament::new([(held, 1), (free, 1)]);
+        armament.hold(held.id);
+        armament.hold(free.id);
+        armament.hold_ionized(|spec| ENGINE.holds(spec, Flyer::Npc, 1.0));
+        let reloads: Vec<f32> = armament.mounts().iter().map(|m| m.reload).collect();
+        assert_eq!(reloads, [HELD_RELOAD, 5.0]);
+    }
+
+    #[test]
     fn the_lockout_reads_its_source() {
         assert_eq!(IonLockout::from(RuleSource::Bible), BIBLE);
         assert_eq!(IonLockout::default(), ENGINE);
@@ -364,9 +487,43 @@ mod tests {
             ion,
             Ion {
                 charge: 6.0,
-                colour: 0x0000_ff00
+                colour: 0x0000_ff00,
+                shed: 0.0,
             }
         );
+    }
+
+    #[test]
+    fn a_ship_spawns_having_shed_nothing() {
+        assert_eq!(Ion::default().shed, 0.0);
+    }
+
+    #[test]
+    fn a_dose_leaves_the_shed_alone() {
+        let mut ion = Ion {
+            charge: 2.0,
+            colour: 0,
+            shed: 1.5,
+        };
+        ion.take(direct(10, 0), AT);
+        assert_eq!(ion.shed, 1.5);
+        assert_eq!(ion.charge, 12.0);
+    }
+
+    #[test]
+    fn the_charge_as_the_block_found_it_adds_back_the_shed() {
+        let ion = Ion {
+            charge: 2.0,
+            colour: 0,
+            shed: 1.5,
+        };
+        assert_eq!(ion.as_block_found(), 3.5);
+        let cleared = Ion {
+            charge: 0.0,
+            colour: 0,
+            shed: -0.5,
+        };
+        assert_eq!(cleared.as_block_found(), -0.5);
     }
 
     #[test]

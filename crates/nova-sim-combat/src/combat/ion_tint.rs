@@ -120,6 +120,7 @@ mod tests {
             let mut ion = Ion {
                 charge: 200.0,
                 colour: 0x0000_80ff,
+                ..Ion::default()
             };
             let tint = display(&mut ion, 400.0, &mut Draws::of(&[roll]));
             assert_eq!(
@@ -134,6 +135,7 @@ mod tests {
         let mut ion = Ion {
             charge: 100.0,
             colour: 1,
+            ..Ion::default()
         };
         assert_eq!(
             display(&mut ion, 1.0, &mut Draws::of(&[4])).map(|t| t.level),
@@ -147,6 +149,7 @@ mod tests {
         let mut ion = Ion {
             charge: 200.0,
             colour: 1,
+            ..Ion::default()
         };
         let _ = display(&mut ion, 400.0, &mut draws);
         assert_eq!(draws.asked, [FLICKER]);
@@ -158,9 +161,17 @@ mod tests {
             let mut ion = Ion {
                 charge,
                 colour: 0x00ff_0000,
+                ..Ion::default()
             };
             assert_eq!(display(&mut ion, 400.0, &mut Draws::of(&[])), None);
-            assert_eq!(ion, Ion { charge, colour: 0 });
+            assert_eq!(
+                ion,
+                Ion {
+                    charge,
+                    colour: 0,
+                    ..Ion::default()
+                }
+            );
         }
     }
 
@@ -169,6 +180,7 @@ mod tests {
         let mut ion = Ion {
             charge: 100.0,
             colour: 0x00ff_0000,
+            ..Ion::default()
         };
         let mut draws = Draws::of(&[]);
         assert_eq!(display(&mut ion, 400.0, &mut draws), None);
@@ -181,6 +193,7 @@ mod tests {
         let mut ion = Ion {
             charge: 100.0,
             colour: 0x00ff_0000,
+            ..Ion::default()
         };
         assert_eq!(display(&mut ion, 0.0, &mut Draws::of(&[])), None);
         assert_eq!(ion.colour, 0x00ff_0000);

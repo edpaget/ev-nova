@@ -736,6 +736,7 @@ mod tests {
         let ionized = Ion {
             charge: 40.0,
             colour: 0x00ff_0000,
+            ..Ion::default()
         };
         session.ion = ionized;
         to_the_breakup(&mut session, &catalog, false);

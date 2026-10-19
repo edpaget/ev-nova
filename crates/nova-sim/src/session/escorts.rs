@@ -1515,7 +1515,8 @@ mod tests {
             npc.ion,
             Ion {
                 charge: 10.0,
-                colour: 0x0000_00FF
+                colour: 0x0000_00FF,
+                ..Ion::default()
             }
         );
     }
@@ -1525,6 +1526,7 @@ mod tests {
         session.npc_mut(warship).expect("there").ion = Ion {
             charge: 30.0,
             colour: 0x00FF_0000,
+            ..Ion::default()
         };
         warship
     }
