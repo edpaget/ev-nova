@@ -267,11 +267,14 @@ impl AppScreen {
     }
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
-    /// its course map's zoom and whether the map shows the borders, for
-    /// the next flight in this run.
+    /// what its berths keep, its course map's zoom and whether the map
+    /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(slot_sprites) = flight.slot_sprites() {
             self.slot_sprites = slot_sprites.clone();
+        }
+        if let Some(kept_berths) = flight.kept_berths() {
+            self.kept_berths = kept_berths;
         }
         if let Some(zoom) = flight.course_map_zoom() {
             self.course_map_zoom = Some(zoom);

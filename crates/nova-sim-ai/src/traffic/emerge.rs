@@ -61,7 +61,9 @@
 //!   0xa (@0x8f3c8-0x8f3d9), whose block keeps the emerge's negative start
 //!   and sets +0x30 to -1.165 (@0x88136) before every tick of the burst.
 //!   Only a ship with AI type 0 or below, which `_AIDispatch` never runs
-//!   (@0x4427e-0x44286), would keep the -3.0; the engine has none.
+//!   (@0x4427e-0x44286), would keep the -3.0: the engine's
+//!   [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), which only the
+//!   player's eject hulk has, and the hulk never emerges.
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
 //! - **Holding fire.** A ship coming out of a gate fires nothing while it
@@ -94,7 +96,11 @@
 //!   for `Rand(30) + 30` ticks (@0x34d5c-0x34d8b), as after a glide in
 //!   from hyperspace: [`Mode::Coasting`](crate::traffic::npc::Mode::Coasting).
 //!
-//! Not modelled: the stellar the ship remembers (+0x92).
+//! A ship with a fuel tank has visited the gate it comes out of (+0x92 the
+//! gate when `_ShipFuelCapacity` is above 0, else -2, @0x8955e-0x89574;
+//! [`Npc::visited`](crate::traffic::npc::Npc::visited)), so on its first
+//! idle think it leaves rather than heading for a stellar (see
+//! [`idle_block`](crate::ai::idle_block)).
 
 use crate::catalog::{GovtId, LandingSite};
 use crate::chance::Chance;

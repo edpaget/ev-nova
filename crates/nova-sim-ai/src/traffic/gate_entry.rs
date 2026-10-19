@@ -28,7 +28,8 @@
 //! - **The release** (@0x8dc94-0x8dd58): every other ship, active, whose
 //!   leader (+0x9a) is this one has its leader cleared, takes this ship's
 //!   AI type capped at 3 ([`released_ai_type`]), clears the stellar it
-//!   defends (+0x8c), its provocation (+0x96) and its target (+0x70),
+//!   defends (+0x8c) and its target (+0x70), sets its provocation (+0x96)
+//!   to -1 ([`RELEASED_PROVOCATION`]),
 //!   and heads for this gate with goal 0x14 and sub-goal 0. Disabled
 //!   followers are not skipped. While +0x4c is above 0
 //!   `_HighLevelAIHandler` returns at once (@0x8d4b9-0x8d4d2), so the
@@ -136,6 +137,11 @@ pub fn enter_level(ticks_left: u32) -> u8 {
     u8::try_from(level).unwrap_or(FULL_LEVEL)
 }
 
+/// The provocation a ship takes as its lead enters a gate and releases
+/// it: +0x96 = -1 (@0x8dd14), so the first point of damage that hits it
+/// leaves it unprovoked (the readers' `cmpw $0` and `jle`).
+pub const RELEASED_PROVOCATION: f32 = -1.0;
+
 /// The AI type a ship led by a ship of `lead`'s type takes as its lead
 /// enters a gate: the lead's, capped at 3, so an interceptor's followers
 /// become warships (@0x8dc94-0x8dd58).
@@ -181,6 +187,27 @@ mod tests {
         assert_eq!(enter_level(0), 0);
         assert_eq!(enter_level(u32::MAX), FULL_LEVEL);
         assert_eq!(ENTRY_TICKS, 16);
+    }
+
+    #[test]
+    fn a_follower_released_at_a_gate_takes_provocation_minus_1_so_a_1_point_hit_leaves_it_unprovoked()
+     {
+        use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
+        let (sites, govts) = (sites(), govts(0, 0));
+        let mut follower = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        follower.target = Some(n(2));
+        let npcs = [
+            follower.clone(),
+            ship(2, PIRATES, AiType::Warship, 50.0, 0.0),
+        ];
+        let around = around(&sites, &npcs, &govts, (0.0, -500.0), 0);
+        let after = |hit: f32| {
+            let mut hit_follower = follower.clone();
+            hit_follower.provoked = RELEASED_PROVOCATION + hit;
+            crate::ai::provoked_by(&hit_follower, &around)
+        };
+        assert_eq!(after(1.0), None, "-1 + 1 is 0: `jle` reads it unprovoked");
+        assert_eq!(after(2.0), Some(n(2)));
     }
 
     #[test]

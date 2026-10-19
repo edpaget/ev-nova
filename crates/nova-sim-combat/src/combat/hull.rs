@@ -125,6 +125,12 @@ pub const RETREATS_DRY: u16 = 0x0080;
 /// box (class +0x9ea, `_HighLevelAIHandler` @0x8e48e and @0x8e6b7; see
 /// `nova_sim::ai::stand_off`).
 pub const STANDS_OFF: u16 = 0x0002;
+/// The `shïp` `Flags2` bit of a ship that swarms: it names the lowest
+/// slot of a swarming class fighting its target as its swarm leader and,
+/// outside the dogfight box, flies at a point ahead of it (class +0x9ea
+/// bit 0, `_AIVerifySwarmLeader` @0x7e316, `_AIFindSwarmLeader` @0x7e400,
+/// `_HighLevelAIHandler` @0x8e64b; see `nova_sim::ai::swarm`).
+pub const SWARMS: u16 = 0x0001;
 /// The `shïp` `Flags3` bit of a ship whose turret shots (4) are drawn
 /// over the ships, in 0x3b5308 (class +0x9ec, filled @0x7a204; `_SpawnShot`
 /// @0x3f101; see [`ShotLayer`](super::shot_layer::ShotLayer)).
@@ -198,8 +204,12 @@ pub struct HullSpec {
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
     pub explosion: Option<Explosion>,
-    /// Its mass, in tons.
+    /// Its mass, in tons; none below none.
     pub mass: f32,
+    /// Its `Mass` field as the data has it, signed, which the joust
+    /// compares (`_LowLevelAIHandler` @0x861ac, @0x8623a; see
+    /// `nova_sim::ai::pursuit`).
+    pub signed_mass: i16,
     /// Where its turrets cannot fire: its `Flags` 0x1000 (front), 0x2000
     /// (sides) and 0x4000 (rear), as a weapon's `Flags` mark them.
     pub blind_spots: u16,
@@ -230,6 +240,9 @@ pub struct HullSpec {
     /// Whether it stands off from its target at its weapons' reach, its
     /// `Flags2` [`STANDS_OFF`] (see `nova_sim::ai::stand_off`).
     pub stands_off: bool,
+    /// Whether it swarms, its `Flags2` [`SWARMS`] (see
+    /// `nova_sim::ai::swarm`).
+    pub swarms: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -317,6 +330,7 @@ impl Default for HullSpec {
             breakup: None,
             explosion: None,
             mass: 0.0,
+            signed_mass: 0,
             blind_spots: 0,
             strength: 0.0,
             board_reach: DEFAULT_BOARD_REACH,
@@ -326,6 +340,7 @@ impl Default for HullSpec {
             pd_target: false,
             retreats_dry: false,
             stands_off: false,
+            swarms: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
@@ -359,6 +374,7 @@ impl HullSpec {
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
+            signed_mass: record.mass,
             blind_spots: record.flags & BLIND_SPOTS,
             strength: f32::from(record.strength.max(0)),
             board_reach,
@@ -368,6 +384,7 @@ impl HullSpec {
             pd_target: record.flags2 & PD_TARGET != 0,
             retreats_dry: record.flags2 & RETREATS_DRY != 0,
             stands_off: record.flags2 & STANDS_OFF != 0,
+            swarms: record.flags2 & SWARMS != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
@@ -745,6 +762,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hull_keeps_its_signed_mass_field() {
+        let negative = HullSpec::new(&HullRecord {
+            mass: -1,
+            ..hull(128)
+        });
+        assert_eq!(negative.mass, 0.0, "the other readers' none below none");
+        assert_eq!(negative.signed_mass, -1);
+        let heavy = HullSpec::new(&HullRecord {
+            mass: 120,
+            ..hull(128)
+        });
+        assert_eq!(heavy.signed_mass, 120);
+        assert_eq!(HullSpec::default().signed_mass, 0);
+    }
+
+    #[test]
     fn a_hull_reads_its_pod_count_floored_and_its_signed_death_delay() {
         let liner = HullSpec::new(&HullRecord {
             death_delay: 100,
@@ -870,6 +903,28 @@ mod tests {
         assert!(!flags.stands_off, "its Flags never");
         assert!(!HullSpec::default().stands_off);
         assert_eq!(STANDS_OFF, 0x0002);
+    }
+
+    #[test]
+    fn a_hull_that_swarms_has_its_flags2_0x0001() {
+        let swarms = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .swarms
+        };
+        assert!(swarms(0x0001));
+        assert!(swarms(0x0083), "with other bits");
+        assert!(!swarms(0xfffe), "every other bit");
+        assert!(!swarms(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0001,
+            ..hull(167)
+        });
+        assert!(!flags.swarms, "its Flags never");
+        assert!(!HullSpec::default().swarms);
+        assert_eq!(SWARMS, 0x0001);
     }
 
     #[test]

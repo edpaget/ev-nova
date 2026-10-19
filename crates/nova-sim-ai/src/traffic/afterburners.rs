@@ -4,9 +4,13 @@
 //! player's combat rating and the yardstick
 //! [`World::afterburner_yardstick`] reads, and gives a person of `përs`
 //! `Flags` [`PERSON_AFTERBURNER`] one whatever its roll (`_SpawnPerson`
-//! @0x40d99-0x40da2).
+//! @0x40d99-0x40da2). A ship placed at a berth another ship still names as
+//! its swarm leader has none, unrolled ([`swarm::named`],
+//! `_AIHasAfterburner` @0x64ff-0x6539), but for that person.
 
 use crate::ai::afterburner::{self, PERSON_AFTERBURNER};
+#[cfg(doc)]
+use crate::ai::swarm;
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
@@ -38,18 +42,20 @@ impl<'c> AfterburnerRoll<'c> {
     }
 
     /// Whether `ship`, of `kind`, flown by `person` if any, has an
-    /// afterburner as it is added, rolled on this roll, or with none never
-    /// rolled (see the module docs).
+    /// afterburner as it is added at a berth another ship names as its
+    /// swarm leader when `named` ([`swarm::named`]), rolled on this roll,
+    /// or with none never rolled (see the module docs).
     pub(crate) fn has(
         roll: Option<&mut Self>,
         ship: &NewShip,
         kind: &ShipKind,
-        person: Option<&SpawnPerson>,
+        (person, named): (Option<&SpawnPerson>, bool),
     ) -> bool {
         // A class's `Strength` is none below none, so in 16 bits.
         #[allow(clippy::cast_possible_truncation)]
         let own = kind.hull.strength as i16;
         let rolled = afterburner::asks(ship)
+            && !named
             && roll.is_some_and(|roll| {
                 let yardstick = afterburner::yardstick(roll.reading, roll.first, own);
                 afterburner::has_afterburner(&kind.hull, roll.rating, yardstick, roll.chance)
@@ -222,6 +228,42 @@ mod tests {
             added(vec![mission, aux], 0, RuleSource::Engine, 0),
             [false, false]
         );
+    }
+
+    #[test]
+    fn a_ship_spawned_at_a_berth_a_swarmer_still_names_has_no_afterburner() {
+        // Berth 1 left, and the ship at berth 2 names it yet: the new ship
+        // takes berth 1 and has none, though its class always has one
+        // (`Flags` 0x0040), unrolled; a person of `përs` 0x0002 still has
+        // one.
+        let added_at_named = |ship: NewShip, flags: u16| {
+            let mut traffic = Traffic::new();
+            traffic.table = table(flags);
+            let mut swarmer = crate::traffic::fixture::npc(9, crate::stats::ShipStats::default());
+            swarmer.swarm_leader = Some(1);
+            traffic.add_npc_at(swarmer, 2);
+            let world = World::new(&[]);
+            let mut chance = Ranged::of(&[]);
+            traffic.add(
+                vec![ship],
+                &BTreeSet::new(),
+                None,
+                Some(&mut AfterburnerRoll::of(&world, &mut chance)),
+            );
+            assert!(chance.asked.is_empty(), "no roll");
+            let added = &traffic.npcs()[1];
+            assert_eq!(added.berth, 1);
+            added.afterburner
+        };
+        assert!(!added_at_named(duede(200), 0));
+        let person = NewShip {
+            person: Some(PersonId(128)),
+            booty: None,
+            ..duede(202)
+        };
+        assert!(added_at_named(person, 0x0002));
+        // Named by none, it has its own.
+        assert_eq!(added(vec![duede(200)], 0, RuleSource::Engine, 0), [true]);
     }
 
     // The spawn paths that roll, and the one that does not.

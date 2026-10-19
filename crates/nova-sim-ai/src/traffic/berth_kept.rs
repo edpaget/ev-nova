@@ -10,8 +10,11 @@
 //! last ship's by the engine, none by the other reading.
 //!
 //! It lives as long as the [`Traffic`](crate::traffic::Traffic) holding
-//! it, as its berths' persons do: across systems, but not across a new
-//! traffic.
+//! it: across systems, but not across a new traffic, where the
+//! original's table keeps the picks and exit cursors until the app quits,
+//! as it does the odds, search timers and persons the traffic hands on
+//! ([`kept_berths`](super::kept_berths)). Whether to hand these on too is
+//! the user's to decide: rdm task carry-slot-picks-and-exits-across-app-life.
 
 use std::collections::BTreeMap;
 
@@ -67,6 +70,12 @@ impl<T: Copy> BerthKept<T> {
         self.reading = reading;
     }
 
+    /// Takes `other`'s word for every berth in place of its own, keeping
+    /// its own reading: the table handed on from another traffic.
+    pub fn take_words_of(&mut self, other: Self) {
+        self.kept = other.kept;
+    }
+
     /// The reading new ships' words are taken by.
     #[must_use]
     pub fn reading(&self) -> RuleSource {
@@ -102,5 +111,17 @@ mod tests {
         assert_eq!(kept.reading(), RuleSource::Bible);
         assert_eq!(kept.seed(1), None);
         assert_eq!(kept.left(1), Some(131), "still kept");
+    }
+
+    #[test]
+    fn taking_anothers_words_keeps_this_ones_reading() {
+        let mut given = BerthKept::<u16>::default();
+        given.write(1, Some(131));
+        let mut taker = BerthKept::<u16>::default();
+        taker.write(2, Some(128));
+        taker.set_reading(RuleSource::Bible);
+        taker.take_words_of(given);
+        assert_eq!((taker.left(1), taker.left(2)), (Some(131), None));
+        assert_eq!(taker.reading(), RuleSource::Bible);
     }
 }

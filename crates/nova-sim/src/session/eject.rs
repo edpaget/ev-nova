@@ -42,9 +42,18 @@
 //!
 //! **The hand-off** (0x6f30e-0x6f40a). The hulk is an NPC of the old
 //! class, with the player's position, velocity, heading, shield and
-//! armour, no government (+0x88 = -1), boarded (+0xb9 = 1, so it can't be
-//! boarded), on no escort or mission duty. A disabled player's hulk is a
-//! disabled derelict; a dying one's breaks up and explodes. Its other
+//! armour, no government, boarded (+0xb9 = 1, so it can't be boarded),
+//! on no escort or mission duty. The original also gives it AI type -1
+//! (+0x88 = -1, @0x6f31f), which the engine's [`AiType`] has no value
+//! for: the hulk keeps its class's `InherentAI` and has
+//! [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai). So it never thinks
+//! (@0x4427e), the odds pass zeroes its berth and walks on (@0x44307),
+//! a hit on it is never answered (`_DamageShip` @0x3b459), and the
+//! readers of another ship's AI type read it as none: an interceptor may
+//! inspect it (@0x8cd4e), a brave trader attacking it calls for no help
+//! (@0x8b707), and a pirate reads it as no warship (@0x7fdad). A
+//! disabled player's hulk is a disabled derelict; a dying one's breaks
+//! up and explodes. Its other
 //! fields the original zeroes (+0x5c, +0x60, +0xb0, +0xc8d6, +0xc8e0,
 //! +0xc8f4-+0xc8f8) are the ionisation, cloak-fade and display state
 //! `_HandleShipDisplay` and `_IonizeShip` keep; the engine's NPC models
@@ -382,7 +391,6 @@ impl Session {
             info_types: 0,
             cargo: NpcHold::default(),
             spared: false,
-            assisting: 0,
             carrier: None,
             person: None,
             mission: None,
@@ -391,11 +399,14 @@ impl Session {
             cloak_gear: kind.cloak,
             led_out: false,
             emerges_from: None,
+            visited: None,
+            travel_set: false,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
             miner: kind.miner,
             can_scoop: kind.can_scoop,
             holds: kind.holds,
+            class_fuel: kind.class_fuel,
             former: None,
             tractor: None,
             ion: Ion::default(),
@@ -403,25 +414,36 @@ impl Session {
             pursuit: Pursuit::default(),
             ai_wait: 0,
             docking: None,
+            lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
+            swarm_leader: None,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
             pods_left: kind.hull.pod_count,
+            // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
+            odds: crate::traffic::odds_cache::STALE,
+            // AI type -1 (@0x6f31f).
+            no_ai: true,
         }
     }
 
     /// Every NPC that targets, fights or inspects the player lets it go
     /// and decides again, as the pod's loop clears each +0x70 of 0
-    /// (@0x6f67d-0x6f6a9).
+    /// (@0x6f67d-0x6f6a9). The loop writes no +0x96, so each keeps its
+    /// provocation, as the high level's goal-0 drop of an attack with no
+    /// target does (@0x8e731), but for one fleeing the player: state 3
+    /// with no target is state 0 with +0x96 0 (@0x8e228-0x8e23d).
     fn drop_the_player(&mut self) {
         let player = ShipRef::Player;
         for npc in self.traffic.npcs_mut() {
             if npc.target == Some(player) {
                 npc.target = None;
             }
+            if npc.goal == Goal::Flee(player) {
+                npc.provoked = 0.0;
+            }
             if npc.goal.quarry() == Some(player) || npc.goal.inspecting() == Some(player) {
                 npc.goal = Goal::Idle;
-                npc.provoked = 0.0;
             }
         }
     }
@@ -725,6 +747,15 @@ mod tests {
         assert!(in_the_pod(&session));
         assert_eq!(session.ion(), ionized);
         assert_eq!(hulk(&session).ion, Ion::default());
+    }
+
+    #[test]
+    fn the_players_hulk_has_no_ai() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        assert!(hulk(&session).no_ai, "AI type -1 (@0x6f31f)");
     }
 
     #[test]
@@ -1322,6 +1353,12 @@ mod tests {
         );
         session.npc_mut(attacker).expect("here").provoked = 5.0;
         let aiming = aimed(&mut session, Goal::Idle, Some(ShipRef::Player));
+        let fleeing = aimed(
+            &mut session,
+            Goal::Flee(ShipRef::Player),
+            Some(ShipRef::Player),
+        );
+        session.npc_mut(fleeing).expect("here").provoked = 4.0;
         let inspector = aimed(&mut session, Goal::Inspect(ShipRef::Player), None);
         session.npc_mut(inspector).expect("here").provoked = 3.0;
         let hired = escort(&mut session);
@@ -1366,12 +1403,18 @@ mod tests {
                 npc(attacker).goal,
                 npc(attacker).provoked
             ),
-            (None, Goal::Idle, 0.0)
+            (None, Goal::Idle, 5.0),
+            "the pod's loop writes +0x70 alone (@0x6f67d-0x6f6a9)"
         );
         assert_eq!(npc(aiming).target, None);
         assert_eq!(
-            (npc(inspector).goal, npc(inspector).provoked),
+            (npc(fleeing).goal, npc(fleeing).provoked),
             (Goal::Idle, 0.0),
+            "a flight with target -1: state 0, +0x96 0 (@0x8e228-0x8e23d)"
+        );
+        assert_eq!(
+            (npc(inspector).goal, npc(inspector).provoked),
+            (Goal::Idle, 3.0),
             "the inspection given up"
         );
         assert_eq!(
@@ -1401,38 +1444,14 @@ mod tests {
         assert!(!session.take_save_due());
     }
 
-    /// The escape ship's bay, its fighters' outfit and the fighter.
-    const BAY: i16 = 160;
-    const FIGHTERS: i16 = 310;
-    const VIPER: i16 = 144;
+    /// The escape ship's fighters' outfit and the fighter.
+    const FIGHTERS: i16 = crate::testkit::ESCAPE_FIGHTERS;
+    const VIPER: i16 = crate::testkit::ESCAPE_SHIP;
 
-    /// `ejecting(100)` with a fighter bay of `VIPER`s, an escape ship
-    /// (`Flags` 0x8000) of 100 shield, 200 armour and 300 fuel, long
-    /// named "Federation Viper".
+    /// `ejecting(100)` with an escape ship
+    /// ([`with_escape_ship`](crate::testkit::with_escape_ship)).
     fn escaping() -> FakePilotCatalog {
-        let mut catalog = ejecting(100);
-        catalog.weapons.push(crate::catalog::WeaponRecord {
-            guidance: crate::bay::FIGHTER_BAY,
-            ammo_type: VIPER,
-            ..crate::testkit::weapon(BAY)
-        });
-        catalog.outfits.push(outfit(
-            FIGHTERS,
-            &[(crate::combat::armament::MOD_AMMO, BAY)],
-        ));
-        let mut viper = ship(
-            VIPER,
-            ShipFields {
-                shield: 100,
-                armor: 200,
-                fuel: 300,
-                ..FAST
-            },
-        );
-        viper.flags = crate::escape::ESCAPE_SHIP_FLAG;
-        viper.long_name = "Federation Viper".to_owned();
-        catalog.ship_records.push(viper);
-        catalog
+        crate::testkit::with_escape_ship(ejecting(100))
     }
 
     /// `escaping`'s session, disabled with two fighters aboard, ejected

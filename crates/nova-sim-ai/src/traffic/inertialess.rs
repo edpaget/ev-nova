@@ -229,9 +229,11 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             rules,
-            crate::rulebook::RuleSource::Engine,
+            crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }

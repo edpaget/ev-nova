@@ -64,7 +64,8 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
     );
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.pursuit.kept, Some(Kept::Rush));
-    let frame = frame_of(ship, &player.state, false).expect("a fight");
+    let frame =
+        frame_of(ship, &player.state, false, None, &crate::ai::NO_WEAPONS).expect("a fight");
     assert_eq!(
         frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
         [Manoeuvre::Approach]
@@ -78,7 +79,8 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         &mut Ranged::of(&[]),
     );
     let ship = &traffic.npcs()[0];
-    let frame = frame_of(ship, &player.state, false).expect("a fight");
+    let frame =
+        frame_of(ship, &player.state, false, None, &crate::ai::NO_WEAPONS).expect("a fight");
     assert_eq!(
         frame.iter().map(|body| body.manoeuvre).collect::<Vec<_>>(),
         [Manoeuvre::Rush]
@@ -89,6 +91,64 @@ fn an_afterburner_attacker_approaching_rushes_in_from_the_tick_after_and_flies_t
         "{speed} {:?}",
         ship.state
     );
+}
+
+/// NPC `id` at `berth` of a swarming class, at the centre facing up.
+fn swarming(id: u32, berth: u32) -> Npc {
+    let mut ship = npc(id, ShipStats::new(FAST, &[]));
+    ship.berth = berth;
+    ship.hull.swarms = true;
+    ship
+}
+
+#[test]
+fn a_swarmer_whose_step_did_not_run_flies_at_its_own_swarm_leaders_aim_not_the_approach() {
+    use crate::ai::pursuit::{Body, Frame};
+    // Decisions four ticks apart: on tick 0 none of NPCs 1, 2, 3 and 5 is
+    // due, so no pursuit step stores a frame for its goal and the flight
+    // works one out from the swarm lead the traffic hands it.
+    let mut traffic = Traffic::with_interval(4);
+    // Two swarm leaders facing up, 1000 left (berth 1) and 1000 right
+    // (berth 2) of the centre: their swarmers' aims are up-left and
+    // up-right, the player straight up, so the approach wants no turn.
+    let mut left = swarming(1, 1);
+    left.state.position = Vec2::new(-1000.0, 0.0);
+    let mut right = swarming(2, 2);
+    right.state.position = Vec2::new(1000.0, 0.0);
+    // The swarmer on the left leader holds a frame for a goal it no longer
+    // has; the one on the right holds none.
+    let mut on_left = swarming(3, 3);
+    on_left.goal = Goal::Attack(ShipRef::Player);
+    on_left.swarm_leader = Some(1);
+    on_left.pursuit.frame = Some(Frame {
+        goal: Goal::Attack(ShipRef::Npc(crate::traffic::npc::NpcId(2))),
+        bodies: [
+            Some(Body {
+                manoeuvre: Manoeuvre::Approach,
+                heading: 0,
+            }),
+            None,
+        ],
+    });
+    let mut on_right = swarming(5, 4);
+    on_right.goal = Goal::Attack(ShipRef::Player);
+    on_right.swarm_leader = Some(2);
+    traffic.npcs = vec![left, right, on_left, on_right];
+    let world = World {
+        player: Some(player_at(Vec2::new(0.0, -2000.0))),
+        ..World::new(&[])
+    };
+    traffic.tick_in(&Attacking, world, &[], &mut Ranged::of(&[]));
+    let heading = |id: u32| {
+        traffic
+            .npcs()
+            .iter()
+            .find(|ship| ship.id.0 == id)
+            .map(|ship| ship.state.heading)
+    };
+    // FAST turns 3 a tick, each towards its own swarm leader's aim: left
+    // and right, where the approach at the player would hold 0.
+    assert_eq!((heading(3), heading(5)), (Some(357.0), Some(3.0)));
 }
 
 #[test]
@@ -126,11 +186,13 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
     ship.pick = Some(WeaponId(130));
     let mut player = player_at(Vec2::new(0.0, -400.0));
     player.state.velocity = Vec2::new(5.0, 0.0);
+    let records = crate::ai::fixture::records_of(&traffic.npcs);
     let heading = |reading: RuleSource| {
         let mut traffic = traffic.clone();
         let world = World {
             player: Some(player),
             approach_lead: reading,
+            weapons: &records,
             ..World::new(&[])
         };
         traffic.tick_holding(
@@ -149,4 +211,62 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
     let (by_pick, by_last_gun) = (heading(RuleSource::Engine), heading(RuleSource::Bible));
     assert!(by_pick.is_some_and(|heading| heading > 0));
     assert!(by_last_gun > by_pick, "{by_last_gun:?} {by_pick:?}");
+}
+
+#[test]
+fn the_traffic_step_leads_with_the_worlds_weapon_records() {
+    use crate::catalog::{WeaponId, WeaponRecord};
+    use crate::combat::armament::Arsenal;
+    // A dogfighter carrying nothing, holding a gun (128, 10 a tick) it
+    // doesn't carry as a reused slot's pick, the player 100 above crossing
+    // right: the step leads with the world's record of 128 (@0x85e4c,
+    // @0x2b06a), the table bearing with none.
+    let mut traffic = traffic();
+    let ship = &mut traffic.npcs[0];
+    ship.afterburner = false;
+    ship.pick = Some(WeaponId(128));
+    let mut player = player_at(Vec2::new(0.0, -100.0));
+    player.state.velocity = Vec2::new(4.0, 0.0);
+    let records = Arsenal::new(
+        &[WeaponRecord {
+            speed: 1000,
+            count: 20,
+            ..nova_sim_catalog::fixture::weapon(128)
+        }],
+        Vec::new(),
+    );
+    let heading = |weapons: &Arsenal| {
+        let mut traffic = traffic.clone();
+        let world = World {
+            player: Some(player),
+            weapons,
+            ..World::new(&[])
+        };
+        traffic.tick_holding(
+            &Attacking,
+            world,
+            &[],
+            &BTreeSet::new(),
+            &mut Ranged::of(&[]),
+        );
+        traffic.npcs()[0]
+            .pursuit
+            .frame
+            .and_then(|frame| frame.iter().next())
+            .map(|body| (body.manoeuvre, body.heading))
+    };
+    let expected = crate::trig::lead_angle(
+        Vec2::ZERO,
+        Vec2::ZERO,
+        (player.state.position, player.state.velocity),
+        records
+            .weapon(WeaponId(128))
+            .and_then(crate::combat::weapon::WeaponSpec::lead_shot),
+    );
+    assert_ne!(expected, 0);
+    assert_eq!(heading(&records), Some((Manoeuvre::Dogfight, expected)));
+    assert_eq!(
+        heading(&crate::ai::NO_WEAPONS),
+        Some((Manoeuvre::Dogfight, 0))
+    );
 }

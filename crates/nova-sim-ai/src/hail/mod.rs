@@ -166,10 +166,13 @@ pub struct Hail<'a> {
     /// What its government and type make of hails.
     pub dispositions: Dispositions,
     /// Whether it is busy: fighting, assisting, keeping formation, holding
-    /// ([`Goal::Hold`], goal 10 to `_AIIsShipBusy` @0x82fac-0x82fe4), or
-    /// under attack.
+    /// ([`Goal::Hold`], goal 10 to `_AIIsShipBusy` @0x82fac-0x82fe4),
+    /// waiting ([`Goal::Wait`], goal 6), or under attack.
     pub busy: bool,
-    /// Whether it is already assisting the player.
+    /// Whether it is already assisting the player: refuelling or repairing
+    /// it ([`Goal::Assist`]) with the player as its target, and not
+    /// disabled (`_IsRefuellingPlayer` @0x820fd, `_IsRepairingPlayer`
+    /// @0x8213a). An assister a hit turned on an NPC is busy, not this.
     pub assisting_player: bool,
     /// Whether any NPC threatens the player, or a ship the player leads
     /// ([`Npc::threatens_player_among`]): `_IsPlayerThreatened` @0x8245c,
@@ -243,7 +246,9 @@ impl<'a> Hail<'a> {
     /// conversation `talk`, the player needing `need`, of `mission` when
     /// it is a mission ship ([`Hail::mission`]). It is busy while
     /// it attacks, snipes at, flees from, plunders or assists a ship, keeps
-    /// formation (goals 10 and 12), waits or drifts as a pirate (goals 0x16
+    /// formation (goals 10 and 12), stops and waits (goal 6, which
+    /// `_AIIsShipBusy` @0x82fac-0x82fe4 finds busy as it finds every goal
+    /// but 0, 1, 2, 7 and 0x14), waits or drifts as a pirate (goals 0x16
     /// and 0xe), or an
     /// NPC attacks or snipes at it
     /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
@@ -275,7 +280,12 @@ impl<'a> Hail<'a> {
         mission: Option<MissionHail>,
     ) -> Self {
         let me = ShipRef::Npc(npc.id);
-        let assisting_player = matches!(npc.goal, Goal::Assist(_));
+        // `_IsRefuellingPlayer` @0x820fd and `_IsRepairingPlayer`
+        // @0x8213a: active, not `_IsDisabled`, target 0, goal 9 or 0xf. A
+        // hailed ship is active.
+        let assisting_player = matches!(npc.goal, Goal::Assist(_))
+            && npc.target == Some(ShipRef::Player)
+            && !npc.condition.disabled();
         let attacked = around
             .npcs
             .iter()
@@ -288,10 +298,14 @@ impl<'a> Hail<'a> {
             mood: talk.mood,
             dispositions,
             busy: npc.goal.fights()
-                || assisting_player
+                || matches!(npc.goal, Goal::Assist(_))
                 || matches!(
                     npc.goal,
-                    Goal::Formation { .. } | Goal::Hold | Goal::CountWait { .. } | Goal::Drift
+                    Goal::Formation { .. }
+                        | Goal::Hold
+                        | Goal::Wait
+                        | Goal::CountWait
+                        | Goal::Drift
                 )
                 || attacked,
             assisting_player,
@@ -466,6 +480,10 @@ pub struct CommNote {
     pub from: NpcId,
     /// Its ship type's `CommName`.
     pub comm_name: String,
+    /// The player's ship's name, which the line names after the help
+    /// (`*0x3b5210`, `_HighLevelAIHandler` @0x8f62a, `_LowLevelAIHandler`
+    /// @0x86e7d).
+    pub ship_name: String,
     /// The help it gave.
     pub done: Help,
 }
@@ -623,6 +641,7 @@ mod tests {
             let note = CommNote {
                 from: NpcId(0),
                 comm_name: String::new(),
+                ship_name: String::new(),
                 done,
             };
             assert_eq!(note.ticks(), 240, "{done:?}");
@@ -907,6 +926,26 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_ship_is_busy() {
+        // Goal 6 is none of `_AIIsShipBusy`'s 0, 1, 2, 7 and 0x14
+        // (@0x82fac-0x82fe4).
+        let npcs = [flying(1, Goal::Wait)];
+        assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
+    }
+
+    #[test]
+    fn a_waiting_miner_is_busy_when_hailed() {
+        // A miner of `Flags3` 0x0001 with no asteroid in slot 0 stops and
+        // waits (state 6, `_MinerAI` @0x8b2d1).
+        let mut zephyr = flying(1, Goal::Idle);
+        zephyr.miner = crate::ai::miner::MINES;
+        let alone = [zephyr.clone()];
+        zephyr.goal = crate::ai::miner::decide(&zephyr, &Surroundings::new(&[], &alone));
+        let npcs = [zephyr];
+        assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
+    }
+
+    #[test]
     fn a_held_ship_is_busy() {
         let npcs = [flying(1, Goal::Hold)];
         assert!(hailing(&npcs, &plain(), 0, &talk()).busy);
@@ -928,7 +967,7 @@ mod tests {
                 ship: ShipRef::Npc(NpcId(5)),
                 hopeless: false,
             },
-            Goal::CountWait { ticks_left: 3 },
+            Goal::CountWait,
             Goal::Drift,
         ] {
             let npcs = [flying(1, goal)];
@@ -962,9 +1001,73 @@ mod tests {
     }
 
     #[test]
+    fn a_refueller_retargeted_at_an_npc_is_busy_but_not_assisting_the_player() {
+        let plain = plain();
+        for help in [Help::Refuel, Help::Repair] {
+            let mut helper = flying(1, Goal::Assist(help));
+            helper.target = Some(ShipRef::Npc(NpcId(2)));
+            let npcs = [helper, flying(2, Goal::Idle)];
+            let hail = hailing(&npcs, &plain, 0, &talk());
+            assert!(hail.busy, "{help:?}: goals 9 and 0xf, `_AIIsShipBusy`");
+            assert!(!hail.assisting_player, "{help:?}: target 0, @0x8211c");
+            let mut none = flying(1, Goal::Assist(help));
+            none.target = None;
+            let npcs = [none];
+            assert!(!hailing(&npcs, &plain, 0, &talk()).assisting_player);
+        }
+    }
+
+    #[test]
+    fn a_busy_refueller_retargeted_at_an_npc_answers_busy_not_on_my_way() {
+        use crate::hail::nova::RequestAssistance;
+        use crate::hail::reply::{BUSY, ON_MY_WAY};
+        let plain = plain();
+        let press = |target: ShipRef| {
+            let mut helper = flying(1, Goal::Assist(Help::Refuel));
+            helper.target = Some(target);
+            let npcs = [helper, flying(2, Goal::Idle)];
+            let hail = hailing(&npcs, &plain, 0, &talk());
+            RequestAssistance::default().press(&hail, &mut nova_sim_base::fixture::Draws::of(&[]))
+        };
+        assert_eq!(
+            press(ShipRef::Npc(NpcId(2))),
+            Answer::say(Reply::Comm(BUSY)),
+            "0x10 for AI type 4 or below, @0x962f8"
+        );
+        assert_eq!(
+            press(ShipRef::Player),
+            Answer::say(Reply::Comm(ON_MY_WAY)),
+            "0x1d, @0x962da"
+        );
+    }
+
+    #[test]
+    fn a_disabled_assister_is_not_assisting_the_player() {
+        use crate::combat::hull::Condition;
+        let plain = plain();
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 5,
+                starting: false,
+            },
+        ] {
+            let mut helper = flying(1, Goal::Assist(Help::Repair));
+            helper.target = Some(ShipRef::Player);
+            helper.condition = condition;
+            let npcs = [helper];
+            let hail = hailing(&npcs, &plain, 0, &talk());
+            assert!(!hail.assisting_player, "{condition:?}: @0x82113");
+            assert!(hail.busy);
+        }
+    }
+
+    #[test]
     fn a_hail_knows_whether_the_ship_assists_the_player_and_whether_the_player_is_threatened() {
         let plain = plain();
-        let npcs = [flying(1, Goal::Assist(Help::Refuel))];
+        let mut helper = flying(1, Goal::Assist(Help::Refuel));
+        helper.target = Some(ShipRef::Player);
+        let npcs = [helper];
         let hail = hailing(&npcs, &plain, 0, &talk());
         assert!(hail.assisting_player);
         assert!(!hail.player_threatened);

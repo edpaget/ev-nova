@@ -175,14 +175,14 @@ mod tests {
 
     /// A kill outfit and a bomb outfit.
     const KILL: i16 = 261;
-    const BOMB: i16 = 262;
+    const BOMB: i16 = crate::testkit::BOMB;
 
     /// `armed`'s catalog with [`KILL`] and [`BOMB`].
     fn sabotaged() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.outfits.extend([
             outfit(KILL, &[(SABOTAGE_KILL, 4100)]),
-            outfit(BOMB, &[(SABOTAGE_BOMB, 0)]),
+            crate::testkit::bomb_outfit(),
         ]);
         catalog
     }

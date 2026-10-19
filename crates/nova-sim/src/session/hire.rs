@@ -266,6 +266,10 @@ impl Session {
             let index = self.pilot.escorts.len() - 1;
             self.fleet.resize(index, None);
             let placed = self.place_escort_at(index, Some(berth));
+            // `_SpawnEscort` rolls its afterburner (@0x3ff51).
+            if let Some(id) = placed {
+                self.roll_escort_afterburner(id, chance);
+            }
             self.fleet.push(placed);
             self.reform();
         }
@@ -314,22 +318,14 @@ mod tests {
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FAST, FakePilotCatalog, Scripted, catalog, jump, land_now, planet, ship};
+    use crate::testkit::{
+        FAST, FakePilotCatalog, Scripted, bar, catalog, jump, land_now, planet, ship,
+    };
     use crate::traffic::npc::AiType;
 
     /// The bar's stellar, 128, at the centre, under the ship as it
     /// starts.
     const BAR_AT: StellarId = StellarId(128);
-
-    /// A bar of tech level 7 (above 5, so no low-tech discount), at the
-    /// centre, so a ship taking off flies out as one starting.
-    fn bar() -> LandingSite {
-        LandingSite {
-            flags: StellarFlags::CAN_LAND | StellarFlags::BAR,
-            tech_level: 7,
-            ..planet(128, 0.0, 0.0)
-        }
-    }
 
     /// [`catalog`] with planet 128 a bar of tech level 7 and these ships
     /// besides the player's own (ship 128, never for hire).

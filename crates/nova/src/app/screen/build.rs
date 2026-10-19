@@ -4,6 +4,7 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
@@ -50,6 +51,7 @@ impl AppScreen {
             flight: None,
             game: None,
             slot_sprites: SlotSprites::default(),
+            kept_berths: KeptBerths::default(),
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,
@@ -335,6 +337,7 @@ impl AppScreen {
             .with_hail_options(self.hail_options.clone())
             .with_rules(self.rules)
             .with_slot_sprites(self.slot_sprites.clone())
+            .with_kept_berths(self.kept_berths.clone())
             .with_overlays(self.flight_overlays)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))

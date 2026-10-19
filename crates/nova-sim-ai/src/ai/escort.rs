@@ -2,7 +2,8 @@
 //! each follows (`_EscortAI` @0x838d2 in the `EV Nova` executable). The
 //! values are in [`escort`](crate::escort).
 //!
-//! - **Hold Position**: it brakes to a stop where it is ([`Goal::Idle`]),
+//! - **Hold Position**: it stops and waits where it is ([`Goal::Wait`],
+//!   goal 6, which a hail finds busy: `_AIIsShipBusy` @0x82fac-0x82fe4),
 //!   targets nothing and fires nothing; its point defence runs on each of
 //!   its decisions, as `_EscortAI`'s hold tail-calls `_AIFireTurret`
 //!   (@0x83e59-0x83e74, @0x83f4e).
@@ -91,7 +92,8 @@ impl Behaviour for EscortAi {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         let order = npc.escort_order();
         if order == Some(EscortOrder::Hold) {
-            return Goal::Idle;
+            // Target and +0x6c -1, goal 6 (@0x83e59-0x83e74).
+            return Goal::Wait;
         }
         if order == Some(EscortOrder::Dock) && npc.carrier.is_some() {
             return Goal::Dock(ShipRef::Player);
@@ -144,7 +146,7 @@ impl Behaviour for EscortAi {
             // Holding Position: `_EscortAI` tail-calls `_AIFireTurret` with
             // no target (@0x83e59-0x83e74, @0x83f4e), which runs its point
             // defence and fires nothing.
-            Goal::Idle => Trigger {
+            Goal::Wait => Trigger {
                 point_defence: true,
                 ..Trigger::default()
             },
@@ -466,7 +468,7 @@ mod tests {
             ordered_mission_escort(EscortOrder::Hold),
             pirate(2, 100.0, 0.0),
         ];
-        assert_eq!(decide(&npcs, (0.0, 0.0), &[0]), (Goal::Idle, vec![]));
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[0]), (Goal::Wait, vec![]));
         let npcs = [
             ordered_mission_escort(EscortOrder::Attack),
             pirate(2, 100.0, 0.0),
@@ -735,16 +737,17 @@ mod tests {
     }
 
     #[test]
-    fn holding_it_runs_its_point_defence_and_fires_nothing() {
-        // `_EscortAI`'s hold tail-calls `_AIFireTurret` with no target
-        // (@0x83e59-0x83e74, @0x83f4e): point defence, then nothing.
+    fn a_holding_escort_waits_and_runs_its_point_defence() {
+        // `_EscortAI`'s hold writes target and +0x6c -1 and goal 6, then
+        // tail-calls `_AIFireTurret` with no target (@0x83e59-0x83e74,
+        // @0x83f4e): point defence, then nothing.
         let hold = Some(EscortOrder::Hold);
         let npcs = [
             having(escort(hold), Goal::Attack(n(2)), Some(n(2))),
             pirate(2, 10.0, 0.0),
         ];
-        assert_eq!(decide(&npcs, (0.0, 0.0), &[]), (Goal::Idle, vec![]));
-        let holding = having(escort(hold), Goal::Idle, Some(n(2)));
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[]), (Goal::Wait, vec![]));
+        let holding = having(escort(hold), Goal::Wait, Some(n(2)));
         assert_eq!(
             command(ENGINE, &[holding, pirate(2, 10.0, 0.0)]),
             (
@@ -754,6 +757,12 @@ mod tests {
                 },
                 None
             )
+        );
+        let idle = having(escort(None), Goal::Idle, None);
+        assert_eq!(
+            command(ENGINE, &[idle, pirate(2, 10.0, 0.0)]).0,
+            Trigger::default(),
+            "goal 0 calls no turret"
         );
     }
 

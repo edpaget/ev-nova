@@ -228,8 +228,9 @@
 //! that apply ([`Session::hailing`]). A press ([`Session::answer`]) says
 //! the ship's reply and does its deed: a ship paid to spare the player
 //! never targets it again and leaves; one declined attacks; one asked for
-//! help flies over to refuel or repair the player
-//! ([`Session::tick_assistance`], [`Session::take_comm`]). A price asked is
+//! help flies over to refuel the player (the `refuel_dock` module) or
+//! docks with it to repair it (the `repair_dock` module), and says when it
+//! is done ([`Session::take_comm`]). A price asked is
 //! haggled over and paid from the cash ([`Session::haggle`]), which makes
 //! no save due. The hail under way, and the help, are never saved.
 //!
@@ -353,6 +354,7 @@
 //! [`Session::take_diagnostics`].
 
 mod afterburner;
+mod afterburner_roll;
 mod answer_flag;
 mod asteroids;
 mod aux_ships;
@@ -389,6 +391,7 @@ mod iff_scramblers;
 mod inertialess;
 mod intro;
 mod jump_collapse;
+mod kept_berths;
 mod map;
 mod map_borders;
 mod map_click;
@@ -418,16 +421,21 @@ mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
+mod refuel_dock;
 mod reinforcements;
+mod repair_dock;
 mod rescue;
 mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
+#[cfg(test)]
+mod slot_search;
 mod status_cargo;
 mod steering;
 mod stellars;
 mod story;
+mod swarm_formation;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
@@ -836,6 +844,10 @@ pub struct Session {
     /// `reinforcements` module); never saved, as the original saves
     /// neither.
     reinforcements: reinforcements::Reinforcements,
+    /// Whether the reinforcement clock's tick of the last traffic tick is
+    /// held behind the frame's work on the line, for `settle_line_queue`
+    /// to run (see [`Session::tick_traffic`]).
+    reinforcements_held: bool,
     /// The governments an IFF scrambler has marked (see the
     /// `iff_scramblers` module); never saved, as the original saves none.
     iff_marked: BTreeSet<GovtId>,
@@ -1635,6 +1647,7 @@ impl Session {
             quote_clock: persons::QuoteClock::default(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
+            reinforcements_held: false,
             iff_marked: BTreeSet::new(),
             quotes: Vec::new(),
             disable_rule: Self::nova_disable(),
@@ -1833,6 +1846,8 @@ impl Session {
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic
             .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
+        self.traffic
+            .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
         self.rules = rules;
         self
     }
@@ -1966,7 +1981,9 @@ impl Session {
     /// which the ship no longer brakes, sounding the warp-up, stops if it
     /// brakes again, and counts on through hyperspace until the ship
     /// arrives (see the [`warp`](crate::warp) module). A landed ship, or one in hyperspace, does
-    /// not move, glows not at all, and gains no fuel. As the jump begins and on every tick in
+    /// not move and glows not at all; a landed one gains no fuel, while one in
+    /// hyperspace regenerates it and has it clamped to its tank, as
+    /// `_HandlePlayer` does through the warp stage (@0x6d96d-0x6d9f2). As the jump begins and on every tick in
     /// hyperspace, the ships the player leads let go of their targets
     /// (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2; see the `escorts`
     /// module). In flight, a mission sound a `P` holds
@@ -2159,6 +2176,11 @@ impl Session {
                     warp: warp.saturating_add(1),
                 });
                 self.let_go_of_led_targets();
+                // `_HandlePlayer` regenerates and clamps the fuel through
+                // the warp stage too (@0x6d96d-0x6d9f2), so a refuel's
+                // uncapped add (see the `refuel_dock` module) lasts only
+                // the frame.
+                regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
                 return;
             }
         }
@@ -2318,7 +2340,8 @@ impl Session {
     /// and fighters carry no aux mark, so the fleet is exactly the kept
     /// ships with one; each keeps its mark into the new system. Each
     /// escort also keeps its ion colour, its charge cleared
-    /// (`_RespawnEscort` @0x3d543 leaves +0xb0).
+    /// (`_RespawnEscort` @0x3d543 leaves +0xb0), and its afterburner
+    /// (+0xbd); a loaded pilot's escorts roll theirs on `chance`.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2357,7 +2380,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &kept_escorts);
+        self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
@@ -2412,18 +2435,29 @@ impl Session {
     /// the NPCs raises the first sighting of the ships watched
     /// ([`Session::watch_ship`]), and each mission ship that left the
     /// system raises [`Fate::Departed`] and is counted (see the
-    /// `mission_ships` module). Then, unless the ship is docked, each
+    /// `mission_ships` module). The fuel the NPCs refuelling the player
+    /// gave it lands (see the `refuel_dock` module). The frame's work on the line,
+    /// its calls, scans, plunders, docks, repairs and refuel notes, is
+    /// queued in slot order, and settles in [`Session::tick_combat`] (see
+    /// the `comm_calls` module). Then, unless the ship is docked, each
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
     /// while a jump plays too; before that, in flight or jumping, the
     /// player's system's reinforcement clock ticks, after the frame's
-    /// calls (see the `reinforcements` module). The traffic ticks in the same [`World`] the
-    /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
+    /// calls (see the `reinforcements` module), unless work is queued on
+    /// the line: then its tick is held, and runs in
+    /// [`Session::tick_combat`] right after the work settles, or, if no
+    /// combat tick came between, first thing in the next traffic tick.
+    /// The traffic ticks in the same [`World`] the gate exit's arrivals
+    /// pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        if std::mem::take(&mut self.reinforcements_held) {
+            self.tick_reinforcements(chance);
+        }
         let flying = self.jumping().is_none() || self.in_warp_lead_in();
         if self.landed.is_none() && flying {
             if self.traffic_due {
@@ -2438,12 +2472,12 @@ impl Session {
                 let last = self.last_npc();
                 let marks = self.mission_marks();
                 let still = self.held_through_the_warp();
+                self.reform_on_swarm_change();
                 self.step_traffic(|traffic, world| {
                     traffic.tick_holding(behaviour, world, &strikes, &still, chance);
                 });
                 self.announce_fleets(chance);
-                self.answer_comm_calls(chance);
-                self.answer_pirates(&mut &mut *chance);
+                self.take_refuel();
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -2451,7 +2485,11 @@ impl Session {
                 self.observe_watched();
             }
         }
-        self.tick_reinforcements(chance);
+        if self.traffic.holds_line_work() {
+            self.reinforcements_held = true;
+        } else {
+            self.tick_reinforcements(chance);
+        }
         if self.landed.is_none() {
             self.step_gate_sprites(chance);
         }
@@ -2517,6 +2555,9 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
+            odds_cache: self.rules.source_for(RuleKey::OddsCache),
+            refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2527,6 +2568,7 @@ impl Session {
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            weapons: &self.arsenal,
         };
         f(&mut self.traffic, world);
     }
@@ -2593,6 +2635,9 @@ impl Session {
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
             arrival_hits: self.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
+            npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
+            odds_cache: self.rules.source_for(RuleKey::OddsCache),
+            refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2603,6 +2648,7 @@ impl Session {
             afterburner_yardstick: self.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.disable_rule.0,
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
+            weapons: &self.arsenal,
         }
     }
 
@@ -2736,7 +2782,12 @@ impl Session {
     /// ([`Session::tractor`]) or an NPC's. Before anything else,
     /// unless landed or jumping, the sabotage clock ticks, and what it sets
     /// off goes off (see the `sabotage` module), and the eject is checked
-    /// (see the `eject` module), both before the scans. The player's
+    /// (see the `eject` module), both before the scans, the boarded flag
+    /// cleared first unless the player is disabled (see the
+    /// `pirate_plunder` module). Then the frame's work on the line, its
+    /// calls, scans, plunders, docks, repairs and refuel notes, settles in
+    /// slot order, with the reinforcement clock's tick held behind it,
+    /// jumping or not (see the `comm_calls` module). The player's
     /// "Ship disabled." and "Ship destroyed." lines are spoken as the
     /// fight's hits leave it (see the `player_downed` module), before the
     /// eject on a breakup's first tick takes it into a new ship. After
@@ -2751,16 +2802,17 @@ impl Session {
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
-            // The fight stands still, but a scan a lead-in step's traffic
-            // tick queued still settles (see `take_scans`), and the pass's
-            // asteroid work runs (see the `asteroids` module).
-            self.take_scans(rules.law, &mut &mut *chance);
+            // The fight stands still, but the scans and calls a lead-in
+            // step's traffic tick held still settle (see
+            // `settle_line_queue`), and the pass's asteroid work runs (see
+            // the `asteroids` module).
+            self.settle_line_queue(rules.law, &mut &mut *chance);
             self.drawn.clear();
             self.tick_asteroids(&mut *chance);
             return;
         }
         self.before_fight(rules, &mut &mut *chance);
-        self.take_scans(rules.law, &mut &mut *chance);
+        self.settle_line_queue(rules.law, &mut &mut *chance);
         let pass = GamePass::Advance {
             double_time: self.double_time,
         };
@@ -2771,12 +2823,14 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s part of a game-work pass that comes before the
-    /// fight, on either pass (see the `double_time` module): the repair
+    /// fight, on either pass (see the `double_time` module): the boarded
+    /// flag's clear (see the `pirate_plunder` module), the repair
     /// inhibit's countdown and the disabled player's self-repair (see the
     /// `player_repair` module), the sabotage clock's tick (see the
     /// `sabotage` module), then the eject check for a player who enters it
     /// disabled or dying (see the `eject` module), drawing on `chance`.
     fn before_fight(&mut self, rules: Rules, chance: &mut dyn Chance) {
+        self.unboard_unless_disabled();
         self.player_repair_tick(rules, &mut *chance);
         self.sabotage_tick(rules, &mut *chance);
         self.eject_before_fight(chance);
@@ -5331,7 +5385,7 @@ impl Session {
         self.ship_hook(self.pilot.ship, ShipHook::Retire, chance);
         let paint_last = self.hook_rules().purchase_paint_order == RuleSource::Engine;
         let old_mass = self.fields.mass;
-        self.drop_fighters(|_, _| false);
+        self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
         let fits = self.arsenal.stock_fits(ship, &self.outfits);
         let Purchase {
@@ -5739,6 +5793,8 @@ impl Session {
             ship: id,
             fate: Fate::Boarded,
         });
+        // +0x6c -1 for each ship it drops (@0x89806).
+        self.clear_quarry_travel(id);
         self.drop_quarry(id);
     }
 
@@ -5793,14 +5849,24 @@ impl Session {
     /// Every NPC other than `id` that targets it, or fights it, lets it go
     /// and decides again, its provocation gone.
     fn drop_quarry(&mut self, id: NpcId) {
-        let quarry = ShipRef::Npc(id);
         for other in self.traffic.npcs_mut() {
-            if other.id != id
-                && (other.target == Some(quarry) || other.goal.quarry() == Some(quarry))
-            {
+            if holds_quarry(other, id) {
                 other.target = None;
                 other.goal = Goal::Idle;
                 other.provoked = 0.0;
+            }
+        }
+    }
+
+    /// Every NPC [`Session::drop_quarry`] would drop for `id` loses its
+    /// travel stellar (see `nova_sim_ai::ai::travel`), as the player's
+    /// boarding and capture write +0x6c -1 for each ship they drop
+    /// (`_AIShipBoardedByPlayer` @0x89806, `_AIShipCapturedByPlayer`
+    /// @0x896e5).
+    fn clear_quarry_travel(&mut self, id: NpcId) {
+        for other in self.traffic.npcs_mut() {
+            if holds_quarry(other, id) {
+                other.travel_set = false;
             }
         }
     }
@@ -6085,6 +6151,7 @@ impl Session {
     /// [`Session::fleet_up`] says.
     fn join_fleet(&mut self, id: NpcId) {
         self.lose_captured(id);
+        self.clear_quarry_travel(id);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
@@ -6267,6 +6334,10 @@ impl Session {
         self.lose_captured(npc.id);
         self.leave(npc.id);
         let placed = self.place_escort(old_slot);
+        // `_DoShipCapture` rolls the old ship's afterburner (@0x4123e).
+        if let Some(id) = placed {
+            self.roll_escort_afterburner(id, chance);
+        }
         if let Some(slot) = self.fleet.get_mut(old_slot) {
             *slot = placed;
         }
@@ -6579,6 +6650,12 @@ fn player_trigger(held: Trigger, jumping: bool) -> Trigger {
         point_defence: true,
         ..held
     }
+}
+
+/// Whether `other`, an NPC other than `id`, targets it or fights it.
+fn holds_quarry(other: &Npc, id: NpcId) -> bool {
+    let quarry = ShipRef::Npc(id);
+    other.id != id && (other.target == Some(quarry) || other.goal.quarry() == Some(quarry))
 }
 
 /// `value` held to the range of an `i16`, as a boarding grant reads a
@@ -7764,6 +7841,39 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_boarding_or_a_capture_clears_the_travel_stellar_of_the_ships_it_lets_go() {
+        // `_AIShipBoardedByPlayer` @0x897e6-0x8980f and
+        // `_AIShipCapturedByPlayer` @0x896c5-0x896fa write +0x6c -1 for
+        // each ship they drop; a ship they leave keeps its own.
+        let catalog = lawful();
+        for capture in [false, true] {
+            let mut session = Session::start(&catalog).expect("starts");
+            let ship = |id| crate::traffic::fixture::npc(id, crate::stats::ShipStats::default());
+            let victim = session.traffic.add_npc(ship(0));
+            let after = Npc {
+                goal: Goal::Attack(ShipRef::Npc(victim)),
+                target: Some(ShipRef::Npc(victim)),
+                travel_set: true,
+                ..ship(1)
+            };
+            let after = session.traffic.add_npc(after);
+            let apart = Npc {
+                travel_set: true,
+                ..ship(2)
+            };
+            let apart = session.traffic.add_npc(apart);
+            if capture {
+                session.join_fleet(victim);
+            } else {
+                session.mark_boarded(victim);
+            }
+            let travel = |id| session.npc(id).expect("here").travel_set;
+            assert!(!travel(after), "dropped: capture {capture}");
+            assert!(travel(apart), "left alone: capture {capture}");
+        }
+    }
+
+    #[test]
     fn a_jumps_arrival_lets_go_of_the_strikes_the_boarding_and_the_hail() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
@@ -8354,7 +8464,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn fuel_does_not_regenerate_while_landed_or_jumping() {
+    fn fuel_does_not_regenerate_while_landed() {
         let catalog = edge_lander();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
@@ -8368,13 +8478,33 @@ pub(super) mod tests {
         session.take_off(&catalog, &mut NeverFires);
         session.tick(Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
+    }
 
+    /// `_HandlePlayer` regenerates the fuel and clamps it to the tank on
+    /// every flying frame, the warp stage's included (@0x6d96d-0x6d9f2).
+    #[test]
+    fn fuel_regenerates_and_is_clamped_to_the_tank_through_the_warp_stage() {
+        let catalog = edge_lander();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        jump(&mut session, &catalog, 132);
+        session.take_off(&catalog, &mut NeverFires);
         begin_jump_now(&mut session).expect("jumps from the edge");
+        assert!(
+            matches!(session.jump, Some(Jump::Hyperspace { .. })),
+            "{:?}",
+            session.jump
+        );
         let leaving = session.reserves().fuel.now;
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.reserves().fuel.now, leaving, "in hyperspace");
+        assert_eq!(session.reserves().fuel.now, leaving + 10.0, "in hyperspace");
+        let max = session.reserves().fuel.max;
+        session.pilot.reserves.fuel.now = max + 5.0;
+        session.tick(Controls::default());
+        assert!(matches!(session.jump, Some(Jump::Hyperspace { .. })));
+        assert_eq!(session.reserves().fuel.now, max, "clamped");
     }
 
     // The pilot.
@@ -16241,6 +16371,7 @@ pub(super) mod tests {
             grudge: false,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
     }
 
@@ -22411,7 +22542,7 @@ pub(super) mod tests {
             (Goal::Idle, None, false),
             (plunder(false), None, true),
             (plunder(true), None, true),
-            (Goal::CountWait { ticks_left: 3 }, None, false),
+            (Goal::CountWait, None, false),
         ] {
             npc.goal = goal;
             let fighter = terms(false).fighter(&mut npc);
@@ -23163,7 +23294,7 @@ pub(super) mod tests {
             missile_at_an_escort(&catalog, Some(crate::escort::EscortOrder::Hold));
         assert!(session.npcs()[1].escorts_player());
         assert!(shot_down_by(&mut session, &catalog, &ai));
-        assert_eq!(session.npcs()[1].goal, Goal::Idle, "holding");
+        assert_eq!(session.npcs()[1].goal, Goal::Wait, "holding");
     }
 
     // Boarding and capture.
@@ -25227,6 +25358,7 @@ pub(super) mod tests {
             grudge: false,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         }
     }
 

@@ -1390,6 +1390,12 @@ pub struct Arsenal {
 }
 
 impl Arsenal {
+    /// No weapon and no ship type: what a world that never pursues holds.
+    pub const EMPTY: Self = Self {
+        weapons: BTreeMap::new(),
+        hulls: BTreeMap::new(),
+    };
+
     /// The arsenal of `weapons` and `hulls`, each weapon reaching down its
     /// sub-munition chain ([`chain_range`]).
     #[must_use]
@@ -1408,6 +1414,18 @@ impl Arsenal {
                 })
                 .collect(),
             hulls: hulls.into_iter().map(|hull| (hull.id, hull)).collect(),
+        }
+    }
+
+    /// The arsenal holding `specs` as its weapons' records, as they are,
+    /// and no ship type: test support for readers of the global weapon
+    /// records, such as an NPC's lead.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn of_specs(specs: impl IntoIterator<Item = WeaponSpec>) -> Self {
+        Self {
+            weapons: specs.into_iter().map(|spec| (spec.id, spec)).collect(),
+            hulls: BTreeMap::new(),
         }
     }
 
@@ -4680,6 +4698,26 @@ mod tests {
             (Armament::default(), LauncherRounds::default())
         );
         assert_eq!(MOD_AMMO, 3);
+    }
+
+    #[test]
+    fn the_empty_arsenal_holds_no_weapon() {
+        assert_eq!(Arsenal::EMPTY, Arsenal::default());
+        assert_eq!(Arsenal::EMPTY.weapons().count(), 0);
+    }
+
+    #[test]
+    fn an_arsenal_of_specs_holds_each_as_it_is() {
+        let fast = WeaponSpec::new(&WeaponRecord {
+            speed: 2000,
+            ..weapon(129)
+        });
+        let arsenal = Arsenal::of_specs([fast, WeaponSpec::new(&weapon(128))]);
+        assert_eq!(arsenal.weapon(WeaponId(129)), Some(&fast));
+        assert_eq!(
+            arsenal.weapons().map(|spec| spec.id.0).collect::<Vec<_>>(),
+            [128, 129]
+        );
     }
 
     #[test]

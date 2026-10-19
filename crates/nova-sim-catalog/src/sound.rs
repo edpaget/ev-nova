@@ -113,6 +113,12 @@ pub enum SimSound {
     /// on the message line: `_beepSnd[1]`, `snd ` 151
     /// (`_AIPlunderShipContents` @0x848e9-0x84908).
     ShipStolen,
+    /// A ship repairing the player finished, said on the comm line:
+    /// `_beepSnd[1]`, `snd ` 151 (`_LowLevelAIHandler` @0x86ddf-0x86e0a).
+    RepairsComplete,
+    /// A ship refuelling the player finished, said on the comm line:
+    /// `_beepSnd[1]`, `snd ` 151 (`_HighLevelAIHandler` @0x8f585-0x8f5b0).
+    EnergyTransferComplete,
     /// The player's ship was newly disabled or newly started to break up:
     /// `_beepSnd[1]`, `snd ` 151 (`_DamageShip` @0x3b11e, @0x3b221; see
     /// the session's `player_downed` module).

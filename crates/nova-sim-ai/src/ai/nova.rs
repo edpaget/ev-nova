@@ -20,7 +20,10 @@
 //! think, which the miner's AI then decides, as the original's next
 //! `_MinerAI` does; the type's fire reads the goal, and a miner's own
 //! goals fire at nothing but an attacker it flees. A mission ship of
-//! `ShipBehav` 0 still hunts the player, miner or not.
+//! `ShipBehav` 0 still hunts the player, miner or not; with the player
+//! disabled and no destroying weapon it gives up and leaves by hyperspace
+//! after its type's think, whatever that decided and whatever its fuel
+//! (`_HighLevelAIHandler` @0x8d6be-0x8d6e9; see [`leave`](crate::ai::leave)).
 //! A leaderless warship of a government with `Flags` 0x1000 goes to the
 //! pirate's AI ([`PirateWarship`], `_PirateWarshipAI`, `_AIDispatch`
 //! @0x8ffc8-0x8fff0), which disables, docks with and plunders its victim
@@ -42,7 +45,8 @@ use std::rc::Rc;
 
 use crate::ai::fire::FireRules;
 use crate::ai::flee_drop;
-use crate::ai::miner::{MINER_BITS, MinerAi};
+use crate::ai::lost_sight;
+use crate::ai::miner::{self, MinerAi};
 use crate::ai::pirate::PirateWarship;
 use crate::ai::target::TargetRules;
 use crate::ai::{
@@ -224,18 +228,11 @@ impl NovaAi {
     }
 
     /// The behaviour that decides for `npc` and picks its target: the
-    /// miners' for a leaderless miner (`_AIDispatch` @0x8ff64-0x8ff96: a
-    /// `shïp` `Flags3` & 3, and leader +0x9a -1, which the player's escorts
-    /// and fighters, mission escorts and an NPC carrier's fighters never
-    /// have), otherwise its own ([`NovaAi::of`]). A miner's fire, gate wait
-    /// and answer to hits stay its own: `_AIDispatch` replaces only the
-    /// type's think.
+    /// miners' for a leaderless miner ([`miner::thinks_for`]), otherwise
+    /// its own ([`NovaAi::of`]). A miner's fire, gate wait and answer to
+    /// hits stay its own: `_AIDispatch` replaces only the type's think.
     fn thinker(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
-        if npc.miner & MINER_BITS != 0
-            && npc.leader.is_none()
-            && !npc.escorts_player()
-            && npc.carrier.is_none()
-        {
+        if miner::thinks_for(npc) {
             &*self.miner
         } else {
             self.of(npc, around)
@@ -244,20 +241,22 @@ impl NovaAi {
 }
 
 impl NovaAi {
-    /// Whether `npc` is a mission's special ship of `ShipBehav` 0 that
-    /// attacks the player now, among `around`, on every think (see
-    /// [`mission_hunt`](crate::ai::target::mission_hunt)); one that does
-    /// not decides as its type does. A ship the player paid off hunts
-    /// again by the engine, and not under [`RuleSource::Bible`] for
-    /// [`RuleKey::HunterBribe`] (`_HighLevelAIHandler` @0x8d628 never reads
-    /// the bribe). Only this site reads the key: a paid-off ship is a
-    /// wimpy trader, which never asks
-    /// [`select_target`](crate::ai::target::select_target).
-    fn hunts_player(&self, npc: &Npc, around: &Surroundings) -> bool {
-        if npc.spared && self.hunter_bribe == RuleSource::Bible {
-            return false;
+    /// Whether `npc`, a mission's special ship of `ShipBehav` 0, attacks
+    /// the player now among `around` (`Some(true)`) or gives up on it
+    /// (`Some(false)`), on every think (see
+    /// [`mission_hunt`](crate::ai::target::mission_hunt)); `None` for any
+    /// other ship, which decides as its type does. A ship the player paid
+    /// off hunts again by the engine, and decides as its type does under
+    /// [`RuleSource::Bible`] for [`RuleKey::HunterBribe`]
+    /// (`_HighLevelAIHandler` @0x8d628 never reads the bribe). Only this
+    /// site reads the key: a paid-off ship is a wimpy trader, which never
+    /// asks [`select_target`](crate::ai::target::select_target).
+    fn mission_hunt(&self, npc: &Npc, around: &Surroundings) -> Option<bool> {
+        let attacks = crate::ai::target::mission_hunt(npc, around)?;
+        if attacks && npc.spared && self.hunter_bribe == RuleSource::Bible {
+            return None;
         }
-        crate::ai::target::mission_hunt(npc, around) == Some(true)
+        Some(attacks)
     }
 }
 
@@ -268,29 +267,67 @@ impl Behaviour for NovaAi {
     }
 
     /// A mission ship of `ShipBehav` 0 attacks the player
-    /// (`hunts_player`), turning on it through `_AIMakeShipAttackPlayer`
-    /// (`_HighLevelAIHandler` @0x8d6b7), whose quote gate its mark fails
-    /// (+0xc8d2, @0x89c71); every other NPC decides as its behaviour does,
-    /// its turn on the player with it. Either way `_HighLevelAIHandler`'s
-    /// call for reinforcements ends the think
+    /// ([`NovaAi::mission_hunt`]), turning on it through
+    /// `_AIMakeShipAttackPlayer` (`_HighLevelAIHandler` @0x8d6b7), whose
+    /// quote gate its mark fails (+0xc8d2, @0x89c71). One that gives up on
+    /// the player leaves by hyperspace (@0x8d6be-0x8d6e9: state 2, its
+    /// target -1), after its type's think, which runs first (`_AIDispatch`
+    /// @0x8ff43-0x90016, then @0x901e5) and so is overridden, with no fuel
+    /// test: even a warship that cannot jump leaves, as its own fallback
+    /// ran before it. The give-up's +0x50 clamp and +0xa4 stamp are the
+    /// warp stage's (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
+    /// Every other NPC decides as its behaviour does, its turn on the
+    /// player with it. Either way `_HighLevelAIHandler`'s lost-sight block
+    /// follows ([`lost_sight::after_think`], @0x8d6ef-0x8d8ae): a ship
+    /// that can't see its target searches, gives up, leaves or waits.
+    /// Unless that search or give-up ended the handler
+    /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), a flight
+    /// from a ship gone from its slot ends with its provocation
+    /// ([`flight_ended`](crate::traffic::provocation::flight_ended),
+    /// @0x8d4e4-0x8d50d → @0x8e228-0x8e23d), and its flee
+    /// drop ([`flee_drop::with_flee_drop`]) and its call for
+    /// reinforcements end the think
     /// ([`reinforcements::with_high_level_call`]), whatever type decided,
-    /// as it runs after every type's think (`_AIDispatch` @0x901e5).
+    /// as the handler runs after every type's think (`_AIDispatch`
+    /// @0x901e5).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        let decision = if self.hunts_player(npc, around) {
-            Decision {
+        let decision = match self.mission_hunt(npc, around) {
+            Some(true) => Decision {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: false,
+                forgets_provocation: false,
                 comm_call: None,
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
-            }
-        } else {
-            self.thinker(npc, around).decision(npc, around, chance)
+                lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
+                visits: None,
+                re_picked: false,
+            },
+            Some(false) => Decision {
+                goal: Goal::JumpOut,
+                turns_on_player: false,
+                clears_target: true,
+                ..self.thinker(npc, around).decision(npc, around, chance)
+            },
+            None => self.thinker(npc, around).decision(npc, around, chance),
+        };
+        let decision = lost_sight::after_think(npc, decision, around, chance);
+        if lost_sight::ends_high_level(&decision) {
+            return decision;
+        }
+        // A think that clears its target has ended its fight itself, so
+        // the high level finds no flight of the old goal's to end.
+        let decision = Decision {
+            forgets_provocation: decision.forgets_provocation
+                || (!decision.clears_target
+                    && crate::traffic::provocation::flight_ended(npc, decision.goal, around)),
+            ..decision
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
         reinforcements::with_high_level_call(npc, decision, around)
@@ -300,13 +337,14 @@ impl Behaviour for NovaAi {
         self.of(npc, around).trigger(npc, around)
     }
 
-    /// A mission ship of `ShipBehav` 0 targets the player
-    /// (`hunts_player`).
+    /// A mission ship of `ShipBehav` 0 targets the player, and none once
+    /// it gives up on it ([`NovaAi::mission_hunt`]).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-        if self.hunts_player(npc, around) {
-            return Some(ShipRef::Player);
+        match self.mission_hunt(npc, around) {
+            Some(true) => Some(ShipRef::Player),
+            Some(false) => None,
+            None => self.thinker(npc, around).target(npc, around),
         }
-        self.thinker(npc, around).target(npc, around)
     }
 
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
@@ -1309,16 +1347,21 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_behav_0_ship_without_destroying_weapons_gives_up_on_a_disabled_player() {
+    fn a_ship_behav_0_ship_without_destroying_weapons_gives_up_on_a_disabled_player_and_leaves() {
         let mark = Marked::new(7);
         let ai = NovaAi::default().with(AiType::Warship, mark.clone());
         let npcs = [mission_ship(of(1, AiType::Warship), 0)];
         let disabled = with_player(&npcs, Condition::Disabled);
+        let gave_up = ai.decision(&npcs[0], &disabled, &mut Draws::of(&[]));
+        assert_eq!(gave_up.goal, Goal::JumpOut, "state 2 (@0x8d6be)");
+        assert!(gave_up.clears_target, "+0x70 = -1 (@0x8d6db)");
+        assert!(!gave_up.turns_on_player);
+        assert_eq!(ai.target(&npcs[0], &disabled), None);
         assert_eq!(
-            ai.decide(&npcs[0], &disabled, &mut Draws::of(&[])),
-            Goal::Attack(mark.ship())
+            *mark.asked.borrow(),
+            [NpcId(1)],
+            "its type thought first (`_AIDispatch` @0x8fffa, then @0x901e5)"
         );
-        assert_eq!(ai.target(&npcs[0], &disabled), Some(mark.ship()));
         let dying = with_player(
             &npcs,
             Condition::Dying {
@@ -1328,10 +1371,10 @@ mod tests {
         );
         assert_eq!(
             ai.decide(&npcs[0], &dying, &mut Draws::of(&[])),
-            Goal::Attack(mark.ship()),
+            Goal::JumpOut,
             "a breaking-up player is disabled to _IsDisabled"
         );
-        assert_eq!(ai.target(&npcs[0], &dying), Some(mark.ship()));
+        assert_eq!(ai.target(&npcs[0], &dying), None);
         let gone = Surroundings::new(&[], &npcs);
         assert_eq!(
             ai.decide(&npcs[0], &gone, &mut Draws::of(&[])),
@@ -1368,6 +1411,46 @@ mod tests {
             "with destroying weapons it goes on while the player breaks up"
         );
         assert_eq!(ai.target(&armed[0], &dying), Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_giving_up_hunter_leaves_with_no_fuel_test_and_somewhere_to_land() {
+        let mut hunter = mission_ship(of(1, AiType::Warship), 0);
+        hunter.person = Some(crate::traffic::npc::NpcPerson {
+            zero_fuel: true,
+            ..crate::traffic::npc::NpcPerson::of(
+                &nova_sim_catalog::fixture::person(151, 128),
+                false,
+            )
+        });
+        hunter.reserves.fuel.now = 0.0;
+        hunter.goal = Goal::JumpOut;
+        assert!(!crate::ai::leave::can_jump(&hunter, RuleSource::Engine));
+        let sites = [nova_sim_catalog::fixture::planet(128, 300.0, 0.0)];
+        let npcs = [hunter];
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.condition = Condition::Disabled;
+        let around = Surroundings {
+            player: Some(player),
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let ai = NovaAi::default();
+        assert_eq!(
+            Warship::default().decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            Goal::Land(crate::catalog::StellarId(128)),
+            "its type's think alone would land"
+        );
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            Goal::JumpOut,
+            "the high level's give-up comes after it"
+        );
+        let intact = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &intact, &mut Draws::of(&[0])),
+            Goal::Attack(ShipRef::Player),
+            "the player intact again, it attacks again"
+        );
     }
 
     #[test]
@@ -1627,12 +1710,17 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: true,
                 provokes: false,
+                forgets_provocation: false,
                 comm_call: None,
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: None,
+                travel: crate::ai::travel::TravelWrite::Keep,
+                visits: None,
+                re_picked: false,
             }
         }
     }
@@ -1652,14 +1740,31 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: false,
+                forgets_provocation: false,
                 comm_call: None,
                 calls_reinforcements: true,
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
                 plunders: None,
+                lost_sight: Some(crate::ai::lost_sight::LostSight::Seen),
+                travel: crate::ai::travel::TravelWrite::Keep,
+                visits: None,
+                re_picked: false,
             },
-            "the mission hunt (@0x8d6b7)"
+            "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
+        );
+        let gives_up = NovaAi::default().with(AiType::Warship, Rc::new(Turning));
+        let disabled = with_player(&hunters, Condition::Disabled);
+        let gave_up = gives_up.decision(&hunters[0], &disabled, &mut Draws::of(&[]));
+        assert_eq!(
+            (
+                gave_up.goal,
+                gave_up.turns_on_player,
+                gave_up.dropped_target
+            ),
+            (Goal::JumpOut, false, true),
+            "giving up, it turns on nobody; the rest is its type's"
         );
         let ai = NovaAi::default().with(AiType::BraveTrader, Rc::new(Turning));
         let brave = [of(2, AiType::BraveTrader)];
@@ -1695,5 +1800,59 @@ mod tests {
                 .turns_on_player,
             "a trader"
         );
+    }
+
+    /// `npc` fully cloaked.
+    fn cloaked(mut npc: Npc) -> Npc {
+        npc.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        npc
+    }
+
+    #[test]
+    fn a_searching_ship_makes_no_high_level_reinforcement_call() {
+        use crate::ai::lost_sight::LostSight;
+        let mark = Marked::new(2);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let npcs = [of(1, AiType::Warship), cloaked(of(2, AiType::Warship))];
+        let around = with_player(&npcs, Condition::Intact);
+        let searching = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(searching.goal, Goal::Attack(mark.ship()));
+        assert_eq!(searching.lost_sight, Some(LostSight::Searching(100)));
+        assert!(!searching.calls_reinforcements, "the jump to @0x8fb47");
+        let mut gave_up = npcs[0].clone();
+        gave_up.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(1);
+        let dropped = ai.decision(&gave_up, &around, &mut Draws::of(&[]));
+        assert_eq!(dropped.goal, Goal::Idle);
+        assert_eq!(dropped.lost_sight, Some(LostSight::GaveUp));
+        assert!(!dropped.calls_reinforcements);
+        let seen = [of(1, AiType::Warship), of(2, AiType::Warship)];
+        let around = with_player(&seen, Condition::Intact);
+        let fight = ai.decision(&seen[0], &around, &mut Draws::of(&[]));
+        assert_eq!(fight.lost_sight, Some(LostSight::Seen));
+        assert!(fight.calls_reinforcements, "seen, @0x8e6eb");
+    }
+
+    #[test]
+    fn the_lost_sight_block_runs_for_every_type_after_its_think() {
+        use crate::ai::lost_sight::LostSight;
+        let mark = Marked::new(3);
+        let escorts = NovaAi::default().with_escorts(mark.clone());
+        let carriers = NovaAi::default().with_carried(mark.clone());
+        let mut escort = of(1, AiType::WimpyTrader);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let fighter = carried(of(1, AiType::WimpyTrader), ShipRef::Npc(NpcId(2)));
+        for (ai, npc) in [(&escorts, escort), (&carriers, fighter)] {
+            let npcs = [npc, of(2, AiType::Warship), cloaked(of(3, AiType::Warship))];
+            let around = with_player(&npcs, Condition::Intact);
+            let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+            assert_eq!(decision.goal, Goal::Attack(mark.ship()));
+            assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)));
+        }
     }
 }
