@@ -70,7 +70,7 @@ use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::traffic::{SPAWN_RESERVE, table};
+use crate::traffic::SPAWN_RESERVE;
 use crate::wares::Roll;
 
 /// A port the session keeps, shared: equal to another when it is the
@@ -243,9 +243,7 @@ impl Session {
                 .0
                 .charge(&record, &site, self.price_mults().second, self.pilot.cash);
         let wage = self.hire_terms.0.wage(&record);
-        let reserves = table::kind(&record, &self.outfits, &self.arsenal)
-            .stats
-            .full();
+        let reserves = self.ship_kind(&record).stats.full();
         let berth = self.hire_berth();
         self.transact(|pilot| {
             pilot.cash -= fee;

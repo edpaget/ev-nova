@@ -856,6 +856,8 @@ impl Session {
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            self.rules
+                .source_for(crate::rulebook::RuleKey::NpcDefaultItems),
         );
         let nav = Vec::new();
         let preset = self.uniform_preset_kept(slot, record, kept, None, chance);
@@ -951,6 +953,8 @@ impl Session {
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            self.rules
+                .source_for(crate::rulebook::RuleKey::NpcDefaultItems),
         );
         // `_MissionDudeSpawn` finds its slot (@0x3cd50) before it hands the
         // slot the person's type (@0x3cd7e) or draws one (@0x3cdea): with

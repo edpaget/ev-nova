@@ -125,7 +125,7 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
 use crate::skill::random_skill_level;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
-use crate::traffic::table::{self, ShipKind};
+use crate::traffic::table::ShipKind;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Session::fleet_kept`]).
@@ -292,7 +292,7 @@ impl Session {
             });
         let (kind, person) = match fitted {
             Some((kind, person)) => (kind, Some(person)),
-            None => (table::kind(record, &self.outfits, &self.arsenal), None),
+            None => (self.ship_kind(record), None),
         };
         if self.restock_persons && person.is_some() {
             restock(&mut escort.reserves, &kind);
@@ -498,7 +498,7 @@ impl Session {
             let Some(record) = self.ship_record(ship) else {
                 continue;
             };
-            let kind = table::kind(record, &self.outfits, &self.arsenal);
+            let kind = self.ship_kind(record);
             restock(&mut self.pilot.escorts[index].reserves, &kind);
         }
         self.restock_persons = true;
@@ -919,7 +919,8 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{
-        Draws, FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, ship, weapon,
+        Draws, FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, outfit, ship,
+        weapon,
     };
 
     /// A pilot whose fleet is two escorts, both defending the player.
@@ -1372,6 +1373,27 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         assert_eq!(skills(&session), [(rolled, 1.0), (1.0, 1.0)], "took off");
+    }
+
+    #[test]
+    fn an_escort_flies_at_its_classs_alone_by_the_engine_and_with_its_items_by_the_other_reading() {
+        // The warship carries a reactor (+300 `Speed`) by default.
+        let mut catalog = fleeted();
+        catalog
+            .outfits
+            .push(outfit(330, &[(crate::stats::MORE_SPEED, 300)]));
+        catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(330), 1)];
+        for (items, top) in [(RuleSource::Engine, 6.0), (RuleSource::Bible, 9.0)] {
+            let mut session = Session::fly(&catalog, escorted(&catalog))
+                .expect("flies")
+                .with_rules(Rulebook::default().with_override(RuleKey::NpcDefaultItems, items));
+            tick(&mut session, &catalog);
+            assert_eq!(
+                escort_npcs(&session)[0].stats.handling.max_speed,
+                top,
+                "{items:?}"
+            );
+        }
     }
 
     #[test]

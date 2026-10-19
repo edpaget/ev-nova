@@ -169,7 +169,6 @@ use crate::skill::random_skill_level;
 use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::ship_display::{NpcDisplay, Spawn};
-use crate::traffic::table;
 
 impl Session {
     /// Holds the eject chord, Command and the eject key down together, or
@@ -350,7 +349,7 @@ impl Session {
     /// (see the module docs), of no government, its skill rolled on
     /// `chance` as its spawn rolls it.
     fn hulk(&self, old: &ShipRecord, condition: Condition, chance: &mut dyn Chance) -> Npc {
-        let kind = table::kind(old, &self.outfits, &self.arsenal);
+        let kind = self.ship_kind(old);
         // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8): its spawn's
         // glow, fold and rolls (see `nova_sim::traffic::ship_display`).
         let (display, fold) = NpcDisplay::spawned(&kind.hull.frames, Spawn::default());

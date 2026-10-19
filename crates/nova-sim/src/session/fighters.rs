@@ -58,7 +58,7 @@ use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::ship_display::NpcDisplay;
-use crate::traffic::table::{self, ShipKind};
+use crate::traffic::table::ShipKind;
 
 impl Session {
     /// Puts each fighter of `sorties` in the system (see the module
@@ -85,7 +85,7 @@ impl Session {
         self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
         let record = self.ship_record(sortie.ship).cloned()?;
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
-        let kind = table::kind(&record, &self.outfits, &self.arsenal);
+        let kind = self.ship_kind(&record);
         let carrier = Carrier {
             ship: sortie.carrier,
             window: dock_window(record.fields.maneuver),
@@ -1573,6 +1573,43 @@ mod tests {
             from.velocity,
             "at or past its own top speed: no gain"
         );
+    }
+
+    #[test]
+    fn a_fighter_launches_against_its_classs_bare_top_speed_by_the_engine() {
+        // The Viper carries a reactor (+300 `Speed`) by default; its carrier
+        // moves at 8 along the heading: past 6, below 9.
+        let mut catalog = carrying();
+        catalog
+            .outfits
+            .push(outfit(330, &[(crate::stats::MORE_SPEED, 300)]));
+        catalog.ship_records[1].defaults = vec![(OutfitId(330), 1)];
+        let from = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, -8.0),
+            heading: 0.0,
+        };
+        for (items, top) in [(RuleSource::Engine, 6.0), (RuleSource::Bible, 9.0)] {
+            let (session, raider, _) = raided(&catalog);
+            let mut session = session
+                .with_rules(Rulebook::default().with_override(RuleKey::NpcDefaultItems, items));
+            let sortie = Sortie {
+                carrier: ShipRef::Npc(raider),
+                bay: BAY,
+                ship: VIPER,
+                from,
+                heading: 0.0,
+                target: None,
+            };
+            assert!(session.launch_fighter(&sortie, &mut NeverFires).is_some());
+            let fighter = session.npcs().last().expect("launched");
+            assert_eq!(fighter.stats.handling.max_speed, top, "{items:?}");
+            assert_eq!(
+                fighter.state.velocity,
+                launch_velocity(from.velocity, 0.0, 4.0, top),
+                "{items:?}"
+            );
+        }
     }
 
     #[test]

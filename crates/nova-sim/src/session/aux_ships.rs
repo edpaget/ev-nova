@@ -119,6 +119,8 @@ impl Session {
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            self.rules
+                .source_for(crate::rulebook::RuleKey::NpcDefaultItems),
         );
         let spawn = AuxSpawn {
             slot,

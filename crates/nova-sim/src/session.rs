@@ -410,6 +410,7 @@ mod nav;
 mod nebulae;
 mod news;
 mod npc_escape;
+mod npc_kinds;
 mod outfits;
 mod person_offers;
 mod persons;
@@ -2405,6 +2406,7 @@ impl Session {
                 .iter()
                 .filter_map(|escort| escort.person)
                 .collect(),
+            self.npc_items(),
         );
         table.add_mission_dudes(
             catalog,
@@ -2412,6 +2414,7 @@ impl Session {
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            self.npc_items(),
         );
         table
     }

@@ -2498,9 +2498,10 @@ mod tests {
             let mut kinds = table(1);
             let record = nova_sim_catalog::fixture::ship(200, fields);
             let arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
-            kinds
-                .ships
-                .insert(ShipId(200), table::kind(&record, &[], &arsenal));
+            kinds.ships.insert(
+                ShipId(200),
+                table::kind(&record, &[], &arsenal, RuleSource::Engine),
+            );
             let mut traffic = Traffic::new();
             traffic.enter(kinds, &mut Draws::of(&placed(750, 750)));
             let immobile = traffic.npcs[0].immobile;

@@ -47,7 +47,12 @@ fn kinds(data: &GameData) -> Vec<(ShipId, ShipKind)> {
     let arsenal = Arsenal::read(data);
     data.ships()
         .iter()
-        .map(|record| (record.id, kind(record, &outfits, &arsenal)))
+        .map(|record| {
+            (
+                record.id,
+                kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine),
+            )
+        })
         .collect()
 }
 
