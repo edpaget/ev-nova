@@ -74,14 +74,14 @@ pub const CANT_FIRE_IONIZED: u16 = 0x0020;
 /// shed ([`Ion::shed`]), so the fight reads the charge as the block found
 /// it ([`Ion::as_block_found`]):
 /// - the player's hold is decided at step 1, after its fire and before
-///   the hit pass's doses ([`IonLockout::player_factor`]), and applied
-///   with its countdown at step 5 ([`IonLockout::reload`],
+///   the hit pass's doses (`IonLockout::player_factor`), and applied
+///   with its countdown at step 5 (`IonLockout::reload`,
 ///   [`Armament::reload_holding`]). So a hit holds its fire from the
 ///   second tick after it, and a charge shed away frees it a tick after
 ///   the charge as a frame began reaches none.
 /// - an NPC's hold is decided and applied at step 4, after its point
 ///   defence and before its fire, on that charge plus the pass's doses
-///   ([`IonLockout::hold_npcs`], [`Armament::hold_ionized`]). So it is
+///   (`IonLockout::hold_npcs`, [`Armament::hold_ionized`]). So it is
 ///   held on the fight a hit lands. Step 5 only counts its reloads down:
 ///   the hold's 1.0 counts to none there, as the original's next loop
 ///   counts it, so a freed weapon fires on the next fight.
@@ -149,7 +149,7 @@ impl IonLockout {
     }
 
     /// Step 5: every weapon's reload counts down, and the player's held
-    /// by the factor `player` step 1 read ([`IonLockout::player_factor`]).
+    /// by the factor `player` step 1 read (`IonLockout::player_factor`).
     pub(super) fn reload(self, fighters: &mut [Fighter], player: Option<f32>) {
         for fighter in fighters.iter_mut() {
             match (fighter.ship == ShipRef::Player, player) {
