@@ -42,8 +42,13 @@
 //!
 //! **The hand-off** (0x6f30e-0x6f40a). The hulk is an NPC of the old
 //! class, with the player's position, velocity, heading, shield and
-//! armour, no government (+0x88 = -1), boarded (+0xb9 = 1, so it can't be
-//! boarded), on no escort or mission duty. A disabled player's hulk is a
+//! armour, no government, boarded (+0xb9 = 1, so it can't be boarded),
+//! on no escort or mission duty. The original also gives it AI type -1
+//! (+0x88 = -1, @0x6f31f), which the engine's [`AiType`] has no value
+//! for: the hulk takes its class's `InherentAI`, which nothing reads, as
+//! a hulk is never intact and so never thinks. The odds pass's zero for
+//! it (@0x44307) is recorded in rdm phase
+//! combat-ai-fidelity/phase-23-left-out-of-phase-16. A disabled player's hulk is a
 //! disabled derelict; a dying one's breaks up and explodes. Its other
 //! fields the original zeroes (+0x5c, +0x60, +0xb0, +0xc8d6, +0xc8e0,
 //! +0xc8f4-+0xc8f8) are the ionisation, cloak-fade and display state
@@ -411,6 +416,8 @@ impl Session {
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
             pods_left: kind.hull.pod_count,
+            // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
+            odds: crate::traffic::odds_cache::STALE,
         }
     }
 
