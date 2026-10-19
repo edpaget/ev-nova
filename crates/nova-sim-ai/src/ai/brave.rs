@@ -25,6 +25,7 @@ use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
+use crate::traffic::provocation::attack_gone;
 
 /// How near, in pixels on either axis, a brave trader's attacker must be
 /// for it to fight back (`cmpw $0x4e2`).
@@ -42,13 +43,16 @@ pub struct BraveTrader {
 impl Behaviour for BraveTrader {
     /// Its [`decide`](Self::decide) goal, with a distress call fleeing or
     /// fighting a warship or interceptor ([`brave_call`]), and a call for
-    /// reinforcements fleeing (state 3, @0x8b6dc).
+    /// reinforcements fleeing (state 3, @0x8b6dc). An attack on a ship
+    /// gone ends with its provocation ([`attack_gone`]): `_BraveTraderAI`
+    /// has no drop of its own, so the high level ends it (@0x8e714).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let goal = self.decide(npc, around, chance);
         Decision {
             goal,
             comm_call: brave_call(goal, around),
             calls_reinforcements: matches!(goal, Goal::Flee(_)),
+            forgets_provocation: attack_gone(npc, around),
             ..Decision::default()
         }
     }

@@ -93,6 +93,7 @@ use crate::geometry::Vec2;
 use crate::govt::INTERCEPTORS_RETREAT;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc};
+use crate::traffic::provocation::attack_gone;
 
 /// How near, in pixels on either axis, an interceptor comes to the ship
 /// it inspects (100.0 @0xdd060).
@@ -160,7 +161,11 @@ impl Behaviour for Interceptor {
     /// patrol, after its out-of-ammo retreat
     /// ([`out_of_ammo::after_patrol`]), the hunt's call on the player kept
     /// through each; then an inspection of a ship it no longer sees is
-    /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee).
+    /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee). The
+    /// high level ends with its provocation a retreat with no target
+    /// ([`out_of_ammo::stops`]) and an attack on a ship gone
+    /// ([`attack_gone`]: `_InterceptorAI` has no drop of its own, so goal 4
+    /// reaches @0x8e714).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
@@ -175,15 +180,18 @@ impl Behaviour for Interceptor {
             chance,
         );
         let mut comm_call = None;
+        let mut stops = false;
         let decision = hunt.or(|| {
             let (goal, call) = self.patrol(npc, around, chance);
             comm_call = call;
+            stops = out_of_ammo::stops(npc, goal);
             out_of_ammo::after_patrol(npc, goal)
         });
         let decision = lost_sight::after_inspection(
             npc,
             Decision {
                 comm_call,
+                forgets_provocation: stops || attack_gone(npc, around),
                 ..decision
             },
             around,
@@ -785,6 +793,7 @@ mod tests {
                 turns_on_player: true,
                 dropped_target: false,
                 provokes: true,
+                forgets_provocation: false,
                 comm_call: None,
                 calls_reinforcements: false,
                 board_wait: None,

@@ -798,6 +798,14 @@ pub struct Decision {
     /// (`_WarshipAI` @0x8b7e5, `_InterceptorAI` @0x8cb9d). The traffic sets
     /// [`Npc::provoked`] so as it takes the goal.
     pub provokes: bool,
+    /// Whether `_HighLevelAIHandler` ends the fight the think left it
+    /// with, zeroing its provocation (+0x96), in the same dispatch: a
+    /// flight with no target (@0x8dff6 → @0x8e228-0x8e23d), or an attack
+    /// on a ship gone or breaking up (@0x8e3e6 → @0x8e714-0x8e726). The
+    /// traffic zeroes [`Npc::provoked`] so as it takes the goal, before
+    /// [`provokes`](Self::provokes) (see
+    /// [`provocation`](crate::traffic::provocation)).
+    pub forgets_provocation: bool,
     /// The call the think makes on the message line, if any: a distress
     /// call (`_AICallForHelp`) or a pre-scan hail (see
     /// [`call_for_help`]). The session answers it in slot order with the

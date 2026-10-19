@@ -51,13 +51,10 @@
 //!   (@0x8d4b9-0x8d4d2) and `_HandleShip` holds its turn, thrust and fire
 //!   (@0x3443f-0x34454, @0x34a54-0x34a72): it sits still for what is left,
 //!   then attacks.
-//! - **The provocation**: goal 0x16's block never writes +0x96, so a hit
-//!   during the wait adds to it and it stays. The engine zeroes it on the
-//!   wait's thinks, as for every goal that fights nothing
-//!   ([`Traffic::take_goals`](crate::traffic::Traffic::take_goals)), as no
-//!   reader sees it: the pirate's think reads none, and the block clears
-//!   its target every frame (@0x8d480), which every reader needs live
-//!   (rdm combat-ai-fidelity phase 18's findings).
+//! - **The provocation**: the wait loop zeroes it as the wait starts
+//!   (@0x8c713, [`enter`]). Goal 0x16's block never writes +0x96, so a hit
+//!   during the wait adds to it and it stays, here too (see
+//!   [`provocation`](crate::traffic::provocation)).
 //!
 //! Nothing here plays a sound.
 
@@ -146,10 +143,12 @@ fn sniping(npc: &Npc, goal: Goal) -> bool {
 
 /// `npc` taking `goal`: one whose goal becomes 0x16 from another takes
 /// [`BOARD_WAIT`] ticks of AI wait ([`Npc::ai_wait`], +0x4c = 120.0
-/// @0x8c71c); one already waiting keeps what is left of its wait.
+/// @0x8c71c) and loses its provocation (+0x96 = 0, @0x8c713); one
+/// already waiting keeps what is left of its wait, and its provocation.
 pub(crate) fn enter(npc: &mut Npc, goal: Goal) {
     if goal == Goal::CountWait && npc.goal != Goal::CountWait {
         npc.ai_wait = BOARD_WAIT;
+        npc.provoked = 0.0;
     }
 }
 

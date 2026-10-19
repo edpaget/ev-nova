@@ -217,12 +217,11 @@ pub fn searching(npc: &Npc) -> bool {
 /// ([`Npc::threatens_player_or_led`], [`Npc::threatens_npc_among`],
 /// [`Npc::threatens_player_extended`]).
 ///
-/// Once a stop keeps provocation
-/// (rdm:phase/combat-ai-fidelity/phase-24-provocation-kept-through-leave,
-/// as [`provoked_by`](crate::ai::provoked_by) reads this target), a
-/// stopped trader with a kept target and provocation turns on it again,
-/// as the original's provoked branch does from state 6 (@0x8b1ac,
-/// @0x8b616).
+/// A stop keeps the trader's provocation as well (see
+/// [`provocation`](crate::traffic::provocation)), and
+/// [`provoked_by`](crate::ai::provoked_by) reads this target, so a stopped
+/// trader with a kept target and provocation turns on it again, as the
+/// original's provoked branch does from state 6 (@0x8b1ac, @0x8b616).
 #[must_use]
 pub fn trader_target(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
     match npc.goal {

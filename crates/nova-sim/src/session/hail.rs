@@ -31,7 +31,8 @@
 //!   becomes a wimpy trader for the rest of its stay (@0x961f8); it leaves
 //!   (`_AIMakeShipLeave` @0x7e2b0), jumping out with a jump's fuel, or
 //!   else deciding as its idle block does, which lands; its target and
-//!   fire command are gone, and so is its provocation.
+//!   fire command are gone, but it keeps its provocation (no +0x96
+//!   write), so a later hit that sets its target turns it to flee.
 //! - **Attack** (a bribe declined, `_AIMakeShipAttackPlayer` @0x89c3e):
 //!   it attacks the player, a person of `Flags` 0x0010 not already
 //!   threatening it saying its hail quote at once

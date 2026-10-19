@@ -234,3 +234,60 @@ fn by_the_other_reading_every_new_ship_starts_unset() {
     assert_eq!(brought_in(&mut traffic, 4), SearchTimer::Unset);
     assert_eq!(brought_in(&mut traffic, 9), SearchTimer::Unset);
 }
+
+/// Stops, as the lost-sight block does a trader that can't jump
+/// (@0x8d803-0x8d80f): state 6, its target kept.
+#[derive(Debug)]
+struct Stops;
+
+impl Behaviour for Stops {
+    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        Goal::Wait
+    }
+
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        crate::ai::lost_sight::trader_target(npc, around)
+    }
+}
+
+#[test]
+fn a_provoked_trader_stopped_on_lost_sight_turns_on_its_kept_target() {
+    use crate::ai::brave::BraveTrader;
+    use crate::ai::fixture::{PIRATES, TRADERS, n, ship};
+    use crate::ai::wimpy::WimpyTrader;
+    use crate::traffic::npc::AiType;
+    let answer = |ai_type: AiType, behaviour: &dyn Behaviour| {
+        let mut traffic = Traffic::with_interval(1);
+        let mut trader = ship(1, TRADERS, ai_type, 0.0, 0.0);
+        trader.goal = Goal::Flee(n(2));
+        trader.target = Some(n(2));
+        trader.provoked = 5.0;
+        traffic.npcs = vec![trader, ship(2, PIRATES, AiType::Warship, 300.0, 0.0)];
+        let world = World::new(&[]);
+        traffic.tick_holding(&Stops, world, &[], &BTreeSet::new(), &mut Ranged::of(&[]));
+        let stopped = &traffic.npcs()[0];
+        assert_eq!(
+            (stopped.goal, stopped.target, stopped.provoked),
+            (Goal::Wait, Some(n(2)), 5.0),
+            "the stop keeps both"
+        );
+        traffic.tick_holding(
+            behaviour,
+            world,
+            &[],
+            &BTreeSet::new(),
+            &mut Ranged::of(&[]),
+        );
+        traffic.npcs()[0].goal
+    };
+    assert_eq!(
+        answer(AiType::WimpyTrader, &WimpyTrader::default()),
+        Goal::Flee(n(2)),
+        "@0x8b1ac"
+    );
+    assert_eq!(
+        answer(AiType::BraveTrader, &BraveTrader::default()),
+        Goal::Attack(n(2)),
+        "@0x8b616"
+    );
+}

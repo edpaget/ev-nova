@@ -642,6 +642,10 @@ mod tests {
         onlooker.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         onlooker.target = Some(ShipRef::Npc(VICTIM));
         onlooker.provoked = 3.0;
+        // Armed, so its think keeps the attack: the original's loop runs in
+        // the pirate's think, before the onlooker's (a higher slot), and a
+        // ship whose own think drops the victim keeps its +0x96.
+        onlooker.armament = Armament::new([(WeaponSpec::new(&weapon(128)), 1)]);
         // Disabled, so it doesn't think: only the drop writes its +0x6c.
         let mut wrecked = npc(6, ShipStats::new(FAST, &[]));
         wrecked.berth = 6;

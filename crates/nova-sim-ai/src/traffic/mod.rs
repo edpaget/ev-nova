@@ -165,6 +165,7 @@ pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
 pub mod pod_flight;
+pub mod provocation;
 #[cfg(test)]
 mod pursuit_tests;
 pub mod quote;
@@ -2028,14 +2029,15 @@ impl Traffic {
     /// `player_at` if there is one: one that stops inspecting a ship
     /// remembers it, and has scanned the player when it was inspecting the
     /// player within its reach, unless an interceptor's re-pick gave the
-    /// new goal ([`Decision::re_picked`]); one whose decision provokes it
-    /// ([`Decision::provokes`]) has a provocation of 1, the word's +0x96
-    /// (@0x8b7e5, @0x8cb9d); one that does not fight loses its
-    /// provocation; and one whose decision clears its target
+    /// new goal ([`Decision::re_picked`]); its provocation takes the
+    /// decision's writes ([`provocation::take`]: zeroed where the high
+    /// level ends its fight, then 1 where the word provokes it), and is
+    /// otherwise kept; and one whose decision clears its target
     /// ([`Decision::clears_target`]) loses it. Its search timer takes the
     /// lost-sight block's write ([`Decision::lost_sight`]), and stays as
     /// it was when the block did not run. One that starts a count wait
-    /// takes its AI wait ([`board_wait::enter`]). Its travel stellar takes
+    /// takes its AI wait and loses its provocation
+    /// ([`board_wait::enter`]). Its travel stellar takes
     /// the decision's write ([`Decision::travel`],
     /// [`travel::take`](crate::ai::travel::take)), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
@@ -2051,9 +2053,9 @@ impl Traffic {
                     .calls_reinforcements
                     .then_some(CommCall::Reinforcements),
             );
+            provocation::take(npc, &decision);
             let Decision {
                 goal,
-                provokes,
                 clears_target,
                 lost_sight,
                 travel,
@@ -2081,12 +2083,6 @@ impl Traffic {
             // The calls carry the odds the think read, before the pass.
             self.on_line
                 .push_think(npc.berth, npc.id, calls, npc.odds, scans);
-            if provokes {
-                npc.provoked = 1.0;
-            }
-            if !goal.fights() {
-                npc.provoked = 0.0;
-            }
             if clears_target {
                 npc.target = None;
             }
@@ -4331,6 +4327,7 @@ mod tests {
             turns_on_player: true,
             dropped_target: true,
             provokes: false,
+            forgets_provocation: false,
             comm_call: None,
             calls_reinforcements: false,
             board_wait: None,
@@ -5091,7 +5088,7 @@ mod tests {
     }
 
     #[test]
-    fn provocation_clears_on_an_idle_goal_or_when_disabled() {
+    fn provocation_clears_when_disabled_and_is_kept_by_an_idle_or_inspecting_think() {
         let mut traffic = populated(2, 1);
         for npc in traffic.npcs_mut() {
             npc.provoked = 9.0;
@@ -5100,14 +5097,20 @@ mod tests {
         let fleeing = Fighting::deciding(Goal::Flee(ShipRef::Player));
         traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].provoked, 9.0, "still fighting");
-        assert_eq!(traffic.npcs()[1].provoked, 0.0, "disabled");
+        assert_eq!(traffic.npcs()[1].provoked, 0.0, "disabled (@0x8feef)");
         let calm = Fighting::deciding(Goal::Idle);
         traffic.tick_in(&calm, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].provoked, 0.0, "idle");
-        traffic.npcs_mut()[0].provoked = 2.0;
+        assert_eq!(traffic.npcs()[0].provoked, 9.0, "idle keeps it");
         let inspecting = Fighting::deciding(Goal::Inspect(ShipRef::Player));
         traffic.tick_in(&inspecting, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].provoked, 0.0, "inspecting is idle");
+        assert_eq!(traffic.npcs()[0].provoked, 9.0, "inspecting keeps it");
+        let ended = Decides(crate::ai::Decision {
+            goal: Goal::Idle,
+            forgets_provocation: true,
+            ..crate::ai::Decision::default()
+        });
+        traffic.tick_in(&ended, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].provoked, 0.0, "the high level ended it");
     }
 
     #[test]

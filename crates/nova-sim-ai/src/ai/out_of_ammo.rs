@@ -10,7 +10,8 @@
 //!   or following its leader out). State 3 with a target is
 //!   [`Goal::Flee`]; with none, `_HighLevelAIHandler` makes it state 0,
 //!   sub 0, provocation 0 at once, in the same dispatch (@0x8dff6 →
-//!   @0x8e228-0x8e23d): [`Goal::Idle`].
+//!   @0x8e228-0x8e23d): [`Goal::Idle`], its provocation forgotten
+//!   ([`stops`]).
 //!   - A warship meets it only with a target, attacking: target -1 and
 //!     states 7 and 3 jump past it (@0x8bc48, @0x8bcb4, @0x8be03,
 //!     @0x8be14, @0x8be1e), and any other state with a target is made 4
@@ -75,6 +76,15 @@ pub fn after_patrol(npc: &Npc, goal: Goal) -> Goal {
         Goal::JumpOut => goal,
         _ => Goal::Idle,
     }
+}
+
+/// Whether an interceptor `npc` that, with nothing to fight, has decided
+/// on `goal` stops as it retreats out of ammunition ([`after_patrol`]):
+/// state 3 with no target, which `_HighLevelAIHandler` makes state 0 at
+/// once, its provocation zeroed (@0x8dff6 → @0x8e228-0x8e23d).
+#[must_use]
+pub fn stops(npc: &Npc, goal: Goal) -> bool {
+    retreats(npc) && !matches!(goal, Goal::Inspect(_) | Goal::JumpOut)
 }
 
 #[cfg(test)]
