@@ -455,6 +455,7 @@ mod shot_slots;
 mod slot_search;
 mod slot_visibility;
 mod smoke_frame;
+mod spawn_availability;
 mod stale_sprites;
 mod status_cargo;
 mod steering;
@@ -1377,6 +1378,10 @@ pub struct Session {
     /// (`mïsn`+0x16; see [`Session::propagate_avail_bits`]); never saved,
     /// as a load refreshes it.
     avail_cache: BTreeMap<MissionId, bool>,
+    /// The player as the last galaxy refresh read them, what a spawn's
+    /// `AppearOn` reads by the engine (see the `spawn_availability`
+    /// module); never saved, as a load refreshes it.
+    refreshed: spawn_availability::RefreshedFacts,
     /// Whether the data turns on the `l33t` mode (`_leetMode`; see
     /// [`Session::with_strings`]); never saved.
     leet: bool,
@@ -1803,6 +1808,7 @@ impl Session {
             loaded_movie: None,
             offering_ship: None,
             avail_cache: BTreeMap::new(),
+            refreshed: spawn_availability::RefreshedFacts::default(),
             leet: false,
             texts_queued: 0,
             text_bars: Vec::new(),
@@ -2506,6 +2512,7 @@ impl Session {
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
                 pilot: &facts,
+                refreshed: spawn_availability::appear_pilot(&self.rules, &self.refreshed, &facts),
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.spawn_reserve(SPAWN_RESERVE),
@@ -2740,6 +2747,7 @@ impl Session {
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
                 pilot: &facts,
+                refreshed: spawn_availability::appear_pilot(&self.rules, &self.refreshed, &facts),
                 fleet: &self.pilot.escorts,
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
@@ -2833,6 +2841,7 @@ impl Session {
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
                 pilot: self,
+                refreshed: spawn_availability::appear_pilot(&self.rules, &self.refreshed, self),
                 fleet: &self.pilot.escorts,
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
@@ -3992,9 +4001,10 @@ impl Session {
         let mark = self.story_mark();
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
-        // @0x6c144); the `AvailBits` cached with it.
+        // @0x6c144); the `AvailBits` and the spawners' tests cached with
+        // it.
         let refresh = self.refresh_now();
-        self.propagate_avail_bits();
+        self.propagate_cached_tests();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -16220,6 +16230,9 @@ pub(super) mod tests {
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), [], "bit 7 is clear");
         session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        // Read as the last galaxy refresh saw it (see the
+        // `spawn_availability` module).
+        session.propagate_cached_tests();
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         let mut refusing = session.with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));

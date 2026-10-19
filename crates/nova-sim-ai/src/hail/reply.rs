@@ -101,10 +101,10 @@ pub const WASTING_TIME: u8 = 13;
 pub const NOT_IN_TROUBLE: u8 = 14;
 /// Group 16: "I'm busy.".
 pub const BUSY: u8 = 16;
-/// Group 17: "I'd rather not.": help while an enemy of the ship's
-/// threatens the player and it has no battle help. It stands in for the
-/// original's AI-type ladder there (@0x9638e-0x96514), which is deferred,
-/// and is the original's own answer for a wimpy trader (@0x96399).
+/// Group 17: "I'd rather not.": help asked of a wimpy trader while an
+/// enemy of the ship's threatens the player and it has no battle help
+/// (`_DoCommDialog` @0x96399, @0x96459), or of a brave trader that won't
+/// fight for a price (@0x9639f-0x963d9).
 pub const RATHER_NOT: u8 = 17;
 /// Group 18: "You'll have to pay me first.": a bribe's price, in a
 /// neutral mood.
@@ -132,12 +132,14 @@ pub const COMEDIAN: u8 = 31;
 /// escort.
 pub const ESCORT_OPENING: u8 = 4;
 /// Group 22: "Sorry sir, I'm just an escort.": Request Assistance to a
-/// mission escort that is busy (the original's AI type above 4,
-/// @0x96304).
+/// busy ship of the original's AI type above 4 (a mission escort, an NPC
+/// fleet escort or an NPC's carried fighter, `Hail::escort_ai`,
+/// @0x962ee-0x96304).
 pub const JUST_AN_ESCORT: u8 = 22;
 /// Group 25: "Sorry, I can't do that.": Request Assistance's refuel or
-/// repair asked of a ship of AI type above 4, a mission escort here,
-/// before any price (`_DoCommDialog` @0x96564-0x9656c, @0x9663a).
+/// repair asked of a ship of AI type above 4 (a mission escort, an NPC
+/// fleet escort or an NPC's carried fighter, `Hail::escort_ai`), before
+/// any price (`_DoCommDialog` @0x96564-0x9656c, @0x9663a).
 pub const CANT_DO_THAT: u8 = 25;
 /// Group 38: "Goodbye, captain.": an escort released.
 pub const RELEASED: u8 = 38;

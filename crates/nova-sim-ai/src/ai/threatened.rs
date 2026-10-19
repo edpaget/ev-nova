@@ -36,7 +36,7 @@ use crate::traffic::npc::Npc;
 pub fn player_threatened_by_enemy_of(asker: &Npc, around: &Surroundings) -> bool {
     around.npcs.iter().any(|threat| {
         threat.id != asker.id
-            && threat.threatens_player_extended(around.npcs, around.seen_by_player(threat))
+            && around.threatens_player(threat)
             && around.govts.npc_enemies(asker.govt, threat.govt)
     })
 }
@@ -55,7 +55,7 @@ pub fn threatened_by_enemy_of(friend: ShipRef, asker: ShipRef, around: &Surround
     let Some(friend) = around.npc(id) else {
         return false;
     };
-    if friend.threatens_player_extended(around.npcs, around.seen_by_player(friend)) {
+    if around.threatens_player(friend) {
         return true;
     }
     let Some(asker) = asker_npc else {

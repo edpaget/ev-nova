@@ -876,9 +876,9 @@ impl Npc {
     /// a ship attacking one the player leads; every other caller, the
     /// radar IFF and the Red Alert among them, asks
     /// [`Npc::threatens_player_among`]. It is kept only for the hail's
-    /// [`threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy)
-    /// and [`threats_to_player`](crate::hail::Hail::threats_to_player),
-    /// which still read it.
+    /// [`threats_to_player`](crate::hail::Hail::threats_to_player), which
+    /// reads `_AIFightEnemyThreatToPlayer`'s inline test (+0x70 == 0, AI
+    /// state 3 or 4, @0x82cda-0x82cef), not `_IsThreatToPlayer`.
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
@@ -927,12 +927,11 @@ impl Npc {
     /// [`Traffic::player_led`](super::Traffic::player_led) does. A ship
     /// whose quarry isn't in `npcs` is led by nobody.
     ///
-    /// Every modelled caller of `_IsThreatToPlayer` asks this, and so do
-    /// the readers of `_ExtendedIsThreatToPlayer` @0x81b70, whose target
-    /// test has the same led clause (@0x81c2e-0x81c4a), but for the attack
-    /// quote's gate and point defence (`_HandleShipPointDefense` @0x395fe),
-    /// which ask the whole of it
-    /// ([`Npc::threatens_player_extended`]).
+    /// It serves the callers of `_IsThreatToPlayer` only: every modelled
+    /// one asks it (`_IsPlayerThreatened` @0x8245c among them, the hail's
+    /// [`player_threatened`](crate::hail::Hail::player_threatened)). The
+    /// readers of `_ExtendedIsThreatToPlayer` @0x81b70 don't; they ask
+    /// [`Npc::threatens_player_extended`], which lists them.
     #[must_use]
     pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
         self.threatens_player_or_led(|id| npcs.iter().any(|n| n.id == id && n.escorts_player()))
@@ -978,12 +977,27 @@ impl Npc {
     /// unseen; the engine's [`Npc::emerging`] treats that tick as out of
     /// the gate, as every reader of the player's sight does.
     ///
-    /// This is the predicate for `_AIMakeShipAttackPlayer`'s quote gate
-    /// ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote))
-    /// and for point defence (`_HandleShipPointDefense` @0x395fe), which
-    /// `nova_sim::Session`'s fight terms feed with the player's sight of
-    /// the ship; the hail's and the ranks' readers still ask
-    /// [`Npc::threatens_player_among`].
+    /// It is the predicate for every reader of `_ExtendedIsThreatToPlayer`:
+    ///
+    /// - `_AIMakeShipAttackPlayer`'s quote gate (@0x89c53,
+    ///   [`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote));
+    /// - point defence (`_HandleShipPointDefense` @0x395fe), which
+    ///   `nova_sim::Session`'s fight terms feed with the player's sight of
+    ///   the ship;
+    /// - the threatened-by-enemy tests (`_IsPlayerThreatenedByMyEnemy`
+    ///   @0x824b8, `_IsShipThreatenedByMyEnemy` @0x82525,
+    ///   [`threatened`](crate::ai::threatened)), and through the first rank
+    ///   battle help ([`Hail::threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy));
+    /// - the comm dialog's attitude (`_AIDoesShipLikePlayer` @0x8218c,
+    ///   `_CommDialogUpdate` @0x90625, `_DrawCommDialogButtons` @0x28d5a,
+    ///   `_DoCommDialog` @0x95ce1, @0x960fa, @0x966da;
+    ///   [`hail::like`](crate::hail::like));
+    /// - the player's escorts' threat picks (`_AIFightThreatToParent`
+    ///   @0x81e5c-0x81f7d, `_IsShipANearbyThreatToParent` @0x83744;
+    ///   [`escort::threats`](crate::escort::threats),
+    ///   [`escort::threat_score`](crate::escort::threat_score)).
+    ///
+    /// The stellar-defender clause above is planet-domination's.
     #[must_use]
     pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
         let led = |id: NpcId| npcs.iter().any(|n| n.id == id && n.escorts_player());

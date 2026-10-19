@@ -26,30 +26,31 @@
 //! 4. Inactive: when [`eligibility`] passes it starts, `days` its
 //!    `Duration` (@0x38867-0x38871). With `PreHoldoff` above 0 it holds
 //!    off that many days and nothing runs yet (@0x388c5); otherwise
-//!    `OnStart` runs, and with `Duration` 0 it ends the same day.
+//!    `OnStart` runs, and with `Duration` 0 it ends the same day, as
+//!    [`RuleKey::CronZeroDurationNoHoldoff`] says.
 //!
 //! A crön ends by running `OnEnd`, then, with `PostHoldoff` above 0,
 //! `days` -1 and `holdoff` its `PostHoldoff`, counted down by step 2;
-//! otherwise it is inactive. Each state is written before the crön's
+//! otherwise it is inactive (but see [`RuleKey::CronZeroDurationNoHoldoff`]
+//! for a `Duration` 0 crön with no holdoffs). Each state is written before the crön's
 //! scripts run, and each script runs at once, so a later crön in the
 //! pass sees what an earlier one set. A running crön never rechecks its
 //! dates, `Require` or `EnableOn`; one that goes inactive may start again
 //! the next day. `_ActivateCron` and `_TerminateCron` have no other
 //! callers: no operator, mission or new pilot starts or ends a crön.
 //!
-//! These are the intended ends. The engine gets two of them wrong, and
-//! each of its readings is a Rulebook key. Both keys default to the
-//! intended end, a deliberate departure from the rule that every key
-//! defaults to the engine, decided 2026-10-11 so that the stock
-//! border-change storylines (crons 184, 185 and 192) re-arm:
+//! These are the intended ends. The engine departs from three of them,
+//! and each of its readings is a Rulebook key. The first two keys default
+//! to the intended end, a deliberate departure from the rule that every
+//! key defaults to the engine, decided 2026-10-11 so that the stock
+//! border-change storylines (crons 184, 185 and 192) re-arm; the third
+//! defaults to the engine, as no stock storyline depends on it:
 //!
 //! - [`RuleKey::CronZeroDurationHoldoff`]: by the engine, a `Duration` 0
 //!   crön whose pre-holdoff ends runs `OnStart` and `OnEnd` and nothing
 //!   more is written (@0x387a8-0x387c1), so it stays running with `days`
 //!   0 and the next day's running branch runs `OnEnd` again
-//!   (@0x387d3-0x387e8) and ends it as `cron_post_holdoff` says. The
-//!   inactive branch's `Duration` 0 end (@0x388cb-0x38901) is right in
-//!   the engine and reads neither key.
+//!   (@0x387d3-0x387e8) and ends it as `cron_post_holdoff` says.
 //! - [`RuleKey::CronPostHoldoff`]: by the engine, a running crön's end
 //!   with `PostHoldoff` above 0 loads its `PreHoldoff` into the holdoff
 //!   and leaves `days` as they are (@0x387f1-0x387f6 → 0x388c5). With
@@ -59,6 +60,17 @@
 //!   day for good, contributing and showing its news. A negative
 //!   `PreHoldoff` is taken as 0. The days stop at `i16::MIN` rather than
 //!   wrap.
+//! - [`RuleKey::CronZeroDurationNoHoldoff`] (engine by default): a
+//!   `Duration` 0 crön that starts with no pre-holdoff (the inactive
+//!   branch, @0x388cb-0x38901) runs `OnStart` and `OnEnd` and gets `days`
+//!   -1; with `PostHoldoff` 0 or below the engine leaves its holdoff 0 and
+//!   its active byte set, so it stays active and contributing, and the
+//!   next day's running branch runs `OnEnd` again (@0x387d3-0x387e8) and
+//!   makes it inactive (@0x387fc): it can restart only the day after. By
+//!   the other reading it is inactive at once after one `OnEnd`. With
+//!   `PostHoldoff` above 0 both readings take the post-holdoff. It reads
+//!   a path disjoint from `cron_zero_duration_holdoff`'s; stock cröns 129
+//!   and 381 take it.
 //!
 //! The session runs each script as a participant's effect (its `M`, `N`,
 //! `Q` and `S` deferred to the next settling), named by [`cron_hook`]
@@ -280,7 +292,7 @@ pub trait CronDay {
 }
 
 /// One day's pass over the crons, by ascending ID, as
-/// `_CronEventHandler` (@0x3874f) makes it, its two buggy ends read from
+/// `_CronEventHandler` (@0x3874f) makes it, its three disputed ends read from
 /// `rules` (see the module docs). Each state is written before the crön's scripts
 /// run, and each script runs at once, so a later crön in the pass sees
 /// what an earlier one set.
@@ -341,8 +353,12 @@ pub fn pass(records: &[CronRecord], rules: &Rulebook, day: &mut (impl CronDay + 
 }
 
 /// Runs `record`'s `OnStart`, and with `days` 0 left its `OnEnd` the same
-/// day. From the inactive branch (@0x388d4-0x388e6) that is its end. At
-/// the end of a pre-holdoff (`after_holdoff`) it is too by default; under
+/// day. From the inactive branch (@0x388d4-0x388e6) that ends it as
+/// [`RuleKey::CronZeroDurationNoHoldoff`] says: by the engine (the
+/// default) [`end_no_holdoff_engine`], which with `PostHoldoff` 0 or below
+/// leaves it active for a second `OnEnd` the next day; by the other
+/// reading the intended end. At the end of a pre-holdoff
+/// (`after_holdoff`) the intended end is the default; under
 /// [`RuleKey::CronZeroDurationHoldoff`]'s engine reading only `OnEnd`
 /// runs, as @0x387a8-0x387c1 writes nothing more, leaving the crön
 /// running with `days` 0 so the next day's pass ends it again.
@@ -359,9 +375,30 @@ fn start(
     }
     if after_holdoff && rules.source_for(RuleKey::CronZeroDurationHoldoff) == RuleSource::Engine {
         run_hook(record, CronHook::OnEnd, day);
+    } else if !after_holdoff
+        && rules.source_for(RuleKey::CronZeroDurationNoHoldoff) == RuleSource::Engine
+    {
+        end_no_holdoff_engine(record, day);
     } else {
         end(record, day);
     }
+}
+
+/// Runs `record`'s `OnEnd`, then the end the engine writes for a
+/// `Duration` 0 crön that starts with no pre-holdoff (`_CronEventHandler`
+/// @0x388e6-0x38901): `days` -1 and the holdoff its `PostHoldoff` when
+/// that is above 0, else 0. The active byte is never cleared on this
+/// path, so with `PostHoldoff` 0 or below the crön stays active and
+/// contributing, and the next day's running branch runs `OnEnd` again
+/// (@0x387d3-0x387e8) and makes it inactive (@0x387fc)
+/// ([`RuleKey::CronZeroDurationNoHoldoff`]'s engine reading).
+fn end_no_holdoff_engine(record: &CronRecord, day: &mut (impl CronDay + ?Sized)) {
+    run_hook(record, CronHook::OnEnd, day);
+    let after = CronState {
+        days: -1,
+        holdoff: record.post_holdoff.max(0),
+    };
+    day.set_state(record.id, Some(after));
 }
 
 /// Runs `record`'s `OnEnd`, then its intended end: its post-holdoff when
@@ -419,7 +456,9 @@ fn run_hook(record: &CronRecord, hook: CronHook, day: &mut (impl CronDay + ?Size
 /// them in its slot (+0x26, +0x28). A crön with none is inactive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CronState {
-    /// The days left of its duration; -1 in its post-holdoff. Under
+    /// The days left of its duration; -1 in its post-holdoff, or, with
+    /// `holdoff` 0, while a `Duration` 0 crön with no holdoffs waits for
+    /// the engine's second `OnEnd` (`cron_zero_duration_no_holdoff`). Under
     /// `cron_post_holdoff = engine` it may be 0 or below in a holdoff
     /// loaded from `PreHoldoff`, or falling for good in a run that never
     /// ends.
@@ -445,8 +484,10 @@ impl CronState {
     /// `Duration` and `holdoff` above 0, counting the holdoff alone down.
     /// Every other state follows an `OnStart`, by either reading of
     /// [`RuleKey::CronPostHoldoff`] or [`RuleKey::CronZeroDurationHoldoff`]:
-    /// running (`holdoff` 0 or below), the intended post-holdoff (`days`
-    /// -1), and the engine's end loading `PreHoldoff` into the holdoff,
+    /// running (`holdoff` 0 or below, which takes in the engine's
+    /// `Duration` 0 end with no holdoffs, `days` -1 and `holdoff` 0, under
+    /// [`RuleKey::CronZeroDurationNoHoldoff`]), the intended post-holdoff
+    /// (`days` -1), and the engine's end loading `PreHoldoff` into the holdoff,
     /// which leaves `days` at 0 or below, never the `Duration` of a crön
     /// that ran a day or more, and -1 for one of `Duration` 0. So the
     /// counters answer it without the rules. A save made under a
@@ -1401,10 +1442,46 @@ mod tests {
         assert_eq!(day.of(128), None);
     }
 
+    /// The rule set with `cron_zero_duration_no_holdoff` following
+    /// `source`, the other cron keys at their defaults.
+    fn no_holdoff(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::CronZeroDurationNoHoldoff, source)
+    }
+
     #[test]
-    fn a_cron_of_duration_0_starts_and_ends_the_same_day() {
+    fn a_duration_0_cron_with_no_holdoffs_ends_again_the_next_day_by_the_engine() {
+        for (pre_holdoff, post_holdoff) in [(0, 0), (-1, -1), (0, -1), (-1, 0)] {
+            for post in [RuleSource::Bible, RuleSource::Engine] {
+                let record = timed(128, 0, pre_holdoff, post_holdoff);
+                let records = [record.clone()];
+                let rules =
+                    no_holdoff(RuleSource::Engine).with_override(RuleKey::CronPostHoldoff, post);
+                let mut day = MockDay::eligible(128).with_rules(rules);
+                assert_eq!(day.day(&records), [Asked(128), Started(128), Ended(128)]);
+                assert_eq!(day.of(128), Some((-1, 0)), "still active");
+                let state = day.state(CronId(128)).expect("active");
+                assert!(contributes(state));
+                assert!(state.started(&record));
+                assert!(state.active());
+                assert_eq!(
+                    day.day(&records),
+                    [Ended(128)],
+                    "OnEnd again, not asked ({pre_holdoff}, {post_holdoff}, {post:?})"
+                );
+                assert_eq!(day.of(128), None);
+                assert_eq!(
+                    day.day(&records),
+                    [Asked(128), Started(128), Ended(128)],
+                    "the first restart"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_duration_0_cron_with_no_holdoffs_ends_once_by_the_other_reading() {
         let records = [timed(128, 0, 0, 0)];
-        let mut day = MockDay::eligible(128);
+        let mut day = MockDay::eligible(128).with_rules(no_holdoff(RuleSource::Bible));
         assert_eq!(day.day(&records), [Asked(128), Started(128), Ended(128)]);
         assert_eq!(day.of(128), None);
         assert_eq!(
@@ -1412,6 +1489,86 @@ mod tests {
             [Asked(128), Started(128), Ended(128)],
             "asked again the next day"
         );
+    }
+
+    #[test]
+    fn a_second_on_end_with_no_holdoffs_is_tested_again() {
+        let records = [CronRecord {
+            flags: ITERATE_END,
+            ..timed(128, 0, 0, 0)
+        }];
+        for (second, log) in [
+            (true, vec![Held(128), Ended(128), Held(128)]),
+            (false, vec![Held(128)]),
+        ] {
+            let mut day = MockDay {
+                holds: VecDeque::from([true, false, second, false]),
+                ..MockDay::eligible(128)
+            }
+            .with_rules(no_holdoff(RuleSource::Engine));
+            assert_eq!(
+                day.day(&records),
+                [Asked(128), Started(128), Held(128), Ended(128), Held(128)]
+            );
+            assert_eq!(day.day(&records), log, "holds {second}");
+            assert_eq!(day.of(128), None, "it still ends");
+        }
+    }
+
+    #[test]
+    fn a_post_holdoff_ends_a_duration_0_cron_alike_by_either_reading() {
+        let records = [timed(128, 0, 0, 2)];
+        for source in [RuleSource::Bible, RuleSource::Engine] {
+            let mut day = MockDay::eligible(128).with_rules(no_holdoff(source));
+            assert_eq!(day.day(&records), [Asked(128), Started(128), Ended(128)]);
+            assert_eq!(day.of(128), Some((-1, 2)), "{source:?}");
+            assert_eq!(day.day(&records), []);
+            assert_eq!(day.of(128), Some((-1, 1)));
+            assert_eq!(day.day(&records), []);
+            assert_eq!(day.of(128), None);
+        }
+    }
+
+    #[test]
+    fn the_zero_duration_keys_read_disjoint_paths() {
+        let sources = [RuleSource::Bible, RuleSource::Engine];
+        for zero in sources {
+            for nh in sources {
+                let rules = no_holdoff(nh).with_override(RuleKey::CronZeroDurationHoldoff, zero);
+
+                let records = [timed(128, 0, 0, 0)];
+                let mut day = MockDay::eligible(128).with_rules(rules);
+                assert_eq!(day.day(&records), [Asked(128), Started(128), Ended(128)]);
+                let second = match nh {
+                    RuleSource::Engine => {
+                        assert_eq!(day.of(128), Some((-1, 0)), "{zero:?} {nh:?}");
+                        vec![Ended(128)]
+                    }
+                    RuleSource::Bible => {
+                        assert_eq!(day.of(128), None, "{zero:?} {nh:?}");
+                        vec![Asked(128), Started(128), Ended(128)]
+                    }
+                };
+                assert_eq!(day.day(&records), second, "{zero:?} {nh:?}");
+
+                let records = [timed(128, 0, 2, 0)];
+                let mut day = MockDay::eligible(128).with_rules(rules);
+                assert_eq!(day.day(&records), [Asked(128)]);
+                assert_eq!(day.day(&records), []);
+                assert_eq!(day.day(&records), [Started(128), Ended(128)]);
+                day.eligible.clear();
+                match zero {
+                    RuleSource::Engine => {
+                        assert_eq!(day.of(128), Some((0, 0)), "{zero:?} {nh:?}");
+                        assert_eq!(day.day(&records), [Ended(128)]);
+                    }
+                    RuleSource::Bible => {
+                        assert_eq!(day.of(128), None, "{zero:?} {nh:?}");
+                        assert_eq!(day.day(&records), [Asked(128)]);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1560,17 +1717,20 @@ mod tests {
     #[test]
     fn a_cron_has_started_once_its_on_start_ran_by_every_reading_of_its_ends() {
         let sources = [RuleSource::Bible, RuleSource::Engine];
-        for zero in sources {
-            for post in sources {
-                for duration in [0, 1, 3] {
-                    for pre_holdoff in [-1, 0, 2] {
-                        for post_holdoff in [0, 2] {
-                            started_matches_the_pass(
-                                &timed(128, duration, pre_holdoff, post_holdoff),
-                                holdoffs(zero, post),
-                                14,
-                            );
-                        }
+        for (zero, post, nh) in sources
+            .into_iter()
+            .flat_map(|a| sources.map(|b| (a, b)))
+            .flat_map(|(a, b)| sources.map(|c| (a, b, c)))
+        {
+            for duration in [0, 1, 3] {
+                for pre_holdoff in [-1, 0, 2] {
+                    for post_holdoff in [-1, 0, 2] {
+                        started_matches_the_pass(
+                            &timed(128, duration, pre_holdoff, post_holdoff),
+                            holdoffs(zero, post)
+                                .with_override(RuleKey::CronZeroDurationNoHoldoff, nh),
+                            14,
+                        );
                     }
                 }
             }
@@ -1930,7 +2090,11 @@ mod tests {
             day.day(&[record]),
             [Asked(128), Held(128), Started(128), Held(128), Ended(128)]
         );
-        assert_eq!(day.of(128), None);
+        assert_eq!(
+            day.of(128),
+            Some((-1, 0)),
+            "active for the engine's second OnEnd"
+        );
     }
 
     /// Crön 128 running its last day, with `flags` and `post_holdoff`.
