@@ -40,6 +40,7 @@ use crate::govt::Governments;
 use crate::reserves::Reserves;
 use crate::scoop;
 use crate::self_repair;
+use crate::skill::STILL_HULL;
 use crate::stats::ShipStats;
 use crate::traffic::strength::{STRONG_FLEET, STRONGER_FLEET};
 
@@ -237,6 +238,8 @@ pub fn appearing_ship_types<'t>(
 
 /// A ship type the traffic can spawn: how it performs, with its default
 /// items, its `InherentAI`, and what it fights with.
+// Each flag is one of its class's bits or gear, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShipKind {
     /// Its stats.
@@ -287,6 +290,13 @@ pub struct ShipKind {
     /// @0x7a0b3-0x7a0ef), which `_HandleShip` holds still every frame
     /// (@0x34209-0x3423b; see [`Npc::immobile`](crate::traffic::npc::Npc::immobile)).
     pub immobile: bool,
+    /// Its `SkillVar`, raw: what each of its ships rolls its skill on as
+    /// it spawns ([`random_skill_level`](crate::skill::random_skill_level)).
+    pub skill_var: i16,
+    /// Whether its `shïp` `Flags` hold
+    /// [`STILL_HULL`](crate::skill::STILL_HULL): its ships neither move
+    /// nor thrust (see the [`skill`](crate::traffic::skill) module).
+    pub still: bool,
     /// Its `Strength` and the marines its default items give a pirate's
     /// plunder ([`ClassMarines::of`]).
     pub marines: ClassMarines,
@@ -596,6 +606,8 @@ pub fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) ->
         holds: crate::market::hold_tons(record.fields.holds),
         base_armor: f32::from(record.fields.armor.max(0)),
         immobile: record.fields.speed == 0 && record.fields.accel == 0,
+        skill_var: record.skill_var,
+        still: record.fields.flags & STILL_HULL != 0,
         marines: ClassMarines::of(record.strength, &record.default_slots, outfits),
     }
 }

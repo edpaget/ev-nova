@@ -381,6 +381,23 @@ pub struct Npc {
     /// No stock class is; the player's ship never is (`_HandlePlayer` has
     /// no such test).
     pub immobile: bool,
+    /// Its skill (ship +0x40), rolled as it spawns
+    /// ([`random_skill_level`](crate::skill::random_skill_level)) and kept
+    /// until it leaves the system: its top speed and thrust take it (see
+    /// the [`skill`](crate::traffic::skill) module). An escort kept across
+    /// a system entry, and a ship enlisted in place, keep theirs. It is
+    /// not saved: a loaded pilot's escorts roll afresh, as
+    /// `_LoadPilotData` spawns them anew.
+    pub skill: f32,
+    /// Its government's `SkillMult` factor
+    /// ([`Governments::skill_mult`](crate::govt::Governments::skill_mult)),
+    /// kept in step with its [`govt`](Npc::govt) by every write of it
+    /// (see the [`skill`](crate::traffic::skill) module).
+    pub skill_mult: f32,
+    /// Whether its ship class is `shïp` `Flags` 0x0400
+    /// ([`STILL_HULL`](crate::skill::STILL_HULL)): it has no top speed and
+    /// no thrust, its turn untouched.
+    pub still: bool,
     /// Its ship type's miner bits, `shïp` `Flags3` & 0x0003
     /// ([`ShipKind::miner`](crate::traffic::table::ShipKind)): a leaderless
     /// ship with either goes to the miner's AI (see

@@ -15,7 +15,7 @@ use crate::stats::ShipStats;
 
 /// NPC `id`, a wimpy trader of ship type 128 performing as `stats`, its
 /// reserves full, at rest at the centre facing up, flying and idle,
-/// intact and unarmed.
+/// intact and unarmed, of skill 1.0 and no government's factor.
 #[must_use]
 pub fn npc(id: u32, stats: ShipStats) -> Npc {
     Npc {
@@ -60,6 +60,9 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         emerges_from: None,
         self_repair: false,
         immobile: false,
+        skill: 1.0,
+        skill_mult: 1.0,
+        still: false,
         miner: 0,
         can_scoop: false,
         holds: 0,

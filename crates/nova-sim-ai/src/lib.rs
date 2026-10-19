@@ -94,7 +94,7 @@
 #[allow(unused_imports)]
 use nova_sim_base::{
     NeverFires, RuleKey, Rulebook, chance, flight, fuel, geometry, handling, inertialess,
-    ionization, reserves, rulebook, trig,
+    ionization, reserves, rulebook, skill, trig,
 };
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, warp};

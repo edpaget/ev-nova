@@ -20,7 +20,10 @@
 //!
 //! **The held handling** ([`Npc::own_handling`]): every reader of an
 //! NPC's `_ShipMaxSpeed`, `_ShipTurnRate` and `_ShipAccelRate` reads it,
-//! before the flight's divisor and its ionization.
+//! after its skill and its government's factor
+//! ([`Npc::class_handling`], see the [`skill`](crate::traffic::skill)
+//! module) and before the player's led factor, the flight's divisor and
+//! its ionization.
 
 use std::collections::BTreeMap;
 
@@ -39,15 +42,18 @@ impl Npc {
         held_by_other(self.tractor, ShipRef::Npc(self.id))
     }
 
-    /// Its own handling: its stats', at a third of its speed, turn and
+    /// Its own handling: its class's at its skill and its government's
+    /// factor ([`Npc::class_handling`]), at a third of its speed, turn and
     /// thrust while another ship holds it ([`held_handling`], its class's
-    /// turn the floor's).
+    /// turn the floor's). The speed and thrust are none below none, as the
+    /// class's already are.
     #[must_use]
     pub fn own_handling(&self) -> Handling {
+        let class = self.class_handling();
         if self.held() {
-            held_handling(self.stats.handling, self.hull.class_turn)
+            held_handling(class, self.hull.class_turn)
         } else {
-            self.stats.handling
+            class
         }
     }
 }

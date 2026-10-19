@@ -158,6 +158,7 @@ mod pursuit_tests;
 pub mod quote;
 mod reinforcing;
 pub mod ship_display;
+pub mod skill;
 pub mod snipe;
 pub mod spawn;
 pub mod strength;
@@ -2195,6 +2196,9 @@ impl Traffic {
                 },
                 self_repair: kind.self_repair,
                 immobile: kind.immobile,
+                skill: 1.0,
+                skill_mult: 1.0,
+                still: kind.still,
                 miner: kind.miner,
                 can_scoop: kind.can_scoop,
                 holds: kind.holds,
@@ -2342,6 +2346,8 @@ mod tests {
                     holds: 0,
                     base_armor: 45.0,
                     immobile: false,
+                    skill_var: 0,
+                    still: false,
                 },
             )]),
             ..SpawnTable::default()
