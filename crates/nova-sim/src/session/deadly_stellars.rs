@@ -418,10 +418,7 @@ mod tests {
         session.take_sounds();
         fight(&mut session);
         assert_eq!(session.condition, Condition::Destroyed);
-        assert_eq!(
-            session.pilot.reserves.armor.now,
-            crate::deadly_stellar::KILLED_ARMOR
-        );
+        assert_eq!(session.pilot.reserves.armor.now, -1000.0);
         assert_eq!(
             session.player_end,
             Some(Ending::Holding {
