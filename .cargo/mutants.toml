@@ -479,4 +479,9 @@ exclude_re = [
     "nova-sim-ai/src/traffic/ship_display\\.rs:243:27: replace > with >= in record$",
     # The warp-out's glow at 32 raised by 3 is capped back to 32.
     "nova-sim-ai/src/traffic/ship_display\\.rs:362:14: replace < with <= in warp_glow$",
+    # An f32 widened to a double is never exactly 0.7 or 0.33, which no
+    # f32 holds, so the ionization factor's tests against them (@0xdd0d0,
+    # @0xdd568) read the same with or without equality.
+    "nova-sim-base/src/ionization\\.rs:62:26: replace > with >= in slowdown$",
+    "nova-sim-combat/src/combat/ion_tint\\.rs:54:26: replace < with <= in tint_level$",
 ]

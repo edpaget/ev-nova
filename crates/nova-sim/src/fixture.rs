@@ -237,6 +237,17 @@ mod tests {
     }
 
     #[test]
+    fn setting_the_players_ionization_charges_and_colours_it() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let ion = crate::combat::ion::Ion {
+            charge: 12.0,
+            colour: 0x0000_80ff,
+        };
+        set_player_ion(&mut session, ion);
+        assert_eq!(session.ion(), ion);
+    }
+
+    #[test]
     fn clones_share_the_saves_and_count_writes() {
         let store = MemoryPilots::new();
         let other = store.clone();

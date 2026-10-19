@@ -4191,6 +4191,43 @@ mod tests {
         assert_eq!(carrier(None), 0);
     }
 
+    /// The reload a ship's `Seeker` 0x0020 blaster (reload 0) is left at
+    /// after a tick's fire and reload, its ship `player` or an NPC of
+    /// ionization factor `factor`, under `lockout`.
+    fn ion_held_reload(player: bool, factor: f32, lockout: RuleSource) -> f32 {
+        let mut combat = Combat::default();
+        combat.set_ion_lockout(lockout);
+        let mut ship = Ship::at(1, 0.0, 0.0).armed(WeaponRecord {
+            reload: 0,
+            seeker: ion::CANT_FIRE_IONIZED,
+            ..blaster()
+        });
+        if player {
+            ship.id = ShipRef::Player;
+            ship.fleet = ShipRef::Player;
+        }
+        ship.ion_capacity = 100.0;
+        ship.ion.charge = factor * 100.0;
+        let mut ships = [ship];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].armament.mounts()[0].reload
+    }
+
+    #[test]
+    fn the_reload_step_holds_an_ionized_ships_seeker_0x0020_weapon_by_the_lockout() {
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            ion_held_reload(true, 0.5, engine),
+            ion::HELD_RELOAD,
+            "player"
+        );
+        assert_eq!(ion_held_reload(false, 0.5, engine), 0.0, "an NPC under 1");
+        assert_eq!(ion_held_reload(false, 1.0, engine), 1.0, "an NPC at 1");
+        let bible = RuleSource::Bible;
+        assert_eq!(ion_held_reload(true, 1.0, bible), 0.0, "unguided");
+        assert_eq!(ion_held_reload(false, 1.0, bible), 0.0, "unguided");
+    }
+
     #[test]
     fn a_shot_fired_this_tick_has_flown_a_tick() {
         let mut combat = Combat::default();
