@@ -1868,6 +1868,18 @@ mod tests {
     }
 
     #[test]
+    fn a_haggle_outcome_is_filled_too() {
+        let mut catalog = hailable();
+        catalog.strings[0].1[150] = "How dare you, <PN>!".to_owned();
+        let mut session = pirate(&catalog, PIRATES);
+        session.pilot.name = "Stock".to_owned();
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 36);
+        let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
+        assert_eq!(view.reply, "How dare you, Stock!");
+    }
+
+    #[test]
     fn a_person_declined_its_bribe_says_its_attack_quote() {
         // `_DoCommDialog` calls `_AIMakeShipAttackPlayer` (@0x9621f), whose
         // gate reads the ship before it sets goal 4 (@0x89c50-0x89c9b).

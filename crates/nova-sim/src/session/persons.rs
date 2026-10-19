@@ -1163,9 +1163,22 @@ mod tests {
     /// The hail of Ace by `catalog` under `rule`, hostile or not: its
     /// opening line, then Greetings' answer.
     fn greeted(catalog: &FakePilotCatalog, rule: RuleSource, hostile: bool) -> (String, String) {
+        greeted_by(catalog, rule, hostile, "")
+    }
+
+    /// [`greeted`], the pilot named `pilot`.
+    fn greeted_by(
+        catalog: &FakePilotCatalog,
+        rule: RuleSource,
+        hostile: bool,
+        pilot: &str,
+    ) -> (String, String) {
         let mut session = Session::start(catalog)
             .expect("starts")
             .with_rules(Rulebook::default().with_override(RuleKey::CommQuote, rule));
+        if !pilot.is_empty() {
+            session.pilot.name = pilot.to_owned();
+        }
         session.populate(catalog, &mut NeverFires);
         if hostile {
             session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
@@ -1200,6 +1213,22 @@ mod tests {
                 "{none}"
             );
         }
+    }
+
+    #[test]
+    fn a_persons_comm_quote_fills_its_tags() {
+        let mut catalog = talkative(24);
+        catalog.strings[2].1[23] = "Well met, <PN>.".to_owned();
+        assert_eq!(
+            greeted_by(&catalog, RuleSource::Engine, false, "Stock").1,
+            "Well met, Stock.",
+            "as Greetings' answer"
+        );
+        assert_eq!(
+            greeted_by(&catalog, RuleSource::Bible, false, "Stock").0,
+            "Well met, Stock.",
+            "as the opening line"
+        );
     }
 
     #[test]
