@@ -27,7 +27,12 @@
 //!   before weapons-fidelity phase 37. The player's
 //!   hit on the victim itself also turns it on the player at once
 //!   ([`victim`], `_AIMakeShipAttackPlayer` @0x3be69), whatever it was
-//!   doing; its lead takes the target alone. A ship still
+//!   doing. Its lead's goal the block never writes, so the lead goes on
+//!   to the Good Samaritan test like any other ship (the lead's part
+//!   @0x3bd1b-0x3bd79 falls to the call @0x3bed2-0x3bef4, whose goal gate
+//!   is goal != 4, @0x828b3): a warship or interceptor lead not attacking
+//!   whose gates pass attacks the player, any other takes the target
+//!   alone. A ship still
 //!   coming into the system answers so too, gliding in, waiting in its
 //!   gate or bursting out of it: `_DamageShip` drops the reaction only
 //!   while the victim's (or the lead's) hyperspace state +0x50 is above
@@ -69,8 +74,9 @@
 //!   damage for a boarding (`nova_sim::Session::board`), intended but not
 //!   direct, as it never passes `_DamageShip`: it draws no victim's or
 //!   lead's reaction, only the Samaritans', the ship boarded and its lead
-//!   among them, as the loop @0x82891-0x82ba8 leaves out no slot. The
-//!   blessing holds it back alike.
+//!   among them, as the loop @0x82891-0x82ba8 leaves out no slot. The lead
+//!   of an escort the player hits is one of those slots too, after its
+//!   own reaction. The blessing holds it back alike.
 //!   The Bible's "piracy police" are the interceptors alone: "acts as
 //!   'piracy police' by attacking any ship that fires on or attempts to
 //!   board another, non-enemy ship" (`düde` AI type 4). Which applies is
@@ -103,6 +109,24 @@
 //! - `_AIMakeShipStopRefuelling` and target 0 for a player's hit
 //!   (@0x3beba-0x3becc), after the focus test, which rdm phase
 //!   combat-ai-fidelity/phase-26-assister-hit owns.
+//!
+//! Left out of `_DoGoodSamaritan`'s reach (weapons-fidelity phase 38
+//! records each):
+//!
+//! - Disabled ships. The loop tests no slot's condition, so a disabled
+//!   warship or interceptor not attacking takes goal 4 and the player
+//!   (@0x82b82, @0x82b97), but `_AIDispatch`'s disabled reset
+//!   (@0x8fece-0x8ff13) wipes both at its next think, nearly always in the
+//!   same frame. The engine has no such reset yet, so a disabled NPC asks
+//!   for nothing here (`Traffic::react` takes intact NPCs alone): writing
+//!   the goal now would carry it through self-repair. rdm phase
+//!   weapons-fidelity-cross-roadmap/phase-2-disabled-ships-take-a-good-samaritans-write
+//!   owns it, behind escort-fleet-fidelity's disabled reset.
+//! - Slots not in use. `_IsShipMyEnemy` answers "not an enemy" for an
+//!   inactive slot (@0x81a16), so a stale one may take the Samaritan's
+//!   write, but no code reads an inactive slot (@0x44275) and every spawn
+//!   rewrites goal and target (@0x3c3a3, @0x3c43b, @0x3c969, @0x3c9d9,
+//!   @0x3d7a3, @0x3dbf7). Record only: the engine keeps no free slots.
 
 use crate::ai::{Goal, Reaction, Surroundings};
 use crate::combat::aim::{angle_off, bearing};
@@ -126,11 +150,25 @@ pub const FOCUS_DEGREES: i16 = 44;
 
 /// How `npc` answers `strike` among `around`, the Good Samaritans being
 /// those `piracy_police` says (see the module docs): as the
-/// [`victim`] for a direct hit on itself or its escort, else as a Good
-/// Samaritan. A strike not direct, the boarding's call, draws no victim's
-/// reaction, so the ship boarded and its lead answer it as Samaritans or
-/// not at all, as `_DoGoodSamaritan`'s loop excludes no slot
-/// (@0x82891-0x82ba8).
+/// [`victim`] for a direct hit on itself or its escort, then as a Good
+/// Samaritan, as `_DamageShip`'s reaction block falls to the call
+/// `_DoGoodSamaritan(victim, player)` (@0x3bed2-0x3bef4) and that loop
+/// excludes no slot (@0x82891-0x82ba8). A Samaritan takes the player as
+/// its target and attacks it, keeping the provocation its victim's
+/// reaction gave it.
+///
+/// So the lead of an escort the player hits, a warship or interceptor
+/// not attacking, takes the target and the provocation (@0x3bd1b-0x3bd79)
+/// and goes on to attack the player as a Samaritan; under the focus skip
+/// (@0x3bcac, straight to 0x3bed2) it is a Samaritan unprovoked. A strike
+/// not direct, the boarding's call, draws no victim's reaction, so the
+/// ship boarded and its lead answer it as Samaritans or not at all.
+///
+/// The Samaritan test reads `npc`'s goal from before its reaction, where
+/// the original reads it after the block. The two agree: the block never
+/// writes a lead's goal, and the victim of the player's hit either keeps
+/// its target, attacking, so fails the test, or turns on the player, which
+/// is what passing the test gives too.
 #[must_use]
 pub fn answer(
     npc: &Npc,
@@ -138,9 +176,7 @@ pub fn answer(
     around: &Surroundings,
     piracy_police: RuleSource,
 ) -> Reaction {
-    if strike.direct && hits(npc, strike, around) {
-        return victim(npc, strike, around);
-    }
+    let reacted = victim(npc, strike, around);
     let polices = match piracy_police {
         RuleSource::Engine => true,
         RuleSource::Bible => npc.ai_type == AiType::Interceptor,
@@ -149,11 +185,11 @@ pub fn answer(
     if samaritans && polices && good_samaritan(npc, strike.ship, around) {
         return Reaction {
             target: Some(ShipRef::Player),
-            provoked: 0.0,
             goal: Some(Goal::Attack(ShipRef::Player)),
+            ..reacted
         };
     }
-    Reaction::default()
+    reacted
 }
 
 /// How `npc` answers `strike` among `around` as its victim, or as the
@@ -313,9 +349,12 @@ fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
 
 /// Whether `npc` answers the player's attack on `victim` among `around`
 /// (see the module docs). The victim itself is not left out, as the loop
-/// @0x82891-0x82ba8 leaves out no slot: a direct hit's victim never asks,
-/// as [`answer`] takes it as the victim first, so only the boarding's
-/// call reaches here for it.
+/// @0x82891-0x82ba8 leaves out no slot. A direct hit's victim reaches
+/// here after its reaction: either it kept its target, so its goal is
+/// attacking and the test fails, or it passes and the merge in [`answer`]
+/// gives exactly what its reaction did, the player as target and as the
+/// goal's quarry. Either way the answer is the original's, where the
+/// victim's goal is already 4 by the call and it never passes.
 fn good_samaritan(npc: &Npc, victim: ShipRef, around: &Surroundings) -> bool {
     let ShipRef::Npc(victim_id) = victim else {
         return false;
@@ -435,9 +474,22 @@ mod tests {
         who: usize,
         hit: &Strike,
     ) -> Reaction {
+        focused_around(focus, govts, npcs, None, who, hit)
+    }
+
+    /// [`focused_by`] with `player` in the system.
+    fn focused_around(
+        focus: RuleSource,
+        govts: &Governments,
+        npcs: &[Npc],
+        player: Option<&crate::ai::PlayerSide>,
+        who: usize,
+        hit: &Strike,
+    ) -> Reaction {
         let around = Surroundings {
             govts,
             hit_focus: focus,
+            player: player.copied(),
             ..Surroundings::new(&[], npcs)
         };
         answer(&npcs[who], hit, &around, RuleSource::Engine)
@@ -463,7 +515,8 @@ mod tests {
     fn the_players_hit_turns_its_victim_on_the_player_but_not_the_victims_lead() {
         // `_DamageShip` calls `_AIMakeShipAttackPlayer` on the victim
         // (`edi`) alone, once si, the attacker, is the player
-        // (@0x3bd7e-0x3be69); the lead takes the target only (@0x3bd79).
+        // (@0x3bd7e-0x3be69); the lead takes the target only (@0x3bd79),
+        // and this one, a trader, is no Samaritan to attack it after.
         let govts = relations(0, 0);
         let mut escort = ship(2, Some(TRADERS), AiType::Warship, 50.0);
         escort.leader = Some(NpcId(1));
@@ -1357,6 +1410,153 @@ mod tests {
             ),
             ANSWERS,
             "an interceptor lead, by the Bible"
+        );
+    }
+
+    // The lead of an escort the player hits.
+
+    /// The lead of an escort the player hit, answering as a Samaritan as
+    /// well as taking the target: provoked by the hit, attacking the
+    /// player.
+    const LEAD_ANSWERS: Reaction = Reaction {
+        target: Some(ShipRef::Player),
+        provoked: 24.0,
+        goal: Some(Goal::Attack(ShipRef::Player)),
+    };
+
+    #[test]
+    fn a_warship_or_interceptor_lead_of_an_escort_the_player_hits_takes_it_and_answers_as_a_samaritan()
+     {
+        // `_DamageShip`'s lead part (@0x3bd1b-0x3bd79) adds +0x96 and sets
+        // +0x70 but never the lead's goal, then falls to the call
+        // `_DoGoodSamaritan(victim, player)` (@0x3bed2-0x3bef4), whose
+        // goal gate (goal != 4, @0x828b3) the lead passes like any slot.
+        let govts = relations(0, 0);
+        let hit = strike(n(2), ShipRef::Player);
+        for lead in [AiType::Warship, AiType::Interceptor] {
+            let npcs = escorted(lead);
+            assert_eq!(answered(&govts, &npcs, 0, &hit), LEAD_ANSWERS, "{lead:?}");
+            assert_eq!(
+                answered(&govts, &npcs, 1, &hit),
+                TURNS,
+                "{lead:?}: the escort"
+            );
+        }
+        assert_eq!(
+            answered(&govts, &escorted(AiType::WimpyTrader), 0, &hit),
+            TAKES(ShipRef::Player),
+            "a trader lead is no Samaritan"
+        );
+        assert_eq!(
+            answered_by(
+                RuleSource::Bible,
+                &govts,
+                &escorted(AiType::Warship),
+                0,
+                &hit
+            ),
+            TAKES(ShipRef::Player),
+            "a warship lead, by the Bible"
+        );
+        assert_eq!(
+            answered_by(
+                RuleSource::Bible,
+                &govts,
+                &escorted(AiType::Interceptor),
+                0,
+                &hit
+            ),
+            LEAD_ANSWERS,
+            "an interceptor lead, by the Bible"
+        );
+    }
+
+    #[test]
+    fn a_lead_whose_samaritan_gates_fail_takes_the_target_only() {
+        let govts = relations(0, 0);
+        let hit = strike(n(2), ShipRef::Player);
+        let mut attacking = escorted(AiType::Warship);
+        attacking[0].goal = Goal::Attack(n(9));
+        assert_eq!(
+            answered(&govts, &attacking, 0, &hit),
+            TAKES(ShipRef::Player),
+            "already attacking (@0x828b3)"
+        );
+        let stray = Strike {
+            intended: false,
+            ..hit
+        };
+        assert_eq!(
+            answered(&govts, &escorted(AiType::Warship), 0, &stray),
+            TAKES(ShipRef::Player),
+            "the hit not intended: no call (@0x3bed2)"
+        );
+        assert_eq!(
+            answered(
+                &relations(IGNORED_WHEN_ATTACKED, 0),
+                &escorted(AiType::Warship),
+                0,
+                &hit
+            ),
+            TAKES(ShipRef::Player),
+            "the victim's government ignored when attacked"
+        );
+        let npcs = escorted(AiType::Warship);
+        let blessed = |blessing| {
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(crate::ai::PlayerSide {
+                    blessing,
+                    ..crate::ai::fixture::player(0.0, -100.0)
+                }),
+                ..Surroundings::new(&[], &npcs)
+            };
+            answer(&npcs[0], &hit, &around, RuleSource::Engine)
+        };
+        assert_eq!(blessed(crate::ai::Blessing::NONE), LEAD_ANSWERS);
+        assert_eq!(
+            blessed(crate::ai::fixture::blessing_of(TRADERS)),
+            TAKES(ShipRef::Player),
+            "its government blesses the player"
+        );
+    }
+
+    #[test]
+    fn the_lead_of_an_escort_keeping_its_target_against_the_player_still_answers_as_a_samaritan() {
+        // The focus skip jumps to 0x3bed2 (@0x3bcac), past the lead's
+        // +0x96 and +0x70, but not past the Good Samaritan call.
+        let govts = relations(0, 0);
+        // An idle lead (1); its escort (2) 50 right attacks a quarry (4)
+        // 50 above itself; the player 100 right of the escort.
+        let mut escort = ship(2, Some(POLICE), AiType::Warship, 50.0);
+        escort.leader = Some(NpcId(1));
+        escort.goal = Goal::Attack(n(4));
+        let mut quarry = ship(4, Some(PIRATES), AiType::Warship, 50.0);
+        quarry.state.position = Vec2::new(50.0, -50.0);
+        let npcs = [ship(1, Some(POLICE), AiType::Warship, 0.0), escort, quarry];
+        let player = crate::ai::fixture::player(150.0, 0.0);
+        let hit = strike(n(2), ShipRef::Player);
+        let engine = |npcs: &[Npc], who| {
+            focused_around(RuleSource::Engine, &govts, npcs, Some(&player), who, &hit)
+        };
+        let bible = |npcs: &[Npc], who| {
+            focused_around(RuleSource::Bible, &govts, npcs, Some(&player), who, &hit)
+        };
+        assert_eq!(engine(&npcs, 1), Reaction::default(), "the escort keeps it");
+        assert_eq!(engine(&npcs, 0), ANSWERS, "the lead, unprovoked");
+        assert_eq!(
+            bible(&npcs, 0),
+            LEAD_ANSWERS,
+            "by the other reading the idle lead tests itself"
+        );
+        // The lead attacking a quarry 10 above itself.
+        let mut turned = npcs.clone();
+        turned[0].goal = Goal::Attack(n(4));
+        turned[2].state.position = Vec2::new(0.0, -10.0);
+        assert_eq!(
+            bible(&turned, 0),
+            Reaction::default(),
+            "by the other reading it keeps its own, and attacking is no Samaritan"
         );
     }
 
