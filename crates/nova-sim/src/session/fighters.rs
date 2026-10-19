@@ -1753,6 +1753,111 @@ mod tests {
         );
     }
 
+    /// A session with [`raided_by`]'s carrier, by `spend`, sniping at rest
+    /// 100 above the player, facing it, carrying only `bays` (each record
+    /// and its fighters aboard), the system filled with pirates to
+    /// `ships`, after one [`fight`]: the session and the carrier.
+    fn sniping_with(
+        catalog: &FakePilotCatalog,
+        spend: RuleSource,
+        bays: &[(WeaponRecord, i32)],
+        ships: u32,
+    ) -> (Session, NpcId) {
+        let (mut session, raider, _) = raided_by(catalog, spend);
+        let npc = session.npc_mut(raider).expect("there");
+        npc.goal = Goal::Snipe(ShipRef::Player);
+        npc.state.position = Vec2::new(0.0, -100.0);
+        npc.state.heading = 180.0;
+        npc.armament = crate::combat::armament::Armament::new(
+            bays.iter()
+                .map(|(record, _)| (crate::combat::weapon::WeaponSpec::new(record), 1)),
+        );
+        npc.rounds = bays
+            .iter()
+            .map(|(record, aboard)| (record.id, *aboard))
+            .collect();
+        for n in 0..ships - 2 {
+            pirate(&mut session, 1000.0 + n as f32, 1000.0);
+        }
+        fight(&mut session, catalog, &raiding_ai());
+        (session, raider)
+    }
+
+    /// The bays heard launching at `carrier` among `session`'s fight
+    /// events, in order.
+    fn launches_heard(session: &mut Session, carrier: NpcId) -> Vec<WeaponId> {
+        session
+            .take_combat_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                CombatEvent::Fired { ship, weapon, .. }
+                    if ship == ShipRef::Npc(carrier) && weapon != GUN =>
+                {
+                    Some(weapon)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_sniping_carrier_whose_bay_reloads_in_zero_launches_twice_a_tick_while_two_slots_are_free()
+    {
+        // The high level's launch (@0x8e6fa) sets a reload of 0 / 1 = 0
+        // (@0x81473-0x81491), so the snipe's own `_AILaunchFighter`
+        // (@0x8732f) finds the bay ready (@0x81403-0x8140b) and launches a
+        // second fighter, heard (@0x81466), into the next free slot.
+        // The bay is then its pick, ready, which its gun pass flags
+        // (@0x80213-0x8021d): `_FireAIShipWeapon` spawns nothing and by
+        // the engine drains a fighter (@0x88cd8-0x88dac,
+        // `RuleKey::AiSpendWithoutShot`). The counts below take the other
+        // reading, which drains none.
+        let catalog = carrying();
+        let zero = WeaponRecord { reload: 0, ..bay() };
+        let sniped = |ships| sniping_with(&catalog, RuleSource::Bible, &[(zero, 3)], ships);
+        let (drained, raider) = sniping_with(&catalog, RuleSource::Engine, &[(zero, 3)], 53);
+        assert_eq!(vipers(&drained).len(), 2);
+        assert_eq!(aboard(&drained, raider), 0, "drained by its pick");
+        let (mut two, raider) = sniped(53);
+        assert_eq!(vipers(&two).len(), 2, "two slots free below 56");
+        assert_eq!(aboard(&two, raider), 1);
+        assert_eq!(launches_heard(&mut two, raider), [BAY, BAY]);
+        // With one slot the second `_LaunchFighter` fails (@0x81421-0x81423)
+        // after its pick write (@0x81411).
+        let (mut one, raider) = sniped(54);
+        assert_eq!(vipers(&one).len(), 1);
+        assert_eq!(aboard(&one, raider), 2);
+        assert_eq!(launches_heard(&mut one, raider), [BAY]);
+        assert_eq!(one.npc(raider).expect("there").pick, Some(BAY));
+        let (mut none, raider) = sniped(55);
+        assert_eq!(vipers(&none), []);
+        assert_eq!(aboard(&none, raider), 3);
+        assert_eq!(launches_heard(&mut none, raider), []);
+    }
+
+    #[test]
+    fn a_sniping_carrier_whose_first_bay_empties_launches_from_its_next_bay_the_same_tick() {
+        // Stock-shaped: two bays of `Reload` 60. The high level's launch
+        // spends 149's last round, so the snipe's call passes it over
+        // (@0x813da) to 150, ready, and launches from it.
+        let catalog = carrying();
+        let next = WeaponRecord {
+            id: WeaponId(150),
+            ..bay()
+        };
+        let (mut session, raider) =
+            sniping_with(&catalog, RuleSource::Engine, &[(bay(), 1), (next, 1)], 53);
+        assert_eq!(vipers(&session).len(), 2);
+        assert_eq!(
+            launches_heard(&mut session, raider),
+            [BAY, WeaponId(150)],
+            "one from each"
+        );
+        let carrier = session.npc(raider).expect("there");
+        assert_eq!(carrier.rounds.slot(BAY), 0);
+        assert_eq!(carrier.rounds.slot(WeaponId(150)), 0);
+    }
+
     // NPC launches in `_AIDispatch`, through the game's work.
 
     /// One advance pass of `session`'s game work, the player at rest, its
