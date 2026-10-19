@@ -1332,6 +1332,37 @@ fn minus_zooms_out_a_step_with_snd_150() {
 }
 
 #[test]
+fn command_and_minus_the_self_destruct_chord_do_not_zoom() {
+    let mut view = near();
+    tap(&mut view, HYPERSPACE_MODE_KEY);
+    view.input(&key(Key::Command, true));
+    view.take_sounds();
+    tap(&mut view, SELF_DESTRUCT_KEY);
+    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
+    assert!(
+        !view
+            .take_sounds()
+            .contains(&Sound::Ui(UiSound::FloatingMapZoomed))
+    );
+}
+
+#[test]
+fn minus_held_alone_does_not_hold_the_zoom_in_back() {
+    // `_HandlePlayer` checks `-` only with Command down (@0x6fdc8), so
+    // `-` alone never sets `_quickKeyCheckResult`, which the zoom reads
+    // (@0x70f5d).
+    let mut view = near();
+    tap(&mut view, HYPERSPACE_MODE_KEY);
+    // The press zooms out a step.
+    view.input(&key(SELF_DESTRUCT_KEY, true));
+    assert_eq!(floating_dots(&view)[1], near_at(4.0 / 3.0));
+    view.take_sounds();
+    tap(&mut view, ZOOM_IN_KEY);
+    assert_eq!(floating_dots(&view)[1], near_at(16.0 / 9.0));
+    assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::FloatingMapZoomed)]);
+}
+
+#[test]
 fn equals_and_keypad_plus_zoom_in_a_step() {
     for k in [ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY] {
         let mut view = near();

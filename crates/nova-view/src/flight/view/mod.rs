@@ -678,15 +678,16 @@ pub struct FlightOverlays {
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
-/// Command, which the jettison and eject keys need, the eject key, which
-/// works only held with Command, the land key, which holds the dock
+/// Command, which the jettison, eject and self-destruct keys need, the
+/// eject key and the self-destruct key, which work only held with Command,
+/// the land key, which holds the dock
 /// approach back while it is down, H and `\`, which show the floating map
 /// while they are down, and \` and J. H, `\`, \` and J act again when
 /// held across a jump's end, a release of Option or a repair, as the
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
 /// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 17] = [
+const FLIGHT_KEYS: [Key; 18] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -700,6 +701,7 @@ const FLIGHT_KEYS: [Key; 17] = [
     Key::Command,
     LAND_KEY,
     EJECT_KEY,
+    SELF_DESTRUCT_KEY,
     HYPERSPACE_MODE_KEY,
     HYPER_SELECT_KEY,
     NAV_OFF_KEY,
@@ -759,6 +761,15 @@ pub const JETTISON_KEY: Key = Key::Char('k');
 /// (`ejectKey`), keycode 0x07, X, which ejects only held together with
 /// Command (`_HandlePlayer` @0x6f29e-0x6f2c1; see the session's eject).
 pub const EJECT_KEY: Key = Key::Char('x');
+/// The self-destruct key, `-`: key-preference slot 0x24 (`destructKey`),
+/// which `_loadKeys` reads (@0xce458) and then forces to keycode 0x1b
+/// whatever the preference says (@0xce71c). It acts only held together
+/// with Command (`_HandlePlayer` @0x6fdb4-0x6fddb; see the session's
+/// self-destruct), so it never clashes with the floating map's zoom out,
+/// the same key, which refuses any press with Command held
+/// (@0x70fa7-0x70fb5). The keypad's `-` (0x4e) arrives as the same key,
+/// a platform difference accepted as [`ZOOM_OUT_KEY`]'s is.
+pub const SELF_DESTRUCT_KEY: Key = Key::Char('-');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');

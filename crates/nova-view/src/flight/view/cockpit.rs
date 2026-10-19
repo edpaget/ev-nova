@@ -46,9 +46,9 @@ use super::{
     ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, ESCORT_TICKS, FACE_TARGET_KEY, FLIGHT_KEYS, FlightView,
     HAIL_KEY, HELP, HELP_AT, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
     LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, MESSAGE_GAP, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_KEY,
-    OVERLAY_SIZE, SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips, ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint, shown_heading,
-    shown_position,
+    OVERLAY_SIZE, SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ViewShips,
+    ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, cloak_alpha, drawn_size, npc_tint,
+    shown_heading, shown_position,
 };
 
 impl<C> FlightView<C> {
@@ -720,12 +720,16 @@ impl<C> FlightView<C> {
 
     /// A zoom key's press: while the floating map is up and no key the
     /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. One
+    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`
+    /// held alone doesn't count: `_HandlePlayer` checks it only with
+    /// Command down (@0x6fdc8), so alone it never sets
+    /// `_quickKeyCheckResult`. One
     /// that changes the scale shows the map again and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        if !self.floating.is_up() || !self.held.is_empty() {
+        let holds = self.held.iter().any(|&held| held != SELF_DESTRUCT_KEY);
+        if !self.floating.is_up() || holds {
             return;
         }
         let moved = if key == ZOOM_OUT_KEY {

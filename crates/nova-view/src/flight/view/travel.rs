@@ -28,12 +28,12 @@ use super::dialog_map::{MapOpened, MapOpening};
 use super::{
     EJECT_KEY, FAR_ENOUGH, FIRE_KEY, FlightView, GATE_REFUSAL_TICKS, HYPER_SELECT_KEY,
     HYPERGATE_CANCELLED, HYPERSPACE_MODE_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MESSAGE_TICKS, MapSeen,
-    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY, Said,
-    TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with, assigned_message,
-    assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay, jump_refusal_message,
-    jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter, pay_said, play_area,
-    point, refusal_message, show_combat, show_destroyed, show_gate_frames, shown_scene,
-    stellar_name, track_appeared,
+    NAV_OFF_KEY, NOTHING_OUT_HERE, NavFlash, Redrawn, SCRIPT_MESSAGE_TICKS, SECONDARY_KEY,
+    SELF_DESTRUCT_KEY, Said, TOO_CLOSE, TRACTORED, Then, arrival_lead, arrival_message_with,
+    assigned_message, assigned_ticks, comm_message, dying, gate_refusal_message, glow_decay,
+    jump_refusal_message, jump_refusal_ticks, landing_refusal_ticks, message_text, no_outfitter,
+    pay_said, play_area, point, refusal_message, show_combat, show_destroyed, show_gate_frames,
+    shown_scene, stellar_name, track_appeared,
 };
 use crate::time::ticks;
 
@@ -530,7 +530,7 @@ impl<
     /// attack quotes, and the effects again. Then says the comm
     /// notes, quotes and messages they raised, and reads the sheets of a
     /// system the session populated afresh. Flight and the jump's warp
-    /// both step this way. The eject chord, the land key
+    /// both step this way. The eject and self-destruct chords, the land key
     /// and double time are held as the keys say, and a pass whose ship
     /// tick brings the escape pod's rescue ends the stepping there, the
     /// view laid out afresh where the rescue put the ship.
@@ -543,6 +543,9 @@ impl<
         let eject = self.takes(PlayerCommand::Eject)
             && self.held.contains(&Key::Command)
             && self.held.contains(&EJECT_KEY);
+        let self_destruct = self.takes(PlayerCommand::SelfDestruct)
+            && self.held.contains(&Key::Command)
+            && self.held.contains(&SELF_DESTRUCT_KEY);
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         let mut rescued = false;
@@ -550,6 +553,7 @@ impl<
             session.set_play_area(play_area(self.view));
             session.hold_fire(fire.0, fire.1);
             session.hold_eject(eject);
+            session.hold_self_destruct(self_destruct);
             session.set_double_time_key(self.double_time);
             session.set_hyperspace_effects(self.hyperspace_effects);
             session.set_land_key(self.held.contains(&LAND_KEY));

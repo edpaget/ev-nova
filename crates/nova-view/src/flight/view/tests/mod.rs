@@ -76,6 +76,7 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod self_destruct;
 mod ship_drawing;
 mod shots;
 mod stellars;
