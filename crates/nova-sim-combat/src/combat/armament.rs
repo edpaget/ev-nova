@@ -5200,6 +5200,19 @@ mod tests {
         assert!(!bays.fires(&blaster));
     }
 
+    #[test]
+    fn a_trigger_launches_on_either_bay_call_alone() {
+        let with = |bays, bays_after| Trigger {
+            bays,
+            bays_after,
+            ..Trigger::default()
+        };
+        assert!(!with(false, false).launches());
+        assert!(with(true, false).launches(), "the high level's (@0x8e6fa)");
+        assert!(with(false, true).launches(), "the snipe's (@0x8732f)");
+        assert!(with(true, true).launches());
+    }
+
     /// Two ready bays, 149 and 150, mounted 150 first, of `rounds` each.
     fn two_bays(rounds: [i32; 2]) -> (Armament, Supplies) {
         let armament = Armament::new([
