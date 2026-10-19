@@ -6,11 +6,13 @@
 use super::{Traffic, World};
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::chance::Chance;
-use crate::cloak::{CLOAK_JUMPING, Cloak, CloakGear, FADE_FULL};
+use crate::cloak::{CLOAK_JUMPING, CLOAK_PRESSING, Cloak, CloakGear, FADE_FULL};
+use crate::geometry::Vec2;
 use crate::stats::ShipStats;
 use crate::traffic::fixture::npc;
 use crate::traffic::npc::{Mode, Npc};
 use nova_sim_base::fixture::Draws;
+use nova_sim_combat::asteroid::Asteroid;
 
 /// Keeps each NPC's goal.
 #[derive(Debug)]
@@ -77,4 +79,39 @@ fn a_ship_cloaking_when_it_jumps_cloaks_through_its_gate_burst_from_its_first_mo
 fn a_cloaked_ship_with_nothing_to_keep_it_uncloaks_in_its_glide() {
     let gliding = thought(Mode::JumpingIn { tick: 3 }, 0, CLOAKED);
     assert_eq!(gliding.direction, -1);
+}
+
+/// The cloak, after one think half, of a cloaked miner pressing on
+/// (`Flags2` [`CLOAK_PRESSING`]) in a world whose slot-0 rock is `rock`.
+fn mining_thought(rock: Option<Asteroid>) -> Cloak {
+    let mut ship = npc(1, ShipStats::default());
+    ship.goal = Goal::Mine;
+    ship.cloak = CLOAKED;
+    ship.cloak_gear = CloakGear {
+        device: true,
+        flags2: CLOAK_PRESSING,
+        ..CloakGear::default()
+    };
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship];
+    let world = World {
+        mining_rock: rock,
+        ..World::new(&[])
+    };
+    traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+    traffic.npcs()[0].cloak
+}
+
+#[test]
+fn a_cloaked_pressing_miner_keeps_its_cloak_until_the_world_shows_it_a_rock() {
+    assert_eq!(mining_thought(None), CLOAKED, "no rock: MineOrder::Stop");
+    let rock = Asteroid {
+        position: Vec2::new(40.0, -20.0),
+        velocity: Vec2::ZERO,
+        frame: 0.0,
+        spin: 0.0,
+        strength: 30,
+        kind: 2,
+    };
+    assert_eq!(mining_thought(Some(rock)).direction, -1, "a live rock");
 }
