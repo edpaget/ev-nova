@@ -285,6 +285,36 @@ mod tests {
     }
 
     #[test]
+    fn an_inertialess_escort_in_close_formation_with_the_player_is_pulled() {
+        use crate::ai::Goal;
+        use crate::escort::{EscortDuty, FormationSlot};
+        let catalog = armed();
+        let mut session = among(&catalog, &[east()], 1);
+        // Away from the centre, so a leader at the centre would not do.
+        session.player.position = Vec2::new(1500.0, 1500.0);
+        let formation = FormationSlot {
+            slot: 0,
+            ships: 1,
+            spacing: 30.0,
+        };
+        let slot = formation.position(&session.player);
+        let escort = npc_mut(&mut session);
+        escort.escort = Some(EscortDuty {
+            formation,
+            order: None,
+        });
+        escort.goal = Goal::Formation { guard: None };
+        escort.stats.inertialess_hull = true;
+        escort.state.position = slot;
+        fight(&mut session);
+        let pulled = pull(slot, Vec2::new(2000.0, 0.0), 40, 1.0);
+        assert!(
+            near(npc(&session).state.velocity, pulled),
+            "not inertialess there"
+        );
+    }
+
+    #[test]
     fn a_stellar_immune_or_inertialess_player_is_not_pulled() {
         let catalog = armed();
         let mut immune = among(&catalog, &[east()], 1);
