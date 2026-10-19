@@ -19,10 +19,11 @@
 //!   [`REFUEL_UNTIL`] (@0xdd060), no further than its tank holds.
 //! - **Repair**: (10 - turn rate) x 30 + 50 ([`REPAIR_REACH`] @0xdd084,
 //!   [`REPAIR_REACH_BASE`] @0xdd064), the turns no fewer than none, a
-//!   stated guard. Once it has been inside for [`REPAIR_TICKS`] (the
-//!   timer @0x86d54), the player's armour is raised [`REPAIR_STEP`] at a
-//!   time until it is no longer disabled. The original's 3-pixel docking
-//!   manoeuvre is simplified to the reach.
+//!   stated guard. The traffic flies the repair itself, docking with the
+//!   player as a pirate does
+//!   ([`repair_dock`](crate::traffic::repair_dock)); the reach is left only
+//!   for the autopilot's fallback, which flies a repairer that holds no
+//!   docking (one with no target) to the player and brakes there.
 
 use super::Help;
 use crate::combat::hull::Condition;
@@ -45,10 +46,6 @@ pub const DOCKED_SPEED: f32 = 0.35;
 pub const REFUEL_UNTIL: f32 = 100.0;
 /// The fuel a refuel gives a tick.
 pub const REFUEL_STEP: f32 = 1.0;
-/// The ticks a repairing ship spends inside its reach before it repairs.
-pub const REPAIR_TICKS: u32 = 100;
-/// The armour a repair raises at a time.
-pub const REPAIR_STEP: f32 = 1.0;
 
 /// The help the player needs, its ship in `condition` with `fuel` (see
 /// the module docs).
@@ -181,6 +178,5 @@ mod tests {
             ],
             [10.0, 15.0, 30.0, 50.0, 0.35, 100.0]
         );
-        assert_eq!(REPAIR_TICKS, 100);
     }
 }

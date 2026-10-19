@@ -466,6 +466,10 @@ pub struct CommNote {
     pub from: NpcId,
     /// Its ship type's `CommName`.
     pub comm_name: String,
+    /// The player's ship's name, which the line names after the help
+    /// (`*0x3b5210`, `_HighLevelAIHandler` @0x8f62a, `_LowLevelAIHandler`
+    /// @0x86e7d).
+    pub ship_name: String,
     /// The help it gave.
     pub done: Help,
 }
@@ -623,6 +627,7 @@ mod tests {
             let note = CommNote {
                 from: NpcId(0),
                 comm_name: String::new(),
+                ship_name: String::new(),
                 done,
             };
             assert_eq!(note.ticks(), 240, "{done:?}");

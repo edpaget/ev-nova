@@ -83,7 +83,9 @@
 //!    entering a gate or one assisting the player unprovoked runs too);
 //!    then each NPC's high level, a
 //!    docking or its fight, none while its AI wait runs, and each drift's
-//!    step, [`plunder::drift`]), then, each NPC
+//!    step, [`plunder::drift`]; a ship repairing the player flies its high
+//!    level, its docking with the player, though it decides nothing
+//!    unprovoked, [`repair_dock`]), then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it,
@@ -102,7 +104,8 @@
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier,
 //!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
-//!    started boarding the victim, and a tick off each flying ship's AI
+//!    started boarding the victim, a repairer's dock done repairing the
+//!    player ([`PirateEvent::PlayerRepaired`]), and a tick off each flying ship's AI
 //!    wait, a pirate's count wait's included ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
@@ -164,6 +167,9 @@ pub mod pod_flight;
 mod pursuit_tests;
 pub mod quote;
 mod reinforcing;
+pub mod repair_dock;
+#[cfg(test)]
+mod repair_dock_tests;
 pub mod snipe;
 pub mod spawn;
 pub mod strength;
@@ -192,6 +198,7 @@ use crate::control::Gate;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::hail::Help;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use autopilot::{Outcome, TopSpeeds};
@@ -1004,7 +1011,7 @@ impl Traffic {
         swarm::pass(&mut self.npcs, |npc| {
             decision_due(self.ticks, npc.id, self.interval)
         });
-        self.pursue(&world, &due, &keeps, chance);
+        self.pursue(&world, &self.high_levels_due(&due), &keeps, chance);
         plunder::drift(&mut self.npcs, &due);
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
@@ -1071,6 +1078,24 @@ impl Traffic {
         // crossing no boundary, as a ship left behind is never drawn.
         self.left_behind.clear();
         self.ticks += 1;
+    }
+
+    /// Whether each NPC flies its high level this tick: each whose decision
+    /// is `due`, and each repairing the player, which decides nothing
+    /// unprovoked but flies its high level all the same, as `_AIDispatch`
+    /// runs it whatever the type AI did (@0x901e5; see [`repair_dock`]).
+    fn high_levels_due(&self, due: &[bool]) -> Vec<bool> {
+        self.npcs
+            .iter()
+            .zip(due)
+            .map(|(npc, &due)| {
+                due || (npc.goal == Goal::Assist(Help::Repair)
+                    && npc.provoked <= 0.0
+                    && npc.mode == Mode::Flying
+                    && npc.condition == Condition::Intact
+                    && decision_due(self.ticks, npc.id, self.interval))
+            })
+            .collect()
     }
 
     /// Every NPC that is not intact forgets what provoked it.
@@ -1243,6 +1268,7 @@ impl Traffic {
     ) -> Vec<Outcome> {
         let speeds = self.top_speeds(world);
         let mut docked: Vec<(NpcId, ShipRef)> = Vec::new();
+        let mut repaired: Vec<(NpcId, ShipId)> = Vec::new();
         let disabled: BTreeSet<NpcId> = self
             .npcs
             .iter()
@@ -1289,6 +1315,11 @@ impl Traffic {
                         docked.push((npc.id, victim));
                         return Outcome::Flying;
                     }
+                    Some(DockOutcome::Repaired) => {
+                        repair_dock::complete(npc);
+                        repaired.push((npc.id, npc.ship));
+                        return Outcome::Flying;
+                    }
                     Some(_) => return Outcome::Flying,
                     None => {}
                 }
@@ -1311,6 +1342,11 @@ impl Traffic {
             })
             .collect();
         self.dock_starts(&docked);
+        self.pirate_events.extend(
+            repaired
+                .into_iter()
+                .map(|(helper, ship)| PirateEvent::PlayerRepaired { helper, ship }),
+        );
         outcomes
     }
 
@@ -1995,7 +2031,10 @@ impl Traffic {
             }
             if !matches!(
                 goal,
-                Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. }
+                Goal::Attack(_)
+                    | Goal::Snipe(_)
+                    | Goal::Plunder { .. }
+                    | Goal::Assist(Help::Repair)
             ) {
                 npc.docking = None;
             }
@@ -2214,7 +2253,6 @@ impl Traffic {
                 info_types: ship.info_types,
                 cargo: NpcHold::of(ship.cargo),
                 spared: false,
-                assisting: 0,
                 carrier: None,
                 person: traits,
                 mission: ship.mission,
@@ -2475,7 +2513,6 @@ mod tests {
         assert_eq!(first.booty, Some(0x0041), "its düde's");
         assert_eq!(first.info_types, 0x8000, "its düde's");
         assert!(!first.spared);
-        assert_eq!(first.assisting, 0);
         assert!(!first.boarded);
         assert_eq!(npcs[1].state.position, Vec2::new(1.0, 0.0));
         traffic.enter(table(1), &mut Draws::of(&placed(0, 0)));
@@ -3571,24 +3608,24 @@ mod tests {
         let mut traffic = populated(1, 1);
         traffic.npcs[0].goal = Goal::Assist(Help::Repair);
         let fleeing = Fighting::deciding(Goal::Flee(ShipRef::Player));
-        traffic.tick_in(
-            &fleeing,
-            World::new(&[]),
-            &[struck(0, 0.0)],
-            &mut Draws::of(&[]),
-        );
+        // The player disabled far off, so the repairer closes on it.
+        let world = World {
+            player: Some(PlayerSide {
+                condition: Condition::Disabled,
+                ..crate::ai::fixture::player(5000.0, 0.0)
+            }),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&fleeing, world, &[struck(0, 0.0)], &mut Draws::of(&[]));
         assert_eq!(
             traffic.npcs()[0].goal,
             Goal::Assist(Help::Repair),
             "a strike of no damage provokes nothing"
         );
-        traffic.tick_in(
-            &fleeing,
-            World::new(&[]),
-            &[struck(0, 2.0)],
-            &mut Draws::of(&[]),
-        );
+        assert!(traffic.npcs()[0].docking.is_some(), "closing");
+        traffic.tick_in(&fleeing, world, &[struck(0, 2.0)], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].goal, Goal::Flee(ShipRef::Player));
+        assert_eq!(traffic.npcs()[0].docking, None, "dropped with its goal");
     }
 
     #[test]

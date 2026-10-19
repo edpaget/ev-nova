@@ -503,7 +503,6 @@ fn fighter(
         info_types: 0,
         cargo: NpcHold::default(),
         spared: false,
-        assisting: 0,
         carrier: Some(carrier),
         person: None,
         mission: None,

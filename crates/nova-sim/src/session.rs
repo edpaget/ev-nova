@@ -228,8 +228,9 @@
 //! that apply ([`Session::hailing`]). A press ([`Session::answer`]) says
 //! the ship's reply and does its deed: a ship paid to spare the player
 //! never targets it again and leaves; one declined attacks; one asked for
-//! help flies over to refuel or repair the player
-//! ([`Session::tick_assistance`], [`Session::take_comm`]). A price asked is
+//! help flies over to refuel the player ([`Session::tick_assistance`]) or
+//! docks with it to repair it (the `repair_dock` module), and says when it
+//! is done ([`Session::take_comm`]). A price asked is
 //! haggled over and paid from the cash ([`Session::haggle`]), which makes
 //! no save due. The hail under way, and the help, are never saved.
 //!
@@ -418,6 +419,7 @@ mod radar;
 mod ranks;
 mod red_alert;
 mod reinforcements;
+mod repair_dock;
 mod rescue;
 mod sabotage;
 mod script_effects;

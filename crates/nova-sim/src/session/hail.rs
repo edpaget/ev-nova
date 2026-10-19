@@ -59,12 +59,15 @@
 //!   the carried fighters.
 //! - **Help** (`_AIMakeShipRefuelPlayer` @0x82dbb,
 //!   `_AIMakeShipRepairPlayer` @0x82df2): it assists the player
-//!   ([`Goal::Assist`]), its provocation gone. Each step
+//!   ([`Goal::Assist`]), its provocation gone. Each step a refuel
 //!   ([`Session::tick_assistance`]) gives the help as
-//!   [`assist`](crate::hail::assist) says. Once done it says so
-//!   ([`Session::take_comm`]) and decides again; a repair for a player no
-//!   longer disabled ends at once, silently. The traffic lets an
-//!   assisting ship decide again once anything provokes it.
+//!   [`assist`](crate::hail::assist) says; once done it says so
+//!   ([`Session::take_comm`]) with `snd ` 151 and decides again. A repair
+//!   is the traffic's: the ship docks with the player as a pirate does and
+//!   repairs it once its dock's wait is done (see
+//!   [`repair_dock`](crate::traffic::repair_dock) and the session's
+//!   `repair_dock` module). The traffic lets an assisting ship decide
+//!   again once anything provokes it.
 //! - **Defend** (battle help, `_AIFightEnemyThreatToPlayer` @0x82c80):
 //!   it attacks the threat to the player picked
 //!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f), and calls for
@@ -80,7 +83,7 @@ use crate::catalog::{CommCatalog, MissionId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::{Condition, DisableRule, ESCAPE_POD_SHIP};
+use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
 use crate::hail::{
     Ask, Attitude, CommNote, Conversation, Deed, Dispositions, EscortStatus, Haggle, Hail,
     HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, assist,
@@ -604,7 +607,6 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
                 npc.trigger = Trigger::default();
                 npc.provoked = 0.0;
-                npc.assisting = 0;
             }
         }
     }
@@ -618,65 +620,52 @@ impl Session {
         self.call_for_reinforcements(id, true, None);
     }
 
-    /// Gives a tick of the help each NPC assisting the player gives (see
-    /// [`assist`](crate::hail::assist)), a repair raising the armour until
-    /// `rule` no longer has the player disabled. While the ship is landed
-    /// or jumping, nothing happens.
-    pub fn tick_assistance(&mut self, rule: &dyn DisableRule) {
+    /// Gives a tick of the refuel each NPC refuelling the player gives (see
+    /// [`assist`](crate::hail::assist)), saying "Energy transfer complete"
+    /// with `snd ` 151 once it is done. While the ship is landed or
+    /// jumping, nothing happens. A repair is the traffic's (see the
+    /// `repair_dock` module).
+    pub fn tick_assistance(&mut self) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
         let player = self.player;
-        let disabled = self.condition == Condition::Disabled;
         let mut done = Vec::new();
         for npc in self.traffic.npcs_mut() {
-            let Goal::Assist(help) = npc.goal else {
+            if npc.goal != Goal::Assist(Help::Refuel) {
                 continue;
-            };
+            }
             // Not while it jumps in or comes out of a gate, nor while it
             // holds its course after (`Mode::Coasting`): the help is given
             // in `_HighLevelAIHandler`, which returns at once while the
-            // wait +0x4c runs, refuel (goal 9) and repair (0xf) included
-            // (@0x8d4b4-0x8d4d2).
+            // wait +0x4c runs, refuel (goal 9) included (@0x8d4b4-0x8d4d2).
             if npc.condition != Condition::Intact || npc.mode != Mode::Flying {
                 continue;
             }
-            let reach = assist::reach(help, npc.stats.handling.turn_rate);
-            let within = assist::within(&npc.state, &player, reach);
-            let finished = match help {
-                Help::Refuel => {
-                    within && assist::docked(&npc.state) && refuel(&mut self.pilot.reserves.fuel)
-                }
-                Help::Repair if !disabled => {
-                    stop(npc);
-                    continue;
-                }
-                Help::Repair => {
-                    if within {
-                        npc.assisting += 1;
-                    }
-                    npc.assisting >= assist::REPAIR_TICKS && {
-                        repair(&mut self.pilot.reserves.armor, &self.hull, rule);
-                        true
-                    }
-                }
-            };
-            if finished {
+            let reach = assist::reach(Help::Refuel, npc.stats.handling.turn_rate);
+            if assist::within(&npc.state, &player, reach)
+                && assist::docked(&npc.state)
+                && refuel(&mut self.pilot.reserves.fuel)
+            {
                 stop(npc);
-                done.push((npc.id, npc.ship, help));
+                done.push((npc.id, npc.ship));
             }
         }
-        for (from, ship, help) in done {
+        let ship_name = self.pilot.ship_name().unwrap_or_default().to_owned();
+        for (from, ship) in done {
             let note = CommNote {
                 from,
                 comm_name: self
                     .ship_record(ship)
                     .map(|record| record.comm_name.clone())
                     .unwrap_or_default(),
-                done: help,
+                ship_name: ship_name.clone(),
+                done: Help::Refuel,
             };
             self.comm_line.show(note.ticks());
             self.comm.push(note);
+            // `_beepSnd[1]` (@0x8f585-0x8f5b0), with the line.
+            self.sounds.push(SimSound::EnergyTransferComplete);
         }
     }
 
@@ -698,24 +687,6 @@ fn refuel(fuel: &mut crate::reserves::Gauge) -> bool {
     fuel.now > assist::REFUEL_UNTIL || fuel.now >= fuel.max
 }
 
-/// Raises `armor` a step at a time, no further than its most, until
-/// `rule` no longer has a ship of `hull` disabled.
-fn repair(
-    armor: &mut crate::reserves::Gauge,
-    hull: &crate::combat::hull::HullSpec,
-    rule: &dyn DisableRule,
-) {
-    // At most the steps up to its most (a step is a point), so a rule
-    // that never lets it fly still ends.
-    let steps = (armor.max - armor.now).ceil().max(0.0) as u32;
-    for _ in 0..steps {
-        if !rule.disabled(*armor, hull) {
-            return;
-        }
-        armor.now = (armor.now + assist::REPAIR_STEP).min(armor.max);
-    }
-}
-
 /// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0-0x7e2e7): it
 /// jumps out (state 2), whatever its fuel, as the original tests none;
 /// its target, fire command and provocation are gone. A warship that
@@ -732,13 +703,11 @@ pub(super) fn make_leave(npc: &mut Npc) {
 fn stop(npc: &mut Npc) {
     npc.goal = Goal::Idle;
     npc.target = None;
-    npc.assisting = 0;
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     use super::*;
@@ -747,7 +716,7 @@ mod tests {
     use crate::catalog::{RankId, RankRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::Strike;
-    use crate::combat::hull::{HullSpec, NovaDisable};
+    use crate::combat::hull::HullSpec;
     use crate::geometry::Vec2;
     use crate::govt::XENOPHOBIC;
     use crate::hail::{Answer, BRIBABLE_WARSHIPS, HailOption, MUTE, UNTALKATIVE};
@@ -2263,16 +2232,16 @@ mod tests {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 120.0);
         session.pilot.reserves.fuel.now = 40.0;
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 41.0);
         let mut far = helped(&catalog, Help::Refuel, 121.0);
         far.pilot.reserves.fuel.now = 40.0;
-        far.tick_assistance(&NovaDisable);
+        far.tick_assistance();
         assert_eq!(far.reserves().fuel.now, 40.0, "beyond its reach");
         let mut moving = helped(&catalog, Help::Refuel, 120.0);
         moving.pilot.reserves.fuel.now = 40.0;
         npc(&mut moving).state.velocity = Vec2::new(0.0, 0.35);
-        moving.tick_assistance(&NovaDisable);
+        moving.tick_assistance();
         assert_eq!(moving.reserves().fuel.now, 40.0, "not slow enough");
     }
 
@@ -2282,10 +2251,10 @@ mod tests {
         let mut session = helped(&catalog, Help::Refuel, 120.0);
         session.pilot.reserves.fuel.now = 40.0;
         npc(&mut session).mode = Mode::Coasting { ticks_left: 3 };
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 40.0);
         npc(&mut session).mode = Mode::Flying;
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 41.0);
     }
 
@@ -2294,9 +2263,11 @@ mod tests {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 0.0);
         session.pilot.reserves.fuel.now = 40.0;
+        session.pilot.ship_name = Some("Kestrel".to_owned());
+        let _ = session.take_sounds();
         for tick in 1..=61 {
             assert!(session.take_comm().is_empty(), "tick {tick}");
-            session.tick_assistance(&NovaDisable);
+            session.tick_assistance();
         }
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert_eq!(
@@ -2304,13 +2275,15 @@ mod tests {
             [CommNote {
                 from: NpcId(0),
                 comm_name: "Cruiser".to_owned(),
+                ship_name: "Kestrel".to_owned(),
                 done: Help::Refuel,
             }]
         );
+        assert_eq!(session.take_sounds(), [SimSound::EnergyTransferComplete]);
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Idle, "it decides again");
         assert_eq!(helper.target, None);
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert!(session.take_comm().is_empty());
     }
@@ -2321,7 +2294,7 @@ mod tests {
         let mut session = helped(&catalog, Help::Refuel, 0.0);
         session.pilot.reserves.fuel.now = 150.0;
         assert!(session.comm_line().free_for_calls(), "free before");
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         let [note] = session.take_comm().try_into().expect("one note");
         for tick in 1..note.ticks() {
             session.count_down_comm_line();
@@ -2336,7 +2309,7 @@ mod tests {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 0.0);
         session.pilot.reserves.fuel.now = 150.0;
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 150.0);
         assert_eq!(session.take_comm().len(), 1);
     }
@@ -2349,118 +2322,9 @@ mod tests {
             now: 79.5,
             max: 80.0,
         };
-        session.tick_assistance(&NovaDisable);
+        session.tick_assistance();
         assert_eq!(session.reserves().fuel.now, 80.0);
         assert_eq!(session.take_comm().len(), 1);
-    }
-
-    /// Records the armour it is asked about, disabled below 20.
-    #[derive(Debug, Default)]
-    struct Below20 {
-        asked: RefCell<Vec<f32>>,
-    }
-
-    impl DisableRule for Below20 {
-        fn disabled(&self, armor: Gauge, _hull: &HullSpec) -> bool {
-            self.asked.borrow_mut().push(armor.now);
-            armor.now < 20.0
-        }
-    }
-
-    /// [`helped`] repairing from within its reach, the player disabled
-    /// with 10 armour of 45.
-    fn repairing(catalog: &FakePilotCatalog) -> Session {
-        let mut session = helped(catalog, Help::Repair, 290.0);
-        session.condition = Condition::Disabled;
-        session.pilot.reserves.armor.now = 10.0;
-        session
-    }
-
-    #[test]
-    fn a_repair_raises_the_armour_after_a_hundred_ticks_within_reach() {
-        let catalog = hailable();
-        let mut session = repairing(&catalog);
-        let rule = Below20::default();
-        for _ in 0..99 {
-            session.tick_assistance(&rule);
-        }
-        assert_eq!(session.reserves().armor.now, 10.0);
-        assert!(rule.asked.borrow().is_empty());
-        assert!(session.take_comm().is_empty());
-        session.tick_assistance(&rule);
-        assert_eq!(session.reserves().armor.now, 20.0);
-        assert_eq!(
-            *rule.asked.borrow(),
-            (10..=20).map(|a| a as f32).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            session.take_comm(),
-            [CommNote {
-                from: NpcId(0),
-                comm_name: "Cruiser".to_owned(),
-                done: Help::Repair,
-            }]
-        );
-        assert_eq!(session.npcs()[0].goal, Goal::Idle);
-        assert_eq!(session.npcs()[0].assisting, 0);
-    }
-
-    /// Has every ship disabled, whatever its armour.
-    #[derive(Debug)]
-    struct Always;
-
-    impl DisableRule for Always {
-        fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
-            true
-        }
-    }
-
-    #[test]
-    fn a_repair_raises_the_armour_no_further_than_its_most() {
-        let catalog = hailable();
-        let mut session = repairing(&catalog);
-        for _ in 0..100 {
-            session.tick_assistance(&Always);
-        }
-        assert_eq!(session.reserves().armor.now, 45.0, "full, and done");
-        assert_eq!(session.take_comm().len(), 1);
-    }
-
-    #[test]
-    fn a_repair_by_novas_rule_raises_the_armour_to_the_least_that_flies() {
-        let catalog = hailable();
-        let mut session = repairing(&catalog);
-        for _ in 0..100 {
-            session.tick_assistance(&NovaDisable);
-        }
-        let armor = session.reserves().armor;
-        assert_eq!(armor.now, 15.0, "a third of 45, a point at a time");
-        assert!(!NovaDisable.disabled(armor, &session.hull()));
-        session.tick_combat(crate::combat::Rules::default(), &mut crate::NeverFires);
-        assert_eq!(session.player_condition(), Condition::Intact);
-    }
-
-    #[test]
-    fn a_repair_counts_only_the_ticks_within_reach() {
-        let catalog = hailable();
-        let mut session = repairing(&catalog);
-        npc(&mut session).state.position = Vec2::new(291.0, 0.0);
-        for _ in 0..200 {
-            session.tick_assistance(&NovaDisable);
-        }
-        assert_eq!(session.reserves().armor.now, 10.0);
-        assert_eq!(session.npcs()[0].assisting, 0);
-    }
-
-    #[test]
-    fn a_repair_for_a_player_no_longer_disabled_ends_at_once_unsaid() {
-        let catalog = hailable();
-        let mut session = repairing(&catalog);
-        session.condition = Condition::Intact;
-        session.tick_assistance(&NovaDisable);
-        assert_eq!(session.npcs()[0].goal, Goal::Idle);
-        assert!(session.take_comm().is_empty());
-        assert_eq!(session.reserves().armor.now, 10.0);
     }
 
     #[test]
@@ -2478,7 +2342,7 @@ mod tests {
         // One at a time: three sessions make too large an array.
         let given_nothing = |mut session: Session| {
             session.pilot.reserves.fuel.now = 40.0;
-            session.tick_assistance(&NovaDisable);
+            session.tick_assistance();
             assert_eq!(session.reserves().fuel.now, 40.0);
         };
         given_nothing(landed);

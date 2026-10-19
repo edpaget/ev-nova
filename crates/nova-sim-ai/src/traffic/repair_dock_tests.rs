@@ -1,0 +1,215 @@
+//! Tests of a ship repairing the player as the traffic's tick flies it (see
+//! [`repair_dock`](crate::traffic::repair_dock)): its high level, the dock
+//! it shares with the plunder, the completion and the drift after.
+
+use std::cell::RefCell;
+
+use super::{Traffic, World};
+use crate::ai::{Behaviour, Goal, PlayerSide, Surroundings};
+use crate::chance::Chance;
+use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
+use crate::flight::FlightRules;
+use crate::geometry::Vec2;
+use crate::hail::Help;
+use crate::stats::ShipStats;
+use crate::traffic::autopilot::TopSpeeds;
+use crate::traffic::fixture::npc;
+use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::plunder::{self, PirateEvent};
+use crate::traffic::plunder_dock::{DockSub, Docking};
+use crate::traffic::repair_dock::REPAIR_HOLD;
+use nova_sim_base::fixture::{FAST, Scripted};
+use nova_sim_catalog::catalog::ShipId;
+
+const HELPER: NpcId = NpcId(1);
+
+/// Logs each ship it decides for, keeping its goal, or waiting (state 6)
+/// when it has none.
+#[derive(Debug, Default)]
+struct Recording {
+    decided: RefCell<Vec<NpcId>>,
+}
+
+impl Behaviour for Recording {
+    fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        self.decided.borrow_mut().push(npc.id);
+        if npc.goal == Goal::Idle {
+            Goal::Wait
+        } else {
+            npc.goal
+        }
+    }
+}
+
+/// The player at the centre at rest facing up, in `condition`.
+fn player(condition: Condition) -> PlayerSide {
+    PlayerSide {
+        condition,
+        ..crate::ai::fixture::player(0.0, 0.0)
+    }
+}
+
+/// A world holding the player in `condition`.
+fn world(condition: Condition) -> World<'static> {
+    World {
+        player: Some(player(condition)),
+        ..World::new(&[])
+    }
+}
+
+/// Traffic of one ship, NPC 1, repairing the player from (`x`, `y`), at
+/// rest facing up, its class turn 3 (a box of 260), deciding every tick.
+fn repairing(x: f32, y: f32) -> Traffic {
+    let mut ship = npc(HELPER.0, ShipStats::new(FAST, &[]));
+    ship.goal = Goal::Assist(Help::Repair);
+    ship.target = Some(ShipRef::Player);
+    ship.hull.class_turn = 3.0;
+    ship.state.position = Vec2::new(x, y);
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship];
+    traffic
+}
+
+fn helper(traffic: &Traffic) -> &Npc {
+    traffic
+        .npcs()
+        .iter()
+        .find(|npc| npc.id == HELPER)
+        .expect("in the system")
+}
+
+/// `traffic` a tick on with the player in `condition`, rolling `rolls`.
+fn tick(traffic: &mut Traffic, behaviour: &Recording, condition: Condition, rolls: &[u16]) {
+    traffic.tick_in(
+        behaviour,
+        world(condition),
+        &[],
+        &mut Scripted::rolling(rolls),
+    );
+}
+
+#[test]
+fn a_ship_repairing_the_disabled_player_docks_and_boards_it_and_repairs_it_after_its_wait() {
+    // A dock started on tick 0 with wait W repairs on tick max(1, W - 100).
+    for (roll, repair_tick) in [(0, 1), (79, 79)] {
+        let mut traffic = repairing(2.0, 0.0);
+        let recording = Recording::default();
+        tick(&mut traffic, &recording, Condition::Disabled, &[roll]);
+        assert_eq!(
+            traffic.take_pirate_events(),
+            [PirateEvent::PlayerDockedWith { pirate: HELPER }],
+            "the start boards the player"
+        );
+        assert_eq!(helper(&traffic).ai_wait, 99 + u32::from(roll));
+        for at in 1..repair_tick {
+            tick(&mut traffic, &recording, Condition::Disabled, &[]);
+            assert_eq!(traffic.take_pirate_events(), [], "{roll}: tick {at}");
+            assert_eq!(helper(&traffic).goal, Goal::Assist(Help::Repair));
+        }
+        tick(&mut traffic, &recording, Condition::Disabled, &[]);
+        assert_eq!(
+            traffic.take_pirate_events(),
+            [PirateEvent::PlayerRepaired {
+                helper: HELPER,
+                ship: ShipId(128)
+            }],
+            "{roll}"
+        );
+        let done = helper(&traffic);
+        assert_eq!(done.goal, Goal::Drift);
+        assert_eq!(done.ai_wait, REPAIR_HOLD - 1);
+        assert_eq!((done.target, done.docking), (None, None));
+    }
+}
+
+#[test]
+fn a_repairer_unprovoked_flies_its_high_level_though_it_never_decides() {
+    let mut traffic = repairing(1000.0, 0.0);
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    assert_eq!(*recording.decided.borrow(), []);
+    assert_eq!(
+        helper(&traffic).docking,
+        Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Close
+        })
+    );
+}
+
+#[test]
+fn a_repaired_ship_drifts_100_steps_then_decides_again() {
+    let mut traffic = repairing(2.0, 0.0);
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Disabled, &[0]);
+    tick(&mut traffic, &recording, Condition::Intact, &[]);
+    assert_eq!(helper(&traffic).goal, Goal::Drift, "repaired on tick 1");
+    let start = helper(&traffic).state.position;
+    for step in 1..=100 {
+        tick(&mut traffic, &recording, Condition::Intact, &[]);
+        let expected = if step == 100 { Goal::Idle } else { Goal::Drift };
+        assert_eq!(helper(&traffic).goal, expected, "{step}");
+    }
+    let drifted = helper(&traffic).state.position - start;
+    assert!(
+        (drifted - Vec2::new(0.0, -100.0 * plunder::DRIFT)).length() < 1e-3,
+        "{drifted:?}"
+    );
+    tick(&mut traffic, &recording, Condition::Intact, &[]);
+    assert_eq!(helper(&traffic).goal, Goal::Wait, "it decides afresh");
+}
+
+#[test]
+fn a_repairer_gives_up_on_a_player_no_longer_disabled_but_not_while_its_wait_runs() {
+    let recording = Recording::default();
+    let mut far = repairing(1000.0, 0.0);
+    tick(&mut far, &recording, Condition::Intact, &[]);
+    let gave_up = helper(&far);
+    assert_eq!(
+        (gave_up.goal, gave_up.target, gave_up.docking),
+        (Goal::Idle, None, None)
+    );
+    let mut docked = repairing(2.0, 0.0);
+    tick(&mut docked, &recording, Condition::Disabled, &[79]);
+    tick(&mut docked, &recording, Condition::Intact, &[]);
+    let waiting = helper(&docked);
+    assert_eq!(waiting.goal, Goal::Assist(Help::Repair));
+    assert_eq!(
+        waiting.docking,
+        Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Dock
+        })
+    );
+}
+
+#[test]
+fn far_off_a_repairer_closes_on_the_player_through_sub_0xb() {
+    let mut traffic = repairing(0.0, 600.0);
+    let mut closing = helper(&traffic).clone();
+    closing.docking = Some(Docking {
+        ship: ShipRef::Player,
+        sub: DockSub::Close,
+    });
+    let speeds = TopSpeeds::own_of(&closing);
+    plunder::fly_docking(
+        &mut closing,
+        Some(&player(Condition::Disabled).state),
+        speeds,
+        FlightRules::default(),
+        &mut Scripted::default(),
+    );
+    let recording = Recording::default();
+    for _ in 0..3 {
+        tick(&mut traffic, &recording, Condition::Disabled, &[]);
+        let flown = helper(&traffic);
+        assert_eq!(
+            flown.docking.map(|docking| docking.sub),
+            Some(DockSub::Close)
+        );
+    }
+    let mut once = repairing(0.0, 600.0);
+    tick(&mut once, &recording, Condition::Disabled, &[]);
+    assert_eq!(helper(&once).state, closing.state);
+}

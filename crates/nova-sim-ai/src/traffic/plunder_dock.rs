@@ -1,4 +1,5 @@
-//! A pirate docking with the disabled ship it plunders: goal 0xd's
+//! A pirate docking with the disabled ship it plunders, or a ship with the
+//! disabled player it repairs: goal 0xd's
 //! disabled half of `_HighLevelAIHandler` (@0x8e873-0x8ea44 in the `EV
 //! Nova` executable, [`high_level`]) and the substates 9, 0xb and 0xf of
 //! `_LowLevelAIHandler` it leaves the pirate in (@0x8769a-0x878f4,
@@ -42,7 +43,10 @@
 //!     above [`DOCK_WAIT`] it holds; above none, under goal 0xd it would
 //!     plunder ([`DockOutcome::Completed`], @0x86f3c-0x86f93: never reached
 //!     by a pirate, whose think turns a boarded victim's plunder into goal
-//!     4 first), under goal 4 nothing; at none, unless drifting (goal 0xe),
+//!     4 first), under goal 0xf it repairs the player
+//!     ([`DockOutcome::Repaired`], @0x86d84-0x86f37, see
+//!     [`repair_dock`](crate::traffic::repair_dock)), under goal 4 or 9
+//!     nothing; at none, unless drifting (goal 0xe),
 //!     it starts the dock (@0x86fa4-0x8700a): the victim boarded, its AI
 //!     wait [`DOCK_WAIT`] + `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the
 //!     victim's ([`DockOutcome::Started`]).
@@ -53,10 +57,10 @@
 //! (@0x86aaa-0x86b38) and the inertialess box ×4 (@0x8e8f6-0x8e916) are
 //! rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit's;
 //! sub 0xb's formation branch (@0x87364-0x873a3) is
-//! rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's; the repair
-//! half of sub 0xf (the completion under goal 0xf, @0x86d84-0x86f37) is
-//! rdm:phase/combat-ai-fidelity/phase-19-left-out-of-phase-10's. Nothing
-//! here plays a sound.
+//! rdm:phase/escort-fleet-fidelity/phase-2-formation-flight's. A ship
+//! repairing the player flies these substates too, by its own high level
+//! ([`repair_dock::high_level`](crate::traffic::repair_dock::high_level)).
+//! Nothing here plays a sound.
 
 use crate::ai::Goal;
 use crate::ai::fire::off_by;
@@ -64,6 +68,7 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
+use crate::hail::Help;
 use crate::handling::Handling;
 use crate::traffic::autopilot::{self, steer};
 use crate::traffic::inertialess::{self, Inertia};
@@ -191,6 +196,10 @@ pub enum DockOutcome {
     /// original plunders here, which no pirate reaches (see the module
     /// docs).
     Completed,
+    /// Docked under goal 0xf (a repair of the player) with its wait above
+    /// none and at most [`DOCK_WAIT`]: the repair completes
+    /// ([`repair_dock::complete`](crate::traffic::repair_dock::complete)).
+    Repaired,
 }
 
 /// Flies `npc` one tick of its docking with a victim at `victim`, on
@@ -327,6 +336,7 @@ fn dock(
     let outcome = match npc.ai_wait {
         wait if wait > DOCK_WAIT => DockOutcome::Flying,
         1.. if matches!(npc.goal, Goal::Plunder { .. }) => DockOutcome::Completed,
+        1.. if npc.goal == Goal::Assist(Help::Repair) => DockOutcome::Repaired,
         1.. => DockOutcome::Flying,
         0 if npc.goal == Goal::Drift => DockOutcome::Flying,
         0 => {
@@ -641,10 +651,36 @@ mod tests {
         assert_eq!(docked(Goal::Attack(VICTIM), 100), DockOutcome::Flying);
         assert_eq!(docked(Goal::Attack(VICTIM), 1), DockOutcome::Flying);
         assert_eq!(docked(Goal::Drift, 0), DockOutcome::Flying);
+        assert_eq!(
+            docked(Goal::Assist(Help::Refuel), 1),
+            DockOutcome::Flying,
+            "goal 9 completes in its high level"
+        );
         assert!(matches!(
             docked(Goal::Attack(VICTIM), 0),
             DockOutcome::Started { .. }
         ));
+    }
+
+    #[test]
+    fn docked_under_a_repair_it_repairs_at_100_or_below_holds_above_and_starts_at_none() {
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let docked = |wait: u32| {
+            let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
+            ship.goal = Goal::Assist(Help::Repair);
+            ship.ai_wait = wait;
+            flown(ship, &victim, &[0]).1
+        };
+        assert_eq!(docked(101), DockOutcome::Flying);
+        assert_eq!(docked(100), DockOutcome::Repaired);
+        assert_eq!(docked(1), DockOutcome::Repaired);
+        assert_eq!(
+            docked(0),
+            DockOutcome::Started {
+                victim: VICTIM,
+                wait: DOCK_WAIT
+            }
+        );
     }
 
     #[test]

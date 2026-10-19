@@ -2223,14 +2223,16 @@ fn requesting_assistance_from_a_friendly_trader_refuels_the_player() {
     assert_eq!(game.showing(), Showing::Flight);
     let mut said = false;
     let mut alongside = false;
+    let line = format!(
+        "Hauler:  Energy transfer complete, {}.",
+        game.session().pilot().ship_name().expect("named")
+    );
     for _ in 0..1200 {
         let frame = game.frame();
         let helper = &game.session().npcs()[0];
         let off = helper.state.position - game.session().player().position;
         alongside |= off.x.abs() <= 105.0 && off.y.abs() <= 105.0;
-        said |= run_texts(&frame)
-            .iter()
-            .any(|text| text == "Hauler:  Energy transfer complete.");
+        said |= run_texts(&frame).contains(&line);
         if said {
             break;
         }

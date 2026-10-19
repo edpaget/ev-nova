@@ -586,7 +586,7 @@ impl<
                     }
                     if !again {
                         session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                        session.tick_assistance(&*self.disable_rule);
+                        session.tick_assistance();
                         notes.extend(session.take_comm());
                         session.tick_combat(rules, &mut self.chance);
                     }

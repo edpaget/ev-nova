@@ -10,6 +10,9 @@
 //!   cleared on each tick the player isn't disabled, as `_HandlePlayer`
 //!   clears it each frame (@0x68b02), and kept only in flight: a ship slot
 //!   field, it is never saved.
+//! - **A repair of the player** ([`PirateEvent::PlayerRepaired`]): see the
+//!   `repair_dock` module. A ship docking to repair the player boards it
+//!   as a pirate does ([`PirateEvent::PlayerDockedWith`]).
 //! - **A plunder of the player** ([`PirateEvent::PlunderPlayer`]): the odds
 //!   from the pirate's class `Strength` and marines against the player's
 //!   class's raw `Strength` and the marines it owns
@@ -66,6 +69,7 @@ impl Session {
             match event {
                 PirateEvent::PlayerDockedWith { .. } => self.player_boarded = true,
                 PirateEvent::PlunderPlayer { pirate } => self.plundered_by(pirate, chance),
+                PirateEvent::PlayerRepaired { helper, ship } => self.repaired_by(helper, ship),
                 PirateEvent::Plundered { line, taken, .. } => {
                     if let Some(line) = line {
                         self.say_stolen_cargo(line.tons, line.credits);

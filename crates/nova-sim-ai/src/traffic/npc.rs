@@ -337,8 +337,6 @@ pub struct Npc {
     /// Whether the player has paid it to spare it: it never targets the
     /// player again.
     pub spared: bool,
-    /// The ticks it has spent within reach of the player, repairing it.
-    pub assisting: u32,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
     /// ship.

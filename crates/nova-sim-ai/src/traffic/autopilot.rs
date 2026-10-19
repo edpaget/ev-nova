@@ -46,7 +46,9 @@
 //!   matching its lead's velocity there.
 //! - [`Goal::Assist`]: outside its reach of the player (see
 //!   [`assist`]) it follows the player as an escort its lead; within it,
-//!   it brakes.
+//!   it brakes. A repairer flies so only while it holds no docking (with
+//!   no target): its docking flies it otherwise
+//!   ([`repair_dock`](crate::traffic::repair_dock)).
 //! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
 //!   keeps its slot beside the player ([`Npc::formation`],
 //!   [`slot_position`](crate::escort::slot_position)); with no slot it brakes. Within

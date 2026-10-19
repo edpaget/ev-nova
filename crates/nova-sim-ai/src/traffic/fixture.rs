@@ -50,7 +50,6 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         info_types: 0,
         cargo: NpcHold::default(),
         spared: false,
-        assisting: 0,
         carrier: None,
         person: None,
         mission: None,

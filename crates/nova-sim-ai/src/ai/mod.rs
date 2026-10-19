@@ -994,8 +994,11 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 
 /// Whether `npc` can still fly its goal among `around`: a stellar still
 /// there and landable, a gate still there (state 20 tests no landability
-/// again), a jump out (state 2 tests no fuel), or a hold. Idling, following
-/// once the lead is gone, fighting and inspecting are no goals to keep.
+/// again), a jump out (state 2 tests no fuel), a hold, or a drift (goal
+/// 0xe, which its high level ends: the trader AIs' idle blocks run only on
+/// goal 0, `_WimpyTraderAI` @0x8b06c, `_BraveTraderAI` @0x8b4d6). Idling,
+/// following once the lead is gone, fighting and inspecting are no goals
+/// to keep.
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
         Goal::Land(stellar) => around
@@ -1003,7 +1006,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .iter()
             .any(|site| site.id == stellar && landable(site)),
         Goal::EnterGate(gate) => around.sites.iter().any(|site| site.id == gate),
-        Goal::JumpOut | Goal::Hold | Goal::Wait => true,
+        Goal::JumpOut | Goal::Hold | Goal::Wait | Goal::Drift => true,
         _ => false,
     }
 }
@@ -1533,6 +1536,28 @@ mod tests {
             let mut chance = Draws::of(&[]);
             let goal = decider.decide(&waiting, &Surroundings::new(&sites, &npcs), &mut chance);
             assert_eq!(goal, Goal::Wait, "{decider:?}");
+            assert!(chance.asked.is_empty(), "{decider:?} drew");
+        }
+    }
+
+    #[test]
+    fn a_drifting_trader_keeps_its_drift_drawing_nothing() {
+        // A repairer's drift after its repair (goal 0xe); their idle
+        // blocks need state 0 (@0x8b06c, @0x8b4d6).
+        let deciders: [(AiType, &dyn Behaviour); 3] = [
+            (AiType::WimpyTrader, &Peaceful),
+            (AiType::WimpyTrader, &WimpyTrader::default()),
+            (AiType::BraveTrader, &BraveTrader::default()),
+        ];
+        let sites = sites();
+        for (ai_type, decider) in deciders {
+            let mut drifting = npc(1, ai_type);
+            drifting.goal = Goal::Drift;
+            drifting.ai_wait = 50;
+            let npcs = [drifting.clone()];
+            let mut chance = Draws::of(&[]);
+            let goal = decider.decide(&drifting, &Surroundings::new(&sites, &npcs), &mut chance);
+            assert_eq!(goal, Goal::Drift, "{decider:?}");
             assert!(chance.asked.is_empty(), "{decider:?} drew");
         }
     }

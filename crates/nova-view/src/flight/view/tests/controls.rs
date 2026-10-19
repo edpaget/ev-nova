@@ -128,7 +128,7 @@ fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
         assert_eq!(ticks, 6, "{on}");
         assert_eq!(reserves(&view).fuel.now, 101.0, "{on}");
         let note = view.message().expect("refuelled").to_owned();
-        assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+        assert!(note.contains(":  Energy transfer complete, "), "{note}");
     }
 }
 
