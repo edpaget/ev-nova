@@ -7,7 +7,7 @@ use nova_data::SoundId;
 use nova_view::Showing;
 use nova_view::sound::{CombatSound, SimSound, Sound, UiSound};
 
-use crate::port::{Audio, AudioCommand, Priority, Volume};
+use crate::port::{Audio, AudioCommand, PlaybackRate, Priority, Volume};
 use crate::settings::{AudioSettings, music_volume_level};
 use crate::table::SoundTable;
 
@@ -37,6 +37,11 @@ use crate::table::SoundTable;
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - The intro screen's pictures keep the music; a picture's own `snd `
+///   ([`UiSound::IntroPicture`]) spends it, then plays like any event, and
+///   the intro's text spends it.
+/// - Entering play halts the main screen's four sounds
+///   ([`UiSound::MainScreenSoundsHalted`]), whatever the sound setting.
 /// - The spaceport's ambient sound plays its own `snd ` the same way: over
 ///   anything, or unless still playing for a looped one
 ///   ([`UiSound::PortAmbient`]); the spaceport's close halts it
@@ -120,10 +125,14 @@ impl<A: Audio> AudioCore<A> {
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
-        // Entering the game (`_EnterGameFromMainScreen` @0x19ec6) and the
-        // About box (`_DoAboutBox` @0x15fbf) cancel the music for good.
+        // Entering the game (`_EnterGameFromMainScreen` @0x19ec6, and
+        // `_ShowIntroScreen` @0x170ad before its text) and the About box
+        // (`_DoAboutBox` @0x15fbf) cancel the music for good; the intro's
+        // pictures keep it.
         if showing == Some(Showing::About)
-            || self.scene.is_some_and(|scene| scene != Showing::MainMenu)
+            || self
+                .scene
+                .is_some_and(|scene| !matches!(scene, Showing::MainMenu | Showing::Intro))
         {
             self.spend_music();
         }
@@ -168,6 +177,7 @@ impl<A: Audio> AudioCore<A> {
     }
 
     /// Takes in one of the flight session's sounds.
+    #[allow(clippy::too_many_lines)] // one arm for each of the session's sounds
     fn take_sim(&mut self, sound: SimSound) {
         use crate::priority as at;
         match sound {
@@ -178,9 +188,12 @@ impl<A: Audio> AudioCore<A> {
             SimSound::ThrustStopped => self.thrusting = false,
             SimSound::Landed => self.play(self.table.landing, at::LANDING),
             SimSound::TookOff => self.play(self.table.take_off, at::TAKE_OFF),
-            SimSound::JumpBegan => self.play(self.table.jump, at::JUMP),
-            SimSound::JumpBeganInDoubleTime => {
-                self.play(self.table.jump_double_time, at::JUMP);
+            SimSound::JumpBegan { rate } => {
+                self.play_at_rate(self.table.jump, at::JUMP, PlaybackRate::from_fixed(rate));
+            }
+            SimSound::JumpBeganInDoubleTime { rate } => {
+                let rate = PlaybackRate::from_fixed(rate);
+                self.play_at_rate(self.table.jump_double_time, at::JUMP, rate);
             }
             SimSound::Arrived => self.play(self.table.arrival, at::ARRIVAL),
             SimSound::ScriptMessage => {
@@ -235,6 +248,17 @@ impl<A: Audio> AudioCore<A> {
             SimSound::ShipDowned => self.play(self.table.ship_downed, at::SHIP_DOWNED),
             SimSound::CargoStolen => self.play(self.table.cargo_stolen, at::CARGO_STOLEN),
             SimSound::ShipStolen => self.play(self.table.ship_stolen, at::SHIP_STOLEN),
+            SimSound::PlunderBeep => self.play(self.table.plunder_beep, at::PLUNDER_BEEP),
+            SimSound::CaptureAssigned => {
+                self.play(self.table.capture_assigned, at::CAPTURE_ASSIGNED);
+            }
+            SimSound::RepairsComplete => {
+                self.play(self.table.repairs_complete, at::REPAIRS_COMPLETE);
+            }
+            SimSound::EnergyTransferComplete => self.play(
+                self.table.energy_transfer_complete,
+                at::ENERGY_TRANSFER_COMPLETE,
+            ),
             SimSound::DownedMissionFailed => {
                 self.play(self.table.downed_mission_failed, at::DOWNED_MISSION_FAILED);
             }
@@ -256,6 +280,10 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.jump_collapsed, at::JUMP_COLLAPSED);
             }
             SimSound::Refused => self.play(self.table.refused, at::REFUSED),
+            SimSound::SelfDestructStarted
+            | SimSound::SelfDestructCountdown
+            | SimSound::SelfDestructCancelled
+            | SimSound::SelfDestructed => self.take_self_destruct(sound),
             SimSound::Halt(sounds) => self.halt(sounds),
         }
     }
@@ -319,7 +347,23 @@ impl<A: Audio> AudioCore<A> {
                 sound,
                 until_stopped: true,
             } => self.play_unless_playing(Some(sound), at::PORT_AMBIENT),
-            UiSound::PortAmbientHalted(sound) => self.halt(&[sound]),
+            UiSound::PortAmbientHalted(sound) | UiSound::IntroPictureHalted(sound) => {
+                self.halt(&[sound]);
+            }
+            UiSound::IntroPicture(sound) => {
+                self.spend_music();
+                self.play(Some(sound), at::INTRO_PICTURE);
+            }
+            UiSound::MainScreenSoundsHalted => {
+                let table = self.table;
+                let sounds = [
+                    table.button_down,
+                    table.button_up,
+                    table.row_slide_start,
+                    table.row_slide_end,
+                ];
+                self.halt(&sounds.into_iter().flatten().collect::<Vec<_>>());
+            }
         }
     }
 
@@ -368,6 +412,28 @@ impl<A: Audio> AudioCore<A> {
 
     /// Plays the klaxon, unless it is still playing, at the effects
     /// volume, while sound is on.
+    /// Plays one of the self-destruct's beeps (`_HandlePlayer` block Z),
+    /// each at priority 15; any other sound plays nothing here.
+    fn take_self_destruct(&mut self, sound: SimSound) {
+        use crate::priority as at;
+        let (beep, priority) = match sound {
+            SimSound::SelfDestructStarted => {
+                (self.table.self_destruct_started, at::SELF_DESTRUCT_STARTED)
+            }
+            SimSound::SelfDestructCountdown => (
+                self.table.self_destruct_countdown,
+                at::SELF_DESTRUCT_COUNTDOWN,
+            ),
+            SimSound::SelfDestructCancelled => (
+                self.table.self_destruct_cancelled,
+                at::SELF_DESTRUCT_CANCELLED,
+            ),
+            SimSound::SelfDestructed => (self.table.self_destructed, at::SELF_DESTRUCTED),
+            _ => return,
+        };
+        self.play(beep, priority);
+    }
+
     fn sound_klaxon(&mut self) {
         self.play_unless_playing(self.table.klaxon, crate::priority::KLAXON);
     }
@@ -397,6 +463,24 @@ impl<A: Audio> AudioCore<A> {
     /// `priority`, while sound is on.
     fn play(&mut self, sound: Option<SoundId>, priority: Priority) {
         self.play_at(sound, self.settings.effects_volume, priority);
+    }
+
+    /// Plays `sound`, if there is one, at the effects' volume, `priority`
+    /// and `rate`, while sound is on: a sound at its own rate as any other
+    /// ([`AudioCommand::Play`]), else pitched ([`AudioCommand::PlayAtRate`]).
+    fn play_at_rate(&mut self, sound: Option<SoundId>, priority: Priority, rate: PlaybackRate) {
+        if rate == PlaybackRate::NATURAL {
+            self.play(sound, priority);
+        } else if let Some(sound) = sound
+            && self.settings.sound
+        {
+            self.audio.run(AudioCommand::PlayAtRate {
+                sound,
+                volume: self.settings.effects_volume,
+                priority,
+                rate,
+            });
+        }
     }
 
     /// Plays `sound`, if there is one, at `volume` and `priority`, while
@@ -626,7 +710,9 @@ pub fn music_fade(volume: Volume) -> Duration {
 /// before the music is spent restarts it from the top.
 fn has_music(scene: Showing) -> bool {
     match scene {
-        Showing::MainMenu => true,
+        // The intro's pictures follow the main screen's fade out with the
+        // music playing on, until a picture's sound or the text cancels it.
+        Showing::MainMenu | Showing::Intro => true,
         // The game's screens never play it; the overlays are never the
         // scene, as they keep the one below.
         Showing::GalaxyMap
@@ -649,7 +735,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::MissionText
         | Showing::MissionInfo
         | Showing::PlayerInfo
-        | Showing::Movie => false,
+        | Showing::Movie
+        | Showing::IntroText => false,
     }
 }
 
@@ -665,7 +752,7 @@ mod tests {
     const THRUST: Sound = Sound::Sim(SimSound::ThrustStarted);
     const COAST: Sound = Sound::Sim(SimSound::ThrustStopped);
     const TOOK_OFF: Sound = Sound::Sim(SimSound::TookOff);
-    const JUMP: Sound = Sound::Sim(SimSound::JumpBegan);
+    const JUMP: Sound = Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 });
     const ARRIVED: Sound = Sound::Sim(SimSound::Arrived);
 
     const LANDED: Sound = Sound::Sim(SimSound::Landed);
@@ -783,6 +870,22 @@ mod tests {
     }
 
     #[test]
+    fn the_self_destructs_beeps_play_at_15() {
+        use crate::priority as at;
+        for (sound, priority) in [
+            (SimSound::SelfDestructStarted, at::SELF_DESTRUCT_STARTED),
+            (SimSound::SelfDestructCountdown, at::SELF_DESTRUCT_COUNTDOWN),
+            (SimSound::SelfDestructCancelled, at::SELF_DESTRUCT_CANCELLED),
+            (SimSound::SelfDestructed, at::SELF_DESTRUCTED),
+        ] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[Sound::Sim(sound)]);
+            let played = drain_prioritised(&log);
+            assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
+        }
+    }
+
+    #[test]
     fn each_event_plays_at_its_priority() {
         use crate::priority as at;
         let script = |exclusive| {
@@ -800,7 +903,10 @@ mod tests {
         let cases = [
             (LANDED, at::LANDING),
             (JUMP, at::JUMP),
-            (Sound::Sim(SimSound::JumpBeganInDoubleTime), at::JUMP),
+            (
+                Sound::Sim(SimSound::JumpBeganInDoubleTime { rate: 0x1_0000 }),
+                at::JUMP,
+            ),
             (ARRIVED, at::ARRIVAL),
             (Sound::Sim(SimSound::ScriptMessage), at::SCRIPT_MESSAGE),
             (Sound::Sim(SimSound::RedAlert), at::RED_ALERT),
@@ -837,6 +943,13 @@ mod tests {
             (Sound::Sim(SimSound::MissionShipLost), at::MISSION_SHIP_LOST),
             (Sound::Sim(SimSound::CargoStolen), at::CARGO_STOLEN),
             (Sound::Sim(SimSound::ShipStolen), at::SHIP_STOLEN),
+            (Sound::Sim(SimSound::PlunderBeep), at::PLUNDER_BEEP),
+            (Sound::Sim(SimSound::CaptureAssigned), at::CAPTURE_ASSIGNED),
+            (Sound::Sim(SimSound::RepairsComplete), at::REPAIRS_COMPLETE),
+            (
+                Sound::Sim(SimSound::EnergyTransferComplete),
+                at::ENERGY_TRANSFER_COMPLETE,
+            ),
             (
                 Sound::Sim(SimSound::MissionShipBoarded),
                 at::MISSION_SHIP_BOARDED,
@@ -1289,7 +1402,7 @@ mod tests {
 
     #[test]
     fn a_jump_begun_in_double_time_plays_warp_up_x2_at_the_effects_volume() {
-        let jump = Sound::Sim(SimSound::JumpBeganInDoubleTime);
+        let jump = Sound::Sim(SimSound::JumpBeganInDoubleTime { rate: 0x1_0000 });
         let (mut core, log) = original();
         core.set_effects_volume(Volume::new(0.5));
         core.update(Some(Showing::Flight), &[jump]);
@@ -1303,6 +1416,44 @@ mod tests {
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::Flight), &[jump]);
         assert_eq!(drain(&log), [], "none in the table");
+    }
+
+    #[test]
+    fn a_warp_up_pitched_by_w_plays_at_its_rate_and_one_at_its_own_plainly() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        let pitched = |rate| Sound::Sim(SimSound::JumpBegan { rate });
+        core.update(Some(Showing::Flight), &[pitched(50_412)]);
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::PlayAtRate {
+                sound: SoundId(128),
+                volume: Volume::new(0.5),
+                priority: crate::priority::JUMP,
+                rate: PlaybackRate::from_fixed(50_412),
+            }]
+        );
+        let double = Sound::Sim(SimSound::JumpBeganInDoubleTime { rate: 72_017 });
+        core.update(Some(Showing::Flight), &[double]);
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::PlayAtRate {
+                sound: SoundId(129),
+                volume: Volume::new(0.5),
+                priority: crate::priority::JUMP,
+                rate: PlaybackRate::from_fixed(72_017),
+            }]
+        );
+        core.update(Some(Showing::Flight), &[pitched(0x1_0000)]);
+        assert_eq!(drain(&log), [play(128, 0.5)], "its own rate");
+        core.set_sound(false);
+        core.update(Some(Showing::Flight), &[pitched(50_412)]);
+        assert!(
+            drain(&log)
+                .iter()
+                .all(|command| !matches!(command, AudioCommand::PlayAtRate { .. })),
+            "sound off"
+        );
     }
 
     #[test]
@@ -1461,6 +1612,21 @@ mod tests {
     }
 
     #[test]
+    fn the_self_destructs_beeps_play_153_152_151_and_151() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        for (sound, id) in [
+            (SimSound::SelfDestructStarted, 153),
+            (SimSound::SelfDestructCountdown, 152),
+            (SimSound::SelfDestructCancelled, 151),
+            (SimSound::SelfDestructed, 151),
+        ] {
+            core.update(Some(Showing::ShipBrowser), &[Sound::Sim(sound)]);
+            assert_eq!(drain(&log), [play(id, 0.5)], "{sound:?}");
+        }
+    }
+
+    #[test]
     fn a_collapsed_jump_beeps_151() {
         const WARP_UP: [SoundId; 2] = [SoundId(128), SoundId(129)];
         let (mut core, log) = original();
@@ -1548,6 +1714,89 @@ mod tests {
         drain(&log);
         core.update(Some(Showing::Spaceport), &[halted]);
         assert_eq!(drain(&log), [halt], "sound off halts too");
+    }
+
+    const INTRO_PICTURE: Sound = Sound::Ui(UiSound::IntroPicture(SoundId(30_003)));
+
+    #[test]
+    fn an_intro_pictures_sound_spends_the_music_then_plays_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Intro), &[INTRO_PICTURE]);
+        let played = drain_prioritised(&log);
+        assert_eq!(
+            played,
+            [
+                fade_out(MUSIC),
+                AudioCommand::Play {
+                    sound: SoundId(30_003),
+                    volume: Volume::new(0.5),
+                    priority: crate::priority::INTRO_PICTURE,
+                }
+            ]
+        );
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), [], "spent for good, even on the main menu");
+    }
+
+    #[test]
+    fn with_sound_off_an_intro_pictures_sound_plays_nothing_but_still_spends_the_music() {
+        let (mut core, log) = original();
+        core.set_sound(false);
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Intro), &[INTRO_PICTURE]);
+        assert_eq!(drain(&log), [fade_out(MUSIC)]);
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [], "spent");
+    }
+
+    #[test]
+    fn the_intro_and_main_screen_halts_halt_whatever_the_sound_setting() {
+        let picture_halted = Sound::Ui(UiSound::IntroPictureHalted(SoundId(30_003)));
+        let main_halted = Sound::Ui(UiSound::MainScreenSoundsHalted);
+        let halt = |id| AudioCommand::Halt { sound: SoundId(id) };
+        for sound_on in [true, false] {
+            let (mut core, log) = original();
+            core.set_sound(sound_on);
+            drain(&log);
+            core.update(Some(Showing::ShipBrowser), &[picture_halted]);
+            assert_eq!(drain(&log), [halt(30_003)], "sound {sound_on}");
+            core.update(Some(Showing::ShipBrowser), &[main_halted]);
+            assert_eq!(
+                drain(&log),
+                [halt(600), halt(601), halt(602), halt(603)],
+                "sound {sound_on}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_main_screen_halt_halts_only_the_tables_main_screen_sounds() {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            button_down: None,
+            row_slide_end: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(None, &[Sound::Ui(UiSound::MainScreenSoundsHalted)]);
+        assert_eq!(
+            drain(&log),
+            [
+                AudioCommand::Halt {
+                    sound: SoundId(601)
+                },
+                AudioCommand::Halt {
+                    sound: SoundId(602)
+                }
+            ]
+        );
     }
 
     #[test]
@@ -2218,6 +2467,32 @@ mod tests {
             core.update(Some(Showing::MainMenu), &[]);
             core.set_music(true);
             assert_eq!(drain(&log), [], "{leave:?}: spent, nothing starts");
+        }
+    }
+
+    #[test]
+    fn the_intro_keeps_the_music_and_starts_it_like_the_main_menu() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(Some(Showing::Intro), &[]);
+        assert_eq!(drain(&log), [], "plays on");
+        let (mut core, log) = original();
+        core.update(Some(Showing::Intro), &[]);
+        assert_eq!(drain(&log), [start_music(MUSIC)], "unspent, it starts");
+    }
+
+    #[test]
+    fn the_intro_text_and_flight_spend_the_music() {
+        for scene in [Showing::IntroText, Showing::Flight] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::MainMenu), &[]);
+            core.update(Some(Showing::Intro), &[]);
+            drain(&log);
+            core.update(Some(scene), &[]);
+            assert_eq!(drain(&log), [fade_out(MUSIC)], "{scene:?}");
+            core.update(Some(Showing::MainMenu), &[]);
+            assert_eq!(drain(&log), [], "{scene:?}: spent");
         }
     }
 

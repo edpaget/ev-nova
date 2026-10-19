@@ -89,13 +89,14 @@ impl Session {
     /// lost ([`Session::lose_escorts`]) would otherwise take the fighter
     /// gone from the system for a loss and make a save due.
     ///
-    /// The rest of what the loop's departures leave the session (the
-    /// pirates answered, each mission ship that left raising its fate, the
-    /// persons' offers, the fighters orphaned, the watched ships observed),
-    /// the fly half's end (the docks started, the waits counted down, the
-    /// followers released, the fuel), the reinforcement clock, the gates'
-    /// sprites and the assistance all settle after the loop, where the
-    /// original runs them in each NPC's own `_HandleShip` or `_AIDispatch`
+    /// The rest of what the loop's departures leave the session (each
+    /// mission ship that left raising its fate, the persons' offers, the
+    /// fighters orphaned, the watched ships observed), the fly half's end
+    /// (the docks started, the repairs queued, the waits counted down, the
+    /// followers released, the fuel), the docks' and repairs' work on the
+    /// line ([`Session::settle_line_queue`]), the reinforcement clock and
+    /// the gates' sprites all settle after the loop, where the original
+    /// runs them in each NPC's own `_HandleShip` or `_AIDispatch`
     /// (`_HandleReinforcements` itself comes after the loop, @0x44504).
     /// No step in the loop reads them, and all settle before the frame is
     /// drawn. An escort of the player's fleet that lands, jumps or enters a
@@ -115,7 +116,7 @@ impl Session {
             .then(|| self.mission_marks())
             .filter(|_| !self.traffic_due);
         let mut fly = match &motion {
-            Motion::Fly(marks) => Some(self.begin_fly(&marks.still, FlyHalf::Advance)),
+            Motion::Fly(_) => Some(self.begin_fly(&BTreeSet::new(), FlyHalf::Advance)),
             Motion::Again if again_marks.is_some() => {
                 Some(self.begin_fly(&BTreeSet::new(), FlyHalf::Again))
             }
@@ -159,12 +160,12 @@ impl Session {
         match motion {
             Motion::Fly(marks) => {
                 self.after_traffic_motion(&marks, &mut &mut *chance);
+                // The docks and repairs the fly half made, on the line.
+                self.settle_line_queue(rules.law, chance);
                 self.traffic_tail(&mut &mut *chance);
-                self.tick_assistance(rules.disable);
             }
             Motion::Populated => {
                 self.traffic_tail(&mut &mut *chance);
-                self.tick_assistance(rules.disable);
             }
             Motion::Again => {
                 if let Some(marks) = again_marks {

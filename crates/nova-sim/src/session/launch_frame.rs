@@ -57,17 +57,14 @@ impl Session {
     /// By [`RuleKey::LaunchFrameAi`]'s other reading, one run that never
     /// stops, its fighters put in the system after it.
     ///
-    /// The fighters' comm calls are queued as they think and answered
-    /// after this loop, by the caller
-    /// ([`Session::answer_comm_calls`]), where the original answers each
-    /// in its own slot's `_AIDispatch`; every other NPC's were answered
-    /// after the batch think, before the scans
-    /// (`Session::after_traffic_ai`), so only the fighters' wait. Nothing
-    /// in the loop draws a frame, opens a dialog, lands, jumps or saves
-    /// the pilot, so the wait crosses no boundary the player sees: the
-    /// calls are said before the frame is drawn. That they come after
-    /// every scan, where the original orders calls and scans by slot, is
-    /// filed (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
+    /// The fighters' work on the line (their calls, their scans) is
+    /// queued at their own berths as they think, among every other
+    /// slot's, and the caller settles it all after this loop in slot order
+    /// ([`Session::settle_line_queue`]), where the original says each in
+    /// its own slot's `_AIDispatch`. Nothing in the loop draws a frame,
+    /// opens a dialog, lands, jumps or saves the pilot, so the wait
+    /// crosses no boundary the player sees: the lines are said before the
+    /// frame is drawn.
     pub(super) fn dispatch_npcs(
         &mut self,
         pass: GamePass,

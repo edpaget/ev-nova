@@ -73,6 +73,7 @@
 //!   draws with egui only in its `dev-tools` build.
 
 pub mod color;
+pub mod colorize;
 pub mod devtools;
 pub mod draw;
 pub mod fade;
@@ -101,6 +102,7 @@ pub mod video_mode;
 pub mod view_shape;
 
 pub use color::Color;
+pub use colorize::Colorize;
 pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;

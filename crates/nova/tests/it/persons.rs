@@ -32,6 +32,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -515,15 +516,10 @@ impl Game {
             .main_menu()
             .expect("a main menu")
             .press_point(MenuChoice::OpenPilot);
-        // The menu is classic: its point in the window.
-        let (rect, scale) = game.app.viewport().content().expect("a content rect");
-        let px = (
-            f64::from(rect.x) + f64::from(at.x * scale),
-            f64::from(rect.y) + f64::from(at.y * scale),
-        );
-        game.click_px(px);
+        game.click_menu(at);
         assert_eq!(game.showing(), Showing::OpenPilot);
         game.tap(Key::Enter);
+        game.enter_ship();
         assert_eq!(game.showing(), showing);
         game.frame();
         game.frame();
@@ -549,6 +545,16 @@ impl Game {
     pub(crate) fn tap(&mut self, key: Key) {
         self.key(key, true);
         self.key(key, false);
+    }
+
+    /// A click at `at` on the classic main menu: its point in the window.
+    fn click_menu(&mut self, at: nova_view::Point) {
+        let (rect, scale) = self.app.viewport().content().expect("a content rect");
+        let px = (
+            f64::from(rect.x) + f64::from(at.x * scale),
+            f64::from(rect.y) + f64::from(at.y * scale),
+        );
+        self.click_px(px);
     }
 
     /// A click at window pixel `px`.
@@ -759,3 +765,5 @@ fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_bac
     assert!(shown.iter().any(|text| text == "Friend"), "{shown:?}");
     assert!(!shown.iter().any(|text| text == "Ace"), "{shown:?}");
 }
+
+crate::common::entry_harness!(Game, click_menu, frame);

@@ -54,6 +54,10 @@
 //!   ([`sabotage_flag`](sabotage::sabotage_flag)), the
 //!   [`SabotageClock`](sabotage::SabotageClock) that sets them off in
 //!   flight, and the `dësc`s a sabotaged player sees as it dies.
+//! - [`self_destruct`]: the player's self-destruct countdown, a
+//!   [`SelfDestruct`](self_destruct::SelfDestruct) stepped each tick with
+//!   the chord held or not, and the [`Beat`](self_destruct::Beat) it
+//!   strikes.
 //! - [`self_repair`]: a disabled ship repairing itself
 //!   ([`can_self_repair`](self_repair::can_self_repair)), and a former
 //!   escort rejoining the player as it does.
@@ -75,8 +79,8 @@
 // `nova-sim-base`, `nova-sim-catalog` and `nova-sim-state`.
 #[allow(unused_imports)]
 use nova_sim_base::{
-    RuleKey, afterburner, chance, flight, fuel, geometry, handling, reserves, rulebook, rules,
-    speed_cap, trig,
+    RuleKey, afterburner, chance, deadly_stellar, flight, fuel, geometry, gravity, handling,
+    ionization, reserves, rulebook, rules, speed_cap, trig,
 };
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, buoy, catalog, control};
@@ -92,6 +96,7 @@ pub mod fleet;
 pub mod message;
 pub mod player_fate;
 pub mod sabotage;
+pub mod self_destruct;
 pub mod self_repair;
 pub mod ship_layer;
 pub mod sprite_layer;

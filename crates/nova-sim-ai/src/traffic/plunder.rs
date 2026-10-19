@@ -10,8 +10,16 @@
 //! - **The high level** ([`high_level`]): while a ship's AI wait runs
 //!   ([`Npc::ai_wait`]) `_HighLevelAIHandler` returns before every goal but
 //!   10 and 0xe (@0x8d4b9-0x8d4d2), so the traffic keeps its pursuit and
-//!   docking as they were. A plunder of a disabled ship docks
-//!   ([`plunder_dock::high_level`]); any other goal flies its fight, which
+//!   docking as they were. Goal 0x16's block comes before that return
+//!   (@0x8d462-0x8d4ac), so a pirate's count wait ([`Goal::CountWait`])
+//!   flies on as a fight with no quarry; a ship turned out of it onto
+//!   another goal keeps the wait and is skipped. A plunder of a disabled ship docks
+//!   ([`plunder_dock::high_level`]), as does a repair of the player
+//!   ([`repair_dock::high_level`], nothing changing with no target); a
+//!   refuel with a target refuels ([`HighLevel::Refuels`], its docking
+//!   set by the refuel pass, [`refuel_dock`](crate::traffic::refuel_dock)),
+//!   nothing changing with none (@0x8f3f3); any
+//!   other goal flies its fight, which
 //!   drops any docking, as goal 4's and goal 0xd's other substates do.
 //! - **The plunder** ([`resolve`]), over the decisions that plunder
 //!   ([`Decision::plunders`]), in berth order: the pirate takes goal 0xe
@@ -57,27 +65,50 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::{self, FlightRules, ShipState};
-use crate::handling::Handling;
+use crate::hail::Help;
+use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
 use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::npc::{NPC_COMMODITIES, Npc, NpcHold, NpcId};
 use crate::traffic::plunder_dock::{self, DockOutcome, DockStep, Docking};
+use crate::traffic::repair_dock;
 use nova_sim_base::trig;
+use nova_sim_catalog::catalog::ShipId;
 
 /// How far a drifting ship moves along its heading each think, in pixels
 /// (the double 0.7 @0xdd0d0, by the frame).
 pub const DRIFT: f32 = 0.7;
 
-/// What the pirates did that their session answers, taken by
-/// `Traffic::take_pirate_events`.
+/// What the pirates did that their session answers, queued on the line
+/// at the actor's berth ([`OnLine::Pirate`](crate::traffic::on_line::OnLine::Pirate)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PirateEvent {
-    /// A pirate started its dock with the disabled player: the player is
-    /// boarded (+0xb9 = 1, @0x86fc7).
+    /// A pirate, or a ship repairing the player, started its dock with the
+    /// disabled player: the player is boarded (+0xb9 = 1, @0x86fc7).
     PlayerDockedWith {
-        /// The pirate.
+        /// The pirate or repairer.
         pirate: NpcId,
+    },
+    /// A ship docked with the player repaired it (`_LowLevelAIHandler`
+    /// @0x86d84-0x86f37; see [`repair_dock`]): the session unboards the
+    /// player, raises its armour until it is no longer disabled and says
+    /// "Repairs complete" with `snd ` 151.
+    PlayerRepaired {
+        /// The repairer.
+        helper: NpcId,
+        /// Its ship type, whose `CommName` the line names.
+        ship: ShipId,
+    },
+    /// A ship docked with a disabled NPC repaired it (`_LowLevelAIHandler`
+    /// @0x86d84-0x86dcf with an NPC nav; see [`repair_dock`]): the session
+    /// unboards the NPC and raises its armour until it is no longer
+    /// disabled, silently (@0x86dd4 skips the line and sound).
+    NpcRepaired {
+        /// The repairer.
+        helper: NpcId,
+        /// The ship it repaired.
+        ship: NpcId,
     },
     /// A pirate plunders the player: the session takes its cargo and
     /// credits, says the line and fails its missions.
@@ -100,6 +131,19 @@ pub enum PirateEvent {
     },
 }
 
+impl PirateEvent {
+    /// The ship that acted: the pirate, or the ship repairing the player.
+    #[must_use]
+    pub fn actor(&self) -> NpcId {
+        match *self {
+            Self::PlayerDockedWith { pirate }
+            | Self::PlunderPlayer { pirate }
+            | Self::Plundered { pirate, .. } => pirate,
+            Self::PlayerRepaired { helper, .. } | Self::NpcRepaired { helper, .. } => helper,
+        }
+    }
+}
+
 /// What a ship's high level does this think (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HighLevel {
@@ -114,14 +158,36 @@ pub enum HighLevel {
     },
     /// It flies its fight, if any.
     Fights,
+    /// It stops (sub 1) while it searches for a target it lost sight of
+    /// ([`lost_sight::searching`](crate::ai::lost_sight::searching)),
+    /// dropping any docking.
+    Stops,
+    /// It refuels its target (goal 9), keeping its docking for the refuel
+    /// pass to set ([`refuel_dock`](crate::traffic::refuel_dock)).
+    Refuels,
 }
 
 /// What `npc`'s high level does this think among `around` (see the module
-/// docs).
+/// docs), counting a dampener as `rule` says
+/// ([`RuleKey::InertialDampener`](crate::RuleKey::InertialDampener)).
 #[must_use]
-pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
-    if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift) {
+pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> HighLevel {
+    if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift | Goal::CountWait) {
         return HighLevel::Skipped;
+    }
+    if npc.goal == Goal::Assist(Help::Refuel) {
+        // No target, no block (@0x8f3f3).
+        return if npc.target.is_some() {
+            HighLevel::Refuels
+        } else {
+            HighLevel::Skipped
+        };
+    }
+    if npc.goal == Goal::Assist(Help::Repair) {
+        return match (repair_dock::high_level(npc, around), npc.target) {
+            (Some(step), Some(ship)) => HighLevel::Docks { ship, step },
+            _ => HighLevel::Skipped,
+        };
     }
     let Goal::Plunder { ship, .. } = npc.goal else {
         return HighLevel::Fights;
@@ -138,16 +204,17 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
     };
     HighLevel::Docks {
         ship,
-        step: plunder_dock::high_level(npc, at.position, boarded),
+        step: plunder_dock::high_level(npc, at.position, boarded, rule),
     }
 }
 
 /// Applies `high`, `npc`'s high level this think: nothing while its wait
-/// runs, a docking set or given up (goal 0, sub 0, target and nav -1), or
-/// any docking dropped as it flies its fight.
+/// runs, a docking set or given up (goal 0, sub 0, target and nav -1, its
+/// travel stellar cleared: @0x8e8b3, @0x8f732), or any docking dropped as
+/// it flies its fight.
 pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
     match high {
-        HighLevel::Skipped => {}
+        HighLevel::Skipped | HighLevel::Refuels => {}
         HighLevel::Docks {
             step: DockStep::GiveUp,
             ..
@@ -155,12 +222,13 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
             npc.goal = Goal::Idle;
             npc.target = None;
             npc.docking = None;
+            npc.travel_set = false;
         }
         HighLevel::Docks {
             ship,
             step: DockStep::Sub(sub),
         } => npc.docking = Some(Docking { ship, sub }),
-        HighLevel::Fights => npc.docking = None,
+        HighLevel::Fights | HighLevel::Stops => npc.docking = None,
     }
 }
 
@@ -184,10 +252,7 @@ pub fn fly_docking(
         npc.docking = None;
         return None;
     };
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..flight.handling(npc.stats.handling)
-    };
+    let handling = npc.flying_handling(speeds.own, flight);
     Some(plunder_dock::fly(npc, victim, &handling, flight, chance))
 }
 
@@ -328,6 +393,7 @@ fn plunder_npc(
         for other in npcs.iter_mut() {
             if other.target == Some(ShipRef::Npc(victim)) && other.condition.active() {
                 other.target = None;
+                other.travel_set = false;
                 other.docking = None;
                 other.goal = Goal::Idle;
                 other.pursuit = crate::ai::pursuit::Pursuit::default();
@@ -335,8 +401,9 @@ fn plunder_npc(
             }
         }
     }
-    let govt = npcs[at].govt;
+    let pirate_ship = npcs[at].clone();
     let ship = &mut npcs[into];
+    ship.take_govt_of(&pirate_ship);
     ship.person = None;
     ship.former = None;
     ship.escort = None;
@@ -345,7 +412,6 @@ fn plunder_npc(
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
     ship.boarded = false;
-    ship.govt = govt;
     ship.ai_wait = CAPTURED_WAIT;
     // Doubles, back to a float (@0x849b4-0x849c8).
     #[allow(clippy::cast_possible_truncation)]
@@ -390,7 +456,6 @@ mod tests {
     use crate::traffic::npc::MissionMark;
     use crate::traffic::plunder_dock::DockSub;
     use nova_sim_base::fixture::{Draws, FAST};
-    use nova_sim_catalog::catalog::ShipId;
     use nova_sim_catalog::fixture::weapon;
 
     const PIRATE: NpcId = NpcId(1);
@@ -458,6 +523,31 @@ mod tests {
     }
 
     #[test]
+    fn a_docking_given_up_clears_the_travel_stellar_and_one_kept_keeps_it() {
+        // The plunder's give-up (@0x8e8b3) and the repair's (@0x8f732)
+        // write +0x6c -1; a docking set writes the victim's slot.
+        let mut docking = pirate(1000);
+        docking.travel_set = true;
+        let mut kept = docking.clone();
+        take_high_level(
+            &mut docking,
+            HighLevel::Docks {
+                ship: ShipRef::Npc(VICTIM),
+                step: DockStep::GiveUp,
+            },
+        );
+        assert!(!docking.travel_set);
+        take_high_level(
+            &mut kept,
+            HighLevel::Docks {
+                ship: ShipRef::Npc(VICTIM),
+                step: DockStep::Sub(DockSub::Close),
+            },
+        );
+        assert!(kept.travel_set);
+    }
+
+    #[test]
     fn a_pirate_docks_with_its_disabled_victim_boarding_it_and_waiting_its_dock() {
         let mut traffic = traffic_of(vec![pirate(100), victim()]);
         tick(&mut traffic, 0);
@@ -472,6 +562,41 @@ mod tests {
         assert_eq!(docked.ai_wait, 99, "Rand(80) of 0 + 100, a tick off");
         assert!(ship(&traffic, VICTIM).boarded);
         assert_eq!(traffic.take_pirate_events(), [], "no dock with the player");
+    }
+
+    #[test]
+    fn a_dampened_pirate_docks_within_four_times_its_box_only_when_the_worlds_rule_counts_its_dampener()
+     {
+        // Class turn 3: a box of 210, 840 for an inertialess ship. The
+        // pirate's high level reads the world's flight rule.
+        let sub = |rule: InertialDampener| {
+            let mut dampened = pirate(100);
+            dampened.stats.dampener = true;
+            assert!(!dampened.stats.inertialess_hull);
+            let mut far = victim();
+            far.state.position = Vec2::new(840.0, 0.0);
+            let mut traffic = traffic_of(vec![dampened, far]);
+            let world = World {
+                flight: FlightRules {
+                    inertial_dampener: rule,
+                    ..FlightRules::default()
+                },
+                ..World::new(&[])
+            };
+            traffic.tick_in(
+                &PirateWarship::default(),
+                world,
+                &[],
+                &mut Draws::of(&[0; 64]),
+            );
+            ship(&traffic, PIRATE).docking.map(|docking| docking.sub)
+        };
+        assert_eq!(sub(InertialDampener::AnyShip), Some(DockSub::Dock));
+        assert_eq!(
+            sub(InertialDampener::PlayerOnly),
+            Some(DockSub::Approach),
+            "beyond twice 210"
+        );
     }
 
     #[test]
@@ -572,6 +697,16 @@ mod tests {
         onlooker.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         onlooker.target = Some(ShipRef::Npc(VICTIM));
         onlooker.provoked = 3.0;
+        // Armed, so its think keeps the attack: the original's loop runs in
+        // the pirate's think, before the onlooker's (a higher slot), and a
+        // ship whose own think drops the victim keeps its +0x96.
+        onlooker.armament = Armament::new([(WeaponSpec::new(&weapon(128)), 1)]);
+        // Disabled, so it doesn't think: only the drop writes its +0x6c.
+        let mut wrecked = npc(6, ShipStats::new(FAST, &[]));
+        wrecked.berth = 6;
+        wrecked.condition = Condition::Disabled;
+        wrecked.target = Some(ShipRef::Npc(VICTIM));
+        wrecked.travel_set = true;
         let mut docked = pirate(1000);
         docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         docked.target = Some(ShipRef::Npc(VICTIM));
@@ -579,14 +714,21 @@ mod tests {
             ship: ShipRef::Npc(VICTIM),
             sub: DockSub::Dock,
         });
+        docked.skill_mult = 2.5;
         let mut boarded = former();
         boarded.boarded = true;
-        let mut traffic = traffic_of(vec![docked, boarded, onlooker]);
+        boarded.skill = 0.75;
+        let mut traffic = traffic_of(vec![docked, boarded, onlooker, wrecked]);
         traffic.set_berth_person(9, "Someone");
         tick(&mut traffic, 0);
         let taken = ship(&traffic, VICTIM);
         assert_eq!(taken.leader, Some(PIRATE));
         assert_eq!(taken.govt, Some(crate::catalog::GovtId(130)));
+        assert_eq!(
+            (taken.skill_mult, taken.skill),
+            (2.5, 0.75),
+            "the pirate's factor, its own skill"
+        );
         assert_eq!(
             (taken.person, taken.former, taken.boarded),
             (None, None, false)
@@ -603,6 +745,9 @@ mod tests {
         let onlooker = ship(&traffic, NpcId(5));
         assert_eq!((onlooker.goal, onlooker.target), (Goal::Idle, None));
         assert_eq!(onlooker.provoked, 0.0);
+        let wrecked = ship(&traffic, NpcId(6));
+        assert_eq!(wrecked.target, None);
+        assert!(!wrecked.travel_set, "+0x6c -1, @0x8487a");
         assert!(matches!(
             traffic.take_pirate_events()[..],
             [PirateEvent::Plundered {
@@ -778,6 +923,71 @@ mod tests {
     }
 
     #[test]
+    fn a_repairs_high_level_is_skipped_while_its_wait_runs_and_docks_after() {
+        let mut helper = npc(1, ShipStats::new(FAST, &[]));
+        helper.goal = Goal::Assist(Help::Repair);
+        helper.target = Some(ShipRef::Player);
+        helper.ai_wait = 5;
+        let downed = crate::ai::PlayerSide {
+            condition: Condition::Disabled,
+            ..crate::ai::fixture::player(2.0, 0.0)
+        };
+        let world = World {
+            player: Some(downed),
+            ..World::new(&[])
+        };
+        let npcs = [helper.clone()];
+        assert_eq!(
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
+            HighLevel::Skipped
+        );
+        helper.ai_wait = 0;
+        let npcs = [helper.clone()];
+        assert_eq!(
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
+            HighLevel::Docks {
+                ship: ShipRef::Player,
+                step: DockStep::Sub(DockSub::Dock)
+            }
+        );
+        helper.target = None;
+        let npcs = [helper];
+        assert_eq!(
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
+            HighLevel::Skipped,
+            "no target: nothing changes"
+        );
+    }
+
+    #[test]
+    fn a_refuels_high_level_is_skipped_while_its_wait_runs_or_with_no_target_and_refuels_after() {
+        let mut helper = npc(1, ShipStats::new(FAST, &[]));
+        helper.goal = Goal::Assist(Help::Refuel);
+        helper.target = Some(ShipRef::Player);
+        helper.ai_wait = 5;
+        helper.docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Close,
+        });
+        let world = World {
+            player: Some(crate::ai::fixture::player(2.0, 0.0)),
+            ..World::new(&[])
+        };
+        let high = |helper: &Npc| {
+            let npcs = [helper.clone()];
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly)
+        };
+        assert_eq!(high(&helper), HighLevel::Skipped);
+        helper.ai_wait = 0;
+        assert_eq!(high(&helper), HighLevel::Refuels);
+        let mut kept = helper.clone();
+        take_high_level(&mut kept, HighLevel::Refuels);
+        assert_eq!(kept.docking, helper.docking, "the refuel pass sets it");
+        helper.target = None;
+        assert_eq!(high(&helper), HighLevel::Skipped, "no target, @0x8f3f3");
+    }
+
+    #[test]
     fn a_queued_event_is_taken_once() {
         let mut traffic = traffic_of(vec![]);
         let event = PirateEvent::PlunderPlayer { pirate: PIRATE };
@@ -910,6 +1120,64 @@ mod tests {
     }
 
     #[test]
+    fn each_events_actor_is_its_pirate_or_repairer() {
+        let helper = NpcId(4);
+        assert_eq!(
+            PirateEvent::PlayerDockedWith { pirate: PIRATE }.actor(),
+            PIRATE
+        );
+        assert_eq!(
+            PirateEvent::PlunderPlayer { pirate: PIRATE }.actor(),
+            PIRATE
+        );
+        let plundered = PirateEvent::Plundered {
+            pirate: PIRATE,
+            victim: VICTIM,
+            tons: 0,
+            line: None,
+            taken: None,
+        };
+        assert_eq!(plundered.actor(), PIRATE);
+        let repaired = PirateEvent::PlayerRepaired {
+            helper,
+            ship: ShipId(128),
+        };
+        assert_eq!(repaired.actor(), helper);
+    }
+
+    #[test]
+    fn a_plunder_is_queued_at_its_pirates_berth_among_the_calls() {
+        use crate::ai::CommCall;
+        use crate::traffic::on_line::OnLine;
+        let mut docked = pirate(1);
+        docked.berth = 3;
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = victim();
+        boarded.boarded = true;
+        let mut traffic = traffic_of(vec![docked, boarded]);
+        tick(&mut traffic, 0);
+        let call = |id| OnLine::Call(NpcId(id), CommCall::Distress, 0.0);
+        traffic.on_line.push(2, call(2));
+        traffic.on_line.push(4, call(4));
+        let work = traffic.take_on_line();
+        assert_eq!(work.len(), 3, "{work:?}");
+        assert_eq!(work[0], call(2));
+        assert!(
+            matches!(
+                work[1],
+                OnLine::Pirate(PirateEvent::Plundered { pirate: PIRATE, .. })
+            ),
+            "{work:?}"
+        );
+        assert_eq!(work[2], call(4));
+    }
+
+    #[test]
     fn double_times_second_pass_counts_the_ai_wait_down_and_drifts_nothing() {
         let mut waiting = pirate(100);
         waiting.goal = Goal::Drift;
@@ -919,6 +1187,19 @@ mod tests {
         let moved = ship(&traffic, PIRATE);
         assert_eq!(moved.ai_wait, 4);
         assert_eq!(moved.state.position, Vec2::ZERO, "no high level");
+    }
+
+    #[test]
+    fn the_fights_countdown_leaves_a_pods_adrift_wait_alone() {
+        // `_HandleShip`'s countdown skips class 0x2ff (@0x3502f): a pod's
+        // wait is its own flight's (`pod_flight::count_down`).
+        use crate::traffic::npc::Mode;
+        let mut pod = npc(0, ShipStats::new(FAST, &[]));
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        pod.mode = Mode::Adrift { ticks_left: 3 };
+        let mut npcs = [pod];
+        count_down(&mut npcs);
+        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 3 });
     }
 
     #[test]

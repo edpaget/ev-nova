@@ -223,6 +223,35 @@ pub enum SimMessage {
     /// hyperspace field collapsed." (`STR#` 2002 #35, `_HandlePlayer`
     /// `_GetIndString` @0x68a04).
     JumpCollapsed,
+    /// One of the player's self-destruct lines (`_HandlePlayer` block Z;
+    /// see [`self_destruct`](crate::self_destruct)).
+    SelfDestruct(SelfDestructLine),
+}
+
+/// The player's self-destruct lines, `STR#` 2002 #385-#390 and #395.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfDestructLine {
+    /// The countdown began: "Self-destruct" (#385), a space and "sequence
+    /// initiated." (#386) (`_HandlePlayer` @0x6fe3f-0x6feb9).
+    Initiated,
+    /// A countdown line: #385, " ", "in" (#395), " ", the seconds left, " ",
+    /// "seconds" (#389) and a full stop (`_HandlePlayer`
+    /// @0x6ff8a-0x7009e): "Self-destruct in 3 seconds.".
+    In {
+        /// The seconds left: 4, 3, 2 or 1.
+        seconds: u32,
+        /// Whether to say "second" (#388) in place of #389; the session
+        /// sets it only for one second, by the other reading of
+        /// [`RuleKey::SelfDestructSecond`](crate::RuleKey::SelfDestructSecond).
+        singular: bool,
+    },
+    /// The player let go of the chord while counting down: #385, a space
+    /// and "sequence cancelled." (#387) (`_HandlePlayer`
+    /// @0x700ea-0x70164).
+    Cancelled,
+    /// The countdown ran out: "Have a nice day." (#390) alone
+    /// (`_HandlePlayer` @0x70203-0x70251).
+    NiceDay,
 }
 
 impl SimMessage {
@@ -287,6 +316,12 @@ impl SimMessage {
     ///   @0x84791, @0x84941, 0x190 pushed @0x84786, @0x84936).
     /// - [`ReinforcementsApproaching`](Self::ReinforcementsApproaching):
     ///   240 (`_HandleReinforcements` @0x3928a, 0xf0 pushed @0x3927f).
+    /// - [`SelfDestruct`](Self::SelfDestruct): 40 for
+    ///   [`Initiated`](SelfDestructLine::Initiated),
+    ///   [`Cancelled`](SelfDestructLine::Cancelled) and
+    ///   [`NiceDay`](SelfDestructLine::NiceDay) (`_HandlePlayer` @0x6feb9,
+    ///   @0x70164, @0x70251), 70 for [`In`](SelfDestructLine::In)
+    ///   (@0x7009e).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -324,6 +359,8 @@ impl SimMessage {
             | Self::NoResponse
             | Self::DockCleared { .. } => 250,
             Self::Buoy(_) => 480,
+            Self::SelfDestruct(SelfDestructLine::In { .. }) => 70,
+            Self::SelfDestruct(_) => 40,
             Self::Tutorial(_) | Self::EscapingIn { .. } => 512,
         }
     }
@@ -342,6 +379,32 @@ mod tests {
         assert_eq!(stolen.ticks(), 400);
         assert_eq!(SimMessage::ShipStolen { fighter: true }.ticks(), 400);
         assert_eq!(SimMessage::ShipStolen { fighter: false }.ticks(), 400);
+    }
+
+    #[test]
+    fn the_self_destructs_lines_last_their_callers_ticks() {
+        let cases = [
+            (SimMessage::SelfDestruct(SelfDestructLine::Initiated), 40),
+            (
+                SimMessage::SelfDestruct(SelfDestructLine::In {
+                    seconds: 4,
+                    singular: false,
+                }),
+                70,
+            ),
+            (
+                SimMessage::SelfDestruct(SelfDestructLine::In {
+                    seconds: 1,
+                    singular: true,
+                }),
+                70,
+            ),
+            (SimMessage::SelfDestruct(SelfDestructLine::Cancelled), 40),
+            (SimMessage::SelfDestruct(SelfDestructLine::NiceDay), 40),
+        ];
+        for (message, ticks) in cases {
+            assert_eq!(message.ticks(), ticks, "{message:?}");
+        }
     }
 
     #[test]

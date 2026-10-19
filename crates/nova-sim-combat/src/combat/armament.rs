@@ -150,6 +150,7 @@ use crate::flight::{ShipState, normalized};
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 use crate::trig;
+use nova_sim_catalog::warp::MAC_TICKS_PER_TICK;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -297,16 +298,69 @@ pub struct Shooter {
     pub cloaked: bool,
     /// Its class's `KeyCarried` ([`HullSpec::key_carried`]).
     pub key_carried: Option<ShipId>,
+    /// Its class's `BaseSets` when it unfolds to fire, `shän` `Flags`
+    /// 0x0002 and 0x0080
+    /// ([`FrameSpec::unfolds_to_fire`](super::ship_frames::FrameSpec::unfolds_to_fire)):
+    /// the fold-before-fire gates read it.
+    pub folds: Option<u16>,
 }
 
 impl Shooter {
-    /// The player's ship of a class with no `KeyCarried`: no NPC, and
-    /// never cloaked.
+    /// The player's ship of a class with no `KeyCarried`: no NPC, never
+    /// cloaked, and never unfolding to fire.
     pub const PLAYER: Self = Self {
         npc: false,
         cloaked: false,
         key_carried: None,
+        folds: None,
     };
+}
+
+/// A ship's fold (see [`ship_frames`](super::ship_frames)): its fold set
+/// (+0xc8fc), the way it folds (+0xc8fa), and the Mac ticks since it last
+/// fired (+0xa8 = `TickCount` @0x8874c, @0x6282d, @0x30b67), which a
+/// ship of `shän` `Flags` 0x0080 refolds by. It is the ship-table slot's,
+/// not the ship's, and firing reads and writes it, so it lives on the
+/// armament beside the exit cursors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fold {
+    /// The fold set, +0xc8fc.
+    pub set: u16,
+    /// The way it folds, +0xc8fa: 1 toward its last set, -1 toward 0, 0
+    /// not at all.
+    pub dir: i8,
+    /// The Mac ticks since the stamp +0xa8 last moved: [`NEVER_FIRED`]
+    /// when it never has, as the spawns zero it, so a refold is due at
+    /// once.
+    pub since_fire: u32,
+}
+
+/// [`Fold::since_fire`] for a ship that has not fired: so long ago that
+/// any wait has run out.
+pub const NEVER_FIRED: u32 = u32::MAX;
+
+impl Default for Fold {
+    /// Set 0, no direction, never fired.
+    fn default() -> Self {
+        Self {
+            set: 0,
+            dir: 0,
+            since_fire: NEVER_FIRED,
+        }
+    }
+}
+
+impl Fold {
+    /// Set `set` with no direction, the timing kept: how a spawn, a change
+    /// of ship and a load leave it.
+    #[must_use]
+    pub fn at(self, set: u16) -> Self {
+        Self {
+            set,
+            dir: 0,
+            ..self
+        }
+    }
 }
 
 /// Where a ship's rounds are kept, one slot for each weapon index, as the
@@ -656,9 +710,8 @@ pub struct Armament {
     /// The exit each `ExitType`'s next shot or beam leaves from (the
     /// original's +0xc8fe-+0xc905; see [`exits`](super::exits)).
     exits: ExitCursors,
-    /// The ship's fold set (the original's +0xc8fc), which a beam of
-    /// `ExitType` -1 steps as a cursor (see [`Armament::fold_set`]).
-    fold_set: u16,
+    /// The ship's fold (see [`Armament::fold`]).
+    fold: Fold,
 }
 
 impl Armament {
@@ -686,7 +739,7 @@ impl Armament {
             mounts,
             last_gun: None,
             exits: ExitCursors::default(),
-            fold_set: 0,
+            fold: Fold::default(),
         }
     }
 
@@ -735,6 +788,16 @@ impl Armament {
             return false;
         }
         mount.affords(rounds, fuel, shooter.npc)
+    }
+
+    /// Whether its class's `KeyCarried` ship `key` is aboard, a fighter
+    /// bay launching it holding rounds of its own in `rounds`:
+    /// `_KeyCarriedShipTypeOnboard` (@0x399c-0x3a13), which
+    /// `_HandleShipDisplay` reads for `shän` `Flags` 0x0004 (see
+    /// [`ship_frames`](super::ship_frames)); never without a `key`.
+    #[must_use]
+    pub fn key_ship_aboard(&self, key: Option<ShipId>, rounds: &dyn Rounds) -> bool {
+        self.key_aboard(key, rounds)
     }
 
     /// Whether a fighter bay launching `key` holds rounds of its own in
@@ -814,8 +877,12 @@ impl Armament {
     ///
     /// 1. Nothing fires unless the ship is [`Condition::Intact`] (the
     ///    engine's form of `_LowLevelAIHandler` clearing the fire flag of
-    ///    a disabled ship, @0x851f6), it carries `pick`, and `pick` has
-    ///    reloaded (@0x887a7-0x887cb).
+    ///    a disabled ship, @0x851f6). Then its last shot is stamped now
+    ///    ([`Armament::stamp_fire`], @0x8874c), and a ship that unfolds to
+    ///    fire ([`Shooter::folds`]) above fold set 0, of more than one
+    ///    base set, turns to unfold (+0xc8fa = -1) and fires nothing
+    ///    (@0x88757-0x88794). Then nothing fires unless it carries
+    ///    `pick`, and `pick` has reloaded (@0x887a7-0x887cb).
     /// 2. It fires [`ai_fire::copies`] copies. Each copy `shooter` has the
     ///    ammunition for ([`Armament::has_ammo`]) spawns as `spawn` says
     ///    ([`ai_fire::spawn`]), and pays a round of its own slot, or its
@@ -849,6 +916,10 @@ impl Armament {
         spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
     ) -> Option<Volley> {
         if condition != Condition::Intact {
+            return None;
+        }
+        self.stamp_fire();
+        if self.unfolds_first(shooter.folds, true) {
             return None;
         }
         let index = self.mounts.iter().position(|mount| mount.spec.id == pick)?;
@@ -934,8 +1005,12 @@ impl Armament {
     /// `reports`. None when nothing was attempted.
     ///
     /// 1. Nothing fires unless the ship is [`Condition::Intact`]
-    ///    (`_HandlePlayer`'s `_IsDisabled` gate, @0x6ab1c), it carries
-    ///    `weapon`, `weapon` has reloaded (@0x6287b) and its guidance is
+    ///    (`_HandlePlayer`'s `_IsDisabled` gate, @0x6ab1c). Then its last
+    ///    shot is stamped now (@0x6282d), and a ship that unfolds to fire
+    ///    ([`Shooter::folds`]) above fold set 0 turns to unfold and fires
+    ///    nothing, whatever its base sets (@0x62837-0x62864). Then nothing
+    ///    fires unless it carries `weapon`, `weapon` has reloaded
+    ///    (@0x6287b) and its guidance is
     ///    one the simulation flies (else it is reported, as
     ///    [`Armament::fire`] does).
     /// 2. It fires [`ai_fire::copies`] copies (`_WeaponMaxSimultShots`
@@ -955,9 +1030,7 @@ impl Armament {
     ///    `BurstReload` (@0x62ffa-0x631b1).
     ///
     /// The sound and the recoil, once a call, are the fight's
-    /// ([`Combat`](super::Combat)). The hook for folding before fire
-    /// (@0x62837-0x62864, the +0xa8 stamp @0x6282d) is the top of this
-    /// function (rdm phase ship-handling-fidelity/phase-10-ship-drawing).
+    /// ([`Combat`](super::Combat)).
     // Each is a separate borrow the fight holds, as for `fire`.
     #[allow(clippy::too_many_arguments)]
     pub fn fire_player(
@@ -972,6 +1045,10 @@ impl Armament {
         spawn: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
     ) -> Option<Volley> {
         if condition != Condition::Intact {
+            return None;
+        }
+        self.stamp_fire();
+        if self.unfolds_first(shooter.folds, false) {
             return None;
         }
         let index = self
@@ -1093,33 +1170,80 @@ impl Armament {
         &mut self.exits
     }
 
-    /// The ship's fold set, the original's +0xc8fc: 0 when built, the
-    /// original's `BaseSets` − 1 for a hull of one set. A beam of `ExitType`
-    /// -1 steps it as `_SpawnBeam` steps a cursor (@0x450fa-0x4523d; see
-    /// [`exits::step_stray`](super::exits::step_stray)), and no refit
-    /// writes it; the player's goes back to 0 on a change of ship, as the
-    /// original writes `BaseSets` − 1 there (`_HandlePlayer` @0x6ef3f).
-    /// Folding hulls' `BaseSets` − 1 at spawn and on a ship
-    /// change, and every reader (the drawn set, the fold-before-fire
-    /// gates), are ship-handling-fidelity phase 10's; this is their hook.
+    /// The ship's fold set, the original's +0xc8fc ([`Armament::fold`]).
     #[must_use]
     pub fn fold_set(&self) -> u16 {
-        self.fold_set
+        self.fold.set
     }
 
-    /// This armament with `fold_set` for its fold set: the player's carried
-    /// through an outfit refit (see [`Armament::fold_set`]).
+    /// The ship's fold ([`Fold`]): set 0, no direction and never fired
+    /// when built. A beam of `ExitType` -1 steps its set as `_SpawnBeam`
+    /// steps a cursor (@0x450fa-0x4523d; see
+    /// [`exits::step_stray`](super::exits::step_stray)); its fire gates
+    /// and stamp are [`Armament::fire_pick`]'s and
+    /// [`Armament::fire_player`]'s, a beam's stamp its fight's; its
+    /// display steps it ([`ship_frames`](super::ship_frames)); and the
+    /// spawns, ship changes and loads set it. No refit writes it: the
+    /// player's is carried through an outfit refit.
+    #[must_use]
+    pub fn fold(&self) -> Fold {
+        self.fold
+    }
+
+    /// The ship's fold, to step or set.
+    pub fn fold_mut(&mut self) -> &mut Fold {
+        &mut self.fold
+    }
+
+    /// This armament with `fold` for its fold: the player's carried
+    /// through an outfit refit (see [`Armament::fold`]).
+    #[must_use]
+    pub fn with_fold(mut self, fold: Fold) -> Self {
+        self.fold = fold;
+        self
+    }
+
+    /// This armament with `fold_set` for its fold set, the rest of its
+    /// fold as it was.
     #[must_use]
     pub fn with_fold_set(mut self, fold_set: u16) -> Self {
-        self.fold_set = fold_set;
+        self.fold.set = fold_set;
         self
+    }
+
+    /// Moves the clock its last shot is timed by on one advance pass:
+    /// [`MAC_TICKS_PER_TICK`] Mac ticks, as `TickCount` is real time,
+    /// which double time's second pass doesn't move.
+    pub fn tick_fire_clock(&mut self) {
+        self.fold.since_fire = self.fold.since_fire.saturating_add(MAC_TICKS_PER_TICK);
+    }
+
+    /// Stamps its last shot now, +0xa8 = `TickCount`.
+    pub fn stamp_fire(&mut self) {
+        self.fold.since_fire = 0;
+    }
+
+    /// The fold-before-fire gate of a ship that folds to fire as `folds`
+    /// says, its `BaseSets` read only when `by_sets` (the NPC's
+    /// `_FireAIShipWeapon` @0x88757-0x88794; the player's
+    /// `_FirePlayerWeapon` @0x62837-0x62864 has no such test): above set
+    /// 0, it turns to unfold (+0xc8fa = -1) and fires nothing.
+    fn unfolds_first(&mut self, folds: Option<u16>, by_sets: bool) -> bool {
+        let Some(sets) = folds else {
+            return false;
+        };
+        if self.fold.set > 0 && (!by_sets || sets > 1) {
+            self.fold.dir = -1;
+            return true;
+        }
+        false
     }
 
     /// The exit cursors and the fold set together, for the fight to move
     /// on as a shot or beam leaves: a beam of `ExitType` -1 steps the fold
     /// set in place of a cursor.
     pub fn exits_mut(&mut self) -> (&mut ExitCursors, &mut u16) {
-        (&mut self.exits, &mut self.fold_set)
+        (&mut self.exits, &mut self.fold.set)
     }
 
     /// This armament with `cursors` for its exit cursors: those its ship's
@@ -1286,12 +1410,40 @@ impl Armament {
     /// ([`Armament::fire_point_defence`]); one at or below none is set to
     /// none.
     pub fn reload(&mut self) {
+        self.reload_holding(|_| false);
+    }
+
+    /// [`Armament::reload`], then each weapon `held` says can't fire held
+    /// at [`HELD_RELOAD`](super::ion::HELD_RELOAD), as the player's reload
+    /// loop holds an ionized ship's `Seeker` 0x0020 weapons
+    /// ([`IonLockout`](super::ion::IonLockout)). The fight decides the
+    /// player's hold after its fire, on the charge as its frame's ion
+    /// block found it, and applies it here at step 5.
+    pub fn reload_holding(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
+        self.reload_and_hold(true, held);
+    }
+
+    /// Each weapon `held` says can't fire held at
+    /// [`HELD_RELOAD`](super::ion::HELD_RELOAD), with no countdown: an
+    /// NPC's hold, which the fight applies before its fire and whose 1.0
+    /// the reload step counts down after it
+    /// ([`IonLockout`](super::ion::IonLockout)).
+    pub fn hold_ionized(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
+        self.reload_and_hold(false, held);
+    }
+
+    fn reload_and_hold(&mut self, count_down: bool, held: impl Fn(&WeaponSpec) -> bool) {
         for mount in &mut self.mounts {
-            mount.reload = if mount.reload > 0.0 {
-                mount.reload - 1.0
-            } else {
-                0.0
-            };
+            if count_down {
+                mount.reload = if mount.reload > 0.0 {
+                    mount.reload - 1.0
+                } else {
+                    0.0
+                };
+            }
+            if held(&mount.spec) {
+                mount.reload = super::ion::HELD_RELOAD;
+            }
         }
     }
 }
@@ -1396,6 +1548,12 @@ pub struct Arsenal {
 }
 
 impl Arsenal {
+    /// No weapon and no ship type: what a world that never pursues holds.
+    pub const EMPTY: Self = Self {
+        weapons: BTreeMap::new(),
+        hulls: BTreeMap::new(),
+    };
+
     /// The arsenal of `weapons` and `hulls`, each weapon reaching down its
     /// sub-munition chain ([`chain_range`]).
     #[must_use]
@@ -1414,6 +1572,18 @@ impl Arsenal {
                 })
                 .collect(),
             hulls: hulls.into_iter().map(|hull| (hull.id, hull)).collect(),
+        }
+    }
+
+    /// The arsenal holding `specs` as its weapons' records, as they are,
+    /// and no ship type: test support for readers of the global weapon
+    /// records, such as an NPC's lead.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn of_specs(specs: impl IntoIterator<Item = WeaponSpec>) -> Self {
+        Self {
+            weapons: specs.into_iter().map(|spec| (spec.id, spec)).collect(),
+            hulls: BTreeMap::new(),
         }
     }
 
@@ -2917,6 +3087,161 @@ mod tests {
         }
     }
 
+    // Folding before fire (`_FireAIShipWeapon` @0x8874c-0x88794,
+    // `_FirePlayerWeapon` @0x6282d-0x62864).
+
+    /// An NPC's supplies, its class unfolding to fire with `sets` base
+    /// sets.
+    fn folding(sets: u16) -> Supplies {
+        let mut supplies = npc_supplies(LauncherRounds::default(), 0.0);
+        supplies.shooter.folds = Some(sets);
+        supplies
+    }
+
+    #[test]
+    fn a_folded_npc_turns_to_unfold_and_fires_nothing_until_set_0() {
+        let mut armament = mounted(blaster(128, 0), 1).with_fold(Fold {
+            set: 2,
+            dir: 1,
+            since_fire: 90,
+        });
+        let mut supplies = folding(6);
+        assert_eq!(
+            supplies.pick(&mut armament, 128, RuleSource::Engine, &mut ahead),
+            None
+        );
+        assert_eq!(
+            armament.fold(),
+            Fold {
+                set: 2,
+                dir: -1,
+                since_fire: 0
+            },
+            "stamped, unfolding"
+        );
+        armament.fold_mut().set = 0;
+        assert!(
+            supplies
+                .pick(&mut armament, 128, RuleSource::Engine, &mut ahead)
+                .is_some()
+        );
+        // A class of one base set fires folded, and so does one that
+        // does not unfold to fire.
+        let mut single = mounted(blaster(128, 0), 1).with_fold_set(2);
+        assert!(
+            folding(1)
+                .pick(&mut single, 128, RuleSource::Engine, &mut ahead)
+                .is_some()
+        );
+        assert_eq!(single.fold().dir, 0);
+        let mut plain = mounted(blaster(128, 0), 1).with_fold_set(2);
+        let mut supplies = npc_supplies(LauncherRounds::default(), 0.0);
+        assert!(
+            supplies
+                .pick(&mut plain, 128, RuleSource::Engine, &mut ahead)
+                .is_some()
+        );
+        assert_eq!(plain.fold().since_fire, 0, "every call stamps");
+    }
+
+    #[test]
+    fn the_stamp_comes_before_the_carry_and_reload_tests_but_not_for_a_disabled_ship() {
+        let mut armament = mounted(blaster(128, 0), 1);
+        let mut supplies = folding(6);
+        assert_eq!(
+            supplies.pick(&mut armament, 130, RuleSource::Engine, &mut ahead),
+            None
+        );
+        assert_eq!(
+            armament.fold().since_fire,
+            0,
+            "not carried, stamped all the same"
+        );
+        armament.tick_fire_clock();
+        assert_eq!(armament.fold().since_fire, MAC_TICKS_PER_TICK);
+        let disabled = armament.fire_pick(
+            WeaponId(128),
+            Condition::Disabled,
+            supplies.shooter,
+            &mut supplies.rounds,
+            &mut supplies.fuel,
+            &mut NeverFires,
+            &mut supplies.reports,
+            RuleSource::Engine,
+            &mut ahead,
+        );
+        assert_eq!(disabled, None);
+        assert_eq!(
+            armament.fold().since_fire,
+            MAC_TICKS_PER_TICK,
+            "no call, no stamp"
+        );
+        let player = armament.fire_player(
+            WeaponId(128),
+            Condition::Disabled,
+            Shooter::PLAYER,
+            &mut supplies.rounds,
+            &mut supplies.fuel,
+            &mut NeverFires,
+            &mut supplies.reports,
+            &mut ahead,
+        );
+        assert_eq!(player, None);
+        assert_eq!(armament.fold().since_fire, MAC_TICKS_PER_TICK);
+    }
+
+    #[test]
+    fn the_players_gate_unfolds_whatever_its_base_sets() {
+        for sets in [1, 6] {
+            let mut armament = mounted(blaster(128, 0), 1).with_fold_set(3);
+            let mut supplies = folding(sets);
+            supplies.shooter.npc = false;
+            assert_eq!(
+                supplies.player(&mut armament, 128, &mut ahead),
+                None,
+                "{sets}"
+            );
+            assert_eq!(
+                (armament.fold().dir, armament.fold().since_fire),
+                (-1, 0),
+                "{sets}"
+            );
+            armament.fold_mut().set = 0;
+            assert!(
+                supplies.player(&mut armament, 128, &mut ahead).is_some(),
+                "{sets}"
+            );
+        }
+        let mut plain = mounted(blaster(128, 0), 1).with_fold_set(3);
+        let mut supplies = npc_supplies(LauncherRounds::default(), 0.0);
+        supplies.shooter = Shooter::PLAYER;
+        assert!(supplies.player(&mut plain, 128, &mut ahead).is_some());
+    }
+
+    #[test]
+    fn a_fold_is_set_0_never_fired_when_built_and_carried_whole() {
+        let built = mounted(blaster(128, 0), 1);
+        assert_eq!(built.fold(), Fold::default());
+        assert_eq!(Fold::default().since_fire, NEVER_FIRED);
+        let fold = Fold {
+            set: 4,
+            dir: -1,
+            since_fire: 7,
+        };
+        assert_eq!(built.clone().with_fold(fold).fold(), fold);
+        assert_eq!(
+            fold.at(5),
+            Fold {
+                set: 5,
+                dir: 0,
+                since_fire: 7
+            }
+        );
+        let mut clock = built.with_fold(Fold::default());
+        clock.tick_fire_clock();
+        assert_eq!(clock.fold().since_fire, NEVER_FIRED, "saturates");
+    }
+
     // The player's fire (`_FirePlayerWeapon`).
 
     impl Supplies {
@@ -3748,6 +4073,7 @@ mod tests {
         npc: true,
         cloaked: false,
         key_carried: None,
+        folds: None,
     };
 
     /// Whether `armament`'s first mount has its ammunition for `shooter`,
@@ -3828,6 +4154,14 @@ mod tests {
         let unflagged = Armament::new([(WeaponSpec::new(&flagged(0)), 1)]);
         assert!(has(&unflagged, NPC, &[]), "no key needed");
         assert_eq!(NEEDS_KEY_SHIP, 0x0080);
+        // The display's own question, `_KeyCarriedShipTypeOnboard`.
+        let aboard = |key: Option<i16>, rounds: &[(i16, i32)]| {
+            armament.key_ship_aboard(key.map(ShipId), &slots(rounds))
+        };
+        assert!(aboard(Some(200), &[(150, 1)]));
+        assert!(!aboard(Some(200), &[]), "the bay empty");
+        assert!(!aboard(Some(202), &[(150, 1)]), "no bay of it");
+        assert!(!aboard(None, &[(150, 1)]), "no KeyCarried");
     }
 
     #[test]
@@ -4704,6 +5038,26 @@ mod tests {
             (Armament::default(), LauncherRounds::default())
         );
         assert_eq!(MOD_AMMO, 3);
+    }
+
+    #[test]
+    fn the_empty_arsenal_holds_no_weapon() {
+        assert_eq!(Arsenal::EMPTY, Arsenal::default());
+        assert_eq!(Arsenal::EMPTY.weapons().count(), 0);
+    }
+
+    #[test]
+    fn an_arsenal_of_specs_holds_each_as_it_is() {
+        let fast = WeaponSpec::new(&WeaponRecord {
+            speed: 2000,
+            ..weapon(129)
+        });
+        let arsenal = Arsenal::of_specs([fast, WeaponSpec::new(&weapon(128))]);
+        assert_eq!(arsenal.weapon(WeaponId(129)), Some(&fast));
+        assert_eq!(
+            arsenal.weapons().map(|spec| spec.id.0).collect::<Vec<_>>(),
+            [128, 129]
+        );
     }
 
     #[test]

@@ -10,8 +10,8 @@
 //! its trigger, as the block (0x692e5) sits between them (@0x68c74,
 //! @0x6ab55); so a kill that gives up a pre-jump comes after the point
 //! defence rested through it. [`Session::tick_combat`] runs it at its
-//! head, after its return while landed or jumping and before the eject
-//! check. It is skipped
+//! head, after its return while landed and before the eject check,
+//! through a jump too. It is skipped
 //! while the player is in the escape pod: `_HandlePlayer` reaches the
 //! block (0x692e5) only once the pod's countdown is out (0x68d1d-0x68d25),
 //! and runs it before its death-timer decrement (@0x6d7e6), the klaxon
@@ -23,9 +23,8 @@
 //! **A kill outfit** ([`Sabotage::Kill`], @0x69384-0x696a2) sets the
 //! player's armour, shield and jump timer to -1.0 (@0x693a0-0x693a6): the
 //! fight that follows on the same tick finds the armour gone and starts
-//! the ordinary breakup, and a pre-jump is given up. The jump's
-//! hyperspace stage can't be cancelled, as the engine never ticks the
-//! clock through it (see the `sabotage` module's left-out list). It then
+//! the ordinary breakup, and the jump is given up, in its pre-jump or
+//! its warp (+0x50 = −1.0, @0x693a6). It then
 //! halts the warp-up sounds ([`WARP_UP_HALTS`], @0x695ea, @0x6960d), and
 //! the comm line names the first owned kill outfit with a name for its
 //! count ([`kill_notice`]), or none, for 360 ticks
@@ -142,13 +141,11 @@ impl Session {
 
     /// A kill outfit goes off (`_HandlePlayer` @0x69384-0x696a2; see the
     /// module docs' **A kill outfit**).
-    fn sabotage_kill(&mut self) {
+    pub(crate) fn sabotage_kill(&mut self) {
         let reserves = &mut self.pilot.reserves;
         reserves.armor.now = -1.0;
         reserves.shield.now = -1.0;
-        if matches!(self.jump, Some(super::Jump::PreJump { .. })) {
-            self.jump = None;
-        }
+        self.jump = None;
         let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
         self.halt_sounds(&WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
@@ -179,14 +176,14 @@ mod tests {
 
     /// A kill outfit and a bomb outfit.
     const KILL: i16 = 261;
-    const BOMB: i16 = 262;
+    const BOMB: i16 = crate::testkit::BOMB;
 
     /// `armed`'s catalog with [`KILL`] and [`BOMB`].
     fn sabotaged() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.outfits.extend([
             outfit(KILL, &[(SABOTAGE_KILL, 4100)]),
-            outfit(BOMB, &[(SABOTAGE_BOMB, 0)]),
+            crate::testkit::bomb_outfit(),
         ]);
         catalog
     }
@@ -387,6 +384,22 @@ mod tests {
         ));
         fight(&mut session, &[]);
         assert_eq!(session.jump, None);
+    }
+
+    #[test]
+    fn a_kill_outfit_cancels_a_warp_under_way_as_its_clock_runs_through_it() {
+        // At rest facing east, the bearing: the jump begins at once, and
+        // the fight, and the clock with it, runs through the warp.
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.player.velocity = crate::geometry::Vec2::ZERO;
+        session.player.heading = 90.0;
+        session.begin_jump().expect("jumps");
+        assert!(session.jumping().is_some(), "its warp is under way");
+        fight(&mut session, &[]);
+        assert_eq!(session.jump, None, "+0x50 = -1.0 (@0x693a6)");
     }
 
     #[test]

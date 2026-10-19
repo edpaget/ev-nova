@@ -10,6 +10,13 @@
 //! tick without replaying from tick 0, so its cost never grows with the
 //! elapsed time and the same tick always gives the same answer at any
 //! frame rate.
+//!
+//! It answers for lights that have run from rest (intensity 0, rising,
+//! timer 0) and never gone out. Flight draws each ship's lights from the
+//! sim's per-ship lights state instead (`nova_sim::combat::ship_lights`),
+//! which a lights out leaves dark and a reused slot's timer starts late;
+//! this solver serves the ship browser and pins that state's port from
+//! rest. Both draw an intensity by [`level`].
 
 /// The lights' full intensity: drawn as they are, added at full strength.
 pub const FULL: u8 = 32;
@@ -17,7 +24,7 @@ pub const FULL: u8 = 32;
 /// A `shän`'s raw blink fields: `BlinkMode` and `BlinkValA`–`D`. The
 /// load-time clamps the original applies are applied by [`lights_level`],
 /// not stored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Blink {
     /// `BlinkMode`: 1 square wave, 2 triangle wave, 3 random; anything
     /// else steady.
@@ -33,7 +40,7 @@ pub struct Blink {
 }
 
 impl Blink {
-    /// Lights that never blink: steady at [`FULL`].
+    /// Lights that never blink: steady at [`FULL`], the default.
     pub const STEADY: Self = Self {
         mode: 0,
         a: 0,
@@ -109,10 +116,14 @@ pub fn lights_level(blink: &Blink, tick: u64, chance: &(impl BlinkChance + ?Size
     }
 }
 
-/// How an intensity is drawn: not at all unless it is above 1, else at
-/// its whole part, at most [`FULL`] (only data outside the Bible's ranges
-/// goes higher; the original's lights path has no cap).
-fn level(intensity: f32) -> Option<u8> {
+/// How an intensity is drawn: not at all unless it is above 1.0
+/// (`_HandleShipDisplay` @0x2c59a), else at its whole part, truncated, at
+/// most [`FULL`] (only data outside the Bible's ranges goes higher; the
+/// original's lights path has no cap). The stateless solver here and the
+/// sim's per-ship lights state (`nova_sim::combat::ship_lights`) both draw
+/// by it.
+#[must_use]
+pub fn level(intensity: f32) -> Option<u8> {
     // `as` truncates towards zero, like the original's `cvttss2si`.
     (intensity > 1.0).then(|| intensity.min(f32::from(FULL)) as u8)
 }

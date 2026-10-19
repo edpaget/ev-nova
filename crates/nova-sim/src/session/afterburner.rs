@@ -40,26 +40,11 @@ use super::Session;
 use crate::afterburner::{afterburner_top, drain, engages, push_speed, push_velocity};
 use crate::combat::hull::Condition;
 use crate::flight::{Caps, Controls};
+use crate::gravity::KnockbackCaps;
+#[cfg(doc)]
+use crate::rulebook::RuleKey;
 
 impl Session {
-    /// Whether any gravity source is in the system, `_gravitySourcesPresent`
-    /// (*0x3b5568), which keeps the afterburner from widening the thrust's
-    /// top, the box and the knockback's cap. None in the stock data; it is
-    /// `ship-handling-fidelity/phase-14-gravity-and-deadly-stellars`' to
-    /// work out, in this body alone.
-    #[allow(clippy::unused_self)]
-    fn gravity_sources_present(&self) -> bool {
-        false
-    }
-
-    /// Whether the afterburner widens the player's caps this tick: it is on
-    /// and no gravity source is present. The thrust's top
-    /// ([`Session::player_caps`]) and the knockback's cap
-    /// ([`Session::afterburner_knockback`]) both read it.
-    fn afterburner_widens(&self) -> bool {
-        self.afterburner_on && !self.gravity_sources_present()
-    }
-
     /// Whether the player's afterburner is on this tick, `_abOn`, as
     /// [`Session::tick`] last engaged it: what the fight's knockback reads
     /// (see the module docs).
@@ -68,11 +53,14 @@ impl Session {
         self.afterburner_on
     }
 
-    /// Whether a push on the player this tick is clamped to 1.8 times its
-    /// top speed, `_DamageShip`'s test (@0x3ab19-0x3ab68): its afterburner
-    /// is on and no gravity source is present.
-    pub(super) fn afterburner_knockback(&self) -> bool {
-        self.afterburner_widens()
+    /// Which pushes on the player this tick are clamped to 1.8 times its
+    /// top speed, `_DamageShip`'s test (@0x3ab19-0x3ab68): with its
+    /// afterburner on, a beam tick's only without a gravity source in the
+    /// system, and any other's as [`RuleKey::GravityAfterburner`] reads
+    /// (see the `gravity` module).
+    pub(super) fn afterburner_knockback(&self) -> KnockbackCaps {
+        self.gravity_afterburner()
+            .knockback(self.afterburner_on, self.gravity_sources_present())
     }
 
     /// The afterburner's engage test for this tick under `controls`
@@ -91,13 +79,18 @@ impl Session {
     }
 
     /// What the player's tick is capped by ([`Caps`]): its thrust tops out
-    /// at 1.8 times its top speed while the afterburner is on and no
-    /// gravity source is present (@0x6cc43-0x6cc80), and its velocity is
+    /// at 1.8 times its top speed while the afterburner is on
+    /// (@0x6cc43-0x6cc80), whatever the gravity by the original, whose
+    /// `_gravitySourcesPresent` is always clear here (see the `gravity`
+    /// module and [`RuleKey::GravityAfterburner`]), and its velocity is
     /// clamped to the box the last tick left (@0x6d43f-0x6d4aa).
     pub(super) fn player_caps(&self) -> Caps {
         let top = self.top_speed();
         Caps {
-            thrust_top: if self.afterburner_widens() {
+            thrust_top: if self
+                .gravity_afterburner()
+                .thrust_widens(self.afterburner_on, self.gravity_sources_present())
+            {
                 afterburner_top(top)
             } else {
                 top
@@ -108,8 +101,10 @@ impl Session {
 
     /// The afterburner's block after the move (@0x6f970-0x6fd3c; see the
     /// [`afterburner`](crate::afterburner) module): while it is on, the box
-    /// widens, the ship is pushed (its speed if it is inertialess, else its
-    /// velocity) and the fuel drains; off, the box bleeds back. The glow's
+    /// widens (whatever the gravity by the original, as
+    /// [`RuleKey::GravityAfterburner`] reads), the ship is pushed (its
+    /// speed if it is inertialess, else its velocity) and the fuel drains;
+    /// off, the box bleeds back. The glow's
     /// step is ramped with the thrust's (see the [`glow`](crate::glow)
     /// module).
     pub(super) fn burn_afterburner(&mut self) {
@@ -119,7 +114,9 @@ impl Session {
             self.player_max_vel.bleed(top, accel);
             return;
         }
-        let gravity = self.gravity_sources_present();
+        let gravity = self
+            .gravity_afterburner()
+            .box_gravity(self.gravity_sources_present());
         self.player_max_vel.burn(top, gravity);
         if self.player_inertialess() {
             self.player_speed = push_speed(self.player_speed, accel, top);
@@ -630,6 +627,111 @@ mod tests {
             "kept: {burning:?}"
         );
         assert!(burning.y > 0.0, "pushed: {burning:?}");
+    }
+
+    // Gravity (see the `gravity` module).
+
+    /// A far stellar of `Gravity` 1 listed in `session`'s system: a gravity
+    /// source whose pull is a millionth of a pixel a tick.
+    fn gravity_listed(session: &mut Session) {
+        session.listed.push(crate::catalog::LandingSite {
+            gravity: 1,
+            ..crate::testkit::planet(199, 100_000.0, 0.0)
+        });
+    }
+
+    /// The rulebook with [`RuleKey::GravityAfterburner`]'s other reading.
+    fn gravity_everywhere() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::GravityAfterburner, RuleSource::Bible)
+    }
+
+    #[test]
+    fn by_the_original_gravity_leaves_the_thrusts_top_at_1_8_and_by_the_other_reading_plain() {
+        let top = |rules: Rulebook| {
+            let mut session = flying(&burner(), 90.0).with_rules(rules);
+            gravity_listed(&mut session);
+            session.afterburner_on = true;
+            (session.top_speed(), session.player_caps().thrust_top)
+        };
+        let (plain, original) = top(Rulebook::default());
+        assert_eq!(original, afterburner_top(plain));
+        let (plain, other) = top(gravity_everywhere());
+        assert_eq!(other, plain);
+    }
+
+    #[test]
+    fn by_the_original_gravity_leaves_the_box_widened_and_by_the_other_reading_as_it_was() {
+        let box_after = |rules: Rulebook| {
+            let mut session = flying(&burner(), 90.0).with_rules(rules);
+            gravity_listed(&mut session);
+            session.settle_box();
+            session.afterburner_on = true;
+            session.burn_afterburner();
+            (session.top_speed(), session.player_max_vel.get())
+        };
+        let (top, original) = box_after(Rulebook::default());
+        assert!(near(original, afterburner_top(top)), "{original}");
+        let (top, other) = box_after(gravity_everywhere());
+        assert_eq!(other, top);
+    }
+
+    /// The afterburning (or not, as `burning` says) player's velocity
+    /// after `weapon` from NPC 0, 100 above, first hits it, moving at
+    /// (20, 0) under `rules`, with a gravity source listed as `gravity`
+    /// says.
+    fn knocked(
+        weapon: crate::catalog::WeaponRecord,
+        burning: bool,
+        gravity: bool,
+        rules: Rulebook,
+    ) -> (f32, Vec2) {
+        use super::super::tests::{armed, fight_until, knocking};
+        let catalog = armed();
+        let mut session =
+            knocking(&catalog, (None, 100.0), (Some(weapon), 100.0)).with_rules(rules);
+        if gravity {
+            gravity_listed(&mut session);
+        }
+        session.player.velocity = Vec2::new(20.0, 0.0);
+        session.afterburner_on = burning;
+        fight_until(&mut session, |session| {
+            session.reserves().shield.now < 1000.0
+        });
+        (session.top_speed(), session.player.velocity)
+    }
+
+    #[test]
+    fn by_the_original_a_hit_on_the_afterburning_player_in_gravity_keeps_it_past_its_top_speed() {
+        use super::super::tests::knocker;
+        let (top, kept) = knocked(knocker(), true, true, Rulebook::default());
+        assert!(top < 20.0 && afterburner_top(top) > 20.0, "{top}");
+        assert!(near(kept.x, 20.0), "kept: {kept:?}");
+        let (_, clamped) = knocked(knocker(), true, true, gravity_everywhere());
+        assert!(near(clamped.x, top), "clamped: {clamped:?}");
+        let (_, kept) = knocked(knocker(), true, false, gravity_everywhere());
+        assert!(near(kept.x, 20.0), "no gravity, kept: {kept:?}");
+    }
+
+    /// A beam of `Impact` 100, the tractor beam's otherwise.
+    fn pushing_beam() -> crate::catalog::WeaponRecord {
+        crate::catalog::WeaponRecord {
+            impact: 100,
+            ..super::super::tests::tractor_beam()
+        }
+    }
+
+    #[test]
+    fn a_beam_on_the_afterburning_player_in_gravity_is_clamped_by_either_reading() {
+        for rules in [Rulebook::default(), gravity_everywhere()] {
+            let (top, clamped) = knocked(pushing_beam(), true, true, rules);
+            assert!(top < 20.0 && afterburner_top(top) > 20.0, "{top}");
+            assert!(clamped.y > 0.0, "pushed: {clamped:?}");
+            assert!(near(clamped.x, top), "clamped: {clamped:?}");
+            let (_, kept) = knocked(pushing_beam(), true, false, rules);
+            assert!(near(kept.x, 20.0), "no gravity, kept: {kept:?}");
+            let (_, plain) = knocked(pushing_beam(), false, false, rules);
+            assert!(near(plain.x, top), "no afterburner, clamped: {plain:?}");
+        }
     }
 
     // Inertialess.

@@ -30,6 +30,7 @@ fn test_amid(
     let scenery = Scenery {
         stellars,
         asteroids: rocks,
+        hazards: None,
     };
     let arena = arena(&arsenal, &govts, Rules::default());
     combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);

@@ -111,6 +111,7 @@ mod tests {
                 }),
                 None,
             ],
+            speed_cap: None,
         });
         hunter
     }

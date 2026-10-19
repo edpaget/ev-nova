@@ -2,8 +2,9 @@
 //! a waiting NPC holds its fire through the fight, as `_HandleShip` skips
 //! its fire block while its AI wait +0x4c runs (@0x34a54-0x34a72; see
 //! [`fire::gated`](crate::ai::fire::gated)), and the traffic flies its
-//! snipers by the rulebook's reading (see
-//! [`snipe`](crate::traffic::snipe)), and its approaches and spawned
+//! snipers, and judges whether its leavers can jump, by the rulebook's
+//! readings (see [`snipe`](crate::traffic::snipe) and
+//! [`leave`](crate::ai::leave)), and its approaches and spawned
 //! afterburners by its readings (see [`pursuit`](crate::ai::pursuit) and
 //! [`afterburner`](crate::ai::afterburner)).
 
@@ -100,6 +101,19 @@ fn the_traffic_steps_in_a_world_holding_the_rulebooks_snipe_brake_lead() {
 }
 
 #[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_npc_jump_fuel() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = Rulebook::default().with_override(RuleKey::NpcJumpFuel, source);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        assert_eq!(session.world().npc_jump_fuel, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.npc_jump_fuel));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
 fn the_traffic_steps_in_a_world_holding_the_rulebooks_approach_lead_and_afterburner_yardstick() {
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {
@@ -186,4 +200,65 @@ fn a_captured_ships_slot_keeps_no_pick() {
     next.pick = None;
     let again = session.traffic.add_npc(next);
     assert_eq!(session.npc(again).map(|npc| npc.pick), Some(None));
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_sessions_weapon_records() {
+    let catalog = armed();
+    let mut session = Session::start(&catalog).expect("starts");
+    let blaster = session.world().weapons.weapon(WeaponId(128)).copied();
+    assert!(blaster.is_some_and(|spec| spec.speed > 0.0), "{blaster:?}");
+    let mut flown = None;
+    session.step_traffic(|_, world| flown = Some(world.weapons.weapon(WeaponId(128)).copied()));
+    assert_eq!(flown, Some(blaster));
+}
+
+/// Every NPC attacks the player.
+#[derive(Debug)]
+struct Dogfighting;
+
+impl Behaviour for Dogfighting {
+    fn decide(
+        &self,
+        _npc: &Npc,
+        _around: &crate::ai::Surroundings,
+        _chance: &mut dyn Chance,
+    ) -> crate::ai::Goal {
+        crate::ai::Goal::Attack(ShipRef::Player)
+    }
+}
+
+/// The heading NPC 0, 100 above the player and dogfighting it as it
+/// crosses right, wants in its first frame, holding `pick`, carrying its
+/// blaster as `carries` says.
+fn dogfight_heading(pick: WeaponId, carries: bool) -> Option<i16> {
+    let catalog = armed();
+    let mut session = facing_an_npc(&catalog, 180);
+    session.player.velocity = Vec2::new(4.0, 0.0);
+    let npc = &mut session.traffic.npcs_mut()[0];
+    if !carries {
+        npc.armament = crate::combat::armament::Armament::default();
+    }
+    npc.pick = Some(pick);
+    // Its first decision falls due within a few ticks.
+    for _ in 0..30 {
+        session.tick_traffic(&catalog, &Dogfighting, &mut NeverFires);
+        if let Some(frame) = session.npcs()[0].pursuit.frame {
+            return frame.iter().next().map(|body| body.heading);
+        }
+    }
+    None
+}
+
+#[test]
+fn a_dogfighter_leads_with_a_pick_it_does_not_carry_by_the_sessions_weapon_record() {
+    // A reused slot's pick may name a weapon the ship doesn't carry
+    // (`RuleKey::ReusedSlotPick`): the lead reads the global record
+    // (@0x85e4c-0x85e59, @0x2b06a-0x2b075), so it leads as one carrying
+    // it does.
+    let carried = dogfight_heading(WeaponId(128), true);
+    assert!(carried.is_some_and(|heading| heading != 180), "{carried:?}");
+    assert_eq!(dogfight_heading(WeaponId(128), false), carried);
+    // A pick of no record leads with nothing: the bearing, straight down.
+    assert_eq!(dogfight_heading(WeaponId(140), false), Some(180));
 }

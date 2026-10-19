@@ -21,6 +21,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{CICN, PICT, RLED};
@@ -426,6 +427,7 @@ impl Harness {
             harness.send(WindowEvent::Text(c));
         }
         harness.press(Key::Enter);
+        harness.enter_ship();
         assert_eq!(harness.showing(), Showing::Flight);
         harness
     }
@@ -671,4 +673,28 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
         "its shots', the cargo boxes' and the cursor's sheets missing from the fixture, as the flight \
          opened; then the trader fired, again and again"
     );
+}
+
+/// Its entry frames leave the stand-in main menu's missing button
+/// pictures, which this data has none of, unasserted: the menu shows
+/// through the entry's fade out.
+impl crate::common::EntryHarness for Harness {
+    fn router(&self) -> &nova::app::screen::AppScreen {
+        self.app.screen()
+    }
+
+    fn send_event(&mut self, event: WindowEvent) {
+        self.send(event);
+    }
+
+    fn click_point(&mut self, at: Point) {
+        self.click(at);
+    }
+
+    fn next_frame(&mut self) {
+        self.frames += 1;
+        let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+        self.send(WindowEvent::Redraw { elapsed });
+        let _ = self.app.take_failures();
+    }
 }

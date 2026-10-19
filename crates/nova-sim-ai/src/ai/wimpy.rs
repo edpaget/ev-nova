@@ -1,6 +1,7 @@
 //! Nova's wimpy trader (AI type 1, `_WimpyTraderAI` in the `EV Nova`
-//! executable): it goes about its business ([`idle`](super::idle)), and
-//! once provoked it flees from its attacker (@0x8b1ac), never fighting
+//! executable): it goes about its business ([`idle`](super::idle)),
+//! stopping to wait ([`Goal::Wait`], state 6) where it can't leave until
+//! provoked, and once provoked it flees from its attacker (@0x8b1ac), never fighting
 //! back by choice, calling for help on every think it flees
 //! (`_AICallForHelp` @0x8b1f5; see
 //! [`call_for_help`](super::call_for_help)); with the attacker gone it
@@ -9,7 +10,7 @@
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, provoked_by, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, lost_sight, provoked_by, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -46,8 +47,8 @@ impl Behaviour for WimpyTrader {
         fire::trigger(npc, around, self.fire)
     }
 
-    fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
-        npc.goal.quarry()
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        lost_sight::trader_target(npc, around)
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
@@ -84,6 +85,31 @@ mod tests {
             WimpyTrader::default().trigger(&npcs[0], &around),
             Trigger::default()
         );
+    }
+
+    #[test]
+    fn a_visited_wimpy_trader_leaves_waits_when_it_cannot_jump_and_flees_provoked() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.visited = Some(StellarId(128));
+        let decided = |trader: &Npc, npcs: &[Npc]| {
+            let around = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+            WimpyTrader::default().decide(trader, &around, &mut Draws::of(&[]))
+        };
+        assert_eq!(decided(&trader, &[trader.clone()]), Goal::JumpOut);
+        trader.class_fuel = 99;
+        assert_eq!(decided(&trader, &[trader.clone()]), Goal::Wait);
+        trader.goal = Goal::Wait;
+        assert_eq!(
+            decided(&trader, &[trader.clone()]),
+            Goal::Wait,
+            "state 6 is sticky"
+        );
+        trader.provoked = 10.0;
+        trader.target = Some(n(2));
+        let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        assert_eq!(decided(&trader, &npcs), Goal::Flee(n(2)), "@0x8b1ac");
     }
 
     #[test]
@@ -217,6 +243,66 @@ mod tests {
                 .react(&npcs[0], &strike, &around)
                 .provoked,
             7.0
+        );
+    }
+
+    #[test]
+    fn a_trader_that_stopped_on_losing_sight_keeps_its_target() {
+        // State 6 keeps +0x70 (@0x8d803-0x8d80f).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Wait;
+        trader.target = Some(ShipRef::Player);
+        let npcs = [trader, ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        let on_player = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().target(&npcs[0], &on_player),
+            Some(ShipRef::Player)
+        );
+        let mut on_npc = npcs.clone();
+        on_npc[0].target = Some(n(2));
+        let seen = around(&sites, &on_npc, &govts, (0.0, -100.0), 0);
+        assert_eq!(WimpyTrader::default().target(&on_npc[0], &seen), Some(n(2)));
+        on_npc[0].goal = Goal::Idle;
+        let idle = around(&sites, &on_npc, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().target(&on_npc[0], &idle),
+            None,
+            "any other goal targets its quarry"
+        );
+    }
+
+    #[test]
+    fn a_stopped_traders_kept_target_is_dropped_once_gone() {
+        // `_HighLevelAIHandler` drops a target whose slot is inactive
+        // (@0x8d4e4-0x8d50d); one breaking up is still active.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Wait;
+        trader.target = Some(n(2));
+        let alone = [trader.clone()];
+        let around_alone = around(&sites, &alone, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().target(&alone[0], &around_alone),
+            None
+        );
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 50.0, 0.0);
+        pirate.condition = crate::combat::hull::Condition::Destroyed;
+        let npcs = [trader.clone(), pirate.clone()];
+        let around_gone = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(WimpyTrader::default().target(&npcs[0], &around_gone), None);
+        pirate.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let npcs = [trader, pirate];
+        let around_dying = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().target(&npcs[0], &around_dying),
+            Some(n(2)),
+            "breaking up, still active"
         );
     }
 }

@@ -105,6 +105,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -948,6 +949,7 @@ impl Game {
             .press_point(MenuChoice::OpenPilot);
         game.click(at);
         game.tap(Key::Enter);
+        game.enter_ship();
         assert_eq!(game.showing(), Showing::Flight);
         game
     }
@@ -2828,6 +2830,7 @@ fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
         .press_point(MenuChoice::OpenPilot);
     game.click(at);
     game.tap(Key::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game.tap(Key::Char('l'));
@@ -2934,3 +2937,5 @@ fn over_flight_m_on_mission_info_opens_its_map_and_escape_returns_to_it() {
     assert_eq!(game.showing(), Showing::MissionInfo, "back to it");
     assert!(game.app.screen().flight_mission_info().is_some());
 }
+
+crate::common::entry_harness!(Game, click, frame);

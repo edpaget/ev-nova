@@ -307,7 +307,11 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     let mut screen = boarded();
     let cash = flight(&screen).pilot().expect("a pilot").cash();
     let sounds = plunder_click(&mut screen, 3);
-    assert_eq!(sounds, []);
+    assert_eq!(
+        sounds,
+        [Sound::Sim(SimSound::PlunderBeep)],
+        "the take's beep, the click itself silent"
+    );
     assert_eq!(
         flight(&screen).pilot().expect("a pilot").cash(),
         cash + 5750
@@ -317,15 +321,37 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
         Some("You stole all the 5750 credits from this ship.")
     );
     assert_eq!(screen.showing(), Showing::Plunder, "still open");
-    plunder_click(&mut screen, 3);
+    let sounds = plunder_click(&mut screen, 3);
     assert_eq!(
         flight(&screen).pilot().expect("a pilot").cash(),
         cash + 5750,
         "greyed: taken once"
     );
+    assert_eq!(sounds, [], "a greyed button is a silent miss");
     plunder_click(&mut screen, 2);
     let dialog = screen.plunder().expect("open");
     assert_eq!(dialog.lines()[2], "Cargo: N/A", "refreshed");
+}
+
+/// A click that reaches no enabled button is a miss (item -1, which
+/// `_PlunderFilter` still passes on, @0x92fdf): the dialog stays open,
+/// for a click on its text and for one outside its frame alike.
+#[test]
+fn a_miss_keeps_the_plunder_dialog_open() {
+    let mut screen = boarded();
+    let sounds = plunder_click(&mut screen, 5);
+    assert_eq!(sounds, []);
+    assert_eq!(screen.showing(), Showing::Plunder, "the text");
+    assert!(flight(&screen).boarding().is_some());
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: Point::new(2.0, 2.0),
+        });
+    }
+    assert_eq!(screen.showing(), Showing::Plunder, "outside its frame");
+    assert!(flight(&screen).boarding().is_some());
 }
 
 #[test]
@@ -401,6 +427,12 @@ fn without_any_metrics_a_boarding_is_let_go() {
     board(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(flight(&screen).boarding(), None, "aborted");
+    assert!(
+        !screen
+            .take_sounds()
+            .contains(&Sound::Sim(SimSound::PlunderBeep)),
+        "let go silently"
+    );
     assert_eq!(
         screen.take_warnings(),
         ["nova: cannot show the plunder dialog: no metrics to lay it out"]

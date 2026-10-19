@@ -297,6 +297,7 @@ mod tests {
         session.player_display_step(
             GamePass::Advance { double_time: false },
             Rules::default(),
+            false,
             &mut NeverFires,
         );
         assert_eq!(walked_in(&session, ShipRef::Player), ShipLayer::Disabled);

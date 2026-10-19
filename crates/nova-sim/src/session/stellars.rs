@@ -158,7 +158,8 @@ impl Session {
     /// and the known set worked out afresh (`Session::rework_known`,
     /// @0x32b7b, @0x32b91-0x32c10), before its stellars; then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
-    /// them are dead since it. Whether it changed the stellars.
+    /// them are dead since it, then the sprite pool handed out (see the
+    /// `stale_sprites` module). Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         self.rewrite_course();
         self.share_explored();
@@ -170,6 +171,7 @@ impl Session {
             |id| galaxy.destroyed(id),
             self.fallback_frame.is_some(),
         );
+        self.rebuild_sprite_pool();
         reshown | rebuilt
     }
 
@@ -195,10 +197,12 @@ impl Session {
     }
 
     /// A flight frame's sprite tick (see the module docs): every stellar
-    /// it finds whole is no longer dead since the last rebuild point.
+    /// it finds whole is no longer dead since the last rebuild point, and
+    /// each owned sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
         let galaxy = &self.galaxy;
         self.rebuilt.frame(&self.sites, |id| galaxy.destroyed(id));
+        self.place_stellar_sprites();
     }
 
     /// How close the ship must be to `site`, one of the stellars shown, to

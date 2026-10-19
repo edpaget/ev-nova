@@ -5,6 +5,21 @@ use super::*;
 // Pilot edits.
 
 #[test]
+fn the_intro_screen_seen_reads_and_marks_the_sessions_pilot() {
+    let mut view = landed_view();
+    assert!(!view.seen_intro());
+    view.mark_intro_seen();
+    assert!(view.seen_intro());
+    assert!(view.session().expect("flying").seen_intro());
+    let mut broken = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    });
+    broken.mark_intro_seen();
+    assert!(!broken.seen_intro());
+}
+
+#[test]
 fn a_session_that_failed_has_no_pilot_desk() {
     let mut view = FlightView::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
@@ -13,6 +28,25 @@ fn a_session_that_failed_has_no_pilot_desk() {
     assert!(view.pilot_desk().is_none());
     view.resync();
     assert!(view.scene().is_none());
+}
+
+#[test]
+fn the_pilot_panel_is_the_sessions_and_none_for_a_session_that_failed() {
+    let view = landed_view();
+    let session = view.session().expect("flying");
+    assert_eq!(
+        view.pilot_panel(),
+        Some(session.pilot_panel(view.catalog()))
+    );
+    assert_eq!(
+        view.pilot_panel().map(|panel| panel.pilot_name),
+        Some("Ada".to_owned())
+    );
+    let broken = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    });
+    assert_eq!(broken.pilot_panel(), None);
 }
 
 #[test]

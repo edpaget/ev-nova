@@ -24,6 +24,9 @@ impl ImageSource for GameData {
         Ok(match kind {
             ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
             ImageKind::Rled => decode_rled(bytes(RLED, id)?, None)?.into_frames(),
+            ImageKind::RledSolid => decode_rled(bytes(RLED, id)?, None)?
+                .into_solid_frames()
+                .ok_or(ImageError::Missing)?,
             ImageKind::MaskedPict { mask } => {
                 let picture = decode_pict(bytes(PICT, id)?)?;
                 let mask = decode_pict(bytes(PICT, mask)?)?;
@@ -119,6 +122,30 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
         assert_eq!(frames[1].pixel(0, 0), Some([0, 0, 255, 255]));
+    }
+
+    #[test]
+    fn a_sprite_sheets_solid_runs_are_its_run_frames_or_missing() {
+        let runs = RledBuilder::new(2, 1)
+            .frame(|f| f.line().pixels(&[0x7C00]).run(1, 0x7FFF, 0x7FFF))
+            .frame(|f| f.line().pixels(&[0x001F]))
+            .build();
+        let data = store(&[(RLED, 200, runs), (RLED, 201, sheet())]);
+        let frames = data.frames(ImageKind::RledSolid, 200).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].pixel(0, 0), Some([0, 0, 0, 0]));
+        assert_eq!(frames[0].pixel(1, 0), Some([255, 255, 255, 255]));
+        assert_eq!(frames[1].pixel(0, 0), Some([0, 0, 0, 0]));
+        assert_eq!(
+            data.frames(ImageKind::RledSolid, 201),
+            Err(ImageError::Missing),
+            "no runs"
+        );
+        assert_eq!(
+            data.frames(ImageKind::RledSolid, 202),
+            Err(ImageError::Missing),
+            "no sheet"
+        );
     }
 
     /// A 2x2 pattern: red, green over blue, red.

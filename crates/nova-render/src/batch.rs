@@ -10,7 +10,9 @@ use nova_view::{Blend, Color, DrawCommand, DrawLayer, DrawList, ImageKey, ImageK
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
 use crate::enlarge::{Enlarger, NativeDetail};
-use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
+use crate::gpu::{
+    Batch, Frame, Gpu, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun, colorize_instance,
+};
 use crate::images::{ImageError, ImageSource};
 use crate::upscale::world_space;
 use crate::viewport::{PixelRect, Viewport};
@@ -178,21 +180,19 @@ impl<S: ImageSource> Renderer<S> {
                 tint,
                 blend,
             } => {
-                if let Some(Placed {
-                    entry,
-                    size: (w, h),
-                }) = self.entry(image, gpu, report)
-                {
-                    let dest = Rect {
-                        x: center.x - w / 2.0,
-                        y: center.y - h / 2.0,
-                        w,
-                        h,
-                    };
-                    if let Some((entry, dest)) = cropped(&entry, dest, clip) {
-                        push_quad(batches, &entry, dest, tint, blend);
-                    }
-                }
+                let sprite = (image, center, tint, blend);
+                self.push_sprite(batches, sprite, NO_COLORIZE, clip, gpu, report);
+            }
+            DrawCommand::Colorized {
+                image,
+                center,
+                tint,
+                blend,
+                colorize,
+            } => {
+                let sprite = (image, center, tint, blend);
+                let colorize = colorize_instance(colorize);
+                self.push_sprite(batches, sprite, colorize, clip, gpu, report);
             }
             DrawCommand::Picture { image, top_left } => {
                 let picture = (image, top_left, None);
@@ -306,6 +306,34 @@ impl<S: ImageSource> Renderer<S> {
         }
     }
 
+    /// Appends a sprite's quad, `(image, center, tint, blend)`, centred on
+    /// `center` and mixed by `colorize`.
+    fn push_sprite(
+        &mut self,
+        batches: &mut Vec<Batch>,
+        (image, center, tint, blend): (ImageKey, Point, Color, Blend),
+        colorize: [f32; 4],
+        clip: Option<Bounds>,
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        if let Some(Placed {
+            entry,
+            size: (w, h),
+        }) = self.entry(image, gpu, report)
+        {
+            let dest = Rect {
+                x: center.x - w / 2.0,
+                y: center.y - h / 2.0,
+                w,
+                h,
+            };
+            if let Some((entry, dest)) = cropped(&entry, dest, clip) {
+                push_quad(batches, &entry, dest, (tint, colorize), blend);
+            }
+        }
+    }
+
     /// Appends a stretched picture's quad, `(image, top_left, size)`,
     /// combined by `blend`. A rectangle with no drawable size draws
     /// nothing, so its picture is not even loaded.
@@ -345,7 +373,7 @@ impl<S: ImageSource> Renderer<S> {
                 h,
             };
             if let Some((entry, dest)) = cropped(&entry, dest, clip) {
-                push_quad(batches, &entry, dest, Color::WHITE, blend);
+                push_quad(batches, &entry, dest, (Color::WHITE, NO_COLORIZE), blend);
             }
         }
     }
@@ -577,7 +605,13 @@ fn push_tiles(
                 w: x1 - x0,
                 h: y1 - y0,
             };
-            push_quad(batches, &cut, dest, Color::WHITE, Blend::Normal);
+            push_quad(
+                batches,
+                &cut,
+                dest,
+                (Color::WHITE, NO_COLORIZE),
+                Blend::Normal,
+            );
             left += w;
         }
         top += h;
@@ -620,7 +654,13 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 /// one ([`Blend::reads_backdrop`]): every quad of such a batch reads the
 /// same copy of what is beneath, so a later overlapping one would not see
 /// the earlier.
-fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: Color, blend: Blend) {
+fn push_quad(
+    batches: &mut Vec<Batch>,
+    entry: &AtlasEntry,
+    dest: Rect,
+    (tint, colorize): (Color, [f32; 4]),
+    blend: Blend,
+) {
     let tint = match blend {
         Blend::Or => {
             let [r, g, b] = or_levels(tint).map(|n| f32::from(n) / 32.0);
@@ -636,6 +676,7 @@ fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: Col
         dest,
         uv: entry.uv,
         tint,
+        colorize,
     };
     if let Some(Batch::Sprites {
         page,
@@ -844,6 +885,7 @@ mod tests {
                 },
                 uv: uv(0, 0, 8, 4),
                 tint: WHITE,
+                colorize: NO_COLORIZE,
             },
             QuadInstance {
                 dest: Rect {
@@ -854,6 +896,7 @@ mod tests {
                 },
                 uv: uv(12, 5, 5, 6),
                 tint: [51.0 / 255.0, 102.0 / 255.0, 204.0 / 255.0, 1.0],
+                colorize: NO_COLORIZE,
             },
             QuadInstance {
                 dest: Rect {
@@ -864,6 +907,7 @@ mod tests {
                 },
                 uv: uv(0, 5, 5, 6),
                 tint: WHITE,
+                colorize: NO_COLORIZE,
             },
         ];
         assert_eq!(
@@ -918,6 +962,7 @@ mod tests {
                     },
                     uv: uv(0, 0, 8, 4),
                     tint: WHITE,
+                    colorize: NO_COLORIZE,
                 }],
             }]
         );
@@ -1016,6 +1061,7 @@ mod tests {
                 v1: to_uv(y1 - tile.1),
             },
             tint: WHITE,
+            colorize: NO_COLORIZE,
         }
     }
 
@@ -1503,6 +1549,7 @@ mod tests {
                     },
                     uv: uv(0, 0, 8, 4),
                     tint: WHITE,
+                    colorize: NO_COLORIZE,
                 }],
             }]
         );
@@ -1609,6 +1656,7 @@ mod tests {
                         v1: 4.0 / page,
                     },
                     tint: WHITE,
+                    colorize: NO_COLORIZE,
                 }],
             }]
         );
@@ -1940,6 +1988,7 @@ mod tests {
                         v1: 4.0 / page,
                     },
                     tint: WHITE,
+                    colorize: NO_COLORIZE,
                 },
                 QuadInstance {
                     dest: Rect {
@@ -1950,6 +1999,7 @@ mod tests {
                     },
                     uv: uv(0, 0, 8, 4),
                     tint: WHITE,
+                    colorize: NO_COLORIZE,
                 },
             ],
             "whole inside its clip, as it is; wholly outside, nothing"
@@ -2740,6 +2790,7 @@ mod tests {
                 },
                 uv: uv(0, 0, 40, 4),
                 tint: WHITE,
+                colorize: NO_COLORIZE,
             }]
         );
     }
@@ -2894,6 +2945,7 @@ mod tests {
                 },
                 uv: uv(33, 0, 16, 8),
                 tint: WHITE,
+                colorize: NO_COLORIZE,
             }],
             "the picture placed after the sheet's three 10x12 frames"
         );

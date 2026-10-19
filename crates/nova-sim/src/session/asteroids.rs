@@ -34,7 +34,7 @@
 //! every pass of that frame kills what it would spawn: here a kill
 //! records the pass frame, and a pass on that frame empties the field
 //! and spawns nothing. A jump's arrival comes between frames, after the
-//! streak, and the next frame's pass spawns as the original's arrival
+//! warp, and the next frame's pass spawns as the original's arrival
 //! frame spawns after its kill. A move settled inside a frame kills the
 //! rest of that frame's passes.
 //!
@@ -585,7 +585,7 @@ mod tests {
             }
             session.npc(id).expect("here").goal
         };
-        assert_eq!(think(&mut session), Goal::Idle, "state 6");
+        assert_eq!(think(&mut session), Goal::Wait, "state 6");
         grown(&mut session, 1);
         assert!(session.asteroids.get(0).is_some(), "slot 0");
         assert_eq!(think(&mut session), Goal::Mine, "state 16");

@@ -1067,7 +1067,9 @@ fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
 }
 
 #[test]
-fn steady_lights_are_ored_at_full_from_the_start() {
+fn steady_lights_are_ored_at_full_from_the_first_frame() {
+    // No tick: the lights are displayed once before the first frame, as
+    // `_PrepareAllSprites` runs `_HandleShipDisplay`.
     let view = FlightView::new(blinking(Blink::STEADY));
     assert_eq!(lights_tints(&view), [Color::WHITE]);
 }
@@ -1108,8 +1110,10 @@ fn the_blink_pauses_while_the_map_is_open() {
 }
 
 #[test]
-fn random_lights_roll_on_hashed_rolls() {
-    // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks.
+fn random_lights_roll_on_the_flights_chance() {
+    // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks: the first, before
+    // the first frame, the solver's on `HashedRolls` from seed 0; the next
+    // on the flight's chance, each its second outcome.
     let random = Blink {
         mode: 3,
         a: 5,
@@ -1118,11 +1122,11 @@ fn random_lights_roll_on_hashed_rolls() {
         d: 0,
     };
     let rolls = HashedRolls::new(0);
-    let expected = |change| lights_tint(5 + rolls.roll(change, 8) as u8).a;
-    let mut view = FlightView::new(blinking(random));
-    assert_eq!(lights_alphas(&view), [expected(0)]);
+    let first = lights_tint(5 + rolls.roll(0, 8) as u8).a;
+    let mut view = FlightView::new(blinking(random)).with_chance(rolling_one());
+    assert_eq!(lights_alphas(&view), [first]);
     ticks(&mut view, 4);
-    assert_eq!(lights_alphas(&view), [expected(1)]);
+    assert_eq!(lights_alphas(&view), [lights_tint(6).a]);
 }
 
 // The HUD.
@@ -1391,9 +1395,9 @@ fn an_arrival_shows_the_new_systems_stellars_at_once() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
-    // Coast two ticks, so the arrival falls between the radar's refreshes
+    // Coast a tick, so the arrival falls between the radar's refreshes
     // and the test shows the arrival's own refresh.
-    ticks(&mut view, 2);
+    ticks(&mut view, 1);
     jump_now(&mut view);
     let leaving = view.session().expect("flying").system();
     for _ in 0..1000 {

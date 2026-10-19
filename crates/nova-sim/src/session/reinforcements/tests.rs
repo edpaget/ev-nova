@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::*;
-use crate::ai::{Behaviour, Decision, Goal, Peaceful, Surroundings, Warship};
+use crate::ai::{Behaviour, CommCall, Decision, Goal, Peaceful, Surroundings, Warship};
 use crate::catalog::{
-    CommCatalog, FleetId, FleetRecord, GovtRecord, OutfitId, ShipId, SystemReinforcements,
-    SystemTraffic,
+    CommCatalog, FleetId, FleetRecord, GovtRecord, MissionRecord, OutfitId, Penalties, ShipId,
+    SystemReinforcements, SystemTraffic,
 };
 use crate::chance::NeverFires;
 use crate::combat::{Rules, ShipRef};
@@ -15,8 +15,11 @@ use crate::control::Test;
 use crate::flight::Controls;
 use crate::govt::WARSHIPS_RETREAT;
 use crate::pilot::Pilot;
-use crate::testkit::{FAST, FakePilotCatalog, catalog, govt, jump, npc, outfit, ship, star};
+use crate::testkit::{
+    Draws, FAST, FakePilotCatalog, carrying, catalog, govt, jump, mission, npc, outfit, ship, star,
+};
 use crate::traffic::npc::{AiType, Npc};
+use crate::traffic::odds_cache::STALE;
 
 /// The Federation (class 1), whose fleet is system 130's reinforcements.
 const FED: GovtId = GovtId(128);
@@ -162,14 +165,120 @@ fn add(session: &mut Session, govt: GovtId, strength: f32, goal: Goal) -> NpcId 
 }
 
 /// A warship of `govt` and strength 100 fighting a pirate of strength
-/// `foe`, which attacks it: the odds against it `foe` / 100.
+/// `foe`, which attacks it: the odds against it `foe` / 100, and cached
+/// so, as the odds pass would have them.
 fn fight(session: &mut Session, govt: GovtId, foe: f32) -> NpcId {
     let warship = add(session, govt, 100.0, Goal::Idle);
     let pirate = add(session, PIRATES, foe, Goal::Attack(ShipRef::Npc(warship)));
     if let Some(npc) = npc_mut(session, warship) {
         npc.goal = Goal::Attack(ShipRef::Npc(pirate));
     }
+    session.traffic.cache_odds(warship, foe / 100.0);
     warship
+}
+
+// The odds a call reads (see `odds_cache`).
+
+#[test]
+fn a_call_whose_think_read_stale_odds_brings_nothing_though_the_cache_is_up_by_the_answer() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 150.0);
+    session.call_for_reinforcements(warship, false, Some(STALE));
+    assert_eq!(timer(&session), 0, "-1 at its think (@0x7f60d)");
+    session.call_for_reinforcements(warship, false, Some(1.5));
+    assert_eq!(timer(&session), i32::from(TIME), "its think's 1.5");
+}
+
+#[test]
+fn a_think_at_stale_odds_calls_nothing_and_its_think_after_the_refresh_calls() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 150.0);
+    session.traffic.cache_odds(warship, STALE);
+    let calls = Calling(vec![warship]);
+    step(&mut session, &catalog, &calls);
+    assert_eq!(timer(&session), 0, "-1 at its think");
+    assert_eq!(
+        session.npc(warship).map(|npc| npc.odds),
+        Some(1.5),
+        "refreshed after it"
+    );
+    step(&mut session, &catalog, &calls);
+    assert_eq!(
+        timer(&session),
+        i32::from(TIME) - 1,
+        "called, and its first tick"
+    );
+}
+
+#[test]
+fn the_traffic_steps_in_a_world_holding_the_rulebooks_odds_cache() {
+    let catalog = reinforced();
+    for source in RuleSource::ALL {
+        let mut session = flying(&catalog);
+        session.rules =
+            crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, source);
+        assert_eq!(session.world().odds_cache, source);
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(world.odds_cache));
+        assert_eq!(flown, Some(source));
+    }
+}
+
+#[test]
+fn a_call_takes_its_thinks_odds_over_the_cache() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 0.0);
+    session.call_for_reinforcements(warship, false, Some(1.5));
+    assert_eq!(
+        timer(&session),
+        i32::from(TIME),
+        "cached at 0 by the answer"
+    );
+}
+
+#[test]
+fn a_forced_call_reads_the_cache_and_needs_odds_above_0() {
+    let catalog = reinforced();
+    for (odds, comes) in [(STALE, false), (0.0, false), (0.25, true), (1.5, true)] {
+        let mut session = flying(&catalog);
+        let warship = fight(&mut session, FED, 150.0);
+        session.traffic.cache_odds(warship, odds);
+        session.call_for_reinforcements(warship, true, None);
+        assert_eq!(timer(&session) > 0, comes, "cached at {odds}");
+    }
+}
+
+#[test]
+fn by_the_other_reading_a_call_works_its_odds_out_at_the_answer() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    session.rules =
+        crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
+    let warship = fight(&mut session, FED, 150.0);
+    session.traffic.cache_odds(warship, STALE);
+    session.call_for_reinforcements(warship, false, Some(STALE));
+    assert_eq!(timer(&session), i32::from(TIME), "1.5 now, stale or not");
+    let mut calm = flying(&catalog);
+    calm.rules =
+        crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
+    let warship = fight(&mut calm, FED, 50.0);
+    calm.traffic.cache_odds(warship, 0.0);
+    calm.call_for_reinforcements(warship, true, None);
+    assert_eq!(
+        timer(&calm),
+        i32::from(TIME),
+        "forced at 0.5 now, cached at 0"
+    );
+    let mut alone = flying(&catalog);
+    alone.rules =
+        crate::rulebook::Rulebook::default().with_override(RuleKey::OddsCache, RuleSource::Bible);
+    let lone = add(&mut alone, FED, 100.0, Goal::Idle);
+    alone.traffic.cache_odds(lone, 1.5);
+    alone.call_for_reinforcements(lone, true, Some(1.5));
+    assert_eq!(timer(&alone), 0, "no odds now, though cached and thought");
 }
 
 /// NPC `id` of `session`, to change.
@@ -228,6 +337,13 @@ fn timer(session: &Session) -> i32 {
     session.clock_here().timer
 }
 
+/// A traffic tick as `calls` decide, then the combat tick of the same
+/// step, which settles the calls (see the `comm_calls` module).
+fn step(session: &mut Session, catalog: &FakePilotCatalog, calls: &Calling) {
+    session.tick_traffic(catalog, calls, &mut NeverFires);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+}
+
 /// The player's system's countdown.
 fn countdown(session: &Session) -> u16 {
     session.clock_here().countdown
@@ -247,7 +363,7 @@ fn a_think_that_calls_starts_the_timer_and_the_clock_ticks_on_the_same_frame() {
     let warship = fight(&mut session, FED, 100.0);
     let calls = Calling(vec![warship]);
     for _ in 0..20 {
-        session.tick_traffic(&catalog, &calls, &mut NeverFires);
+        step(&mut session, &catalog, &calls);
         if timer(&session) > 0 {
             break;
         }
@@ -260,7 +376,7 @@ fn an_outnumbered_allied_warships_fleet_is_announced_at_three_quarters_and_arriv
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), i32::from(TIME));
     for tick in 1..31 {
         assert_eq!(ticked(&mut session, &catalog), (vec![], vec![]), "{tick}");
@@ -295,15 +411,15 @@ fn a_ship_not_outnumbered_calls_nothing_unless_forced_as_battle_help_forces_it()
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 50.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), 0, "odds of 0.5, not above half of 1");
-    session.call_for_reinforcements(warship, true);
+    session.call_for_reinforcements(warship, true, None);
     assert_eq!(timer(&session), i32::from(TIME), "forced (@0x9636d)");
     let mut alone = flying(&catalog);
     let lone = add(&mut alone, FED, 100.0, Goal::Idle);
-    alone.call_for_reinforcements(lone, true);
+    alone.call_for_reinforcements(lone, true, None);
     assert_eq!(timer(&alone), 0, "no odds at all: not even forced");
-    alone.call_for_reinforcements(NpcId(999), true);
+    alone.call_for_reinforcements(NpcId(999), true, None);
     assert_eq!(timer(&alone), 0, "a ship not here");
 }
 
@@ -313,10 +429,10 @@ fn a_ship_of_a_government_not_allied_with_the_fleets_calls_nothing() {
     let mut session = flying(&catalog);
     let pirate = add(&mut session, PIRATES, 100.0, Goal::Idle);
     add(&mut session, FED, 300.0, Goal::Attack(ShipRef::Npc(pirate)));
-    session.call_for_reinforcements(pirate, true);
+    session.call_for_reinforcements(pirate, true, None);
     assert_eq!(timer(&session), 0);
     let allied = fight(&mut session, ALLIES, 300.0);
-    session.call_for_reinforcements(allied, false);
+    session.call_for_reinforcements(allied, false, None);
     assert_eq!(timer(&session), i32::from(TIME), "an ally's");
 }
 
@@ -325,15 +441,15 @@ fn the_timer_running_blocks_a_second_call() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     ticked(&mut session, &catalog);
-    session.call_for_reinforcements(warship, true);
+    session.call_for_reinforcements(warship, true, None);
     assert_eq!(timer(&session), i32::from(TIME) - 1);
 }
 
 /// `session` with its fleet called and arrived.
 fn arrived(session: &mut Session, catalog: &FakePilotCatalog, warship: NpcId) {
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     heard(session, catalog, TIME);
     assert_eq!(timer(session), reinforcements::ARRIVED);
 }
@@ -344,15 +460,15 @@ fn a_second_call_before_the_interval_brings_none_and_one_after_it_does() {
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
     arrived(&mut session, &catalog, warship);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), reinforcements::ARRIVED, "2 days to go");
     session.reinforcements_day();
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), reinforcements::ARRIVED, "1 day to go");
     session.reinforcements_day();
     assert_eq!(countdown(&session), 0);
     assert!(session.pilot().reinforcement_days.is_empty(), "none kept");
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(timer(&session), i32::from(TIME), "called again");
 }
 
@@ -398,7 +514,7 @@ fn a_full_ship_table_brings_no_fleet_and_no_quote_but_sets_the_countdown() {
         session.traffic.add_npc_at(filler, berth);
     }
     let crowd = session.npcs().len();
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(heard(&mut session, &catalog, TIME), announced(), "no quote");
     assert_eq!(session.npcs().len(), crowd, "no fleet");
     assert_eq!(countdown(&session), 2);
@@ -411,7 +527,7 @@ fn a_fleet_government_without_a_medium_name_comes_unannounced() {
     catalog.govts[0].medium_name = String::new();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(heard(&mut session, &catalog, 31), [], "no line (@0x3914d)");
     assert_eq!(countdown(&session), 2, "but the countdown set");
 }
@@ -421,7 +537,7 @@ fn a_missing_entry_of_the_line_reads_as_empty() {
     let catalog = reinforced();
     let mut session = flying(&catalog).with_strings(Rc::new(Empty));
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(
         heard(&mut session, &catalog, 31),
         [SimMessage::ReinforcementsApproaching(
@@ -438,7 +554,7 @@ fn inhibited_by(owned: OutfitId, govt: GovtId) -> (Clock, Vec<SimMessage>) {
     session.pilot.outfits.insert(owned, 1);
     session.reset_precalced();
     let warship = fight(&mut session, govt, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     let clock = session.clock_here();
     (clock, heard(&mut session, &catalog, TIME))
 }
@@ -472,12 +588,12 @@ fn comes_after_the_sale(source: RuleSource) -> bool {
     session.pilot.outfits.insert(JAMMER, 1);
     session.reset_precalced();
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(countdown(&session), 1, "marked");
     session.pilot.outfits.remove(&JAMMER);
     session.reset_precalced();
     session.reinforcements_day();
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     timer(&session) > 0
 }
 
@@ -517,7 +633,7 @@ fn leaving_the_system_freezes_its_timer_and_returning_resumes_it() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     heard(&mut session, &catalog, 5);
     assert_eq!(timer(&session), i32::from(TIME) - 5);
     jump(&mut session, &catalog, 131);
@@ -538,7 +654,7 @@ fn the_clock_counts_down_through_a_jumps_frames_too() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     session.plot_course(SystemId(131)).expect("a route");
     crate::testkit::fly_out(&mut session);
     crate::testkit::begin_jump_now(&mut session).expect("jumps");
@@ -552,7 +668,7 @@ fn double_times_second_pass_counts_the_clock_down_again() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     session.tick_again(
         Controls::default(),
         &crate::ai::NovaAi::default(),
@@ -570,7 +686,7 @@ fn an_advance_pass_counts_the_clock_down_once() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     let rescued = session.game_work(
         Controls::default(),
         &catalog,
@@ -587,7 +703,7 @@ fn landed_the_clock_stands() {
     let catalog = reinforced();
     let mut session = flying(&catalog);
     let warship = fight(&mut session, FED, 100.0);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     crate::testkit::land_now(&mut session).expect("lands");
     session.tick_reinforcements(&mut NeverFires);
     assert_eq!(timer(&session), i32::from(TIME));
@@ -639,7 +755,7 @@ fn a_warship_holds_at_odds_below_twice_max_odds_while_its_fleet_comes() {
     };
     assert!(matches!(decide(&session), Goal::Flee(_)), "odds 1.5 over 1");
     assert_eq!(session.reinforcements_coming(), None);
-    session.call_for_reinforcements(warship, false);
+    session.call_for_reinforcements(warship, false, None);
     assert_eq!(
         session.reinforcements_coming(),
         Some(Coming { govt: Some(FED) })
@@ -649,4 +765,212 @@ fn a_warship_holds_at_odds_below_twice_max_odds_while_its_fleet_comes() {
         !matches!(goal, Goal::Flee(_)),
         "no retreat below twice 1 while the fleet comes: {goal:?}"
     );
+}
+
+// The clock held behind the frame's calls held behind a scan (see the
+// `comm_calls` module).
+
+/// Every NPC keeps its goal but the scanner, which gives its inspection
+/// of the player up; each of `calls` calls for reinforcements and each of
+/// `flees` flees the pirate, calling for help.
+#[derive(Debug)]
+struct ScanFirst {
+    scanner: NpcId,
+    calls: Vec<NpcId>,
+    flees: Vec<(NpcId, NpcId)>,
+}
+
+impl Behaviour for ScanFirst {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    fn decision(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Decision {
+        let flees = self.flees.iter().find(|(id, _)| *id == npc.id);
+        let goal = if npc.id == self.scanner {
+            Goal::Idle
+        } else if let Some(&(_, pirate)) = flees {
+            Goal::Flee(ShipRef::Npc(pirate))
+        } else {
+            npc.goal
+        };
+        Decision {
+            goal,
+            calls_reinforcements: self.calls.contains(&npc.id),
+            comm_call: flees.map(|_| CommCall::Distress),
+            ..Decision::default()
+        }
+    }
+}
+
+/// Adds an interceptor at the player's side inspecting it, of a
+/// government the catalog has no record of, so it is nobody's ally and
+/// its scan finds nothing.
+fn scanner(session: &mut Session) -> NpcId {
+    let scanner = add(session, GovtId(131), 100.0, Goal::Inspect(ShipRef::Player));
+    if let Some(npc) = npc_mut(session, scanner) {
+        npc.ai_type = AiType::Interceptor;
+    }
+    scanner
+}
+
+/// The scanner inspects the player again, at its side.
+fn inspect_again(session: &mut Session, scanner: NpcId) {
+    let at = session.player.position;
+    if let Some(npc) = npc_mut(session, scanner) {
+        npc.goal = Goal::Inspect(ShipRef::Player);
+        npc.state.position = at;
+    }
+}
+
+#[test]
+fn a_call_held_behind_a_scan_still_starts_the_timer_the_clock_ticks_on_that_frame() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let scanner = scanner(&mut session);
+    let warship = fight(&mut session, FED, 100.0);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: vec![warship],
+        flees: Vec::new(),
+    };
+    for _ in 0..20 {
+        inspect_again(&mut session, scanner);
+        session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        if timer(&session) > 0 {
+            break;
+        }
+    }
+    assert_eq!(timer(&session), i32::from(TIME) - 1, "its first tick");
+}
+
+/// The police (class 4), scanning for bit 0x0004 and punishing
+/// smuggling, its fine 500.
+const POLICE: GovtId = GovtId(131);
+
+/// [`reinforced`], with [`POLICE`] and mission 140, its cargo masked
+/// 0x0006.
+fn policed() -> FakePilotCatalog {
+    let mut catalog = reinforced();
+    catalog.govts.push(GovtRecord {
+        classes: [4, -1, -1, -1],
+        scan_mask: 0x0004,
+        scan_fine: 500,
+        penalties: Penalties {
+            smuggle: 5,
+            ..Penalties::default()
+        },
+        ..govt(131)
+    });
+    catalog.missions.push(MissionRecord {
+        scan_mask: 0x0006,
+        ..mission(140)
+    });
+    catalog
+}
+
+#[test]
+fn a_later_slots_call_is_still_made_after_an_earlier_slots_scan_puts_its_find_on_the_line() {
+    let catalog = policed();
+    let mut session = flying(&catalog);
+    session.pilot.missions.put(0, carrying(140, 4));
+    let scanner = add(&mut session, POLICE, 100.0, Goal::Inspect(ShipRef::Player));
+    if let Some(npc) = npc_mut(&mut session, scanner) {
+        npc.ai_type = AiType::Interceptor;
+    }
+    let warship = fight(&mut session, FED, 100.0);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: vec![warship],
+        flees: Vec::new(),
+    };
+    for _ in 0..20 {
+        inspect_again(&mut session, scanner);
+        let mut chance = Draws::of(&[0]);
+        session.tick_traffic(&catalog, &behaviour, &mut chance);
+        assert_eq!(timer(&session), 0, "held behind the scan, no tick yet");
+        session.tick_combat(Rules::default(), &mut chance);
+        let (messages, sounds) = (session.take_messages(), session.take_sounds());
+        if timer(&session) > 0 {
+            assert!(
+                matches!(
+                    messages.as_slice(),
+                    [SimMessage::Smuggling { fine: 500, .. }]
+                ),
+                "the scan's find on the line: {messages:?}"
+            );
+            assert_eq!(sounds, [SimSound::Smuggling]);
+            assert!(!session.comm_line().free_for_calls(), "the line shows it");
+            break;
+        }
+    }
+    assert_eq!(
+        timer(&session),
+        i32::from(TIME) - 1,
+        "the call made behind the find, and the clock's first tick"
+    );
+}
+
+#[test]
+fn a_frames_announcement_comes_after_its_held_distress_call() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false, None);
+    for _ in 1..31 {
+        ticked(&mut session, &catalog);
+    }
+    assert_eq!(timer(&session), 10, "one tick from announcing");
+    let scanner = scanner(&mut session);
+    let pirate = add(&mut session, PIRATES, 100.0, Goal::Idle);
+    let trader = add(&mut session, FED, 100.0, Goal::Idle);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: Vec::new(),
+        flees: vec![(trader, pirate)],
+    };
+    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+    assert_eq!(session.take_messages(), [], "the call and the clock held");
+    assert_eq!(timer(&session), 10);
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    let messages = session.take_messages();
+    assert!(
+        matches!(messages.as_slice(), [SimMessage::CallForHelp(_), announcement] if *announcement == announced()[0]),
+        "help first: {messages:?}"
+    );
+    assert_eq!(
+        session.take_sounds(),
+        [SimSound::CallForHelp, SimSound::ReinforcementsApproaching]
+    );
+    assert_eq!(timer(&session), 9);
+}
+
+#[test]
+fn a_held_clock_tick_is_not_lost_when_no_combat_tick_follows() {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false, None);
+    let scanner = scanner(&mut session);
+    let behaviour = ScanFirst {
+        scanner,
+        calls: Vec::new(),
+        flees: Vec::new(),
+    };
+    session.tick_traffic(&catalog, &behaviour, &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME), "held");
+    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME) - 1, "the held tick ran");
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(
+        timer(&session),
+        i32::from(TIME) - 2,
+        "held again behind the scan still queued, then settled"
+    );
+    session.tick_combat(Rules::default(), &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME) - 2, "once only");
+    session.tick_traffic(&catalog, &Keeping, &mut NeverFires);
+    assert_eq!(timer(&session), i32::from(TIME) - 3, "back in place");
 }

@@ -8,6 +8,10 @@ pub enum ImageKind {
     Pict,
     /// An `rlëD` sprite sheet: one or more equal-sized frames.
     Rled,
+    /// An `rlëD`'s solid runs alone (its opcode-4 runs of one colour), one
+    /// frame per sheet frame: drawn plainly over the sheet's own frame, as
+    /// the original's blits fill a run raw over every blend and colorize.
+    RledSolid,
     /// A `PICT` picture whose alpha comes from another `PICT`, its mask:
     /// opaque where the mask is dark, clear where it is light. Nova's
     /// button caps are drawn this way.
@@ -78,6 +82,17 @@ impl ImageKey {
     pub const fn sprite(id: i16, frame: u16) -> Self {
         Self {
             kind: ImageKind::Rled,
+            id,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of `rlëD` `id`'s solid runs alone
+    /// ([`ImageKind::RledSolid`]).
+    #[must_use]
+    pub const fn solid_runs(id: i16, frame: u16) -> Self {
+        Self {
+            kind: ImageKind::RledSolid,
             id,
             frame,
         }
@@ -153,5 +168,19 @@ mod tests {
                 frame: 35
             }
         );
+    }
+
+    #[test]
+    fn a_sprites_solid_runs_are_their_own_image() {
+        let key = ImageKey::solid_runs(1930, 13);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::RledSolid,
+                id: 1930,
+                frame: 13
+            }
+        );
+        assert_ne!(key, ImageKey::sprite(1930, 13));
     }
 }

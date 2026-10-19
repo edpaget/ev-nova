@@ -6,6 +6,9 @@
 //! at its old path (`nova_sim::market`, `nova_sim::GameDate`, …), so the
 //! rest of the workspace reaches them through it.
 //!
+//! - [`class_stats`]: an NPC's stats under the bare-class reading,
+//!   [`ShipStats::for_npc`](stats::ShipStats::for_npc): its class's
+//!   alone by the engine, its default items counted by the other reading.
 //! - [`clearance`]: the dock request the land key makes
 //!   ([`DockRequest`](clearance::DockRequest)), its counter, and the dock
 //!   approach that counts it on every frame and greets the pilot
@@ -66,6 +69,7 @@ use nova_sim_base::{
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, catalog, control};
 
+pub mod class_stats;
 pub mod clearance;
 pub mod cron;
 pub mod date;

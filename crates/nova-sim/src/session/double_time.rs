@@ -193,11 +193,11 @@ impl Session {
     /// routine without its AI ([`Session::pass_after_move`]). Its caller
     /// runs it after the advance pass
     /// ([`Session::game_work`]) while [`Session::double_time`] is on.
-    /// Landed, or once a jump has begun, it does nothing, as the advance
-    /// pass stands still; a jump that begins on its move stops it there,
-    /// and so does the escape pod's countdown running out on it, the
-    /// rescue then due ([`Session::rescue_if_due`], which its caller asks
-    /// after this pass as after the advance pass). Its caller then answers
+    /// Landed, it does nothing, as the advance pass stands still; it runs
+    /// through a jump, as the world does (see the `warp_stage` module).
+    /// The escape pod's countdown running out on it stops it, the rescue
+    /// then due ([`Session::rescue_if_due`], which its caller asks after
+    /// this pass as after the advance pass). Its caller then answers
     /// what the pass's close struck ([`Session::answer_strikes`]) and runs
     /// the second-pass quote roll, the attack quotes the answers raise
     /// first ([`Session::tick_quotes_again`]).
@@ -208,7 +208,7 @@ impl Session {
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if self.landed.is_some() || self.jumping().is_some() {
+        if self.landed.is_some() {
             return;
         }
         let mut source = &mut *chance;
@@ -218,7 +218,7 @@ impl Session {
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
-        if self.jumping().is_some() || self.rescue_due {
+        if self.rescue_due {
             return;
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
@@ -391,12 +391,22 @@ mod tests {
 
     // The warp-up (`_HandlePlayer` @0x6b60d-0x6b690).
 
-    /// The warp-up a jump begun `double_time` sounds.
-    fn warp_up(double_time: bool) -> SimSound {
+    /// The frames a warp-up of `duration` Mac ticks plays for on
+    /// `session`'s ship, pitched by its class's warp factor
+    /// ([`crate::warp::pitched_length`]), two Mac ticks a frame.
+    fn warp_up_frames(session: &Session, duration: u32) -> u32 {
+        let rate = crate::warp::warp_up_rate(session.player_warp_factor());
+        crate::warp::pitched_length(duration, rate).div_ceil(2)
+    }
+
+    /// The warp-up a jump of `session`'s ship begun `double_time`
+    /// sounds, pitched by its class's warp factor.
+    fn warp_up(session: &Session, double_time: bool) -> SimSound {
+        let rate = crate::warp::warp_up_rate(session.player_warp_factor());
         if double_time {
-            SimSound::JumpBeganInDoubleTime
+            SimSound::JumpBeganInDoubleTime { rate }
         } else {
-            SimSound::JumpBegan
+            SimSound::JumpBegan { rate }
         }
     }
 
@@ -408,12 +418,20 @@ mod tests {
             session.begin_jump().expect("jumps");
             assert_eq!(
                 session.take_sounds(),
-                [warp_up(double_time)],
+                [warp_up(&session, double_time)],
                 "{double_time}"
             );
         }
-        assert_ne!(SimSound::JumpBeganInDoubleTime, SimSound::JumpBegan);
+        assert_ne!(
+            SimSound::JumpBeganInDoubleTime { rate: 0x1_0000 },
+            SimSound::JumpBegan { rate: 0x1_0000 }
+        );
     }
+
+    /// Frames of a jump that stay short of the warp end's fallback, which
+    /// halts the warp-ups (see the `warp_stage` module): the stage passes
+    /// 30 no sooner than 15 double-time frames in.
+    const BEFORE_THE_FALLBACK: u32 = 10;
 
     /// Gives up `session`'s jump as a script's move in flight does (`N130`,
     /// [`Reset::Jump`](super::super::entry::Reset::Jump)): no halt and no
@@ -464,19 +482,27 @@ mod tests {
     /// well, but the eject before it halts the warp-ups.
     #[test]
     fn a_warp_up_still_playing_is_not_sounded_again() {
-        // 129 lasts 120 Mac ticks, 60 frames, and 128, of which there is
-        // none, 350, 175 frames, in real time: double time's second pass
-        // doesn't shorten it.
+        // 129 lasts 120 Mac ticks and 128, of which there is none, 350,
+        // each pitched by w 1.3 to 156 and 455, 78 and 228 frames, in real
+        // time: double time's second pass doesn't shorten it.
         let catalog = with_warp_up_x2();
-        for (double_time, frames) in [(true, 60), (false, 175)] {
+        for (double_time, duration) in [(true, 120), (false, 350)] {
             let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+            let frames = warp_up_frames(&session, duration);
+            assert_eq!(frames, if double_time { 78 } else { 228 });
             session.set_double_time_key(double_time);
             session.begin_jump().expect("jumps");
-            assert_eq!(session.take_sounds(), [warp_up(double_time)]);
-            for _ in 0..frames - 1 {
+            assert_eq!(session.take_sounds(), [warp_up(&session, double_time)]);
+            // Given up before the warp end's fallback could halt it
+            // (stage 30 at the earliest), the warp-up plays on.
+            for _ in 0..BEFORE_THE_FALLBACK {
                 frame(&mut session);
             }
             given_up_by_a_move(&mut session, &catalog);
+            for _ in BEFORE_THE_FALLBACK..frames - 1 {
+                frame(&mut session);
+            }
+            session.take_sounds();
             session.begin_jump().expect("jumps");
             assert_eq!(session.take_sounds(), [], "{double_time}: still playing");
             assert_eq!(session.warp_clock(), Some(0), "the clock starts");
@@ -485,7 +511,7 @@ mod tests {
             session.begin_jump().expect("jumps");
             assert_eq!(
                 session.take_sounds(),
-                [warp_up(double_time)],
+                [warp_up(&session, double_time)],
                 "{double_time}: over"
             );
         }
@@ -499,14 +525,14 @@ mod tests {
         let catalog = with_warp_up_x2();
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
         session.begin_jump().expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+        assert_eq!(session.take_sounds(), [warp_up(&session, false)]);
         given_up_by_a_move(&mut session, &catalog);
         assert_eq!(session.aim, 0, "no tick has aimed it");
         session.player.heading = 90.0;
         session.set_double_time_key(true);
         assert!(session.double_time());
         session.begin_jump().expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        assert_eq!(session.take_sounds(), [warp_up(&session, true)]);
     }
 
     #[test]
@@ -515,7 +541,7 @@ mod tests {
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
         session.set_double_time_key(true);
         session.begin_jump().expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        assert_eq!(session.take_sounds(), [warp_up(&session, true)]);
         frame(&mut session);
         session.condition = crate::combat::hull::Condition::Disabled;
         frame(&mut session);
@@ -528,7 +554,7 @@ mod tests {
         session.condition = crate::combat::hull::Condition::Intact;
         given_up_by_a_move(&mut session, &catalog);
         session.begin_jump().expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        assert_eq!(session.take_sounds(), [warp_up(&session, true)]);
     }
 
     #[test]
@@ -601,15 +627,22 @@ mod tests {
 
     #[test]
     fn double_time_holds_while_warp_up_x2_plays() {
-        // 129 lasts 120 Mac ticks: 60 frames.
+        // 129 lasts 120 Mac ticks, pitched by w 1.3 to 156: 78 frames.
         let catalog = with_warp_up_x2();
         let mut session = east(&catalog);
         session.set_double_time_key(true);
         session.begin_jump().expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBeganInDoubleTime]);
+        assert_eq!(session.take_sounds(), [warp_up(&session, true)]);
         session.set_double_time_key(false);
         assert!(session.double_time(), "held by 129");
-        for frame in 1..60 {
+        assert_eq!(warp_up_frames(&session, 120), 78);
+        for frame in 1..BEFORE_THE_FALLBACK {
+            session.tick(Controls::default());
+            assert!(session.double_time(), "frame {frame}");
+        }
+        // Given up before the warp end's fallback halts 129.
+        given_up_by_a_move(&mut session, &catalog);
+        for frame in BEFORE_THE_FALLBACK..78 {
             session.tick(Controls::default());
             assert!(session.double_time(), "frame {frame}");
         }
@@ -622,7 +655,7 @@ mod tests {
         let catalog = with_warp_up_x2();
         let mut session = east(&catalog);
         session.begin_jump().expect("jumps");
-        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+        assert_eq!(session.take_sounds(), [warp_up(&session, false)]);
         session.tick(Controls::default());
         let aim = bearing_aim(&session);
         assert_eq!(session.aim, aim, "the jump's bearing");
@@ -638,8 +671,18 @@ mod tests {
         session.player.heading = f32::from(aim);
         session.set_double_time_key(true);
         assert!(!session.double_time());
-        // 128 lasts 350 Mac ticks: 175 frames from the jump.
-        for _ in 1..174 {
+        // 128 lasts 350 Mac ticks, pitched by w 1.3 to 455: 228 frames
+        // from the jump.
+        assert_eq!(warp_up_frames(&session, 350), 228);
+        for _ in 1..BEFORE_THE_FALLBACK {
+            session.tick(Controls::default());
+        }
+        // Given up before the warp end's fallback halts 128, facing the
+        // aim the jump left.
+        given_up_by_a_move(&mut session, &catalog);
+        session.player.heading = f32::from(aim);
+        assert_eq!(session.aim, aim, "kept");
+        for _ in BEFORE_THE_FALLBACK..227 {
             session.tick(Controls::default());
         }
         assert!(!session.double_time(), "128 plays on");
@@ -950,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn the_second_pass_does_nothing_landed_or_once_a_jump_has_begun() {
+    fn the_second_pass_does_nothing_landed_and_runs_on_through_a_jump() {
         let catalog = catalog();
         let mut landed = session(&catalog);
         land_now(&mut landed).expect("lands");
@@ -963,13 +1006,19 @@ mod tests {
             .expect("a route");
         fly_out(&mut jumping);
         begin_jump_now(&mut jumping).expect("jumps");
-        let player = *jumping.player();
+        let (stage, clock) = (jumping.warp_stage(), jumping.warp_clock());
+        assert!(stage > 1.0, "in the warp stage: {stage}");
         again(&mut jumping, THRUST);
-        assert_eq!(*jumping.player(), player);
+        assert_eq!(
+            jumping.warp_stage().to_bits(),
+            (stage + 1.0).to_bits(),
+            "+0x50 grows on it too"
+        );
+        assert_eq!(jumping.warp_clock(), clock, "the clock is real time");
     }
 
     #[test]
-    fn a_jump_that_begins_on_the_second_pass_stops_it_there() {
+    fn a_jump_that_begins_on_the_second_pass_runs_on_through_it() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session
@@ -1003,8 +1052,17 @@ mod tests {
         let strikes = session.strikes.clone();
         again(&mut session, Controls::default());
         assert_eq!(session.jumping(), Some(crate::catalog::SystemId(131)));
-        assert_eq!(session.npcs()[0].state, npc, "the traffic stood still");
-        assert_eq!(session.take_combat_events(), [], "no fight");
+        assert_ne!(session.npcs()[0].state, npc, "the traffic flew on");
+        assert!(
+            session.take_combat_events().iter().all(|event| !matches!(
+                event,
+                crate::combat::CombatEvent::Fired {
+                    ship: ShipRef::Player,
+                    ..
+                }
+            )),
+            "the player's trigger rests in a jump"
+        );
         assert_eq!(session.strikes, strikes);
     }
 }

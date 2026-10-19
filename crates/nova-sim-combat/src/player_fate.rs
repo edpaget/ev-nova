@@ -187,15 +187,11 @@ pub struct FateRow {
 /// A command the flight view sends the session for one of the player's
 /// keys (or a click), named after its keymap slot in the original.
 ///
-/// Pause (slot 0x2e), cloak (slot 0x52) and self-destruct (slot 0x24)
-/// have no variant: each joins when its key is built, by the phase that
-/// owns it (rdm:task/cloaking-device for the cloak,
-/// rdm:phase/ship-handling-fidelity/phase-13-player-self-destruct for the
-/// self-destruct). The breaking-up row refuses pause (0x45ef0) and the
-/// cloak (0x705d6, silently), and takes the self-destruct: only its start
-/// is gated on dying (0x6fdf0), which the session refuses, and a
-/// countdown already running goes on (0x6fedf, 0x7019d). The eject (slot
-/// 0x22) and the player info (slot 0x32) have theirs.
+/// Pause (slot 0x2e) and cloak (slot 0x52) have no variant: each joins
+/// when its key is built, by the work that owns it (rdm:task/cloaking-device
+/// for the cloak). The breaking-up row refuses pause (0x45ef0) and the
+/// cloak (0x705d6, silently). The eject (slot 0x22), the self-destruct
+/// (slot 0x24) and the player info (slot 0x32) have theirs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerCommand {
     /// The galaxy map: `mapKey` (slot 0x12).
@@ -240,11 +236,20 @@ pub enum PlayerCommand {
     /// the pod's frames reach no key handler, so the other rows refuse it
     /// in silence.
     PlayerInfo,
+    /// The self-destruct: Command + `destructKey` (slot 0x24), held
+    /// together (`_HandlePlayer` @0x6fdb4-0x6fddb), the key forced to `-`
+    /// (@0xce71c). Flying, disabled and breaking-up players take it: only
+    /// the countdown's start is gated on dying (@0x6fdf0), which the
+    /// session refuses in silence, and a countdown already running goes on
+    /// (@0x6fedf, @0x7019d). The dead branch and the pod's frames reach no
+    /// key handler, so the other rows refuse it
+    /// (`nova_sim::Session::hold_self_destruct`).
+    SelfDestruct,
 }
 
 impl PlayerCommand {
     /// Every command, for tests that go over them all.
-    pub const ALL: [PlayerCommand; 14] = [
+    pub const ALL: [PlayerCommand; 15] = [
         Self::Map,
         Self::Land,
         Self::Jump,
@@ -259,6 +264,7 @@ impl PlayerCommand {
         Self::Escort,
         Self::Eject,
         Self::PlayerInfo,
+        Self::SelfDestruct,
     ];
 }
 
@@ -690,6 +696,29 @@ mod tests {
                 "{fate:?}"
             );
         }
+    }
+
+    #[test]
+    fn only_flying_disabled_and_breaking_up_players_take_the_self_destruct() {
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled]
+            .into_iter()
+            .chain(BREAKING_UP)
+        {
+            assert!(
+                fate.row().input.takes(PlayerCommand::SelfDestruct),
+                "{fate:?}"
+            );
+        }
+        for fate in [PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }]
+            .into_iter()
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(
+                !fate.row().input.takes(PlayerCommand::SelfDestruct),
+                "{fate:?}"
+            );
+        }
+        assert!(PlayerCommand::ALL.contains(&PlayerCommand::SelfDestruct));
     }
 
     #[test]

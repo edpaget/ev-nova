@@ -189,33 +189,6 @@ impl Session {
         }
     }
 
-    /// Scans the player for each NPC that has looked the player over
-    /// since the last
-    /// ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)),
-    /// convicting by `law` and drawing on `chance`, unless the player is
-    /// landed, and gives whether the fight runs after them: not while the
-    /// player is landed or jumping. `Session::tick_combat` takes them
-    /// first, jumping or not, each held past the warp's lead-in by
-    /// `_ScanPlayer`'s jump-timing check (@0x7e562-0x7e633; see
-    /// [`Session::scanned_by`]).
-    ///
-    /// The scans wait from the traffic tick that queued them to the combat
-    /// tick of the same step, so they settle before the frame is drawn. In
-    /// the warp the view steps the session only while its lead-in lasts,
-    /// and the arrival comes after its last step, so a scan queued in the
-    /// lead-in settles before the arrival too. A scan the arrival would
-    /// cut off is dropped with the system's traffic, as the original's
-    /// would be held.
-    pub(super) fn take_scans(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) -> bool {
-        if self.landed.is_some() {
-            return false;
-        }
-        for npc in self.traffic.take_scans() {
-            self.scanned_by(npc, law, chance);
-        }
-        self.jumping().is_none()
-    }
-
     /// The scan of the player by NPC `id` (`_ScanPlayer` @0x7e46e),
     /// convicting by `law` and drawing on `chance`: nothing for a ship
     /// gone or of no government, or that does not go on (see
@@ -243,7 +216,7 @@ impl Session {
     /// ([`SimMessage::IllegalJunk`], [`SimMessage::IllegalOutfit`]) with
     /// [`SimSound::Smuggling`], and clears its latch. The player is always
     /// visible to the scanner (no cloak).
-    fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
+    pub(super) fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
         let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };
@@ -2061,7 +2034,7 @@ mod tests {
     }
 
     #[test]
-    fn past_the_lead_in_the_traffic_stands_still_and_no_scan_reaches_the_player() {
+    fn past_the_lead_in_the_traffic_flies_on_and_no_scan_reaches_the_player() {
         // AC2, in hyperspace.
         let catalog = contraband_catalog(500);
         let mut session = smuggler(&catalog, 1, 0, 1200);
@@ -2075,31 +2048,33 @@ mod tests {
         let before = police(&mut session).clone();
         step(&mut session, &catalog, &mut Draws::of(&[0]));
         assert!(!session.in_warp_lead_in(), "t = 74");
-        assert_eq!(*police(&mut session), before, "stands still");
+        assert_ne!(
+            police(&mut session).state,
+            before.state,
+            "the world runs through the warp"
+        );
         held_back(&mut session);
     }
 
     #[test]
     fn a_disabled_players_warp_never_holds_a_scan() {
-        // AC3. The engine cannot disable a player in its warp, as no fight
-        // runs in hyperspace and a pre-jump stage is given up as the ship
-        // is disabled, so the condition is set by hand. A warp factor of 0,
-        // which no `Flags` gives, is the `warp` module's.
+        // AC3. The condition is set by hand, as a hit would: the warp of a
+        // disabled player holds no scan (`_IsDisabled` @0x7e56a), and the
+        // next tick collapses it (see the `jump_collapse` module). A warp
+        // factor of 0, which no `Flags` gives, is the `warp` module's.
         let catalog = contraband_catalog(500);
         let mut session = smuggler(&catalog, 1, 0, 1200);
         bound_east(&mut session, 90.0);
         session.begin_jump().expect("jumps");
         let _ = session.take_sounds();
         step_to(&mut session, &catalog, 2 * LAST_LEAD_IN_TICK);
+        assert!(session.warp_holds_scans(), "past the lead-in");
         session.condition = crate::combat::hull::Condition::Disabled;
         assert!(session.in_warp_lead_in(), "never past it");
-        inspect_again(&mut session);
-        let at = police(&mut session).state.position;
-        police(&mut session).state.velocity = Vec2::new(1.0, 0.0);
-        step(&mut session, &catalog, &mut Draws::of(&[0]));
-        assert_ne!(police(&mut session).state.position, at, "the traffic ticks");
-        assert!(session.jumping().is_some());
-        convicted(&mut session);
+        assert!(!session.warp_holds_scans());
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.jumping(), None, "the warp collapsed");
+        assert_eq!(session.take_messages(), [SimMessage::JumpCollapsed]);
     }
 
     // The lead-in's end by the warp's d and w, read through the catalog:

@@ -48,17 +48,16 @@
 //! ## Left out
 //!
 //! - `_warpSoundDone` (cleared @0x695ef, @0x69612 after each warp-up
-//!   halt): it holds the original's warp-out until the warp-up sound ends
-//!   (@0x6bbc5); the engine's jump is not timed by the sound, and the kill
-//!   outfit cancels the jump anyway. Only the halts are ported.
+//!   halt): it arms the original's warp end once the warp-up sound ends
+//!   (@0x6bbc5), and the kill outfit cancels the jump anyway, so nothing
+//!   reads it after; the next warp start clears it again (@0x6b695).
+//!   Only the halts are ported.
 //! - `_statusRedraw[1]` (@0x699fc-0x69a01): the engine's status display
 //!   reads the session every frame, so there is nothing to mark.
-//! - The jump's hyperspace stage: the original's clock runs on through
-//!   it, and a kill outfit's +0x50 = -1.0 cancels the warp too. The engine
-//!   steps nothing of the session's fight while `Jump::Hyperspace` is
-//!   under way, so the clock stands still through it and only a pre-jump
-//!   is cancelled. This waits on the engine ticking the warp stage
-//!   (`ship-handling-fidelity/phase-8-warp-out`).
+//!
+//! The clock runs on through the jump's warp stage, as the session's
+//! fight does, and a kill outfit's +0x50 = -1.0 cancels the warp as it
+//! cancels a pre-jump.
 //!
 //! # The death-time dialogs
 //!

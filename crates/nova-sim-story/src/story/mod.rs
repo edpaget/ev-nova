@@ -358,8 +358,10 @@
 //! system listing it. The session refreshes at a landing, a jump's arrival
 //! (evaluated before its days, written once the hops and the systems
 //! explored are resolved by the flags as they stood), after a new pilot's
-//! `OnStart` and, quietly, at a load, which covers the main screen's calls
-//! since the engine's menu round trip saves and flies again. By the other
+//! `OnStart` and, quietly, at a load, which covers Open Pilot's call
+//! (`_MainScreenChoice` @0x1a8ca); a return from play to the main screen
+//! keeps the session as play left it, as `_DoMainScreen`'s own setup runs
+//! once a launch. By the other
 //! reading of [`RuleKey::VisibilityRefresh`](crate::RuleKey::VisibilityRefresh)
 //! it also refreshes after every settled script that changed the pilot.
 //! The availability tests stay live reads at each spawn, where the
@@ -401,11 +403,14 @@
 //! refresh (@0x1925e), while every nebula is inactive; `_MainScreenChoice`
 //! skips its sweep after a new pilot (@0x1a7d2). The explored flag is
 //! never saved: `_ResetPlayer` clears it (@0x1da86) before every load,
-//! and after the load's refresh `_OpenLastPilotFile` (@0x765a2-0x765ce)
-//! and `_MainScreenChoice` (@0x1a8d4-0x1a906) explore every visible
-//! explored system by ascending index, so `OnExplore` runs again after
-//! every load. `_DoMainScreen` (@0x1afcf-0x1affe) is no sweep: it
-//! explores only the player's system and clears no flag. Activity
+//! and after the load's refresh Open Pilot's `_MainScreenChoice`
+//! (@0x1a8d4-0x1a906), and `_OpenLastPilotFile` at launch
+//! (@0x765a2-0x765ce), explore every visible explored system by
+//! ascending index, so `OnExplore` runs again after every load.
+//! `_DoMainScreen` (@0x1afcf-0x1affe) is no sweep: it explores only the
+//! player's system, clears no flag and runs once a launch (its one
+//! caller is `_InitEVNova` @0x47428), so a return from play explores
+//! nothing. Activity
 //! (`ActiveOn`, both sizes above 0) is written at each refresh
 //! (@0x998b4-0x998ef) and read only by the exploration and the maps,
 //! which draw a nebula active and explored. See the
@@ -416,7 +421,10 @@
 //! and explored flag asked as its consumer's predicate (see "Dispatch");
 //! its activity is written at every refresh point beside visibility; a
 //! load forgets the explored flags and sweeps the visible explored
-//! systems; and the Rulebook keys
+//! systems, the launch's load of the last pilot too (main-screen phase 4,
+//! `nova_sim::PilotKeeper::open_last`); the launch then explores the
+//! player's system once, as `_DoMainScreen` does
+//! (`nova_sim::Session::open_at_launch`); and the Rulebook keys
 //! [`nebula_explore_once`](crate::RuleKey::NebulaExploreOnce) and
 //! [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot) offer the other
 //! readings (see the session's `nebulae` module).
@@ -462,8 +470,8 @@
 //! Each exploration raises `Explored`, the system explored
 //! already or not. Flying a pilot, a new one or a load, raises the
 //! `Explored` of every visible explored system, by ascending ID, as the
-//! original's load sweeps their nebulae (`_OpenLastPilotFile`
-//! @0x765a2-0x765ce; a new pilot has explored only its own,
+//! original's Open Pilot sweeps their nebulae (`_MainScreenChoice`
+//! @0x1a8d4-0x1a906; a new pilot has explored only its own,
 //! `_DoNewPilot` @0x19118), and no `Landed`: a load resumes in flight and
 //! lands nothing, as `_EnterGameFromMainScreen` and `_PlayGame` call no
 //! landing, but forgets the stellar the offers were rolled at (@0x75ef5),
@@ -1906,6 +1914,7 @@ pub mod day;
 pub mod dispatch;
 pub mod galaxy;
 pub mod rebuild;
+pub mod sprite_pool;
 pub mod wreck;
 
 pub use dispatch::DuplicateSubscription;

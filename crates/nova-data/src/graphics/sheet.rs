@@ -40,6 +40,8 @@ pub struct SpriteSheet {
     frame_height: u32,
     frames: Vec<Image>,
     layout: SheetLayout,
+    /// The frames' solid runs alone, when any frame has one.
+    solid: Option<Vec<Image>>,
 }
 
 impl SpriteSheet {
@@ -56,7 +58,14 @@ impl SpriteSheet {
             frame_height,
             frames,
             layout,
+            solid: None,
         }
+    }
+
+    /// The sheet with `solid` as its solid-run frames: one per frame, or
+    /// none.
+    pub(crate) fn with_solid(self, solid: Option<Vec<Image>>) -> Self {
+        Self { solid, ..self }
     }
 
     /// Width of every frame.
@@ -81,6 +90,22 @@ impl SpriteSheet {
     #[must_use]
     pub fn into_frames(self) -> Vec<Image> {
         self.frames
+    }
+
+    /// Its solid runs alone, one image per frame, when any frame has a
+    /// run of one colour: an `rlëD`'s opcode-4 runs, which the original
+    /// draws raw over every blend and colorize (see
+    /// [`decode_rled`](super::rled::decode_rled)). None for a sheet with
+    /// none.
+    #[must_use]
+    pub fn solid_frames(&self) -> Option<&[Image]> {
+        self.solid.as_deref()
+    }
+
+    /// Its solid-run frames ([`SpriteSheet::solid_frames`]), by value.
+    #[must_use]
+    pub fn into_solid_frames(self) -> Option<Vec<Image>> {
+        self.solid
     }
 
     /// The layout the sheet was decoded with.

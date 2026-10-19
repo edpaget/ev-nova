@@ -30,6 +30,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
 use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings};
@@ -59,7 +60,7 @@ use nova_sim::{
     SystemId, TICKS_PER_SECOND,
 };
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
-use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
+use nova_view::flight::jump::ARRIVAL_FLASH_FOR;
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
@@ -358,6 +359,19 @@ impl Harness {
         )
     }
 
+    /// [`Harness::planning`], its jumps arriving at rest just outside the
+    /// no-jump zone, [`RuleKey::JumpArrival`]'s other reading, so the ship
+    /// can jump on from where it arrives.
+    fn planning_at_rest() -> Self {
+        Self::flying_by(
+            data(),
+            SharedChance::default(),
+            Rulebook::default()
+                .with_override(RuleKey::MapPlotting, RuleSource::Bible)
+                .with_override(RuleKey::JumpArrival, RuleSource::Bible),
+        )
+    }
+
     /// [`Harness::flying_over`], its rules read as `rules` says.
     fn flying_by(data: Rc<GameData>, chance: SharedChance, rules: Rulebook) -> Self {
         let screen = start_screen(Rc::clone(&data))
@@ -446,6 +460,7 @@ impl Harness {
             self.send(WindowEvent::Text(c));
         }
         self.press(Key::Enter);
+        self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight);
     }
 
@@ -657,7 +672,8 @@ impl Harness {
     /// jump distance from it, then lets go: first Down, to face away from
     /// the centre while drifting in, then Up.
     fn fly_out(&mut self) {
-        for _ in 0..600 {
+        // Long enough to turn round a jump's arrival at top speed inward.
+        for _ in 0..1800 {
             if self.ship().position.length() >= MIN_JUMP_DISTANCE {
                 self.hold(&[]);
                 return;
@@ -690,8 +706,10 @@ impl Harness {
         let ship = self.ship();
         let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
         // A crawl, as a ship at rest off the centre can drift, isn't
-        // drifting wrong: Down would hold it there.
-        let drifting_wrong = if out { outward < -1e-3 } else { outward > 1e-3 };
+        // drifting wrong: Down would hold it there, as reverse aims only
+        // a ship moving fast enough on an axis.
+        let drifting_wrong = (if out { outward < -1e-3 } else { outward > 1e-3 })
+            && nova_sim::player_turn::reverse_aim(ship.velocity).is_some();
         // Down stops within a turn of its whole-degree aim, without
         // snapping onto it: a turn and the table's degree of slack.
         let turn = self.session().handling().turn_rate.trunc() + 1.0;
@@ -836,8 +854,9 @@ fn date(harness: &Harness) -> (u8, u8, i32) {
 #[test]
 fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     // The planner: Gamma is unknown past unexplored Beta, so the engine's
-    // Shift-click can't add it after Beta.
-    let mut harness = Harness::planning();
+    // Shift-click can't add it after Beta. The jump arrives at rest, so the
+    // ship can jump on from where it arrives.
+    let mut harness = Harness::planning_at_rest();
     harness.frame();
     assert_eq!(date(&harness), (23, 6, 1177));
 
@@ -909,7 +928,8 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.run(1);
     assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1001.0, 0.0));
     harness.press(Key::Char('j'));
-    let last = harness.run(2);
+    // The warp's end on its clock: about 4.5 s for the fixture's ship.
+    let last = harness.run(6);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(130));
     assert_eq!(session.course(), []);
@@ -949,7 +969,8 @@ fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
 
 #[test]
 fn j_straight_after_arriving_jumps_on_to_the_next_system() {
-    let mut harness = Harness::planning();
+    // At rest just outside the zone, by the other reading of the arrival.
+    let mut harness = Harness::planning_at_rest();
     harness.out_towards(130);
     harness.arrive_in(129);
     // Once the jump effect is over, and a second later, J still goes on.
@@ -964,7 +985,7 @@ fn j_straight_after_arriving_jumps_on_to_the_next_system() {
     let pressed = harness.frame();
     assert!(!shows(&pressed, TOO_CLOSE), "{:?}", texts(&pressed));
     assert!(harness.flight().jump_effect().is_some(), "jumping on");
-    harness.run(2);
+    harness.run(6);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(130));
     assert_eq!(session.reserves().fuel.now, 100.0);
@@ -987,7 +1008,7 @@ fn j_as_the_new_system_fades_in_jumps_on_to_the_next_system() {
         session.preparing_jump(),
         session.jumping()
     );
-    harness.run(4);
+    harness.run(8);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(130));
     assert_eq!(session.reserves().fuel.now, 100.0);
@@ -1004,6 +1025,11 @@ fn escape_closes_flights_map_and_then_leaves_flight() {
     assert_eq!(harness.showing(), Showing::ShipBrowser);
 }
 
+/// The fixture has no `snd `s, so the warp ends by its fallback, which
+/// plays the warp-out on its own pass, and the arrival a pass later, the
+/// natural end, plays it again: a missing 130 never counts as playing
+/// (`_HandlePlayer` @0x6bbe1), so the original's second `PlaySound` is as
+/// silent as its first.
 #[test]
 fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     let audio = RecordingAudio::new();
@@ -1021,25 +1047,44 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
         .borrow()
         .iter()
         .copied()
-        .filter(|command| matches!(command, AudioCommand::Play { .. }))
+        .filter(|command| {
+            matches!(
+                command,
+                AudioCommand::Play { .. } | AudioCommand::PlayAtRate { .. }
+            )
+        })
         .collect();
-    let play = |id| AudioCommand::Play {
-        sound: nova_data::SoundId(id),
+    assert_eq!(plays, [warp_up(), warp_out(), warp_out()]);
+}
+
+/// The warp-up, `snd ` 128, pitched by the fixture ship's warp factor,
+/// 1.3: at 65536 / 1.3 (`_AdjustWarpSoundSpeed` @0x5ecc).
+fn warp_up() -> AudioCommand {
+    AudioCommand::PlayAtRate {
+        sound: nova_data::SoundId(128),
         volume: AudioSettings::default().effects_volume,
-        priority: if id == 128 {
-            nova_audio::priority::JUMP
-        } else {
-            nova_audio::priority::ARRIVAL
-        },
-    };
-    assert_eq!(plays, [play(128), play(130)]);
+        priority: nova_audio::priority::JUMP,
+        rate: nova_audio::port::PlaybackRate::from_fixed(50_412),
+    }
+}
+
+/// The warp-out, `snd ` 130.
+fn warp_out() -> AudioCommand {
+    AudioCommand::Play {
+        sound: nova_data::SoundId(130),
+        volume: AudioSettings::default().effects_volume,
+        priority: nova_audio::priority::ARRIVAL,
+    }
 }
 
 /// The fixture has no `snd `s, so the warp-up's length is the engine's
-/// stand-in, far longer than the jump's effect: it still plays as the
-/// ship arrives, as stock 128 does. The arrival halts it, 128 then 129,
-/// before the warp-out, as `_HandlePlayer`'s warp end does (@0x6c6b7,
-/// @0x6c6d2, then 130 @0x6c706).
+/// stand-in, 350 Mac ticks, pitched by w 1.3 to 455, past the fallback
+/// end's d / w = 269: it still plays as the fallback fires, as stock 128
+/// does for a w of 1.3. The fallback's pass halts it, 128 then 129, before
+/// the warp-out, as `_HandlePlayer`'s fallback end does (@0x6c6b7,
+/// @0x6c6d2, then 130 @0x6c706). The arrival a pass later is the natural
+/// end: it halts nothing, and finds the missing 130 not playing
+/// (@0x6bbe1), so plays it again.
 #[test]
 fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
     let audio = RecordingAudio::new();
@@ -1059,23 +1104,19 @@ fn a_jump_through_the_app_halts_the_warp_up_before_the_warp_out() {
         .iter()
         .copied()
         .filter(|command| match *command {
-            AudioCommand::Play { sound, .. } | AudioCommand::Halt { sound } => warp(sound),
+            AudioCommand::Play { sound, .. }
+            | AudioCommand::PlayAtRate { sound, .. }
+            | AudioCommand::Halt { sound } => warp(sound),
             _ => false,
         })
         .collect();
-    let play = |id| AudioCommand::Play {
-        sound: nova_data::SoundId(id),
-        volume: AudioSettings::default().effects_volume,
-        priority: if id == 128 {
-            nova_audio::priority::JUMP
-        } else {
-            nova_audio::priority::ARRIVAL
-        },
-    };
     let halt = |id| AudioCommand::Halt {
         sound: nova_data::SoundId(id),
     };
-    assert_eq!(commands, [play(128), halt(128), halt(129), play(130)]);
+    assert_eq!(
+        commands,
+        [warp_up(), halt(128), halt(129), warp_out(), warp_out()]
+    );
 }
 
 /// Fires every time, recording each percent it is asked.
@@ -1147,6 +1188,7 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
     harness.choose(MenuChoice::OpenPilot);
     assert_eq!(harness.showing(), Showing::OpenPilot);
     harness.press(Key::Enter);
+    harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().pilot().name(), "Ada");
     harness.jump_to_beta();
@@ -1186,7 +1228,10 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // A unit every 30 ticks: a unit a second.
     const REGEN_TICKS: i16 = 30;
     let data = data_with(&ship_with_regen(REGEN_TICKS));
-    let mut harness = Harness::flying_over(data, SharedChance::default());
+    // Arriving at rest, by the other reading, so the second jump starts
+    // from where the first arrives.
+    let at_rest = Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible);
+    let mut harness = Harness::flying_by(data, SharedChance::default(), at_rest);
     // A first jump drains the tank below full, so the second jump's
     // `before` sits where regen is free to show, not clamped at the top.
     harness.jump_to_beta();
@@ -1198,10 +1243,13 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     assert!(before < 300.0, "below full, so regen could show: {before}");
 
     let arrived = harness.arrive_in(130);
-    assert_eq!(
-        harness.session().reserves().fuel.now,
-        before - JUMP_FUEL,
-        "none regained during the jump or as a lump on arrival"
+    // `_HandlePlayer` regenerates through the warp stage too
+    // (@0x6d96d-0x6d9c3): at its normal rate, a unit a second, over a warp
+    // shorter than 6 seconds, and no lump on arrival.
+    let landed_with = harness.session().reserves().fuel.now;
+    assert!(
+        before - JUMP_FUEL < landed_with && landed_with < before - JUMP_FUEL + 6.0,
+        "regained through the warp at its rate alone: {landed_with}"
     );
     assert!(fuel_bar(&arrived) < bar_before, "{}", fuel_bar(&arrived));
 
@@ -1211,10 +1259,10 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // boundaries the fixed step may fall either side of.
     let ticks = f32::from(seconds) * TICKS_PER_SECOND as f32;
     let regen_over_the_run = ticks / f32::from(REGEN_TICKS);
-    let at_most = before - JUMP_FUEL + regen_over_the_run + 1.0;
+    let at_most = landed_with + regen_over_the_run + 1.0;
     let fuel = harness.session().reserves().fuel.now;
     assert!(
-        before - JUMP_FUEL < fuel && fuel <= at_most,
+        landed_with < fuel && fuel <= at_most,
         "creeping back at its normal rate, at most {at_most}: {fuel}"
     );
 }
@@ -1232,6 +1280,7 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     let mut harness = Harness::on_the_menu(SharedChance::default(), &store);
     harness.choose(MenuChoice::OpenPilot);
     harness.press(Key::Enter);
+    harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(129));
@@ -1327,7 +1376,7 @@ fn white(frame: &Frame) -> bool {
 }
 
 #[test]
-fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
+fn with_hyperspace_effects_off_a_jump_arrives_without_fading() {
     let mut harness = Harness::on_the_menu_with_prefs(&MemoryPilots::new());
     harness.new_pilot("Ada");
 
@@ -1341,19 +1390,19 @@ fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
     assert_eq!(harness.showing(), Showing::Flight);
     assert!(!harness.flight().hyperspace_effects());
 
-    // J: the stars streak with no fade, the ship arrives as the streak
-    // ends, the arrival shows solid white once, and the jump is over.
+    // J: the ship warps away with no fade, arrives when the session ends
+    // the warp, the arrival shows solid white once, and the jump is over.
     harness.out_towards_beta();
     harness.press(Key::Char('j'));
-    let mut streaking = None;
+    let mut warping = None;
     let mut arrived = None;
     let mut whites = 0;
-    for n in 0..600_u64 {
+    for n in 0..1200_u64 {
         let frame = harness.frame();
         assert!(!fading(&frame), "frame {n} fades");
         whites += usize::from(white(&frame));
-        if streaking.is_none() && harness.flight().jump_effect().is_some() {
-            streaking = Some(n);
+        if warping.is_none() && harness.flight().jump_effect().is_some() {
+            warping = Some(n);
         }
         if arrived.is_none() && harness.session().system() == SystemId(129) {
             arrived = Some(n);
@@ -1368,14 +1417,9 @@ fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
             break;
         }
     }
-    let streaking = streaking.expect("streaked");
+    let warping = warping.expect("warped");
     let arrived = arrived.expect("arrived in Beta");
-    let streak_frames = STREAK_FOR.as_millis() as u64 * 60 / 1000;
-    let took = arrived - streaking;
-    assert!(
-        streak_frames - 1 <= took && took <= streak_frames + 1,
-        "arrived {took} frames after the streak began"
-    );
+    assert!(arrived > warping, "arrived {arrived}, warping {warping}");
     assert!(whites >= 1, "a white arrival frame");
     assert!(harness.flight().jump_effect().is_none(), "the jump is over");
 
@@ -1394,7 +1438,7 @@ fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
     harness.press(Key::Char('j'));
     let mut faded_out = false;
     let mut faded_in = false;
-    for _ in 0..600 {
+    for _ in 0..1200 {
         let frame = harness.frame();
         let gamma = harness.session().system() == SystemId(130);
         faded_out |= !gamma && fading(&frame);
@@ -1543,3 +1587,5 @@ fn escape_on_the_hypergate_map_enters_the_gate_too() {
     assert_eq!(harness.session().system(), SystemId(130));
     assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
 }
+
+crate::common::entry_harness!(Harness, click, frame);

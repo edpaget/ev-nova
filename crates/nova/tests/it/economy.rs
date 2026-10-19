@@ -21,6 +21,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::common::EntryHarness;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -792,17 +793,19 @@ impl Harness {
     }
 
     /// Brings the ship to rest: Down turns it to face against its motion,
-    /// then Up thrusts until it has all but stopped, and both let go.
+    /// within a turn of where reverse aims, where it stops turning, then Up
+    /// thrusts until it has all but stopped, and both let go.
     fn brake(&mut self) {
         let mut held = Vec::new();
+        let turn = self.session().handling().turn_rate;
         for _ in 0..600 {
             let ship = self.ship();
-            if ship.velocity.length() < 0.5 {
+            let aim = nova_sim::player_turn::reverse_aim(ship.velocity);
+            let Some(against) = aim.filter(|_| ship.velocity.length() >= 0.5) else {
                 self.hold(&mut held, &[]);
                 return;
-            }
-            let against = heading_of(ship.velocity * -1.0);
-            let codes = if shortest_turn(ship.heading, against).abs() < 1e-3 {
+            };
+            let codes = if shortest_turn(ship.heading, f32::from(against)).abs() <= turn {
                 [KeyCode::ArrowUp]
             } else {
                 [KeyCode::ArrowDown]
@@ -873,6 +876,7 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
     game.click(new_pilot);
     game.type_name("Ada");
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert_eq!(game.pilot().ship(), OLD);
@@ -1060,6 +1064,7 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
+    game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     let restored = game.pilot();
     assert_eq!(restored, flown);
@@ -1080,3 +1085,5 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     assert_eq!(Some(restored.date()), days.nth(8));
     assert_eq!(game.session().stats(), stats);
 }
+
+crate::common::entry_harness!(Harness, click, frame);

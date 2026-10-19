@@ -156,6 +156,8 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         free_mass: ship.free_mass,
         flags: ship.flags.bits(),
         flags2: ship.flags2.bits(),
+        ionize_max: ship.ionize_max,
+        deionize: ship.deionize,
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
         armor_rech: ship.armor_rech,
@@ -1425,8 +1427,10 @@ impl Combatant {
             top_speed: self.top_speed,
             jumping: false,
             afterburner: false,
+            afterburner_beam: false,
             tractor: &mut self.tractor,
             ion: &mut self.ion,
+            ion_capacity: 0.0,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,
@@ -1444,6 +1448,7 @@ impl Combatant {
                 ShipRef::Player => nova_sim::ship_layer::Slot::Player,
                 ShipRef::Npc(id) => nova_sim::ship_layer::Slot::Berth(id.0),
             },
+            resists: nova_sim::combat::stellar_hazards::HazardResistance::default(),
         }
     }
 }
@@ -2493,7 +2498,8 @@ fn the_stock_emp_torpedo_ionizes_the_ship_it_hits_and_its_blasts_circle() {
         ships[1].ion,
         Ion {
             charge: 100.0,
-            colour: 0x00d4_ffff
+            colour: 0x00d4_ffff,
+            ..Ion::default()
         }
     );
     let mut ships = [
@@ -2509,7 +2515,8 @@ fn the_stock_emp_torpedo_ionizes_the_ship_it_hits_and_its_blasts_circle() {
         ships[2].ion,
         Ion {
             charge: 75.0,
-            colour: 0x00d4_ffff
+            colour: 0x00d4_ffff,
+            ..Ion::default()
         }
     );
     let shuttle = class(&data, &arsenal, ShipId(128)).reserves.shield.now;
@@ -2602,7 +2609,8 @@ fn the_stock_pulse_laser_ionizes_by_4_on_every_hit_tick() {
         ships[1].ion,
         Ion {
             charge: 4.0 * f32::from(hits),
-            colour: 0x00ff_00ff
+            colour: 0x00ff_00ff,
+            ..Ion::default()
         }
     );
 }
@@ -3078,6 +3086,7 @@ fn every_stock_player_homing_missile_locks_its_target_at_31_ticks() {
 /// 100 pixels away at `bearing`, and which way: a shot's heading, or, for
 /// a beam (over within the tick when it lasts a tick), the bearing when
 /// it hit that ship.
+#[allow(clippy::large_types_passed_by_value)] // a test's fixture, built in place
 fn fires_at(spec: &WeaponSpec, hull: HullSpec, bearing: f32) -> Option<f32> {
     let at = facing(bearing) * 100.0;
     let mut combat = Combat::default();
@@ -4007,7 +4016,9 @@ fn boarding(session: &Session, quarry: &nova_sim::Npc) -> nova_sim::Controls {
         };
         (turn, side)
     };
-    if error.length() > accel || distance > quarry.hull.board_reach / 3.0 {
+    if error.length() > accel
+        || distance > quarry.hull.board_reach.x.min(quarry.hull.board_reach.y) / 3.0
+    {
         let (turn, side) = toward(heading_of(error));
         return nova_sim::Controls {
             thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,
@@ -4929,6 +4940,7 @@ fn table_of(data: &GameData, system: i16) -> SpawnTable {
         &nova_sim::combat::armament::Arsenal::read(data),
         &NovaPersons::default(),
         &std::collections::BTreeSet::new(),
+        nova_sim::RuleSource::Engine,
     )
 }
 
@@ -5667,6 +5679,7 @@ fn stock_pick_made(
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

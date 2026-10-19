@@ -167,8 +167,8 @@ impl Session {
                 .ship_name(self.pilot.ship)
                 .unwrap_or_default()
                 .to_owned(),
-            turn_rate: player_info::turn_shown(&totals),
-            accel: player_info::accel_shown(&totals),
+            turn_rate: player_info::turn_shown(&totals, self.ionization()),
+            accel: player_info::accel_shown(&totals, self.ionization()),
             max_speed: player_info::speed_shown(&totals),
             credits: self.pilot.cash,
             shield: player_info::reserve_shown(reserves.shield.now, self.stats.shield),
@@ -276,7 +276,7 @@ impl Session {
     /// The Legal Status row (`_SystemIsInhabited` 0x4c4a, then
     /// [`Session::legal_status_in`]): the player's system's stellars read
     /// from `catalog`; "N/A" in an uninhabited system.
-    fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
+    pub(super) fn legal_status(&self, catalog: &impl PilotCatalog, words: &Words) -> String {
         let system = self.pilot.system;
         let sites = overlaid_sites(&self.galaxy, catalog, system);
         let inhabited = player_info::system_is_inhabited(
@@ -622,6 +622,25 @@ mod tests {
             (info.max_speed, info.accel, info.turn_rate),
             (800, 550, 150)
         );
+    }
+
+    #[test]
+    fn an_ionized_players_turn_and_accel_rows_read_the_slowed_rates() {
+        let mut catalog = named();
+        catalog.ships = vec![(
+            ShipId(128),
+            Ok(crate::handling::ShipFields {
+                ionize_max: 400,
+                ..crate::testkit::FAST
+            }),
+        )];
+        let mut session = Session::start(&catalog).expect("starts");
+        let plain = session.player_info(&catalog);
+        assert_eq!((plain.accel, plain.turn_rate), (450, 90));
+        session.ion.charge = 200.0;
+        let info = session.player_info(&catalog);
+        assert_eq!((info.accel, info.turn_rate), (225, 45));
+        assert_eq!(info.max_speed, plain.max_speed);
     }
 
     /// [`catalog`] with mission 140 carrying `tons` of cargo type 1,

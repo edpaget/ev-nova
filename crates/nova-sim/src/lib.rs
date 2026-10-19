@@ -157,8 +157,13 @@
 //!   shipyard shares), the [`ControlBits`] port a ship's `Availability` goes through, what a
 //!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
+//! - [`gravity`]: a stellar's pull by inverse square and who resists it,
+//!   and [`deadly_stellar`]: the stellars that destroy the ships that
+//!   touch them.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
+//! - [`jump_arrival`]: the original's jump arrival, 1350 out on the
+//!   side the player came from at its top speed.
 //! - [`inertialess`]: inertialess flight: who flies it
 //!   ([`is_inertialess`](inertialess::is_inertialess)), the speed along
 //!   the heading thrust and brakes move, and the velocity pulled toward
@@ -342,6 +347,9 @@ pub use nova_sim_base::afterburner;
 pub use nova_sim_base::blink;
 pub use nova_sim_base::chance;
 pub use nova_sim_base::clock;
+pub use nova_sim_base::deadly_stellar;
+pub use nova_sim_base::gravity;
+pub use nova_sim_base::ionization;
 pub use nova_sim_catalog::buoy;
 pub use nova_sim_catalog::catalog;
 pub use nova_sim_catalog::control;
@@ -377,6 +385,7 @@ pub mod map_search;
 pub use nova_sim_ai::hail;
 pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
+pub use nova_sim_ai::jump_arrival;
 pub use nova_sim_ai::navigation;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;
@@ -400,6 +409,7 @@ pub use nova_sim_story::nebula;
 pub use nova_sim_story::news;
 pub use nova_sim_story::person;
 pub use nova_sim_story::pilot;
+pub mod pilot_panel;
 pub mod pre_jump;
 pub use nova_sim_story::rank;
 pub mod rating;
@@ -409,8 +419,10 @@ pub use nova_sim_base::reserves;
 pub use nova_sim_base::rule_values;
 pub use nova_sim_base::rulebook;
 pub use nova_sim_base::rules;
+pub use nova_sim_base::skill;
 pub use nova_sim_base::speed_cap;
 pub use nova_sim_combat::sabotage;
+pub use nova_sim_combat::self_destruct;
 pub mod save;
 pub mod saves;
 pub use nova_sim_ai::scan;
@@ -456,9 +468,9 @@ pub use catalog::{
     GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics, TextMovies,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    RankId, RankRecord, ShipDisplay, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};
@@ -506,7 +518,7 @@ pub use landing::{
 };
 pub use legal::{Crime, CrimeMap, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
-pub use message::SimMessage;
+pub use message::{SelfDestructLine, SimMessage};
 pub use navigation::{NavMode, next_after, stellar_under};
 pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
@@ -532,7 +544,8 @@ pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
-pub use saves::{PilotKeeper, PilotStore, pilot_key};
+pub use saves::{OpenError, PilotKeeper, PilotStore, pilot_key};
+pub use self_destruct::SelfDestruct;
 pub use session::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, Departure, ESCAPE_POD_SHIP, Hailed,
     HookRules, HoverPlace, InfoRow, InterfaceLoad, LandPress, MapClicked, MapPress,
@@ -552,6 +565,7 @@ pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCa
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
+pub use traffic::kept_berths::KeptBerths;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Leave, Traffic, World};
 pub use tutorial::{Tutorial, TutorialHint};

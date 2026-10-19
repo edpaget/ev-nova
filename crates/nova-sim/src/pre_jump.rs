@@ -19,11 +19,11 @@
 //! as the player's turn block does
 //! ([`player_turn`](crate::player_turn)): by the turn rate's whole
 //! degrees, stopping within a turn of the aim without snapping onto it.
-//! The turn is done once the ship is within that turn ([`settled`]). The
-//! warp's own facing test, within max(`_ShipTurnRate`, 30°) of the
-//! bearing (@0x6d16d-0x6d1a1), and the brake's whole-degree arc
-//! (@0x6b765-0x6b7ef) are
-//! rdm:phase/ship-handling-fidelity/phase-8-warp-out's.
+//! The turn is done once the ship is within that turn ([`settled`]),
+//! which ends the engine's pre-jump stage; the warp's own facing test,
+//! within max(`_ShipTurnRate`, 30°) of the bearing (@0x6d16d-0x6d1a1),
+//! gates the move-off, which can come before (see the session's
+//! `warp_stage` module).
 //!
 //! The original's warp stage starts as the brake ends, not after the
 //! turn: on the first frame the ship is slow enough, or at once when it
@@ -37,9 +37,17 @@
 //!
 //! The ship is slow enough when each component of its velocity is under
 //! [`JUMP_SPEED`] (@0x6b045, @0x6b579): it slows below a speed, and does
-//! not brake to a stop. The original also multiplies the velocity by 0.992
-//! each frame while braking; that drag is left out, as the simulation has
-//! none.
+//! not brake to a stop.
+//!
+//! **The brake** (@0x6b765-0x6b868). Each tick it aims against the
+//! velocity ([`brake_aim`]) and thrusts while that aim is within
+//! [`BRAKE_THRUST_ARC`], or its turn rate plus one if wider, of its
+//! heading, in whole degrees ([`brake_thrusts`]). It thrusts before it
+//! turns, by `_Accel` along its unturned whole-degree heading, not
+//! through the per-axis cap of `_AdjustedAccel`. Then, thrust or not, its
+//! velocity is multiplied by [`BRAKE_DRAG`], 0.992 ([`drag_by`]). The
+//! thrusting tick also raises its glow
+//! ([`brake_glow`](crate::glow::brake_glow)), which the session ramps.
 //!
 //! [`stage`] says which of these a ship is in, and [`fly`] flies one tick
 //! of it. A ship that cannot turn skips the turn, and one that cannot turn
@@ -57,13 +65,14 @@
 //! velocity following its heading.
 
 use crate::flight::{
-    Caps, FlightRules, Flyer, ShipState, Turn, advance, heading_of, inertialess_advance,
-    shortest_turn,
+    Caps, FlightRules, Flyer, ShipState, Turn, advance, drag_by, facing, inertialess_advance,
 };
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::inertialess::REVERSE;
 use crate::player_turn::{PlayerTurn, brake_aim, settled, step_of, turn};
+use crate::speed_cap::SpeedCap;
+use crate::trig::{self, angular_difference, whole};
 
 /// The speed, in pixels a tick, that each component of a ship's velocity
 /// must be under for it to jump: the original's test that
@@ -149,17 +158,46 @@ pub fn fly(
     }
     let (aim, thrust) = match stage {
         PreJump::Brake => {
-            let behind = heading_of(ship.velocity * -1.0);
-            let arc = BRAKE_THRUST_ARC.max(handling.turn_rate + 1.0);
-            let thrust = shortest_turn(ship.heading, behind).abs() < arc;
-            (Some(brake_aim(ship.velocity)), thrust)
+            let aim = brake_aim(ship.velocity);
+            let thrust = brake_thrusts(ship.heading, aim, handling.turn_rate);
+            if thrust {
+                ship.velocity = ship.velocity + brake_push(ship.heading, handling.accel, flight);
+            }
+            ship.velocity = drag_by(ship.velocity, BRAKE_DRAG);
+            (Some(aim), thrust)
         }
         PreJump::Turn => (bearing, false),
         PreJump::Ready => return false,
     };
     (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
-    advance(ship, handling, thrust, caps, flight, Flyer::Player);
+    advance(ship, handling, false, caps, flight, Flyer::Player);
     thrust
+}
+
+/// What the brake multiplies the velocity by each tick (0.992, f64
+/// @0xdd980).
+pub const BRAKE_DRAG: f64 = 0.992;
+
+/// Whether a ship heading `heading`, turning `turn_rate` a tick, thrusts
+/// to brake against its motion toward `aim`: |`_AngularDifference`(aim,
+/// trunc heading)| < max(`turn_rate` + 1, [`BRAKE_THRUST_ARC`]), in whole
+/// degrees (@0x6b765-0x6b7ef).
+#[must_use]
+pub fn brake_thrusts(heading: f32, aim: i16, turn_rate: f32) -> bool {
+    let off = f32::from(angular_difference(aim, whole(heading)).abs());
+    let arc = (turn_rate + 1.0).max(BRAKE_THRUST_ARC);
+    arc > off
+}
+
+/// The brake's push of `accel` along `heading`, unturned: `_Accel` along
+/// its whole degree (@0x6b7f7-0x6b816), not `_AdjustedAccel`, so no
+/// per-axis cap applies; by [`SpeedCap::Circle`] along the heading itself,
+/// as that reading thrusts.
+fn brake_push(heading: f32, accel: f32, flight: FlightRules) -> Vec2 {
+    match flight.speed_cap {
+        SpeedCap::PerAxis => trig::accel(whole(heading), accel),
+        SpeedCap::Circle => facing(heading) * accel,
+    }
 }
 
 #[cfg(test)]
@@ -448,12 +486,22 @@ mod tests {
     #[test]
     fn a_braking_ship_thrusts_only_once_it_faces_nearly_against_its_motion() {
         assert!(brakes_at(&SHIP, 0.0));
-        assert!(brakes_at(&SHIP, 19.9));
-        assert!(brakes_at(&SHIP, -19.9));
+        assert!(brakes_at(&SHIP, 19.9), "whole degree 199, 19 off");
+        assert!(brakes_at(&SHIP, -19.0), "161, 19 off");
         assert!(!brakes_at(&SHIP, 20.0));
         assert!(!brakes_at(&SHIP, 20.1));
         assert!(!brakes_at(&SHIP, -20.1));
         assert!(!brakes_at(&SHIP, 180.0));
+    }
+
+    #[test]
+    fn the_thrust_arc_compares_whole_degrees() {
+        // 160.1 is 19.9° off 180, which the float test would take; its
+        // whole degree, 160, is 20 off, which `_AngularDifference` of the
+        // truncated heading gives (@0x6b765-0x6b7ef).
+        assert!(!brakes_at(&SHIP, -19.9));
+        assert!(!brakes_at(&SHIP, -19.5));
+        assert!(brakes_at(&SHIP, 19.99), "199.99 truncates to 199");
     }
 
     #[test]
@@ -468,8 +516,89 @@ mod tests {
             turn_rate: 19.5,
             ..SHIP
         };
-        assert!(brakes_at(&at_19, 20.4), "19.5 + 1 is wider than 20");
-        assert!(!brakes_at(&at_19, 20.5));
+        assert!(brakes_at(&at_19, 20.9), "19.5 + 1 is wider than 20");
+        assert!(!brakes_at(&at_19, 21.0));
+    }
+
+    /// `v` × 0.992 a component, in the original's widths (f64 product,
+    /// stored f32, @0x6b832-0x6b85c).
+    #[allow(clippy::cast_possible_truncation)]
+    fn dragged(v: Vec2) -> Vec2 {
+        let drag = |c: f32| (f64::from(c) * 0.992) as f32;
+        Vec2::new(drag(v.x), drag(v.y))
+    }
+
+    #[test]
+    fn each_braking_tick_drags_the_velocity_by_0_992_thrust_or_not() {
+        // Facing along its motion: no thrust.
+        let mut state = ship(Vec2::new(0.0, -3.0), 0.0);
+        let thrust = fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        );
+        assert!(!thrust);
+        assert_eq!(state.velocity, dragged(Vec2::new(0.0, -3.0)));
+        assert_eq!(state.velocity.y.to_bits(), (-2.976_f32).to_bits());
+        assert_eq!(state.position, Vec2::new(0.0, 1000.0) + state.velocity);
+        // Facing against it: the thrust, then the drag.
+        let mut state = ship(Vec2::new(0.0, -3.0), 180.0);
+        assert!(fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        ));
+        let pushed = Vec2::new(0.0, -3.0) + crate::trig::accel(180, SHIP.accel);
+        assert_eq!(state.velocity, dragged(pushed));
+    }
+
+    #[test]
+    fn the_brake_thrusts_along_the_unturned_whole_degree_heading_by_plain_accel() {
+        // 185.7 truncates to 185, 5 off the aim of 180; it turns 3 to
+        // 182.7 after the thrust.
+        let mut state = ship(Vec2::new(0.0, -3.0), 185.7);
+        assert!(fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+        ));
+        assert_eq!(state.heading, 182.7);
+        let pushed = Vec2::new(0.0, -3.0) + crate::trig::accel(185, SHIP.accel);
+        assert_eq!(state.velocity, dragged(pushed));
+    }
+
+    #[test]
+    fn under_the_circle_cap_the_brake_thrusts_along_the_heading_itself() {
+        let circle = FlightRules {
+            speed_cap: SpeedCap::Circle,
+            ..FlightRules::default()
+        };
+        let mut state = ship(Vec2::new(0.0, -3.0), 185.7);
+        assert!(fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            circle,
+            None,
+        ));
+        let pushed = Vec2::new(0.0, -3.0) + facing(185.7) * SHIP.accel;
+        assert_eq!(state.velocity, dragged(pushed));
+        let whole_degree = Vec2::new(0.0, -3.0) + crate::trig::accel(185, SHIP.accel);
+        assert_ne!(state.velocity, dragged(whole_degree), "not the 185° push");
     }
 
     #[test]
@@ -481,7 +610,9 @@ mod tests {
             if stage(&state, &SHIP, EAST, true, WHOLE, false) != PreJump::Brake {
                 break;
             }
-            let off = shortest_turn(state.heading, 180.0).abs();
+            let aim = brake_aim(state.velocity);
+            let whole = crate::trig::whole(state.heading);
+            let off = f32::from(crate::trig::angular_difference(aim, whole).abs());
             let speed = state.velocity.length();
             let thrust = fly(
                 &mut state,
@@ -497,7 +628,8 @@ mod tests {
                 thrust_began.get_or_insert(k);
                 assert!(state.velocity.length() < speed, "slowing: {state:?}");
             } else {
-                assert_eq!(state.velocity.length(), speed, "coasting: {state:?}");
+                let drag = state.velocity.length() / speed;
+                assert!((drag - 0.992).abs() < 1e-5, "coasting, dragged: {state:?}");
             }
         }
         // 54 ticks to come within 20 degrees of 180 at 3 a tick.

@@ -88,8 +88,10 @@ impl AuxShips {
         }
     }
 
-    /// The restart of the enter-system hook (@0x99fb5-0x99ff4) and of the
-    /// take-off (@0x634df-0x6353c), for a mission of `Flags` `flags`:
+    /// The restart of the enter-system hook (@0x99fb5-0x99ff4), of the
+    /// take-off (@0x634df-0x6353c) and of `_OpenLastPilotFile`'s loop at
+    /// launch (@0x765d4-0x76637, `nova_sim::Session::open_at_launch`), for
+    /// a mission of `Flags` `flags`:
     /// with [`AUX_EVERY_VISIT`] its count ([`aux_count`]) left to come
     /// again; the countdown `Rand(70) + 70`, drawn on `chance`; none
     /// arrived.
@@ -99,6 +101,25 @@ impl AuxShips {
         }
         self.countdown = countdown(chance);
         self.arrived = 0;
+    }
+
+    /// The restart of Open Pilot (`_MainScreenChoice(1)` @0x1a918-0x1a982),
+    /// for a mission of `Flags` `flags`: with [`AUX_EVERY_VISIT`] its count
+    /// ([`aux_count`]) left to come again; then, only while some are left
+    /// to come (+0x6e > 0, @0x1a94a-0x1a94f), the countdown
+    /// `Rand(70) + 70`, drawn on `chance` (@0x1a951-0x1a966), and none
+    /// arrived. With none left the countdown and those arrived stay as
+    /// the save had them. The take-off and the enter-system hook
+    /// ([`AuxShips::restart`]) have no such guard, nor has
+    /// `_OpenLastPilotFile`'s loop at launch (@0x765d4-0x76637).
+    pub fn restart_from_main_screen(&mut self, aux: &AuxShip, flags: u16, chance: &mut dyn Chance) {
+        if flags & AUX_EVERY_VISIT != 0 {
+            self.left = aux_count(aux);
+        }
+        if self.left > 0 {
+            self.countdown = countdown(chance);
+            self.arrived = 0;
+        }
     }
 
     /// How many of `aux`'s ships come now, once the system allows them
@@ -321,6 +342,72 @@ mod tests {
         let mut ships = spent;
         ships.restart(&aux(4, 700), AUX_EVERY_VISIT, &mut Draws::of(&[0]));
         assert_eq!(ships.left, 0, "a düde out of range has none");
+    }
+
+    #[test]
+    fn the_main_screens_restart_refills_with_0x0010_and_draws_only_with_some_left() {
+        let spent = AuxShips {
+            countdown: 5,
+            arrived: 2,
+            left: 1,
+        };
+        let mut ships = spent;
+        let mut draws = Draws::of(&[9]);
+        ships.restart_from_main_screen(&aux(4, 200), 0x0001, &mut draws);
+        assert_eq!(
+            ships,
+            AuxShips {
+                countdown: 79,
+                arrived: 0,
+                left: 1
+            },
+            "some left: drawn, none arrived"
+        );
+        assert_eq!(draws.asked, [COUNTDOWN_DRAW]);
+        let mut ships = AuxShips { left: 0, ..spent };
+        ships.restart_from_main_screen(&aux(4, 200), AUX_EVERY_VISIT, &mut Draws::of(&[0]));
+        assert_eq!(
+            ships,
+            AuxShips {
+                countdown: 70,
+                arrived: 0,
+                left: 4
+            },
+            "refilled first, then drawn"
+        );
+    }
+
+    #[test]
+    fn the_main_screens_restart_leaves_the_countdown_with_none_left() {
+        for left in [0, -1] {
+            let before = AuxShips {
+                countdown: 5,
+                arrived: 2,
+                left,
+            };
+            let mut ships = before;
+            let mut draws = Draws::of(&[]);
+            ships.restart_from_main_screen(&aux(4, 200), 0x0001, &mut draws);
+            assert_eq!(ships, before, "{left}");
+            assert!(draws.asked.is_empty(), "nothing drawn ({left})");
+        }
+        let mut ships = AuxShips {
+            countdown: 5,
+            arrived: 2,
+            left: 3,
+        };
+        let mut draws = Draws::of(&[]);
+        ships.restart_from_main_screen(&aux(4, 700), AUX_EVERY_VISIT, &mut draws);
+        assert_eq!(
+            ships,
+            AuxShips {
+                countdown: 5,
+                arrived: 2,
+                left: 0
+            },
+            "a düde out of range refills none, so nothing is drawn"
+        );
+        assert!(draws.asked.is_empty());
     }
 
     #[test]

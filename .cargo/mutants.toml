@@ -23,6 +23,19 @@ exclude_re = [
     # words it steps early are only another ship's or the player's, which
     # nothing reads before the frame.
     "nova-sim/src/session/npc_escape\\.rs:[0-9]+:[0-9]+: replace escape_may_run -> bool with true$",
+    # The jump arrival's reverse bearing, (bearing + 180) mod 360: `_Accel`
+    # reads it through `_TableSin` and `_TableCos`, which take any whole
+    # degree mod 360 (`trig::table_radians`), so bearing + 180 + 360 and
+    # bearing - 180 place the ship at the same bits for every bearing.
+    "nova-sim-ai/src/jump_arrival\\.rs:[0-9]+:[0-9]+: replace (% with \\+|\\+ with -) in top_speed_arrival$",
+    # The board check's reverse heading, (theirs + 180) mod 360: for whole
+    # degrees in 0..=360, theirs - 180 is the same reverse less 360, and
+    # `_AngularDifference`'s two folds give the same distance from it for
+    # every player heading (checked over all 361 x 361 pairs).
+    "board\\.rs:[0-9]+:[0-9]+: replace \\+ with - in check_board",
+    # `_RandomSkillLevel`'s side count, 2 x SkillVar + 1, is odd, so never
+    # 0: `> 0` and `>= 0` split the signed `_Rand` the same way.
+    "nova-sim-base/src/skill\\.rs:49:26: replace > with >= in random_skill_level$",
     # `_ShipTurnRate`'s player floor (`floored_turn`) sets a rate below 1.0
     # to 1.0; at exactly 1.0, `<=` sets it to 1.0 too.
     "handling.rs:[0-9]+:[0-9]+: replace < with <= in floored_turn",
@@ -479,4 +492,27 @@ exclude_re = [
     # A berth holds one ship, so a fighter just put in the system never
     # shares its carrier's: `>` and `>=` pick the same fighters above it.
     "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",
+    # The fold steps only with a direction (`fold.dir == 0` is the other
+    # arm), so its tests of `dir > 0` and `dir < 0` read the same as
+    # `>= 0` and `<= 0` there.
+    "nova-sim-combat/src/combat/ship_frames\\.rs:429:29: replace > with >= in ShipFrames::fold$",
+    "nova-sim-combat/src/combat/ship_frames\\.rs:432:36: replace < with <= in ShipFrames::fold$",
+    # A shield layer of exactly a turn's frames gives the hull's frame mod a
+    # turn, its rotation, either way; and one of a single frame gives 0
+    # either way.
+    "nova-sim-combat/src/combat/ship_frames\\.rs:(308:37|310:32): replace > with >= in FrameSpec::shield_frame$",
+    # A frame-angle entry at exactly 270 points along x, so the up or down
+    # compression's y factor changes nothing and the x factor not its
+    # angle.
+    "nova-sim-combat/src/combat/ship_frames\\.rs:162:41: replace > with >= in FrameTable::angle$",
+    # The reverse turn's sign is read only off a turn already beyond the
+    # turn rate, never 0.
+    "nova-sim-ai/src/traffic/ship_display\\.rs:243:27: replace > with >= in record$",
+    # The warp-out's glow at 32 raised by 3 is capped back to 32.
+    "nova-sim-ai/src/traffic/ship_display\\.rs:362:14: replace < with <= in warp_glow$",
+    # An f32 widened to a double is never exactly 0.7 or 0.33, which no
+    # f32 holds, so the ionization factor's tests against them (@0xdd0d0,
+    # @0xdd568) read the same with or without equality.
+    "nova-sim-base/src/ionization\\.rs:62:26: replace > with >= in slowdown$",
+    "nova-sim-combat/src/combat/ion_tint\\.rs:54:26: replace < with <= in tint_level$",
 ]

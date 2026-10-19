@@ -308,7 +308,12 @@ impl AppScreen {
     /// original's app menu opens them (`_PrefAEVTHandler` @0x56181), and
     /// P on the main menu, the ship browser and the galaxy viewer, away
     /// from flight and the spaceport, where P is the player info key. A
-    /// press opens them; its repeats and release do nothing.
+    /// press opens them; its release does nothing, and so do its repeats
+    /// but on the main menu, where `_MainScreenKey` reads a repeat of P as
+    /// it reads a press (@0x1abaf): one that reaches the menu once the
+    /// Preferences have closed clicks and opens them again. The Cocoa
+    /// Preferences window takes those that come while it is open
+    /// (`_RunPrefsDialog` @0xcd401).
     pub(super) fn preferences_key(&mut self, input: &Input) -> bool {
         let Input::Key {
             key,
@@ -324,11 +329,12 @@ impl AppScreen {
         if !taken || self.dialogs.is_none() {
             return false;
         }
-        if pressed && !repeat {
+        let menu_key = self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held;
+        if pressed && (!repeat || menu_key) {
             // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
             // goes to the original's menus (`MenuKey`), which do not.
             // It opens once the click has played.
-            if self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held {
+            if menu_key {
                 self.click_then(MenuAction::Choice(MenuChoice::Preferences));
             } else {
                 self.open_preferences();

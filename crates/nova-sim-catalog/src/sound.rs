@@ -23,24 +23,33 @@ pub enum SimSound {
     /// @0x6b645-0x6b690), before the turn to the jump's bearing. None
     /// sounds while 128 still plays from an earlier start: the
     /// still-playing skip (@0x6b645-0x6b658), which the session decides
-    /// (see the [`warp`](crate::warp) module's `WarpUps`).
-    JumpBegan,
+    /// (see the [`warp`](crate::warp) module's `WarpUps`). It plays at
+    /// `rate`, a 16.16 fraction of its own rate, pitched by the ship
+    /// class's warp factor (`_AdjustWarpSoundSpeed` @0x5ecc, called
+    /// @0x6b67d-0x6b688; [`warp_up_rate`](crate::warp::warp_up_rate)).
+    JumpBegan {
+        /// The playback rate, 0x10000 at its own.
+        rate: u32,
+    },
     /// The warp stage of a jump began in double time: the double-time
     /// warp-up, `_warpUpSnd[1]`, `snd ` 129 "Warp up x2" (`_HandlePlayer`
     /// @0x6b60d-0x6b63f, @0x6b66f-0x6b690), in place of
     /// [`SimSound::JumpBegan`], with its own still-playing skip
-    /// (@0x6b617-0x6b62b).
-    JumpBeganInDoubleTime,
+    /// (@0x6b617-0x6b62b), pitched as it is.
+    JumpBeganInDoubleTime {
+        /// The playback rate, 0x10000 at its own.
+        rate: u32,
+    },
     /// A jump ended in the next system: the warp-out, `snd ` 130
     /// (`_HandlePlayer` @0x6bbd3-0x6bc08; the hypergate @0x63e57 and the
     /// wormhole @0x6443d play it too). A jump's warp end first halts the
     /// warp-ups, a [`SimSound::Halt`] of [`WARP_UP_HALTS`] just before it
     /// (@0x6c6b7, @0x6c6d2); a gate or wormhole exit halts nothing. The
-    /// original's fallback end starts it a frame before the system switch
-    /// (@0x6c706); that lag isn't visible to the player. A jump's natural
-    /// end, both warp-ups finished, raises none while the last warp-out
-    /// still plays (@0x6bbe1-0x6bbe9; see
-    /// [`WarpOut`](crate::warp::WarpOut)).
+    /// fallback end raises both on its own pass, a pass before the system
+    /// switch (@0x6c706; see `nova_sim`'s `warp_stage` module); the arrival
+    /// after it is the natural end. A jump's natural end, both warp-ups
+    /// finished or halted, raises none while the last warp-out still plays
+    /// (@0x6bbe1-0x6bbe9; see [`WarpOut`](crate::warp::WarpOut)).
     Arrived,
     /// The player became threatened: the Red Alert, `snd ` 370
     /// (`_HandlePlayer` @0x68cdd-0x68cff; see
@@ -113,6 +122,12 @@ pub enum SimSound {
     /// on the message line: `_beepSnd[1]`, `snd ` 151
     /// (`_AIPlunderShipContents` @0x848e9-0x84908).
     ShipStolen,
+    /// A ship repairing the player finished, said on the comm line:
+    /// `_beepSnd[1]`, `snd ` 151 (`_LowLevelAIHandler` @0x86ddf-0x86e0a).
+    RepairsComplete,
+    /// A ship refuelling the player finished, said on the comm line:
+    /// `_beepSnd[1]`, `snd ` 151 (`_HighLevelAIHandler` @0x8f585-0x8f5b0).
+    EnergyTransferComplete,
     /// The player's ship was newly disabled or newly started to break up:
     /// `_beepSnd[1]`, `snd ` 151 (`_DamageShip` @0x3b11e, @0x3b221; see
     /// the session's `player_downed` module).
@@ -185,6 +200,25 @@ pub enum SimSound {
     /// original never does: the boarders go aboard first. Its priority,
     /// 8.
     Boarded,
+    /// A press in the plunder dialog that does something: `_beepSnd[2]`,
+    /// `snd ` 152, priority 1 (`_DoPlunderDialog`). Abort (@0x935cb); the
+    /// self-destruct tripped by a take's press (@0x93681, before `STR#`
+    /// 2002 #113); the cargo taken (@0x939b9), or with no room for it
+    /// (@0x937a0, #114); the credits taken (@0x93b3b); some ammunition
+    /// taken (@0x93f10), or none fitting (@0x93f77, #117); the energy, with
+    /// any on board (@0x94095); and the capture's successful roll, before
+    /// the fleet's room is checked (@0x94368). A person's grant line plays
+    /// it too, as the dialog opens, when it grants any (@0x933fe). The
+    /// capture's own self-destruct (@0x942de-0x94336) and the escort path
+    /// (@0x9459b-0x947cf) are silent; the refusals raise
+    /// [`SimSound::Refused`].
+    PlunderBeep,
+    /// Either button of the captured-ship assignment dialog:
+    /// `_beepSnd[1]`, `snd ` 151, priority 1
+    /// (`_DoCapturedShipAssignmentDialog`: "Use As My Ship" @0x5b66b,
+    /// "Use As Escort" @0x5b56b), before anything else is done, so a swap
+    /// dropped for want of a ship slot beeps too.
+    CaptureAssigned,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
@@ -198,8 +232,9 @@ pub enum SimSound {
     /// of it, on any channel. A halted warp-up is over for the session's
     /// still-playing skip and the double-time switch too. The player's final explosion raises it with
     /// [`PLAYER_EXPLOSION_HALTS`]; the eject, a sabotage kill outfit going
-    /// off, a disabled player's jump collapse and a jump's arrival with
-    /// [`WARP_UP_HALTS`], 128 and 129.
+    /// off, a disabled player's jump collapse and a jump's warp end (its
+    /// fallback's pass, or else its arrival) with [`WARP_UP_HALTS`], 128
+    /// and 129.
     Halt(&'static [SoundId]),
     /// The player ejected from its disabled or dying ship, into the escape
     /// pod or an escape ship: `_escapePodSnd`, `snd ` 372 "Eject"
@@ -240,11 +275,30 @@ pub enum SimSound {
     /// fast (@0x65fcc) and #130 can't board, a refused `PickupMode` 2
     /// pickup's too (@0x65ffe), all at priority 1, not modelled (see
     /// `nova_sim::Session::board`),
+    /// as does the plunder dialog's (`_DoPlunderDialog`, priority 1; see
+    /// `nova_sim::Session::plunder`): a take with nothing on board, cargo
+    /// (@0x93ad2), credits (@0x93cb8), ammunition (@0x93d2f) or energy
+    /// (@0x94256); a failed capture (@0x94936, #125); and a capture into a
+    /// full fleet (@0x9487f, #124),
     /// and every other refusal
     /// that beeps reuses it rather than adding a variant of its own. The
     /// audio side plays it at 1, its most common site's priority (rdm task
     /// `refused-and-port-ambient-priorities-by-site`).
     Refused,
+    /// The player began the self-destruct countdown: `_beepSnd[3]`,
+    /// `snd ` 153, at priority 15 (`_HandlePlayer` `PlaySound` @0x6fe33).
+    /// A dying player's start is silent and plays nothing, so it is no
+    /// [`SimSound::Refused`].
+    SelfDestructStarted,
+    /// A self-destruct countdown line, 4 to 1 seconds left: `_beepSnd[2]`,
+    /// `snd ` 152, at priority 15 (`PlaySound` @0x70065).
+    SelfDestructCountdown,
+    /// The player let go of the self-destruct chord while counting down:
+    /// `_beepSnd[1]`, `snd ` 151, at priority 15 (`PlaySound` @0x700de).
+    SelfDestructCancelled,
+    /// The self-destruct countdown ran out and the player's ship goes:
+    /// `_beepSnd[1]`, `snd ` 151, at priority 15 (`PlaySound` @0x701fb).
+    SelfDestructed,
 }
 
 /// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129
@@ -254,7 +308,10 @@ pub enum SimSound {
 /// a disabled player's jump collapse halts them before its
 /// [`SimSound::JumpCollapsed`] (@0x68a5c, @0x68a7f), and a jump's warp
 /// end halts them before its [`SimSound::Arrived`] (`_HandlePlayer`
-/// @0x6c6b7, @0x6c6d2, the warp-out @0x6c706).
+/// @0x6c6b7, @0x6c6d2, the warp-out @0x6c706): its fallback end on the
+/// fallback's own pass, a pass before the arrival, which then halts
+/// nothing; a jump's arrival with no fallback pass first, at the
+/// arrival.
 pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
 
 /// The sounds the player's final explosion halts, in order:

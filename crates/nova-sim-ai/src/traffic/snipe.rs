@@ -14,7 +14,10 @@
 //!   @0x871b2-0x871eb); or, with a last gun (+0xc8da,
 //!   [`Armament::last_gun`](crate::combat::armament::Armament::last_gun))
 //!   and by the engine, the lead angle at its target for that gun
-//!   (`_CalcLeadAngle` @0x8716a-0x871b0), so it turns toward its target
+//!   (`_CalcLeadAngle` @0x8716a-0x871b0), read from its global record
+//!   (`0x3b517c[gun × 0xc8]`, @0x2b067-0x2b075) whether or not it carries
+//!   it, and the table bearing for one of no record (the original reads
+//!   whatever memory is there), so it turns toward its target
 //!   and thrusts: not a brake at all
 //!   ([`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)). It
 //!   thrusts while its turn rate plus [`THRUST_SLACK`] is more than how
@@ -23,6 +26,11 @@
 //!   with no reverse key. Its
 //!   passes run nothing, and it asks for no point defence: it goes
 //!   straight to `_AILaunchFighter` (@0x87329).
+//! - **Moving and inertialess** ([`inertialess_brake`], @0x8710f-0x8713a):
+//!   its thrust is `_ShipAccelRate` reversed, a whole tick's acceleration
+//!   off its speed, with no turn and no thrust shown; then, as above, it
+//!   runs no pass and goes to the launch (@0x8713a → @0x87329). The
+//!   autopilot chooses it for an inertialess sniper.
 //! - **At rest**: its velocity slows by [`DAMPING`] each tick
 //!   (@0x8725a-0x8728e), it turns to the plain bearing of its target in
 //!   the table's whole degrees (`_CalcInterceptAngle` @0x872aa, not a
@@ -30,17 +38,14 @@
 //!   whole degrees, faces that bearing within [`GUN_FACING`] turns,
 //!   strictly ([`facing`], @0x872c3-0x872fe).
 //!
-//! Left out: an inertialess ship's brake (thrust reversed,
-//! @0x8710f-0x8713a): a moving inertialess sniper brakes as substate 1
-//! does instead ([`inertialess::brake`](crate::traffic::inertialess::brake),
-//! see the autopilot), until
-//! rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit.
 //! The block calls no `PlaySound` or `_beepSnd`.
 
 use crate::ai::fire::{self, GUN_FACING};
+use crate::combat::armament::Arsenal;
 use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::inertialess::{REVERSE, step_speed};
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::steer;
 use crate::traffic::npc::Npc;
@@ -89,15 +94,28 @@ pub fn facing(npc: &Npc, at: &ShipState) -> bool {
     )
 }
 
+/// A moving inertialess sniper's brake (@0x8710f-0x87137): its thrust
+/// +0x30 is `_ShipAccelRate` reversed, which `_HandleShip` takes as a whole
+/// tick's acceleration off its speed, capped at its top speed and floored
+/// at none ([`step_speed`] by [`REVERSE`], @0x34aef-0x34b68). It takes no
+/// heading (+0x68 stays the handler entry's, its own), and a reversed
+/// thrust shows none (@0x34eef-0x34eff), so the controls are none. The
+/// speed is moved here, as no thrust key is held for the step to move it.
+pub fn inertialess_brake(npc: &mut Npc, handling: &Handling) -> Controls {
+    npc.speed = step_speed(npc.speed, REVERSE, handling.accel, handling.max_speed);
+    Controls::default()
+}
+
 /// The controls `npc` snipes by this tick at its target at `target`, on
 /// `handling`, slowing it first when it is at rest; the lead angle a
-/// moving one with a last gun turns to by `lead`'s reading (see the
-/// module docs). With no target it coasts.
+/// moving one with a last gun turns to by `lead`'s reading, for that gun's
+/// record in `weapons` (see the module docs). With no target it coasts.
 pub fn fly(
     npc: &mut Npc,
     target: Option<&ShipState>,
     handling: &Handling,
     lead: RuleSource,
+    weapons: &Arsenal,
 ) -> Controls {
     let Some(target) = target else {
         return Controls::default();
@@ -115,15 +133,9 @@ pub fn fly(
             ..Controls::default()
         };
     }
-    let last_gun = npc.armament.last_gun().and_then(|gun| {
-        npc.armament
-            .mounts()
-            .iter()
-            .find(|mount| mount.spec.id == gun)
-    });
     // +0x68, a whole degree either way (@0x871ac, @0x871eb).
-    let wanted = match (last_gun, lead) {
-        (Some(gun), RuleSource::Engine) => fire::lead(npc, target, Some(&gun.spec)),
+    let wanted = match (npc.armament.last_gun(), lead) {
+        (Some(gun), RuleSource::Engine) => fire::lead(npc, target, weapons.weapon(gun)),
         _ => retro(state.velocity),
     };
     Controls {
@@ -142,7 +154,7 @@ mod tests {
     use crate::catalog::{WeaponId, WeaponRecord};
     use crate::combat::ShipRef;
     use crate::combat::aim::bearing;
-    use crate::combat::armament::{Armament, LauncherRounds, Shooter};
+    use crate::combat::armament::{Armament, Arsenal, LauncherRounds, Shooter};
     use crate::combat::hull::Condition;
     use crate::combat::report::Reports;
     use crate::combat::weapon::WeaponSpec;
@@ -173,6 +185,18 @@ mod tests {
             armament: Armament::new([(WeaponSpec::new(&gun), 1)]),
             ..crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]))
         }
+    }
+
+    /// The global record of [`sniper`]'s gun.
+    fn records() -> Arsenal {
+        Arsenal::new(
+            &[WeaponRecord {
+                speed: 1000,
+                count: 20,
+                ..weapon(128)
+            }],
+            Vec::new(),
+        )
     }
 
     /// `npc` having fired its gun once, its last gun.
@@ -221,7 +245,13 @@ mod tests {
         let mut npc = sniper(at(0.0, 0.0, 0.2, -0.3, 80.0));
         let lead = fire::lead_with(&npc, &target, Some(&npc.armament.mounts()[0].spec));
         assert!(lead > 95.0, "{lead}");
-        let controls = fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine);
+        let controls = fly(
+            &mut npc,
+            Some(&target),
+            &FAST_HANDLING,
+            RuleSource::Engine,
+            &records(),
+        );
         assert_eq!(npc.state.velocity, Vec2::new(0.2 * 0.95, -0.3 * 0.95));
         assert_eq!(controls.turn, Turn::Right, "to 90");
         assert!(!controls.thrust && !controls.reverse);
@@ -232,6 +262,7 @@ mod tests {
             Some(&target),
             &FAST_HANDLING,
             RuleSource::Engine,
+            &records(),
         );
         assert_eq!(held, Controls::default());
     }
@@ -244,7 +275,13 @@ mod tests {
         let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
         let thrusting = |heading: f32| {
             let mut npc = sniper(at(0.0, 0.0, 0.0, 2.0, heading));
-            let controls = fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine);
+            let controls = fly(
+                &mut npc,
+                Some(&target),
+                &FAST_HANDLING,
+                RuleSource::Engine,
+                &records(),
+            );
             assert_eq!(npc.state.velocity, Vec2::new(0.0, 2.0), "no damping");
             assert!(!controls.reverse);
             controls
@@ -279,6 +316,7 @@ mod tests {
             Some(&target),
             &FRACTIONAL_TURN,
             RuleSource::Engine,
+            &records(),
         );
         assert!(controls.thrust);
         let mut beyond = sniper(at(0.0, 0.0, 0.0, 2.0, 5.0));
@@ -287,6 +325,7 @@ mod tests {
             Some(&target),
             &FRACTIONAL_TURN,
             RuleSource::Engine,
+            &records(),
         );
         assert!(!controls.thrust, "5 is not less than 4.6");
     }
@@ -298,7 +337,14 @@ mod tests {
         assert_eq!(retro(Vec2::new(1.0, 1.0)), 314);
         let thrusting = |heading: f32| {
             let mut npc = sniper(at(0.0, 0.0, 1.0, 1.0, heading));
-            fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine).thrust
+            fly(
+                &mut npc,
+                Some(&target),
+                &FAST_HANDLING,
+                RuleSource::Engine,
+                &records(),
+            )
+            .thrust
         };
         // 318 is 4 off 314: it holds, where the float's 3.5 off 315 would
         // thrust.
@@ -325,6 +371,7 @@ mod tests {
             Some(&target),
             &FAST_HANDLING,
             RuleSource::Engine,
+            &records(),
         );
         assert!(controls.thrust, "toward its target");
         assert_eq!(controls.turn, Turn::Right);
@@ -336,10 +383,17 @@ mod tests {
             Some(&target),
             &FRACTIONAL_TURN,
             RuleSource::Engine,
+            &records(),
         );
         assert!(controls.thrust);
         let mut other = npc.clone();
-        let controls = fly(&mut other, Some(&target), &FAST_HANDLING, RuleSource::Bible);
+        let controls = fly(
+            &mut other,
+            Some(&target),
+            &FAST_HANDLING,
+            RuleSource::Bible,
+            &records(),
+        );
         assert!(!controls.thrust, "76 off its retro heading");
         assert_eq!(controls.turn, Turn::Left);
         // With no last gun, the engine too turns to its retro heading.
@@ -349,6 +403,7 @@ mod tests {
             Some(&target),
             &FAST_HANDLING,
             RuleSource::Engine,
+            &records(),
         );
         assert_eq!((controls.thrust, controls.turn), (false, Turn::Left));
     }
@@ -368,11 +423,80 @@ mod tests {
     }
 
     #[test]
+    fn moving_with_a_last_gun_it_leads_by_its_weapons_global_record() {
+        // `_CalcLeadAngle` reads the last gun's record from the global
+        // table (@0x8716a-0x871a4, @0x2b067-0x2b075), never the mount: a
+        // record of 20 a tick leads it at about 84, 8 off its heading of 76,
+        // so it turns right and doesn't thrust, where its mount's 79 would.
+        let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
+        let npc = having_fired(sniper(at(0.0, 0.0, 0.0, 2.0, 76.0)));
+        let faster = Arsenal::new(
+            &[WeaponRecord {
+                speed: 2000,
+                count: 20,
+                ..weapon(128)
+            }],
+            Vec::new(),
+        );
+        let lead = fire::lead_with(&npc, &target, faster.weapon(WeaponId(128)));
+        assert!(lead > 80.0, "{lead}");
+        let mut flown = npc.clone();
+        let controls = fly(
+            &mut flown,
+            Some(&target),
+            &FAST_HANDLING,
+            RuleSource::Engine,
+            &faster,
+        );
+        assert_eq!((controls.thrust, controls.turn), (false, Turn::Right));
+        // A last gun of no record leads with nothing: the table bearing, 90,
+        // not its retro heading (the original reads whatever memory is
+        // there, which can't be modelled).
+        let mut flown = npc.clone();
+        let controls = fly(
+            &mut flown,
+            Some(&target),
+            &FAST_HANDLING,
+            RuleSource::Engine,
+            &Arsenal::default(),
+        );
+        assert_eq!((controls.thrust, controls.turn), (false, Turn::Right));
+    }
+
+    #[test]
     fn with_its_target_gone_it_coasts() {
         let mut npc = sniper(at(0.0, 0.0, 0.1, 2.0, 0.0));
-        let controls = fly(&mut npc, None, &FAST_HANDLING, RuleSource::Engine);
+        let controls = fly(
+            &mut npc,
+            None,
+            &FAST_HANDLING,
+            RuleSource::Engine,
+            &records(),
+        );
         assert_eq!(controls, Controls::default());
         assert_eq!(npc.state.velocity, Vec2::new(0.1, 2.0), "not slowed");
+    }
+
+    #[test]
+    fn an_inertialess_brake_takes_a_whole_ticks_acceleration_off_its_speed_with_no_turn_or_thrust()
+    {
+        // FAST: 0.18 a tick, 6 at most.
+        let handling = ShipStats::new(FAST, &[]).handling;
+        assert_eq!((handling.accel, handling.max_speed), (0.18, 6.0));
+        let braked = |speed: f32| {
+            let start = at(10.0, -20.0, 0.0, -3.0, 40.0);
+            let mut npc = Npc {
+                speed,
+                ..sniper(start)
+            };
+            let controls = inertialess_brake(&mut npc, &handling);
+            assert_eq!(controls, Controls::default());
+            assert_eq!(npc.state, start, "its heading and velocity untouched");
+            npc.speed
+        };
+        assert!((braked(3.0) - 2.82).abs() < 1e-6, "{}", braked(3.0));
+        assert_eq!(braked(0.1), 0.0, "floored");
+        assert_eq!(braked(7.0), 6.0, "capped at its top speed");
     }
 
     #[test]
@@ -414,7 +538,13 @@ mod tests {
         // float's 135 is 1.4 off and it would hold (+0x68 @0x872b7).
         let target = at(300.0, 300.0, 0.0, 0.0, 0.0);
         let mut npc = sniper(at(0.0, 0.0, 0.0, 0.0, 136.4));
-        let controls = fly(&mut npc, Some(&target), &FAST_HANDLING, RuleSource::Engine);
+        let controls = fly(
+            &mut npc,
+            Some(&target),
+            &FAST_HANDLING,
+            RuleSource::Engine,
+            &records(),
+        );
         assert_eq!(controls.turn, Turn::Left);
         assert!(!controls.thrust);
     }

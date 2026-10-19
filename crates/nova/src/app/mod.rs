@@ -2264,7 +2264,7 @@ mod tests {
     fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
         let screen = SoundingScreen {
             showing: Showing::MainMenu,
-            sounds: vec![Sound::Sim(SimSound::JumpBegan)],
+            sounds: vec![Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 })],
         };
         let audio = RecordingAudio::new();
         let log = audio.log();
@@ -2370,7 +2370,8 @@ mod tests {
             if std::mem::take(&mut self.held) {
                 self.ran += 1;
                 self.logged_when_run = self.log.borrow().clone();
-                self.sounds.push(Sound::Sim(SimSound::JumpBegan));
+                self.sounds
+                    .push(Sound::Sim(SimSound::JumpBegan { rate: 0x1_0000 }));
             }
         }
 

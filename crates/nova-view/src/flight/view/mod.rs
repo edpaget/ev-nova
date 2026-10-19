@@ -205,8 +205,10 @@
 //! glow base ([`Session::engine_glow`]) at the flight's time in ticks: it
 //! fades in over 24 ticks of thrust, flickers, and fades out over 24
 //! ticks after Up is released, and landing and beginning a jump put it
-//! out. The lights are drawn at the level [`nova_sim::lights_level`]
-//! gives for the sheet's blink at the flight's time in ticks. Each is
+//! out. The lights are drawn at the level the session's display drew
+//! them ([`Session::player_drawn`]'s, and each NPC's `drawn`), its
+//! ported lights state stepped each display (`nova_sim::combat::ship_lights`,
+//! random lights rolling on the flight's chance). Each is
 //! drawn at [`lights_tint`](crate::draw::lights_tint) of its level, or not at all while it is hidden
 //! or off. Both are combined by OR with what is beneath
 //! ([`Blend::Or`](crate::Blend::Or)) at every level, scaled by level/32,
@@ -214,8 +216,8 @@
 //! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`](crate::draw::lights_tint) for the
 //! full record. The flight's time
 //! stops while the course map is open, so the lights blink and the glow
-//! flickers in game time. Random blinking rolls on [`HashedRolls`] from
-//! seed 0, and the glow's flicker on [`HashedRolls`] from seed 1. A layer
+//! flickers in game time. The glow's flicker rolls on [`HashedRolls`]
+//! from seed 1. A layer
 //! that cannot be shown is left out silently.
 //!
 //! Input, the original's default keys:
@@ -375,23 +377,23 @@
 //!   the arrival tick, with their sounds; a `\` held from before the jump,
 //!   and J held through it, do nothing after it. J held into a disable, or
 //!   first pressed while disabled, acts on the first tick the ship is
-//!   intact again. The stars streak when the session says
-//!   the jump has begun ([`Session::jumping`]), at once for a ship already
-//!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
-//!   the session waits while the stars streak and the screen, HUD
-//!   included, fades to white, as the original's whole-display fade does;
-//!   then the ship arrives at full white, the new system is read and laid
-//!   out, and the message line says so in the original's words
-//!   ([`arrival_message`]). Flight resumes as the new system fades in
+//!   intact again. The jump plays its [`JumpEffect`] from when the session
+//!   says the jump has begun ([`Session::jumping`]), at once for a ship
+//!   already facing that way and slow enough: the session flies the warp,
+//!   the ship rushing off along its bearing, and the screen, HUD included,
+//!   fades to white once the session lights it, as the original's
+//!   whole-display fade does; then the ship arrives at full white when the
+//!   session ends the warp, the new system is read and laid out, and the
+//!   message line says so in the original's words ([`arrival_message`]). Flight resumes as the new system fades in
 //!   from white: every key works again and the session flies, J included,
 //!   as under the original's asynchronous display fade. A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
 //!   system it passes. With the Hyperspace Effects preference off
 //!   ([`FlightView::with_hyperspace_effects`],
 //!   [`FlightView::set_hyperspace_effects`]) a jump skips the fades, as
-//!   the original's does: the stars streak, the ship arrives as the streak
-//!   ends, and the arrival frame shows solid white once, with flight
-//!   going on under it.
+//!   the original's does: the ship warps away unfaded, arrives when the
+//!   session ends the warp, and the arrival frame shows solid white once,
+//!   with flight going on under it.
 //! - Space fires the primary weapons and Control the secondary selected,
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
@@ -425,7 +427,7 @@
 //!   ([`Boarding::Offered`](nova_sim::Boarding::Offered)), held for the router as a hail's offer is.
 //!   B works during a jump too, as `_HandlePlayerBoardAttempt` reads no
 //!   jump state (0x65000-0x66064): its checks run on the ship as it brakes,
-//!   or as it was when the jump began once the stars streak.
+//!   or as it warps.
 //! - Y (a press) hails the target ([`Session::hail_key`]), and with no
 //!   ship target, or Alt (Option) held, the navigation stellar: one that
 //!   answers opens nothing yet, where the original opens its comm dialog
@@ -444,10 +446,12 @@
 //!   ([`FlightView::take_hail`]), which opens the comm dialog over the
 //!   paused flight; each press there goes through [`FlightView::answer`],
 //!   each haggle through [`FlightView::haggle`], and closing the channel
-//!   through [`FlightView::hang_up`]. Each step, the NPCs assisting the
-//!   player give their help ([`Session::tick_assistance`], by the screen's
-//!   [`DisableRule`]), and each says when it is done, as a message
-//!   ([`comm_message`]). During a jump, its pre-jump stage included, Y is
+//!   through [`FlightView::hang_up`]. Each step, the NPCs refuelling the
+//!   player give their help in the traffic's tick (a repair is the
+//!   traffic's, by the screen's [`DisableRule`]), and each that is done
+//!   says so, as a message ([`comm_message`]), taken after the step's
+//!   combat tick, which settles the notes in slot order with the frame's
+//!   other lines ([`Session::take_comm`]). During a jump, its pre-jump stage included, Y is
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set
 //!   (@0x61f87; its beep is player-death phase 16's).
@@ -501,7 +505,7 @@
 //!   ([`TargetPick::PreviousEscort`](nova_sim::TargetPick::PreviousEscort)), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
 //!   set says ([`FlightView::with_rules`]). While a jump is under way,
-//!   the ship braking and turning for it or the stars streaking, the
+//!   the ship braking and turning for it or warping, the
 //!   escort menu's keys are taken, among the few that are (see J above),
 //!   as the original runs its escort block on every frame of a jump but
 //!   the arrival (`_HandlePlayer` @0x6dd00-0x6e452): a command then says what the
@@ -575,8 +579,11 @@
 //! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
 //! flight (the comm, offer and plunder dialogs, the map) leave it as it
 //! is, and it shows again afterwards for the ticks it had left, as
-//! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only
-//! when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or [`NOTHING_OUT_HERE`]
+//! `_RedrawComm` (@0x903a0) redraws it; the plunder dialog counts it down
+//! one tick a press that leaves the dialog open, as its loop calls
+//! `_HandleComm` (@0x949a1). Starting a jump clears it only
+//! when it says [`TOO_CLOSE`], [`TRACTORED`], [`FAR_ENOUGH`] or
+//! [`NOTHING_OUT_HERE`]
 //! (`_HandlePlayer` @0x6b231-0x6b3d9), and
 //! opening the escort menu only when it says [`NO_ESCORTS`](super::escorts::NO_ESCORTS)
 //! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
@@ -678,15 +685,16 @@ pub struct FlightOverlays {
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
-/// Command, which the jettison and eject keys need, the eject key, which
-/// works only held with Command, the land key, which holds the dock
+/// Command, which the jettison, eject and self-destruct keys need, the
+/// eject key and the self-destruct key, which work only held with Command,
+/// the land key, which holds the dock
 /// approach back while it is down, H and `\`, which show the floating map
 /// while they are down, and \` and J. H, `\`, \` and J act again when
 /// held across a jump's end, a release of Option or a repair, as the
 /// original polls them with a latch each ([`FlightView::held_keys_frame`]);
 /// the original's `_quickKeyCheckResult` counts \` and J as held too
 /// (@0x69aa1, @0x6b0e6), which the floating map's zoom keys read.
-const FLIGHT_KEYS: [Key; 17] = [
+const FLIGHT_KEYS: [Key; 18] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -700,6 +708,7 @@ const FLIGHT_KEYS: [Key; 17] = [
     Key::Command,
     LAND_KEY,
     EJECT_KEY,
+    SELF_DESTRUCT_KEY,
     HYPERSPACE_MODE_KEY,
     HYPER_SELECT_KEY,
     NAV_OFF_KEY,
@@ -759,6 +768,15 @@ pub const JETTISON_KEY: Key = Key::Char('k');
 /// (`ejectKey`), keycode 0x07, X, which ejects only held together with
 /// Command (`_HandlePlayer` @0x6f29e-0x6f2c1; see the session's eject).
 pub const EJECT_KEY: Key = Key::Char('x');
+/// The self-destruct key, `-`: key-preference slot 0x24 (`destructKey`),
+/// which `_loadKeys` reads (@0xce458) and then forces to keycode 0x1b
+/// whatever the preference says (@0xce71c). It acts only held together
+/// with Command (`_HandlePlayer` @0x6fdb4-0x6fddb; see the session's
+/// self-destruct), so it never clashes with the floating map's zoom out,
+/// the same key, which refuses any press with Command held
+/// (@0x70fa7-0x70fb5). The keypad's `-` (0x4e) arrives as the same key,
+/// a platform difference accepted as [`ZOOM_OUT_KEY`]'s is.
+pub const SELF_DESTRUCT_KEY: Key = Key::Char('-');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
@@ -855,13 +873,14 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// leave, fading out; plain white otherwise, held at its gate by the
 /// player's hit too (its goal 4 is not the fade's goal 0x15).
 ///
-/// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
-/// at 16-bit depth by a destination factor of twice the ticks left and a
-/// bias of four times them, at most 32, and out again entering a gate
-/// (@0x2bf94-0x2c088). Those translucent blits were not traced; this
-/// draws the ship's alpha rising from none to full, or falling, as the
-/// cloak's fade does. An NPC gets no screen flash, as the player's own
-/// gate arrival does (see [`jump`](super::jump)).
+/// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) sets the hull's
+/// translucency t to 32 less this level, entering a gate as
+/// trunc(−2.0 × w + 32.0) (@0x2bfb2-0x2c007) and coming out as 32 − 2d,
+/// d = trunc(16.0 − w) (@0x2c0c8-0x2c12b), and blits it washed toward
+/// white ([`gate_colorize`](crate::flight::gate_colorize)) and then
+/// crossfaded at (32 − t)/32, which this alpha draws. An NPC gets no
+/// screen flash, as the player's own gate arrival does (see
+/// [`jump`](super::jump)).
 fn npc_tint(npc: &Npc) -> Option<Color> {
     let level = match npc.mode {
         Mode::Emerging { ticks_left } => emerge_level(ticks_left)?,
@@ -1022,9 +1041,11 @@ pub struct FlightView<C> {
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router
     /// holds flight under a dialog, as `_HandleComm` (@0x301b9) counts
-    /// only in the flight loop. The original's `_HandlePlayerDockRequest`
-    /// counts one tick more just before landing (@0x66da5), which no
-    /// player sees.
+    /// only in the flight loop, but for the plunder dialog, whose loop
+    /// calls it once a press that leaves it open (@0x949a1; see
+    /// [`FlightView::plunder_held`]). The original's
+    /// `_HandlePlayerDockRequest` counts one tick more just before
+    /// landing (@0x66da5), which no player sees.
     message: Option<Message>,
     /// The port's own overlays drawn.
     overlays: FlightOverlays,
@@ -1075,8 +1096,8 @@ pub struct FlightView<C> {
     /// What the floating map draws, taken at its last show
     /// ([`FlightView::show_floating_map`]).
     floating_picture: Option<MapPicture>,
-    /// The jump's effect, while it holds flight: the streak and the
-    /// fade-out, until the ship arrives.
+    /// The jump's effect, until the ship arrives: the warp and its fade to
+    /// white.
     jump: Option<JumpEffect>,
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.
@@ -1109,10 +1130,7 @@ pub struct FlightView<C> {
     double_time: bool,
     /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
-    /// What random running lights roll on.
-    blink_rolls: HashedRolls,
-    /// What the engine glow's flicker rolls on: seed 1, so it never
-    /// mirrors random-mode lights, which roll on seed 0.
+    /// What the player's engine glow's flicker rolls on: seed 1.
     glow_rolls: HashedRolls,
     /// How the NPCs decide.
     behaviour: Rc<dyn Behaviour>,
@@ -1140,6 +1158,10 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// Each ship's shield flash while its timer runs.
     flashes: BTreeMap<ShipRef, ShieldFlash>,
+    /// Each ship's alt layer as last drawn, which a disabled 0x0020 ship
+    /// keeps showing ([`HeldAlts`](crate::flight::held_alt::HeldAlts));
+    /// kept as each frame draws it.
+    held_alts: RefCell<crate::flight::held_alt::HeldAlts>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
     /// What the view keeps of the shots in flight, drawn on the effects'
@@ -1469,7 +1491,7 @@ fn show_combat(
     session: &mut Session,
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
-    looks: &Looks,
+    (looks, sheets): (&Looks, Sheets<'_>),
     chance: &mut dyn Chance,
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
@@ -1493,7 +1515,7 @@ fn show_combat(
         }
         effects.apply(&event, scene, looks, chance);
     }
-    step_flashes(flashes, session);
+    step_flashes(flashes, session, sheets);
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
@@ -1520,30 +1542,41 @@ fn glow_decay(
     Some(sheet.map_or(0.0, ShipSheet::weapon_decay))
 }
 
+/// The player's sheet and each NPC ship type's, or why each cannot be
+/// read.
+type Sheets<'a> = (
+    &'a Result<ShipSheet, String>,
+    &'a BTreeMap<ShipId, Result<ShipSheet, String>>,
+);
+
 /// Steps each ship's shield flash among `flashes` a frame by its shield
-/// in `session` ([`ShieldFlash::step`]), dropping the flashes of ships no
-/// longer in the system and those run out.
-///
-/// No class has a shield layer yet: the shän shield layer is
-/// rdm:phase/ship-handling-fidelity/phase-10's, and no stock `shän` has
-/// one, so each flash only runs down, and the base it is given, which
-/// only a drawn layer reads, is the ship's shield capacity for now. That
-/// phase passes the class's own loaded `Shield` (class +0x5c @0x2c8aa)
-/// with the layer.
-fn step_flashes(flashes: &mut BTreeMap<ShipRef, ShieldFlash>, session: &Session) {
-    let shield = |ship: ShipRef| match ship {
-        ShipRef::Player => Some(session.reserves().shield),
-        ShipRef::Npc(id) => session
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .map(|npc| npc.reserves.shield),
+/// in `session` ([`ShieldFlash::step`]), whether its class's sheet among
+/// `sheets` has a shield layer, and its class's own loaded `Shield`
+/// (class +0x5c @0x2c8aa, [`Session::class_shield`]), dropping the
+/// flashes of ships no longer in the system and those run out.
+fn step_flashes(
+    flashes: &mut BTreeMap<ShipRef, ShieldFlash>,
+    session: &Session,
+    (player, sheets): Sheets<'_>,
+) {
+    let of = |ship: ShipRef| match ship {
+        ShipRef::Player => Some((
+            session.reserves().shield,
+            session.ship(),
+            player.as_ref().ok(),
+        )),
+        ShipRef::Npc(id) => session.npcs().iter().find(|npc| npc.id == id).map(|npc| {
+            let sheet = sheets.get(&npc.ship).and_then(|sheet| sheet.as_ref().ok());
+            (npc.reserves.shield, npc.ship, sheet)
+        }),
     };
     flashes.retain(|&ship, flash| {
-        let Some(gauge) = shield(ship) else {
+        let Some((gauge, class, sheet)) = of(ship) else {
             return false;
         };
-        flash.step(gauge.now, gauge.max, false);
+        let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
+        let base = session.class_shield(class).unwrap_or(gauge.max);
+        flash.step(gauge.now, base, has_layer);
         flash.shown() > 0.0
     });
 }

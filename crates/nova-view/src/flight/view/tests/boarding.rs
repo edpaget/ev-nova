@@ -125,9 +125,81 @@ fn plundering_goes_through_the_session_and_says_what_it_took() {
         boarding.credits
     );
     assert_eq!(view.boarding().map(|now| now.credits), Some(0));
-    assert_lasts(&mut view, &said, 240);
+    assert_lasts(&mut view, &said, 239);
     assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
     assert_eq!(view.boarding(), None);
+}
+
+/// The plunder dialog's loop counts the message line down a tick on each
+/// press that leaves it open (`_HandleComm` @0x949a1): the line already
+/// shown, and a take's own, which `_DisplayComm` sets to 240 first.
+#[test]
+fn each_press_that_keeps_the_plunder_dialog_open_counts_the_message_a_tick() {
+    let mut view = beside(750, 750, 0, false);
+    view.say_for(MISSION_FAILED, 240);
+    tap(&mut view, BOARD_KEY);
+    view.take_boarding().expect("boarded");
+    assert_eq!(view.plunder(Take::Miss), Taken::Missed);
+    assert_eq!(view.plunder(Take::Miss), Taken::Missed);
+    assert_lasts(&mut view, MISSION_FAILED, 238);
+    let mut view = beside(750, 750, 0, false);
+    tap(&mut view, BOARD_KEY);
+    view.take_boarding().expect("boarded");
+    assert!(matches!(view.plunder(Take::Credits), Taken::Credits(_)));
+    let mut line = nova_sim::CommLine::default();
+    line.show(240);
+    line.tick();
+    assert_eq!(
+        view.session().expect("flying").comm_line(),
+        line,
+        "the session's line in step with the message"
+    );
+    let said = view.message().expect("said").to_owned();
+    assert_lasts(&mut view, &said, 239);
+}
+
+/// `_HandleComm` hides the floating map once `TickCount` is more than
+/// 500 past its show (@0x30262-0x30285), at each press that keeps the
+/// dialog open; the time the dialog has been open counts.
+#[test]
+fn a_press_hides_the_floating_map_once_500_ticks_have_passed() {
+    for (held, up) in [
+        (Duration::from_secs(8), true),
+        (Duration::from_secs(9), false),
+    ] {
+        let mut view = beside(750, 750, 0, false);
+        tap(&mut view, BOARD_KEY);
+        view.take_boarding().expect("boarded");
+        let now = crate::time::sixtieths(view.elapsed);
+        view.floating.show(now);
+        assert_eq!(view.plunder_held(Take::Miss, held), Taken::Missed);
+        assert_eq!(view.floating.is_up(), up, "{held:?}");
+    }
+    let mut view = beside(750, 750, 0, false);
+    tap(&mut view, BOARD_KEY);
+    view.take_boarding().expect("boarded");
+    let now = crate::time::sixtieths(view.elapsed);
+    view.floating.show(now);
+    assert_eq!(
+        view.plunder_held(Take::Abort, Duration::from_secs(60)),
+        Taken::Aborted
+    );
+    assert!(
+        view.floating.is_up(),
+        "a press that closes the dialog counts nothing"
+    );
+}
+
+/// Letting a boarding go with no dialog to show it is silent.
+#[test]
+fn a_boarding_let_go_is_silent() {
+    let mut view = beside(750, 750, 0, false);
+    tap(&mut view, BOARD_KEY);
+    view.take_boarding().expect("boarded");
+    view.take_sounds();
+    view.let_go_of_boarding();
+    assert_eq!(view.boarding(), None);
+    assert_eq!(view.take_sounds(), []);
 }
 
 #[test]
@@ -183,7 +255,12 @@ fn the_plunder_messages_are_the_originals() {
     );
     assert_eq!(message(Taken::FleetFull).as_deref(), Some(FLEET_FULL));
     assert_eq!(message(Taken::Escorted).as_deref(), Some(ASSIGNED_ESCORT));
-    for silent in [Taken::Captured, Taken::Aborted, Taken::Nothing] {
+    for silent in [
+        Taken::Captured,
+        Taken::Aborted,
+        Taken::Nothing,
+        Taken::Missed,
+    ] {
         assert_eq!(message(silent), None, "{silent:?}");
     }
     assert_eq!(
@@ -554,7 +631,10 @@ fn a_helpers_note_shows_for_the_common_time() {
     assert_eq!(view.message(), None);
     view.tick(TICK);
     let note = view.message().expect("refuelled").to_owned();
-    assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+    assert!(
+        note.ends_with(":  Energy transfer complete, Ship 129."),
+        "{note}"
+    );
     assert_lasts(&mut view, &note, nova_sim::hail::NOTE_TICKS);
 }
 

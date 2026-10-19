@@ -15,6 +15,7 @@ mod dev_overlay;
 #[cfg(feature = "dev-tools")]
 mod dev_tools_paint;
 mod economy;
+mod entering;
 mod flight;
 mod galaxy_map;
 mod hire;

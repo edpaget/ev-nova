@@ -21,15 +21,17 @@
 //! 4. The advance pass's AI (@0x44223-0x442ae): the traffic's think half,
 //!    the damage aimed read after the passes (`_CalculateTargetedDamage`
 //!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the fleets
-//!    announced and the comm calls answered, the scans, then every NPC's
-//!    point defence and fighter launches, slot by slot (`_AIFireTurret`
-//!    @0x80b0d, `_AILaunchFighter` @0x8e6fa and @0x8732f;
-//!    [`Combat::defend_npcs`]), each fighter launched put in the system
-//!    as its slot's turn ends (`_LaunchFighter`, see the `fighters`
-//!    module), a fighter above its carrier thinking then, and the loop
-//!    resumed after that slot ([`Session::dispatch_npcs`]); then the comm
-//!    calls those fighters made answered. All before `_HandleShot`, so
-//!    the fighters move on their launch frame.
+//!    announced and the refuel landed, then every NPC's point defence and
+//!    fighter launches, slot by slot (`_AIFireTurret` @0x80b0d,
+//!    `_AILaunchFighter` @0x8e6fa and @0x8732f; [`Combat::defend_npcs`]),
+//!    each fighter launched put in the system as its slot's turn ends
+//!    (`_LaunchFighter`, see the `fighters` module), a fighter above its
+//!    carrier thinking then, and the loop resumed after that slot
+//!    ([`Session::dispatch_npcs`]); then the frame's work on the line,
+//!    every think's calls, scan, plunders and refuel note, the launched
+//!    fighters' among them, settled in slot order
+//!    ([`Session::settle_line_queue`], see the `comm_calls` module). All
+//!    before `_HandleShot`, so the fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit,
 //!    their hits settled and answered.
@@ -41,18 +43,22 @@
 //!    breakup's countdown or explodes it, its shockwave reaching the
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
-//!    after the fly half and the assistance ([`Session::ship_loop`]).
-//! 7. `_HandleBeams` (@0x4453d), its hits settled, then what the
-//!    pass leaves ([`Session::fight_tail`]), then the asteroids
-//!    (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids` @0x444f5, after
-//!    the passes).
+//!    after the fly half, the line work its docks and repairs queued
+//!    settled ([`Session::ship_loop`]).
+//! 7. The stellar hazards, gravity's pull and the deadly stellars' kills
+//!    (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e), then
+//!    `_HandleBeams` (@0x4453d), its hits settled
+//!    ([`Session::beams_phase`]), then what the pass leaves
+//!    ([`Session::fight_tail`]), then the asteroids (`_SpawnAsteroid`
+//!    @0x44243 and `_HandleAsteroids` @0x444f5, after the passes).
 //!
-//! Landed, or with the jump under way as the pass begins or once its move
-//! begins it, the pass runs the separate parts instead, as the fight
-//! stands still. Double time's second pass ([`Session::tick_again`]) runs
-//! the same order without the AI: from the eject check on, both passes
-//! run one routine ([`Session::pass_after_move`]), which branches where
-//! `_DoPlayGameWork` branches on its argument (@0x44026-0x4402a).
+//! Landed, the pass runs the separate parts instead, as the fight stands
+//! still. Through a jump the world runs on, in this order (see the
+//! `warp_stage` module). Double time's second pass
+//! ([`Session::tick_again`]) runs the same order without the AI: from the
+//! eject check on, both passes run one routine
+//! ([`Session::pass_after_move`]), which branches where `_DoPlayGameWork`
+//! branches on its argument (@0x44026-0x4402a).
 //!
 //! **What remains**, none crossing a boundary the player sees, so none
 //! filed:
@@ -67,9 +73,15 @@
 //! - Every existing NPC's point defence and launches run after every
 //!   existing NPC's decision, where `_AIDispatch` interleaves them slot by
 //!   slot; a fighter launched in the loop decides at its launch.
-//! - A fighter launched and thinking in the loop has its comm calls
-//!   answered after the whole loop, where its own slot's `_AIDispatch`
-//!   says them (see [`Session::dispatch_npcs`]).
+//! - Every think's work on the line settles after the whole loop, in slot
+//!   order, where each slot's `_AIDispatch` says its own (see
+//!   [`Session::dispatch_npcs`]); a dock or repair the fly half makes
+//!   settles after the ship loop, where `_LowLevelAIHandler` makes it in
+//!   the AI loop.
+//! - The stellar hazards run after the ship loop, after the shots, and
+//!   the asteroids after the beams, where `_DoPlayGameWork` runs
+//!   `_HandleAsteroids` (@0x444f5) and the reinforcements (@0x44504)
+//!   before the hazards.
 //! - What the close strikes (the beams, the shockwaves) is answered by the
 //!   caller after the pass ([`Session::answer_strikes`]), before the frame
 //!   is drawn.
@@ -90,11 +102,7 @@
 //! **Filed.** An existing NPC in a slot above a carrier thinks before
 //! the loop, blind to the fighter launched that frame, and a launched
 //! fighter's own launch settles against the room left after every
-//! existing claim, where the original's loop reaches them in slot order;
-//! and every existing NPC's comm calls are answered before every scan, a
-//! launched fighter's after every scan, where each slot's `_AIDispatch`
-//! makes its calls and then its scan, so a scan line keeps a later slot's
-//! call off the line
+//! existing claim, where the original's loop reaches them in slot order
 //! (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
@@ -118,10 +126,15 @@ use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
 use crate::traffic::npc::NpcId;
 
-/// What a pass's fight reads of the session as it began: every NPC.
+/// What a pass's fight reads of the session as it began: every NPC, and
+/// whether the player was dying.
 pub(super) struct PassStart {
     /// Every NPC.
     npcs: Vec<NpcBefore>,
+    /// Whether the player was dying or destroyed, as `_HandlePlayer`
+    /// computes `_IsDying` at its top (-0x2ca, @0x68aba-0x68ac6), which
+    /// the self-destruct reads (see the `self_destruct` module).
+    player_dying: bool,
 }
 
 impl PassStart {
@@ -129,7 +142,16 @@ impl PassStart {
     pub(super) fn of(session: &Session) -> Self {
         Self {
             npcs: session.npcs_before(),
+            player_dying: matches!(
+                session.condition,
+                Condition::Dying { .. } | Condition::Destroyed
+            ),
         }
+    }
+
+    /// Whether the player was dying or destroyed as the pass began.
+    pub(super) fn player_dying(&self) -> bool {
+        self.player_dying
     }
 
     /// Every NPC as the pass's fight began.
@@ -154,12 +176,11 @@ impl Session {
     /// settled on it, which ends the pass there (`_HandlePlayer` @0x68ddd;
     /// see [`Session::rescue_if_due`]).
     ///
-    /// Landed, or with the jump under way as the pass begins or once the
-    /// move has begun it, it runs the separate parts instead
-    /// ([`Session::tick`], [`Session::rescue_if_due`],
-    /// [`Session::tick_traffic`], [`Session::tick_assistance`] and
-    /// [`Session::tick_combat`]), as the fight stands still then and the
-    /// warp's lead-in traffic is the traffic tick's.
+    /// Landed, it runs the separate parts instead ([`Session::tick`],
+    /// [`Session::rescue_if_due`], [`Session::tick_traffic`] and
+    /// [`Session::tick_combat`]), as the fight stands still then. Through
+    /// a jump it runs on in its own order, as the world does (see the
+    /// `warp_stage` module).
     pub fn game_work(
         &mut self,
         controls: Controls,
@@ -168,13 +189,12 @@ impl Session {
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) -> bool {
-        if self.landed.is_some() || self.jumping().is_some() {
+        if self.landed.is_some() {
             self.tick(controls);
             if self.rescue_if_due(catalog, chance) {
                 return true;
             }
             self.tick_traffic(catalog, behaviour, chance);
-            self.tick_assistance(rules.disable);
             self.tick_combat(rules, chance);
             return false;
         }
@@ -191,13 +211,6 @@ impl Session {
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
-        if self.jumping().is_some() {
-            // The jump began in the move: the rest stands still.
-            self.tick_traffic(catalog, behaviour, chance);
-            self.tick_assistance(rules.disable);
-            self.tick_combat(rules, chance);
-            return false;
-        }
         if self.rescue_if_due(catalog, chance) {
             return true;
         }
@@ -217,14 +230,13 @@ impl Session {
     /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
     /// past it (@0x4402a to @0x44350). Where the original branches on its
     /// argument, this branches on `ai`: with it, the traffic thinks and
-    /// its fleets and comm calls are said, the scans settle and every
-    /// NPC's point defence fires and its fighters launch, each put in the
-    /// system as its slot's turn ends ([`Session::dispatch_npcs`]), then
-    /// the calls the fighters that thought made are said, all before the
-    /// shots,
-    /// and the ship loop's traffic flies its fly half, its reinforcement
-    /// clock included ([`Session::traffic_tail`]), then the assistance;
-    /// without it, the traffic only moves, and the reinforcement clock
+    /// its fleets are said, every NPC's point defence fires and its
+    /// fighters launch, each put in the system as its slot's turn ends
+    /// ([`Session::dispatch_npcs`]), then the frame's work on the line
+    /// settles in slot order ([`Session::settle_line_queue`]), all before
+    /// the shots, and the ship loop's traffic flies its fly half, its
+    /// reinforcement clock included ([`Session::traffic_tail`]); without
+    /// it, the traffic only moves, and the reinforcement clock
     /// (`_HandleReinforcements` @0x44504) ticks after the asteroids (see
     /// [`Session::ship_loop`]).
     pub(super) fn pass_after_move(
@@ -237,7 +249,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         // The end of `_HandlePlayer` and its display (@0x43e29).
-        self.player_display_step(pass, rules, chance);
+        self.player_display_step(pass, rules, start.player_dying(), chance);
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(pass, rules, chance);
         self.answer_strikes(behaviour);
@@ -246,14 +258,13 @@ impl Session {
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.hold_derelicts();
-            self.take_scans(rules.law, chance);
             // `_LaunchFighter` marks each fighter's slot active in
             // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
             // `_HandleShot` and its own `_HandleShip` see it that frame.
             self.dispatch_npcs(pass, behaviour, rules, chance);
-            // The calls the fighters launched in the loop made as they
-            // thought (see `Session::dispatch_npcs`).
-            self.answer_comm_calls(chance);
+            // Every think's work on the line, the launched fighters'
+            // among it, in slot order (see `Session::dispatch_npcs`).
+            self.settle_line_queue(rules.law, chance);
             Some(marks)
         } else {
             None
@@ -271,10 +282,9 @@ impl Session {
             None => Motion::Again,
         };
         self.ship_loop(start, motion, pass, rules, chance);
-        // `_HandleBeams` (@0x4453d), and what the pass leaves.
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.close_tick(fighters, arena, chance);
-        });
+        // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
+        // what the pass leaves.
+        self.beams_phase(pass, rules, chance);
         self.fight_tail(rules, chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
         // come after the collision passes (see the `asteroids` module).
@@ -285,7 +295,9 @@ impl Session {
     }
 
     /// `_HandlePlayer`'s fight before its move, on `pass` by `rules`,
-    /// drawing on `chance`: the repair inhibit's countdown and the
+    /// drawing on `chance`: the boarded flag's clear unless the player is
+    /// disabled (@0x68b02; see the `pirate_plunder` module), the repair
+    /// inhibit's countdown and the
     /// disabled player's self-repair (@0x68b3d-0x68c6c; see the
     /// `player_repair` module), its point defence (@0x68c74,
     /// [`Combat::defend_player`]), the sabotage clock's tick (@0x692e5;
@@ -299,6 +311,7 @@ impl Session {
     /// regenerate (@0x6cf86-0x6d093, [`Combat::regenerate_player`]), after
     /// its trigger and before its position step (@0x6d4b0).
     pub(super) fn player_fires(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
+        self.unboard_unless_disabled();
         self.player_repair_tick(rules, chance);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.defend_player(fighters, arena, chance);
@@ -345,10 +358,10 @@ impl Session {
     /// yet set up, its population ([`Session::populate`]), which moves
     /// from the next; otherwise the session's work before the AI and the
     /// traffic's think half ([`Traffic::think_holding`]), and the fleets
-    /// it brings and the comm calls it queues said
-    /// (`Session::after_traffic_ai`), before the scans, as before the
-    /// launch frame's loop. What its motion is read against, when it
-    /// thought.
+    /// it brings said and the refuel it gave landed
+    /// (`Session::after_traffic_ai`); the work it queues on the line
+    /// settles after the launch frame's loop. What its motion is read
+    /// against, when it thought.
     ///
     /// [`Traffic::think_holding`]: crate::traffic::Traffic::think_holding
     fn traffic_think(
@@ -358,7 +371,10 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Option<TrafficMarks> {
         if self.traffic_due {
-            self.populate(catalog, chance);
+            // No system is set up while the jump is under way.
+            if self.jumping().is_none() {
+                self.populate(catalog, chance);
+            }
             return None;
         }
         let (strikes, marks) = self.before_traffic_ai(catalog, chance);
@@ -393,7 +409,7 @@ impl Session {
         let armor_regen = self.player_armor_regen();
         // This tick's `_abOn`, as `_HandlePlayer` runs before the shots
         // (see the `afterburner` module).
-        let afterburner = self.afterburner_knockback();
+        let knockback = self.afterburner_knockback();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -431,13 +447,16 @@ impl Session {
             class_speed: player_terms.class_speed,
             top_speed: player_terms.top_speed,
             jumping: self.jump.is_some(),
-            afterburner,
+            afterburner: knockback.shots,
+            afterburner_beam: knockback.beams,
             tractor: &mut self.tractor,
+            ion_capacity: self.stats.ion.capacity(crate::flight::Flyer::Player),
             ion: &mut self.ion,
             armament: &mut self.armament,
             rounds: &mut rounds,
             drawn_heading: player_terms.drawn_heading,
             docked: false,
+            resists: player_terms.resists,
             sprite: player_terms.sprite,
             slot: crate::ship_layer::Slot::Player,
         }];
@@ -458,7 +477,9 @@ impl Session {
     /// it, by `rules`, drawing on `chance`: the player's "Ship disabled."
     /// and "Ship destroyed." lines, said as the hits land, before the
     /// eject on a breakup's first tick can take the player into a new
-    /// ship (see the `player_downed` module); the pushes; each NPC newly
+    /// ship, a deadly stellar's kill in the phase, `killed`, read as the
+    /// condition the hits left (see the `player_downed` module); the
+    /// pushes; each NPC newly
     /// downed raising its fate; the strikes weighed, answered for crimes
     /// and kills ([`Session::settle_strikes`]) and kept for the NPCs'
     /// answers. A target the phase left dying or cloaked is kept: the next
@@ -485,16 +506,17 @@ impl Session {
     fn settle_landed(
         &mut self,
         was: &[NpcBefore],
-        player_was: Condition,
+        (player_was, killed): (Condition, Option<Condition>),
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
         let (strikes, losses) = self.combat.take_landed();
-        self.player_downed(player_was, &strikes, chance);
+        let struck = super::struck_npcs(&strikes);
+        self.player_downed(player_was, killed, &strikes, chance);
         self.take_shoves();
         self.raise_disabled(was, chance);
         self.sync_fleet();
-        self.lose_escorts();
+        self.lose_escorts(was, &struck);
         self.settle_strikes((strikes, losses), was, rules.law, chance);
     }
 
@@ -510,7 +532,27 @@ impl Session {
         let was = self.npcs_before();
         let player_was = self.condition;
         self.with_fighters(pass, rules, chance, phase);
-        self.settle_landed(&was, player_was, rules, chance);
+        self.settle_landed(&was, (player_was, None), rules, chance);
+    }
+
+    /// The pass's stellar hazards and its `_HandleBeams` on `pass` by
+    /// `rules`, drawing on `chance`: gravity pulls and the deadly stellars
+    /// kill (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e;
+    /// [`Combat::hazards`]), then the beams' step and the late steps
+    /// ([`Combat::close_tick`]), among one set of fighters, so a ship a
+    /// deadly stellar kills is out of the beams. The kills' hold starts
+    /// before the beams' hits settle (see the `deadly_stellars` module),
+    /// as a phase that lands hits settles ([`Session::settle_landed`]).
+    pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
+        let hazards = self.stellar_hazards();
+        let was = self.npcs_before();
+        let player_was = self.condition;
+        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+            combat.hazards(fighters, &hazards);
+            combat.close_tick(fighters, arena, chance);
+        });
+        let killed = self.hold_stellar_kills();
+        self.settle_landed(&was, (player_was, killed), rules, chance);
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
@@ -531,6 +573,7 @@ impl Session {
             let scenery = Scenery {
                 stellars: &mut stellars,
                 asteroids: &mut rocks,
+                hazards: None,
             };
             combat.test_hits(fighters, arena, scenery, chance);
         });
@@ -542,10 +585,14 @@ impl Session {
     /// `rules`, drawing on `chance`: each NPC's exit cursors kept for its
     /// berth; the fighters launched from bays put in the system (see the
     /// `fighters` module); the words the pass's stray beams stepped; the
-    /// fleet kept in step; the escorts lost; the NPCs' self-repair; each
-    /// NPC destroyed taken out; the fighters orphaned; a target gone let
-    /// go; the stellars seen; the ships laid out; and the heading each
-    /// ship is drawn at noted, which its next tick's shots leave from.
+    /// fleet kept in step; the escorts whose ship is gone lost; the NPCs'
+    /// self-repair; each NPC a deadly stellar killed vanished or destroyed
+    /// (see the `deadly_stellars` module), then each NPC destroyed taken
+    /// out; the
+    /// fighters orphaned; a target gone let go; the stellars seen; the
+    /// ships laid out and their frames displayed (see the `ship_display`
+    /// module); and the heading each ship is drawn at noted, which its
+    /// next tick's shots leave from.
     /// Each dying NPC's escape pods and escape-ship roll ran before it, in
     /// its own turn of the ship loop ([`Session::ship_loop`]) or, in the
     /// separate parts, after the beams (`Session::fight`; see the
@@ -561,15 +608,18 @@ impl Session {
         // is left when nothing stepped one since the ship loop.
         self.step_stray_words(chance);
         self.sync_fleet();
-        self.lose_escorts();
+        // Each phase lost the escorts its hits downed; what is left is
+        // those whose ship is gone.
+        self.lose_escorts(&[], &std::collections::BTreeSet::new());
         self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
-        self.take_out_the_destroyed(chance);
+        self.take_out_the_killed(chance);
         self.orphan_fighters();
         self.let_go_of_gone_target();
         self.see_stellars();
         self.hold_derelicts();
         self.lay_out_ships();
+        self.display_ships(&mut *chance);
         self.note_drawn();
     }
 }
@@ -880,28 +930,19 @@ mod tests {
             by_parts.tick(Controls::default());
             assert!(!by_parts.rescue_if_due(catalog, &mut NeverFires));
             by_parts.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
-            by_parts.tick_assistance(Rules::default().disable);
             by_parts.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session, by_parts);
         }
     }
 
     #[test]
-    fn a_landed_or_jumping_pass_runs_the_parts_as_before() {
+    fn a_landed_pass_runs_the_parts_as_before() {
+        // Landed, the fight stands still; through a jump the world runs
+        // on in the pass's own order (see the `warp_stage` module).
         let catalog = armed();
         let mut landed = facing_an_npc(&catalog, 180);
         crate::testkit::land_now(&mut landed).expect("lands");
         runs_the_parts(landed, &catalog);
-        let catalog = crate::testkit::catalog();
-        let mut jumping = crate::session::tests::bound_for_131(
-            &catalog,
-            crate::session::tests::OUT,
-            Vec2::ZERO,
-            90.0,
-        );
-        jumping.begin_jump().expect("jumps");
-        assert!(jumping.in_warp_lead_in());
-        runs_the_parts(jumping, &catalog);
     }
 
     /// [`armed`] with weapon 128 a 200-pixel beam lasting 3 ticks, firing

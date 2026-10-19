@@ -63,6 +63,9 @@
 //! - [`hyperspace`]: the [`StarMap`](hyperspace::StarMap) of hyperlinks
 //!   and the routes along it, whether the ship can jump
 //!   ([`check_jump`](hyperspace::check_jump)), and where it arrives.
+//! - [`jump_arrival`]: the original's jump arrival, 1350 out on the
+//!   side the player came from at its top speed
+//!   ([`top_speed_arrival`](jump_arrival::top_speed_arrival)).
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`](navigation::stellar_under)), as the original does.
@@ -93,8 +96,8 @@
 // `nova-sim-combat`.
 #[allow(unused_imports)]
 use nova_sim_base::{
-    NeverFires, RuleKey, Rulebook, chance, flight, fuel, geometry, handling, inertialess, reserves,
-    rulebook, trig,
+    NeverFires, RuleKey, Rulebook, chance, flight, fuel, geometry, handling, inertialess,
+    ionization, reserves, rulebook, skill, trig,
 };
 #[allow(unused_imports)]
 use nova_sim_catalog::{ControlBits, SimSound, buoy, catalog, control, warp};
@@ -113,6 +116,7 @@ pub mod gate;
 pub mod hail;
 pub mod hover;
 pub mod hyperspace;
+pub mod jump_arrival;
 pub mod navigation;
 pub mod scan;
 pub mod scoop;

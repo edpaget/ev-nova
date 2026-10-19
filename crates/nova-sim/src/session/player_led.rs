@@ -49,16 +49,12 @@
 //! (@0x339a6-0x33a36) cannot run, as phase 10's step-1 findings say; a
 //! disabled former escort that repairs itself rejoins the fleet as what
 //! it was (@0x33a3b-0x33bd9, see [`self_repair`](super::self_repair));
-//! and a led ship times its warp-out by the player's clock
-//! (@0x347c1-0x348bd), which holds here by construction: the player and
-//! the fight stand still through the hyperspace stage, and so does the
-//! traffic once the warp is past its lead-in; through the lead-in the
-//! traffic tick holds every led ship and the fighters they lead still,
-//! as the original's do not accelerate before t > 0.45·d/w², after the
-//! lead-in. So every led ship keeps its place beside the player and
-//! arrives with it (see [`escorts`](super::escorts)). No ship has a
-//! warp-out motion, nor a disabled ship its drag (@0x34752-0x349c1,
-//! @0x3395d-0x339a1): rdm:phase/ship-handling-fidelity/phase-8-warp-out.
+//! and a led ship warps out with the player: each warp-stage pass the
+//! player's `_MakeEscortsHyperWithParent` puts it on its jump (see the
+//! `warp_stage` module), and its warp-out runs on the player's clock and
+//! warp factor (@0x347c1-0x348bd; `nova_sim::traffic::warp_out`), so it
+//! moves off once t > 0.45·d/w², after the player, and arrives with it
+//! (see [`escorts`](super::escorts)).
 //!
 //! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
 //! in three branches. It draws it in the escorts' layer, under the other
@@ -135,14 +131,14 @@ impl Session {
                     let npcs = self
                         .npcs()
                         .iter()
-                        .filter(|npc| self.shown(npc.hull))
+                        .filter(|npc| self.shown(&npc.hull))
                         .filter(|npc| self.is_displayed(ShipRef::Npc(npc.id), slot_of(npc)))
                         .map(|npc| {
                             let layer =
                                 ShipLayer::of(disabled(npc.condition), npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
-                    let player = (self.shown(self.hull)
+                    let player = (self.shown(&self.hull)
                         && self.is_displayed(ShipRef::Player, Slot::Player))
                     .then(|| (ShipRef::Player, self.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
@@ -170,7 +166,7 @@ impl Session {
             ShipRef::Player => Some(self.hull),
             ShipRef::Npc(id) => self.npc(id).map(|npc| npc.hull),
         };
-        hull.is_some_and(|hull| !self.shown(hull))
+        hull.is_some_and(|hull| !self.shown(&hull))
     }
 
     /// The ship type whose frames `ship`'s slot sprite holds, the sheet
@@ -195,7 +191,7 @@ impl Session {
                 (slot_of(npc), npc.ship, npc.hull)
             }
         };
-        let hidden = !self.shown(hull)
+        let hidden = !self.shown(&hull)
             && self.rules.source_for(RuleKey::HiddenShipHoverBox) == RuleSource::Engine;
         let stale = hidden || !self.is_laid_out(ship, slot);
         Some(if stale {
@@ -222,7 +218,7 @@ impl Session {
 
     /// Whether a ship of `hull` is drawn and laid out (see
     /// [`Session::is_hidden`]).
-    fn shown(&self, hull: HullSpec) -> bool {
+    fn shown(&self, hull: &HullSpec) -> bool {
         !hull.hidden || self.rules.source_for(RuleKey::HiddenShips) == RuleSource::Bible
     }
 
@@ -320,14 +316,14 @@ impl Session {
         let mut npcs: Vec<&Npc> = self
             .npcs()
             .iter()
-            .filter(|npc| self.shown(npc.hull))
+            .filter(|npc| self.shown(&npc.hull))
             .collect();
         npcs.sort_by_key(|npc| npc.berth);
         let npcs = npcs
             .into_iter()
             .map(|npc| (ShipRef::Npc(npc.id), slot_of(npc)));
         let player = self
-            .shown(self.hull)
+            .shown(&self.hull)
             .then_some((ShipRef::Player, Slot::Player));
         player.into_iter().chain(npcs).collect()
     }
@@ -355,6 +351,8 @@ mod tests {
         accepted, jump_to, shipping, ships_catalog, take_off, ticks,
     };
     use crate::traffic::npc::NpcId;
+    use crate::traffic::warp_out::WarpGoal;
+    use crate::warp;
 
     /// Mission 140's two ships, of `ShipBehav` `behav`, there from the
     /// start in the system the mission is accepted in.
@@ -724,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ships_the_player_leads_keep_their_place_through_the_warps_lead_in() {
+    fn the_ships_the_player_leads_warp_out_with_it_on_its_clock() {
         let catalog = ships_catalog(ships(1));
         let (mut session, led, traffic) = with_traffic();
         let class = session.npc(led[0]).expect("there").clone();
@@ -744,24 +742,80 @@ mod tests {
         };
         session.begin_jump().expect("jumps");
         assert!(session.jumping().is_some(), "facing the bearing at rest");
-        for npc in session.traffic.npcs_mut() {
-            npc.state.velocity = crate::geometry::Vec2::new(1.0, 0.0);
+        let aim = session
+            .jump_aim(crate::catalog::SystemId(131))
+            .expect("on the map");
+        assert_eq!(aim, 90, "east, as the player faces");
+        for &id in &led {
+            let npc = session.npc_mut(id).expect("there");
+            npc.state.velocity = crate::geometry::Vec2::ZERO;
+            npc.state.heading = f32::from(aim);
         }
+        let traffic_was = session.npc(traffic).expect("there").state;
         let state = |session: &Session, id: NpcId| session.npc(id).expect("there").state;
-        let before: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
-        let (fighter_was, traffic_was) = (state(&session, fighter), state(&session, traffic));
-        for _ in 0..3 {
+        let duration = session.warp_sound();
+        let factor = session.player_warp_factor();
+        let mut moved_off = None;
+        for tick in 1..200 {
+            assert!(
+                led.iter().all(|&id| session.npc(id).is_some()),
+                "tick {tick}: {:?}",
+                session.traffic.departed()
+            );
+            let before: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
             session.tick(crate::flight::Controls::default());
             ticks(&mut session, &catalog, 1);
+            let clock = session.warp_clock().expect("in the warp");
+            let v = warp::npc_warp_out_speed(
+                warp::WarpOutClock::Player,
+                warp::mac_ticks(clock),
+                factor,
+                duration,
+                false,
+            );
+            for (&id, was) in led.iter().zip(&before) {
+                let npc = session.npc(id).expect("there");
+                assert_eq!(
+                    npc.warp.goal,
+                    Some(WarpGoal::Follow(ShipRef::Player)),
+                    "tick {tick}"
+                );
+                let push = if v > 0.0 {
+                    crate::trig::accel(aim, v)
+                } else {
+                    crate::geometry::Vec2::ZERO
+                };
+                assert_eq!(
+                    npc.state.position,
+                    was.position + push,
+                    "tick {tick}: {id:?}"
+                );
+            }
+            if tick == 1 {
+                assert_ne!(
+                    state(&session, traffic),
+                    traffic_was,
+                    "the traffic flies on"
+                );
+            }
+            if v > 0.0 {
+                moved_off.get_or_insert(tick);
+            }
+            if moved_off.is_some_and(|first| tick > first + 3) {
+                break;
+            }
         }
-        assert!(session.in_warp_lead_in());
-        let after: Vec<_> = led.iter().map(|&id| state(&session, id)).collect();
-        assert_eq!(after, before, "the led ships keep their place");
-        assert_eq!(state(&session, fighter), fighter_was, "and their fighters");
-        assert_ne!(
-            state(&session, traffic),
-            traffic_was,
-            "the traffic flies on"
+        // 0.45 × d / w², past the player's own 0.35 × d / w².
+        let first = moved_off.expect("they move off");
+        let at = warp::mac_ticks(u32::try_from(first).expect("small"));
+        assert!(
+            f64::from(at) > 0.45 * f64::from(duration) / f64::from(factor * factor) - 2.0,
+            "{first}"
+        );
+        assert_eq!(
+            session.npc(fighter).expect("there").warp.goal,
+            None,
+            "a fighter an escort leads is not the player's to take along"
         );
     }
 

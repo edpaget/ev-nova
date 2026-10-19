@@ -4,7 +4,9 @@
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_sim::KeptBerths;
 use nova_sim::ship_layer::SlotSprites;
+use nova_sim::story::sprite_pool::StellarSpritePool;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
@@ -16,7 +18,7 @@ use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
 use nova_view::menu::appear::Appear;
-use nova_view::menu::{MainMenu, MainScreenSource, PilotList};
+use nova_view::menu::{MainMenu, MainScreenSource, PilotList, PilotPanelSource};
 use nova_view::movie::{MoviePlayer, Movies};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
@@ -49,7 +51,10 @@ impl AppScreen {
             ships: ShipBrowser::new(Rc::clone(&data)),
             data,
             flight: None,
+            game: None,
             slot_sprites: SlotSprites::default(),
+            stellar_sprites: StellarSpritePool::default(),
+            kept_berths: KeptBerths::default(),
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,
@@ -67,6 +72,7 @@ impl AppScreen {
             new_pilot: None,
             open_pilot: None,
             load_note: None,
+            note_hides_game: false,
             question: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
@@ -94,6 +100,8 @@ impl AppScreen {
             ),
             fade_in: None,
             appear: None,
+            entry: None,
+            new_pilot_intro: None,
             button_down: false,
             player_info: None,
             command_held: false,
@@ -333,6 +341,8 @@ impl AppScreen {
             .with_hail_options(self.hail_options.clone())
             .with_rules(self.rules)
             .with_slot_sprites(self.slot_sprites.clone())
+            .with_stellar_sprite_pool(self.stellar_sprites.clone())
+            .with_kept_berths(self.kept_berths.clone())
             .with_overlays(self.flight_overlays)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))
@@ -399,7 +409,8 @@ impl AppScreen {
             }
         };
         let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
-            .with_chance(self.effects_chance.clone());
+            .with_chance(self.effects_chance.clone())
+            .with_pilot_panel(self.data.pilot_panel_looks());
         screen.appear();
         Self {
             side: Side::MainMenu,
@@ -438,11 +449,11 @@ impl AppScreen {
         self.load_note.as_ref()
     }
 
-    /// The quit question the window's close asked over the main menu,
-    /// while it is open.
+    /// The question asked over the main menu, while it is open: the
+    /// window's close's, or New Pilot's over a game in progress.
     #[must_use]
     pub fn question(&self) -> Option<&YesNoDialog> {
-        self.question.as_ref()
+        self.question.as_ref().map(|(_, dialog)| dialog)
     }
 
     /// Changes the pilot with `change` while the ship is landed, as a
@@ -584,6 +595,9 @@ impl AppScreen {
     /// Which screen is showing.
     #[must_use]
     pub fn showing(&self) -> Showing {
+        if let Some(showing) = self.entry_showing() {
+            return showing;
+        }
         if self.about.is_some() {
             // The X text is no About box: it leaves the music playing.
             return if self.about_text == ABOUT_TEXT {
@@ -739,6 +753,13 @@ impl AppScreen {
     #[must_use]
     pub fn flight_view(&self) -> Option<&FlightView<Rc<GameData>>> {
         self.flight.as_ref()
+    }
+
+    /// The game in progress the main menu holds, not flying, if any: a
+    /// pilot created or opened there, or back from play.
+    #[must_use]
+    pub fn game_in_progress(&self) -> Option<&FlightView<Rc<GameData>>> {
+        self.game.as_ref()
     }
 
     /// The spaceport, while the ship is landed.

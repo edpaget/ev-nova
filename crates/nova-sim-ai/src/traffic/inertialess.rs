@@ -24,9 +24,9 @@
 //!   ([`match_speed`]), and stops in the distance half a tick's thrust a
 //!   tick takes ([`stopping_distance`], [`braking_speed`]). Without it an
 //!   inertialess ship would turn away to brake and speed up instead. A
-//!   sniper flies through it too, its brake substate 1's, until
-//!   rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit
-//!   ports substate 0xe's.
+//!   moving sniper doesn't: it brakes as substate 0xe does, a whole tick's
+//!   acceleration off its speed
+//!   ([`snipe::inertialess_brake`](crate::traffic::snipe::inertialess_brake)).
 //! - **Holding still.** Where the original only stops reading the
 //!   ship's controls, while it waits on its course after its glide in or
 //!   burst out (@0x34a54) and while it fades into a gate (@0x3501f), its
@@ -54,7 +54,7 @@ use crate::traffic::npc::Npc;
 /// How fast, in pixels a tick on either axis, a ship braking must still
 /// move to brake (`_LowLevelAIHandler` substate 1, the double 0.35 at
 /// 0xdda68, @0x8539d, @0x853c3).
-pub const MOVING: f32 = 0.35;
+pub const MOVING: f64 = 0.35;
 
 /// How a ship flies this tick: inertially, or inertialess at its speed
 /// along its heading.
@@ -83,10 +83,14 @@ impl Inertia {
 }
 
 /// Whether a ship moving at `velocity` moves [`MOVING`] or more on either
-/// axis: substate 1 brakes it until it doesn't.
+/// axis: substate 1 brakes it until it doesn't. Like the snipe's test
+/// ([`snipe::moving`](crate::traffic::snipe::moving)), it takes each
+/// axis's `_FloatAbs`, widens it (`cvtss2sd`) and compares it with the
+/// double (@0x8539d, @0x853c3), so the float 0.35, which widens to
+/// 0.34999999403953552, is not moving.
 #[must_use]
 pub fn moving(velocity: Vec2) -> bool {
-    velocity.x.abs() >= MOVING || velocity.y.abs() >= MOVING
+    f64::from(velocity.x.abs()) >= MOVING || f64::from(velocity.y.abs()) >= MOVING
 }
 
 /// Substate 1's brake for an inertialess ship at `state`: reverse, which
@@ -229,9 +233,11 @@ mod tests {
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             rules,
-            crate::rulebook::RuleSource::Engine,
+            crate::traffic::autopilot::Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }
@@ -247,7 +253,19 @@ mod tests {
 
     #[test]
     fn the_named_values_are_pinned() {
-        assert_eq!(MOVING, 0.35);
+        assert_eq!(MOVING, 0.35_f64);
+    }
+
+    #[test]
+    fn a_velocity_of_the_float_0_35_on_each_axis_is_not_moving_as_substate_1_widens_it() {
+        // The float 0.35 widens to 0.34999999403953552, below the double
+        // 0.35; the next float up is above it.
+        let above = f32::from_bits(0.35_f32.to_bits() + 1);
+        assert!(!moving(Vec2::new(0.35, 0.0)));
+        assert!(!moving(Vec2::new(0.0, -0.35)));
+        assert!(!moving(Vec2::new(-0.35, 0.35)));
+        assert!(moving(Vec2::new(above, 0.0)));
+        assert!(moving(Vec2::new(0.0, -above)));
     }
 
     // Who flies inertialess.
@@ -519,6 +537,37 @@ mod tests {
         );
         fly(&mut ship, &[], Some(&target));
         assert_eq!(ship.state.heading, 3.0, "turning right to face east");
+    }
+
+    #[test]
+    fn an_inertialess_sniper_moving_brakes_a_whole_tick_with_no_turn_until_it_rests_then_turns_to_its_target()
+     {
+        use crate::traffic::ship_display::Thrust;
+        let target = at(500.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = npc(
+            RAVEN,
+            Goal::Snipe(crate::combat::ShipRef::Player),
+            at(0.0, 0.0, 0.0, -3.0, 0.0),
+            3.0,
+        );
+        fly(&mut ship, &[], Some(&target));
+        // A whole tick's 0.18, not substate 1's half.
+        assert!((ship.speed - 2.82).abs() < 1e-5, "{}", ship.speed);
+        assert_eq!(ship.state.heading, 0.0, "no turn");
+        assert_eq!(ship.display.drive.thrust, Thrust::None);
+        let mut ticks = 1;
+        while crate::traffic::snipe::moving(&ship.state) {
+            fly(&mut ship, &[], Some(&target));
+            assert_eq!(ship.state.heading, 0.0, "no turn while it moves");
+            ticks += 1;
+            assert!(ticks < 100);
+        }
+        // Down from 3 to under 0.35 at 0.18 a tick.
+        assert_eq!(ticks, 15);
+        let rested = ship.speed;
+        fly(&mut ship, &[], Some(&target));
+        assert_eq!(ship.state.heading, 3.0, "turning right to face east");
+        assert_eq!(ship.speed, rested, "at rest its speed is left alone");
     }
 
     // The glide in and the burst out.

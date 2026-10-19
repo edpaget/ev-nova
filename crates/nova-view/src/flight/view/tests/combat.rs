@@ -46,9 +46,11 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
             (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
             (ImageKey::sprite(1129, 1), at(812.0, 184.0)),
             (ImageKey::sprite(2001, frame), at(612.0, 284.0)),
+            (ImageKey::sprite(2101, frame), at(612.0, 284.0)),
+            (ImageKey::sprite(2201, frame), at(612.0, 284.0)),
             (ImageKey::sprite(2000, 0), VIEW_CENTER),
         ],
-        "after the stellars, before the player"
+        "after the stellars, before the player, its glow and lights over it"
     );
 }
 
@@ -174,11 +176,17 @@ fn an_npc_is_a_dim_blip_on_the_radar() {
     );
 }
 
-/// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with.
+/// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with,
+/// plainly or colorized.
 fn npc_tints(list: &DrawList) -> Vec<Color> {
     list.iter()
         .filter_map(|command| match command {
-            DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(*tint),
+            DrawCommand::Sprite { image, tint, .. }
+            | DrawCommand::Colorized { image, tint, .. }
+                if image.id == 2001 =>
+            {
+                Some(*tint)
+            }
             _ => None,
         })
         .collect()
@@ -634,7 +642,7 @@ fn arriving_repopulates_from_the_new_system() {
 }
 
 #[test]
-fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_still() {
+fn the_traffic_flies_on_through_the_whole_warp_and_the_ship_moves_off() {
     // The traffic follows the ship out, then makes for planet 128 at
     // the centre as the ship jumps.
     let catalog = FakeCatalog {
@@ -649,30 +657,26 @@ fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_stil
     ready_to_jump(&mut view);
     jumped.set(true);
     view.input(&key(JUMP, true));
-    assert!(view.jump_effect().is_some(), "streaking on J");
+    assert!(view.jump_effect().is_some(), "jumping on J");
     let leaving = player(&view);
     let start = npc_states(&view);
     assert_eq!(start.len(), 2);
-    // The lead-in lasts 36 ticks (`nova_sim::warp`): 1.2 s.
     view.tick(ms(500));
-    let session = view.session().expect("flying");
-    assert!(session.in_warp_lead_in());
-    assert_ne!(
-        npc_states(&view),
-        start,
-        "the traffic flies on under the streak"
-    );
-    assert_eq!(player(&view), leaving, "the ship stays where it is");
-    view.tick(ms(800));
-    let session = view.session().expect("flying");
-    assert!(!session.in_warp_lead_in(), "past the lead-in");
-    assert_eq!(session.system(), SystemId(130), "not yet arrived");
+    assert!(view.session().expect("flying").in_warp_lead_in());
+    assert_ne!(npc_states(&view), start, "the traffic flies on");
+    while view.session().expect("flying").in_warp_lead_in() {
+        view.tick(TICK);
+    }
     let past = npc_states(&view);
     view.tick(ms(150));
-    assert_eq!(npc_states(&view), past, "the traffic stands still");
+    assert_ne!(npc_states(&view), past, "past the lead-in too");
+    assert_ne!(
+        player(&view).position,
+        leaving.position,
+        "the ship moves off"
+    );
     assert_eq!(view.session().expect("flying").system(), SystemId(130));
-    // The arrival keeps the effect's time: past 1.5 s.
-    view.tick(ms(100));
+    tick_to_arrival(&mut view);
     assert_eq!(view.session().expect("flying").system(), SystemId(131));
 }
 
@@ -885,6 +889,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         cost: 0,
         speed: 0,
         exits: None,
+        display: None,
         escort_class: nova_sim::EscortClass::Freighter,
     };
     let (_, chance) = scripted(&placed(850, 650, 90));
@@ -1934,6 +1939,18 @@ fn beginning_the_fade_before_the_hold_expires_does_nothing() {
 }
 
 #[test]
+fn only_a_pilot_with_a_session_whose_ship_is_breaking_up_or_destroyed_is_dying() {
+    let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+    assert!(!flying.is_dying(), "alive");
+    assert!(at_the_explosion().is_dying(), "destroyed");
+    let failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..killed_in(1)
+    });
+    assert!(!failed.is_dying(), "no session, no pilot dying");
+}
+
+#[test]
 fn only_a_living_pilot_may_be_saved() {
     let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
     assert!(flying.may_save());
@@ -2946,6 +2963,7 @@ fn damaging() -> FakeCatalog {
             news_pic: -1,
             require: 0,
             inh_jam: [0; 4],
+            skill_mult: 0,
         }],
         ..catalog
     }

@@ -47,7 +47,12 @@ fn kinds(data: &GameData) -> Vec<(ShipId, ShipKind)> {
     let arsenal = Arsenal::read(data);
     data.ships()
         .iter()
-        .map(|record| (record.id, kind(record, &outfits, &arsenal)))
+        .map(|record| {
+            (
+                record.id,
+                kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine),
+            )
+        })
         .collect()
 }
 
@@ -148,6 +153,7 @@ fn player(at: Vec2) -> PlayerSide {
         target: None,
         class: nova_sim::escort::EscortClass::Freighter,
         boarded: false,
+        speed: 0.0,
     }
 }
 
@@ -167,8 +173,10 @@ fn a_stock_dragon_approaching_the_player_rushes_in_past_its_top_speed() {
     let mut traffic = Traffic::with_interval(1);
     let id = traffic.add_npc(ship);
     let behaviour = Attacks(BTreeMap::from([(id, ShipRef::Player)]));
+    let arsenal = Arsenal::read(&data);
     let world = World {
         player: Some(player(at)),
+        weapons: &arsenal,
         ..World::new(&[])
     };
     let mut chance = Ranged::of(&[]);
@@ -209,7 +217,12 @@ fn a_stock_dragon_meeting_another_head_on_breaks_off() {
     let target = traffic.add_npc(dragon(&data, Vec2::new(0.0, -100.0), 180.0));
     let jouster = traffic.add_npc(dragon(&data, Vec2::ZERO, 0.0));
     let behaviour = Attacks(BTreeMap::from([(jouster, ShipRef::Npc(target))]));
-    traffic.tick_in(&behaviour, World::new(&[]), &[], &mut Ranged::of(&[(2, 0)]));
+    let arsenal = Arsenal::read(&data);
+    let world = World {
+        weapons: &arsenal,
+        ..World::new(&[])
+    };
+    traffic.tick_in(&behaviour, world, &[], &mut Ranged::of(&[(2, 0)]));
     let ship = traffic
         .npcs()
         .iter()

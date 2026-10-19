@@ -25,12 +25,15 @@
 //!   `_AdjustedAccel(heading, max, max, &vel)` (@0x2ae4b), which adds to
 //!   the velocity while it is short of the top speed: from rest, exactly
 //!   the top speed along the heading. The top speed is ship-class +0x40,
-//!   `shïp` `Speed` / 100 (`_LoadObjectData` @0x7a0db-0x7a0ef), here the
-//!   ship's [`Handling::max_speed`](crate::handling::Handling::max_speed)
-//!   with the outfits it flies with: a `düde` ship's default items, or a
-//!   person's fitted ship. The original reads the bare `Speed`; each ship
-//!   here still starts at exactly its own top speed. A `LinkSyst` fleet
-//!   gets none: it comes by hyperspace.
+//!   `shïp` `Speed` / 100 (`_LoadObjectData` @0x7a0db-0x7a0ef), here its
+//!   kind's [`Handling::max_speed`](crate::handling::Handling::max_speed):
+//!   by the engine reading of
+//!   [`RuleKey::NpcDefaultItems`](crate::RuleKey::NpcDefaultItems) its
+//!   class's bare `Speed`, as the original reads it, and by the other
+//!   with its default items ([`ShipKind`]).
+//!   No skill, government factor or `Flags` 0x0400 applies, as the
+//!   original reads the class field and not `_ShipMaxSpeed`. A `LinkSyst`
+//!   fleet gets none: it comes by hyperspace.
 //! - **Derelicts.** A person of a derelict government (`gövt` `Flags`
 //!   0x0800) brought by a pass has its velocity zeroed (@0x43245-0x4325b),
 //!   but the code jumps on to the pass's shared `_AdjustedAccel`
@@ -315,6 +318,26 @@ pub enum Entry {
         /// The gate it comes out of.
         gate: StellarId,
     },
+}
+
+impl Entry {
+    /// The gate it comes out of, if it is emerging.
+    #[must_use]
+    pub fn gate(self) -> Option<StellarId> {
+        match self {
+            Self::Emerging { gate, .. } => Some(gate),
+            Self::Placed | Self::JumpingIn => None,
+        }
+    }
+
+    /// The stellar a ship whose tank holds `fuel_capacity` has visited as it
+    /// comes in so ([`Npc::gate_visit`](crate::traffic::npc::Npc::gate_visit)):
+    /// its gate, if it is emerging and has a tank.
+    #[must_use]
+    pub fn visited(self, fuel_capacity: f32) -> Option<StellarId> {
+        self.gate()
+            .and_then(|gate| crate::traffic::npc::Npc::gate_visit(gate, fuel_capacity))
+    }
 }
 
 /// The system's stellars, which an arrival may come out of (see
@@ -1414,6 +1437,21 @@ mod tests {
     use crate::traffic::table::SpawnPerson;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::{AllowAll, RefuseBits, person};
+
+    #[test]
+    fn an_entry_from_a_gate_names_it_and_a_tank_visits_it() {
+        let gate = StellarId(129);
+        let emerging = Entry::Emerging {
+            ticks_left: 3,
+            gate,
+        };
+        assert_eq!(emerging.gate(), Some(gate));
+        assert_eq!(emerging.visited(300.0), Some(gate));
+        assert_eq!(emerging.visited(0.0), None, "no tank (@0x89566)");
+        for other in [Entry::Placed, Entry::JumpingIn] {
+            assert_eq!((other.gate(), other.visited(300.0)), (None, None));
+        }
+    }
 
     /// The person draw of a world without persons gone or grudging, by
     /// the engine.

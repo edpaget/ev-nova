@@ -552,8 +552,29 @@ fn far_enough_and_nothing_out_here_last_512() {
 }
 
 #[test]
+fn j_held_by_a_tractor_beam_says_36_with_the_refusal_beep() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    let session = view.session.as_mut().expect("flying");
+    nova_sim::fixture::set_player_tractor(
+        session,
+        Some(nova_sim::combat::impact::TractorLock::by(
+            nova_sim::combat::ShipRef::Npc(nova_sim::NpcId(7)),
+        )),
+    );
+    view.take_sounds();
+    view.input(&key(JUMP, true));
+    assert_eq!(view.jump_effect(), None);
+    assert!(!view.preparing_jump());
+    assert_eq!(view.take_sounds(), [REFUSED]);
+    assert_eq!(message(&view), Some(message_drawn(TRACTORED)));
+    assert_lasts(&mut view, TRACTORED, 360);
+}
+
+#[test]
 fn starting_a_jump_clears_the_far_enough_hint() {
-    for text in [FAR_ENOUGH, NOTHING_OUT_HERE, TOO_CLOSE] {
+    for text in [FAR_ENOUGH, NOTHING_OUT_HERE, TOO_CLOSE, TRACTORED] {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);
@@ -612,7 +633,7 @@ fn ship_at(list: &DrawList) -> usize {
 }
 
 #[test]
-fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
+fn a_jump_moves_off_fades_to_white_arrives_on_the_warp_end_and_fades_in() {
     let mut view = flight().with_overlays(TITLED);
     plot(&mut view, 131);
     fly_out(&mut view);
@@ -620,38 +641,46 @@ fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
     let leaving = player(&view);
     let fuel_leaving = reserves(&view).fuel.now;
     assert_eq!(view.message(), None);
-    let effect = view.jump_effect().expect("jumping");
-    assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::Warp)
+    );
     assert_eq!(
         view.session().expect("flying").jumping(),
         Some(SystemId(131))
     );
 
-    // The stars streak; nothing fades.
-    view.tick(ms(500));
-    assert_eq!(player(&view), leaving, "frozen");
-    let list = drawn(&view);
-    let mut streaks = DrawList::new();
-    starfield::draw_streaked(&mut streaks, &view.camera(), at(1.0, 0.0), 256.0);
-    assert!(!streaks.is_empty());
-    assert!(list.iter().take(streaks.len()).eq(streaks.iter()));
-    assert_eq!(fade(&list), None);
-    assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+    // The ship warps; nothing fades until the session lights the screen.
+    let mut moved = false;
+    for _ in 0..2000 {
+        view.tick(TICK);
+        moved |= player(&view).position != leaving.position;
+        if view.session().expect("flying").hyper_gamma() > 0.0 {
+            break;
+        }
+        assert_eq!(fade(&drawn(&view)), None, "unlit");
+    }
+    assert!(moved, "the ship moves off before the white");
+    let east = player(&view).position.x - leaving.position.x;
+    assert!(east > 50.0, "it rushes east: {east}");
 
-    // The old system fades out to white, HUD and all.
-    view.tick(ms(625));
+    // The old system fades to white from that tick, HUD and all.
     let list = drawn(&view);
     let (at_fade, color) = fade(&list).expect("a fade");
-    assert_eq!(color, Color::rgba(255, 255, 255, 64));
+    assert!(color.a > 0 && color.a < 10, "{color:?}");
     assert!(ship_at(&list) < hud_at(&list) && hud_at(&list) < at_fade);
     assert_eq!(at_fade, list.len() - 1, "the fade is drawn last");
     assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
-    view.tick(ms(125));
-    assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "growing");
-    assert_eq!(view.session().expect("flying").system(), SystemId(130));
+    let first = fade(&list).map(|f| f.1.a);
+    view.tick(ms(750));
+    assert!(fade(&drawn(&view)).map(|f| f.1.a) > first, "growing");
 
-    // Past 1.5 s it arrives, and the new system fades in.
-    view.tick(ms(450));
+    // It arrives on the step the session ends the warp, and the new
+    // system fades in from white.
+    while view.session().expect("flying").system() == SystemId(130) {
+        assert!(!view.session().expect("flying").warp_end_due());
+        view.tick(TICK);
+    }
     let session = view.session().expect("flying");
     assert_eq!(session.system(), SystemId(131));
     assert_eq!(session.jumping(), None);
@@ -662,58 +691,176 @@ fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     assert_eq!(view.course_map().current(), Some(SystemId(131)));
     assert_eq!(view.course_map().route(), []);
+    // 1350 out on Sol's side, at top speed (`nova_sim::jump_arrival`).
     let arrived = player(&view);
-    assert_eq!(arrived.position, Vec2::new(-1001.0, 0.0));
-    assert_eq!(arrived.velocity, Vec2::ZERO, "at rest");
-    assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
-    assert_eq!(view.shown_position(), at(-1001.0, 0.0));
-    let list = drawn(&view);
-    let (at_fade, color) = fade(&list).expect("a fade");
-    assert_eq!(color.a, 221);
-    assert!(texts(&list).contains(&"Alpha Centauri (sÿst 131)".to_owned()));
-    let mut hud = DrawList::new();
-    hud::draw(
-        &mut hud,
-        view.status_bar().expect("a status bar"),
-        &HudState {
-            radar: &view.radar_shown(),
-            blink_on: view.hud_cadence.blink_on(),
-            reserves: reserves(&view),
-            nav: NavDisplay::Off,
-            cargo: Some(&view.session().expect("flying").status_cargo()),
-            disabled: false,
-        },
-        None,
-        VIEW_SIZE.0,
+    let top = view.session().expect("flying").top_speed();
+    assert!(
+        (arrived.position - Vec2::new(-1350.0, 0.0)).length() < 1e-3,
+        "{arrived:?}"
     );
     assert!(
-        list.iter()
-            .skip(hud_at(&list))
-            .take(hud.len())
-            .eq(hud.iter()),
-        "the HUD, with a jump's fuel less and a day on"
+        (arrived.velocity.length() - top).abs() < 1e-4,
+        "{arrived:?}"
     );
+    assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
     assert_eq!(
-        (at_fade, hud_at(&list) + hud.len() + 2),
-        (list.len() - 1, at_fade),
-        "then the target and weapon, and the fade over everything"
+        view.shown_position(),
+        at(arrived.position.x, arrived.position.y)
     );
-    view.tick(ms(100));
-    assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(204), "shrinking");
-    assert_eq!(player(&view), arrived, "at rest, no keys held");
+    let list = drawn(&view);
+    let (at_fade, color) = fade(&list).expect("a fade");
+    assert_eq!(color.a, 255, "the arrival frame, white");
+    assert!(texts(&list).contains(&"Alpha Centauri (sÿst 131)".to_owned()));
+    assert_eq!(at_fade, list.len() - 1, "the fade over everything");
+    view.tick(ms(750));
+    assert!(fade(&drawn(&view)).map(|f| f.1.a) < Some(255), "shrinking");
 
     // Then plain flight.
-    view.tick(ms(1200));
+    view.tick(ms(800));
     assert_eq!(view.jump_effect(), None);
     let list = drawn(&view);
     assert_eq!(fade(&list), None);
     let mut stars = DrawList::new();
     starfield::draw(&mut stars, &view.camera());
     assert!(list.iter().take(stars.len()).eq(stars.iter()));
+    let flying = player(&view);
     view.input(&key(Key::Up, true));
     ticks(&mut view, 3);
-    assert_eq!(player(&view), stepped(arrived, THRUST, 3));
-    assert_ne!(player(&view), arrived, "it flies again");
+    assert_eq!(player(&view), stepped(flying, THRUST, 3));
+    assert_ne!(player(&view), flying, "it flies again");
+}
+
+#[test]
+fn the_fade_starts_on_the_tick_the_screen_is_lit_and_arrival_waits_for_the_session() {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    let lit = tick_until_lit(&mut view);
+    assert!(lit > 1, "{lit}");
+    assert!(matches!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(_))
+    ));
+    // The fade runs on display time; the arrival comes when the session
+    // ends the warp, before the fade is through: (v - 55) × 5 lights late.
+    let mut fading = 0;
+    while view.session().expect("flying").system() == SystemId(130) {
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeOut(_))
+        ));
+        view.tick(TICK);
+        fading += 1;
+    }
+    assert!(fading > 1 && fading < 45, "{fading}");
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeIn(0.0)),
+        "white at arrival"
+    );
+}
+
+/// A flight warping to Alpha Centauri, its screen lit when `lit` and its
+/// fade to white under way, given up as `give_up` gives the session's
+/// jump up within a tick, then ticked once more.
+fn given_up(lit: bool, give_up: fn(&mut Session)) -> View {
+    let mut view = flight();
+    plot(&mut view, 131);
+    fly_out(&mut view);
+    jump_now(&mut view);
+    if lit {
+        tick_until_lit(&mut view);
+        ticks(&mut view, 2);
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeOut(_))
+        ));
+    } else {
+        assert!(view.session().expect("flying").hyper_gamma() <= 0.0);
+    }
+    let Ok(session) = &mut view.session else {
+        panic!("flying");
+    };
+    give_up(session);
+    view.tick(TICK);
+    let session = view.session().expect("flying");
+    assert_eq!(session.jumping(), None, "lit: {lit}");
+    assert_eq!(session.preparing_jump(), None, "lit: {lit}");
+    assert_eq!(session.system(), SystemId(130), "no arrival");
+    view.tick(TICK);
+    view
+}
+
+/// Disables the player: its jump collapses on the next step.
+fn disable_player(session: &mut Session) {
+    nova_sim::fixture::set_player_condition(session, Condition::Disabled);
+}
+
+/// A way to give the session's jump up, named.
+type GiveUp = (&'static str, fn(&mut Session));
+
+/// The ways a jump is given up before arrival: collapsed by a disable,
+/// and cut by a sabotage kill outfit.
+const GIVE_UPS: [GiveUp; 2] = [
+    ("collapsed", disable_player),
+    ("sabotaged", nova_sim::fixture::sabotage_kill),
+];
+
+#[test]
+fn a_jump_given_up_before_the_screen_is_lit_drops_its_effect() {
+    for (how, give_up) in GIVE_UPS {
+        let mut view = given_up(false, give_up);
+        assert_eq!(view.jump_effect(), None, "{how}");
+        assert_eq!(fade(&drawn(&view)), None, "{how}: nothing white");
+        view.tick(ms(3000));
+        assert_eq!(fade(&drawn(&view)), None, "{how}: nor later");
+    }
+}
+
+#[test]
+fn a_jump_given_up_once_the_screen_is_lit_fades_back_from_white() {
+    for (how, give_up) in GIVE_UPS {
+        let mut view = given_up(true, give_up);
+        assert!(
+            matches!(
+                view.jump_effect().map(JumpEffect::phase),
+                Some(JumpPhase::FadeIn(_))
+            ),
+            "{how}: {:?}",
+            view.jump_effect()
+        );
+        let (_, color) = fade(&drawn(&view)).expect("a fade");
+        assert!(color.a > 240, "{how}: from white, {color:?}");
+        view.tick(ms(750));
+        let (_, color) = fade(&drawn(&view)).expect("a fade");
+        assert!(color.a < 200, "{how}: falling back, {color:?}");
+        view.tick(FADE_IN_FOR);
+        assert_eq!(view.jump_effect(), None, "{how}");
+        assert_eq!(fade(&drawn(&view)), None, "{how}: the white gone");
+    }
+}
+
+#[test]
+fn a_player_whose_jump_collapsed_can_jump_again_once_intact() {
+    for lit in [false, true] {
+        let mut view = given_up(lit, disable_player);
+        let Ok(session) = &mut view.session else {
+            panic!("flying");
+        };
+        nova_sim::fixture::set_player_condition(session, Condition::Intact);
+        view.take_sounds();
+        view.input(&key(PLAYER_INFO_KEY, true));
+        view.input(&key(PLAYER_INFO_KEY, false));
+        assert!(view.take_player_info_request(), "lit: {lit}: P is taken");
+        assert!(!view.take_sounds().contains(&REFUSED), "lit: {lit}");
+        tap(&mut view, JUMP);
+        let session = view.session().expect("flying");
+        assert!(
+            session.preparing_jump().is_some() || session.jumping().is_some(),
+            "lit: {lit}: jumping again"
+        );
+    }
 }
 
 #[test]
@@ -723,8 +870,9 @@ fn hyperspace_effects_default_on() {
     plot(&mut view, 131);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1250));
-    assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "fading out");
+    tick_until_lit(&mut view);
+    view.tick(ms(750));
+    assert!(translucent_fade(&drawn(&view)), "fading out");
 }
 
 /// Whether `list` draws the fade quad translucent: part of a fade.
@@ -733,7 +881,7 @@ fn translucent_fade(list: &DrawList) -> bool {
 }
 
 #[test]
-fn with_effects_off_a_jump_streaks_then_arrives_without_fading() {
+fn with_effects_off_a_jump_moves_off_then_arrives_without_fading() {
     let mut view = flight().with_hyperspace_effects(false);
     assert!(!view.hyperspace_effects());
     plot(&mut view, 131);
@@ -741,20 +889,16 @@ fn with_effects_off_a_jump_streaks_then_arrives_without_fading() {
     jump_now(&mut view);
     let leaving = player(&view);
 
-    // The stars streak, with no fade over them.
-    view.tick(ms(500));
-    assert_eq!(player(&view), leaving, "frozen");
-    let list = drawn(&view);
-    let mut streaks = DrawList::new();
-    starfield::draw_streaked(&mut streaks, &view.camera(), at(1.0, 0.0), 256.0);
-    assert!(list.iter().take(streaks.len()).eq(streaks.iter()));
-    assert_eq!(fade(&list), None);
-    view.tick(ms(499));
-    assert_eq!(fade(&drawn(&view)), None);
-    assert_eq!(view.session().expect("flying").system(), SystemId(130));
+    // The ship warps away, lighting nothing.
+    while view.session().expect("flying").system() == SystemId(130) {
+        assert_eq!(fade(&drawn(&view)), None);
+        assert!(view.session().expect("flying").hyper_gamma() < 0.0);
+        view.tick(TICK);
+    }
+    let arriving = Vec2::new(-1350.0, 0.0);
+    assert!((leaving.position - arriving).length() > 1.0);
 
-    // As the streak ends, the ship arrives and the screen is white once.
-    view.tick(ms(1));
+    // On the warp's end the ship arrives and the screen is white once.
     let session = view.session().expect("flying");
     assert_eq!(session.system(), SystemId(131));
     assert_eq!(session.jumping(), None);
@@ -765,7 +909,11 @@ fn with_effects_off_a_jump_streaks_then_arrives_without_fading() {
         "opaque white over everything"
     );
     assert!(view.jump_effect().is_some(), "flashing");
-    assert_eq!(player(&view).position, Vec2::new(-1001.0, 0.0));
+    assert!(
+        (player(&view).position - arriving).length() < 1e-3,
+        "{:?}",
+        player(&view)
+    );
 
     // Then plain flight, with no fade in.
     view.tick(ms(33));
@@ -781,7 +929,8 @@ fn set_hyperspace_effects_changes_the_next_jump() {
     plot(&mut view, 131);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1250));
+    tick_until_lit(&mut view);
+    view.tick(ms(750));
     assert!(translucent_fade(&drawn(&view)), "fading");
 
     let mut view = flight();
@@ -791,7 +940,7 @@ fn set_hyperspace_effects_changes_the_next_jump() {
     fly_out(&mut view);
     jump_now(&mut view);
     let mut faded = false;
-    for _ in 0..200 {
+    while view.session().expect("flying").system() == SystemId(130) {
         view.tick(TICK);
         faded |= translucent_fade(&drawn(&view));
     }
@@ -818,10 +967,9 @@ fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
     fly_out(&mut view);
     jump_now(&mut view);
     let fuel_leaving = reserves(&view).fuel.now;
-    let effect = view.jump_effect().expect("jumping");
-    assert_eq!(effect.direction(), at(1.0, 0.0), "east, to the first hop");
+    assert!(view.jump_effect().is_some(), "jumping");
 
-    view.tick(ms(1550));
+    tick_to_arrival(&mut view);
     let session = view.session().expect("flying");
     assert_eq!(session.system(), SystemId(132));
     assert_eq!(session.course(), []);
@@ -840,7 +988,7 @@ fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
     );
     assert!(view.jump_effect().is_some(), "fading in");
 
-    view.tick(ms(1450));
+    view.tick(ms(1500));
     assert_eq!(view.jump_effect(), None);
     assert_eq!(view.session().expect("flying").jumping(), None);
     for _ in 0..30 {
@@ -851,7 +999,7 @@ fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
 }
 
 #[test]
-fn the_streak_waits_for_the_session_to_begin_the_jump() {
+fn the_jump_effect_waits_for_the_session_to_begin_the_jump() {
     // fly_out leaves the ship racing north, facing it; Alpha Centauri
     // is east.
     let mut view = flight();
@@ -873,8 +1021,7 @@ fn the_streak_waits_for_the_session_to_begin_the_jump() {
         waited += 1;
         assert!(waited < 1000, "the jump never began");
     }
-    let effect = view.jump_effect().expect("the streak, on that tick");
-    assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
+    assert!(view.jump_effect().is_some(), "the effect, on that tick");
     let rate = view.session().expect("flying").handling().turn_rate;
     assert!(
         nova_sim::player_turn::settled(
@@ -890,7 +1037,7 @@ fn the_streak_waits_for_the_session_to_begin_the_jump() {
 }
 
 #[test]
-fn a_ship_ready_to_jump_streaks_on_j() {
+fn a_ship_ready_to_jump_begins_its_jump_on_j() {
     // Turned east at rest, then drifting out slowly that way: facing
     // Alpha Centauri and slow enough, it needs no pre-jump stage.
     let mut view = flight();
@@ -911,10 +1058,14 @@ fn a_ship_ready_to_jump_streaks_on_j() {
     assert_eq!(ship.heading, 90.0, "{ship:?}");
     assert!(ship.position.length() >= MIN_JUMP_DISTANCE, "{ship:?}");
     view.input(&key(JUMP, true));
-    let effect = view.jump_effect().expect("streaking on J");
-    assert_eq!(effect.direction(), at(1.0, 0.0));
+    let effect = view.jump_effect().expect("jumping on J");
+    assert_eq!(effect.phase(), JumpPhase::Warp);
+    assert_eq!(
+        view.session().expect("flying").jumping(),
+        Some(SystemId(131))
+    );
     view.tick(TICK);
-    assert_eq!(player(&view), ship, "frozen at once");
+    assert_eq!(player(&view).heading, ship.heading, "facing the bearing");
 }
 
 #[test]
@@ -962,7 +1113,7 @@ fn keys_are_ignored_while_the_jump_plays() {
     assert!(!view.map_open());
     assert_eq!(view.message(), None);
     view.input(&key(Key::Left, false));
-    view.tick(ms(2700));
+    arrive_now(&mut view);
     assert_eq!(view.jump_effect(), None);
     assert_eq!(view.take_landing(), None);
     let arrived = player(&view);
@@ -980,7 +1131,8 @@ fn keys_are_ignored_while_the_old_system_fades_out() {
     plot(&mut view, 131);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1250));
+    tick_until_lit(&mut view);
+    view.tick(ms(500));
     assert!(matches!(
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeOut(_))
@@ -1228,6 +1380,11 @@ fn a_flight_key_held_through_arrival_acts_at_once() {
     let arrived = player(&view);
     view.tick(TICK);
     assert_eq!(player(&view), stepped(arrived, THRUST, 1), "thrusting");
+    assert_ne!(
+        player(&view),
+        stepped(arrived, Controls::default(), 1),
+        "not coasting"
+    );
 }
 
 #[test]
@@ -1241,6 +1398,11 @@ fn a_key_held_when_j_is_pressed_stays_held() {
     let arrived = player(&view);
     view.tick(TICK);
     assert_eq!(player(&view), stepped(arrived, THRUST, 1), "thrusting");
+    assert_ne!(
+        player(&view),
+        stepped(arrived, Controls::default(), 1),
+        "not coasting"
+    );
 }
 
 #[test]
@@ -1293,14 +1455,11 @@ fn j_during_the_arrival_fade_in_begins_the_next_jump() {
         view.session().expect("flying").jumping(),
         Some(SystemId(132))
     );
-    let effect = view.jump_effect().expect("the next jump's streak");
-    assert!(matches!(effect.phase(), JumpPhase::Streak(_)));
-    let toward = JumpEffect::toward(Vec2::new(600.0, 0.0), Vec2::new(0.0, 600.0));
-    assert_eq!(
-        effect.direction(),
-        toward.direction(),
-        "south-west, to Barnard"
-    );
+    let effect = view.jump_effect().expect("the next jump's effect");
+    assert!(matches!(
+        effect.phase(),
+        JumpPhase::Warp | JumpPhase::FadeOut(_)
+    ));
     arrive_now(&mut view);
     assert_eq!(system_of(&view), SystemId(132));
 }

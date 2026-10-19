@@ -76,6 +76,8 @@ mod maps;
 mod missions;
 mod nav;
 mod pilot;
+mod self_destruct;
+mod ship_drawing;
 mod shots;
 mod stellars;
 mod widescreen;
@@ -168,6 +170,9 @@ struct FakeCatalog {
     persons: Vec<nova_sim::PersonRecord>,
     /// Ship 128's default items: none, by default.
     defaults: Vec<(OutfitId, u16)>,
+    /// Ship 129's sheet in place of the one [`FakeCatalog::ship_sheet`]
+    /// gives: none, by default.
+    npc_sheet: Option<ShipSheet>,
     /// Whether Alpha Centauri links on to Barnard, which has no
     /// stellars: not by default.
     onward: bool,
@@ -269,6 +274,8 @@ const FIELDS: ShipFields = ShipFields {
     armor_rech: 0,
     flags: 0,
     flags2: 0,
+    ionize_max: 0,
+    deionize: 0,
 };
 
 fn sheet() -> ShipSheet {
@@ -281,7 +288,10 @@ fn sheet() -> ShipSheet {
         frame_height: 40,
         glow: None,
         lights: None,
-        blink: Blink::STEADY,
+        alt: None,
+        shield: None,
+        base_transp: 0,
+        solid: false,
     }
 }
 
@@ -320,7 +330,7 @@ fn catalog() -> FakeCatalog {
         traffic: Vec::new(),
         dudes: Vec::new(),
         weapons: Vec::new(),
-        hulls: Vec::new(),
+        hulls: vec![hull_of(128, &[]), hull_of(129, &[]), hull_of(130, &[])],
         govts: Vec::new(),
         ranks: Vec::new(),
         looks: Vec::new(),
@@ -343,6 +353,7 @@ fn catalog() -> FakeCatalog {
         persons: Vec::new(),
         defaults: Vec::new(),
         onward: false,
+        npc_sheet: None,
         fan: false,
         near: false,
         reborn: false,
@@ -817,6 +828,7 @@ impl ShipSprites for FakeCatalog {
         match id.0 {
             128 => self.sheet.clone(),
             895 => Err("no shän 895".to_owned()),
+            129 if self.npc_sheet.is_some() => self.npc_sheet.ok_or_else(String::new),
             129 => Ok(ShipSheet {
                 image_id: 2001,
                 rotations: NonZeroU16::new(72).expect("non-zero"),
@@ -1003,15 +1015,18 @@ fn reserves(view: &View) -> Reserves {
     view.session().expect("flying").reserves()
 }
 
-/// `state` after `ticks` of the player's steps under `controls`.
+/// `state` after `ticks` of the player's steps under `controls`, capped
+/// at the top speed of a pilot without Strict Play (the speed a jump
+/// arrives at).
 fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
+    let top = handling().max_speed * nova_sim::top_speed::NON_STRICT_SPEED;
     for _ in 0..ticks {
         player_step(
             &mut state,
             &handling(),
             controls,
             None,
-            nova_sim::flight::Caps::top(handling().max_speed),
+            nova_sim::flight::Caps::top(top),
             FlightRules::default(),
         );
     }
@@ -1163,6 +1178,7 @@ fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
         image_id,
         frames: NonZeroU16::new(frames).expect("non-zero"),
+        solid: false,
     }
 }
 
@@ -1180,10 +1196,27 @@ fn blinking(blink: Blink) -> FakeCatalog {
         sheet: Ok(ShipSheet {
             glow: Some(layer(2100, 36)),
             lights: Some(layer(2200, 12)),
-            blink,
             ..sheet()
         }),
+        hulls: vec![lit_hull(hull_of(128, &[]), blink)],
         ..catalog()
+    }
+}
+
+/// `hull` with a lights sprite blinking `blink`, as its `shän` names one,
+/// which the session's display steps (`nova_sim::combat::ship_lights`).
+fn lit_hull(hull: nova_sim::HullRecord, blink: Blink) -> nova_sim::HullRecord {
+    let display = hull.display.unwrap_or(nova_sim::catalog::ShipDisplay {
+        base_sets: 1,
+        ..nova_sim::catalog::ShipDisplay::default()
+    });
+    nova_sim::HullRecord {
+        display: Some(nova_sim::catalog::ShipDisplay {
+            blink,
+            lights_image: true,
+            ..display
+        }),
+        ..hull
     }
 }
 
@@ -1485,7 +1518,7 @@ fn multi_jumping() -> FakeCatalog {
     }
 }
 
-/// Taps J and ticks until the streak begins, as the session says the
+/// Taps J and ticks until the jump's effect begins, as the session says the
 /// jump has begun.
 fn jump_now(view: &mut View) {
     tap(view, JUMP);
@@ -1514,7 +1547,7 @@ fn arrive_now(view: &mut View) {
 
 /// Two of `build`'s flights, each with its course to Alpha Centauri
 /// plotted and flown out: the first braking and turning for the jump
-/// on a tap of J, the second 300 ms into the jump's streak. Boxed: two flights
+/// on a tap of J, the second 300 ms into the jump's warp. Boxed: two flights
 /// are too large for the stack together.
 fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
     let mut braking = Box::new(build());
@@ -1522,13 +1555,13 @@ fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
     fly_out(&mut braking);
     tap(&mut braking, JUMP);
     assert!(braking.preparing_jump(), "braking");
-    let mut streaking = Box::new(build());
-    plot(&mut streaking, 131);
-    fly_out(&mut streaking);
-    jump_now(&mut streaking);
-    streaking.tick(ms(300));
-    assert!(streaking.jump_effect().is_some(), "streaking");
-    [braking, streaking]
+    let mut warping = Box::new(build());
+    plot(&mut warping, 131);
+    fly_out(&mut warping);
+    jump_now(&mut warping);
+    warping.tick(ms(300));
+    assert!(warping.jump_effect().is_some(), "warping");
+    [braking, warping]
 }
 
 /// Which stage of the jump `view` is in, for a failing assertion.
@@ -1536,8 +1569,20 @@ fn stage(view: &View) -> &'static str {
     if view.preparing_jump() {
         "braking"
     } else {
-        "streaking"
+        "warping"
     }
+}
+
+/// Ticks `view` until its session's `_hyperGamma` is above 0, and gives
+/// how many ticks that took.
+fn tick_until_lit(view: &mut View) -> u32 {
+    for n in 1..2000 {
+        view.tick(TICK);
+        if view.session().expect("flying").hyper_gamma() > 0.0 {
+            return n;
+        }
+    }
+    panic!("never lit: {:?}", player(view));
 }
 
 /// Ticks until the ship has arrived in another system, the jump's
@@ -1563,7 +1608,8 @@ fn fading_in_on_course_to_barnard() -> View {
     plot(&mut view, 132);
     fly_out(&mut view);
     jump_now(&mut view);
-    view.tick(ms(1550));
+    tick_to_arrival(&mut view);
+    view.tick(ms(50));
     assert_eq!(system_of(&view), SystemId(131));
     assert!(matches!(
         view.jump_effect().map(JumpEffect::phase),
@@ -1765,6 +1811,7 @@ fn shipbuying() -> FakeCatalog {
             inherent_govt: None,
             combat_govt: None,
             escort_type: -1,
+            skill_var: 0,
             on_capture: nova_sim::Script::default(),
             on_purchase: nova_sim::Script::default(),
             on_retire: nova_sim::Script::default(),
@@ -2018,6 +2065,7 @@ fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog
         inherent_govt: None,
         combat_govt: None,
         escort_type: -1,
+        skill_var: 0,
         on_capture: nova_sim::Script::default(),
         on_purchase: nova_sim::Script::default(),
         on_retire: nova_sim::Script::default(),
@@ -2217,6 +2265,12 @@ fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
         cost: 0,
         speed: 0,
         exits: None,
+        // Steady lights, drawn where its sheet has a lights layer.
+        display: Some(nova_sim::catalog::ShipDisplay {
+            base_sets: 1,
+            lights_image: true,
+            ..nova_sim::catalog::ShipDisplay::default()
+        }),
         escort_class: nova_sim::EscortClass::Freighter,
     }
 }
@@ -2490,6 +2544,7 @@ fn ship_class(id: i16) -> ShipRecord {
         inherent_govt: None,
         combat_govt: None,
         escort_type: -1,
+        skill_var: 0,
         on_capture: nova_sim::Script::default(),
         on_purchase: nova_sim::Script::default(),
         on_retire: nova_sim::Script::default(),
@@ -2723,10 +2778,13 @@ fn boardable() -> FakeCatalog {
     player.crew = 10;
     catalog.ships[0].fields.speed = 0;
     catalog.ships.push(player);
-    catalog.hulls = vec![nova_sim::HullRecord {
-        strength: 5,
-        ..hull_of(129, &[])
-    }];
+    catalog.hulls = vec![
+        hull_of(128, &[]),
+        nova_sim::HullRecord {
+            strength: 5,
+            ..hull_of(129, &[])
+        },
+    ];
     catalog
 }
 
@@ -3289,6 +3347,7 @@ fn granting(count: i16) -> FakeCatalog {
         news_pic: -1,
         require: 0,
         inh_jam: [0; 4],
+        skill_mult: 0,
     }];
     for record in &mut catalog.ships {
         record.crew = 3;

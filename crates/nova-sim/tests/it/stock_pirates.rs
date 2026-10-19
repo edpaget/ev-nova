@@ -52,7 +52,12 @@ fn stock_npc(
         .into_iter()
         .find(|record| record.id == ship)
         .expect("the ship type reads");
-    let kind = kind(&record, &data.outfits(), arsenal);
+    let kind = kind(
+        &record,
+        &data.outfits(),
+        arsenal,
+        nova_sim::RuleSource::Engine,
+    );
     let mut npc = nova_sim::traffic::fixture::npc(id, kind.stats);
     npc.berth = id;
     npc.ship = ship;
@@ -94,7 +99,7 @@ fn every_stock_class_carries_its_crew_and_inherent_ai_on_its_hull() {
     let outfits = data.outfits();
     let ships = data.ships();
     for record in &ships {
-        let hull = kind(record, &outfits, &arsenal).hull;
+        let hull = kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine).hull;
         assert_eq!(
             (hull.crew, hull.inherent_ai),
             (record.crew, record.inherent_ai),

@@ -11,14 +11,21 @@
 //!   the NPC traffic rolls on.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
+//! - [`deadly_stellar`]: which stellars kill the ships that touch them,
+//!   who resists, and the touch.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
+//! - [`gravity`]: a stellar's pull by inverse square, who resists it,
+//!   and which afterburner widenings a gravity source keeps plain.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
+//! - [`ionization`]: what an ion charge does to a ship's handling: its
+//!   factor, the slowed turn and thrust, the charge shed each frame and
+//!   the pull back toward a lowered top speed.
 //! - [`player_turn`]: the player's turn block, `_HandlePlayer`'s: the
 //!   whole-degree turn, the auto-turn toward an aim that holds the turn
 //!   keys off, and the aims reverse and the jump's brake take.
@@ -35,6 +42,9 @@
 //!   [`Rulebook`]) or drawing on the chance in rule order, and each
 //!   described by a [`Descriptor`](rules::Descriptor) tools list without
 //!   running it.
+//! - [`skill`]: an NPC's skill rolled at spawn, its government's
+//!   `SkillMult` factor and the `shïp` `Flags` bit that holds a class
+//!   still.
 //! - [`speed_cap`]: the original's per-axis speed caps, `_AdjustedAccel`
 //!   and `_SpeedLimit`, which flight, launches and knockback share.
 //! - [`trig`]: the original's table trigonometry in whole degrees.
@@ -47,18 +57,22 @@ pub mod afterburner;
 pub mod blink;
 pub mod chance;
 pub mod clock;
+pub mod deadly_stellar;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod geometry;
+pub mod gravity;
 pub mod handling;
 pub mod inertialess;
+pub mod ionization;
 pub mod player_turn;
 pub mod reserves;
 pub mod rule_values;
 pub mod rulebook;
 pub mod rules;
+pub mod skill;
 pub mod speed_cap;
 pub mod trig;
 

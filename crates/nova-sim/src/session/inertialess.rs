@@ -32,16 +32,13 @@
 //! as both reach @0x6d343.
 //!
 //! **The speed's resets.** It starts at none (`_ResetPlayer` @0x1d43c), and
-//! landing sets it to none (`_PlayerLandOnStellar` @0x63409). An arrival
-//! takes its velocity's length ([`Session::arrive_at_speed`]): a gate's
-//! exit sets it to half the top speed along the exit heading
-//! (`_PlayerEnterHypergate` @0x63b17, `_PlayerEnterWormhole` @0x643cd),
-//! the speed the exit's velocity is; a jump's arrival is at rest in the
-//! engine, so none. The original's arrival sets +0x48 to the top speed
-//! (@0x6bce7-0x6bcf5), placing the ship 1350 out as it does every ship
-//! (@0x6bc8c-0x6bccd): that whole block is
-//! rdm:phase/ship-handling-fidelity/phase-18-arrival-at-top-speed's,
-//! since it reverses the engine's at-rest arrival. Nothing else writes the
+//! landing sets it to none (`_PlayerLandOnStellar` @0x63409). A gate's
+//! exit takes its velocity's length ([`Session::arrive_at_speed`]), half
+//! the top speed along the exit heading (`_PlayerEnterHypergate`
+//! @0x63b17, `_PlayerEnterWormhole` @0x643cd). A jump's arrival, by the
+//! engine's reading of `jump_arrival`, sets it to the top speed, the
+//! velocity zero (@0x6bce7-0x6bcf5; see the `jump_arrival` module); by
+//! the other reading it is at rest, so none. Nothing else writes the
 //! player's +0x48: not taking off (the ship is landed, at none), changing
 //! ship or capturing one.
 //!
@@ -49,7 +46,7 @@
 
 use super::Session;
 use crate::flight::{Controls, Flyer, drag, inertialess_player_step};
-use crate::glow::{Follow, ramp_inertialess_glow};
+use crate::glow::{Follow, step_glow};
 use crate::inertialess::{PLAYER_DISABLED_DECAY, is_inertialess};
 
 impl Session {
@@ -108,25 +105,13 @@ impl Session {
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
     /// an inertialess ship's glow, following `follow`, with the
-    /// afterburner's step while it is on ([`ramp_inertialess_glow`]).
+    /// banking glow and the afterburner's step while it is on
+    /// ([`step_glow`]).
     pub(super) fn ramp_inertialess(&mut self, thrust: bool, follow: Follow) {
         self.sound_thrust(thrust);
         let burning = self.afterburner_on;
-        self.engine_glow = ramp_inertialess_glow(self.engine_glow, thrust, follow, burning);
-    }
-
-    /// Ramps the glow after a pre-jump tick in which the ship thrust or
-    /// not, following its speed if it is inertialess.
-    pub(super) fn ramp_pre_jump(&mut self, thrust: bool) {
-        if self.player_inertialess() {
-            let follow = Follow::Speed {
-                speed: self.player_speed,
-                max_speed: self.flying_handling().max_speed,
-            };
-            self.ramp_inertialess(thrust, follow);
-        } else {
-            self.thrust(thrust);
-        }
+        let banking = self.banking_glow();
+        self.engine_glow = step_glow(self.engine_glow, thrust, banking, Some(follow), burning);
     }
 
     /// Sets the player's speed as it arrives moving at its velocity: its
@@ -245,6 +230,15 @@ mod tests {
         assert_eq!(thrust_turn_and_coast(&mut by_outfit), (velocity, speed));
         by_outfit.tick(Controls::default());
         assert_eq!(by_outfit.player, by_hull.player, "the same flight");
+    }
+
+    #[test]
+    fn the_player_side_carries_the_players_speed() {
+        // An inertialess dogfighter matches it (`_LowLevelAIHandler`
+        // @0x860a6 reads the target's +0x48).
+        let mut session = flying(&hull(), 90.0);
+        session.player_speed = 2.5;
+        assert_eq!(session.player_side().speed, 2.5);
     }
 
     #[test]
@@ -378,7 +372,7 @@ mod tests {
         session.player_speed = 6.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(131)));
         let max_speed = session.flying_handling().max_speed;
-        for (base, glow) in [(16_i16, 14_i16), (0, 1)] {
+        for (base, glow) in [(16_i16, 15_i16), (0, 1)] {
             session.engine_glow = base;
             session.tick(Controls::default());
             assert!(!slow_enough(session.player.velocity), "still braking");
@@ -386,30 +380,29 @@ mod tests {
                 speed: session.player_speed(),
                 max_speed,
             };
-            assert_eq!(
-                session.engine_glow,
-                ramp_inertialess_glow(base, false, follow, false),
-                "from {base}"
-            );
+            let raises = crate::glow::JumpRaises::default();
+            let jumped = |follow| crate::glow::ramp_jump_glow(base, raises, follow, false, false);
+            assert_eq!(session.engine_glow, jumped(Some(follow)), "from {base}");
             assert_eq!(session.engine_glow, glow, "from {base}");
-            assert_ne!(glow, crate::glow::ramp_glow(base, false), "from {base}");
+            assert_ne!(glow, jumped(None), "from {base}: it follows");
         }
     }
 
     #[test]
-    fn a_new_pilot_starts_at_none_and_landing_and_a_jumps_arrival_set_none() {
+    fn a_new_pilot_starts_at_none_and_landing_and_an_at_rest_jumps_arrival_set_none() {
         let catalog = hull();
         let mut session = flying(&catalog, 0.0);
         assert_eq!(session.player_speed(), 0.0, "a new pilot");
         session.player_speed = 3.0;
         session.dock(crate::catalog::StellarId(128));
         assert_eq!(session.player_speed(), 0.0, "landed");
-        let mut session = flying(&catalog, 0.0);
+        let mut session = flying(&catalog, 0.0)
+            .with_rules(Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Bible));
         crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
         assert_eq!(
             session.player.velocity,
             Vec2::ZERO,
-            "the engine's at-rest arrival"
+            "the other reading's at-rest arrival"
         );
         assert_eq!(session.player_speed(), 0.0);
     }

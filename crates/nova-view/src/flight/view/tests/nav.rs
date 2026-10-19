@@ -1056,7 +1056,7 @@ fn anti_interference_lowers_the_level_static_is_rolled_against() {
 }
 
 #[test]
-fn the_hud_cadence_and_blink_advance_through_a_jumps_streak() {
+fn the_hud_cadence_and_blink_advance_through_a_jumps_warp() {
     let mut view = flight();
     plot(&mut view, 131);
     fly_out(&mut view);
@@ -1064,7 +1064,7 @@ fn the_hud_cadence_and_blink_advance_through_a_jumps_streak() {
     let streaking = |view: &View| {
         matches!(
             view.jump_effect().map(JumpEffect::phase),
-            Some(JumpPhase::Streak(_))
+            Some(JumpPhase::Warp)
         )
     };
     assert!(streaking(&view));

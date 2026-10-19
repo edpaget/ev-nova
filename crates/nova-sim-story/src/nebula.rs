@@ -55,7 +55,10 @@
 //! load, and after the load's refresh `_OpenLastPilotFile`
 //! (@0x765a2-0x765ce) and `_MainScreenChoice` (@0x1a8d4-0x1a906) explore
 //! every visible explored system by ascending index, so `OnExplore` runs
-//! again after every load. The Bible agrees: "the explored state of the
+//! again after every load: Open Pilot's sweep, and the launch's
+//! (main-screen phase 4), are the session's load sweep, and the launch
+//! then explores the player's system once, as `_DoMainScreen` does
+//! (@0x1affe, `nova_sim::Session::open_at_launch`). The Bible agrees: "the explored state of the
 //! nebulae isn't saved from game to game". The once-a-pilot reading
 //! keeps a nebula's [`nebula_hook`] in the once-fired record
 //! ([`RuleKey::NebulaExploreOnce`](crate::RuleKey::NebulaExploreOnce),

@@ -20,7 +20,6 @@ use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
 use nova_sim::data::FIRST_ASTEROID_SPIN;
-use nova_sim::data::ship_blink;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, FIRST_SMOKE_ICON, GovtId, LayerSheet, SMOKE_FRAMES,
@@ -43,17 +42,19 @@ impl ShipSprites for GameData {
             .expect("a sheet layout has at least one column");
         // A layer that cannot be resolved is drawn as no layer; the ship
         // browser is where its error is shown.
-        let (glow, lights, weapon) = self.ship_layers(id).map_or((None, None, None), |layers| {
-            (
-                layers.glow.and_then(layer_sheet),
-                layers.lights.and_then(layer_sheet),
-                layers.weapon.and_then(layer_sheet),
-            )
-        });
-        let weap_decay = self
-            .get::<ShipAnim>(id.0)
-            .and_then(Result::ok)
-            .map_or(0, |anim| anim.record.weap_decay);
+        let [glow, lights, weapon, alt, shield] =
+            self.ship_layers(id).map_or([None; 5], |layers| {
+                [
+                    layers.glow,
+                    layers.lights,
+                    layers.weapon,
+                    layers.alt,
+                    layers.shield,
+                ]
+                .map(|layer| layer.and_then(layer_sheet))
+            });
+        let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
+        let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
         Ok(ShipSheet {
             image_id: sprite.image_id,
             rotations,
@@ -61,14 +62,18 @@ impl ShipSprites for GameData {
             frame_height: sheet.frame_height(),
             glow,
             lights,
-            blink: ship_blink(self, id.0),
             weapon,
-            weap_decay,
+            weap_decay: field(|anim| anim.weap_decay),
+            alt,
+            shield,
+            base_transp: field(|anim| anim.base_transp),
+            solid: sheet.solid_frames().is_some(),
         })
     }
 }
 
-/// A resolved layer's ID and frame count; `None` for one that failed.
+/// A resolved layer's ID, frame count and whether it holds solid runs;
+/// `None` for one that failed.
 fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // An `rlëD` header counts its frames in a u16, and the decoder rejects
@@ -78,6 +83,7 @@ fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet>
     Some(LayerSheet {
         image_id: layer.image_id,
         frames,
+        solid: layer.sheet.solid_frames().is_some(),
     })
 }
 
@@ -359,7 +365,6 @@ mod tests {
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
-    use nova_sim::Blink;
 
     use super::*;
 
@@ -419,6 +424,7 @@ mod tests {
         LayerSheet {
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
+            solid: false,
         }
     }
 
@@ -452,9 +458,12 @@ mod tests {
                 frame_height: 2,
                 glow: None,
                 lights: None,
-                blink: Blink::STEADY,
                 weapon: None,
                 weap_decay: 0,
+                alt: None,
+                shield: None,
+                base_transp: 0,
+                solid: false,
             })
         );
     }
@@ -485,29 +494,69 @@ mod tests {
         assert_eq!(data.ship_sheet(ShipId(128)).expect("a sheet").weapon, None);
     }
 
+    /// An `rlëD` of `frames` 3 x 2 frames, each with a white run.
+    fn with_runs(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2), |b, _| {
+                b.frame(|f| f.line().run(3, 0x7FFF, 0x7FFF).line().pixels(&[0x7C00; 3]))
+            })
+            .build()
+    }
+
     #[test]
-    fn a_ships_sheet_carries_its_shans_blink() {
-        // The Shuttle's: mode 1, A=4 B=1 C=2 D=20.
-        let mut shan = layered(1000, 1, 8, 0, 1200);
-        for (at, value) in [(0x36, 1), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
-            put_i16(&mut shan, at, value);
-        }
+    fn a_ships_sheet_marks_the_hull_and_layers_whose_sheets_hold_solid_runs() {
+        let mut shan = layered(1000, 1, 8, 1100, 1200);
+        put_i16(&mut shan, 0x26, 1930);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, with_runs(8)),
+            (RLED, 1100, sheet(8)),
+            (RLED, 1200, sheet(8)),
+            (RLED, 1930, with_runs(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert!(found.solid, "the hull");
+        assert_eq!(found.weapon.map(|layer| layer.solid), Some(true));
+        assert_eq!(found.glow.map(|layer| layer.solid), Some(false));
+        assert_eq!(found.lights.map(|layer| layer.solid), Some(false));
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").solid);
+    }
+
+    #[test]
+    fn a_ships_sheet_carries_its_alt_and_shield_layers_and_translucency() {
+        // The Thunderforge's: `Flags` 0x58, alt 1330 of 6 sets; and a
+        // plug-in shield 1500, `BaseTransp` 10.
+        let mut shan = anim(1000, 1, 8);
+        put_i16(&mut shan, 0x0A, 10);
+        put_i16(&mut shan, 0x0C, 1330);
+        put_i16(&mut shan, 0x10, 6);
+        put_i16(&mut shan, 0x2E, 0x58);
+        put_i16(&mut shan, 0x40, 1500);
         let data = store(&[
             (Ship::TYPE, 128, ship()),
             (ShipAnim::TYPE, 128, shan),
             (RLED, 1000, sheet(8)),
-            (RLED, 1200, sheet(8)),
+            (RLED, 1330, sheet(48)),
+            (RLED, 1500, sheet(8)),
         ]);
-        assert_eq!(
-            data.ship_sheet(ShipId(128)).map(|sheet| sheet.blink),
-            Ok(Blink {
-                mode: 1,
-                a: 4,
-                b: 1,
-                c: 2,
-                d: 20,
-            })
-        );
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!(found.alt, Some(layer(1330, 48)));
+        assert_eq!(found.shield, Some(layer(1500, 8)));
+        assert_eq!(found.base_transp, 10);
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        let found = plain.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!((found.alt, found.shield), (None, None));
+        assert_eq!(found.base_transp, 0);
     }
 
     #[test]

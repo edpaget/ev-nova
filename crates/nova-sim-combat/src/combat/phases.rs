@@ -6,7 +6,9 @@
 //! (see the [`combat`](super) module docs' steps). [`Combat::tick_on`]
 //! runs them in that order with nothing between them.
 
+use super::ion::IonLockout;
 use super::lineup::reread;
+use super::stellar_hazards::StellarHazards;
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
     regenerate_player,
@@ -57,7 +59,8 @@ impl Combat {
     /// (@0x6ab55, @0x6abc7), drawing on `chance` (see `Combat::fire`);
     /// then its reloads count down a tick, as `_HandlePlayer` counts them
     /// (@0x6ae25-0x6ae61) after its trigger and before `_HandleShot` holds
-    /// them (`Combat::hold_reloads`).
+    /// them (`Combat::hold_reloads`), each weapon it can't fire ionized
+    /// held after them (@0x6ae73-0x6ae9c, [`IonLockout`](super::ion::IonLockout)).
     pub fn fire_player(
         &mut self,
         fighters: &mut [Fighter],
@@ -70,7 +73,13 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire(fighters, &targets, chance, Firers::Player);
-        count_down(fighters, Firers::Player);
+        let lockout = self.ion_lockout;
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.ship == ShipRef::Player)
+        {
+            lockout.reload_one(fighter);
+        }
     }
 
     /// Steps 2 and 3, the collision passes (`_SWCollideSpriteLayer`
@@ -158,7 +167,8 @@ impl Combat {
     /// Step 6, `_HandleShip` for each NPC, as `_DoPlayGameWork`'s ship
     /// loop runs it (@0x4445c-0x444c4), by [`Fighter::slot`]: its reloads
     /// count down a tick (@0x33896-0x338ce), after `_HandleShot` has held
-    /// them (`Combat::hold_reloads`); its shields and armour regenerate
+    /// them (`Combat::hold_reloads`), each weapon it can't fire ionized
+    /// held after them (@0x338d6-0x338f0, [`IonLockout`](super::ion::IonLockout)); its shields and armour regenerate
     /// (@0x34424-0x34677, `regenerate`); then it fires the weapons its
     /// trigger holds that are ready (`_FireAIShipWeapon` @0x34ffd,
     /// @0x3500a), at the ships as the slots before it left them, drawing
@@ -227,7 +237,7 @@ impl Combat {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let fighter = &mut fighters[index];
-        fighter.armament.reload();
+        self.ion_lockout.reload_one(fighter);
         regenerate(fighter, arena.rules.disable);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire_one(&mut fighters[index], &targets, chance);
@@ -287,10 +297,13 @@ impl Combat {
 
     /// `_HandleBeams` (@0x4453d), step 6's beams and the late steps 7 to
     /// 9: the beams follow their firers among `fighters`, drawing on
-    /// `chance`, point-defence beams hit their missiles, the beams' hits
-    /// land, each ship they struck settles its condition (truncated first
-    /// for a newly downed player), and where each ship stands is kept for
-    /// the next tick's collision passes. Every ship has regenerated and
+    /// `chance`, each live beam stamping its firer's last shot on the
+    /// advance pass, point-defence beams hit their missiles, the beams'
+    /// hits land, each ship they struck settles its condition (truncated
+    /// first for a newly downed player), and where each ship stands is
+    /// kept for the next tick's collision passes. As the fight's tick
+    /// ends, what each ship's ion block shed is cleared
+    /// ([`Ion::shed`](super::ion::Ion::shed)). Every ship has regenerated and
     /// been displayed already, at its own step ([`Combat::display_player`],
     /// [`Combat::handle_npcs`]): a breakup a beam begins starts at the
     /// ship's next display step.
@@ -309,6 +322,9 @@ impl Combat {
         let mut targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let beams_held = self.beams.len();
         self.move_beams(fighters, &targets, pass, chance);
+        if pass.beams_act() {
+            self.stamp_beam_firers(fighters);
+        }
         // Steps 7 and 8.
         if pass.beams_act() {
             self.hold_on_missiles(pass.beam_damage());
@@ -342,16 +358,19 @@ impl Combat {
             .iter()
             .map(|fighter| (fighter.ship, fighter.state.position))
             .collect();
+        IonLockout::clear_shed(fighters);
     }
-}
 
-/// Counts the reloads of each of the `firers` among `fighters` down a
-/// tick.
-fn count_down(fighters: &mut [Fighter], firers: Firers) {
-    for fighter in fighters
-        .iter_mut()
-        .filter(|fighter| firers.take(fighter.ship))
-    {
-        fighter.armament.reload();
+    /// The stellar hazards among `fighters`: gravity's pull, then the
+    /// deadly stellars' kills (`_HandleGravity` @0x44509,
+    /// `_HandleDeadlyStellars` @0x4450e; see [`stellar_hazards`]), which
+    /// `_DoPlayGameWork` runs after the ship loop and before
+    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick`]), on either pass.
+    /// So a ship a deadly stellar kills is out of the beams.
+    ///
+    /// [`stellar_hazards`]: super::stellar_hazards
+    pub fn hazards(&mut self, fighters: &mut [Fighter], hazards: &StellarHazards) {
+        self.note_slots(fighters);
+        self.stellar_hazards(fighters, hazards);
     }
 }

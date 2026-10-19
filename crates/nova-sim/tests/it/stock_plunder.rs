@@ -51,7 +51,12 @@ fn stock_npc(
         .into_iter()
         .find(|record| record.id == ship)
         .expect("the ship type reads");
-    let kind = kind(&record, &data.outfits(), arsenal);
+    let kind = kind(
+        &record,
+        &data.outfits(),
+        arsenal,
+        nova_sim::RuleSource::Engine,
+    );
     let mut npc = nova_sim::traffic::fixture::npc(id, kind.stats);
     npc.berth = id;
     npc.ship = ship;
@@ -92,7 +97,7 @@ fn the_unrelenting_counts_its_marines_at_its_item_slots_outfit_by_the_engine() {
     let carrying: Vec<ShipId> = ships
         .iter()
         .filter(|record| {
-            let marines = kind(record, &outfits, &arsenal).marines;
+            let marines = kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine).marines;
             marines.by_outfit.crew != 0 || marines.by_outfit.defence != 0
         })
         .map(|record| record.id)
@@ -102,7 +107,7 @@ fn the_unrelenting_counts_its_marines_at_its_item_slots_outfit_by_the_engine() {
         .iter()
         .find(|record| record.id == UNRELENTING)
         .expect("the Unrelenting reads");
-    let marines = kind(record, &outfits, &arsenal).marines;
+    let marines = kind(record, &outfits, &arsenal, nova_sim::RuleSource::Engine).marines;
     assert_eq!(marines.read(RuleSource::Engine).crew, 262, "2 × 131");
     assert_eq!(marines.read(RuleSource::Bible).crew, 50, "2 × 25");
 }

@@ -4,10 +4,12 @@
 //! **Drawing** (`_MainScreenUpdate` @0x17c0d). The port painted black,
 //! `PICT` 8000 placed by [`interface_background`], the logo's frame, each
 //! slide's frame while it runs (`_MainScreenAnimDraw` @0x16146), each
-//! shown row's buttons' `rlëD` frame 0 (frame 1 for the one pressed) at
-//! its `cölr` 128 position from `menuTopCorner` (@0x184f8-0x186f7), then
-//! the rollover over them (@0x18713). Every position is an offset from
-//! `menuTopCorner`.
+//! the pilot panel, centred on `mainMenuCenter` ([`PilotPanelArea`],
+//! @0x17dcc-0x184ea), each shown row's buttons' `rlëD` frame 0 (frame 1
+//! for the one pressed) at its `cölr` 128 position from `menuTopCorner`
+//! (@0x184f8-0x186f7), then the rollover over them (@0x18713). Every
+//! position is an offset from `menuTopCorner`. The router tells the menu
+//! which pilot the panel is about ([`MainMenu::show_pilot`]).
 //!
 //! **The appear** ([`MainMenu::appear`], `_LoadMainScreenAnim`). The
 //! three slides set off ([`Slides`]), and each row of buttons, 0 and 3,
@@ -35,9 +37,10 @@
 //! the slides' time counts, as their timers were set before the fade.
 //!
 //! **Without the art** (plug-in data, or test data that has none), the
-//! menu draws a stand-in: the game's name and six Nova-skin rectangle
-//! buttons stacked in the middle of the screen, hit-tested by rectangle
-//! and tracked the same way.
+//! menu draws a stand-in: the game's name, the pilot panel centred on the
+//! classic centre (512, 384), and six Nova-skin rectangle buttons stacked
+//! in the middle of the screen, hit-tested by rectangle and tracked the
+//! same way.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -45,6 +48,7 @@ use std::time::Duration;
 use super::art::{MainScreenArt, PictFrames};
 use super::background::{Background, interface_background};
 use super::logo::Logo;
+use super::pilot_panel::{PanelLabels, PanelLooks, PanelPilot, PilotPanelArea, PilotPanelSource};
 use super::rollover::Rollover;
 use super::slides::{SlideSound, Slides};
 use super::tracking::{MainScreenTracker, Tracked};
@@ -54,7 +58,7 @@ use crate::flight::SharedChance;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -142,8 +146,6 @@ pub enum ChosenBy {
     /// the original runs the choice only once that click has played
     /// (`_PlayMainScreenClickSound` @0x177af).
     Shortcut,
-    /// The engine's Escape, which chooses Quit silently.
-    Escape,
 }
 
 /// A choice made on the main menu, and how.
@@ -191,7 +193,7 @@ impl ArtLayout {
         })
     }
 
-    fn draw(&self, list: &mut DrawList, pressed: Option<usize>) {
+    fn draw(&self, list: &mut DrawList, pressed: Option<usize>, panel: &PanelDraw<'_>) {
         let corner = self.background.top_corner;
         let (width, height) = CLASSIC_SIZE;
         fill_rect(
@@ -209,6 +211,12 @@ impl ArtLayout {
                 draw_frame(list, art, frame, corner);
             }
         }
+        panel.area.draw(
+            list,
+            self.background.center,
+            self.slides.row_shown(2),
+            panel.metrics,
+        );
         for (index, button) in self.art.buttons.iter().enumerate() {
             if !self.slides.row_shown(row_of(index)) {
                 continue;
@@ -222,6 +230,15 @@ impl ArtLayout {
         self.rollover.draw(list, &self.art.rollover, corner);
     }
 }
+
+/// The pilot panel to draw, and what measures its text.
+struct PanelDraw<'a> {
+    area: &'a PilotPanelArea,
+    metrics: &'a dyn TextMetrics,
+}
+
+/// The classic centre, which the stand-in's pilot panel is centred on.
+const CLASSIC_CENTER: Point = Point::new(512.0, 384.0);
 
 /// Draws frame `frame` of `art`, clipped to its place from `corner`.
 fn draw_frame(list: &mut DrawList, art: &PictFrames, frame: u16, corner: Point) {
@@ -260,6 +277,8 @@ pub struct MainMenu {
     chance: SharedChance,
     choice: Option<Chosen>,
     sounds: Vec<Sound>,
+    /// The panel about the pilot loaded.
+    panel: PilotPanelArea,
 }
 
 impl std::fmt::Debug for MainMenu {
@@ -301,7 +320,29 @@ impl MainMenu {
             chance: SharedChance::default(),
             choice: None,
             sounds: Vec::new(),
+            panel: PilotPanelArea::new(PanelLooks::stock(PanelLabels::default())),
         }
+    }
+
+    /// The menu with its pilot panel in `looks`, showing no pilot. A menu
+    /// made without them draws the panel in the stock font and colours
+    /// with empty labels.
+    #[must_use]
+    pub fn with_pilot_panel(mut self, looks: PanelLooks) -> Self {
+        self.panel = PilotPanelArea::new(looks);
+        self
+    }
+
+    /// Shows `pilot` in the pilot panel, reading its ship from `source`
+    /// when its type changes ([`PilotPanelArea::show`]).
+    pub fn show_pilot(&mut self, pilot: PanelPilot, source: &dyn PilotPanelSource) {
+        self.panel.show(pilot, source);
+    }
+
+    /// The pilot the panel shows.
+    #[must_use]
+    pub fn pilot_shown(&self) -> &PanelPilot {
+        self.panel.pilot()
     }
 
     /// The menu with the logo's picks drawn on `chance`.
@@ -466,9 +507,9 @@ fn stand_in_buttons() -> [Button; 6] {
 impl Screen for MainMenu {
     /// A primary-button press on a button, held and let go of over one,
     /// chooses the button let go of over, with the original's sounds
-    /// ([`MainScreenTracker`]); the other mouse buttons do nothing. An Escape press chooses Quit, silently: an
-    /// engine key, as the original's main screen ignores Escape
-    /// (`_MainScreenKey` @0x1ac2d). Typing N, O or Q, in either case,
+    /// ([`MainScreenTracker`]); the other mouse buttons do nothing. Escape
+    /// does nothing, as `_MainScreenKey` @0x1aba0 has no branch for it
+    /// (@0x1ac2d). Typing N, O or Q, in either case,
     /// chooses New Pilot, Open Pilot or Quit with [`UiSound::ButtonKeyed`],
     /// as `_MainScreenKey` @0x1aba0 does through
     /// `_PlayMainScreenClickSound`. The router takes its other keys (E, P,
@@ -488,16 +529,6 @@ impl Screen for MainMenu {
                 self.choice = Some(Chosen {
                     choice,
                     by: ChosenBy::Shortcut,
-                });
-            }
-            Input::Key {
-                key: Key::Escape,
-                pressed: true,
-                repeat: false,
-            } => {
-                self.choice = Some(Chosen {
-                    choice: MenuChoice::Quit,
-                    by: ChosenBy::Escape,
                 });
             }
             Input::PointerButton {
@@ -573,13 +604,17 @@ impl Screen for MainMenu {
     }
 
     /// The main screen as `_MainScreenUpdate` draws it, or the stand-in:
-    /// the title centred across the screen, then each button, pressed
-    /// while a press on it is held with the pointer on it.
+    /// the title centred across the screen, the pilot panel, then each
+    /// button, pressed while a press on it is held with the pointer on it.
     fn draw(&self, list: &mut DrawList) {
         let pressed = self.tracker.pressed();
+        let panel = PanelDraw {
+            area: &self.panel,
+            metrics: self.metrics.as_ref(),
+        };
         let buttons = match &self.layout {
             Layout::Art(layout) => {
-                layout.draw(list, pressed);
+                layout.draw(list, pressed, &panel);
                 return;
             }
             Layout::StandIn(buttons) => buttons,
@@ -593,6 +628,8 @@ impl Screen for MainMenu {
             None,
             Color::WHITE,
         );
+        // The stand-in shows every row, so the message never waits.
+        panel.area.draw(list, CLASSIC_CENTER, true, panel.metrics);
         for (index, button) in buttons.iter().enumerate() {
             button.draw(
                 pressed == Some(index),
@@ -624,11 +661,13 @@ mod tests {
 
     use super::*;
     use crate::draw::{Blend, lights_tint};
+    use crate::input::Key;
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME, LOGO_PICT,
         LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_PICTS,
         SLIDE_POSITIONS, main_screen_art,
     };
+    use crate::menu::pilot_panel::{PanelShip, ShipPicture};
     use crate::text::fixture::MonoMetrics;
 
     fn stand_in() -> MainMenu {
@@ -1307,6 +1346,174 @@ mod tests {
         assert!(!menu.slides_running());
     }
 
+    // The pilot panel.
+
+    /// A source naming every ship "Variant", with a 4 x 2 `PICT` 3000.
+    struct Ships;
+
+    impl PilotPanelSource for Ships {
+        fn pilot_panel_looks(&self) -> PanelLooks {
+            panel_looks()
+        }
+
+        fn panel_ship(&self, _ship: nova_sim::catalog::ShipId) -> PanelShip {
+            PanelShip {
+                subtitle: "Variant".to_owned(),
+                picture: Some(ShipPicture {
+                    picture: 3000,
+                    width: 4,
+                    height: 2,
+                }),
+            }
+        }
+    }
+
+    fn panel_looks() -> PanelLooks {
+        PanelLooks::stock(PanelLabels {
+            pilot_name: "Pilot Name:".to_owned(),
+            no_pilot: "No Pilot File Loaded".to_owned(),
+            ..PanelLabels::default()
+        })
+    }
+
+    fn alive() -> PanelPilot {
+        PanelPilot::Alive(Box::new(nova_sim::pilot_panel::PilotPanel {
+            pilot_name: "Ada".to_owned(),
+            ship_name: String::new(),
+            ship_class: String::new(),
+            ship: nova_sim::catalog::ShipId(128),
+            legal_status: String::new(),
+            combat_rating: String::new(),
+            date: String::new(),
+        }))
+    }
+
+    /// Where `text` is drawn, if it is: its top-left.
+    fn drawn_text(menu: &MainMenu, wanted: &str) -> Option<Point> {
+        drawn(menu).iter().find_map(|command| match command {
+            DrawCommand::Text { text, origin, .. } if text == wanted => Some(*origin),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn the_panel_is_drawn_after_the_slides_and_before_the_buttons_and_the_rollover() {
+        let mut menu = appearing().with_pilot_panel(panel_looks());
+        menu.show_pilot(alive(), &Ships);
+        menu.tick(mac_ticks(4));
+        let list = drawn(&menu);
+        let place =
+            |wanted: &dyn Fn(&DrawCommand) -> bool| list.iter().position(wanted).expect("drawn");
+        let slide = place(&|command| {
+            matches!(command, DrawCommand::Clipped { command, .. }
+                if matches!(**command, DrawCommand::Picture { image, .. } if image.id == 8032))
+        });
+        let panel =
+            place(&|command| matches!(command, DrawCommand::Text { text, .. } if text == "Ada"));
+        let picture = place(&|command| matches!(command, DrawCommand::BlendedPicture { .. }));
+        let button = place(
+            &|command| matches!(command, DrawCommand::Picture { image, .. } if image.kind == ImageKind::Rled),
+        );
+        assert!(
+            slide < panel && picture < button,
+            "{slide} {panel} {picture} {button}"
+        );
+        let mut menu = with_art().with_pilot_panel(panel_looks());
+        menu.show_pilot(alive(), &Ships);
+        menu.input(&Input::PointerMoved(menu.press_point(MenuChoice::About)));
+        menu.tick(Duration::ZERO);
+        menu.tick(mac_ticks(1));
+        let list = drawn(&menu);
+        let picture = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::BlendedPicture { .. }))
+            .expect("the picture");
+        let rollover = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Sprite { .. }))
+            .expect("the rollover");
+        assert!(picture < rollover, "{picture} {rollover}");
+    }
+
+    #[test]
+    fn the_panel_is_centred_on_main_menu_center() {
+        let mut menu = with_art().with_pilot_panel(panel_looks());
+        menu.show_pilot(alive(), &Ships);
+        // The fixture's 4 x 2 picture centres `mainMenuCenter` at (512, 384).
+        let center = interface_background(CLASSIC_SIZE, (4, 2)).center;
+        assert_eq!(center, Point::new(512.0, 384.0));
+        assert_eq!(
+            drawn_text(&menu, "Pilot Name:"),
+            Some(Point::new(center.x - 190.0, center.y + 250.0 - 9.0))
+        );
+        assert_eq!(
+            drawn_text(&menu, "Variant"),
+            Some(Point::new(center.x - 185.0, center.y + 346.0 - 9.0)),
+            "the subtitle from the source"
+        );
+        assert_eq!(menu.pilot_shown(), &alive());
+    }
+
+    #[test]
+    fn no_pilot_file_loaded_waits_for_slide_2_as_the_screen_appears() {
+        let mut menu = appearing().with_pilot_panel(panel_looks());
+        menu.appear();
+        assert_eq!(menu.pilot_shown(), &PanelPilot::None);
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            menu.tick(mac_ticks(1));
+            seen.push(drawn_text(&menu, "No Pilot File Loaded").is_some());
+        }
+        assert_eq!(seen, [false, false, false, false, false, true]);
+        // "No Pilot File Loaded" is 20 characters, 4.5 each in Geneva 9.
+        assert_eq!(
+            drawn_text(&menu, "No Pilot File Loaded"),
+            Some(Point::new(512.0 - 45.0, 384.0 + 310.0 - 9.0))
+        );
+    }
+
+    #[test]
+    fn the_stand_in_draws_the_panel_at_the_classic_centre_and_its_message_at_once() {
+        let mut menu = stand_in().with_pilot_panel(panel_looks());
+        menu.appear();
+        assert_eq!(
+            drawn_text(&menu, "No Pilot File Loaded"),
+            Some(Point::new(512.0 - 45.0, 384.0 + 310.0 - 9.0))
+        );
+        menu.show_pilot(alive(), &Ships);
+        assert_eq!(
+            drawn_text(&menu, "Pilot Name:"),
+            Some(Point::new(512.0 - 190.0, 384.0 + 250.0 - 9.0))
+        );
+        let list = drawn(&menu);
+        let title = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Text { text, .. } if text == TITLE))
+            .expect("the title");
+        let panel = list
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Text { text, .. } if text == "Ada"))
+            .expect("the panel");
+        let button = list
+            .iter()
+            .position(
+                |command| matches!(command, DrawCommand::Text { text, .. } if text == "New Pilot"),
+            )
+            .expect("a button");
+        assert!(title < panel && panel < button, "{title} {panel} {button}");
+    }
+
+    #[test]
+    fn a_menu_made_without_looks_draws_no_empty_message() {
+        let menu = stand_in();
+        assert_eq!(menu.pilot_shown(), &PanelPilot::None);
+        assert!(
+            !drawn(&menu).iter().any(
+                |command| matches!(command, DrawCommand::Text { text, .. } if text.is_empty())
+            )
+        );
+    }
+
     #[test]
     fn the_stand_in_shows_every_row_and_appears_as_it_is() {
         let mut menu = stand_in();
@@ -1535,20 +1742,16 @@ mod tests {
     // The keys.
 
     #[test]
-    fn escape_chooses_quit_but_its_repeats_and_release_do_not() {
+    fn escape_chooses_nothing_and_is_silent() {
         let mut menu = with_art();
-        menu.input(&key(Key::Escape, true, true));
-        menu.input(&key(Key::Escape, false, false));
-        assert_eq!(menu.take_choice(), None);
-        menu.input(&key(Key::Escape, true, false));
-        assert_eq!(
-            menu.take_choice(),
-            Some(Chosen {
-                choice: MenuChoice::Quit,
-                by: ChosenBy::Escape
-            })
-        );
-        assert_eq!(menu.take_sounds(), [], "silently");
+        for (pressed, repeat) in [(true, false), (true, true), (false, false)] {
+            assert_eq!(
+                menu.input(&key(Key::Escape, pressed, repeat)),
+                ScreenAction::None
+            );
+            assert_eq!(menu.take_choice(), None, "{pressed} {repeat}");
+            assert_eq!(menu.take_sounds(), [], "{pressed} {repeat}");
+        }
     }
 
     #[test]
@@ -1610,10 +1813,10 @@ mod tests {
     fn debug_shows_the_press_and_the_choice() {
         let mut menu = with_art();
         menu.input(&button(true, menu.press_point(MenuChoice::Quit)));
-        menu.input(&key(Key::Escape, true, false));
+        menu.input(&Input::Text('q'));
         assert_eq!(
             format!("{menu:?}"),
-            "MainMenu { pressed: Some(2), choice: Some(Chosen { choice: Quit, by: Escape }), .. }"
+            "MainMenu { pressed: Some(2), choice: Some(Chosen { choice: Quit, by: Shortcut }), .. }"
         );
     }
 }

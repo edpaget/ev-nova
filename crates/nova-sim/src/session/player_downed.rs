@@ -68,17 +68,21 @@ impl Session {
     /// with their beeps, and fails its first `Flags2` 0x0004 mission for
     /// each, as the player's condition `was` before the fight's tick and
     /// is now, when the tick's `strikes` hit the player, drawing on
-    /// `chance` (see the module docs).
+    /// `chance` (see the module docs). A deadly stellar's kill is no hit:
+    /// when one killed the ship, `killed` holds its condition just before,
+    /// as the hits left it, which stands for now (see the
+    /// `deadly_stellars` module).
     pub(super) fn player_downed(
         &mut self,
         was: Condition,
+        killed: Option<Condition>,
         strikes: &[Strike],
         chance: &mut dyn Chance,
     ) {
         if !strikes.iter().any(|strike| strike.ship == ShipRef::Player) {
             return;
         }
-        let now = self.condition;
+        let now = killed.unwrap_or(self.condition);
         if was == Condition::Intact && now != Condition::Intact {
             self.sounds.push(SimSound::ShipDowned);
             self.say(SimMessage::ShipDisabled);

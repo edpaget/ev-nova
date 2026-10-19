@@ -32,13 +32,24 @@
 //!   whatever its condition and goal, its wait counting down, and leaves
 //!   the system ([`Outcome::EnteredGate`]) as it runs out: on the 16th
 //!   tick, counting the one it reached the box.
-//! - [`Goal::JumpOut`]: it heads straight out from the centre at full
-//!   speed, and jumps once it is its stats' jump distance out.
+//! - [`Goal::JumpOut`]: it leaves by the leg
+//!   [`leave::leg`](crate::ai::leave::leg) gives, as
+//!   [`leave_flight`] flies it: within 1000 of the centre (dist² ≤ 1e6),
+//!   it turns out from the centre and thrusts within its turn rate and 3
+//!   whole degrees of that bearing (sub 3); beyond, an expediting ship
+//!   begins its warp out at once, and any other brakes until it moves
+//!   below 0.35 on both axes, then begins it (`_HighLevelAIHandler` state
+//!   2, @0x8dd99-0x8de57; the warp out is
+//!   [`warp_out`](crate::traffic::warp_out)'s). The 1000 is every NPC's: its outfits' hyperspace
+//!   distance is the player's alone ([`Npc::stats`]' `jump_distance` is
+//!   not read).
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
 //!   matching its lead's velocity there.
-//! - [`Goal::Assist`]: outside its reach of the player (see
-//!   [`assist`]) it follows the player as an escort its lead; within it,
-//!   it brakes.
+//! - [`Goal::Assist`]: its docking flies it
+//!   ([`repair_dock`](crate::traffic::repair_dock),
+//!   [`refuel_dock`](crate::traffic::refuel_dock)); holding none (with no
+//!   target), it coasts, as sub 0xb with no target does nothing
+//!   (@0x87345-0x87351).
 //! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
 //!   keeps its slot beside the player ([`Npc::formation`],
 //!   [`slot_position`](crate::escort::slot_position)); with no slot it brakes. Within
@@ -64,11 +75,14 @@
 //!   (see [`pursuit`]). It turns to the heading the body wants;
 //!   approaching, it thrusts while off it by less than
 //!   [`APPROACH_THRUST`] turns; dogfighting, by less than a turn and
-//!   [`DOGFIGHT_THRUST`]; fleeing close (sub 5, @0x85c62-0x85d72), turned
+//!   [`DOGFIGHT_THRUST`], an inertialess one up to the speed its frame
+//!   matches ([`pursuit::Frame::speed_cap`]); fleeing close (sub 5, @0x85c62-0x85d72), turned
 //!   to the table bearing from its attacker to itself, by less than a
 //!   turn and [`FLEE_THRUST`], as a stand-off ship backing away inside
 //!   the dogfight box does, never running out to jump (see
-//!   [`stand_off`](crate::ai::stand_off)); each in whole degrees,
+//!   [`stand_off`](crate::ai::stand_off)); swarming (sub 0x12,
+//!   @0x852eb-0x8533d), by less than a turn and [`SWARM_THRUST`], at its
+//!   plain acceleration and own top speed; each in whole degrees,
 //!   strictly ([`fire::off_by`]). Breaking off it thrusts every tick at
 //!   [`BREAK_THRUST`] times its acceleration; rushing, at [`RUSH_THRUST`]
 //!   times it, up to [`RUSH_SPEED`] times its top speed. Sniping, it
@@ -79,28 +93,41 @@
 //!   engine, its target's lead) and thrusting within its turn rate and
 //!   [`snipe::THRUST_SLACK`]; at rest it slows by [`snipe::DAMPING`] a
 //!   tick and turns to its target's plain bearing (`_LowLevelAIHandler`
-//!   sub-goal 0xe, @0x8709d-0x87334).
+//!   sub-goal 0xe, @0x8709d-0x87334). Moving and inertialess, it takes a
+//!   whole tick's acceleration off its speed with no turn
+//!   ([`snipe::inertialess_brake`], @0x8710f-0x8713a).
+//! - [`Goal::Attack`], [`Goal::Snipe`] or [`Goal::Plunder`] while it
+//!   searches for a target it lost sight of
+//!   ([`lost_sight::searching`]): it brakes to a stop, sub 1, as a wait
+//!   does (`_HighLevelAIHandler` @0x8d814).
 //! - [`Goal::Plunder`] of an intact ship flies as an attack, or as a
 //!   snipe when hopeless, by its frame (see [`pursuit`]); a disabled one it
 //!   docks with, as the traffic flies its [`Npc::docking`] (see
 //!   [`plunder_dock`](crate::traffic::plunder_dock)), braking until its
 //!   high level gives it one.
 //! - While its AI wait runs ([`Npc::ai_wait`]: a pirate's dock or hold, a
-//!   ship a pirate took into its fleet), whatever its goal, it moves on at
-//!   its velocity with no turn, thrust or slowing, as `_HandleShip` skips
-//!   them while +0x4c runs (@0x34a54-0x34a72); a drift
+//!   ship a pirate took into its fleet, or a pirate turned out of its
+//!   count wait onto another goal), whatever its goal but the count wait
+//!   itself, it moves on at its velocity with no turn, thrust or slowing,
+//!   as `_HandleShip` skips them while +0x4c runs (@0x34a54-0x34a72) but
+//!   for goal 0x16 (@0x3443f-0x34454); a drift
 //!   ([`Goal::Drift`]) so too, its 0.7 a tick along its heading being the
 //!   high level's (see [`plunder`](crate::traffic::plunder)).
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
-//!   either axis, truncated (its frame has no body): it runs out from the
-//!   centre and jumps once past its jump distance with the fuel.
+//!   either axis, truncated (its frame has no body): beyond 1000 and able
+//!   to jump ([`leave::can_jump`](crate::ai::leave::can_jump), by
+//!   [`Readings::jump_fuel`]) it leaves as a leaving ship does; otherwise
+//!   it runs out (state 3's far branch, @0x8e0e1-0x8e21a;
+//!   [`leave::flee_leg`](crate::ai::leave::flee_leg)).
 //! - [`Goal::Hold`]: no thrust and no turn (`_LowLevelAIHandler` zeroes
 //!   the thrust @0x851f1, and has no handler for state 0): it coasts on
 //!   the velocity it has, unclamped (under
 //!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
 //!   its top speed).
-//! - [`Goal::Idle`], [`Goal::Mine`] (order 1 for now, see its docs),
-//!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c), or a
+//! - [`Goal::Idle`], [`Goal::Wait`] (state 6, a stop, @0x8f101),
+//!   [`Goal::Mine`] (order 1 for now, see its docs),
+//!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c, its AI wait running),
+//!   or a
 //!   goal it cannot fly (a stellar, lead, player or carrier that is not
 //!   there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
@@ -150,8 +177,10 @@
 //!   is gone, so the ship thrusts as usual (@0x34a8a-0x34bbb), never bursts
 //!   (@0x34bc0-0x34d32), never reaches `_AIMakeShipStopJumping` (@0x82e77)
 //!   and never takes its Rand(30)+30 wait (@0x34d5c-0x34d8b). Only
-//!   sub-goal 0x12's formation thrust (@0x8533d, an NPC formation the
-//!   engine does not model) and the braking thrusts of sub-goals 1 and 0xe
+//!   sub-goal 0x12's swarm thrust (@0x8533d, which a held swarmer with a
+//!   swarm leader not its own leader flies: rdm
+//!   phase escort-fleet-fidelity/phase-12-held-ship-goal-4-burst) and the
+//!   braking thrusts of sub-goals 1 and 0xe
 //!   (@0x853fe, @0x8551e, @0x85552, @0x87137, which run only at a speed
 //!   of 0.35 or more, never at rest) leave +0x34 alone and would burst.
 //! - A ship with no lead, its glide or burst over, holds its course
@@ -176,14 +205,16 @@
 //!   never lands or jumps. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
+use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
+use crate::ai::swarm::SwarmLead;
 use crate::ai::{Goal, fire, fire::Manoeuvre};
 use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
-use crate::combat::armament::Trigger;
+use crate::combat::armament::{Arsenal, Trigger};
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
@@ -191,17 +222,17 @@ use crate::flight::{
 };
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
-use crate::hail::assist;
 use crate::handling::Handling;
-use crate::hyperspace::JUMP_FUEL;
 use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
 use crate::rulebook::RuleSource;
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::inertialess::{self, Inertia};
+use crate::traffic::leave_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
+use crate::traffic::ship_display;
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
 use std::collections::BTreeMap;
@@ -219,6 +250,9 @@ pub const DOGFIGHT_THRUST: f32 = 15.0;
 /// How far beyond a turn, in degrees, a ship fleeing close still thrusts
 /// (20.0 @0xdd668).
 pub const FLEE_THRUST: f32 = 20.0;
+/// How far beyond a turn, in whole degrees, a swarmer flying at its swarm
+/// leader still thrusts (20.0 @0xdd668, sub 0x12 @0x85322).
+pub const SWARM_THRUST: f32 = 20.0;
 /// The least a leaderless ship holds its course after its glide in or
 /// burst out of a gate, in ticks (`Rand(30) + 30`, @0x34d74-0x34d81).
 pub const POST_BURST_WAIT: u32 = 30;
@@ -228,6 +262,19 @@ pub const POST_BURST_SPREAD: u32 = 30;
 /// in ticks: `_DamageShip` cuts its AI wait (+0x4c) to 20.0 (const
 /// @0xdd668) when the victim answers the hit (@0x3be6e-0x3be7c).
 pub const HIT_WAIT: u32 = 20;
+
+/// The readings of the disputed rules the autopilot flies by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Readings {
+    /// Where a moving sniper with a last gun turns as it brakes
+    /// ([`snipe::fly`],
+    /// [`RuleKey::SnipeBrakeLead`](crate::RuleKey::SnipeBrakeLead)).
+    pub snipe_lead: RuleSource,
+    /// Who needs a jump's fuel now to jump out, which a ship fleeing beyond
+    /// its attacker's reach reads ([`leave::can_jump`](crate::ai::leave::can_jump),
+    /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
+    pub jump_fuel: RuleSource,
+}
 
 /// What became of an NPC this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,11 +316,12 @@ pub struct TopSpeeds {
 }
 
 impl TopSpeeds {
-    /// `npc`'s own handling's top speed, with no lead.
+    /// `npc`'s own handling's top speed ([`Npc::own_handling`]), with no
+    /// lead.
     #[must_use]
     pub fn own_of(npc: &Npc) -> Self {
         Self {
-            own: npc.stats.handling.max_speed,
+            own: npc.own_handling().max_speed,
             lead: None,
         }
     }
@@ -293,19 +341,25 @@ impl TopSpeeds {
 /// ship its goal is about (the lead it follows, the ship it fights or
 /// inspects) at `other`, when it is there, disabled as `other_disabled`
 /// says (a stand-off ship's band halves against a disabled target, see
-/// [`stand_off`](crate::ai::stand_off)), at its top speed
-/// `speeds.own`, its burst out of a gate or glide in capped at
+/// [`stand_off`](crate::ai::stand_off)), with `swarm` its swarm lead
+/// ([`swarm::lead`](crate::ai::swarm::lead)) for a frame its step has not
+/// worked out, at its top speed `speeds.own`, its burst out of a gate or glide in capped at
 /// [`TopSpeeds::burst_cap`], under the flight rules `flight` (its thrust
-/// [`FlightRules::handling`]'s, which every plan here reads), a moving
-/// sniper with a last gun turning as `snipe_lead` says ([`snipe::fly`]),
-/// the wait a leaderless ship takes after it rolled on `chance`.
+/// [`FlightRules::handling`]'s, which every plan here reads), by
+/// `readings` of the disputed rules (a moving sniper with a last gun
+/// turning as [`Readings::snipe_lead`] says, a fleeing ship jumping out as
+/// [`Readings::jump_fuel`] says), the wait a leaderless ship takes after
+/// it rolled on `chance`. A fight's frame its step has not worked out
+/// leads by `weapons`, the global weapon records
+/// ([`pursuit::frame_of`]).
 ///
 /// An [`immobile`](Npc::immobile) ship's velocity is set to none before
 /// it flies and its move is undone after, as `_HandleShip` zeroes it and
 /// skips the move (@0x34209-0x3423b) before the AI and the thrust run.
 // Each is a separate input of the tick: the ship, the system's stellars
-// and gate widths, its quarry and whether it is disabled, its top speeds,
-// the flight rules, the snipe's rule and the dice.
+// and gate widths, its quarry, whether it is disabled and its swarm lead,
+// its top speeds, the flight rules, the disputed rules' readings, the
+// weapon records and the dice.
 #[allow(clippy::too_many_arguments)]
 pub fn fly(
     npc: &mut Npc,
@@ -313,57 +367,39 @@ pub fn fly(
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
     other_disabled: bool,
+    swarm: Option<SwarmLead>,
     speeds: TopSpeeds,
     flight: FlightRules,
-    snipe_lead: RuleSource,
+    readings: Readings,
+    weapons: &Arsenal,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    let rules = (flight, snipe_lead);
+    let rules = (flight, readings, weapons);
+    let quarry = (other, other_disabled, swarm);
     if !npc.immobile {
-        return fly_mobile(
-            npc,
-            sites,
-            type_widths,
-            other,
-            other_disabled,
-            speeds,
-            rules,
-            chance,
-        );
+        return fly_mobile(npc, sites, type_widths, quarry, speeds, rules, chance);
     }
     let at = npc.state.position;
     npc.state.velocity = Vec2::ZERO;
-    let outcome = fly_mobile(
-        npc,
-        sites,
-        type_widths,
-        other,
-        other_disabled,
-        speeds,
-        rules,
-        chance,
-    );
+    let outcome = fly_mobile(npc, sites, type_widths, quarry, speeds, rules, chance);
     npc.state.position = at;
     outcome
 }
 
-/// [`fly`] for a ship that may move, under the flight rules and the
-/// snipe's rule `(flight, snipe_lead)`.
-#[allow(clippy::too_many_arguments)]
+/// [`fly`] for a ship that may move, at its quarry `(other,
+/// other_disabled, swarm)`, under the flight rules and the disputed rules'
+/// readings, leading by the weapon records `(flight, readings, weapons)`.
 fn fly_mobile(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
-    other: Option<&ShipState>,
-    other_disabled: bool,
+    (other, other_disabled, swarm): (Option<&ShipState>, bool, Option<SwarmLead>),
     speeds: TopSpeeds,
-    (flight, snipe_lead): (FlightRules, RuleSource),
+    (flight, readings, weapons): (FlightRules, Readings, &Arsenal),
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    let handling = Handling {
-        max_speed: speeds.own,
-        ..flight.handling(npc.stats.handling)
-    };
+    let snipe_lead = readings.snipe_lead;
+    let handling = npc.flying_handling(speeds.own, flight);
     let inertia = Inertia::of(npc, other, flight);
     if pod_flight::is_pod(npc) {
         let controls = pod_flight::controls(npc, &handling);
@@ -374,10 +410,12 @@ fn fly_mobile(
         return outcome;
     }
     hand_off(npc, sites);
-    if npc.ai_wait > 0 {
+    if npc.ai_wait > 0 && !npc.count_wait() {
         // `_HandleShip` skips its turn and thrust while +0x4c runs
         // (@0x34a54-0x34a72) and moves it first (@0x34274-0x342aa), an
-        // inertialess ship's velocity following its speed (@0x3425f).
+        // inertialess ship's velocity following its speed (@0x3425f);
+        // goal 0x16 is exempt (`_AIIsShipDoingCountWait`, @0x3443f-0x34454)
+        // and brakes below.
         position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }
@@ -385,7 +423,7 @@ fn fly_mobile(
     let controls = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
             Some(site) if over(&state, site) => return Outcome::Landed(stellar),
-            Some(site) => approach(&state, &handling, site.position, inertia),
+            Some(site) => land_approach(npc, site, &handling, inertia),
             None => brake(&state, &handling, inertia),
         },
         Goal::EnterGate(gate) => {
@@ -394,12 +432,7 @@ fn fly_mobile(
                 Err(outcome) => return outcome,
             }
         }
-        Goal::JumpOut => {
-            if state.position.length() >= npc.stats.jump_distance {
-                return Outcome::JumpedOut;
-            }
-            run_out(&state, &handling, inertia)
-        }
+        Goal::JumpOut => return leave_flight::leaving(npc, &handling, flight, inertia),
         Goal::Follow(_) | Goal::Inspect(_) => match other {
             Some(other) => follow(&state, &handling, other, inertia),
             None => brake(&state, &handling, inertia),
@@ -407,61 +440,60 @@ fn fly_mobile(
         // Goal 0xd against a disabled ship docks with it, which the
         // traffic flies ([`plunder_dock`](crate::traffic::plunder_dock));
         // with no docking yet, its high level not having run, it brakes.
+        // Searching for a target out of sight: sub 1, a stop (@0x8d814).
+        Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } if lost_sight::searching(npc) => {
+            brake(&state, &handling, inertia)
+        }
         Goal::Plunder { .. } if other_disabled => brake(&state, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
-                if let Some(body) =
-                    pursuit::frame_of(npc, target, other_disabled).and_then(|frame| frame.last())
+                if let Some((body, speed_cap)) =
+                    pursuit::frame_of(npc, target, other_disabled, swarm, weapons)
+                        .and_then(|frame| Some((frame.last()?, frame.speed_cap)))
                 {
                     let flown = Flown {
                         handling: &handling,
                         inertia,
                     };
-                    fight(npc, target, body, flown, (flight, snipe_lead));
+                    fight(
+                        npc,
+                        target,
+                        (body, speed_cap),
+                        flown,
+                        (flight, snipe_lead, weapons),
+                    );
                     return Outcome::Flying;
                 }
-                // Running out from its attacker beyond its reach.
-                let out = state.position.length();
-                if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
-                    return Outcome::JumpedOut;
-                }
-                run_out(&state, &handling, inertia)
+                // Fleeing beyond its attacker's reach: state 3's far branch.
+                return leave_flight::fleeing_afar(
+                    npc,
+                    &handling,
+                    flight,
+                    inertia,
+                    readings.jump_fuel,
+                );
             }
             // A sniper whose target is gone coasts ([`snipe::fly`]).
             None if matches!(npc.goal, Goal::Snipe(_)) => {
-                snipe::fly(npc, None, &handling, snipe_lead)
+                snipe::fly(npc, None, &handling, snipe_lead, weapons)
             }
             None => brake(&state, &handling, inertia),
         },
-        Goal::Assist(help) => match other {
-            Some(player)
-                if !assist::within(&state, player, assist::reach(help, handling.turn_rate)) =>
-            {
-                follow(&state, &handling, player, inertia)
-            }
-            _ => brake(&state, &handling, inertia),
-        },
-        Goal::Formation { .. } => match (other, npc.formation()) {
-            (Some(leader), Some(place)) => {
-                let slot = place.position(leader);
-                let off = slot - state.position;
-                let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
-                if within(KEEP_FORMATION) {
-                    keep_formation(npc, leader, slot, &handling);
-                    return Outcome::Flying;
-                }
-                rejoin(&state, &handling, slot, leader.velocity, inertia)
-            }
-            _ => brake(&state, &handling, inertia),
+        Goal::Formation { .. } => match formation(npc, other, &handling, inertia) {
+            Ok(controls) => controls,
+            Err(outcome) => return outcome,
         },
         Goal::Dock(_) => match dock(npc, other, &handling, flight, inertia) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
-        // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c).
-        Goal::Idle | Goal::Mine | Goal::CountWait { .. } => brake(&state, &handling, inertia),
-        // A drift moves on with no turn or thrust (its wait above).
-        Goal::Hold | Goal::Drift => Controls::default(),
+        // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
+        // is a wait (state 6, @0x8f101).
+        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait => brake(&state, &handling, inertia),
+        // A drift moves on with no turn or thrust (its wait above), as
+        // does an assister its docking doesn't fly: sub 0xb with no target
+        // does nothing (@0x87345-0x87351).
+        Goal::Hold | Goal::Drift | Goal::Assist(_) => Controls::default(),
     };
     step(npc, &handling, controls, flight, inertia);
     Outcome::Flying
@@ -477,6 +509,7 @@ pub(crate) fn step(
     flight: FlightRules,
     inertia: Inertia,
 ) {
+    ship_display::record(npc, handling, controls, flight, inertia);
     match inertia {
         Inertia::Inertial => flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc),
         Inertia::Inertialess { .. } => {
@@ -522,6 +555,27 @@ fn enter_box(
         ticks_left: ENTRY_TICKS - 1,
     };
     Err(Outcome::Flying)
+}
+
+/// How `npc` keeps its slot in the formation of its leader at `leader`
+/// (see the module docs): the controls to rejoin it, or braking with no
+/// leader or slot; or, within [`KEEP_FORMATION`] of it, having flown.
+fn formation(
+    npc: &mut Npc,
+    leader: Option<&ShipState>,
+    handling: &Handling,
+    inertia: Inertia,
+) -> Result<Controls, Outcome> {
+    let (Some(leader), Some(place)) = (leader, npc.formation()) else {
+        return Ok(brake(&npc.state, handling, inertia));
+    };
+    let slot = place.position(leader);
+    let off = slot - npc.state.position;
+    if off.x.abs() <= KEEP_FORMATION && off.y.abs() <= KEEP_FORMATION {
+        keep_formation(npc, leader, slot, handling);
+        return Err(Outcome::Flying);
+    }
+    Ok(rejoin(&npc.state, handling, slot, leader.velocity, inertia))
 }
 
 /// How `npc` flies back to its carrier at `carrier` (see the module
@@ -621,22 +675,6 @@ fn dock_in(
     );
 }
 
-/// Heads straight out from the centre at full speed; from the centre
-/// itself, ahead.
-fn run_out(state: &ShipState, handling: &Handling, inertia: Inertia) -> Controls {
-    let away = if state.position.length() > 0.0 {
-        heading_of(state.position)
-    } else {
-        state.heading
-    };
-    match_velocity(
-        state,
-        handling,
-        flight::facing(away) * handling.max_speed,
-        inertia,
-    )
-}
-
 /// Turns from `heading` towards `wanted`, not at all within half a tick's
 /// turn, where turning would only overshoot.
 pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
@@ -652,7 +690,7 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 }
 
 /// Flies one tick of `npc`'s fight at a target at `target` on
-/// `handling` by its frame's last `body`, whose writes to the thrust
+/// `handling` by its frame's last `body` and its `speed_cap`, whose writes to the thrust
 /// (+0x30), the cap (+0x34) and the heading (+0x68) win (see
 /// [`pursuit`](crate::ai::pursuit)): it turns to the heading the body
 /// wants, and thrusts approaching (7) while off it by less than
@@ -663,31 +701,35 @@ pub(crate) fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// [`BREAK_THRUST`] times its acceleration, and rushing (0x11) at
 /// [`RUSH_THRUST`] times it up to [`RUSH_SPEED`] times its top speed;
 /// sniping, it flies as [`snipe::fly`] says, a moving sniper with a last
-/// gun turning as `snipe_lead` says. It flies under `flight` as
+/// gun turning as `snipe_lead` says, leading by that gun's record in
+/// `weapons`. It flies under `flight` as
 /// `flown_by` says ([`step`]); a moving inertialess sniper brakes as
-/// substate 1 does ([`inertialess::brake`]) until
-/// rdm:phase/ship-handling-fidelity/phase-19-inertialess-snipe-and-pursuit
-/// ports substate 0xe's inertialess brake.
+/// substate 0xe does ([`snipe::inertialess_brake`]). An inertialess
+/// dogfighter whose frame matches its target's speed
+/// ([`Frame::speed_cap`](pursuit::Frame::speed_cap)) flies at most at
+/// that speed, a cap of none being none, as `_HandleShip` reads +0x34
+/// (@0x34a8a-0x34aab); a later body's cap (0x10's none, 0x11's) wins.
 fn fight(
     npc: &mut Npc,
     target: &ShipState,
-    body: Body,
+    (body, speed_cap): (Body, Option<f32>),
     flown_by: Flown,
-    (flight, snipe_lead): (FlightRules, RuleSource),
+    (flight, snipe_lead, weapons): (FlightRules, RuleSource, &Arsenal),
 ) {
     let handling = flown_by.handling;
     let window = match body.manoeuvre {
         Manoeuvre::Approach => APPROACH_THRUST * handling.turn_rate,
         Manoeuvre::Dogfight => handling.turn_rate + DOGFIGHT_THRUST,
         Manoeuvre::Flee => handling.turn_rate + FLEE_THRUST,
+        Manoeuvre::Swarm => handling.turn_rate + SWARM_THRUST,
         // Breaking off and rushing thrust whatever the heading.
         Manoeuvre::BreakOff | Manoeuvre::Rush => f32::INFINITY,
         Manoeuvre::Snipe => {
             let controls = match flown_by.inertia {
-                Inertia::Inertialess { .. } if inertialess::moving(npc.state.velocity) => {
-                    inertialess::brake(&npc.state)
+                Inertia::Inertialess { .. } if snipe::moving(&npc.state) => {
+                    snipe::inertialess_brake(npc, handling)
                 }
-                _ => snipe::fly(npc, Some(target), handling, snipe_lead),
+                _ => snipe::fly(npc, Some(target), handling, snipe_lead, weapons),
             };
             step(npc, handling, controls, flight, flown_by.inertia);
             return;
@@ -705,6 +747,13 @@ fn fight(
             #[allow(clippy::cast_possible_truncation)]
             max_speed: (f64::from(handling.max_speed) * RUSH_SPEED) as f32,
             ..*handling
+        },
+        Manoeuvre::Dogfight => match (flown_by.inertia, speed_cap) {
+            (Inertia::Inertialess { .. }, Some(cap)) if cap > 0.0 => Handling {
+                max_speed: cap,
+                ..*handling
+            },
+            _ => *handling,
         },
         _ => *handling,
     };
@@ -931,18 +980,16 @@ fn burst(
 /// ([`Mode::Coasting`]) has a wait to cut: a glide or burst has none
 /// (+0x4c = -1, @0x8dd83). A ship the player hit in its gate was cut as
 /// it was held, but a Good Samaritan held there kept its wait
-/// (@0x82b82-0x82b97), which a later hit cuts. A pirate's count wait
-/// ([`Goal::CountWait`], goal 0x16) is cut the same way: `_DamageShip`
-/// reads no goal; and so is a flying ship's [`Npc::ai_wait`], a pirate's
-/// dock or hold or a ship it took into its fleet.
+/// (@0x82b82-0x82b97), which a later hit cuts. So is a flying ship's
+/// [`Npc::ai_wait`]: a pirate's dock or hold, a ship it took into its
+/// fleet, or a pirate's count wait ([`Goal::CountWait`], goal 0x16), as
+/// `_DamageShip` reads no goal; the player's hit turns that pirate on it
+/// (goal 4) with what is left of the wait, 20 at most.
 pub(crate) fn cut_wait(npc: &mut Npc) {
     if let Mode::Coasting { ticks_left }
     | Mode::Emerging { ticks_left }
     | Mode::HeldAtGate { ticks_left } = &mut npc.mode
     {
-        *ticks_left = (*ticks_left).min(HIT_WAIT);
-    }
-    if let Goal::CountWait { ticks_left } = &mut npc.goal {
         *ticks_left = (*ticks_left).min(HIT_WAIT);
     }
     npc.ai_wait = npc.ai_wait.min(HIT_WAIT);
@@ -1026,6 +1073,23 @@ fn over(state: &ShipState, site: &LandingSite) -> bool {
         && state.velocity.length() <= LANDING_SPEED
 }
 
+/// How `npc`, landing on `site` but not over it, flies on `handling` as
+/// `inertia` says: toward it ([`approach`]), a folding ship unfolding
+/// once within its landing radius (`_HighLevelAIHandler` state 1
+/// @0x8da0c-0x8da38, see [`ship_display`]).
+fn land_approach(
+    npc: &mut Npc,
+    site: &LandingSite,
+    handling: &Handling,
+    inertia: Inertia,
+) -> Controls {
+    let state = npc.state;
+    if (site.position - state.position).length() <= landing_radius(site) {
+        ship_display::landing_unfold(npc);
+    }
+    approach(&state, handling, site.position, inertia)
+}
+
 /// Heads for `target` at full speed, and brakes once the ship's stopping
 /// distance reaches the distance left.
 fn approach(state: &ShipState, handling: &Handling, target: Vec2, inertia: Inertia) -> Controls {
@@ -1070,7 +1134,7 @@ fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -
 /// does, until thrust would only push it the other way; nothing at or
 /// below [`AT_REST_SPEED`] (see [`stopping_distance`]). An inertialess
 /// ship brakes as substate 1 does ([`inertialess::brake`]).
-fn brake(state: &ShipState, handling: &Handling, inertia: Inertia) -> Controls {
+pub(crate) fn brake(state: &ShipState, handling: &Handling, inertia: Inertia) -> Controls {
     if let Inertia::Inertialess { .. } = inertia {
         return inertialess::brake(state);
     }
@@ -1135,6 +1199,7 @@ fn close_on(
 /// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it: the
 /// thrust `handling` flies it with.
 fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2, handling: &Handling) {
+    npc.display.drive.formation = true;
     let state = &mut npc.state;
     state.velocity = leader.velocity;
     state.heading = leader.heading;
@@ -1202,13 +1267,14 @@ fn match_velocity(
 mod tests {
     use super::*;
     use crate::escort::{EscortDuty, FormationSlot};
-    use crate::hail::{Help, assist};
+    use crate::hail::Help;
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::traffic::emerge::EMERGE_TICKS;
     use crate::traffic::gate_entry::ENTRY_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
+    use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
     use std::collections::BTreeMap;
@@ -1273,15 +1339,18 @@ mod tests {
         speeds: TopSpeeds,
         rules: FlightRules,
     ) -> Outcome {
+        let weapons = crate::ai::fixture::records_of([&*npc]);
         super::fly(
             npc,
             sites,
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             rules,
-            RuleSource::Engine,
+            Readings::default(),
+            &weapons,
             &mut Draws::of(&[]),
         )
     }
@@ -1293,15 +1362,18 @@ mod tests {
         other: Option<&ShipState>,
         speeds: TopSpeeds,
     ) -> Outcome {
+        let weapons = crate::ai::fixture::records_of([&*npc]);
         super::fly(
             npc,
             sites,
             &BTreeMap::new(),
             other,
             false,
+            None,
             speeds,
             FlightRules::default(),
-            RuleSource::Engine,
+            Readings::default(),
+            &weapons,
             &mut Draws::of(&[]),
         )
     }
@@ -1623,6 +1695,52 @@ mod tests {
             at(61.0, 0.0, 0.0, 0.0, 0.0),
         );
         assert_eq!(fly(&mut far, &sites, None), Outcome::Flying, "too far");
+    }
+
+    #[test]
+    fn a_folding_ship_landing_unfolds_near_its_stellar_too_fast_to_land() {
+        let sites = [planet(140, 10.0, 0.0)];
+        let folding = |x: f32, vx: f32| {
+            let mut ship = npc(FAST, Goal::Land(StellarId(140)), at(x, 0.0, vx, 0.0, 0.0));
+            ship.hull.frames.flags = crate::combat::ship_frames::FOLDS;
+            ship.hull.frames.base_sets = 6;
+            ship.armament.fold_mut().set = 5;
+            ship
+        };
+        let mut near = folding(0.0, 1.5);
+        assert_eq!(fly(&mut near, &sites, None), Outcome::Flying, "too fast");
+        assert_eq!(near.armament.fold().dir, -1, "near: unfolding");
+        let mut far = folding(-80.0, 0.0);
+        fly(&mut far, &sites, None);
+        assert_eq!(far.armament.fold().dir, 0, "too far");
+        // Near a stellar far from the centre.
+        let distant = [planet(140, 600.0, 0.0)];
+        let mut there = folding(600.0, 1.5);
+        fly(&mut there, &distant, None);
+        assert_eq!(there.armament.fold().dir, -1, "near it, wherever it is");
+    }
+
+    #[test]
+    fn a_step_records_its_drive_and_keeping_formation_marks_it() {
+        let mut ship = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 0.0));
+        let flight = FlightRules::default();
+        let handling = flight.handling(ship.stats.handling);
+        let controls = Controls {
+            thrust: true,
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        step(&mut ship, &handling, controls, flight, Inertia::Inertial);
+        assert_eq!(ship.display.drive.turn, -1);
+        assert_eq!(ship.display.drive.thrust, ship_display::Thrust::Plain);
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        let mut kept = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 0.0));
+        fly(&mut kept, &[], Some(&leader));
+        assert!(kept.display.drive.formation, "close formation");
+        let mut far = escort(FAST, at(slot.x + 400.0, slot.y, 0.0, 0.0, 0.0));
+        fly(&mut far, &[], Some(&leader));
+        assert!(!far.display.drive.formation, "rejoining");
     }
 
     #[test]
@@ -1963,13 +2081,11 @@ mod tests {
         // `_DamageShip` reads no goal (@0x3be6e-0x3be7c): goal 0x16's
         // +0x4c is cut as any other.
         for (left, cut) in [(120, 20), (21, 20), (20, 20), (19, 19), (0, 0)] {
-            let mut pirate = npc(
-                AVERAGE,
-                Goal::CountWait { ticks_left: left },
-                at(0.0, 0.0, 0.0, 0.0, 0.0),
-            );
+            let mut pirate = npc(AVERAGE, Goal::CountWait, at(0.0, 0.0, 0.0, 0.0, 0.0));
+            pirate.ai_wait = left;
             cut_wait(&mut pirate);
-            assert_eq!(pirate.goal, Goal::CountWait { ticks_left: cut }, "{left}");
+            assert_eq!(pirate.ai_wait, cut, "{left}");
+            assert_eq!(pirate.goal, Goal::CountWait, "{left}");
             assert_eq!(pirate.mode, Mode::Flying);
         }
     }
@@ -2080,9 +2196,11 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&player),
                 false,
+                None,
                 top,
                 FlightRules::default(),
-                RuleSource::Engine,
+                Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut draws,
             );
             assert!(
@@ -2245,9 +2363,11 @@ mod tests {
             &BTreeMap::new(),
             None,
             false,
+            None,
             speeds,
             FlightRules::default(),
-            RuleSource::Engine,
+            Readings::default(),
+            &crate::ai::NO_WEAPONS,
             draws,
         );
         while let Mode::LeavingGate { .. } = ship.mode {
@@ -2257,9 +2377,11 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
-                RuleSource::Engine,
+                Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 draws,
             );
         }
@@ -2292,9 +2414,11 @@ mod tests {
                         &BTreeMap::new(),
                         None,
                         false,
+                        None,
                         speeds,
                         FlightRules::default(),
-                        RuleSource::Engine,
+                        Readings::default(),
+                        &crate::ai::NO_WEAPONS,
                         &mut draws
                     ),
                     Outcome::Flying
@@ -2316,9 +2440,11 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
-                RuleSource::Engine,
+                Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut draws,
             );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
@@ -2366,9 +2492,11 @@ mod tests {
                     &BTreeMap::new(),
                     None,
                     false,
+                    None,
                     speeds,
                     FlightRules::default(),
-                    RuleSource::Engine,
+                    Readings::default(),
+                    &crate::ai::NO_WEAPONS,
                     &mut draws,
                 );
             }
@@ -2383,9 +2511,11 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 false,
+                None,
                 speeds,
                 FlightRules::default(),
-                RuleSource::Engine,
+                Readings::default(),
+                &crate::ai::NO_WEAPONS,
                 &mut draws,
             );
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
@@ -2444,28 +2574,6 @@ mod tests {
         assert_eq!(ship.mode, Mode::Flying, "the wait is out");
     }
 
-    #[test]
-    fn a_ship_jumping_out_heads_out_and_jumps_at_its_jump_distance() {
-        for start in [
-            at(100.0, -50.0, 0.0, 0.0, 180.0),
-            at(0.0, 0.0, 0.0, 0.0, 30.0),
-        ] {
-            let mut ship = npc(FAST, Goal::JumpOut, start);
-            let mut farthest = 0.0_f32;
-            let (outcome, ticks) = (0..2000)
-                .find_map(|tick| {
-                    let outcome = fly(&mut ship, &[], None);
-                    farthest = farthest.max(ship.state.position.length());
-                    (outcome != Outcome::Flying).then_some((outcome, tick))
-                })
-                .expect("jumps");
-            assert_eq!(outcome, Outcome::JumpedOut);
-            assert!(ticks < 400, "{ticks}");
-            assert!(farthest >= ship.stats.jump_distance, "{farthest}");
-            assert!(farthest < ship.stats.jump_distance + 10.0, "{farthest}");
-        }
-    }
-
     // Entering a gate.
 
     /// Hypergate 300 at (500, 0), 100 wide: a reach of 25.
@@ -2491,9 +2599,11 @@ mod tests {
             widths,
             None,
             false,
+            None,
             speeds,
             FlightRules::default(),
-            RuleSource::Engine,
+            Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }
@@ -2672,12 +2782,15 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_at_its_jump_distance_jumps_without_moving() {
-        let mut ship = npc(FAST, Goal::JumpOut, at(0.0, -1000.0, 0.0, 0.0, 0.0));
-        assert_eq!(fly(&mut ship, &[], None), Outcome::JumpedOut);
-        assert_eq!(ship.state.position, Vec2::new(0.0, -1000.0));
-        let mut short = npc(FAST, Goal::JumpOut, at(0.0, -999.0, 0.0, 0.0, 0.0));
-        assert_eq!(fly(&mut short, &[], None), Outcome::Flying);
+    fn a_ship_at_rest_past_1000_begins_its_warp_out_without_moving() {
+        let mut ship = npc(FAST, Goal::JumpOut, at(0.0, -1000.5, 0.0, 0.0, 0.0));
+        assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own), "sub-goal 4");
+        assert!(ship.jumping());
+        assert_eq!(ship.state.position, Vec2::new(0.0, -1000.5));
+        let mut at_1000 = npc(FAST, Goal::JumpOut, at(0.0, -1000.0, 0.0, 0.0, 0.0));
+        assert_eq!(fly(&mut at_1000, &[], None), Outcome::Flying);
+        assert_eq!(at_1000.warp.goal, None);
     }
 
     #[test]
@@ -2717,9 +2830,10 @@ mod tests {
         let still = ShipFields { speed: 0, ..FAST };
         let sites = [planet(140, 300.0, 0.0)];
         let lead = at(500.0, 0.0, 2.0, 0.0, 90.0);
+        // A leaver's run out thrusts whatever its top speed (sub 3,
+        // `leave_flight`), so it is no goal that wants no speed.
         for goal in [
             Goal::Land(StellarId(140)),
-            Goal::JumpOut,
             Goal::Follow(NpcId(0)),
             Goal::Idle,
         ] {
@@ -2734,7 +2848,7 @@ mod tests {
         // A top speed of none caps nothing per axis (`_AdjustedAccel`
         // @0x2aecd-0x2aeee), so a follower matching its lead's velocity
         // gets it; the other goals want no speed and stay put.
-        for goal in [Goal::Land(StellarId(140)), Goal::JumpOut, Goal::Idle] {
+        for goal in [Goal::Land(StellarId(140)), Goal::Idle] {
             let mut ship = npc(still, goal, at(0.0, 0.0, 0.0, 0.0, 45.0));
             for _ in 0..300 {
                 assert_eq!(fly(&mut ship, &sites, Some(&lead)), Outcome::Flying);
@@ -2773,6 +2887,20 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_ship_brakes_to_a_stop_as_state_6_does() {
+        // `_HighLevelAIHandler` flies state 6 as +0x50 = 0, sub 1 (@0x8f101).
+        let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
+        let mut waiting = npc(FAST, Goal::Wait, start);
+        let mut idle = npc(FAST, Goal::Idle, start);
+        for _ in 0..200 {
+            assert_eq!(fly(&mut waiting, &[], None), Outcome::Flying);
+            fly(&mut idle, &[], None);
+            assert_eq!(waiting.state, idle.state, "the idle ship's brake");
+        }
+        assert!(waiting.state.velocity.length() < 0.5, "{:?}", waiting.state);
+    }
+
+    #[test]
     fn a_mining_ship_brakes_to_a_stop_as_order_1_does() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         let mut miner = npc(FAST, Goal::Mine, start);
@@ -2786,76 +2914,23 @@ mod tests {
     }
 
     #[test]
-    fn an_assisting_ship_comes_to_the_player_and_waits_docked_within_its_reach() {
-        for help in [Help::Refuel, Help::Repair] {
-            let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
-            let mut ship = npc(FAST, Goal::Assist(help), at(-600.0, 400.0, 0.0, 0.0, 0.0));
-            for _ in 0..600 {
-                assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
-            }
-            let reach = assist::reach(help, ship.stats.handling.turn_rate);
-            assert!(
-                assist::within(&ship.state, &player, reach),
-                "{help:?} {:?}",
-                ship.state
-            );
-            assert!(assist::docked(&ship.state), "{help:?} {:?}", ship.state);
-        }
-    }
-
-    #[test]
-    fn outside_its_reach_an_assisting_ship_follows_the_player() {
-        let player = at(0.0, 0.0, 1.0, 0.0, 0.0);
-        // FAST turns 3° a tick: a refuel's reach is 105.
-        for start in [
-            at(-106.0, 0.0, 0.0, 0.0, 0.0),
-            at(0.0, 300.0, 2.0, 1.0, 45.0),
-        ] {
-            let mut ship = npc(FAST, Goal::Assist(Help::Refuel), start);
-            let mut escort = npc(FAST, Goal::Follow(NpcId(0)), start);
-            fly(&mut ship, &[], Some(&player));
-            fly(&mut escort, &[], Some(&player));
-            assert_eq!(ship.state, escort.state, "{start:?}");
-        }
-    }
-
-    #[test]
-    fn within_its_reach_or_with_the_player_gone_an_assisting_ship_brakes() {
+    fn an_assisting_ship_its_docking_doesnt_fly_coasts_as_a_drifting_one_does() {
         let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        let start = at(-105.0, 105.0, 2.0, -1.0, 30.0);
+        let start = at(-600.0, 400.0, 2.0, -1.0, 30.0);
         for (help, other) in [
             (Help::Refuel, Some(&player)),
             (Help::Repair, Some(&player)),
             (Help::Refuel, None),
         ] {
             let mut ship = npc(FAST, Goal::Assist(help), start);
-            let mut idle = npc(FAST, Goal::Idle, start);
+            let mut drifting = npc(FAST, Goal::Hold, start);
             for _ in 0..30 {
                 fly(&mut ship, &[], other);
-                fly(&mut idle, &[], other);
-                assert_eq!(ship.state, idle.state, "{help:?} {other:?}");
+                fly(&mut drifting, &[], other);
+                assert_eq!(ship.state, drifting.state, "{help:?} {other:?}");
             }
+            assert_eq!(ship.state.velocity, Vec2::new(2.0, -1.0), "no thrust");
         }
-        let moving = at(0.0, 0.0, 1.0, 0.0, 0.0);
-        let mut ship = npc(
-            FAST,
-            Goal::Assist(Help::Refuel),
-            at(-100.0, 0.0, 0.0, 0.0, 90.0),
-        );
-        for _ in 0..30 {
-            fly(&mut ship, &[], Some(&moving));
-        }
-        assert_eq!(
-            ship.state.position,
-            Vec2::new(-100.0, 0.0),
-            "within reach of a moving player it does not chase"
-        );
-        let far = at(-1000.0, 0.0, 2.0, 0.0, 30.0);
-        let mut ship = npc(FAST, Goal::Assist(Help::Repair), far);
-        let mut idle = npc(FAST, Goal::Idle, far);
-        fly(&mut ship, &[], None);
-        fly(&mut idle, &[], None);
-        assert_eq!(ship.state, idle.state, "gone, from afar");
     }
 
     #[test]
@@ -3107,19 +3182,21 @@ mod tests {
         let start = at(300.0, -400.0, 0.0, 0.0, 200.0);
         let mut ship = npc(FAST, Goal::JumpOut, start);
         let mut last = start.position;
-        while fly(&mut ship, &[], None) == Outcome::Flying {
+        while ship.warp.goal.is_none() {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
             last = ship.state.position;
         }
         let off = shortest_turn(heading_of(start.position), heading_of(last));
         assert!(off.abs() < 3.0, "{off}: {last:?}");
-        // From the centre itself, straight ahead.
+        // From the centre itself, straight up: the bearing out of (0, 0)
+        // is the table's 0.
         let mut ship = npc(FAST, Goal::JumpOut, at(0.0, 0.0, 0.0, 0.0, 30.0));
         let mut last = Vec2::ZERO;
-        while fly(&mut ship, &[], None) == Outcome::Flying {
+        while ship.warp.goal.is_none() {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
             last = ship.state.position;
         }
-        let off = shortest_turn(30.0, heading_of(last));
-        assert!(off.abs() < 1e-3, "{off}: {last:?}");
+        assert!(last.x.abs() < 25.0 && last.y < -1000.0, "{last:?}");
     }
 
     // Fights.
@@ -3224,6 +3301,7 @@ mod tests {
             &crossing,
             flown.pick,
             RuleSource::Engine,
+            &crate::ai::fixture::records_of([&flown]),
         ));
         assert_eq!(wanted, wanted.trunc(), "a whole degree");
         assert!((wanted - 45.0).abs() < 3.0, "{wanted}");
@@ -3268,29 +3346,26 @@ mod tests {
     }
 
     #[test]
-    fn fleeing_from_afar_it_runs_out_from_the_centre_and_jumps_with_the_fuel() {
+    fn fleeing_from_afar_it_runs_out_from_the_centre_and_begins_its_warp_out_past_1000() {
         // The attacker 251 right: run straight out, up from (0, -10).
         let attacker = at(251.0, -10.0, 0.0, 0.0, 0.0);
         let mut runner = npc(FAST, Goal::Flee(FOE), at(0.0, -10.0, 0.0, 0.0, 0.0));
-        let (outcome, _) = (0..1000)
-            .find_map(|tick| {
+        (0..1000)
+            .find(|_| {
                 let outcome = fly(&mut runner, &[planet(140, 0.0, -10.0)], Some(&attacker));
-                (outcome != Outcome::Flying).then_some((outcome, tick))
+                assert_eq!(outcome, Outcome::Flying, "never lands");
+                runner.warp.goal.is_some()
             })
-            .expect("leaves");
-        assert_eq!(outcome, Outcome::JumpedOut, "never lands");
+            .expect("its warp out begins");
+        assert_eq!(runner.goal, Goal::Flee(FOE), "still fleeing");
+        assert!(runner.jumping());
         assert!(runner.state.position.x.abs() < 1.0, "{:?}", runner.state);
         assert!(
-            runner.state.position.length() >= runner.stats.jump_distance,
-            "only past its jump distance: {:?}",
+            runner.state.position.length() > 1000.0,
+            "only past 1000: {:?}",
             runner.state
         );
-        let mut dry = npc(FAST, Goal::Flee(FOE), at(0.0, -1000.0, 0.0, -6.0, 0.0));
-        dry.reserves.fuel.now = 99.0;
-        for _ in 0..30 {
-            assert_eq!(fly(&mut dry, &[], Some(&attacker)), Outcome::Flying);
-        }
-        assert!(dry.state.position.y < -1100.0, "runs on: {:?}", dry.state);
+        // Who can jump, and braking first, are `leave_flight`'s tests.
     }
 
     /// A ship at rest at the centre facing `heading`, 3 degrees a tick,
@@ -3323,9 +3398,11 @@ mod tests {
             &BTreeMap::new(),
             Some(other),
             disabled,
+            None,
             speeds,
             FlightRules::default(),
-            RuleSource::Engine,
+            Readings::default(),
+            &crate::ai::NO_WEAPONS,
             &mut Draws::of(&[]),
         )
     }
@@ -3483,6 +3560,7 @@ mod tests {
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
         );
         let target = at(300.0, 0.0, 0.0, 0.0, 0.0);
+        let records = crate::ai::fixture::records_of([&ship]);
         let flown = |lead: RuleSource| {
             let mut flown = ship.clone();
             super::fly(
@@ -3491,9 +3569,14 @@ mod tests {
                 &BTreeMap::new(),
                 Some(&target),
                 false,
+                None,
                 TopSpeeds::own_of(&ship),
                 FlightRules::default(),
-                lead,
+                Readings {
+                    snipe_lead: lead,
+                    ..Readings::default()
+                },
+                &records,
                 &mut Draws::of(&[]),
             );
             flown.state
@@ -3612,13 +3695,12 @@ mod tests {
     fn a_count_wait_brakes_as_an_idle_ship_does() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         for ticks_left in [0, 1, 120] {
+            let waiting = Npc {
+                ai_wait: ticks_left,
+                ..npc(FAST, Goal::CountWait, start)
+            };
             assert_eq!(
-                flown_for(
-                    npc(FAST, Goal::CountWait { ticks_left }, start),
-                    &start,
-                    false,
-                    40
-                ),
+                flown_for(waiting, &start, false, 40),
                 flown_for(npc(FAST, Goal::Idle, start), &start, false, 40),
                 "{ticks_left}"
             );

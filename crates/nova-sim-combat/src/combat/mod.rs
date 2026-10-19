@@ -40,6 +40,8 @@
 //!   governments and `düde`s.
 //! - [`stellar`]: which shots hit a destroyable stellar, and what they
 //!   take off it.
+//! - [`stellar_hazards`]: gravity's pull and the deadly stellars' kills
+//!   inside the tick, before the beams.
 //! - [`submunition`]: the shots a shot releases on a hit and at the end
 //!   of its life.
 //!
@@ -228,7 +230,11 @@
 //!    step 5. An NPC fires its pick as `_FireAIShipWeapon` does
 //!    ([`ai_fire`]): a copy that spawns nothing still spends, by the
 //!    engine, and a recoil sets the firer's velocity, reported as a
-//!    [`Shove`]. Then, in `_HandleBeams` (@0x4453d,
+//!    [`Shove`]. Then the [`Scenery`]'s stellar hazards: gravity pulls,
+//!    then the deadly stellars kill ([`stellar_hazards`], `_HandleGravity`
+//!    @0x44509 and `_HandleDeadlyStellars` @0x4450e, [`Combat::hazards`]),
+//!    before every beam step, so a ship a deadly stellar kills is out of
+//!    the beams. Then, in `_HandleBeams` (@0x4453d,
 //!    [`Combat::close_tick`]), each beam spends a tick of its life, or
 //!    fades a tick at its end ([`Beam::live`]), one that has ended going
 //!    before it hits or is drawn again. The rest follow their firers
@@ -384,12 +390,15 @@ pub mod hidden;
 pub mod hull;
 pub mod impact;
 pub mod ion;
+pub mod ion_tint;
 pub mod jamming;
 mod lineup;
 pub mod phases;
 pub mod plunder;
 pub mod projectile;
 pub mod report;
+pub mod ship_frames;
+pub mod ship_lights;
 pub mod shockwave;
 pub mod shot_layer;
 pub mod shot_slots;
@@ -397,7 +406,9 @@ pub mod sides;
 mod source_slot;
 pub mod spin_timer;
 pub mod stellar;
+pub mod stellar_hazards;
 pub mod submunition;
+pub mod tractor_hold;
 pub mod weapon;
 
 use std::collections::BTreeMap;
@@ -411,12 +422,12 @@ use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
 pub use escort_loss::EscortLoss;
-use exits::{Compression, ExitCursors, ExitPoints, StrayWord, drawn_frame, frame_angle};
+use exits::{Compression, ExitCursors, ExitPoints, StrayWord};
 use hull::{
     Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
 };
 use impact::{Body, Tractor, TractorLock};
-use ion::{Burst, Dose, Ion};
+use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
 use lineup::Lineup;
 pub use phases::Arena;
@@ -429,6 +440,7 @@ use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
 use stellar::{StellarStrike, StellarTarget};
+use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
 
 use crate::bay::FIGHTER_BAY;
@@ -709,6 +721,9 @@ pub struct Scenery<'a> {
     pub stellars: &'a mut [StellarTarget],
     /// The asteroids ([`asteroid_hit`]).
     pub asteroids: &'a mut [AsteroidTarget],
+    /// The stellar hazards ([`stellar_hazards`]): none when there are
+    /// none.
+    pub hazards: Option<&'a StellarHazards>,
 }
 
 /// How a strike left the ship it hit.
@@ -939,22 +954,34 @@ pub struct Fighter<'a> {
     /// original's +0x50 above 0): no hit, blast, beam or shockwave pushes
     /// it, though a tractor still holds it and it still pulls itself
     /// along its own tractor beam, and its point defence rests
-    /// (`_HandleShipPointDefense` @0x392d6). An NPC's jump out has no
-    /// stage in the simulation, so only the player's is.
+    /// (`_HandleShipPointDefense` @0x392d6). The player's from J on, an
+    /// NPC's through its warp stage, its own jump or its leader's.
     pub jumping: bool,
-    /// Whether it is the player with its afterburner on and no gravity
-    /// source present, which widens a push's clamp to 1.8 times its top
-    /// speed ([`Body::afterburner`](impact::Body::afterburner)); never an
-    /// NPC's.
+    /// Whether it is the player with its afterburner widening a hit's, a
+    /// blast's and the shockwave's clamp to 1.8 times its top speed
+    /// ([`Body::afterburner`](impact::Body::afterburner)); never an NPC's.
+    /// Its session decides it, a gravity source in the system as
+    /// `nova_sim::RuleKey::GravityAfterburner` reads.
     pub afterburner: bool,
+    /// Whether it is the player with its afterburner widening a beam
+    /// tick's clamp, as [`Fighter::afterburner`] does the others: only
+    /// with no gravity source in the system, as `_HandleBeams` runs after
+    /// `_HandleGravity` sets `_gravitySourcesPresent` (@0x316a1,
+    /// @0x39c27); never an NPC's.
+    pub afterburner_beam: bool,
     /// Its tractor lock, if a tractor beam holds it, or it holds itself
     /// along its own (the original's +0xc8dc and +0xb4): the fight sets
     /// and touches it ([`impact`]); what it does to the ship is the
     /// session's to come.
     pub tractor: &'a mut Option<TractorLock>,
     /// Its ionization (the original's +0x5c and +0xb0): the fight raises
-    /// it ([`ion`]); what it does to the ship is the session's to come.
+    /// it ([`ion`]) and holds its `Seeker` 0x0020 weapons by it
+    /// ([`IonLockout`]); its session sheds it and slows the ship by it.
     pub ion: &'a mut Ion,
+    /// The ion charge at which it is fully ionized, its ionization
+    /// factor's divisor (`_ShipIonizationFactor`): its class's
+    /// `IonizeMax`, and the player's Ion Absorbers'.
+    pub ion_capacity: f32,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -976,6 +1003,8 @@ pub struct Fighter<'a> {
     /// sub-munition reads whatever ship holds its parent's source slot as
     /// it spawns ([`Shot::firer_slot`]).
     pub slot: Slot,
+    /// Which stellar hazards it resists ([`stellar_hazards`]).
+    pub resists: HazardResistance,
 }
 
 /// The rules a fight is fought by: when a ship is disabled, which
@@ -1204,6 +1233,9 @@ pub struct Combat {
     /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)): by default on
     /// each axis, as `_SpeedLimit` does.
     speed_cap: SpeedCap,
+    /// Which weapons an ionized ship can't fire
+    /// ([`RuleKey::IonFireLockout`](crate::RuleKey::IonFireLockout)).
+    ion_lockout: IonLockout,
     /// The original's shot slots ([`shot_slots`]). Each shot that leaves
     /// the table holds its slot until the next `_HandleShot` visits it
     /// (see [`Combat::shot_room`]): from the late part of a tick (step 7)
@@ -1241,6 +1273,9 @@ pub struct Combat {
     /// caps each still holds its slot through the next tick's firing (see
     /// [`Combat::beam_room`]).
     ended_beams: usize,
+    /// The ships deadly stellars killed since they were last taken
+    /// ([`Combat::take_stellar_kills`]).
+    stellar_kills: Vec<StellarKill>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -1306,6 +1341,7 @@ impl Combat {
         scenery: Scenery<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        let hazards = scenery.hazards;
         let arena = Arena {
             pass,
             arsenal,
@@ -1328,6 +1364,9 @@ impl Combat {
         self.defend_npcs(fighters, arena, None, false, chance);
         self.fly_shots(fighters, arena, chance);
         self.handle_npcs(fighters, arena, chance);
+        if let Some(hazards) = hazards {
+            self.hazards(fighters, hazards);
+        }
         self.close_tick(fighters, arena, chance);
     }
 
@@ -1382,6 +1421,21 @@ impl Combat {
                 })
                 .collect();
             self.events.extend(lit);
+        }
+    }
+
+    /// Step 6's stamp: on the advance pass each live beam stamps its
+    /// firer's last shot now, as `_HandleBeams` does (+0xa8 =
+    /// `TickCount` @0x30b62-0x30b67), so a ship that unfolds to fire holds
+    /// off its refold while its beam lasts ([`Armament::stamp_fire`]).
+    fn stamp_beam_firers(&self, fighters: &mut [Fighter]) {
+        for beam in &self.beams {
+            if let Some(firer) = fighters
+                .iter_mut()
+                .find(|fighter| fighter.ship == beam.firer)
+            {
+                firer.armament.stamp_fire();
+            }
         }
     }
 
@@ -1589,6 +1643,12 @@ impl Combat {
     /// point test at the shot's end point, in slot order.
     pub fn set_proximity_fuse(&mut self, source: RuleSource) {
         self.proximity_fuse = ProximityFuse::from(source);
+    }
+
+    /// Holds an ionized ship's `Seeker` 0x0020 weapons as `source` says
+    /// ([`IonLockout`]): by default, the engine's.
+    pub fn set_ion_lockout(&mut self, source: RuleSource) {
+        self.ion_lockout = IonLockout::from(source);
     }
 
     /// Has the player's quadrant turrets (7 and 8) test their blind spots
@@ -2386,6 +2446,7 @@ impl Combat {
         let Scenery {
             stellars,
             asteroids,
+            hazards: _,
         } = scenery;
         let now = self.stand_where_they_stood(fighters);
         let player_stood = self.stood.get(&ShipRef::Player).copied();
@@ -2739,9 +2800,13 @@ impl Combat {
                 passes_shields: landed.hit.passes_shields,
                 late: landed.ship == ShipRef::Player || beam,
             });
-            if let Some(velocity) =
-                impact::push(&fighter.body(), from, impact, source, self.speed_cap)
-            {
+            if let Some(velocity) = impact::push(
+                &fighter.knocked_body(beam),
+                from,
+                impact,
+                source,
+                self.speed_cap,
+            ) {
                 self.shove(fighter, velocity);
             }
             let before = taken(fighter.reserves);
@@ -3219,6 +3284,7 @@ impl Fighter<'_> {
             npc: matches!(self.ship, ShipRef::Npc(_)),
             cloaked: self.cloaked,
             key_carried: self.hull.key_carried,
+            folds: self.hull.frames.unfolds_to_fire(),
         }
     }
 
@@ -3251,6 +3317,20 @@ impl Fighter<'_> {
             top_speed: self.top_speed,
             jumping: self.jumping,
             afterburner: self.afterburner,
+        }
+    }
+
+    /// The ship as a hit's push reads it: its afterburner's widening is
+    /// [`Fighter::afterburner_beam`] for a `beam` tick, else
+    /// [`Fighter::afterburner`].
+    fn knocked_body(&self, beam: bool) -> Body {
+        Body {
+            afterburner: if beam {
+                self.afterburner_beam
+            } else {
+                self.afterburner
+            },
+            ..self.body()
         }
     }
 
@@ -3434,10 +3514,7 @@ impl<'a> Muzzle<'a> {
         (cursors, fold): (&'a mut ExitCursors, &'a mut u16),
     ) -> Self {
         let exits = hull.exits.as_ref();
-        let angle = exits.map_or(0.0, |exits| {
-            let frames = exits.frames();
-            frame_angle(drawn_frame(drawn_heading, frames), frames)
-        });
+        let angle = exits.map_or(0.0, |exits| exits.drawn_angle(drawn_heading));
         Self {
             from,
             exits,
@@ -3689,11 +3766,14 @@ mod tests {
     mod display_step;
     mod escort_lost_in_place;
     mod exit_steps;
+    mod fold_stamp;
     mod hidden_shots;
+    mod ion_lockout_tick;
     mod lineup;
     mod plunder_fire;
     mod shot_slots;
     mod shot_visits;
+    mod stellar_hazards;
     mod strike_terms;
     mod tick_phases;
     mod weapon_glow;
@@ -3729,8 +3809,11 @@ mod tests {
         class_speed: f32,
         top_speed: f32,
         jumping: bool,
+        afterburner: bool,
+        afterburner_beam: bool,
         tractor: Option<TractorLock>,
         ion: Ion,
+        ion_capacity: f32,
         armament: Armament,
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
@@ -3739,6 +3822,7 @@ mod tests {
         sprite: Option<SpriteRank>,
         /// Its ship slot: by default its berth, its NPC number.
         slot: Slot,
+        resists: HazardResistance,
     }
 
     /// A trigger holding no weapon, its point defence running, as a test
@@ -3792,8 +3876,11 @@ mod tests {
                 class_speed: 10.0,
                 top_speed: 10.0,
                 jumping: false,
+                afterburner: false,
+                afterburner_beam: false,
                 tractor: None,
                 ion: Ion::default(),
+                ion_capacity: 0.0,
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
@@ -3803,6 +3890,7 @@ mod tests {
                     entry: -1 - i64::from(id),
                 }),
                 slot: Slot::Berth(id),
+                resists: HazardResistance::default(),
             }
         }
 
@@ -3853,15 +3941,18 @@ mod tests {
                 class_speed: self.class_speed,
                 top_speed: self.top_speed,
                 jumping: self.jumping,
-                afterburner: false,
+                afterburner: self.afterburner,
+                afterburner_beam: self.afterburner_beam,
                 tractor: &mut self.tractor,
                 ion: &mut self.ion,
+                ion_capacity: self.ion_capacity,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),
                 docked: self.docked,
                 sprite: self.sprite,
                 slot: self.slot,
+                resists: self.resists,
             }
         }
     }
@@ -4194,6 +4285,56 @@ mod tests {
         };
         assert_eq!(carrier(Some(ShipId(200))), 1);
         assert_eq!(carrier(None), 0);
+    }
+
+    /// The reload a ship's `Seeker` 0x0020 blaster (reload 0) is left at
+    /// after a tick's fire and reload, its ship `player` or an NPC of
+    /// ionization factor `factor`, under `lockout`; and how many shots it
+    /// fired.
+    fn ion_held_reload(player: bool, factor: f32, lockout: RuleSource) -> (f32, usize) {
+        let mut combat = Combat::default();
+        combat.set_ion_lockout(lockout);
+        let mut ship = Ship::at(1, 0.0, 0.0).armed(WeaponRecord {
+            reload: 0,
+            seeker: ion::CANT_FIRE_IONIZED,
+            ..blaster()
+        });
+        if player {
+            ship.id = ShipRef::Player;
+            ship.fleet = ShipRef::Player;
+        }
+        ship.ion_capacity = 100.0;
+        ship.ion.charge = factor * 100.0;
+        let id = ship.id;
+        let mut ships = [ship];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shots = fired(&combat.take_events(), id);
+        (ships[0].armament.mounts()[0].reload, shots)
+    }
+
+    #[test]
+    fn the_reload_step_holds_an_ionized_ships_seeker_0x0020_weapon_by_the_lockout() {
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            ion_held_reload(true, 0.5, engine),
+            (ion::HELD_RELOAD, 1),
+            "player: fires, then held"
+        );
+        assert_eq!(
+            ion_held_reload(false, 0.5, engine),
+            (0.0, 1),
+            "an NPC under 1"
+        );
+        // An NPC's hold comes with its reload step, before its fire, and
+        // its 1.0 stays until its next step counts it down (@0x338f0).
+        assert_eq!(
+            ion_held_reload(false, 1.0, engine),
+            (ion::HELD_RELOAD, 0),
+            "an NPC at 1"
+        );
+        let bible = RuleSource::Bible;
+        assert_eq!(ion_held_reload(true, 1.0, bible), (0.0, 1), "unguided");
+        assert_eq!(ion_held_reload(false, 1.0, bible), (0.0, 1), "unguided");
     }
 
     #[test]
@@ -9105,7 +9246,8 @@ mod tests {
     }
 
     impl Ship {
-        /// The ship with `hull`.
+        /// The ship with `hull`, taken whole as the field it fills.
+        #[allow(clippy::large_types_passed_by_value)]
         fn of(self, hull: HullSpec) -> Self {
             Self { hull, ..self }
         }
@@ -9952,6 +10094,33 @@ mod tests {
         assert_eq!((ships[0].tractor, ships[1].tractor), (None, None));
     }
 
+    /// The x velocity a ship of mass 1 and top speed 10 at (100, 0) is
+    /// left with by one hit of `weapon` from a ship at the centre facing
+    /// it, its afterburner widening its shots' cap as `shots` says and its
+    /// beams' as `beams` says.
+    fn knocked_with_caps(weapon: WeaponRecord, shots: bool, beams: bool) -> f32 {
+        let mut target = of_mass(Ship::at(2, 100.0, 0.0), 1.0);
+        target.top_speed = 10.0;
+        target.afterburner = shots;
+        target.afterburner_beam = beams;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(weapon), target];
+        let (shoves, _) = shoves_after_one(&mut ships, 12);
+        let pushed = shoves_on(&shoves, B);
+        assert!(!pushed.is_empty(), "it hit");
+        pushed[0].x
+    }
+
+    #[test]
+    fn a_beams_push_reads_its_own_afterburner_cap_and_a_shots_the_other() {
+        let burnt = crate::afterburner::afterburner_top(10.0);
+        let beam = || beam_of(50);
+        assert_eq!(knocked_with_caps(beam(), true, false), 10.0, "plain");
+        assert_eq!(knocked_with_caps(beam(), false, true), burnt, "widened");
+        let shot = || pushing(50);
+        assert_eq!(knocked_with_caps(shot(), true, false), burnt, "widened");
+        assert_eq!(knocked_with_caps(shot(), false, true), 10.0, "plain");
+    }
+
     #[test]
     fn a_missile_lock_pushes_nothing() {
         let heavy = WeaponRecord {
@@ -10357,7 +10526,8 @@ mod tests {
             ships[1].ion,
             Ion {
                 charge: 30.0,
-                colour: GREEN
+                colour: GREEN,
+                ..Ion::default()
             }
         );
         assert_eq!(ships[0].ion, Ion::default(), "not its firer");
@@ -10424,7 +10594,8 @@ mod tests {
             ships[2].ion,
             Ion {
                 charge: expected,
-                colour: GREEN
+                colour: GREEN,
+                ..Ion::default()
             }
         );
         let corner = Vec2::new(100.0, -28.0) - at;
@@ -10918,6 +11089,7 @@ mod tests {
 
     /// The layer of the first shot of `record` that a ship of `hull`
     /// fires at ship 2, 300 to its right.
+    #[allow(clippy::large_types_passed_by_value)] // a test's fixture, built in place
     fn fired_layer(record: WeaponRecord, hull: HullSpec) -> ShotLayer {
         let mut combat = Combat::default();
         let mut ships = [

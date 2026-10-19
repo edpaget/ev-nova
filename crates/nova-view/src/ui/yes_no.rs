@@ -39,6 +39,12 @@ pub const NO_ITEM: usize = 5;
 /// stock by a stock test.
 pub const QUIT_QUESTION: &str = "Are you sure you want to quit?";
 
+/// `STR#` 140 #8, the question New Pilot asks with a pilot already
+/// loaded (`_MainScreenChoice` @0x1a74a-0x1a78f), kept here as
+/// [`QUIT_QUESTION`] is.
+pub const NEW_PILOT_QUESTION: &str =
+    "There\u{2019}s already a pilot file loaded. Are you sure you want to create a new one?";
+
 /// The Yes/No dialog asking a question, until it is answered.
 #[derive(Clone, Debug)]
 pub struct YesNoDialog {

@@ -5,7 +5,8 @@ use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::text_tags::comma_number;
 use nova_sim::{
     Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, Good, HailRefusal, Help,
-    JumpRefusal, LandingRefusal, OutfitId, Session, ShipId, SimMessage, StellarId, Taken,
+    JumpRefusal, LandingRefusal, OutfitId, SelfDestructLine, Session, ShipId, SimMessage,
+    StellarId, Taken,
 };
 use nova_sim::{MissionBoardLine, PayNote, RuleSource, TagNames, TutorialHint};
 
@@ -61,22 +62,24 @@ pub const TOO_FAR_TICKS: u16 = 360;
 /// A hypergate jump cancelled, or a wormhole leading nowhere: 250
 /// (`_PlayerEnterHypergate` @0x6397e, `_PlayerEnterWormhole` @0x646a3).
 pub const GATE_REFUSAL_TICKS: u16 = 250;
-/// A jump refused as too close or with no destination: 360
-/// (`_HandlePlayer` @0x6b931, @0x6ba00).
+/// A jump refused as too close, held by a tractor beam or with no
+/// destination: 360 (`_HandlePlayer` @0x6b931, @0x6ba00).
 pub const JUMP_REFUSAL_TICKS: u16 = 360;
 /// The capture's old ship retained or lost: 360 (`_DoShipCapture`
 /// @0x41aa1).
 pub const OLD_SHIP_TICKS: u16 = 360;
 
 /// How long the message for `refusal` stays: [`JUMP_REFUSAL_TICKS`] too
-/// close or with no destination, 240 short of fuel (`_HandlePlayer`
+/// close, held by a tractor beam or with no destination, 240 short of fuel (`_HandlePlayer`
 /// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals. A
 /// disabled ship's refusal shows no message ([`jump_refusal_message`]),
 /// so its time is never used.
 #[must_use]
 pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
     match refusal {
-        JumpRefusal::TooClose { .. } | JumpRefusal::NoDestination => JUMP_REFUSAL_TICKS,
+        JumpRefusal::TooClose { .. } | JumpRefusal::Tractored | JumpRefusal::NoDestination => {
+            JUMP_REFUSAL_TICKS
+        }
         JumpRefusal::NoFuel { .. } | JumpRefusal::Landed | JumpRefusal::Disabled => MESSAGE_TICKS,
     }
 }
@@ -206,6 +209,23 @@ pub const BOMB_SET_UP: &str = "Someone set up us the bomb!";
 /// `STR#` 2002 #35: a disabled player's pre-jump collapsed
 /// (`_HandlePlayer` `_GetIndString` @0x68a04).
 pub const JUMP_COLLAPSED: &str = "Ship disabled - hyperspace field collapsed.";
+/// `STR#` 2002 #385: what each of the self-destruct's lines but the last
+/// begins with (`_HandlePlayer` @0x6fe3f, @0x6ff8a, @0x700ea).
+pub const SELF_DESTRUCT_LEAD: &str = "Self-destruct";
+/// `STR#` 2002 #386: the self-destruct began (@0x6fe65).
+pub const SEQUENCE_INITIATED: &str = "sequence initiated.";
+/// `STR#` 2002 #387: the self-destruct was let go (@0x70110).
+pub const SEQUENCE_CANCELLED: &str = "sequence cancelled.";
+/// `STR#` 2002 #395: the countdown line's "in" (@0x6ffb0).
+pub const SELF_DESTRUCT_IN: &str = "in";
+/// `STR#` 2002 #388: "second", which the original never says; the
+/// countdown's last line says it only by the other reading of
+/// `nova_sim::RuleKey::SelfDestructSecond`.
+pub const SECOND: &str = "second";
+/// `STR#` 2002 #389: the countdown line's "seconds" (@0x70014).
+pub const SECONDS: &str = "seconds";
+/// `STR#` 2002 #390: the self-destruct's last words (@0x70203).
+pub const HAVE_A_NICE_DAY: &str = "Have a nice day.";
 /// `STR#` 2002 #39: what comes before a sabotage outfit that went off.
 pub const YOUR: &str = "Your";
 /// `STR#` 2002 #40: what follows one sabotage outfit that went off.
@@ -311,6 +331,27 @@ pub fn illegal_outfit_message(
     )
 }
 
+/// The ejected player's line: "Escaping in", a space, the escape ship's
+/// long name and a full stop (`_HandlePlayer` @0x6f5ad-0x6f5f3).
+fn escaping_in_text(ship: ShipId, session: &Session) -> String {
+    let name = session.ship_long_name(ship).unwrap_or_default();
+    format!("{ESCAPING_IN} {name}.")
+}
+
+/// The self-destruct's lines (`_HandlePlayer` block Z): each but the last
+/// is "Self-destruct" (#385) and a space before its own words.
+fn self_destruct_text(line: SelfDestructLine) -> String {
+    match line {
+        SelfDestructLine::Initiated => format!("{SELF_DESTRUCT_LEAD} {SEQUENCE_INITIATED}"),
+        SelfDestructLine::In { seconds, singular } => {
+            let unit = if singular { SECOND } else { SECONDS };
+            format!("{SELF_DESTRUCT_LEAD} {SELF_DESTRUCT_IN} {seconds} {unit}.")
+        }
+        SelfDestructLine::Cancelled => format!("{SELF_DESTRUCT_LEAD} {SEQUENCE_CANCELLED}"),
+        SelfDestructLine::NiceDay => HAVE_A_NICE_DAY.to_owned(),
+    }
+}
+
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `session`: none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
@@ -359,12 +400,8 @@ pub(super) fn sim_message_text(message: &SimMessage, session: &Session) -> Optio
         | SimMessage::ScanHail(text)
         | SimMessage::ReinforcementsApproaching(text) => return Some(text.clone()),
         SimMessage::JumpCollapsed => JUMP_COLLAPSED,
-        SimMessage::EscapingIn { ship } => {
-            // "Escaping in", a space, the long name and a full stop
-            // (@0x6f5ad-0x6f5f3).
-            let name = session.ship_long_name(*ship).unwrap_or_default();
-            return Some(format!("{ESCAPING_IN} {name}."));
-        }
+        SimMessage::SelfDestruct(line) => return Some(self_destruct_text(*line)),
+        SimMessage::EscapingIn { ship } => return Some(escaping_in_text(*ship, session)),
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
         SimMessage::BombSetUp => BOMB_SET_UP,
         SimMessage::Sabotaged {
@@ -435,9 +472,9 @@ fn scanner_name<'a>(person: Option<&'a str>, scanner: ShipId, session: &'a Sessi
 pub const NO_RESPONSE: &str = "No response.";
 /// `STR#` 2002 #54.
 pub const HAIL_IN_HYPERSPACE: &str = "Unable to send hail - target ship is entering hyperspace.";
-/// `STR#` 2002 #3, without the ship's name the original adds.
+/// `STR#` 2002 #3, which the line follows with the player's ship's name.
 pub const ENERGY_TRANSFER: &str = "Energy transfer complete";
-/// `STR#` 2002 #384.
+/// `STR#` 2002 #384, which the line follows with the player's ship's name.
 pub const REPAIRS_COMPLETE: &str = "Repairs complete";
 
 /// What the player is told when `refusal` stops a hail: the original's
@@ -500,16 +537,16 @@ pub(super) fn mission_board_message(line: MissionBoardLine, session: &Session) -
 }
 
 /// What the player is told when a ship it asked for help is done:
-/// "<ship>:  Energy transfer complete." or "<ship>:  Repairs complete."
-/// (the original names the player's ship after the energy transfer; it
-/// has no name here).
+/// "`ship`:  Energy transfer complete, `player ship`." or "`ship`:  Repairs
+/// complete, `player ship`." (`_HighLevelAIHandler` @0x8f5b5-0x8f668,
+/// `_LowLevelAIHandler` @0x86e0f-0x86ebb).
 #[must_use]
 pub fn comm_message(note: &CommNote) -> String {
     let done = match note.done {
         Help::Refuel => ENERGY_TRANSFER,
         Help::Repair => REPAIRS_COMPLETE,
     };
-    format!("{}:  {done}.", note.comm_name)
+    format!("{}:  {done}, {}.", note.comm_name, note.ship_name)
 }
 
 /// `STR#` 2002 #29.
@@ -518,6 +555,9 @@ pub const NO_DESTINATION: &str =
 /// `STR#` 2002 #42.
 pub const TOO_CLOSE: &str =
     "Can't initiate hyperspace jump - not yet far enough away from system center.";
+/// `STR#` 2002 #36, shown in place of #42 while another ship holds the
+/// player in a tractor beam (`_HandlePlayer` @0x6b8a4-0x6b8dc).
+pub const TRACTORED: &str = "Your ship is unable to enter hyperspace while held by a tractor beam.";
 /// `STR#` 2002 #10.
 pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 /// Not the original's, which never flies a landed ship: worded after
@@ -717,6 +757,7 @@ pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::ScanHail(_)
         | SimMessage::ReinforcementsApproaching(_)
         | SimMessage::JumpCollapsed
+        | SimMessage::SelfDestruct(_)
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
         | SimMessage::BombSetUp
@@ -1102,7 +1143,9 @@ pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -
         Taken::CaptureFailed => CAPTURE_FAILED.to_owned(),
         Taken::FleetFull => FLEET_FULL.to_owned(),
         Taken::Escorted => ASSIGNED_ESCORT.to_owned(),
-        Taken::Captured | Taken::Aborted | Taken::Nothing => return None,
+        // A miss, or a take with nothing on board, says nothing: it only
+        // beeps (`_DoPlunderDialog` @0x93ad2, @0x93cb8, @0x93d2f, @0x94256).
+        Taken::Captured | Taken::Aborted | Taken::Nothing | Taken::Missed => return None,
     };
     Some(text)
 }
@@ -1209,6 +1252,7 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> Option<&'static str> {
     match refusal {
         JumpRefusal::NoDestination => Some(NO_DESTINATION),
         JumpRefusal::TooClose { .. } => Some(TOO_CLOSE),
+        JumpRefusal::Tractored => Some(TRACTORED),
         JumpRefusal::NoFuel { .. } => Some(NO_FUEL),
         JumpRefusal::Landed => Some(TAKE_OFF_FIRST),
         JumpRefusal::Disabled => None,
@@ -1489,6 +1533,7 @@ mod tests {
         let jump = [
             (JumpRefusal::NoDestination, 360),
             (JumpRefusal::TooClose { distance: 1.0 }, 360),
+            (JumpRefusal::Tractored, 360),
             (JumpRefusal::NoFuel { fuel: 1.0 }, 240),
             (JumpRefusal::Landed, 240),
         ];
@@ -1755,10 +1800,21 @@ mod tests {
         );
         assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), None);
         assert_eq!(
-            [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
+            jump_refusal_message(&JumpRefusal::Tractored),
+            Some(TRACTORED)
+        );
+        assert_eq!(
+            [
+                NO_DESTINATION,
+                TOO_CLOSE,
+                TRACTORED,
+                NO_FUEL,
+                TAKE_OFF_FIRST
+            ],
             [
                 "You have to select a destination before you can start a hyperspace jump.",
                 "Can't initiate hyperspace jump - not yet far enough away from system center.",
+                "Your ship is unable to enter hyperspace while held by a tractor beam.",
                 "Insufficient energy for hyperspace jump.",
                 "Can't initiate hyperspace jump - take off first.",
             ]
@@ -1792,15 +1848,16 @@ mod tests {
         let note = |done| nova_sim::CommNote {
             from: NpcId(2),
             comm_name: "Cruiser".to_owned(),
+            ship_name: "Kestrel".to_owned(),
             done,
         };
         assert_eq!(
             comm_message(&note(Help::Refuel)),
-            "Cruiser:  Energy transfer complete."
+            "Cruiser:  Energy transfer complete, Kestrel."
         );
         assert_eq!(
             comm_message(&note(Help::Repair)),
-            "Cruiser:  Repairs complete."
+            "Cruiser:  Repairs complete, Kestrel."
         );
     }
 

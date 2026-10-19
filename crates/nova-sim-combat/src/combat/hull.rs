@@ -7,11 +7,14 @@
 //!   original tests shots against sprite masks, which the simulation does
 //!   not have. A ship type without a `shän` is a placeholder
 //!   [`DEFAULT_HIT_RADIUS`] across.
-//! - Its board reach, how far off its centre on either axis the player
-//!   can board it, is half its `shän`'s size ([`BOARD_REACH_PER_SIZE`],
-//!   0.5 @0xdd128 x the sprite's width and height in
-//!   `_HandlePlayerBoardAttempt`; the simulation reads only the width),
-//!   and [`DEFAULT_BOARD_REACH`] without a `shän`.
+//! - Its board reach, how far off its centre the player can board it, is
+//!   half its `shän`'s `BaseXSize` on the x axis and half its `BaseYSize`
+//!   on the y axis ([`BOARD_REACH_PER_SIZE`], 0.5 @0xdd128 x the sprite's
+//!   width and height, `_GetSpriteXSize` @0x26d4 and `_GetSpriteYSize`
+//!   @0x2703, in `_HandlePlayerBoardAttempt`). Those read the loaded
+//!   sprite's frame, which is the `shän`'s sizes for every stock ship; a
+//!   missing or non-positive size reads as [`FALLBACK_SPRITE_SIZE`], as
+//!   they return for a sprite without a frame (@0x26fc, @0x272b).
 //! - A ship is disabled as a [`DisableRule`] says. Nova's,
 //!   [`NovaDisable`], is `_IsDisabled`'s.
 //! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
@@ -51,9 +54,12 @@
 use std::fmt::Debug;
 
 use super::exits::ExitPoints;
+use super::ship_frames::FrameSpec;
 use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{EscortClass, HullRecord, ShipId};
+use crate::geometry::Vec2;
+use crate::gravity::STELLAR_IMMUNE_HULL;
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
@@ -89,10 +95,12 @@ pub fn never_breaks_up(ship: ShipId) -> bool {
 pub const DEFAULT_HIT_RADIUS: f32 = 16.0;
 /// A ship's hit radius per pixel of its `shän`'s `BaseXSize`.
 pub const HIT_RADIUS_PER_SIZE: f32 = 0.33;
-/// The board reach of a ship type without a `shän`, in pixels: half a
-/// 48-pixel sprite, a placeholder.
-pub const DEFAULT_BOARD_REACH: f32 = 24.0;
-/// A ship's board reach per pixel of its `shän`'s `BaseXSize`.
+/// The size, in pixels, `_GetSpriteXSize` and `_GetSpriteYSize` give a
+/// sprite without a usable frame (@0x26fc, @0x272b): the board reach of a
+/// ship without a `shän` size is half of it on that axis.
+pub const FALLBACK_SPRITE_SIZE: f32 = 32.0;
+/// A ship's board reach per pixel of its `shän`'s `BaseXSize` (on the x
+/// axis) and `BaseYSize` (on the y axis).
 pub const BOARD_REACH_PER_SIZE: f32 = 0.5;
 /// The `shïp` `Flags` bit that disables it at [`TOUGH_DISABLE_PERCENT`]
 /// of its armour instead of [`DISABLE_PERCENT`].
@@ -125,6 +133,12 @@ pub const RETREATS_DRY: u16 = 0x0080;
 /// box (class +0x9ea, `_HighLevelAIHandler` @0x8e48e and @0x8e6b7; see
 /// `nova_sim::ai::stand_off`).
 pub const STANDS_OFF: u16 = 0x0002;
+/// The `shïp` `Flags2` bit of a ship that swarms: it names the lowest
+/// slot of a swarming class fighting its target as its swarm leader and,
+/// outside the dogfight box, flies at a point ahead of it (class +0x9ea
+/// bit 0, `_AIVerifySwarmLeader` @0x7e316, `_AIFindSwarmLeader` @0x7e400,
+/// `_HighLevelAIHandler` @0x8e64b; see `nova_sim::ai::swarm`).
+pub const SWARMS: u16 = 0x0001;
 /// The `shïp` `Flags3` bit of a ship whose turret shots (4) are drawn
 /// over the ships, in 0x3b5308 (class +0x9ec, filled @0x7a204; `_SpawnShot`
 /// @0x3f101; see [`ShotLayer`](super::shot_layer::ShotLayer)).
@@ -203,16 +217,20 @@ pub struct HullSpec {
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
     pub explosion: Option<Explosion>,
-    /// Its mass, in tons.
+    /// Its mass, in tons; none below none.
     pub mass: f32,
+    /// Its `Mass` field as the data has it, signed, which the joust
+    /// compares (`_LowLevelAIHandler` @0x861ac, @0x8623a; see
+    /// `nova_sim::ai::pursuit`).
+    pub signed_mass: i16,
     /// Where its turrets cannot fire: its `Flags` 0x1000 (front), 0x2000
     /// (sides) and 0x4000 (rear), as a weapon's `Flags` mark them.
     pub blind_spots: u16,
     /// How strong it counts in a fight, its `Strength`; none below none.
     pub strength: f32,
-    /// How far off its centre, in pixels on either axis, the player can
-    /// board it.
-    pub board_reach: f32,
+    /// How far off its centre, in pixels, the player can board it: `x` on
+    /// the x axis and `y` on the y axis.
+    pub board_reach: Vec2,
     /// Its sprite's width, its `shän`'s `BaseXSize`, in pixels; none
     /// without a sprite. A formation is spaced by it (see
     /// `nova_sim::escort::spacing`).
@@ -235,6 +253,9 @@ pub struct HullSpec {
     /// Whether it stands off from its target at its weapons' reach, its
     /// `Flags2` [`STANDS_OFF`] (see `nova_sim::ai::stand_off`).
     pub stands_off: bool,
+    /// Whether it swarms, its `Flags2` [`SWARMS`] (see
+    /// `nova_sim::ai::swarm`).
+    pub swarms: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
     pub key_carried: Option<ShipId>,
@@ -262,6 +283,11 @@ pub struct HullSpec {
     /// shots and beams leave from its centre (see
     /// [`exits`](super::exits)).
     pub exits: Option<ExitPoints>,
+    /// Its `shän`'s display: what picks the frames it is drawn on and
+    /// whether it unfolds to fire (see
+    /// [`ship_frames`](super::ship_frames)); [`FrameSpec::NONE`] without
+    /// a `shän`.
+    pub frames: FrameSpec,
     /// Its turret miss class (the original's class +0xa10,
     /// [`miss_class`]): the range a turret or point-defence shot it fires
     /// rolls in, and the highest roll that hits it while it is intact (see
@@ -271,6 +297,11 @@ pub struct HullSpec {
     /// [`TURRET_SHOTS_OVER`] (see
     /// [`ShotLayer::spawned`](super::shot_layer::ShotLayer::spawned)).
     pub turret_shots_over: bool,
+    /// Whether neither gravity nor a deadly stellar touches it: its
+    /// `Flags3` [`STELLAR_IMMUNE_HULL`] (class +0x9ec; see
+    /// [`resists_gravity`](crate::gravity::resists_gravity) and
+    /// [`resists_deadly`](crate::deadly_stellar::resists_deadly)).
+    pub stellar_immune: bool,
     /// Its `Flags` afterburner bits, [`AFTERBURNER_ALWAYS`] and
     /// [`AFTERBURNER_BY_RATING`], which decide with [`HullSpec::planet_type`]
     /// whether an AI ship of the type has an afterburner (see
@@ -323,22 +354,29 @@ impl Default for HullSpec {
             breakup: None,
             explosion: None,
             mass: 0.0,
+            signed_mass: 0,
             blind_spots: 0,
             strength: 0.0,
-            board_reach: DEFAULT_BOARD_REACH,
+            board_reach: Vec2::new(
+                FALLBACK_SPRITE_SIZE * BOARD_REACH_PER_SIZE,
+                FALLBACK_SPRITE_SIZE * BOARD_REACH_PER_SIZE,
+            ),
             sprite_size: None,
             sprite_height: None,
             planet_type: false,
             pd_target: false,
             retreats_dry: false,
             stands_off: false,
+            swarms: false,
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
             hidden: false,
             exits: None,
+            frames: FrameSpec::NONE,
             miss_class: miss_class(EscortClass::Freighter),
             turret_shots_over: false,
+            stellar_immune: false,
             afterburner: 0,
             inherent_ai: 0,
             crew: 0,
@@ -353,7 +391,12 @@ impl HullSpec {
     pub fn new(record: &HullRecord) -> Self {
         let size = record.size.filter(|&size| size > 0).map(f32::from);
         let hit_radius = size.map_or(DEFAULT_HIT_RADIUS, |size| size * HIT_RADIUS_PER_SIZE);
-        let board_reach = size.map_or(DEFAULT_BOARD_REACH, |size| size * BOARD_REACH_PER_SIZE);
+        let height = record.height.filter(|&height| height > 0).map(f32::from);
+        let board_reach = Vec2::new(
+            size.unwrap_or(FALLBACK_SPRITE_SIZE) * BOARD_REACH_PER_SIZE,
+            height.unwrap_or(FALLBACK_SPRITE_SIZE) * BOARD_REACH_PER_SIZE,
+        );
+        let frames = FrameSpec::new(record.display.as_ref(), record.exits.as_ref());
         Self {
             hit_radius,
             tough: record.flags & TOUGH != 0,
@@ -366,22 +409,30 @@ impl HullSpec {
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
+            signed_mass: record.mass,
             blind_spots: record.flags & BLIND_SPOTS,
             strength: f32::from(record.strength.max(0)),
             board_reach,
             sprite_size: size,
-            sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
+            sprite_height: height,
             planet_type: record.flags & PLANET_TYPE != 0,
             pd_target: record.flags2 & PD_TARGET != 0,
             retreats_dry: record.flags2 & RETREATS_DRY != 0,
             stands_off: record.flags2 & STANDS_OFF != 0,
+            swarms: record.flags2 & SWARMS != 0,
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
             hidden: record.cost == HIDDEN_COST,
-            exits: record.exits.as_ref().and_then(ExitPoints::new),
+            exits: record
+                .exits
+                .as_ref()
+                .and_then(ExitPoints::new)
+                .map(|exits| exits.with_angle_table(frames.table.is_some())),
+            frames,
             miss_class: miss_class(record.escort_class),
             turret_shots_over: record.flags3 & TURRET_SHOTS_OVER != 0,
+            stellar_immune: record.flags3 & STELLAR_IMMUNE_HULL != 0,
             afterburner: record.flags & (AFTERBURNER_ALWAYS | AFTERBURNER_BY_RATING),
             inherent_ai: 0,
             crew: 0,
@@ -614,7 +665,7 @@ impl DisableRule for NovaDisable {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{BoomId, ShipExits, ShipId};
+    use crate::catalog::{BoomId, ShipDisplay, ShipExits, ShipId};
     use crate::combat::exits::ExitPoints;
     use nova_sim_catalog::fixture::hull;
 
@@ -737,6 +788,22 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_type_is_stellar_immune_by_its_flags3_0x0020_alone() {
+        let of = |flags3: u16| {
+            HullSpec::new(&HullRecord {
+                flags3,
+                ..hull(140)
+            })
+            .stellar_immune
+        };
+        assert!(of(0x0020));
+        assert!(of(0xFFFF));
+        assert!(!of(0x0040), "the turret shots' bit");
+        assert!(!of(0xFFDF), "every other bit");
+        assert!(!HullSpec::default().stellar_immune);
+    }
+
+    #[test]
     fn a_ship_types_afterburner_bits_are_its_flags_0x0020_and_0x0040() {
         let of = |flags: u16| HullSpec::new(&HullRecord { flags, ..hull(140) }).afterburner;
         assert_eq!(of(0x0160), 0x0060);
@@ -811,6 +878,46 @@ mod tests {
     }
 
     #[test]
+    fn hull_spec_reads_its_shäns_display_and_turns_its_exits_by_its_table() {
+        let raw = ShipExits {
+            frames: 8,
+            up_compress: (100, 100),
+            down_compress: (100, 50),
+            ..ShipExits::default()
+        };
+        let display = ShipDisplay {
+            flags: 0x01C2,
+            base_sets: 6,
+            anim_delay: 5,
+            ..ShipDisplay::default()
+        };
+        let miner = HullSpec::new(&HullRecord {
+            exits: Some(raw),
+            display: Some(display),
+            ..hull(379)
+        });
+        assert_eq!(miner.frames, FrameSpec::new(Some(&display), Some(&raw)));
+        assert_eq!(miner.frames.unfolds_to_fire(), Some(6));
+        let exits = miner.exits.expect("exits");
+        assert_eq!(exits.drawn_frame(125.0), 3, "by the table");
+        let plain = HullSpec::new(&HullRecord {
+            exits: Some(raw),
+            display: Some(ShipDisplay {
+                flags: 0x00C2,
+                ..display
+            }),
+            ..hull(379)
+        });
+        assert_eq!(
+            plain.exits.expect("exits").drawn_frame(125.0),
+            2,
+            "no table"
+        );
+        assert_eq!(HullSpec::default().frames, FrameSpec::NONE);
+        assert_eq!(HullSpec::new(&hull(128)).frames, FrameSpec::NONE, "no shän");
+    }
+
+    #[test]
     fn the_sprite_size_is_the_shäns_size() {
         let shuttle = HullSpec::new(&HullRecord {
             size: Some(24),
@@ -844,19 +951,36 @@ mod tests {
     }
 
     #[test]
-    fn the_board_reach_is_half_the_shäns_size() {
-        let shuttle = HullSpec::new(&HullRecord {
-            size: Some(25),
+    fn the_board_reach_is_half_the_shäns_size_on_each_axis() {
+        let tall = HullSpec::new(&HullRecord {
+            size: Some(24),
+            height: Some(40),
             ..hull(128)
         });
-        assert_eq!(shuttle.board_reach, 12.5);
+        assert_eq!(tall.board_reach, Vec2::new(12.0, 20.0));
+        let shuttle = HullSpec::new(&HullRecord {
+            size: Some(25),
+            height: Some(25),
+            ..hull(128)
+        });
+        assert_eq!(shuttle.board_reach, Vec2::new(12.5, 12.5));
         assert_eq!(BOARD_REACH_PER_SIZE, 0.5);
-        for size in [None, Some(0), Some(-5)] {
-            let placeholder = HullSpec::new(&HullRecord { size, ..hull(128) });
-            assert_eq!(placeholder.board_reach, DEFAULT_BOARD_REACH, "{size:?}");
+        for bad in [None, Some(0), Some(-5)] {
+            let no_width = HullSpec::new(&HullRecord {
+                size: bad,
+                height: Some(40),
+                ..hull(128)
+            });
+            assert_eq!(no_width.board_reach, Vec2::new(16.0, 20.0), "{bad:?}");
+            let no_height = HullSpec::new(&HullRecord {
+                size: Some(24),
+                height: bad,
+                ..hull(128)
+            });
+            assert_eq!(no_height.board_reach, Vec2::new(12.0, 16.0), "{bad:?}");
         }
-        assert_eq!(DEFAULT_BOARD_REACH, 24.0);
-        assert_eq!(HullSpec::default().board_reach, 24.0);
+        assert_eq!(FALLBACK_SPRITE_SIZE, 32.0);
+        assert_eq!(HullSpec::default().board_reach, Vec2::new(16.0, 16.0));
     }
 
     #[test]
@@ -901,6 +1025,22 @@ mod tests {
         assert_eq!(trader.strength, 0.0, "none below none");
         assert_eq!((trader.breakup, trader.explosion), (None, None));
         assert_eq!(TOUGH, 0x0010);
+    }
+
+    #[test]
+    fn a_hull_keeps_its_signed_mass_field() {
+        let negative = HullSpec::new(&HullRecord {
+            mass: -1,
+            ..hull(128)
+        });
+        assert_eq!(negative.mass, 0.0, "the other readers' none below none");
+        assert_eq!(negative.signed_mass, -1);
+        let heavy = HullSpec::new(&HullRecord {
+            mass: 120,
+            ..hull(128)
+        });
+        assert_eq!(heavy.signed_mass, 120);
+        assert_eq!(HullSpec::default().signed_mass, 0);
     }
 
     #[test]
@@ -1032,6 +1172,28 @@ mod tests {
         assert!(!flags.stands_off, "its Flags never");
         assert!(!HullSpec::default().stands_off);
         assert_eq!(STANDS_OFF, 0x0002);
+    }
+
+    #[test]
+    fn a_hull_that_swarms_has_its_flags2_0x0001() {
+        let swarms = |flags2| {
+            HullSpec::new(&HullRecord {
+                flags2,
+                ..hull(167)
+            })
+            .swarms
+        };
+        assert!(swarms(0x0001));
+        assert!(swarms(0x0083), "with other bits");
+        assert!(!swarms(0xfffe), "every other bit");
+        assert!(!swarms(0), "none");
+        let flags = HullSpec::new(&HullRecord {
+            flags: 0x0001,
+            ..hull(167)
+        });
+        assert!(!flags.swarms, "its Flags never");
+        assert!(!HullSpec::default().swarms);
+        assert_eq!(SWARMS, 0x0001);
     }
 
     #[test]

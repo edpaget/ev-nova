@@ -200,8 +200,7 @@ impl WgpuRenderer {
             &[&globals_layout, &page_layout, &texture_layout],
         );
         let solid_layout = pipeline_layout(device, "nova solids", &[&globals_layout]);
-        let sprite_attributes =
-            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
+        let sprite_attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
         let solid_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
         let sprite_pipeline_with = |layout, fragment, blend| {
             pipeline(
@@ -1166,6 +1165,7 @@ mod tests {
                 v1: 1.0,
             },
             tint: [1.0; 4],
+            colorize: crate::gpu::NO_COLORIZE,
         }
     }
 

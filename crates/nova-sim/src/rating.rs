@@ -25,9 +25,30 @@
 //! - **The start**: a new pilot's rating is its `chär`'s `Kills`, sign
 //!   extended (`_ActivateCharResource` @0x76d57-0x76d60), or 0 with no
 //!   `chär` (@0x76f70).
+//! - **Its words** ([`string_index`]): `_DrawCombatRatingString` @0x57e5
+//!   reads `_playerKills` and draws `_combatRatingString[index]`, which
+//!   `_LoadStrings` fills from [`RATING_STRINGS`] #1 to #11
+//!   (@0x71c5d-0x71c8f): 0 or less is the first, 1 to 99 the second, and
+//!   each doubling from 100 the next, up to 25,600 and over, the
+//!   eleventh. The main screen's pilot panel shows it; the player info's
+//!   Combat Rating row does not yet.
 
 /// The most a rating is set back to once it is over it.
 pub const RATING_CAP: i64 = 10_000_000;
+
+/// The `STR#` of the combat rating's words, #1 to #11.
+pub const RATING_STRINGS: i16 = 138;
+
+/// The ratings at which each of the words after the first starts, the
+/// second's first (`_DrawCombatRatingString` @0x57e5).
+const RATING_STEPS: [i64; 10] = [1, 100, 200, 400, 800, 1600, 3200, 6400, 12_800, 25_600];
+
+/// Which of [`RATING_STRINGS`]'s words, 0-based, `rating` reads as (see
+/// the module docs).
+#[must_use]
+pub fn string_index(rating: i64) -> usize {
+    RATING_STEPS.iter().filter(|&&step| rating >= step).count()
+}
 
 /// The rating after a kill of a ship of `strength` (its `shïp`'s raw
 /// `Strength`), from `rating` (see the module docs).
@@ -76,6 +97,39 @@ mod tests {
         assert_eq!(credit(10_000_001, 50), RATING_CAP);
         assert_eq!(credit(10_000_009, 0), RATING_CAP);
         assert_eq!(RATING_CAP, 10_000_000);
+    }
+
+    #[test]
+    fn the_strings_index_steps_at_each_doubling_from_100() {
+        let cases = [
+            (i64::MIN, 0),
+            (-1, 0),
+            (0, 0),
+            (1, 1),
+            (99, 1),
+            (100, 2),
+            (199, 2),
+            (200, 3),
+            (399, 3),
+            (400, 4),
+            (799, 4),
+            (800, 5),
+            (1599, 5),
+            (1600, 6),
+            (3199, 6),
+            (3200, 7),
+            (6399, 7),
+            (6400, 8),
+            (12_799, 8),
+            (12_800, 9),
+            (25_599, 9),
+            (25_600, 10),
+            (i64::MAX, 10),
+        ];
+        for (rating, index) in cases {
+            assert_eq!(string_index(rating), index, "{rating}");
+        }
+        assert_eq!(RATING_STRINGS, 138);
     }
 
     #[test]

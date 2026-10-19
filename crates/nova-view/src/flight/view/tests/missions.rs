@@ -770,6 +770,7 @@ fn smuggling(flags: u16, fine: i16) -> View {
         news_pic: -1,
         require: 0,
         inh_jam: [0; 4],
+        skill_mult: 0,
     }];
     catalog.missions = vec![MissionRecord {
         cargo_type: 0,
@@ -2137,4 +2138,60 @@ fn a_plunders_lines_are_its_cargo_and_its_stolen_ship() {
         Some("Fighter stolen!".to_owned())
     );
     assert_eq!(arrival_lead(&stolen), None);
+}
+
+#[test]
+fn the_self_destructs_lines_say_its_stock_words() {
+    use nova_sim::SelfDestructLine;
+    let view = flight();
+    let session = view.session().expect("flying");
+    let text = |message: SimMessage| sim_message_text(&message, session);
+    assert_eq!(
+        text(SimMessage::SelfDestruct(SelfDestructLine::Initiated)).as_deref(),
+        Some("Self-destruct sequence initiated.")
+    );
+    assert_eq!(
+        text(SimMessage::SelfDestruct(SelfDestructLine::In {
+            seconds: 4,
+            singular: false
+        }))
+        .as_deref(),
+        Some("Self-destruct in 4 seconds.")
+    );
+    assert_eq!(
+        text(SimMessage::SelfDestruct(SelfDestructLine::In {
+            seconds: 1,
+            singular: false
+        }))
+        .as_deref(),
+        Some("Self-destruct in 1 seconds."),
+        "the engine always says #389"
+    );
+    assert_eq!(
+        text(SimMessage::SelfDestruct(SelfDestructLine::In {
+            seconds: 1,
+            singular: true
+        }))
+        .as_deref(),
+        Some("Self-destruct in 1 second.")
+    );
+    assert_eq!(
+        text(SimMessage::SelfDestruct(SelfDestructLine::Cancelled)).as_deref(),
+        Some("Self-destruct sequence cancelled.")
+    );
+    assert_eq!(
+        text(SimMessage::SelfDestruct(SelfDestructLine::NiceDay)).as_deref(),
+        Some("Have a nice day.")
+    );
+    for message in [
+        SimMessage::SelfDestruct(SelfDestructLine::Initiated),
+        SimMessage::SelfDestruct(SelfDestructLine::In {
+            seconds: 2,
+            singular: false,
+        }),
+        SimMessage::SelfDestruct(SelfDestructLine::Cancelled),
+        SimMessage::SelfDestruct(SelfDestructLine::NiceDay),
+    ] {
+        assert_eq!(arrival_lead(&message), None, "{message:?}");
+    }
 }

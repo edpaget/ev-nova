@@ -352,6 +352,15 @@ pub struct Pick {
     /// helped against (step 6, which sets the target and goal 4 itself,
     /// @0x8a5b0-0x8a5ca) is no such call.
     pub turns_on_player: bool,
+    /// Whether the pick writes state 4 (attack) itself: one that calls
+    /// `_AIMakeShipAttackPlayer` ([`turns_on_player`](Self::turns_on_player),
+    /// which writes state 4 @0x89d3e), and the help (@0x8a5c1). The
+    /// hunt's, the xenophobe's and the threat step's NPC picks write the
+    /// target alone (@0x8ad11, @0x8a3f0, @0x8ae49), and a kept target
+    /// leaves the state as it was (3 or 4, @0x89e95-0x89eb6): a caller in
+    /// another state, an inspecting interceptor's re-pick
+    /// (`_InterceptorAI` @0x8d41e), goes on with that state.
+    pub attacks: bool,
 }
 
 /// [`select_target`]'s pick, with whether it turns `npc` on the player
@@ -364,14 +373,56 @@ pub fn pick_target(
     rules: TargetRules,
     chance: &mut dyn Chance,
 ) -> Option<Pick> {
+    pick_by_steps(npc, current, around, rules, chance, Threats::Asked)
+}
+
+/// An inspecting interceptor's re-pick (`_InterceptorAI` @0x8d41e): the
+/// steps of [`pick_target`] as `_SelectWarshipTarget` runs them for a ship
+/// in state 7 whose target (+0x70) is the ship it inspects. Step 1 keeps
+/// only in states 3 and 4 (@0x89e95-0x89ea3), so it keeps nothing; and no
+/// step writes +0x70 -1, so the threat step, which needs it (@0x8ad3c),
+/// never runs. None leaves the inspection as it was.
+#[must_use]
+pub fn re_pick_target(
+    npc: &Npc,
+    around: &Surroundings,
+    rules: TargetRules,
+    chance: &mut dyn Chance,
+) -> Option<Pick> {
+    pick_by_steps(npc, None, around, rules, chance, Threats::Skipped)
+}
+
+/// Whether the threat step (8) runs: only while the ship has no target
+/// (@0x8ad3c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Threats {
+    /// The ship came with no target: the step runs when the others find
+    /// none.
+    Asked,
+    /// The ship came holding a target: the step never runs.
+    Skipped,
+}
+
+/// The steps of `_SelectWarshipTarget` (see the module docs), the threat
+/// step as `threats` says.
+fn pick_by_steps(
+    npc: &Npc,
+    current: Option<ShipRef>,
+    around: &Surroundings,
+    rules: TargetRules,
+    chance: &mut dyn Chance,
+    threats: Threats,
+) -> Option<Pick> {
     let kept = |ship| Pick {
         ship,
         turns_on_player: false,
+        attacks: false,
     };
     // A pick that calls `_AIMakeShipAttackPlayer` when it is the player.
     let called = |ship| Pick {
         ship,
         turns_on_player: ship == ShipRef::Player,
+        attacks: ship == ShipRef::Player,
     };
     let paid_off = |ship| ship == ShipRef::Player && npc.spared;
     if let Some(ship) = current.filter(|&ship| around.live(ship) && !paid_off(ship)) {
@@ -421,7 +472,11 @@ pub fn pick_target(
         )
     } else {
         if let Some(foe) = helped(npc, around, rules) {
-            return Some(kept(foe));
+            // The help writes the target and state 4 (@0x8a5bd-0x8a5c1).
+            return Some(Pick {
+                attacks: true,
+                ..kept(foe)
+            });
         }
         let rolled = enemy_class_roll(npc, around, chance);
         let wanted = hostile_to_player(npc, around) || rolled;
@@ -451,18 +506,31 @@ pub fn pick_target(
         let called_before = xenophobe_pick.is_some_and(|pick| pick.turns_on_player);
         return Some(Pick {
             turns_on_player: called(target).turns_on_player || called_before,
+            attacks: called(target).attacks || called_before,
             ..called(target)
         });
     }
-    if xenophobe_pick.is_some() {
+    if xenophobe_pick.is_some() || threats == Threats::Skipped {
         return xenophobe_pick;
     }
-    let threats = others()
+    nearest_threat(npc, others(), around, rules).map(kept)
+}
+
+/// Step 8, threats (see the module docs): the nearest of `others` among
+/// `around` threatening `npc` or a ship it leads, other than one it spares
+/// by `rules`.
+fn nearest_threat<'a>(
+    npc: &Npc,
+    others: impl Iterator<Item = &'a Npc>,
+    around: &Surroundings,
+    rules: TargetRules,
+) -> Option<ShipRef> {
+    let threats = others
         .filter(|other| other.threatens_npc_among(npc.id, around.npcs))
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| !spares(npc, ship, around, rules))
         .collect::<Vec<_>>();
-    nearest(npc, &threats, around, false).map(kept)
+    nearest(npc, &threats, around, false)
 }
 
 /// Step 6, help allies (see the module docs): the quarry of the first
@@ -679,6 +747,7 @@ mod tests {
             target: None,
             class: crate::catalog::EscortClass::Freighter,
             boarded: false,
+            speed: 0.0,
         }
     }
 
@@ -1502,6 +1571,7 @@ mod tests {
             grudge,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
         let npcs = [grudger, ship(2, ENEMY, 0.0, 50.0)];
         let around = Surroundings {
@@ -1587,6 +1657,7 @@ mod tests {
             grudge: true,
             quoted: false,
             quoted_at: None,
+            zero_fuel: false,
         });
         let npcs = [grudger];
         let around = Surroundings {
@@ -1880,12 +1951,14 @@ mod tests {
             Some(Pick {
                 ship,
                 turns_on_player: true,
+                attacks: true,
             })
         };
         let keeps = |ship| {
             Some(Pick {
                 ship,
                 turns_on_player: false,
+                attacks: false,
             })
         };
         let none = Blessing::NONE;
@@ -1921,7 +1994,10 @@ mod tests {
         ];
         assert_eq!(
             chosen_pick(0, &helping, None, 0, NEAR),
-            keeps(P),
+            Some(Pick {
+                attacks: true,
+                ..keeps(P).expect("a pick")
+            }),
             "helping an ally against the player (@0x8a5b0-0x8a5ca)"
         );
         assert_eq!(chosen_pick(0, &wanted, Some(P), -7, NEAR), keeps(P), "kept");
@@ -1946,6 +2022,73 @@ mod tests {
             chosen_pick(0, &[me(), threat], None, 0, NEAR),
             keeps(n(2)),
             "a threat"
+        );
+    }
+
+    #[test]
+    fn each_pick_says_whether_it_writes_state_4() {
+        // `_AIMakeShipAttackPlayer` writes state 4 (@0x89d3e), and so does
+        // the help (@0x8a5c1); the hunt's, the xenophobe's and the threat
+        // step's NPC picks write the target alone (@0x8ad11, @0x8a3f0,
+        // @0x8ae49).
+        let attacks = |pick: Option<Pick>| pick.map(|pick| pick.attacks);
+        let none = Blessing::NONE;
+        let grudge = crate::traffic::GRUDGE;
+        assert_eq!(
+            attacks(grudge_pick(grudge, true, false, None, true, none)),
+            Some(true),
+            "a grudge"
+        );
+        assert_eq!(
+            attacks(hunter_pick(false, false, true, Condition::Intact, none)),
+            Some(true),
+            "a ShipBehav 0 mission ship"
+        );
+        assert_eq!(
+            attacks(xenophobe_pick(0, Some(ME), 1000, none)),
+            Some(true),
+            "a xenophobe's player"
+        );
+        assert_eq!(
+            attacks(xenophobe_pick(0, Some(XENO), 1, none)),
+            Some(false),
+            "a xenophobe's NPC"
+        );
+        let wanted = [me(), ship(2, ENEMY, 300.0, 0.0), ship(3, RIVAL, 0.0, 200.0)];
+        assert_eq!(
+            attacks(chosen_pick(0, &wanted, None, -7, NEAR)),
+            Some(true),
+            "the hunt's player"
+        );
+        assert_eq!(
+            attacks(chosen_pick(0, &wanted, None, 0, NEAR)),
+            Some(false),
+            "the hunt's NPC"
+        );
+        let mut kin = ship(3, ME, 2000.0, 0.0);
+        kin.goal = Goal::Attack(P);
+        let helping = [
+            me(),
+            ship(2, ALLY, 1000.0, 0.0),
+            kin,
+            ship(4, NEUTRAL, 3000.0, 0.0),
+        ];
+        assert_eq!(
+            attacks(chosen_pick(0, &helping, None, 0, NEAR)),
+            Some(true),
+            "a help, though it makes no call"
+        );
+        let mut threat = ship(2, NEUTRAL, 900.0, 0.0);
+        threat.goal = Goal::Attack(n(1));
+        assert_eq!(
+            attacks(chosen_pick(0, &[me(), threat], None, 0, NEAR)),
+            Some(false),
+            "a threat"
+        );
+        assert_eq!(
+            attacks(chosen_pick(0, &wanted, Some(P), -7, NEAR)),
+            Some(false),
+            "kept: state 3 or 4 as it was"
         );
     }
 
@@ -2073,7 +2216,8 @@ mod tests {
             pick(&npcs[0], None, &around),
             Some(Pick {
                 ship: n(2),
-                turns_on_player: true
+                turns_on_player: true,
+                attacks: true,
             }),
             "@0x8a40e called for the player before step 7 took the wreck"
         );
@@ -2086,6 +2230,7 @@ mod tests {
             Some(Pick {
                 ship,
                 turns_on_player: true,
+                attacks: true,
             })
         };
         assert_eq!(
@@ -2492,6 +2637,7 @@ mod tests {
             Some(Pick {
                 ship: n(2),
                 turns_on_player,
+                attacks: turns_on_player,
             })
         };
         assert_eq!(

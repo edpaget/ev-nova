@@ -28,9 +28,12 @@
 //!   and the tractor's self-pull alike.
 //!
 //! The player's top speed is 1.8 times its own there
-//! ([`AFTERBURNER_SPEED`]) while its afterburner is on and no gravity
-//! source is present (@0x3ab19-0x3ab68): a [`Body`] whose
-//! [`afterburner`](Body::afterburner) is set. Only the player's can be,
+//! ([`AFTERBURNER_SPEED`]) while its afterburner is on and
+//! `_gravitySourcesPresent` is clear (@0x3ab19-0x3ab68): a [`Body`] whose
+//! [`afterburner`](Body::afterburner) is set. Its session decides it, and
+//! the fight sets it apart for a beam tick, the one push that runs after
+//! `_HandleGravity` sets the flag (see
+//! [`Fighter::afterburner_beam`](super::Fighter::afterburner_beam)). Only the player's can be,
 //! as the block tests +0x86 for the player first (@0x3ab19); an NPC's
 //! cap is always its plain top speed.
 //!
@@ -71,8 +74,9 @@
 //!
 //! What a lock does to the ship it holds (the pull to its holder's
 //! velocity, the lapse half a second after its last touch, the third of
-//! its speed, turn and thrust, the refused jump) is
-//! `ship-handling-fidelity/phase-12-tractor-hold`'s.
+//! its speed, turn and thrust) is the
+//! [`tractor_hold`](super::tractor_hold) module's; the refused jump is
+//! `nova_sim::Session::begin_jump`'s.
 //!
 //! Neither block makes a sound.
 
@@ -113,9 +117,9 @@ pub struct Body {
     pub top_speed: f32,
     /// Whether its jump is under way (+0x50 above none).
     pub jumping: bool,
-    /// Whether it is the player with its afterburner on and no gravity
-    /// source present (`_abOn`, *0x3b5598, and `_gravitySourcesPresent`,
-    /// *0x3b5568), which widens a push's clamp to 1.8 times its top speed.
+    /// Whether it is the player with its afterburner widening this push's
+    /// clamp to 1.8 times its top speed (`_abOn`, *0x3b5598, with
+    /// `_gravitySourcesPresent`, *0x3b5568, clear).
     pub afterburner: bool,
 }
 
@@ -128,9 +132,10 @@ pub struct TractorLock {
     pub holder: ShipRef,
     /// The engine ticks since a tractor beam last touched it. The fight
     /// sets it to none on each touch, as the original sets +0xb4 to the
-    /// `TickCount`; counting it up, and dropping the lock as the original
-    /// does once `TickCount` reaches +0xb4 + 30 (half a second, 15 ticks),
-    /// are `ship-handling-fidelity/phase-12-tractor-hold`'s.
+    /// `TickCount`; the hold counts it up ([`TractorLock::age`]) and drops
+    /// the lock as the original does once `TickCount` reaches +0xb4 + 30
+    /// (half a second, [`LAPSE_TICKS`](super::tractor_hold::LAPSE_TICKS);
+    /// see the [`tractor_hold`](super::tractor_hold) module).
     pub ticks_since_touch: u32,
 }
 

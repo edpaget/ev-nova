@@ -110,6 +110,12 @@
 //!   `reinforcements` module). The timer of a fleet on its way (+0xc8) is
 //!   not saved, as the original's isn't. An older save kept none, so the
 //!   upgrade gives `[]`. A load drops an entry of 0 days.
+//! - Version 31: adds whether the pilot has seen the intro screen
+//!   (`seen_intro`), as the original's pilot file keeps `seenIntroScreen`
+//!   at +0x3086 (`_WritePilotData` @0x72970, `_LoadPilotData` @0x75ee2).
+//!   An older save can't tell whether its pilot ever entered play, and
+//!   showing a long-played pilot the intro is worse than skipping it for
+//!   one never flown, so the upgrade gives `true`.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -208,7 +214,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 30;
+pub const CURRENT: u64 = 31;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -928,6 +934,7 @@ struct Saved {
     missions: Vec<SavedMission>,
     crons: Vec<SavedCron>,
     ranks: Vec<i16>,
+    seen_intro: bool,
 }
 
 /// A saved reinforcement countdown: a system and its days left.
@@ -1093,6 +1100,7 @@ pub fn encode(pilot: &Pilot) -> String {
             .collect(),
         crons: saved_crons(&pilot.crons),
         ranks: pilot.ranks.iter().map(|rank| rank.0).collect(),
+        seen_intro: pilot.seen_intro,
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -1129,7 +1137,17 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     ship_done,
     charted,
     reinforcement_days,
+    seen_intro,
 ];
+
+/// Version 30 to 31: the intro screen seen. An older save can't tell
+/// whether its pilot ever entered play, and showing a long-played pilot
+/// the intro is worse than skipping it for one never flown.
+fn seen_intro(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("seen_intro".to_owned(), Value::Bool(true));
+    }
+}
 
 /// Version 29 to 30: no reinforcement countdown. An older save kept
 /// none, so every system's fleet can be called at once, as after a
@@ -1505,6 +1523,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         missions,
         crons: crons_of(saved.crons),
         ranks: saved.ranks.into_iter().map(RankId).collect(),
+        seen_intro: saved.seen_intro,
     })
 }
 
@@ -1659,6 +1678,7 @@ mod tests {
             missions: busy(),
             crons: holding_off(),
             ranks: BTreeSet::from([RankId(140), RankId(128)]),
+            seen_intro: true,
         }
     }
 
@@ -1811,7 +1831,8 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 30);
+        assert_eq!(CURRENT, 31);
+        assert_eq!(value["seen_intro"], true);
         assert_eq!(value["explored"], serde_json::json!([130, 131, 200]));
         assert_eq!(value["charted"], serde_json::json!([131]));
         assert_eq!(
@@ -1902,7 +1923,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 30"), "{text}");
+        assert!(text.contains("\n  \"version\": 31"), "{text}");
     }
 
     #[test]
@@ -3563,9 +3584,60 @@ mod tests {
         assert_eq!(back, pilot);
     }
 
-    /// `pilot` saved at version 29: no reinforcement countdown kept.
-    fn at_version_29(pilot: &Pilot) -> String {
+    /// `pilot` saved at version 30: whether it has seen the intro screen
+    /// not kept.
+    fn at_version_30(pilot: &Pilot) -> String {
         let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(30);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("seen_intro");
+        value.to_string()
+    }
+
+    #[test]
+    fn whether_the_intro_screen_was_seen_survives_a_round_trip_either_way() {
+        for seen_intro in [false, true] {
+            let pilot = Pilot {
+                seen_intro,
+                ..seasoned()
+            };
+            let back = decode(&encode(&pilot)).expect("loads");
+            assert_eq!(back.seen_intro(), seen_intro);
+            assert_eq!(back, pilot, "{seen_intro}");
+        }
+    }
+
+    #[test]
+    fn a_version_30_save_loads_with_the_intro_screen_seen() {
+        let unseen = Pilot {
+            seen_intro: false,
+            ..seasoned()
+        };
+        let pilot = decode(&at_version_30(&unseen)).expect("loads");
+        assert!(pilot.seen_intro());
+        assert_eq!(pilot, seasoned());
+    }
+
+    #[test]
+    fn a_current_save_missing_seen_intro_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_30(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("seen_intro"),
+            "{}",
+            unusable(&text)
+        );
+    }
+
+    /// `pilot` saved at version 29: no reinforcement countdown kept, nor
+    /// whether it has seen the intro screen.
+    fn at_version_29(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_30(pilot)).expect("JSON");
         value["version"] = serde_json::Value::from(29);
         value
             .as_object_mut()
@@ -3739,6 +3811,7 @@ mod tests {
         value["version"] = serde_json::Value::from(CURRENT);
         value["charted"] = serde_json::json!([]);
         value["reinforcement_days"] = serde_json::json!([]);
+        value["seen_intro"] = serde_json::json!(true);
         let text = value.to_string();
         assert!(unusable(&text).contains("ship_done"), "{}", unusable(&text));
     }
@@ -4170,12 +4243,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 30", "\"version\": 31");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 31 }));
+        let newer = encode(&seasoned()).replace("\"version\": 31", "\"version\": 32");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 32 }));
         assert_eq!(
-            SaveError::Newer { version: 31 }.to_string(),
+            SaveError::Newer { version: 32 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 31, and this version of Nova reads up to 30)."
+             (it is version 32, and this version of Nova reads up to 31)."
         );
     }
 

@@ -55,8 +55,9 @@
 //! # Who can be hired (`_CalcShipCanBuy` @0x4f848-0x4f90a)
 //!
 //! A class listed can be hired when its `Availability` holds (through
-//! [`ControlBits`]), the fleet has room ([`MAX_ESCORTS`](crate::board::MAX_ESCORTS)
-//! escorts that are not fighters, `_CanHireEscorts` @0x5795) and its fee
+//! [`ControlBits`]), the fleet has room (fewer than
+//! [`MAX_ESCORTS`](crate::board::MAX_ESCORTS) escorts in the system that
+//! are not fighters, `_CanHireEscorts` @0x5795) and its fee
 //! is no more than the cash. Neither `_CanHireEscorts` nor
 //! `_CalcShipCanBuy` checks for a free ship-table slot (@0x5795-0x57e4),
 //! so by the engine reading of

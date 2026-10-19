@@ -4,23 +4,35 @@
 //! before and after it: [`Traffic::begin_fly`], then
 //! [`Traffic::fly_npc`] for each NPC, then [`Traffic::end_fly`].
 //!
-//! - **Begin** holds every NPC's cloak, notes which ones are entering a
-//!   gate, and snapshots what each flight reads of the others: every
-//!   ship's state before any moves, the player's, the top speeds and the
-//!   disabled ships. The original's steering reads come from
+//! - **Begin** forgets, on double time's second pass, the ships gone in a
+//!   ship pass (see [`gone`](super::gone)); holds every NPC's cloak; on
+//!   the advance pass moves each
+//!   NPC's warp and fire clocks on (`TickCount`), holds each intact one's
+//!   warp to its goal and its fold to its dispatch, and runs the odds pass
+//!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
+//!   `_HandleShip`; see [`odds_cache`](super::odds_cache)); notes which
+//!   ships are entering a gate; and snapshots what each flight reads of
+//!   the others: every ship's state before any moves, the player's, the
+//!   top speeds, the disabled ships, the leaders' warps (sending each
+//!   leader out on the advance pass), the tractors' holders and each
+//!   swarmer's lead. The original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
 //!   so every flight reads the others where the last tick left them.
-//! - **Each NPC** flies its docking flight or its autopilot step from its
-//!   own state as it stands, so a push an earlier slot's shockwave gave
-//!   it is in the velocity it moves by. One whose flight ends it (it
-//!   landed, jumped, entered a gate, docked) leaves the traffic at once,
-//!   as its slot is inactive from its own `_HandleShip` on: no later
-//!   slot's step, fire or shockwave sees it.
-//! - **End** starts the pirates' docks, counts the board waits and the AI
-//!   waits down, releases the followers of each lead that reached its
-//!   gate's box, and regenerates the fuel; on the advance pass the pods
-//!   the think half freed join the departures, the ships left behind are
-//!   let go, and the tick is counted on the AI timer.
+//! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
+//!   its spawn's display rolls, then flies its jump, its docking flight
+//!   or its autopilot step from its own state as it stands, so a push an
+//!   earlier slot's shockwave gave it is in the velocity it moves by, and
+//!   banks and glows. One whose flight ends it (it landed, jumped,
+//!   entered a gate, docked) leaves the traffic at once, as its slot is
+//!   inactive from its own `_HandleShip` on: no later slot's step, fire or
+//!   shockwave sees it; one that left the system is recorded among the
+//!   ships gone ([`gone`](super::gone)).
+//! - **End** starts the pirates' docks, queues the repairs completed on
+//!   the line, counts the AI waits down, releases the followers of each
+//!   lead that reached its gate's box, and regenerates the fuel; on the
+//!   advance pass the pods the think half freed join the departures, the
+//!   ships left behind are let go, and the tick is counted on the AI
+//!   timer.
 //!
 //! [`Traffic::fly_holding`] and [`Traffic::move_in`] run the three over
 //! every NPC in the traffic's order; the session's ship loop runs them by
@@ -30,10 +42,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::autopilot::{self, Outcome, TopSpeeds};
+use super::gone::Freed;
 use super::npc::{AiType, Mode, Npc, NpcId};
+use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
-use super::{Traffic, World, board_wait, plunder};
+use super::{
+    DockNotes, Traffic, World, ionization, plunder, repair_dock, ship_display, tractor_hold,
+    warp_out,
+};
 use crate::ai::Goal;
+use crate::ai::swarm::{self, SwarmLead};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -57,6 +75,9 @@ pub enum FlyHalf {
 #[derive(Clone, Debug)]
 pub struct FlyPass {
     half: FlyHalf,
+    /// Whether it is the advance pass's, whose high level the flight
+    /// follows.
+    think: bool,
     /// The NPCs that keep their place.
     still: BTreeSet<NpcId>,
     /// The player's state, if it is in the system.
@@ -73,8 +94,16 @@ pub struct FlyPass {
     entering: BTreeSet<NpcId>,
     /// The NPCs in the traffic's order as the half began.
     order: Vec<NpcId>,
-    /// Each dock a pirate started, as (pirate, victim).
-    docked: Vec<(NpcId, ShipRef)>,
+    /// Each leader's warp as the half began, which its followers read.
+    leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
+    /// The ships a tractor's hold may name, as the half began.
+    holders: tractor_hold::Holders,
+    /// Each swarmer's lead, as the half began.
+    leads: BTreeMap<NpcId, SwarmLead>,
+    /// The first class, which a spawn's anim rolls may read.
+    first: ship_display::FirstClass,
+    /// Each dock started and each repair completed.
+    docks: DockNotes,
     /// Each lead that reached its gate's box, its gate and AI type.
     reached: Vec<(NpcId, StellarId, AiType)>,
 }
@@ -95,7 +124,28 @@ impl Traffic {
     pub fn begin_fly(&mut self, world: &World, still: &BTreeSet<NpcId>, half: FlyHalf) -> FlyPass {
         let states = self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let order = self.npcs.iter().map(|npc| npc.id).collect();
+        let think = half == FlyHalf::Advance;
+        if !think {
+            // A ship pass with no decisions before it (see `gone`).
+            self.gone.ship_pass();
+        }
         self.hold_cloaks();
+        if think {
+            // `TickCount` moves on between advance passes alone, and the
+            // high level holds each ship's warp to its goal.
+            for npc in &mut self.npcs {
+                npc.warp.tick_clock();
+                npc.armament.tick_fire_clock();
+                // `_AIDispatch` runs no high level for a disabled ship.
+                if npc.condition == Condition::Intact {
+                    warp_out::hold_stage(npc);
+                }
+                ship_display::dispatch_fold(npc);
+            }
+            // `_DoPlayGameWork`'s odds pass, after every think and before
+            // `_HandleShip` (@0x442b0-0x44336; see `odds_cache`).
+            self.refresh_odds(world);
+        }
         let entering = self
             .npcs
             .iter()
@@ -108,15 +158,27 @@ impl Traffic {
             .map(|npc| npc.id)
             .zip(self.top_speeds(world))
             .collect();
+        let leaders = warp_out::leaders(&self.npcs);
+        if think {
+            warp_out::send_leaders_out(&mut self.npcs);
+        }
+        let holders = tractor_hold::Holders::of(world, &self.npcs);
         let disabled = self
             .npcs
             .iter()
             .filter(|npc| npc.condition == Condition::Disabled)
             .map(|npc| npc.id)
             .collect();
+        let around = world.around(&self.npcs);
+        let leads = self
+            .npcs
+            .iter()
+            .filter_map(|npc| swarm::lead(npc, &around).map(|lead| (npc.id, lead)))
+            .collect();
         self.departed.clear();
         FlyPass {
             half,
+            think,
             still: still.clone(),
             player: world.player.map(|player| player.state),
             player_disabled: world
@@ -127,7 +189,11 @@ impl Traffic {
             disabled,
             entering,
             order,
-            docked: Vec::new(),
+            leaders,
+            holders,
+            leads,
+            first: self.first_class,
+            docks: DockNotes::default(),
             reached: Vec::new(),
         }
     }
@@ -156,6 +222,9 @@ impl Traffic {
             pass.reached.push((id, gate, npc.ai_type));
         }
         if outcome != Outcome::Flying {
+            if let Some(freed) = Freed::by(outcome) {
+                self.gone.record(self.npcs[index].clone(), freed);
+            }
             self.departed.push((id, outcome));
             self.npcs.remove(index);
         }
@@ -183,12 +252,20 @@ impl Traffic {
     pub fn end_fly(&mut self, pass: FlyPass) {
         let FlyPass {
             half,
-            docked,
+            docks,
             reached,
             ..
         } = pass;
-        self.dock_starts(&docked);
-        board_wait::count_down(&mut self.npcs);
+        self.dock_starts(&docks.docked);
+        for (helper, ship, nav) in docks.repaired {
+            self.queue_pirate(match nav {
+                ShipRef::Player => PirateEvent::PlayerRepaired { helper, ship },
+                ShipRef::Npc(repaired) => PirateEvent::NpcRepaired {
+                    helper,
+                    ship: repaired,
+                },
+            });
+        }
         plunder::count_down(&mut self.npcs);
         self.release_followers(&reached);
         self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
@@ -261,25 +338,75 @@ fn fly_one(
     if pass.still.contains(&npc.id) {
         return Outcome::Flying;
     }
+    let derelict = world.govts.derelict(npc.govt);
+    // Its ion block, the move's other side (see the `ionization` module).
+    ionization::deionize(npc, speeds.own);
+    tractor_hold::hold(npc, &pass.holders, world.tractor_step, pass.think);
+    ship_display::settle_spawn(npc, derelict, &pass.first, &mut *chance);
+    let held = ship_display::held(npc);
+    let swarm = pass.leads.get(&npc.id).copied();
+    let outcome = fly_steered(
+        npc,
+        pass,
+        world,
+        (other, other_disabled, swarm),
+        speeds,
+        &mut *chance,
+    );
+    ship_display::bank_and_glow(npc, held, derelict, Some(world.warp.player.glow));
+    outcome
+}
+
+/// Flies `npc` a tick in `world` in the fly half `pass`: its jump, its
+/// dock with a ship it plunders or repairs, or its goal, toward `other`,
+/// disabled as `other_disabled` says, with `swarm` its swarm lead, at
+/// `speeds`, a dock it starts or a repair it completes noted in the
+/// half's docks, rolling on `chance`.
+fn fly_steered(
+    npc: &mut Npc,
+    pass: &mut FlyPass,
+    world: &World,
+    (other, other_disabled, swarm): (Option<ShipState>, bool, Option<SwarmLead>),
+    speeds: TopSpeeds,
+    chance: &mut (impl Chance + ?Sized),
+) -> Outcome {
+    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think) {
+        return outcome;
+    }
     match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, &mut *chance) {
         Some(DockOutcome::Started { victim, .. }) => {
-            pass.docked.push((npc.id, victim));
+            pass.docks.docked.push((npc.id, victim));
+            return Outcome::Flying;
+        }
+        Some(DockOutcome::Repaired) => {
+            // Its nav, the ship it repaired, before the completion
+            // clears it (@0x86d84, @0x86f31).
+            let nav = npc.docking.map_or(ShipRef::Player, |docking| docking.ship);
+            repair_dock::complete(npc);
+            pass.docks.repaired.push((npc.id, npc.ship, nav));
             return Outcome::Flying;
         }
         Some(_) => return Outcome::Flying,
         None => {}
     }
-    autopilot::fly(
+    let outcome = autopilot::fly(
         npc,
         world.sites,
         world.type_widths,
         other.as_ref(),
         other_disabled,
+        swarm,
         speeds,
         world.flight,
-        world.snipe_brake_lead,
+        autopilot::Readings {
+            snipe_lead: world.snipe_brake_lead,
+            jump_fuel: world.npc_jump_fuel,
+        },
+        world.weapons,
         &mut *chance,
-    )
+    );
+    warp_out::settle(npc, &pass.leaders, &world.warp);
+    outcome
 }
 
 #[cfg(test)]

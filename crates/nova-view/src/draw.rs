@@ -3,6 +3,7 @@
 use nova_sim::blink::FULL;
 
 use crate::color::Color;
+use crate::colorize::Colorize;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -14,8 +15,11 @@ pub enum Blend {
     #[default]
     Normal,
     /// Adds its colour, scaled by its alpha, to what is beneath: a true
-    /// saturating add. No screen uses it since the glow and lights moved to
-    /// [`Blend::Or`].
+    /// saturating add. The main screen's pilot panel draws the ship's
+    /// target picture with it, for QuickDraw's addOver (`CopyBits` mode
+    /// 0x22), which wraps instead; the two agree over black, as every
+    /// stock picture lies (see
+    /// [`pilot_panel`](crate::menu::pilot_panel)).
     Additive,
     /// ORs its colour, scaled by a level from the tint, into what is
     /// beneath, bit for bit: the original's ship glow and lights blits,
@@ -136,6 +140,22 @@ pub enum DrawCommand {
         /// How it combines with what is beneath it.
         blend: Blend,
     },
+    /// A sprite frame as [`DrawCommand::Sprite`] draws it, each texel
+    /// first mixed toward a colour by `colorize` ([`Colorize::mix`]), as
+    /// the murk and an ionized ship's tint colorize a ship's layers. A
+    /// colorize that does not mix draws as the plain sprite.
+    Colorized {
+        /// The frame.
+        image: ImageKey,
+        /// Where the frame's centre goes.
+        center: Point,
+        /// Colour multiplier and alpha, or the OR level, as for a sprite.
+        tint: Color,
+        /// How it combines with what is beneath it.
+        blend: Blend,
+        /// The mix toward a colour.
+        colorize: Colorize,
+    },
     /// A picture, unscaled and untinted, with its top-left corner at
     /// `top_left`.
     Picture {
@@ -248,7 +268,9 @@ impl DrawCommand {
         };
         let mut command = self.clone();
         match &mut command {
-            Self::Sprite { center, .. } | Self::Dot { center, .. } => *center = moved(*center),
+            Self::Sprite { center, .. }
+            | Self::Colorized { center, .. }
+            | Self::Dot { center, .. } => *center = moved(*center),
             Self::Picture { top_left, .. }
             | Self::StretchedPicture { top_left, .. }
             | Self::BlendedPicture { top_left, .. } => *top_left = moved(*top_left),
@@ -400,6 +422,24 @@ impl DrawList {
             center,
             tint,
             blend: Blend::OrCrossfade,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Colorized`] combined by `blend`.
+    pub fn colorized_sprite(
+        &mut self,
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Colorize,
+    ) -> &mut Self {
+        self.push(DrawCommand::Colorized {
+            image,
+            center,
+            tint,
+            blend,
+            colorize,
         })
     }
 

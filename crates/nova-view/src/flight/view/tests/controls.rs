@@ -124,11 +124,12 @@ fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
             ticks += 1;
         }
         // A tick of help on the advance pass alone: 95 to past 100,
-        // one at a time.
-        assert_eq!(ticks, 6, "{on}");
+        // one at a time, and done on the think after (`_HighLevelAIHandler`
+        // tests done before the add, @0x8f548).
+        assert_eq!(ticks, 7, "{on}");
         assert_eq!(reserves(&view).fuel.now, 101.0, "{on}");
         let note = view.message().expect("refuelled").to_owned();
-        assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+        assert!(note.contains(":  Energy transfer complete, "), "{note}");
     }
 }
 
@@ -559,6 +560,48 @@ fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is()
     assert_eq!(targeted(&view), None, "not where its slot was laid out");
     click(&mut view, now);
     assert_eq!(targeted(&view), Some(copy), "where it is");
+}
+
+#[test]
+fn a_flight_hands_its_stellar_sprite_pool_to_its_session_and_back() {
+    use nova_sim::story::sprite_pool::{SlotSprite, StellarSpritePool};
+    let mut pool = StellarSpritePool::default();
+    pool.rebuild((2000..2016).map(nova_sim::StellarId));
+    pool.place(nova_sim::StellarId(2015), (-7, 9));
+    pool.rebuild([]);
+    let view = flight().with_stellar_sprite_pool(pool);
+    let ghost = SlotSprite::Ghost { top_left: (-7, 9) };
+    let carried = view.stellar_sprite_pool().expect("flying");
+    assert_eq!(carried.sprite_of(nova_sim::StellarId(2015), false), ghost);
+    assert_eq!(
+        view.session()
+            .expect("flying")
+            .stellar_sprite_pool()
+            .sprite_of(nova_sim::StellarId(2015), false),
+        ghost
+    );
+    let failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    })
+    .with_stellar_sprite_pool(StellarSpritePool::default());
+    assert_eq!(failed.stellar_sprite_pool(), None);
+}
+
+#[test]
+fn a_flight_hands_its_kept_berths_to_its_session_and_back() {
+    let mut traffic = nova_sim::Traffic::new();
+    traffic.set_berth_person(2, "Ace");
+    let kept = traffic.kept_berths();
+    let view = flight().with_kept_berths(kept.clone());
+    assert_eq!(view.session().expect("flying").kept_berths(), kept);
+    assert_eq!(view.kept_berths(), Some(kept.clone()));
+    let failed = FlightView::new(FakeCatalog {
+        character: Err(StartError::NoCharacter),
+        ..catalog()
+    })
+    .with_kept_berths(kept);
+    assert_eq!(failed.kept_berths(), None);
 }
 
 #[test]

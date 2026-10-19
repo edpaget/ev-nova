@@ -149,6 +149,19 @@ pub fn drag(state: &mut ShipState) {
     state.velocity = state.velocity * DISABLED_DRAG;
 }
 
+/// `velocity` × `by` a component, each product worked in f64 and stored
+/// as an f32, as the jump's drags are: the player's brake
+/// (`_HandlePlayer` @0x6b832-0x6b85c) and warp stage (@0x6bb32-0x6bb59),
+/// and an NPC's warp-out (`_HandleShip` @0x34762-0x3478c) and a follow's
+/// stage start (`_LowLevelAIHandler` @0x85c10-0x85c42). Each caller
+/// passes its own factor.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn drag_by(velocity: Vec2, by: f64) -> Vec2 {
+    let scale = |component: f32| (f64::from(component) * by) as f32;
+    Vec2::new(scale(velocity.x), scale(velocity.y))
+}
+
 /// What a tick caps a ship's motion at: the top speed its thrust pushes
 /// toward, and the box (or circle) its velocity is held to. An NPC's are
 /// both its top speed ([`Caps::top`]). The player's come from its
@@ -257,12 +270,10 @@ pub fn step(
 ) {
     let rate = handling.turn_rate;
     state.heading = match controls.turn {
-        Turn::Left => normalized(state.heading - rate),
-        Turn::Right => normalized(state.heading + rate),
         Turn::None if controls.reverse && state.velocity.length() > rules.at_rest_speed() => {
             turn_toward(state.heading, heading_of(state.velocity * -1.0), rate)
         }
-        Turn::None => state.heading,
+        turn => turned(state.heading, turn, rate),
     };
     let caps = Caps::top(handling.max_speed);
     advance(state, handling, controls.thrust, caps, rules, flyer);
@@ -342,12 +353,7 @@ pub fn inertialess_step(
     controls: Controls,
     rules: FlightRules,
 ) {
-    let rate = handling.turn_rate;
-    state.heading = match controls.turn {
-        Turn::Left => normalized(state.heading - rate),
-        Turn::Right => normalized(state.heading + rate),
-        Turn::None => state.heading,
-    };
+    state.heading = turned(state.heading, controls.turn, handling.turn_rate);
     let thrust = if controls.thrust {
         THRUST
     } else if controls.reverse {
@@ -432,6 +438,17 @@ pub fn inertialess_advance(
         (SpeedCap::Circle, _) => circle(state.velocity, top),
     };
     state.position = state.position + state.velocity;
+}
+
+/// `heading` turned a tick by the turn keys, `turn`, at `rate` degrees a
+/// tick: an NPC's turn, kept within `[0, 360)` ([`normalized`]).
+#[must_use]
+pub fn turned(heading: f32, turn: Turn, rate: f32) -> f32 {
+    match turn {
+        Turn::Left => normalized(heading - rate),
+        Turn::Right => normalized(heading + rate),
+        Turn::None => heading,
+    }
 }
 
 /// Heading `from` turned towards heading `to` the short way, by at most
@@ -658,6 +675,19 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_by_the_keys_wraps_within_0_to_360() {
+        assert_eq!(turned(90.0, Turn::Left, 3.0), 87.0);
+        assert_eq!(turned(359.0, Turn::Right, 3.0), 2.0);
+        assert_eq!(turned(1.0, Turn::Left, 3.0), 358.0);
+        assert_eq!(turned(90.0, Turn::None, 3.0), 90.0);
+        assert_eq!(
+            turned(2.0, Turn::Left, 2.000_000_2),
+            0.0,
+            "a hair past north rounds to 360, which wraps"
+        );
+    }
+
+    #[test]
     fn a_tiny_left_turn_from_0_stays_below_360() {
         let mut state = heading(0.0);
         let creep = Handling {
@@ -714,6 +744,18 @@ mod tests {
         assert_eq!(state.velocity, Vec2::new(0.995, -1.99));
         assert_eq!(state.position, Vec2::new(10.0, 20.0));
         assert_eq!(state.heading, 45.0);
+    }
+
+    #[test]
+    fn drag_by_works_each_component_in_f64_and_stores_it_as_an_f32() {
+        // 0.03 × 0.95 in f64 stores 0.0285; worked in f32 it is a bit
+        // short.
+        let dragged = drag_by(Vec2::new(0.03, -0.03), 0.95);
+        assert_eq!(dragged.x.to_bits(), 0.0285_f32.to_bits());
+        assert_eq!(dragged.y.to_bits(), (-0.0285_f32).to_bits());
+        assert_ne!(0.03_f32 * 0.95_f32, 0.0285_f32);
+        let dragged = drag_by(Vec2::new(0.5, -0.25), 0.98);
+        assert_eq!(dragged, Vec2::new(0.49, -0.245));
     }
 
     #[test]

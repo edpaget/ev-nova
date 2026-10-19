@@ -40,11 +40,16 @@
 //! double time on, or off, and skips a warp-up begun while it plays (see
 //! the session's `double_time` module).
 //!
+//! **The warp's motion and end.** The player moves off at
+//! [`move_off_speed`] once it faces the bearing, and lights the screen by
+//! [`hyper_gamma`]; an NPC warps out at [`npc_warp_out_speed`] and, jumping
+//! on its own, is gone at [`npc_warped_out`]; the player's warp ends by
+//! [`warp_end`]. The warp-up plays pitched by w ([`warp_up_rate`]), so it
+//! lasts [`pitched_length`]. The session's warp stage and the traffic's
+//! warp-out wire them.
+//!
 //! Left out: `_LoadObjectData`'s guard that sets a negative factor to 0.5
-//! (@0x7aefe-0x7af07), which no `Flags` reaches. The engine doesn't move
-//! a warping ship yet (rdm:phase/ship-handling-fidelity/phase-8-warp-out),
-//! so nothing reads [`move_off_speed`] and [`npc_warp_out_speed`] but
-//! their tests.
+//! (@0x7aefe-0x7af07), which no `Flags` reaches.
 
 use crate::catalog::SoundId;
 use crate::clock::TICKS_PER_SECOND;
@@ -96,7 +101,8 @@ const SINGLE_TIME: f64 = 1.0;
 /// @0xdd628).
 const LED_WARP_OUT: f64 = -45.0;
 
-/// The fastest a warp-out's speed gets (50.0, f32 @0xdd064).
+/// The fastest a move-off or a warp-out moves a ship a pass (50.0, f32
+/// @0xdd064; see [`capped_move_off`]).
 const WARP_OUT_CAP: f32 = 50.0;
 
 /// A sound's length as `_ParseSndHeader` gives it: its frames, and the
@@ -216,9 +222,9 @@ pub fn lead_in_speed(since: u32, factor: f32, duration: u32) -> f32 {
 /// off while v > 0 (@0x6d293-0x6d296).
 ///
 /// Out of double time it is [`lead_in_speed`] bit for bit: a − b is
-/// a + (−b) in IEEE arithmetic. The cap at 50.0 the motion applies after
-/// it (@0x6d2c3-0x6d2f8) is the motion's
-/// (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
+/// a + (−b) in IEEE arithmetic. The motion caps it after
+/// (@0x6d2c3-0x6d2f8, [`capped_move_off`]), though `_hyperGamma` reads
+/// it uncapped.
 #[must_use]
 pub fn move_off_speed(since: u32, factor: f32, duration: u32, double_time: bool) -> f32 {
     let term = if double_time {
@@ -276,8 +282,7 @@ pub enum WarpOutClock {
 ///   ([`WarpOutClock::Own`], @0x348ff) while `double_time`, else 1.0;
 /// - then, when w ≠ 0, v = f32(f64(v) + T / f64(w)), with T −45.0
 ///   (@0x348b5) or −35.0 (@0x3498a);
-/// - then capped at 50.0 (@0x349a3-0x349be). A NaN passes the cap
-///   (`ucomiss`, `jbe`).
+/// - then capped at 50.0 (@0x349a3-0x349be, [`capped_move_off`]).
 ///
 /// The ship accelerates while v > 0 (@0x349c1). A ship the player leads
 /// runs this only while the player's +0x50 > 1.0 (@0x347cf-0x347e3),
@@ -298,8 +303,135 @@ pub fn npc_warp_out_speed(
     let rate = if double_time { rate } else { SINGLE_TIME };
     let t = f64::from(since) * rate * f64::from(factor);
     let v = (t / (f64::from(duration) * DURATION_SCALE)) as f32;
-    let v = less_over_factor(v, factor, term);
+    capped_move_off(less_over_factor(v, factor, term))
+}
+
+/// A move-off or warp-out speed `v` capped at 50.0 (f32 @0xdd064), as
+/// the player's move-off (`_HandlePlayer` @0x6d2c3-0x6d2f8) and an NPC's
+/// warp-out (`_HandleShip` @0x349a3-0x349be) cap it. A NaN passes the cap
+/// (`ucomiss`, `jbe`).
+#[must_use]
+pub fn capped_move_off(v: f32) -> f32 {
     if v > WARP_OUT_CAP { WARP_OUT_CAP } else { v }
+}
+
+/// What `_AdjustWarpSoundSpeed` divides by w (65536.0, f64 @0xdd0e8).
+const RATE_ONE: f64 = 65536.0;
+
+/// The playback rate the warp-up plays at for a ship class's warp
+/// `factor` (w), as a 16.16 fraction of its own rate: trunc(65536.0 /
+/// f64(w)) (`_AdjustWarpSoundSpeed` @0x5ecc-0x5ee6, called @0x6b67d-0x6b688
+/// as the warp stage starts), which `ST_PlaySoundParam` takes from its
+/// param block's +8 (`AmbrosiaTools` @0xe3dfe-0xe3e08, 0x10000 when 0)
+/// and multiplies the sound's step by (`_UFix32_Multiply` @0xe3fc8). So a
+/// ship with w above 1 plays its warp-up slower and lower. A factor of 0
+/// or below, which no `Flags` gives, plays at its own rate.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn warp_up_rate(factor: f32) -> u32 {
+    let rate = RATE_ONE / f64::from(factor);
+    if rate.is_finite() && rate > 0.0 {
+        rate.min(f64::from(u32::MAX)) as u32
+    } else {
+        RATE_ONE as u32
+    }
+}
+
+/// How long, in Mac ticks, a warp-up of `duration` Mac ticks lasts played
+/// at `rate` (a 16.16 fraction of its own rate, [`warp_up_rate`]):
+/// duration × 65536 / rate, rounded down as the duration is. A rate of 0
+/// is 1.0, as `ST_PlaySoundParam` takes it.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn pitched_length(duration: u32, rate: u32) -> u32 {
+    let rate = if rate == 0 { 0x1_0000 } else { rate };
+    let length = u64::from(duration) * 0x1_0000 / u64::from(rate);
+    length.min(u64::from(u32::MAX)) as u32
+}
+
+/// What the move-off speed less gives the screen's white (55.0, f32
+/// @0xdd968).
+const GAMMA_FLOOR: f32 = 55.0;
+
+/// What the move-off's excess over [`GAMMA_FLOOR`] is multiplied by (5.0,
+/// f32 @0xdd67c).
+const GAMMA_SCALE: f32 = 5.0;
+
+/// `_hyperGamma` (*0x3b55b0) for the player's move-off speed `v`, before
+/// its cap at 50: (v − 55.0) × 5.0 in f32 (`_HandlePlayer`
+/// @0x6d2a7-0x6d2bf). `_HandlePlayer` raises a negative one to 0 and
+/// fades the screen to white while it is above 0 (@0x683bf-0x68404).
+#[must_use]
+pub fn hyper_gamma(v: f32) -> f32 {
+    (v - GAMMA_FLOOR) * GAMMA_SCALE
+}
+
+/// The warp stage's +0x50 past which the warp can end (30.0, f32
+/// @0xdd084).
+pub const WARP_END_STAGE: f32 = 30.0;
+
+/// What `_HandlePlayer`'s warp end does on one frame of the warp stage
+/// (@0x6bb5e-0x6c70b), by [`warp_end`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarpEnd {
+    /// Not yet.
+    Running,
+    /// The natural end (@0x6bbb8-0x6bc0d): the system switch, now.
+    Natural,
+    /// The fallback end (@0x6c62a-0x6c70b): the warp-ups halted and the
+    /// warp-out played on this pass; the switch comes on the next pass, by
+    /// its natural end on `_warpSoundDone` (@0x6bbb8-0x6bbd9).
+    Fallback,
+}
+
+/// One frame of `_HandlePlayer`'s warp end (@0x6bb5e-0x6c70b), with the
+/// warp stage's +0x50 at `stage`, the warp clock `since` Mac ticks, the
+/// ship class's warp `factor` (w), the warp sound's `duration` (d), and
+/// whether either warp-up `playing`; `done` is `_warpSoundDone`
+/// (*0xdee3c), which it reads and writes:
+///
+/// 1. **The arm** (@0x6bb5e-0x6bba4): past 30.0 with no warp-up playing,
+///    `done` is set.
+/// 2. **The natural end** (@0x6bbb8-0x6bbd9): at 30.0 or more with
+///    `done` set, it is cleared and the warp ends.
+/// 3. **The fallback end** (@0x6c62a-0x6c706): otherwise, past 30.0 with
+///    t past d / w, in f32 (t made exact from its halves @0x6c63f-0x6c65f,
+///    `divss` @0x6c68e, `ucomiss` @0x6c694; a NaN never ends), the
+///    warp-ups are halted and, unless `done` is set, it is set and the
+///    warp-out plays.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn warp_end(
+    stage: f32,
+    since: u32,
+    factor: f32,
+    duration: u32,
+    playing: bool,
+    done: &mut bool,
+) -> WarpEnd {
+    if stage > WARP_END_STAGE && !playing {
+        *done = true;
+    }
+    if stage >= WARP_END_STAGE && *done {
+        *done = false;
+        return WarpEnd::Natural;
+    }
+    if stage > WARP_END_STAGE && since as f32 > duration as f32 / factor {
+        *done = true;
+        return WarpEnd::Fallback;
+    }
+    WarpEnd::Running
+}
+
+/// Whether an NPC jumping out on its own (sub-goal 4) is gone, `since`
+/// Mac ticks into its warp stage, for its class's warp `factor` (w) and
+/// the warp sound's `duration` (d): t ≥ d / w in f32
+/// (`_LowLevelAIHandler` @0x858fe-0x8595e; t made exact from its halves,
+/// `divss` @0x85955, `ucomiss` and `jb` @0x8595b, so a NaN never goes).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn npc_warped_out(since: u32, factor: f32, duration: u32) -> bool {
+    since as f32 >= duration as f32 / factor
 }
 
 /// Whether each warp-up sound is still playing: `_warpUpSnd[0]`, `snd `
@@ -312,19 +444,19 @@ pub fn npc_warp_out_speed(
 /// audio side. The original's sound level only scales the volume
 /// (`_AdjustSoundVolume` @0x5efb-0x5f2a), so a warp-up plays, and holds,
 /// with the sound off too, where the engine's audio plays nothing. The
-/// engine's audio plays the warp-up at its own rate, so it lasts its
-/// duration in Mac ticks ([`sound_duration`]), which [`WarpUps::start`]
-/// counts down by [`MAC_TICKS_PER_TICK`] on each advance pass
+/// warp-up plays at [`warp_up_rate`] of its own rate, so it lasts its
+/// duration in Mac ticks ([`sound_duration`]) scaled by the pitch
+/// ([`pitched_length`]), which the session passes [`WarpUps::start`] and
+/// which is counted down by [`MAC_TICKS_PER_TICK`] on each advance pass
 /// ([`WarpUps::step`]), as the sound plays in real time. Accepted
 /// differences: the countdown follows the session's ticks, so it stands
-/// still under a dialog or the map, where the sound plays on; a warp-up
-/// still playing as the ship lands is taken as over; and once the
-/// warp-up's pitch follows w (`_AdjustWarpSoundSpeed`,
-/// rdm:phase/ship-handling-fidelity/phase-8-warp-out), its length will
-/// scale with it.
+/// still under a dialog or the map, where the sound plays on; and a
+/// warp-up still playing as the ship lands is taken as over.
 ///
-/// A jump's arrival halts both ([`SimSound::Halt`] of [`WARP_UP_HALTS`]),
-/// as the original's warp end does (`_HandlePlayer` @0x6c69d-0x6c6d2); a
+/// A jump's warp end halts both ([`SimSound::Halt`] of [`WARP_UP_HALTS`]),
+/// as the original's does (`_HandlePlayer` @0x6c69d-0x6c6d2): its fallback
+/// end on the fallback's own pass, so the arrival a pass later finds them
+/// over, or else the arrival (`nova_sim::Session::arrive`); a
 /// hypergate or wormhole exit keeps them playing, as the original's do
 /// (@0x63e57, @0x6443d); a relocation's dock ends them for the session
 /// only, raising no halt.
@@ -745,6 +877,16 @@ mod tests {
     }
 
     #[test]
+    fn a_move_off_is_capped_at_50_and_a_nan_passes() {
+        assert_eq!(capped_move_off(50.5), 50.0);
+        assert_eq!(capped_move_off(f32::INFINITY), 50.0);
+        assert_eq!(capped_move_off(50.0), 50.0);
+        assert_eq!(capped_move_off(49.75), 49.75);
+        assert_eq!(capped_move_off(-3.0), -3.0);
+        assert!(capped_move_off(f32::NAN).is_nan(), "`ucomiss`, `jbe`");
+    }
+
+    #[test]
     fn a_warp_out_of_no_factor_skips_its_term() {
         for clock in [WarpOutClock::Player, WarpOutClock::Own] {
             assert_eq!(npc_warp_out_speed(clock, 1000, 0.0, 252, true), 0.0);
@@ -867,6 +1009,132 @@ mod tests {
         out.start(200);
         out.clear();
         assert_eq!(out, WarpOut::default());
+    }
+
+    // The warp-up's pitch.
+
+    #[test]
+    fn the_warp_up_plays_at_65536_over_w_truncated() {
+        assert_eq!(warp_up_rate(1.0), 65_536);
+        assert_eq!(warp_up_rate(warp_factor(0)), 50_412, "65536 / 1.3");
+        assert_eq!(warp_up_rate(warp_factor(0x0001)), 72_017, "65536 / 0.91");
+        assert_eq!(warp_up_rate(warp_factor(0x0004)), 31_507, "65536 / 2.08");
+        assert_eq!(warp_up_rate(2.0), 32_768);
+        // A factor no `Flags` gives plays at its own rate.
+        assert_eq!(warp_up_rate(0.0), 65_536, "65536 / 0 is +inf");
+        assert_eq!(warp_up_rate(f32::INFINITY), 65_536, "65536 / inf is 0");
+        assert_eq!(warp_up_rate(-1.0), 65_536);
+        assert_eq!(warp_up_rate(f32::NAN), 65_536);
+        assert_eq!(warp_up_rate(1e-30), u32::MAX, "capped");
+    }
+
+    #[test]
+    fn a_pitched_warp_up_lasts_its_duration_over_its_rate() {
+        assert_eq!(pitched_length(364, 65_536), 364, "at its own rate");
+        assert_eq!(
+            pitched_length(364, 32_768),
+            728,
+            "half as fast, twice as long"
+        );
+        // 364 × 65536 / 50412 = 473.2.
+        assert_eq!(pitched_length(364, warp_up_rate(warp_factor(0))), 473);
+        // 364 × 65536 / 72017 = 331.2.
+        assert_eq!(pitched_length(364, warp_up_rate(warp_factor(0x0001))), 331);
+        assert_eq!(pitched_length(0, 50_412), 0);
+        assert_eq!(pitched_length(364, 0), 364, "a rate of 0 is 1.0");
+        assert_eq!(pitched_length(u32::MAX, 1), u32::MAX, "saturates");
+    }
+
+    // `_hyperGamma`.
+
+    #[test]
+    fn the_hyper_gamma_is_v_less_55_times_5() {
+        assert_eq!(hyper_gamma(55.0), 0.0);
+        assert_eq!(hyper_gamma(56.0), 5.0);
+        assert_eq!(hyper_gamma(0.5), -272.5);
+        assert_eq!(hyper_gamma(75.0), 100.0);
+        assert_eq!(
+            hyper_gamma(60.1).to_bits(),
+            ((60.1_f32 - 55.0) * 5.0).to_bits()
+        );
+    }
+
+    // The warp end.
+
+    /// One frame of the warp end from `stage`, `since` Mac ticks, w 1.3,
+    /// d 364 and whether a warp-up `plays`, starting from `done`: what it
+    /// gives and `_warpSoundDone` after it.
+    fn end(stage: f32, since: u32, plays: bool, done: bool) -> (WarpEnd, bool) {
+        let mut done = done;
+        let end = warp_end(stage, since, warp_factor(0), 364, plays, &mut done);
+        (end, done)
+    }
+
+    #[test]
+    fn the_natural_end_comes_past_30_once_the_warp_ups_finish() {
+        assert_eq!(end(30.5, 0, false, false), (WarpEnd::Natural, false));
+        assert_eq!(end(30.5, 0, true, false), (WarpEnd::Running, false));
+        assert_eq!(
+            end(30.0, 0, false, false),
+            (WarpEnd::Running, false),
+            "not past 30"
+        );
+        assert_eq!(end(29.0, 0, false, false), (WarpEnd::Running, false));
+        // An armed flag ends it at 30 itself.
+        assert_eq!(end(30.0, 0, true, true), (WarpEnd::Natural, false));
+        assert_eq!(end(29.9, 0, true, true), (WarpEnd::Running, true));
+    }
+
+    #[test]
+    fn the_fallback_end_comes_past_30_once_t_is_past_d_over_w() {
+        // 364 / 1.3 = 280 Mac ticks.
+        assert_eq!(end(31.0, 280, true, false), (WarpEnd::Running, false));
+        assert_eq!(end(31.0, 281, true, false), (WarpEnd::Fallback, true));
+        assert_eq!(
+            end(30.0, 1000, true, false),
+            (WarpEnd::Running, false),
+            "not past 30"
+        );
+        // The next frame, its warp-ups halted, ends naturally.
+        assert_eq!(end(32.0, 282, false, true), (WarpEnd::Natural, false));
+    }
+
+    #[test]
+    fn the_fallback_compares_in_f32_and_a_nan_never_ends() {
+        let mut done = false;
+        let d_over_w = 364.0_f32 / 1.69;
+        // 215.38: 215 is not past it, 216 is.
+        assert!(d_over_w > 215.0 && d_over_w < 216.0);
+        let w = 1.69;
+        assert_eq!(
+            warp_end(31.0, 215, w, 364, true, &mut done),
+            WarpEnd::Running
+        );
+        assert_eq!(
+            warp_end(31.0, 216, w, 364, true, &mut done),
+            WarpEnd::Fallback
+        );
+        let mut done = false;
+        assert_eq!(
+            warp_end(31.0, 1000, f32::NAN, 364, true, &mut done),
+            WarpEnd::Running
+        );
+    }
+
+    #[test]
+    fn an_npc_is_gone_once_t_reaches_d_over_w() {
+        // 364 / 1.3 = 280 exactly in f32? 280.0 against 279 and 280.
+        let w = warp_factor(0);
+        let edge = 364.0_f32 / w;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let below = edge.floor() as u32;
+        assert!(!npc_warped_out(below - 1, w, 364));
+        assert!(npc_warped_out(below + 1, w, 364));
+        assert_eq!(npc_warped_out(below, w, 364), below as f32 >= edge);
+        // At t = d / w exactly, it is gone: `jb` skips only below.
+        assert!(npc_warped_out(200, 2.0, 400));
+        assert!(!npc_warped_out(199, 2.0, 400));
+        assert!(!npc_warped_out(1000, f32::NAN, 364), "a NaN never goes");
     }
 
     #[test]

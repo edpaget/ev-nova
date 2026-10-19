@@ -50,7 +50,7 @@
 
 use super::ShipRef;
 use super::armament::inaccuracy;
-use super::exits::{Compression, ExitKind, ExitPoints, drawn_frame, frame_angle};
+use super::exits::{Compression, ExitKind, ExitPoints};
 use super::projectile::{Shot, ShotId, Target, contact};
 use super::sides::{Sides, Ties};
 use super::weapon::{Guidance, WeaponSpec};
@@ -309,10 +309,7 @@ impl Beam {
         chance: &mut dyn Chance,
     ) -> bool {
         if let Some((at, exits)) = firer {
-            self.frame = exits.map_or(at.heading, |exits| {
-                let frames = exits.frames();
-                frame_angle(drawn_frame(at.heading, frames), frames)
-            });
+            self.frame = exits.map_or(at.heading, |exits| exits.drawn_angle(at.heading));
             self.start = at.position + self.exit_offset(exits, compression);
         }
         let toward = match self.aiming {

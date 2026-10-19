@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use nova_sim::{HailView, OfferPrompt, Take, Taken};
+use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
 use nova_view::flight::{FlightView, MapOpener};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
@@ -57,21 +57,21 @@ impl AppScreen {
     /// Opens "Desc Dialog" on `dësc` `id` over the side shown, as
     /// [`open_about`](Self::open_about) opens the About text. The About
     /// text and the main menu's X text ([`MENU_X_TEXT`]) are first loaded
-    /// and munged as before any pilot is loaded ([`start_up_words`]), as
-    /// `_DoAboutBox` and `_MainScreenKey` do before `_ShowTextDialog`.
+    /// and munged as `_DoAboutBox` and `_MainScreenKey` do before
+    /// `_ShowTextDialog` ([`AppScreen::main_screen_words`]).
     pub(super) fn open_text(&mut self, id: i16) {
+        if self.dialogs.is_none() {
+            return;
+        }
+        let text = if id == MENU_X_TEXT || id == ABOUT_TEXT {
+            self.main_screen_words(id)
+        } else {
+            self.data.description(id)
+        };
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        let rules = nova_sim::text_parse::ParseRules::from_rulebook(&self.rules);
-        let dialog = self.data.description(id).and_then(|text| {
-            let text = if id == MENU_X_TEXT || id == ABOUT_TEXT {
-                start_up_words(&text, &*self.data, rules)
-            } else {
-                text
-            };
-            desc_dialog(dialogs, &self.data, &text)
-        });
+        let dialog = text.and_then(|text| desc_dialog(dialogs, &self.data, &text));
         match dialog {
             Ok(dialog) => {
                 let below = self.shown_mut();
@@ -82,6 +82,28 @@ impl AppScreen {
             }
             Err(reason) => eprintln!("nova: cannot show dësc {id}: {reason}"),
         }
+    }
+
+    /// The About text or the X text `id` as the original loads and munges
+    /// it: with a game held, whose session started, its conditional text
+    /// resolved for that pilot (`_LoadDescription`, about @0x16021, X
+    /// @0x1ac9d, through [`FlightView::load_description`]: the rank
+    /// governments reset, the `l33t` mode's draws) and its tags filled
+    /// for it with no mission (`_MungeBriefing(0, -1)`, about @0x16035, X
+    /// @0x1acb1, [`nova_sim::Session::plain_text`]), as the original reads
+    /// the player globals of the pilot loaded; with none, as before any
+    /// pilot ([`start_up_words`]).
+    pub(super) fn main_screen_words(&mut self, id: i16) -> Result<String, String> {
+        if let Some(game) = self.game.as_mut().filter(|game| game.session().is_ok()) {
+            let text = game.load_description(id)?;
+            return Ok(game
+                .session()
+                .map_or_else(|_| text.clone(), |session| session.plain_text(&text)));
+        }
+        let rules = nova_sim::text_parse::ParseRules::from_rulebook(&self.rules);
+        self.data
+            .description(id)
+            .map(|text| start_up_words(&text, &*self.data, rules))
     }
 
     /// Opens the Preferences dialog over the side shown, on the player's
@@ -141,8 +163,9 @@ impl AppScreen {
         } = *input
         {
             self.double_time = !self.double_time;
-            if let Some(flight) = &mut self.flight {
-                flight.set_double_time(self.double_time);
+            let on = self.double_time;
+            for flight in self.flights_mut() {
+                flight.set_double_time(on);
             }
         }
     }
@@ -184,7 +207,7 @@ impl AppScreen {
             self.prefs_change = Some(prefs);
             self.movies.set_on(prefs.quicktime_movies);
             let weapon_effects = self.flight_weapon_effects();
-            if let Some(flight) = &mut self.flight {
+            for flight in self.flights_mut() {
                 flight.set_hyperspace_effects(prefs.hyperspace_effects);
                 flight.set_smoke_trails(prefs.smoke_trails);
                 flight.set_weapon_effects(weapon_effects);
@@ -236,7 +259,7 @@ impl AppScreen {
         }
         self.question
             .as_mut()
-            .map(|question| question as &mut dyn Screen)
+            .map(|(_, question)| question as &mut dyn Screen)
     }
 
     /// The About dialog's input; it closes once Done is activated.
@@ -253,7 +276,11 @@ impl AppScreen {
 
     /// Flight's input: an Escape press closes flight's map when it is
     /// open (unless its Find is, which takes it), and otherwise goes
-    /// back; everything else goes to flight
+    /// back to the side flight was entered from; from the main menu, by
+    /// [`RuleKey::EscapeToMainScreen`]: by the engine it saves the pilot
+    /// and returns to the menu with it held, and by the other reading it
+    /// does nothing, as the original's `_PlayGame` is left only by death
+    /// or Quit. Everything else goes to flight
     /// (where L, the stellar slot keys and a click select the navigation
     /// target). When it lands, the
     /// spaceport shows.
@@ -274,10 +301,12 @@ impl AppScreen {
                 if flight.map_open() {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {
-                    // The pilot is put away: saved, and flight dropped, so
-                    // the developer's F flies a fresh, unnamed pilot; the
-                    // main screen appears as on any return from play.
-                    self.return_to_main_screen();
+                    // The pilot is saved and held, so Enter Ship resumes
+                    // it; the main screen appears as on any return from
+                    // play.
+                    if self.rules.source_for(RuleKey::EscapeToMainScreen) == RuleSource::Engine {
+                        self.return_to_main_screen();
+                    }
                 } else {
                     self.switch_to(self.return_to);
                 }
@@ -678,11 +707,11 @@ impl AppScreen {
     /// Opens the plunder dialog on `shown` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the boarding is let go, with a warning.
+    /// the boarding is let go silently, with a warning.
     fn open_plunder(&mut self, shown: &PlunderShown) {
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
-                flight.plunder(Take::Abort);
+                flight.let_go_of_boarding();
             }
             self.warnings
                 .push("nova: cannot show the plunder dialog: no metrics to lay it out".to_owned());
@@ -710,18 +739,22 @@ impl AppScreen {
         self.plunder = Some(dialog);
     }
 
-    /// The plunder dialog's input: each press goes through flight, and
-    /// the dialog shows what is still on board, or closes once the
-    /// boarding is over; a capture awaiting its assignment opens the
-    /// assignment dialog.
+    /// The plunder dialog's input: each press goes through flight, a
+    /// miss of every enabled button included, with the time the dialog
+    /// has been open, and the dialog shows what is still on board, or
+    /// closes once the boarding is over; a capture awaiting its
+    /// assignment opens the assignment dialog. Every pointer event goes
+    /// to the dialog, so a click outside its frame is a miss too, as
+    /// `_PlunderFilter` takes every mouse-down (@0x92f20).
     pub(super) fn plunder_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.plunder.as_mut().expect("open");
         dialog.input(input);
         let Some(take) = dialog.take_take() else {
             return ScreenAction::None;
         };
+        let held = dialog.held();
         let flight = self.flight.as_mut().expect(ENTERED);
-        let taken = flight.plunder(take);
+        let taken = flight.plunder_held(take, held);
         match flight.plunder_shown() {
             Some(shown) => {
                 if let Some(dialog) = &mut self.plunder {

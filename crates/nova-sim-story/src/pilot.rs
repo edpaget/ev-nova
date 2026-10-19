@@ -69,6 +69,12 @@
 //! It keeps its active ranks, by `ränk` ID: none on a new pilot, as every
 //! rank loads inactive (@0x7da5e, @0x190f0; see [`rank`](crate::rank)).
 //!
+//! It keeps whether the pilot has seen the intro screen, the original's
+//! `seenIntroScreen` (0x2322ed), which the pilot file keeps at +0x3086
+//! (`_WritePilotData` @0x72970, `_LoadPilotData` @0x75ee2): clear on a new
+//! pilot (`_ResetGameData` @0x1dfdb), and set once the pilot has entered
+//! play past the intro (`_EnterGameFromMainScreen` @0x19ea2-0x19ebc).
+//!
 //! A `nova_sim::Session` flies a pilot and changes it as the rules
 //! say.
 
@@ -115,6 +121,7 @@ pub enum ExploredLevel {
 
 /// Everything about the player that a save keeps.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Independent facts, each saved on its own.
 pub struct Pilot {
     /// The pilot's name; empty for a pilot that is never saved.
     pub name: String,
@@ -208,6 +215,9 @@ pub struct Pilot {
     pub crons: BTreeMap<CronId, CronState>,
     /// The active ranks, by ID (see [`rank`](crate::rank)).
     pub ranks: BTreeSet<RankId>,
+    /// Whether the pilot has seen the intro screen (the original's
+    /// `seenIntroScreen`): false for a new pilot.
+    pub seen_intro: bool,
 }
 
 impl Pilot {
@@ -270,6 +280,7 @@ impl Pilot {
             missions: ActiveMissions::default(),
             crons: BTreeMap::new(),
             ranks: BTreeSet::new(),
+            seen_intro: false,
         })
     }
 
@@ -299,6 +310,12 @@ impl Pilot {
     #[must_use]
     pub fn strict_play(&self) -> bool {
         self.strict_play
+    }
+
+    /// Whether the pilot has seen the intro screen.
+    #[must_use]
+    pub fn seen_intro(&self) -> bool {
+        self.seen_intro
     }
 
     /// The missions accepted, in their slots.
@@ -994,6 +1011,17 @@ mod tests {
     fn a_new_pilot_does_not_play_strict() {
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert!(!pilot.strict_play());
+    }
+
+    #[test]
+    fn a_new_pilot_has_not_seen_the_intro_screen() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert!(!pilot.seen_intro());
+        let seen = Pilot {
+            seen_intro: true,
+            ..pilot
+        };
+        assert!(seen.seen_intro());
     }
 
     #[test]
