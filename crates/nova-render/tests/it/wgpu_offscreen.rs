@@ -504,14 +504,17 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     // 4..8). Below, a hull square at (4..8, 14..18) with the sheet over it
     // at k = 0, and two solid lit squares crossfaded at k = 16 over the
     // clear, (14..18, 14..18) then (16..20, 14..18), the second over half
-    // the first.
+    // the first. Beside them, a hull square at (24..28, 14..18) with the
+    // sheet crossfaded over it by 8 at a murk of 16, its colour halved.
     let see_through = nova_view::flight::weapons::see_through;
+    let murk_tint = nova_view::flight::murk::murk_tint;
     let hull = w555(HULL_555);
     let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
     let mut list = DrawList::new();
     list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
         .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
         .sprite(ImageKey::sprite(2, 0), Point::new(6.0, 16.0), tint(hull))
+        .sprite(ImageKey::sprite(2, 0), Point::new(26.0, 16.0), tint(hull))
         .crossfade_sprite(ImageKey::sprite(7, 0), spots[0], see_through(8))
         .crossfade_sprite(ImageKey::sprite(7, 0), spots[1], see_through(24))
         .crossfade_sprite(ImageKey::sprite(7, 0), spots[2], see_through(8))
@@ -519,6 +522,11 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
             ImageKey::sprite(7, 0),
             Point::new(6.0, 16.0),
             see_through(32),
+        )
+        .crossfade_sprite(
+            ImageKey::sprite(7, 0),
+            Point::new(26.0, 16.0),
+            murk_tint(see_through(8), 16),
         )
         .crossfade_sprite(
             ImageKey::sprite(9, 0),
@@ -575,6 +583,12 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     assert_area(&pixels, (14, 14), (16, 18), first, 0);
     assert_area(&pixels, (16, 14), (18, 18), both, 0);
     assert_area(&pixels, (18, 14), (20, 18), first, 0);
+    // A darkened tint scales the source's colour before the crossfade:
+    // at a murk of 16, by 16/32.
+    let murked = w555(original_crossfade_555(LIT_555.map(|c| c / 2), HULL_555, 24));
+    assert_eq!(murked, [49, 24, 8, 255]);
+    assert_ne!(murked, lit_24, "the crossfade ignoring the tint's colour");
+    assert_area(&pixels, (26, 14), (28, 18), murked, 0);
 }
 
 #[test]
