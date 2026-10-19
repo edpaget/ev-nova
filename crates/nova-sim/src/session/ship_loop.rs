@@ -64,16 +64,26 @@ impl Session {
     /// Gives each NPC as its own step found it, in slot order, for its
     /// escape-ship roll (see the `npc_escape` module).
     ///
-    /// What the loop's departures leave the session (the pirates answered,
-    /// each mission ship that left raising its fate, the persons' offers,
-    /// the fighters docked and orphaned, the watched ships observed), the
-    /// fly half's end (the docks started, the waits counted down, the
+    /// A fighter whose flight docks it goes aboard its carrier at its own
+    /// slot ([`Session::dock_fighter`]), as `_LowLevelAIHandler` calls
+    /// `_AIAddFighterToParent` there (@0x87fef): the player's leaves the
+    /// fleet before any later slot's step settles its hits, whose escorts
+    /// lost ([`Session::lose_escorts`]) would otherwise take the fighter
+    /// gone from the system for a loss and make a save due.
+    ///
+    /// The rest of what the loop's departures leave the session (the
+    /// pirates answered, each mission ship that left raising its fate, the
+    /// persons' offers, the fighters orphaned, the watched ships observed),
+    /// the fly half's end (the docks started, the waits counted down, the
     /// followers released, the fuel), the reinforcement clock, the gates'
     /// sprites and the assistance all settle after the loop, where the
     /// original runs them in each NPC's own `_HandleShip` or `_AIDispatch`
     /// (`_HandleReinforcements` itself comes after the loop, @0x44504).
     /// No step in the loop reads them, and all settle before the frame is
-    /// drawn.
+    /// drawn. An escort of the player's fleet that lands, jumps or enters a
+    /// gate settles nothing after the loop: the next hits settled lose it
+    /// ([`Session::lose_escorts`]), with the same save due wherever they
+    /// fall.
     pub(super) fn ship_loop(
         &mut self,
         motion: Motion,
@@ -102,10 +112,11 @@ impl Session {
         let mut shown = vec![ShipRef::Player];
         let mut found = Vec::new();
         for (_, id) in order {
-            if let Some(fly) = fly.as_mut() {
-                self.step_traffic(|traffic, world| {
-                    traffic.fly_npc(fly, id, &world, &mut *chance);
-                });
+            if let Some(fly) = fly.as_mut()
+                && let Some(outcome) = self
+                    .step_traffic(|traffic, world| traffic.fly_npc(fly, id, &world, &mut *chance))
+            {
+                self.dock_fighter(id, outcome);
             }
             let Some(npc) = self.npc(id) else {
                 continue;
@@ -131,7 +142,6 @@ impl Session {
             Motion::Again => {
                 if let Some(marks) = again_marks {
                     self.mission_ships_left(&marks);
-                    self.dock_fighters();
                 }
             }
         }

@@ -237,32 +237,37 @@ impl Session {
     /// round to its bay, and one no bay launches is lost, which makes a
     /// save due.
     pub(super) fn dock_fighters(&mut self) {
-        let docked: Vec<(NpcId, ShipRef, crate::catalog::ShipId)> = self
-            .traffic
-            .departed()
-            .iter()
-            .filter_map(|&(id, outcome)| match outcome {
-                Outcome::Docked { carrier, ship } => Some((id, carrier, ship)),
-                _ => None,
-            })
-            .collect();
-        for (id, carrier, ship) in docked {
-            match carrier {
-                ShipRef::Player => {
-                    let mut rounds = OutfitRounds {
-                        owned: &mut self.pilot.outfits,
-                        sources: &self.ammo_outfits,
-                    };
-                    let stowed = self.armament.stow(ship, &mut rounds);
-                    self.unfleet(id);
-                    if !stowed {
-                        self.save_due = true;
-                    }
+        let departed = self.traffic.departed().to_vec();
+        for (id, outcome) in departed {
+            self.dock_fighter(id, outcome);
+        }
+    }
+
+    /// Takes NPC `id` aboard its carrier when its flight's `outcome` docked
+    /// it, as [`Session::dock_fighters`] does for each; any other outcome
+    /// is left alone. The ship loop settles each dock at the fighter's own
+    /// slot, as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
+    /// (@0x87fef), so no later slot's step finds the player's fighter gone
+    /// from the system but still in the fleet.
+    pub(super) fn dock_fighter(&mut self, id: NpcId, outcome: Outcome) {
+        let Outcome::Docked { carrier, ship } = outcome else {
+            return;
+        };
+        match carrier {
+            ShipRef::Player => {
+                let mut rounds = OutfitRounds {
+                    owned: &mut self.pilot.outfits,
+                    sources: &self.ammo_outfits,
+                };
+                let stowed = self.armament.stow(ship, &mut rounds);
+                self.unfleet(id);
+                if !stowed {
+                    self.save_due = true;
                 }
-                ShipRef::Npc(carrier) => {
-                    if let Some(carrier) = self.npc_mut(carrier) {
-                        carrier.armament.stow(ship, &mut carrier.rounds);
-                    }
+            }
+            ShipRef::Npc(carrier) => {
+                if let Some(carrier) = self.npc_mut(carrier) {
+                    carrier.armament.stow(ship, &mut carrier.rounds);
                 }
             }
         }
@@ -1527,6 +1532,84 @@ pub(super) mod tests {
         assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
         assert_eq!(session.npcs(), []);
         assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+    }
+
+    /// Game work passes of the player at rest and Nova's traffic until no
+    /// fighter is out, at most `limit`; how many it took.
+    fn until_docked_in_game_work(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        limit: u32,
+    ) -> Option<u32> {
+        let ai = NovaAi::default();
+        (1..=limit).find(|_| {
+            session.game_work(
+                Controls::default(),
+                catalog,
+                &ai,
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session
+                .pilot()
+                .escorts()
+                .iter()
+                .all(|escort| !escort.carried)
+        })
+    }
+
+    #[test]
+    fn a_fighter_docking_in_the_ship_loop_below_another_slot_makes_no_save_due() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
+        let fighter = session.fleet[0].expect("placed");
+        let escort = session.fleet[1].expect("placed");
+        let berth = |session: &Session, id| session.npc(id).expect("here").berth;
+        assert!(berth(&session, fighter) < berth(&session, escort));
+        let npc = session.npc_mut(fighter).expect("out");
+        npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
+        session.take_save_due();
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        let passes = until_docked_in_game_work(&mut session, &catalog, 600);
+        assert!(passes.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            session.fleet,
+            [Some(escort)],
+            "the fleet no longer holds it"
+        );
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+        assert!(!session.take_save_due(), "as docking makes none");
+    }
+
+    #[test]
+    fn a_fighter_docking_on_double_times_second_pass_below_another_slot_makes_no_save_due() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
+        let fighter = session.fleet[0].expect("placed");
+        let escort = session.fleet[1].expect("placed");
+        let npc = session.npc_mut(fighter).expect("out");
+        npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        session.take_save_due();
+        let docked = (1..=600).find(|_| {
+            session.tick_again(
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().len() == 1
+        });
+        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(
+            session.fleet,
+            [Some(escort)],
+            "the fleet no longer holds it"
+        );
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+        assert!(!session.take_save_due(), "as docking makes none");
     }
 
     #[test]

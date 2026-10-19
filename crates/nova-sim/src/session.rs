@@ -2523,6 +2523,7 @@ impl Session {
                     traffic.tick_holding(behaviour, world, &strikes, &marks.still, chance);
                 });
                 self.after_traffic_ai(chance);
+                self.dock_fighters();
                 self.after_traffic_motion(&marks, chance);
             }
         }
@@ -2566,12 +2567,13 @@ impl Session {
     /// The session's work after the traffic's motion, read against
     /// `marks`, drawing on `chance`: the pirates answered, each mission
     /// ship that left raising its fate, the persons' offers resolved, the
-    /// fighters docked and orphaned, and the watched ships observed.
+    /// fighters orphaned, and the watched ships observed. The fighters that
+    /// docked are taken aboard before it ([`Session::dock_fighters`]), by
+    /// the ship loop at each one's own slot.
     fn after_traffic_motion(&mut self, marks: &TrafficMarks, chance: &mut (impl Chance + ?Sized)) {
         self.answer_pirates(&mut &mut *chance);
         self.mission_ships_left(&marks.marks);
         self.resolve_person_offers(marks.last, &mut &mut *chance);
-        self.dock_fighters();
         self.orphan_fighters();
         self.observe_watched();
     }
