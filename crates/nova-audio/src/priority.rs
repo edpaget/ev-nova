@@ -128,6 +128,12 @@ pub const CARGO_STOLEN: Priority = Priority::new(1);
 /// A pirate's stolen-escort line, `_beepSnd[1]`: `_AIPlunderShipContents`
 /// @0x84908.
 pub const SHIP_STOLEN: Priority = Priority::new(1);
+/// A repairer's "Repairs complete" line, `_beepSnd[1]`:
+/// `_LowLevelAIHandler` @0x86e0a.
+pub const REPAIRS_COMPLETE: Priority = Priority::new(1);
+/// A refueller's "Energy transfer complete" line, `_beepSnd[1]`:
+/// `_HighLevelAIHandler` @0x8f5b0.
+pub const ENERGY_TRANSFER_COMPLETE: Priority = Priority::new(1);
 /// A mission's special ship lost, `_beepSnd[1]`: `_HandleShipDisplay`
 /// @0x2db5a, `_DamageShip` @0x3af11.
 pub const MISSION_SHIP_LOST: Priority = Priority::new(1);
@@ -222,6 +228,8 @@ mod tests {
             (DOWNED_MISSION_FAILED, 1, "downed mission failed"),
             (CARGO_STOLEN, 1, "cargo stolen"),
             (SHIP_STOLEN, 1, "ship stolen"),
+            (REPAIRS_COMPLETE, 1, "repairs complete"),
+            (ENERGY_TRANSFER_COMPLETE, 1, "energy transfer complete"),
             (MISSION_SHIP_LOST, 1, "mission ship lost"),
             (MISSION_SHIP_BOARDED, 8, "mission ship boarded"),
             (TRAFFIC_CONTROL, 1, "traffic control"),
