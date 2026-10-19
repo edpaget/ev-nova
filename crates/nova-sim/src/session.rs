@@ -2375,7 +2375,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &kept_escorts);
+        self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
@@ -6350,7 +6350,7 @@ impl Session {
         // `captured_person` says.
         self.lose_captured(npc.id, true);
         self.leave(npc.id);
-        let placed = self.place_old_ship(old_slot, left, hold);
+        let placed = self.place_old_ship(old_slot, left, hold, chance);
         if let Some(slot) = self.fleet.get_mut(old_slot) {
             *slot = placed;
         }

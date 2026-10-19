@@ -148,16 +148,18 @@ impl Session {
 
     /// The player's old ship, escort `index`, comes into the system after
     /// "Use As My Ship" (see the module docs): where the player was
-    /// (`at`), holding `hold`, keeping formation by flying to its slot.
-    /// Gives its NPC; none when its ship type has no record or no berth is
-    /// free.
+    /// (`at`), holding `hold`, keeping formation by flying to its slot, its
+    /// skill rolled on `chance` as `_DoShipCapture`'s spawn rolls it
+    /// (@0x4114d, through `_GenericRandomShipSpawn`). Gives its NPC; none
+    /// when its ship type has no record or no berth is free.
     pub(super) fn place_old_ship(
         &mut self,
         index: usize,
         at: ShipState,
         hold: NpcHold,
+        chance: &mut dyn Chance,
     ) -> Option<NpcId> {
-        let id = self.place_escort(index)?;
+        let id = self.place_escort(index, chance)?;
         if let Some(npc) = self.npc_mut(id) {
             npc.state = at;
             npc.cargo = hold;
@@ -252,7 +254,7 @@ mod tests {
                 if unplaced.contains(&index) {
                     None
                 } else {
-                    session.place_escort(index)
+                    session.place_escort(index, &mut crate::chance::NeverFires)
                 }
             })
             .collect();
@@ -599,6 +601,34 @@ mod tests {
             .and_then(|id| session.npc(id))
             .expect("placed");
         assert_eq!(old.cargo, NpcHold::default());
+    }
+
+    #[test]
+    fn the_old_ship_rolls_its_skill_of_no_government() {
+        let mut catalog = boardable();
+        for ship in &mut catalog.ship_records {
+            if ship.id == ShipId(128) {
+                ship.skill_var = 37;
+            }
+        }
+        let mut session = alongside(&catalog);
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::Captured
+        );
+        let mut chance = Draws::of(&[0]).keyed(75, 74);
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut chance),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(chance.times_asked(75), 1);
+        let id = session.fleet[0].expect("placed");
+        let old = session.npc(id).expect("in the system");
+        assert_eq!(
+            (old.skill, old.skill_mult),
+            ((f64::from(74 - 37 + 100) * 0.01) as f32, 1.0)
+        );
     }
 
     #[test]

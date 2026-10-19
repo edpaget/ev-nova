@@ -1446,7 +1446,9 @@ mod tests {
     fn attack_copies_a_strangers_target_to_mission_escorts() {
         let catalog = ships_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
-        let stranger = session.place_escort(0).expect("a ship");
+        let stranger = session
+            .place_escort(0, &mut crate::chance::NeverFires)
+            .expect("a ship");
         session.npc_mut(stranger).expect("here").escort = None;
         session.target = Some(stranger);
         let done = session

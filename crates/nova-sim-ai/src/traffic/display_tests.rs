@@ -94,6 +94,8 @@ fn a_spawn_glows_folds_and_owes_its_rolls() {
     let came = traffic.bring_in_within(
         vec![ship(Entry::Placed, None), ship(Entry::JumpingIn, Some(0))],
         0,
+        &crate::govt::Governments::empty(),
+        &mut crate::chance::NeverFires,
     );
     assert_eq!(came, 2);
     let [fleet, jumping] = traffic.npcs() else {

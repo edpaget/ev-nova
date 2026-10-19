@@ -105,6 +105,7 @@ use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, Surroundings};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
+use crate::chance::Chance;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
 use crate::combat::armament::Fold;
@@ -122,6 +123,7 @@ use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
+use crate::skill::random_skill_level;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
@@ -135,6 +137,10 @@ pub(super) struct KeptEscort {
     /// `_RespawnEscort` leaves (see the `ship_display` module); none when
     /// its NPC was not in the system, and it takes a loaded pilot's.
     pub(super) display: Option<(ShipFrames, Fold)>,
+    /// Its skill ([`Npc::skill`]), which `_RespawnEscort` leaves (it never
+    /// writes +0x40, @0x3d4b8-0x3d62c); none when its NPC was not in the
+    /// system, and it rolls one as `_SpawnEscort` does.
+    pub(super) skill: Option<f32>,
 }
 
 impl Session {
@@ -173,7 +179,8 @@ impl Session {
     /// index, from its NPC in the system, if any (none without one).
     ///
     /// As `_DeleteAllComputerShips(0)` keeps the player's ships whole
-    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark. Its
+    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark, and every
+    /// escort its skill. Its
     /// ionization is not kept: `_RespawnEscort` clears the charge
     /// (+0x5c @0x3d543), and the display `_PrepareAllSprites` runs before
     /// the first frame (@0x3a783) clears the colour of a ship with no
@@ -190,6 +197,7 @@ impl Session {
                 npc.map_or_else(KeptEscort::default, |npc| KeptEscort {
                     aux: npc.aux,
                     display: Some((npc.display.frames, npc.armament.fold())),
+                    skill: Some(npc.skill),
                 })
             })
             .collect()
@@ -199,10 +207,16 @@ impl Session {
     /// engine their standing orders are reset, and each is placed on its
     /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Session::fleet_kept`]): its aux
-    /// mark and its display and fold, with no ionization, or a
+    /// mark, its skill, and its display and fold, with no ionization, or a
     /// loaded pilot's fold set with none kept
-    /// ([`Session::loaded_escort_set`]).
-    pub(super) fn enter_escorts(&mut self, berths: &[u32], kept: &[KeptEscort]) {
+    /// ([`Session::loaded_escort_set`]); one that kept no skill rolls one
+    /// on `chance`.
+    pub(super) fn enter_escorts(
+        &mut self,
+        berths: &[u32],
+        kept: &[KeptEscort],
+        chance: &mut dyn Chance,
+    ) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -216,8 +230,13 @@ impl Session {
         }
         self.fleet = (0..self.pilot.escorts.len())
             .map(|index| {
-                let id = self.place_escort_at(index, berths.get(index).copied())?;
                 let kept = kept.get(index).copied().unwrap_or_default();
+                let id = self.place_escort_at(
+                    index,
+                    berths.get(index).copied(),
+                    kept.skill,
+                    &mut *chance,
+                )?;
                 let loaded = self
                     .npc(id)
                     .map(|npc| self.loaded_escort_set(&npc.hull.frames));
@@ -243,16 +262,24 @@ impl Session {
         }
     }
 
-    /// Escort `index` as an NPC in the system at the first free berth (see
-    /// [`Session::place_escort_at`]).
-    pub(super) fn place_escort(&mut self, index: usize) -> Option<NpcId> {
-        self.place_escort_at(index, None)
+    /// Escort `index` as an NPC in the system at the first free berth, its
+    /// skill rolled on `chance` (see [`Session::place_escort_at`]).
+    pub(super) fn place_escort(&mut self, index: usize, chance: &mut dyn Chance) -> Option<NpcId> {
+        self.place_escort_at(index, None, None, chance)
     }
 
     /// Escort `index` as an NPC in the system, at `berth` or else the
     /// first free one, beside the player until it is snapped to its slot;
-    /// none when its ship type has no record.
-    pub(super) fn place_escort_at(&mut self, index: usize, berth: Option<u32>) -> Option<NpcId> {
+    /// none when its ship type has no record. It flies at `skill`, or one
+    /// rolled on `chance` as `_SpawnEscort` rolls it (through
+    /// `_GenericRandomShipSpawn` @0x3cad1), of no government.
+    pub(super) fn place_escort_at(
+        &mut self,
+        index: usize,
+        berth: Option<u32>,
+        skill: Option<f32>,
+        chance: &mut dyn Chance,
+    ) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
         let record = self.ship_record(escort.ship)?;
         let maneuver = record.fields.maneuver;
@@ -272,6 +299,7 @@ impl Session {
             self.pilot.escorts[index].reserves = escort.reserves;
         }
         let carrier = escort.carried.then(|| self.player_carrier(maneuver));
+        let skill = skill.unwrap_or_else(|| random_skill_level(kind.skill_var, chance));
         let npc = Npc {
             id: NpcId::default(),
             berth: 0,
@@ -318,7 +346,7 @@ impl Session {
             emerges_from: None,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
-            skill: 1.0,
+            skill,
             skill_mult: 1.0,
             still: kind.still,
             miner: kind.miner,
@@ -358,7 +386,8 @@ impl Session {
 
     /// NPC `id` joins the fleet where it is as the escort of `record`
     /// (`_AIMakeEscortFlyInForm` @0x89b8e, and a former escort's rejoin,
-    /// see [`self_repair`](super::self_repair)): of no government, its AI
+    /// see [`self_repair`](super::self_repair)): of no government, and so
+    /// of no government's factor, keeping its skill, its AI
     /// type its ship type's `InherentAI`, led by the player alone,
     /// keeping formation by `record`'s standing order with no target of
     /// its own, carried by the player when `record` is a carried
@@ -374,7 +403,7 @@ impl Session {
         let Some(npc) = self.npc_mut(id) else {
             return;
         };
-        npc.govt = None;
+        npc.independent();
         if let Some((inherent_ai, _)) = ship {
             npc.ai_type = AiType::from_raw(inherent_ai);
         }
@@ -890,7 +919,7 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{
-        FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, ship, weapon,
+        Draws, FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, ship, weapon,
     };
 
     /// A pilot whose fleet is two escorts, both defending the player.
@@ -1312,6 +1341,51 @@ mod tests {
         assert_eq!(escorts[1].reserves.shield.now, 30.0);
         let worst = straying(&mut session, &catalog, 300);
         assert!(worst <= escort::KEEP_FORMATION, "{worst}");
+    }
+
+    #[test]
+    fn an_escort_rolls_its_skill_when_first_placed_and_keeps_it_through_each_entry() {
+        // The warship of `SkillVar` 37: 75 sides, the last 1.37.
+        let mut catalog = fleeted();
+        catalog.ship_records[1].skill_var = 37;
+        let rolled = (f64::from(74 - 37 + 100) * 0.01) as f32;
+        let skills = |session: &Session| -> Vec<(f32, f32)> {
+            escort_npcs(session)
+                .iter()
+                .map(|npc| (npc.skill, npc.skill_mult))
+                .collect()
+        };
+        let placed = || {
+            let mut session = Session::fly(&catalog, escorted(&catalog)).expect("flies");
+            let mut chance = Draws::of(&[]).keyed(75, 74);
+            session.tick_traffic(&catalog, &Peaceful, &mut chance);
+            assert_eq!(chance.times_asked(75), 1, "the loaded pilot's escort rolls");
+            assert_eq!(skills(&session), [(rolled, 1.0), (1.0, 1.0)]);
+            session
+        };
+        let mut session = placed();
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_eq!(skills(&session), [(rolled, 1.0), (1.0, 1.0)], "jumped");
+        let mut session = placed();
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(skills(&session), [(rolled, 1.0), (1.0, 1.0)], "took off");
+    }
+
+    #[test]
+    fn a_ship_enlisted_keeps_its_skill_and_drops_its_governments_factor() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let id = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        let ship = session.npc_mut(id).expect("there");
+        ship.govt = Some(crate::catalog::GovtId(140));
+        ship.skill_mult = 2.0;
+        ship.skill = 0.8;
+        session.enlist(id, escort(WARSHIP, worn(), None));
+        let ship = session.npc(id).expect("there");
+        assert_eq!((ship.govt, ship.skill_mult, ship.skill), (None, 1.0, 0.8));
     }
 
     /// Ionizes the first escort red, then checks that, once the fleet

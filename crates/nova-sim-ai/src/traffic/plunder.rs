@@ -331,8 +331,9 @@ fn plunder_npc(
             }
         }
     }
-    let govt = npcs[at].govt;
+    let pirate_ship = npcs[at].clone();
     let ship = &mut npcs[into];
+    ship.take_govt_of(&pirate_ship);
     ship.person = None;
     ship.former = None;
     ship.escort = None;
@@ -341,7 +342,6 @@ fn plunder_npc(
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
     ship.boarded = false;
-    ship.govt = govt;
     ship.ai_wait = CAPTURED_WAIT;
     // Doubles, back to a float (@0x849b4-0x849c8).
     #[allow(clippy::cast_possible_truncation)]
@@ -575,14 +575,21 @@ mod tests {
             ship: ShipRef::Npc(VICTIM),
             sub: DockSub::Dock,
         });
+        docked.skill_mult = 2.5;
         let mut boarded = former();
         boarded.boarded = true;
+        boarded.skill = 0.75;
         let mut traffic = traffic_of(vec![docked, boarded, onlooker]);
         traffic.set_berth_person(9, "Someone");
         tick(&mut traffic, 0);
         let taken = ship(&traffic, VICTIM);
         assert_eq!(taken.leader, Some(PIRATE));
         assert_eq!(taken.govt, Some(crate::catalog::GovtId(130)));
+        assert_eq!(
+            (taken.skill_mult, taken.skill),
+            (2.5, 0.75),
+            "the pirate's factor, its own skill"
+        );
         assert_eq!(
             (taken.person, taken.former, taken.boarded),
             (None, None, false)

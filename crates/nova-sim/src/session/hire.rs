@@ -264,7 +264,7 @@ impl Session {
         if let Some(berth) = berth {
             let index = self.pilot.escorts.len() - 1;
             self.fleet.resize(index, None);
-            let placed = self.place_escort_at(index, Some(berth));
+            let placed = self.place_escort_at(index, Some(berth), None, chance);
             self.fleet.push(placed);
             self.reform();
         }
@@ -314,7 +314,9 @@ mod tests {
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FAST, FakePilotCatalog, Scripted, catalog, jump, land_now, planet, ship};
+    use crate::testkit::{
+        Draws, FAST, FakePilotCatalog, Scripted, catalog, jump, land_now, planet, ship,
+    };
     use crate::traffic::npc::AiType;
 
     /// The bar's stellar, 128, at the centre, under the ship as it
@@ -805,13 +807,14 @@ mod tests {
         session.fleet = (0..session.pilot.escorts.len())
             .map(|index| {
                 (index < MAX_ESCORTS - 1)
-                    .then(|| session.place_escort(index))
+                    .then(|| session.place_escort(index, &mut crate::chance::NeverFires))
                     .flatten()
             })
             .collect();
         assert!(list(&mut session).room, "five of the seven in the system");
         assert_eq!(row(&list(&mut session), 129).hire, Ok(()));
-        session.fleet[MAX_ESCORTS - 1] = session.place_escort(MAX_ESCORTS - 1);
+        session.fleet[MAX_ESCORTS - 1] =
+            session.place_escort(MAX_ESCORTS - 1, &mut crate::chance::NeverFires);
         assert!(!list(&mut session).room, "six in the system");
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
         assert_eq!(saved.escorts().len(), MAX_ESCORTS + 1);
@@ -856,6 +859,22 @@ mod tests {
             }]
         );
         assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn a_hired_escort_rolls_its_skill_and_flies_of_no_government() {
+        // `SkillVar` 37: 75 sides, the first 0.63.
+        let catalog = barred(vec![ShipRecord {
+            skill_var: 37,
+            ..hireable(129, 100)
+        }]);
+        let mut session = landed(&catalog, 25_000);
+        let mut chance = Draws::of(&[]).keyed(75, 0);
+        assert!(session.hire(ShipId(129), &mut chance).is_ok());
+        assert_eq!(chance.times_asked(75), 1);
+        let id = session.fleet[0].expect("placed");
+        let npc = session.npc(id).expect("in the system");
+        assert_eq!((npc.skill, npc.skill_mult), ((0.63_f64) as f32, 1.0));
     }
 
     #[test]

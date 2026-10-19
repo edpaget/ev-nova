@@ -2842,7 +2842,11 @@ mod tests {
         let mut session = targeting_merchant(&catalog);
         session.pilot.escorts = vec![escort_of(false); 7];
         session.fleet = (0..7)
-            .map(|index| (index < 5).then(|| session.place_escort(index)).flatten())
+            .map(|index| {
+                (index < 5)
+                    .then(|| session.place_escort(index, &mut crate::chance::NeverFires))
+                    .flatten()
+            })
             .collect();
         // Its quarry, NPC 5, is now an escort of the player's: it lets go.
         let merchant = npc(&mut session);
@@ -2852,7 +2856,7 @@ mod tests {
             hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
             "five of the seven in the system"
         );
-        session.fleet[5] = session.place_escort(5);
+        session.fleet[5] = session.place_escort(5, &mut crate::chance::NeverFires);
         assert!(
             !hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
             "six in the system"

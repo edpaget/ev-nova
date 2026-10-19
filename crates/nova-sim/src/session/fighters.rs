@@ -53,6 +53,7 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::skill::random_skill_level;
 use crate::traffic::SPAWN_RESERVE;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
@@ -85,18 +86,6 @@ impl Session {
         let record = self.ship_record(sortie.ship).cloned()?;
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
         let kind = table::kind(&record, &self.outfits, &self.arsenal);
-        // `_LaunchFighter` sets the fighter's leader before it reads its
-        // `_ShipMaxSpeed` (@0x3d866-0x3d870, @0x3dc70), so the player's
-        // fighter is pushed against its led top speed.
-        let top_speed = match sortie.carrier {
-            ShipRef::Player => kind.stats.handling.max_speed * self.led_speed(),
-            ShipRef::Npc(_) => kind.stats.handling.max_speed,
-        };
-        let state = ShipState {
-            position: sortie.from.position,
-            velocity: launch_velocity(sortie.from.velocity, sortie.heading, push, top_speed),
-            heading: sortie.heading,
-        };
         let carrier = Carrier {
             ship: sortie.carrier,
             window: dock_window(record.fields.maneuver),
@@ -108,7 +97,31 @@ impl Session {
             ShipRef::Player => self.player_speed,
             ShipRef::Npc(id) => self.npc(id).map_or(0.0, |npc| npc.speed),
         };
-        let mut npc = fighter(&kind, sortie.ship, state, speed, carrier);
+        let at = ShipState {
+            position: sortie.from.position,
+            velocity: sortie.from.velocity,
+            heading: sortie.heading,
+        };
+        let mut npc = fighter(&kind, sortie.ship, at, speed, carrier);
+        // `_GenericRandomShipSpawn` rolls its skill (@0x3cad1, from
+        // `_LaunchFighter` @0x3d657), and it takes its carrier's government
+        // and factor.
+        npc.skill = random_skill_level(kind.skill_var, &mut *chance);
+        if let ShipRef::Npc(id) = sortie.carrier
+            && let Some(launcher) = self.npc(id)
+        {
+            npc.take_govt_of(launcher);
+        }
+        // `_LaunchFighter` sets the fighter's leader before it reads its
+        // `_ShipMaxSpeed` (@0x3d866-0x3d870, @0x3dc70), after its spawn, so
+        // it is pushed against its own top speed, at its skill and factor,
+        // and the player's against its led top speed.
+        let own = npc.class_handling().max_speed;
+        let top_speed = match sortie.carrier {
+            ShipRef::Player => own * self.led_speed(),
+            ShipRef::Npc(_) => own,
+        };
+        npc.state.velocity = launch_velocity(sortie.from.velocity, sortie.heading, push, top_speed);
         let side = self.player_side();
         // A class's `Strength` is none below none, so in 16 bits.
         #[allow(clippy::cast_possible_truncation)]
@@ -180,7 +193,7 @@ impl Session {
         let target = launcher
             .target
             .filter(|&ship| ship != ShipRef::Npc(carrier) && self.fleet_of(ship) != Some(fleet));
-        npc.govt = launcher.govt;
+        npc.take_govt_of(&launcher);
         npc.leader = Some(launcher.leader.unwrap_or(launcher.id));
         npc.aggression = launcher.aggression;
         npc.target = target;
@@ -555,7 +568,9 @@ mod tests {
     use crate::rulebook::Rulebook;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, land_now, outfit, ship, weapon};
+    use crate::testkit::{
+        FAST, FakePilotCatalog, Ranged, catalog, hull, land_now, outfit, ship, weapon,
+    };
     use crate::traffic::npc::{AiType, Npc, NpcId};
 
     /// The Viper Bay: carrying ship 144, reloading every 60 ticks,
@@ -1558,6 +1573,58 @@ mod tests {
             from.velocity,
             "at or past its own top speed: no gain"
         );
+    }
+
+    #[test]
+    fn a_fighter_rolls_its_skill_and_launches_against_its_own_top_speed() {
+        // A Viper of `SkillVar` 37: 75 sides, the last 1.37. The carrier
+        // moves at 8 along the heading.
+        let mut catalog = carrying();
+        catalog.ship_records[1].skill_var = 37;
+        let (mut session, raider, _) = raided(&catalog);
+        session.npc_mut(raider).expect("there").skill_mult = 2.0;
+        let from = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, -8.0),
+            heading: 0.0,
+        };
+        let sortie = |carrier| Sortie {
+            carrier,
+            bay: BAY,
+            ship: VIPER,
+            from,
+            heading: 0.0,
+            target: None,
+        };
+        let skill = (f64::from(74 - 37 + 100) * 0.01) as f32;
+        let launched = |session: &mut Session, carrier| {
+            let mut chance = Ranged::of(&[(75, 74)]);
+            assert!(
+                session
+                    .launch_fighter(&sortie(carrier), &mut chance)
+                    .is_some()
+            );
+            assert!(chance.was_asked(75));
+            session.npcs().last().expect("launched").clone()
+        };
+        let mine = launched(&mut session, ShipRef::Player);
+        assert_eq!((mine.skill, mine.skill_mult), (skill, 1.0));
+        assert_eq!(
+            mine.state.velocity,
+            launch_velocity(from.velocity, 0.0, 4.0, 6.0 * skill * 1.5),
+            "its own top speed, led"
+        );
+        let theirs = launched(&mut session, ShipRef::Npc(raider));
+        assert_eq!(
+            (theirs.skill, theirs.skill_mult),
+            (skill, 2.0),
+            "its carrier's factor"
+        );
+        assert_eq!(
+            theirs.state.velocity,
+            launch_velocity(from.velocity, 0.0, 4.0, 6.0 * skill * 2.0),
+        );
+        assert_ne!(theirs.state.velocity, from.velocity, "pushed past 8");
     }
 
     #[test]

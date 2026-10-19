@@ -159,6 +159,8 @@ pub mod quote;
 mod reinforcing;
 pub mod ship_display;
 pub mod skill;
+#[cfg(test)]
+mod skill_rolls;
 pub mod snipe;
 pub mod spawn;
 pub mod strength;
@@ -189,6 +191,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
+use crate::skill::random_skill_level;
 use autopilot::{Outcome, TopSpeeds};
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
@@ -787,6 +790,8 @@ impl Traffic {
             world.persons.grudges,
             Some(world.spawn_reserve),
             None,
+            world.govts,
+            &mut *chance,
         );
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
@@ -801,7 +806,9 @@ impl Traffic {
             ships,
             world.persons.grudges,
             Some(world.spawn_reserve),
-            Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
+            Some(AfterburnerRoll::of(&world)),
+            world.govts,
+            &mut *chance,
         );
     }
 
@@ -811,11 +818,25 @@ impl Traffic {
     /// no slot does not come. The auxiliary ships' spawn
     /// (`_SpecificDudeSpawn` from `_EnterMoreShips`, reserve 8 @0x435a8),
     /// and the mission ships' whose appear timer ran out or that a hail
-    /// swaps in (`_MissionDudeSpawn`, reserve 8 @0x3cd50).
-    pub fn bring_in_within(&mut self, ships: Vec<NewShip>, reserve: u32) -> usize {
+    /// swaps in (`_MissionDudeSpawn`, reserve 8 @0x3cd50). Each rolls its
+    /// skill on `chance` and takes its government's factor from `govts`.
+    pub fn bring_in_within(
+        &mut self,
+        ships: Vec<NewShip>,
+        reserve: u32,
+        govts: &Governments,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> usize {
         // Neither `_SpecificDudeSpawn` nor `_MissionDudeSpawn` rolls an
         // afterburner.
-        self.add(ships, &BTreeSet::new(), Some(reserve), None)
+        self.add(
+            ships,
+            &BTreeSet::new(),
+            Some(reserve),
+            None,
+            govts,
+            &mut *chance,
+        )
     }
 
     /// What the system's traffic is drawn from.
@@ -1165,7 +1186,9 @@ impl Traffic {
             arrivals,
             world.persons.grudges,
             Some(world.spawn_reserve),
-            Some(&mut AfterburnerRoll::of(&world, &mut &mut *chance)),
+            Some(AfterburnerRoll::of(&world)),
+            world.govts,
+            &mut *chance,
         );
         self.escort_strength(&world, draw.world.gate(), chance);
     }
@@ -1494,7 +1517,9 @@ impl Traffic {
             fleet,
             world.persons.grudges,
             Some(world.spawn_reserve),
-            Some(&mut AfterburnerRoll::of(world, &mut &mut *chance)),
+            Some(AfterburnerRoll::of(world)),
+            world.govts,
+            &mut *chance,
         );
     }
 
@@ -2079,7 +2104,11 @@ impl Traffic {
     /// armour cut ([`derelict_armor`]); a ship set up held
     /// ([`NewShip::held`]) starts holding ([`Goal::Hold`]). Each rolls its
     /// afterburner on `afterburners` as its spawn asks (see
-    /// [`afterburners`]); with none, no ship has one.
+    /// [`afterburners`]); with none, no ship has one. Each rolls its skill
+    /// on `chance` ([`random_skill_level`], as `_RandomShipSpawn`
+    /// @0x3c531, `_GenericRandomShipSpawn` @0x3cad1 and `_MissionDudeSpawn`
+    /// @0x3d02b each roll one) and takes its government's factor from
+    /// `govts` (see the [`skill`] module).
     ///
     /// A ship whose ship type has no record does not come, and neither
     /// does an escort whose lead did not come. With a `reserve`, each ship
@@ -2097,7 +2126,9 @@ impl Traffic {
         ships: Vec<NewShip>,
         grudges: &BTreeSet<PersonId>,
         reserve: Option<u32>,
-        mut afterburners: Option<&mut AfterburnerRoll>,
+        afterburners: Option<AfterburnerRoll>,
+        govts: &Governments,
+        chance: &mut (impl Chance + ?Sized),
     ) -> usize {
         let mut placed: Vec<Option<NpcId>> = Vec::with_capacity(ships.len());
         for ship in ships {
@@ -2128,7 +2159,8 @@ impl Traffic {
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             let name = person.map(|person| person.record.name.clone());
             let afterburner =
-                AfterburnerRoll::has(afterburners.as_deref_mut(), &ship, kind, person);
+                AfterburnerRoll::has(afterburners, &ship, kind, person, &mut &mut *chance);
+            let skill = random_skill_level(kind.skill_var, &mut *chance);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             let (display, fold) = ship_display::NpcDisplay::spawned(
@@ -2196,8 +2228,8 @@ impl Traffic {
                 },
                 self_repair: kind.self_repair,
                 immobile: kind.immobile,
-                skill: 1.0,
-                skill_mult: 1.0,
+                skill,
+                skill_mult: govts.skill_mult(ship.govt),
                 still: kind.still,
                 miner: kind.miner,
                 can_scoop: kind.can_scoop,
@@ -3289,6 +3321,8 @@ mod tests {
         traffic.bring_in_within(
             vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)],
             SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
         );
         assert_eq!(berths(&traffic), [3, 2, 4, 1, 5], "brought in alike");
     }
@@ -5528,6 +5562,8 @@ mod tests {
         traffic.bring_in_within(
             vec![mission_ship(0, 9.0), mission_ship(1, 9.0)],
             SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
         );
         let npcs = traffic.npcs();
         for npc in &npcs[..2] {
@@ -5554,6 +5590,8 @@ mod tests {
                     mission_ship(-1, 1.0),
                 ],
                 SPAWN_RESERVE,
+                &crate::govt::Governments::empty(),
+                &mut crate::chance::NeverFires,
             );
             let npcs = traffic.npcs();
             assert_eq!(npcs[0].condition, Condition::Disabled);
@@ -5580,6 +5618,8 @@ mod tests {
                 mission_ship(-1, 1.0),
             ],
             SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
         );
         let boarded: Vec<bool> = traffic.npcs().iter().map(|npc| npc.boarded).collect();
         assert_eq!(boarded, [true, false]);
@@ -5598,6 +5638,8 @@ mod tests {
                 mission_ship(-1, 1.0),
             ],
             SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
         );
         let goals: Vec<Goal> = traffic.npcs().iter().map(|npc| npc.goal).collect();
         assert_eq!(goals, [Goal::Hold, Goal::Idle]);
@@ -5782,7 +5824,12 @@ mod tests {
     fn a_cloaked_ship_attacking_another_npc_measures_from_it() {
         for (x, kept) in [(1300.0, true), (1100.0, false)] {
             let mut traffic = with_mission_ship(ZEPHYR, false, 1000.0);
-            traffic.bring_in_within(vec![mission_ship(-1, x)], SPAWN_RESERVE);
+            traffic.bring_in_within(
+                vec![mission_ship(-1, x)],
+                SPAWN_RESERVE,
+                &crate::govt::Governments::empty(),
+                &mut crate::chance::NeverFires,
+            );
             traffic.npcs[0].cloak = Cloak {
                 fade: FADE_FULL,
                 direction: 0,
@@ -6066,6 +6113,8 @@ mod tests {
                 mission_ship(0, 0.0),
             ],
             SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
         );
         assert_eq!(
             traffic
@@ -6086,9 +6135,19 @@ mod tests {
         };
         let mut traffic = Traffic::new();
         traffic.enter(table(0), &mut Draws::of(&[]));
-        traffic.bring_in_within(vec![quoted(999)], SPAWN_RESERVE);
+        traffic.bring_in_within(
+            vec![quoted(999)],
+            SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         assert!(traffic.take_quotes().is_empty(), "ship 999 has no record");
-        traffic.bring_in_within(vec![quoted(200)], SPAWN_RESERVE);
+        traffic.bring_in_within(
+            vec![quoted(200)],
+            SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         assert_eq!(traffic.take_quotes(), [7600]);
     }
 
@@ -6103,6 +6162,8 @@ mod tests {
                     ..mission_ship(0, 0.0)
                 }],
                 SPAWN_RESERVE,
+                &crate::govt::Governments::empty(),
+                &mut crate::chance::NeverFires,
             );
             traffic
         };
@@ -6424,7 +6485,14 @@ mod tests {
     #[test]
     fn a_fleet_with_no_slot_for_its_lead_brings_nothing_and_no_quote() {
         let mut traffic = at_berths(1..=55);
-        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE), None);
+        traffic.add(
+            quoted_fleet(2),
+            &BTreeSet::new(),
+            Some(SPAWN_RESERVE),
+            None,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         assert_eq!(traffic.npcs().len(), 55);
         assert!(traffic.take_quotes().is_empty(), "no line, no beep");
     }
@@ -6432,7 +6500,14 @@ mod tests {
     #[test]
     fn an_escort_with_no_slot_is_skipped_and_the_lead_keeps_its_quote() {
         let mut traffic = at_berths(1..=53);
-        traffic.add(quoted_fleet(2), &BTreeSet::new(), Some(SPAWN_RESERVE), None);
+        traffic.add(
+            quoted_fleet(2),
+            &BTreeSet::new(),
+            Some(SPAWN_RESERVE),
+            None,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         let npcs = &traffic.npcs()[53..];
         assert_eq!(npcs.len(), 2, "the lead and one escort");
         assert_eq!((npcs[0].berth, npcs[1].berth), (54, 55));
@@ -6451,7 +6526,14 @@ mod tests {
             lead: ship.lead.map(|_| 1),
             ..ship
         }));
-        traffic.add(ships, &BTreeSet::new(), None, None);
+        traffic.add(
+            ships,
+            &BTreeSet::new(),
+            None,
+            None,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         let npcs = traffic.npcs();
         assert_eq!(npcs.len(), 2, "ship 999 has no record");
         assert_eq!(npcs[1].leader, Some(npcs[0].id));
@@ -6462,7 +6544,14 @@ mod tests {
         let mut traffic = at_berths([]);
         let mut fleet = quoted_fleet(1);
         fleet[0].ship = ShipId(999);
-        traffic.add(fleet, &BTreeSet::new(), None, None);
+        traffic.add(
+            fleet,
+            &BTreeSet::new(),
+            None,
+            None,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         assert_eq!(traffic.npcs(), [], "no lead, no escort");
         assert!(traffic.take_quotes().is_empty());
     }
@@ -6531,7 +6620,12 @@ mod tests {
     #[test]
     fn mission_ships_brought_in_find_no_slot_once_55_berths_are_held() {
         let mut traffic = at_berths(1..=55);
-        let came = traffic.bring_in_within(vec![mission_ship(-1, 0.0)], SPAWN_RESERVE);
+        let came = traffic.bring_in_within(
+            vec![mission_ship(-1, 0.0)],
+            SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         assert_eq!((came, traffic.npcs().len()), (0, 55));
     }
 
@@ -6743,7 +6837,12 @@ mod tests {
     fn arrivals_take_the_pick_of_the_berth_they_reuse() {
         let mut traffic = left_picking(WeaponId(131), RuleSource::Engine);
         traffic.table = table(0);
-        traffic.bring_in_within(vec![mission_ship(-1, 0.0)], SPAWN_RESERVE);
+        traffic.bring_in_within(
+            vec![mission_ship(-1, 0.0)],
+            SPAWN_RESERVE,
+            &crate::govt::Governments::empty(),
+            &mut crate::chance::NeverFires,
+        );
         let arrival = traffic.npcs().last().expect("came");
         assert_eq!((arrival.berth, arrival.pick), (1, Some(WeaponId(131))));
     }

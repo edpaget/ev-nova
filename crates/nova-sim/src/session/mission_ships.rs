@@ -879,9 +879,12 @@ impl Session {
             chance,
         );
         let last = self.last_npc();
-        let came = self
-            .traffic
-            .bring_in_within(ships, self.spawn_reserve(SPAWN_RESERVE));
+        let came = self.traffic.bring_in_within(
+            ships,
+            self.spawn_reserve(SPAWN_RESERVE),
+            &self.govts,
+            &mut *chance,
+        );
         self.mission_ships_came(last);
         i16::try_from(came).unwrap_or(i16::MAX)
     }
@@ -990,7 +993,9 @@ impl Session {
             ship.held = false;
         }
         let last = self.last_npc();
-        let came = self.traffic.bring_in_within(vec![ship], reserve);
+        let came = self
+            .traffic
+            .bring_in_within(vec![ship], reserve, &self.govts, &mut *chance);
         if came == 0 {
             return;
         }
