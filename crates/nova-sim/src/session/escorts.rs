@@ -855,11 +855,6 @@ impl Session {
     }
 }
 
-/// The order an escort holding `order`, carried or not, takes from
-/// `command`, and whether that is a recall: Return to Hangar sends any
-/// escort but a carried fighter back to formation (`_IssueNewEscortCommand`
-/// @0x661a5-0x661ed, the AI type 5 test), a recall when it had another
-/// order.
 /// `npc` falls in with the player, as a hired escort joining
 /// (`_AIMakeEscortFlyInForm` @0x89b8e) and a captured mission escort
 /// alike: of no government, and so of no government's factor, keeping
@@ -877,6 +872,11 @@ pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.target = None;
 }
 
+/// The order an escort holding `order`, carried or not, takes from
+/// `command`, and whether that is a recall: Return to Hangar sends any
+/// escort but a carried fighter back to formation (`_IssueNewEscortCommand`
+/// @0x661a5-0x661ed, the AI type 5 test), a recall when it had another
+/// order.
 fn order_for(
     command: EscortCommand,
     carried: bool,

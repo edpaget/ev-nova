@@ -93,7 +93,7 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::session::Session;
     use crate::session::mission_ships::tests::{
-        accepted, destroy, goal_catalog, in_flight, jump_to, marked, ships_of, take_off,
+        accepted, destroy, goal_catalog, in_flight, jump_to, marked, settle, ships_of, take_off,
     };
     use crate::testkit::FakePilotCatalog;
     use crate::traffic::npc::{AiType, NpcId};
@@ -227,11 +227,50 @@ mod tests {
                 ships.destroyed + 1,
                 "goal {goal}: @0x2dbd4"
             );
-            assert!(
-                session.pilot().bits.iter().all(|bit| bit.get() != 6),
-                "goal {goal}: no OnShipDone for a failed mission (@0x9ec70)"
-            );
         }
+    }
+
+    /// Mission 140 of a destroy goal, in flight, its first ship captured
+    /// for an escort, its mission failed first when `failed`; its other
+    /// ship is destroyed, and then the captured one, the last kill the
+    /// goal needs. Whether `OnShipDone` (b6) ran.
+    fn ship_done_after_losing_the_captured(failed: bool) -> bool {
+        let catalog = goal_catalog(0, 0);
+        let mut session = in_flight(&catalog);
+        if failed {
+            fail(&mut session);
+        }
+        let id = first_marked(&session);
+        session.join_fleet(id);
+        let other = session
+            .npcs()
+            .iter()
+            .position(|npc| npc.mission.is_some() && npc.id != id)
+            .expect("the other ship");
+        destroy(&mut session, other);
+        settle(&mut session, &catalog);
+        assert_eq!(ships_of(&session).left, 1, "failed: {failed}");
+        let index = session
+            .npcs()
+            .iter()
+            .position(|npc| npc.id == id)
+            .expect("here");
+        destroy(&mut session, index);
+        settle(&mut session, &catalog);
+        assert_eq!(ships_of(&session).left, 0, "failed: {failed}");
+        session.pilot().bits.iter().any(|bit| bit.get() == 6)
+    }
+
+    #[test]
+    fn a_captured_mission_ships_loss_completing_a_failed_missions_goal_runs_no_ship_done() {
+        assert!(
+            !ship_done_after_losing_the_captured(true),
+            "no OnShipDone for a failed mission (@0x9ec70-0x9ec8c)"
+        );
+        assert!(
+            ship_done_after_losing_the_captured(false),
+            "the control: the same losses on a mission not failed run it"
+        );
     }
 
     #[test]
