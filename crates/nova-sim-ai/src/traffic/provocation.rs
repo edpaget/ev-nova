@@ -76,26 +76,48 @@ use crate::traffic::npc::Npc;
 #[cfg(doc)]
 use crate::traffic::{board_wait, gate_entry};
 
-/// Whether `npc`'s attack (state 4, [`Goal::attacking`]) is on a ship
-/// breaking up among `around`, which the high level tests with `_IsDying`
-/// (@0x8e3ef). A ship gone from the system is no longer in its slot, its
-/// target -1 by then (@0x8d4e4-0x8d50d); a disabled one is there.
+/// Whether the high level, after the think that `decided`, still finds
+/// `npc` attacking (state 4, [`Goal::attacking`]) a ship breaking up among
+/// `around`, which it tests with `_IsDying` (@0x8e3ef). A think that turns
+/// on another ship, or flees, leaves no such attack: its goal is what the
+/// high level sees. One that lets the fight go (its
+/// [`provoked_by`](crate::ai::provoked_by) needs a live ship) stands for
+/// the original's think, which keeps goal 4 on +0x70, so the attack it
+/// had before is the one tested. A ship gone from the system is no longer
+/// in its slot, its target -1 by then (@0x8d4e4-0x8d50d); a disabled one
+/// is there.
 #[must_use]
-pub(crate) fn attack_breaking_up(npc: &Npc, around: &Surroundings) -> bool {
-    npc.goal
-        .attacking()
-        .is_some_and(|ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. })))
+pub(crate) fn attack_breaking_up(npc: &Npc, decided: Goal, around: &Surroundings) -> bool {
+    let dying = |ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. }));
+    match fought(decided) {
+        Some(_) => decided.attacking().is_some_and(dying),
+        None => npc.goal.attacking().is_some_and(dying),
+    }
 }
 
-/// Whether `npc`'s flight (state 3) is from a ship gone from its slot
-/// among `around`: out of the system or destroyed, not
-/// [`active`](Condition::active). The high level makes its target -1
-/// (@0x8d4e4-0x8d50d) and then state 0, zeroing its provocation
-/// (@0x8dff6 → @0x8e228-0x8e23d).
+/// Whether the high level, after the think that `decided`, still finds
+/// `npc` fleeing (state 3) a ship gone from its slot among `around`: out
+/// of the system or destroyed, not [`active`](Condition::active). It makes
+/// that target -1 (@0x8d4e4-0x8d50d) and then state 0, zeroing its
+/// provocation (@0x8dff6 → @0x8e228-0x8e23d). A think that turns on
+/// another ship leaves no such flight; one that lets the fight go stands
+/// for the original's, which keeps goal 3 on +0x70, so the flight it had
+/// before is the one tested (see [`attack_breaking_up`]).
 #[must_use]
-pub(crate) fn flight_ended(npc: &Npc, around: &Surroundings) -> bool {
-    matches!(npc.goal, Goal::Flee(ship)
-        if !around.condition_of(ship).is_some_and(Condition::active))
+pub(crate) fn flight_ended(npc: &Npc, decided: Goal, around: &Surroundings) -> bool {
+    let gone = |ship| !around.condition_of(ship).is_some_and(Condition::active);
+    match fought(decided) {
+        Some(_) => matches!(decided, Goal::Flee(ship) if gone(ship)),
+        None => matches!(npc.goal, Goal::Flee(ship) if gone(ship)),
+    }
+}
+
+/// The ship `goal` flees or attacks, the fight the high level then sees.
+fn fought(goal: Goal) -> Option<crate::combat::ShipRef> {
+    match goal {
+        Goal::Flee(ship) => Some(ship),
+        _ => goal.attacking(),
+    }
 }
 
 /// `npc` takes `decision`'s writes of its provocation: zeroed where the
@@ -295,6 +317,51 @@ mod tests {
     }
 
     #[test]
+    fn fleeing_a_gone_ship_and_hit_by_another_it_keeps_fleeing_the_other_and_its_provocation() {
+        // `_DamageShip` makes Y the target and adds to +0x96; the think
+        // writes goal 3 on Y, whose slot is live, so the zero at
+        // @0x8e228-0x8e23d never runs.
+        for ai_type in [AiType::WimpyTrader, AiType::BraveTrader] {
+            let mut fleeing = ship(1, TRADERS, ai_type, 0.0, 0.0);
+            fleeing.goal = Goal::Flee(n(2));
+            fleeing.target = Some(n(3));
+            fleeing.provoked = 10.0;
+            let hitter = ship(3, PIRATES, AiType::Warship, 2000.0, 0.0);
+            let decision = decided(&crate::ai::NovaAi::default(), &fleeing, &[hitter]);
+            assert_eq!(decision.goal, Goal::Flee(n(3)), "{ai_type:?}");
+            assert!(!decision.forgets_provocation, "{ai_type:?}");
+            let mut npc = fleeing;
+            take(&mut npc, &decision);
+            assert_eq!(npc.provoked, 10.0, "{ai_type:?}");
+        }
+    }
+
+    #[test]
+    fn attacking_a_ship_breaking_up_and_provoked_by_another_it_turns_on_the_other_and_keeps_it() {
+        // The think writes goal 4 on Y, not breaking up, so the zero at
+        // @0x8e714-0x8e726 never runs.
+        let dying = breaking_up(ship(2, PIRATES, AiType::Warship, 100.0, 0.0));
+        let hitter = ship(3, PIRATES, AiType::Warship, 0.0, 100.0);
+        let others = [dying, hitter];
+        let behaviours: [(&dyn Behaviour, Npc); 2] = [
+            (
+                &BraveTrader::default(),
+                attacking(AiType::BraveTrader, TRADERS),
+            ),
+            (
+                &Interceptor::default(),
+                attacking(AiType::Interceptor, POLICE),
+            ),
+        ];
+        for (behaviour, mut npc) in behaviours {
+            npc.target = Some(n(3));
+            let decision = decided(behaviour, &npc, &others);
+            assert_eq!(decision.goal.attacking(), Some(n(3)), "{:?}", npc.ai_type);
+            assert!(!decision.forgets_provocation, "{:?}", npc.ai_type);
+        }
+    }
+
+    #[test]
     fn a_warship_or_pirate_drops_a_target_breaking_up_itself_and_keeps_its_provocation() {
         // `_WarshipAI` @0x8bc67-0x8bca9 and `_PirateWarshipAI`
         // @0x8c315-0x8c330 write goal 0 and target -1, and no +0x96.
@@ -350,12 +417,21 @@ mod tests {
     fn an_attack_is_on_a_ship_breaking_up_and_a_flight_from_one_gone_from_its_slot() {
         let (sites, govts) = (sites(), govts(0, 0));
         let foe = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
-        let tested = |test: fn(&Npc, &Surroundings) -> bool, npc: &Npc, foe: Option<&Npc>| {
+        // `test` of `npc` after a think that `decided`, among `foe`.
+        let after = |test: fn(&Npc, Goal, &Surroundings) -> bool,
+                     npc: &Npc,
+                     decided: Goal,
+                     foe: Option<&Npc>| {
             let npcs: Vec<Npc> = std::iter::once(npc.clone()).chain(foe.cloned()).collect();
-            test(npc, &around(&sites, &npcs, &govts, (0.0, -500.0), 0))
+            test(
+                npc,
+                decided,
+                &around(&sites, &npcs, &govts, (0.0, -500.0), 0),
+            )
         };
         let attacking = provoked(Goal::Attack(n(2)));
-        let breaking = |npc: &Npc, foe| tested(attack_breaking_up, npc, foe);
+        // A think that lets the fight go: the goal before is tested.
+        let breaking = |npc: &Npc, foe| after(attack_breaking_up, npc, Goal::Idle, foe);
         assert!(!breaking(&attacking, Some(&foe)), "there");
         assert!(!breaking(&attacking, None), "gone: target -1 (@0x8d50d)");
         let dying = breaking_up(foe.clone());
@@ -380,7 +456,7 @@ mod tests {
             assert!(!breaking(&provoked(goal), Some(&dying)), "{goal:?}");
         }
         let fleeing = provoked(Goal::Flee(n(2)));
-        let ended = |npc: &Npc, foe| tested(flight_ended, npc, foe);
+        let ended = |npc: &Npc, foe| after(flight_ended, npc, Goal::Idle, foe);
         assert!(ended(&fleeing, None), "gone");
         assert!(!ended(&fleeing, Some(&foe)), "there");
         assert!(
@@ -389,5 +465,44 @@ mod tests {
         );
         assert!(!ended(&attacking, None), "no flight");
         assert!(!ended(&provoked(Goal::Flee(ShipRef::Player)), Some(&foe)));
+        // The goal the think leaves is the one the high level sees when it
+        // fights: a flight from, or an attack on, another ship ends nothing.
+        let player = Goal::Flee(ShipRef::Player);
+        assert!(
+            !after(flight_ended, &fleeing, player, None),
+            "flees another"
+        );
+        assert!(!after(
+            flight_ended,
+            &fleeing,
+            Goal::Attack(ShipRef::Player),
+            None
+        ));
+        assert!(
+            after(flight_ended, &provoked(Goal::Idle), Goal::Flee(n(2)), None),
+            "flees one gone"
+        );
+        assert!(!after(flight_ended, &fleeing, Goal::Flee(n(2)), Some(&foe)));
+        assert!(
+            !after(attack_breaking_up, &attacking, player, Some(&dying)),
+            "flees"
+        );
+        assert!(!after(
+            attack_breaking_up,
+            &attacking,
+            Goal::Attack(ShipRef::Player),
+            Some(&dying)
+        ));
+        let idle = provoked(Goal::Idle);
+        assert!(
+            after(attack_breaking_up, &idle, Goal::Attack(n(2)), Some(&dying)),
+            "attacks one breaking up"
+        );
+        assert!(!after(
+            attack_breaking_up,
+            &idle,
+            Goal::Attack(n(2)),
+            Some(&foe)
+        ));
     }
 }

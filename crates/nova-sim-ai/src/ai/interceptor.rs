@@ -191,12 +191,15 @@ impl Behaviour for Interceptor {
             npc,
             Decision {
                 comm_call,
-                forgets_provocation: stops || attack_breaking_up(npc, around),
                 ..decision
             },
             around,
         );
-        re_pick(npc, decision, around, self.target, chance)
+        let decision = re_pick(npc, decision, around, self.target, chance);
+        Decision {
+            forgets_provocation: stops || attack_breaking_up(npc, decision.goal, around),
+            ..decision
+        }
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {

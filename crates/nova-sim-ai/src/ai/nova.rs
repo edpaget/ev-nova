@@ -330,7 +330,7 @@ impl Behaviour for NovaAi {
         }
         let decision = Decision {
             forgets_provocation: decision.forgets_provocation
-                || crate::traffic::provocation::flight_ended(npc, around),
+                || crate::traffic::provocation::flight_ended(npc, decision.goal, around),
             ..decision
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);

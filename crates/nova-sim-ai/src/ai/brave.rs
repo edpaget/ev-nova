@@ -53,7 +53,7 @@ impl Behaviour for BraveTrader {
             goal,
             comm_call: brave_call(goal, around),
             calls_reinforcements: matches!(goal, Goal::Flee(_)),
-            forgets_provocation: attack_breaking_up(npc, around),
+            forgets_provocation: attack_breaking_up(npc, goal, around),
             ..Decision::default()
         }
     }
