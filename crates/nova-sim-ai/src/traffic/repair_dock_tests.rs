@@ -213,3 +213,40 @@ fn far_off_a_repairer_closes_on_the_player_through_sub_0xb() {
     tick(&mut once, &recording, Condition::Disabled, &[]);
     assert_eq!(helper(&once).state, closing.state);
 }
+
+#[test]
+fn every_repairer_flies_its_high_level_and_no_other_unprovoked_assister() {
+    let mut traffic = repairing(1000.0, 0.0);
+    let mut second = traffic.npcs[0].clone();
+    second.id = NpcId(2);
+    second.berth = 2;
+    let mut refueller = traffic.npcs[0].clone();
+    refueller.id = NpcId(3);
+    refueller.berth = 3;
+    refueller.goal = Goal::Assist(Help::Refuel);
+    // A docking only its high level would drop.
+    let kept = Docking {
+        ship: ShipRef::Player,
+        sub: DockSub::Close,
+    };
+    refueller.docking = Some(kept);
+    second.docking = None;
+    traffic.npcs.extend([second, refueller]);
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Disabled, &[]);
+    let docking = |id: u32| {
+        traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == NpcId(id))
+            .expect("here")
+            .docking
+    };
+    assert_eq!(docking(2).map(|docking| docking.sub), Some(DockSub::Close));
+    assert_eq!(
+        docking(3),
+        Some(kept),
+        "a refueller's high level doesn't run"
+    );
+    assert_eq!(*recording.decided.borrow(), []);
+}
