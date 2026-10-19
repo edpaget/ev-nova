@@ -9,6 +9,7 @@ use crate::flight::murk::{murk_tint, sprite_murk};
 use crate::flight::ship_layers::{lights_murk, npc_glow_rolls};
 use crate::flight::weapon_glow::npc_glow_level;
 use nova_sim::catalog::{ShipDisplay, ShipExits};
+use nova_sim::cloak::CloakShown;
 use nova_sim::combat::ship_frames::{ANIMATED, BANKS};
 
 /// A `shän` display of `flags`, `sets` base sets and `AnimDelay` `delay`,
@@ -574,9 +575,49 @@ fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
     let session = view.session().expect("flying");
     let shown = session.cloak_shown(&npc);
     assert_eq!(shown, CloakShown::Translucent(0x1e));
-    let cloaked = cloak_alpha(shown).expect("seen");
-    assert_ne!(cloaked, base);
-    assert_eq!(npc_hull(&view, &npc).map(|tint| tint.a), Some(cloaked));
+    assert_eq!(
+        npc_hull(&view, &npc),
+        Some(crate::draw::translucent_tint(4, 30)),
+        "at 4 over 30, not its BaseTransp"
+    );
+}
+
+#[test]
+fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothing() {
+    let view = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
+        0,
+        Rc::new(Still),
+        &[],
+    );
+    let mut npc = npc_of(&view);
+    npc.cloak = nova_sim::cloak::Cloak {
+        fade: 25.0,
+        direction: 1,
+    };
+    let session = view.session().expect("flying");
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    let hull = list.iter().find_map(|command| match *command {
+        DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend,
+        } if image.id == 2001 => Some((center, tint, blend)),
+        _ => None,
+    });
+    let (center, tint, blend) = hull.expect("drawn");
+    assert_eq!((tint, blend), (lights_tint(7), crate::draw::Blend::Or));
+    assert!(
+        (center.x - VIEW_CENTER.x).abs() <= 2.0 && (center.y - VIEW_CENTER.y).abs() <= 2.0,
+        "{center:?}"
+    );
+    // A hidden full fade draws no hull, glow or lights.
+    npc.cloak = CLOAKED;
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, session, &npc, VIEW_CENTER, npc.state.heading);
+    assert_eq!(list.iter().count(), 0, "no weapon glow lit");
 }
 
 /// Each colorized sprite of `image` drawn: its tint, whether it is OR-ed

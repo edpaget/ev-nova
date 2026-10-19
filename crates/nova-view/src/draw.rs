@@ -667,10 +667,14 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 ///
 /// Where this deviates from the original:
 ///
-/// - **Cloaking is not modelled.** A cloaked ship's bias (+0xb0 ≠ 0)
-///   mixes the lights toward a colour and keeps them off `AddOver` even at
-///   level 32. Nor is the 8-bit depth, whose alpha-table blits were not
+/// - **The 8-bit depth is not modelled**: its alpha-table blits were not
 ///   traced.
+///
+/// A cloaking ship's layers take no bias either: `_HandleShipDisplay`
+/// leaves +0xb0 alone below a full fade and caps each channel factor at
+/// trunc(32 − fade) (@0x2d4ed-0x2d641), which takes a level of 32 off
+/// `AddOver` onto the translucent blit, the same OR formula at the capped
+/// level (see [`cloak_fade`](crate::flight::cloak_fade)).
 #[must_use]
 pub fn lights_tint(level: u8) -> Color {
     let full = u16::from(FULL);

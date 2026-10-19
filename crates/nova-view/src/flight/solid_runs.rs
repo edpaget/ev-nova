@@ -113,6 +113,7 @@ mod tests {
             at: AT,
             tint: Color::WHITE,
             colorize: None,
+            blend: crate::Blend::Normal,
         };
         ship.draw(&mut list, AT, Some(alt));
         list.iter()
@@ -135,6 +136,7 @@ mod tests {
             },
             heading: 0.0,
             tint: Color::WHITE,
+            cloak: None,
             hull: true,
             murk: 0,
             held: true,
@@ -277,6 +279,7 @@ mod tests {
             at: Point::new(55.0, 12.0),
             tint: Color::WHITE,
             colorize: None,
+            blend: crate::Blend::Normal,
         };
         assert_eq!(alt_runs(held), [(ImageKey::solid_runs(1400, 7), held.at)]);
     }
@@ -288,6 +291,7 @@ mod tests {
             at: Point::new(55.0, 12.0),
             tint: Color::WHITE,
             colorize: None,
+            blend: crate::Blend::Normal,
         };
         assert_eq!(alt_runs(other), []);
     }

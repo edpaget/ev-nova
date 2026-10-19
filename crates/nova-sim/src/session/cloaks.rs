@@ -16,8 +16,8 @@
 //! - **Drawn** ([`Session::cloak_shown`], `_HandleShipDisplay`
 //!   @0x2d187-0x2d1cd): fully cloaked, a ship the player leads, or any
 //!   ship while the player scans on screen, is drawn faint and any other
-//!   not at all; short of that, a led ship is drawn, and any other while
-//!   the player sees past its cloak.
+//!   not at all; short of that, every ship with a fade is drawn jittered
+//!   and faint (@0x2d2c0-0x2d648), and one with none as it is.
 //! - **The radar** ([`Session::on_radar`], `_DrawStatusRadar`
 //!   @0x49ac6-0x49af5): a cloaked ship shows only when its own cloak shows
 //!   there or the player scans for cloaked ships on the radar.
@@ -59,8 +59,7 @@ impl Session {
     }
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
-    /// it waits at, which [`Session::sees`] holds unseen: what the view
-    /// draws a ship fading in at its gate by.
+    /// it waits at, which [`Session::sees`] holds unseen.
     #[must_use]
     pub fn sees_past_cloak(&self, npc: &Npc) -> bool {
         let observer = Observer {
@@ -78,27 +77,25 @@ impl Session {
     /// leads is drawn faint, and so is any ship while the player scans for
     /// cloaked ships on screen, at any range, as @0x2d1aa has no range test
     /// ([`cloak::full_fade_translucency`]); any other is not drawn. Still
-    /// fading, or uncloaked, a ship the player leads is drawn, and any
-    /// other while the player sees past its cloak
-    /// ([`Session::sees_past_cloak`]). The original draws every ship still
-    /// fading jittered and translucent (@0x2d2c0-0x2d648), which
-    /// rdm:phase/cloaking-fidelity/phase-1-cloak-fade-and-sounds owns;
-    /// until then an opaque led ship is the nearest the engine draws. A
-    /// ship waiting at its gate is left to the view's tint, as now.
+    /// fading (a fade above 0), every ship is drawn jittered and faint,
+    /// whoever leads it and whether or not the player sees past its cloak
+    /// ([`CloakShown::Fading`], @0x2d2c0-0x2d648); with no fade it is
+    /// drawn as it is (@0x2d169-0x2d16c). A ship waiting at its gate is
+    /// left to the view's tint, as now.
     #[must_use]
     pub fn cloak_shown(&self, npc: &Npc) -> CloakShown {
-        let led = npc.escorts_player();
         if npc.cloak.full() {
+            let led = npc.escorts_player();
             let level = cloak::full_fade_translucency(led, self.scanner().on_screen);
             if level < cloak::TRANSLUCENCY_STEPS {
                 CloakShown::Translucent(level)
             } else {
                 CloakShown::Hidden
             }
-        } else if led || self.sees_past_cloak(npc) {
-            CloakShown::Opaque
+        } else if npc.cloak.fade > 0.0 {
+            CloakShown::Fading(npc.cloak.fade)
         } else {
-            CloakShown::Hidden
+            CloakShown::Opaque
         }
     }
 
@@ -374,14 +371,55 @@ mod tests {
     }
 
     #[test]
-    fn a_led_ship_still_fading_is_drawn_and_a_stranger_only_while_seen() {
+    fn every_ship_still_fading_is_drawn_fading_led_or_not_and_no_fade_is_opaque() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         assert_eq!(shown(&mut session, 0.0, 0), CloakShown::Opaque, "uncloaked");
-        assert_eq!(shown(&mut session, 31.9, 1), CloakShown::Hidden);
-        assert_eq!(shown(&mut session, 8.0, -1), CloakShown::Opaque, "seen");
+        assert_eq!(
+            shown(&mut session, -0.5, 0),
+            CloakShown::Opaque,
+            "drifted under"
+        );
+        assert_eq!(shown(&mut session, 31.9, 1), CloakShown::Fading(31.9));
+        assert_eq!(shown(&mut session, 8.0, -1), CloakShown::Fading(8.0));
+        assert_eq!(shown(&mut session, 0.5, -2), CloakShown::Fading(0.5));
         lead(&mut session);
-        assert_eq!(shown(&mut session, 31.9, 1), CloakShown::Opaque, "led");
+        assert_eq!(
+            shown(&mut session, 31.9, 1),
+            CloakShown::Fading(31.9),
+            "led"
+        );
         assert_eq!(shown(&mut session, 0.0, 0), CloakShown::Opaque);
+    }
+
+    #[test]
+    fn an_npc_cloaking_and_uncloaking_raises_no_cloak_sound() {
+        // `_DoShipCloak` and `_DoShipUncloak` play their sounds only for
+        // the player (+0x86 0, @0xdec0, @0xdf9e).
+        use crate::cloak::{CLOAK_WHEN_HIT, CloakGear};
+        use crate::combat::ShipRef;
+        use crate::combat::fixture::strike;
+        use crate::traffic::npc::NpcId;
+        use nova_sim_catalog::sound::SimSound;
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].cloak_gear = CloakGear {
+            flags2: CLOAK_WHEN_HIT,
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        session.take_sounds();
+        session.cloak_hits(&[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)]);
+        assert_eq!(session.npcs()[0].cloak.direction, 1, "cloaking");
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.cloak_hits(&[strike(ShipRef::Npc(NpcId(0)), ShipRef::Player)]);
+        assert_eq!(session.npcs()[0].cloak.direction, -1, "uncloaking");
+        let sounds = session.take_sounds();
+        assert!(
+            !sounds
+                .iter()
+                .any(|s| matches!(s, SimSound::Cloaked | SimSound::Uncloaked)),
+            "{sounds:?}"
+        );
     }
 }

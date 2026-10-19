@@ -28,6 +28,21 @@
 //!   going in, cannot follow: a cloaked fade is above 8). So a ship
 //!   cloaking from 0 reads cloaked only past 16, and an uncloak asked
 //!   before then does nothing.
+//! - **The sounds**: `_DoShipCloak` plays [`CLOAK_SOUND`] (381,
+//!   `cloakSnd[1]`, @0xdec0-0xdef3) when the fade was not already going
+//!   in, and `_DoShipUncloak` [`UNCLOAK_SOUND`] (380, `cloakSnd[0]`,
+//!   @0xdf9e-0xdfd0) when it was not already going out, each at priority
+//!   8 and only for the player (+0x86 0). [`Cloak::cloak`] and
+//!   [`Cloak::uncloak`] say whether it would play; no NPC's cloak ever
+//!   sounds.
+//! - **Dying** ([`Cloak::display_step`], @0x2d169-0x2d17e): after the
+//!   step, a dying ship (`_IsDying`) with any fade left takes direction
+//!   [`DYING_DIRECTION`] (-2), whatever it was, so it falls at twice the
+//!   rate from the next step.
+//! - **Drawn** ([`CloakShown`]): with no fade a ship is drawn as it is;
+//!   fading, every ship is drawn jittered and faint, whoever leads it
+//!   (@0x2d2c0-0x2d648); fully faded, at [`full_fade_translucency`]
+//!   (@0x2d187-0x2d2bb). The view's `cloak_fade` module draws each.
 //!
 //! What an NPC's ship type gives ([`CloakGear`]) comes from its default
 //! items and its `Flags2`: a cloak (an outfit with a `ModType` 17 mod,
@@ -73,15 +88,20 @@
 //! Zephyr's weapons have no burst); the think's 30-59 frame delay after a
 //! ship's hyperspace glide (`_HandleShip` @0x34d74); a cloak's fuel and
 //! shield usage forcing an uncloak (@0x83422-0x83452) and
-//! `_CloakZeroesShields`; a dying ship's fade out at twice the rate
-//! (direction -2, @0x2d17e); the player's own cloak; area cloaks; NPCs'
-//! own sight of cloaked ships for their targeting (cloaking-fidelity 4;
-//! point defence and homing shots already ask [`seen`]); the visual fade below a full cloak (its
-//! jitter and levels, @0x2d2c0-0x2d648) and the cloak's sounds. A full
-//! cloak's level is modelled: faint for a ship the player leads or while
-//! it scans on screen, otherwise not drawn ([`full_fade_translucency`],
-//! [`CloakShown`]); the player's own at full fade (@0x2d199-0x2d1a1) is
-//! not, as the player has no cloak.
+//! `_CloakZeroesShields`; the player's own cloak, so raising the cloak
+//! sounds (rdm:phase/cloaking-fidelity/phase-8-cloaking-device) and its
+//! own full fade (@0x2d199-0x2d1a1); area cloaks; NPCs' own sight of
+//! cloaked ships for their targeting (cloaking-fidelity 4; point defence
+//! and homing shots already ask [`seen`]).
+//!
+//! Left out of `_HandleShipDisplay`'s drawing (@0x2d088-0x2d72e): the
+//! 8-bit depth, its hull at translucency 0x10 (@0x2d341-0x2d34c) and its
+//! weapon glow hidden (@0x2d667-0x2d681), as the view draws 16-bit only;
+//! the ship's paint (`_GetShipPaintColor` @0x7d0c-0x7da7), as the engine
+//! draws none (rdm:task/ship-paint-tint-and-capture): the factors take
+//! paint as an argument and the view passes unpainted (32, 32, 32); and
+//! the step's frame-time factor (the double at 0x3b511c, @0x2d0d2-0x2d0df),
+//! as the engine's tick already models frame time.
 //!
 //! # Seeing a cloaked ship
 //!
@@ -181,15 +201,20 @@ pub const TRANSLUCENCY_STEPS: u8 = 0x40;
 /// screen (`_HandleShipDisplay` @0x2d1a3-0x2d1cd).
 pub const SEEN_AT_FULL_FADE: u8 = 0x1e;
 
-/// How a ship's cloak lets the player's screen show it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How a ship's cloak lets the player's screen show it
+/// (`_HandleShipDisplay` @0x2d169-0x2d648).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CloakShown {
-    /// Drawn as it is.
+    /// Drawn as it is: no fade (at or below 0, @0x2d169-0x2d16c).
     Opaque,
-    /// Drawn translucent, at this level in 64ths: 0 opaque, always below
-    /// [`TRANSLUCENCY_STEPS`].
+    /// Fading, at this fade, above 0 and below [`FADE_FULL`]: drawn
+    /// jittered and faint, whoever leads it (@0x2d2c0-0x2d648).
+    Fading(f32),
+    /// Fully faded and drawn translucent, at this level in 64ths: always
+    /// below [`TRANSLUCENCY_STEPS`] (@0x2d187-0x2d1cd).
     Translucent(u8),
-    /// Not drawn.
+    /// Fully faded and its hull not drawn (translucency
+    /// [`TRANSLUCENCY_STEPS`]); its weapon glow, when lit, still is.
     Hidden,
 }
 

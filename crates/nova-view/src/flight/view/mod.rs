@@ -612,7 +612,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::gate_entry::enter_level;
@@ -1620,25 +1619,6 @@ fn dying(
         )
     });
     me.into_iter().chain(npcs).collect()
-}
-
-/// The alpha a ship's sprite is drawn with for how its cloak shows it
-/// ([`Session::cloak_shown`]), or `None` when it is not drawn: full when
-/// opaque, and a translucency of n 64ths leaving (64 - n) 64ths of full
-/// alpha, rounded to nearest. A ship waiting at the gate it comes out of
-/// is hidden, then faded in, by its tint ([`npc_tint`]), as
-/// `_HandleShipDisplay` (@0x2c090-0x2c18e) fades it. The radar still shows
-/// a cloaked ship, as `_DrawStatusRadar` does not ask.
-fn cloak_alpha(shown: CloakShown) -> Option<u8> {
-    match shown {
-        CloakShown::Opaque => Some(u8::MAX),
-        CloakShown::Translucent(level) => {
-            let steps = u16::from(TRANSLUCENCY_STEPS);
-            let left = steps - u16::from(level.min(TRANSLUCENCY_STEPS));
-            u8::try_from((left * 255 + steps / 2) / steps).ok()
-        }
-        CloakShown::Hidden => None,
-    }
 }
 
 /// Each of `shown` the radar shows, where it is drawn, whether it is the
