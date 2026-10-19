@@ -169,7 +169,7 @@ impl Session {
         let rebuilt = self.rebuilt.rebuild(
             &self.sites,
             |id| galaxy.destroyed(id),
-            self.fallback_frame.is_some(),
+            self.statics.fallback_frame.is_some(),
         );
         self.rebuild_sprite_pool();
         reshown | rebuilt
@@ -190,7 +190,7 @@ impl Session {
                 && self.rebuilt.dead(site.id)
                 && self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
             {
-                self.fallback_frame
+                self.statics.fallback_frame
             }
             _ => site.frame_size,
         }
@@ -234,7 +234,7 @@ impl Session {
         if !wreck::in_range(stellar) {
             return;
         }
-        let Some(life) = self.lives.get(&stellar).cloned() else {
+        let Some(life) = self.statics.lives.get(&stellar).cloned() else {
             return;
         };
         let destroyed_before = self.galaxy.destroyed(stellar);
@@ -292,7 +292,7 @@ impl Session {
             .iter()
             .filter(|site| !site.destroyed && site.frame_size.is_some())
             .filter_map(|site| {
-                let life = self.lives.get(&site.id)?;
+                let life = self.statics.lives.get(&site.id)?;
                 wreck::destroyable(life).then(|| StellarTarget {
                     stellar: site.id,
                     position: site.position,
@@ -317,7 +317,11 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         for target in stellars {
-            let full = self.lives.get(&target.stellar).map(wreck::full_strength);
+            let full = self
+                .statics
+                .lives
+                .get(&target.stellar)
+                .map(wreck::full_strength);
             if full == Some(target.strength) {
                 self.strength.remove(&target.stellar);
             } else {
@@ -348,7 +352,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let (Some(life), Some(site)) = (
-            self.lives.get(&stellar).cloned(),
+            self.statics.lives.get(&stellar).cloned(),
             self.sites.iter().find(|site| site.id == stellar).copied(),
         ) else {
             return;
@@ -384,7 +388,7 @@ impl Session {
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
-            let Some(life) = self.lives.get(&stellar).cloned() else {
+            let Some(life) = self.statics.lives.get(&stellar).cloned() else {
                 continue;
             };
             match wreck::day(&life, countdown) {
@@ -408,6 +412,7 @@ impl Session {
     pub(super) fn destroy_from_the_start(&mut self) {
         let reading = self.rules.source_for(RuleKey::DestroyInvincible);
         let ruined: Vec<_> = self
+            .statics
             .lives
             .values()
             .filter(|life| {

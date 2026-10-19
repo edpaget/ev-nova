@@ -350,7 +350,7 @@ impl Session {
         });
         self.lay_out_displayed();
         self.traffic.step_fades();
-        self.traffic.after_firing(&self.arsenal);
+        self.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
@@ -413,7 +413,7 @@ impl Session {
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &self.ammo_outfits,
+            sources: &self.statics.ammo_outfits,
         };
         let mut fighters = vec![Fighter {
             ship: ShipRef::Player,
@@ -464,8 +464,8 @@ impl Session {
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
         let arena = Arena {
             pass,
-            arsenal: &self.arsenal,
-            govts: &self.govts,
+            arsenal: &self.statics.arsenal,
+            govts: &self.statics.govts,
             rules,
             field,
         };

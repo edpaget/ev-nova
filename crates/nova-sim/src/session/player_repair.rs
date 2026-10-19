@@ -66,7 +66,7 @@ impl Session {
             return;
         }
         let drawn = chance.below(REPAIR_ODDS);
-        let gear = has_gear(&self.pilot.outfits, &self.outfits);
+        let gear = has_gear(&self.pilot.outfits, &self.statics.outfits);
         let armor = &mut self.pilot.reserves.armor;
         if !can_self_repair(drawn, self.condition, armor.now, gear) {
             return;

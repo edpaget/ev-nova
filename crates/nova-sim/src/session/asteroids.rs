@@ -107,13 +107,13 @@ impl Session {
         self.asteroids.spawn(
             Origin::Edge(ring),
             self.field_spec(),
-            &self.asteroid_types,
+            &self.statics.asteroid_types,
             player,
             self.play_area,
             chance,
         );
         self.asteroids
-            .step(&self.asteroid_types, player, self.play_area);
+            .step(&self.statics.asteroid_types, player, self.play_area);
     }
 
     /// Places the field of a session started or loaded in flight, once,
@@ -147,7 +147,7 @@ impl Session {
         let player = self.player.position;
         self.asteroids.place_field(
             self.field_spec(),
-            &self.asteroid_types,
+            &self.statics.asteroid_types,
             player,
             self.play_area,
             chance,
@@ -168,6 +168,7 @@ impl Session {
             .indexed()
             .map(|(slot, asteroid)| {
                 let kind_type = self
+                    .statics
                     .asteroid_types
                     .get(usize::from(asteroid.kind))
                     .copied()
@@ -211,7 +212,10 @@ impl Session {
             }
         }
         for slot in self.combat.take_broken_asteroids() {
-            let Some(remains) = self.asteroids.destroy(slot, &self.asteroid_types, chance) else {
+            let Some(remains) = self
+                .asteroids
+                .destroy(slot, &self.statics.asteroid_types, chance)
+            else {
                 continue;
             };
             for _ in 0..remains.boxes {
@@ -230,7 +234,8 @@ impl Session {
     /// The player's system's field: none for one the catalog doesn't
     /// list.
     fn field_spec(&self) -> FieldSpec {
-        self.asteroid_fields
+        self.statics
+            .asteroid_fields
             .get(&self.pilot.system)
             .copied()
             .unwrap_or(FieldSpec::NONE)

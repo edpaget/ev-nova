@@ -20,7 +20,7 @@ impl Session {
     /// read, so the two match.
     #[must_use]
     pub fn radar_gear(&self) -> RadarGear {
-        RadarGear::of(&self.pilot.outfits, &self.outfits)
+        RadarGear::of(&self.pilot.outfits, &self.statics.outfits)
     }
 
     /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its

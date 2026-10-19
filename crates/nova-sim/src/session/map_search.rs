@@ -22,6 +22,7 @@ impl Session {
     #[must_use]
     pub fn find_map_system(&self, query: &str) -> SearchOutcome {
         let candidates = self
+            .statics
             .place_names
             .systems
             .iter()

@@ -90,7 +90,7 @@ impl Session {
     /// The daily step's second participant: one pass over the crons (see
     /// [`cron`](crate::cron)), drawing on `chance`.
     pub(super) fn crons_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let crons = Rc::clone(&self.crons);
+        let crons = Rc::clone(&self.statics.crons);
         let rules = self.rules;
         cron::pass(
             &crons,
@@ -113,7 +113,7 @@ impl Session {
     /// [`Checks::all_refusals`]: crate::rules::Checks::all_refusals
     #[must_use]
     pub fn cron_refusals(&self, cron: CronId) -> Option<Vec<(&'static str, Verdict<CronRefusal>)>> {
-        let record = self.crons.iter().find(|record| record.id == cron)?;
+        let record = self.statics.crons.iter().find(|record| record.id == cron)?;
         let facts = self.cron_facts(record);
         Some(
             cron::eligibility()
@@ -141,9 +141,9 @@ impl Session {
     pub(super) fn contributed(&self) -> u64 {
         let by = Contributors {
             ship: self.fields.contribute,
-            outfits: &self.outfits,
-            crons: &self.crons,
-            ranks: &self.ranks,
+            outfits: &self.statics.outfits,
+            crons: &self.statics.crons,
+            ranks: &self.statics.ranks,
         };
         wares::contributed(&by, &self.pilot)
     }

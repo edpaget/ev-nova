@@ -825,7 +825,7 @@ impl Session {
     fn show(&mut self, system: SystemId, listed: Vec<LandingSite>) {
         self.sites = super::shown_sites(
             &self.galaxy,
-            &self.listed_stellars,
+            &self.statics.listed_stellars,
             system,
             &listed,
             self.landed,
@@ -1022,7 +1022,7 @@ impl Session {
     /// countdown started: on an arrival ([`Session::announce`]) or on the
     /// warp end's fallback pass (see the `warp_stage` module).
     pub(super) fn sound_warp_out(&mut self) {
-        self.warp_out.start(self.warp_out_sound);
+        self.warp_out.start(self.statics.warp_out_sound);
         self.sounds.push(SimSound::Arrived);
     }
 

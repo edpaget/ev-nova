@@ -146,7 +146,10 @@ impl Session {
 
     /// The record of `outfit`, if there is one.
     fn outfit_record(&self, outfit: OutfitId) -> Option<&OutfitRecord> {
-        self.outfits.iter().find(|record| record.id == outfit)
+        self.statics
+            .outfits
+            .iter()
+            .find(|record| record.id == outfit)
     }
 
     /// What granting one of `outfit` does: a plain item's when it has no
@@ -183,7 +186,7 @@ impl Session {
             self.fields,
             &self.standard(),
             &self.pilot.outfits,
-            &self.outfits,
+            &self.statics.outfits,
             &self.rules,
         )
     }
@@ -201,7 +204,7 @@ impl Session {
                 self.pilot.system,
                 self.galaxy.map(),
                 self.hyperlinks,
-                &self.govts,
+                &self.statics.govts,
                 self.outfit_rules().map_explore,
             );
             for system in reached {

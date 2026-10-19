@@ -224,8 +224,9 @@ impl Session {
     /// ([`escape_ship_type`]): its fighter bays' rounds are the fighters
     /// aboard.
     fn escape_ship(&self) -> Option<ShipId> {
-        let rounds = |weapon| outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, weapon);
-        escape_ship_type(self.arsenal.weapons(), rounds, &self.ships)
+        let rounds =
+            |weapon| outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, weapon);
+        escape_ship_type(self.statics.arsenal.weapons(), rounds, &self.statics.ships)
     }
 
     /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`, while
@@ -233,10 +234,11 @@ impl Session {
     /// or ship, a free ship slot and a record of the class it flies.
     /// Whether it ejected.
     fn try_eject(&mut self, auto: bool, hulk: Condition, chance: &mut dyn Chance) -> bool {
-        let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.outfits))
+        let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.statics.outfits))
             || (self.eject_held && self.takes(PlayerCommand::Eject));
         if !armed
-            || !(has_escape_pod(&self.pilot.outfits, &self.outfits) || self.escape_ship().is_some())
+            || !(has_escape_pod(&self.pilot.outfits, &self.statics.outfits)
+                || self.escape_ship().is_some())
             || self.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM
         {
             return false;
@@ -526,10 +528,13 @@ impl Session {
             defaults,
             None,
             None,
-            &self.outfits,
+            &self.statics.outfits,
         );
-        let fits = self.arsenal.stock_fits(record.id, &self.outfits);
-        fit_stock(&mut outfits, &fits, &self.outfits);
+        let fits = self
+            .statics
+            .arsenal
+            .stock_fits(record.id, &self.statics.outfits);
+        fit_stock(&mut outfits, &fits, &self.statics.outfits);
         let change = ClassChange {
             outfits,
             reserves: super::ReservePolicy::Hold,
@@ -1317,7 +1322,7 @@ mod tests {
             }
         }
         let mut session = flying(&catalog, &[POD, AUTO]);
-        session.warp_sounds[0] = 9;
+        session.statics_mut().warp_sounds[0] = 9;
         session.jump = Some(BRAKING);
         session.take_messages();
         let (breakup, check) = to_the_first_check(&mut session, &catalog, false);
@@ -1361,7 +1366,7 @@ mod tests {
         // An escape ship's notice follows the collapse's.
         let catalog = escaping();
         let (mut session, sounds) = escaped(&catalog, &[], |session| {
-            session.warp_sounds[0] = 9;
+            session.statics_mut().warp_sounds[0] = 9;
             session.jump = Some(BRAKING);
         });
         assert_eq!(
@@ -1402,7 +1407,7 @@ mod tests {
         assert!(crate::warp::lead_in_speed(2, w, 9) > 0.0);
         let mut session = flying(&catalog, &[POD, AUTO]);
         session.set_double_time_key(true);
-        session.warp_sounds = [9, 9];
+        session.statics_mut().warp_sounds = [9, 9];
         session.jump = Some(BRAKING);
         session.pilot.reserves.armor.now = 0.0;
         session.condition = Condition::Dying {
@@ -1970,7 +1975,7 @@ mod tests {
         catalog.ship_records.push(ship(OLD, FAST));
         let session = podded(&catalog, |session| {
             session.pilot.ship = ShipId(OLD);
-            session.hull = session.arsenal.hull(ShipId(OLD));
+            session.hull = session.statics.arsenal.hull(ShipId(OLD));
         });
         let hulk = hulk(&session);
         assert_eq!(hulk.ship, ShipId(OLD));

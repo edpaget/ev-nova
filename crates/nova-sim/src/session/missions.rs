@@ -254,7 +254,11 @@ impl Session {
     /// ([`StellarMarks::identical`](crate::mission::StellarMarks::identical)). No stop is never docked at.
     pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
         let rules = IdentityRules::of(&self.rules);
-        stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, rules))
+        stop.is_some_and(|stop| {
+            self.statics
+                .stellar_marks
+                .identical(stop.stellar, docked, rules)
+        })
     }
 
     /// Whether the ship is docked at a mission's `stop`, as
@@ -292,12 +296,12 @@ impl Session {
     pub(crate) fn stop_landing(&self, stop: Stop) -> Result<(SystemId, StellarId), StopRefusal> {
         let refresh = self.refresh_now();
         let visible_listers = |stellar: StellarId| {
-            crate::story::listers_of(&self.listed_stellars, stellar)
+            crate::story::listers_of(&self.statics.listed_stellars, stellar)
                 .iter()
                 .copied()
                 .filter(|&system| self.galaxy.exists(system) && !refresh.hides(system))
         };
-        if crate::story::listers_of(&self.listed_stellars, stop.stellar).is_empty() {
+        if crate::story::listers_of(&self.statics.listed_stellars, stop.stellar).is_empty() {
             return Err(StopRefusal::NoSystem);
         }
         if let Some(first) = visible_listers(stop.stellar).next() {
@@ -307,7 +311,8 @@ impl Session {
                 .unwrap_or(first);
             return Ok((system, stop.stellar));
         }
-        self.stellar_marks
+        self.statics
+            .stellar_marks
             .variants(stop.stellar, IdentityRules::of(&self.rules))
             .find_map(|variant| Some((visible_listers(variant).next()?, variant)))
             .ok_or(StopRefusal::Hidden)
@@ -381,7 +386,7 @@ impl Session {
 
     /// The record of `mïsn` `id`, if the session has one.
     pub(super) fn mission_record(&self, id: MissionId) -> Option<&MissionRecord> {
-        self.missions.iter().find(|record| record.id == id)
+        self.statics.missions.iter().find(|record| record.id == id)
     }
 
     /// The record an active mission's lifecycle reads: its own, or a
@@ -778,7 +783,9 @@ impl Session {
             self.check_avail_bits(mission);
         }
         let mut offers = std::mem::take(&mut self.offers);
-        self.at_visit(stellar, |visit| offers.refilter(&self.missions, visit));
+        self.at_visit(stellar, |visit| {
+            offers.refilter(&self.statics.missions, visit);
+        });
         self.offers = offers;
     }
 
@@ -904,14 +911,14 @@ impl Session {
                     |govt| self.pilot.legal_record(govt),
                     of,
                     among,
-                    &self.govts,
+                    &self.statics.govts,
                 );
                 let systems = cleaned(
                     self.galaxy.governed(),
                     |system| self.pilot.system_record(system),
                     of,
                     among,
-                    &self.govts,
+                    &self.statics.govts,
                 );
                 for govt in govts {
                     self.pilot.set_legal_record(govt, 0);
@@ -930,7 +937,7 @@ impl Session {
     /// `record`'s `CompGovt` though it is not.
     fn govt_targets(&self, record: &MissionRecord) -> Vec<(GovtId, Option<GovtId>)> {
         let ids: std::collections::BTreeSet<GovtId> =
-            self.govts.ids().chain(record.comp_govt).collect();
+            self.statics.govts.ids().chain(record.comp_govt).collect();
         ids.into_iter().map(|govt| (govt, Some(govt))).collect()
     }
 
@@ -1072,12 +1079,18 @@ impl Session {
         };
         self.run_mission_script(slot, &record.on_success, chance);
         self.pass_days(post_days(record.date_post_inc), chance);
-        let changes = success_records(&record, &self.govts, self.govt_targets(&record), |govt| {
-            self.pilot.legal_record(govt)
-        });
-        let in_systems = success_records(&record, &self.govts, self.galaxy.governed(), |system| {
-            self.pilot.system_record(system)
-        });
+        let changes = success_records(
+            &record,
+            &self.statics.govts,
+            self.govt_targets(&record),
+            |govt| self.pilot.legal_record(govt),
+        );
+        let in_systems = success_records(
+            &record,
+            &self.statics.govts,
+            self.galaxy.governed(),
+            |system| self.pilot.system_record(system),
+        );
         self.set_records(&changes, &in_systems);
         self.apply_pay(done.pay);
         self.forget_offers();
@@ -1141,7 +1154,7 @@ impl Session {
         };
         let mut offers = std::mem::take(&mut self.offers);
         self.at_visit(stellar, |visit| {
-            offers.reoffer(&self.missions, visit, chance);
+            offers.reoffer(&self.statics.missions, visit, chance);
         });
         self.offers = offers;
     }
@@ -1212,7 +1225,7 @@ impl Session {
     pub(super) fn roll_offers(&mut self, stellar: StellarId, chance: &mut dyn Chance) {
         let mut offers = std::mem::take(&mut self.offers);
         self.at_visit(stellar, |visit| {
-            offers.roll(&self.missions, visit, chance);
+            offers.roll(&self.statics.missions, visit, chance);
         });
         self.offers = offers;
     }
@@ -1259,7 +1272,11 @@ impl Session {
         &self,
         mission: MissionId,
     ) -> Option<Vec<(&'static str, Verdict<Refusal>)>> {
-        let record = self.missions.iter().find(|record| record.id == mission)?;
+        let record = self
+            .statics
+            .missions
+            .iter()
+            .find(|record| record.id == mission)?;
         let stellar = self.landed?;
         self.at_visit(stellar, |visit| {
             let facts = AvailFacts {
@@ -1293,13 +1310,13 @@ impl Session {
     /// `f` of the galaxy a mission's stellars are chosen from.
     pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
         let player = self.pilot.system;
-        let stellars = stellars_of(&self.galaxy, &self.listed_stellars, player);
-        let placed = placements(&self.galaxy, &self.listed_stellars, player);
+        let stellars = stellars_of(&self.galaxy, &self.statics.listed_stellars, player);
+        let placed = placements(&self.galaxy, &self.statics.listed_stellars, player);
         f(&World {
             stellars: &stellars,
             placed: &placed,
             map: self.galaxy.map(),
-            govts: &self.govts,
+            govts: &self.statics.govts,
             draw: self.rules.source_for(RuleKey::MissionStellarDraw),
             distance: self.rules.source_for(RuleKey::MissionStellarDistance),
             ally_index: self.rules.source_for(RuleKey::MissionAllyIndex),
@@ -1370,6 +1387,7 @@ impl Session {
     pub(crate) fn propagate_avail_bits(&mut self) {
         let gate = self.gate();
         let verdicts: BTreeMap<MissionId, bool> = self
+            .statics
             .missions
             .iter()
             .map(|record| (record.id, gate.allows(&record.avail_bits)))
@@ -1462,7 +1480,7 @@ impl Session {
                 values,
                 cash: self.pilot.cash,
                 today: self.pilot.date,
-                date_affixes: &self.date_affixes,
+                date_affixes: &self.statics.date_affixes,
                 pay_millions: self.rules.source_for(RuleKey::PayMillions),
                 slot,
             }),
@@ -1650,11 +1668,11 @@ impl TextSource {
 /// string lists hold (`STR#` 4001).
 impl TagNames for Session {
     fn stellar_name(&self, stellar: StellarId) -> Option<String> {
-        self.place_names.stellars.get(&stellar).cloned()
+        self.statics.place_names.stellars.get(&stellar).cloned()
     }
 
     fn system_name(&self, system: SystemId) -> Option<String> {
-        self.place_names.systems.get(&system).cloned()
+        self.statics.place_names.systems.get(&system).cloned()
     }
 
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
@@ -3423,7 +3441,7 @@ mod tests {
         let (mut session, _) = watched(&catalog, Rulebook::default());
         accept(&mut session, 140);
         accept(&mut session, 141);
-        session.missions.clear();
+        session.statics_mut().missions.clear();
         assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
         let cash = session.pilot().cash();
         land_on(&mut session, &catalog, 128);

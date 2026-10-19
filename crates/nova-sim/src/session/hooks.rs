@@ -194,7 +194,7 @@ impl Session {
                     &mut self.pilot,
                     self.galaxy.governed(),
                     &start.legal,
-                    &self.govts,
+                    &self.statics.govts,
                 );
             }
             if self.hook_rules().start_ship_purchase == RuleSource::Bible {
@@ -909,7 +909,7 @@ mod tests {
     /// losing its crew, so a capture joins the fleet at once.
     fn aboard_crewless(catalog: &FakePilotCatalog) -> (Session, Rc<Probe>) {
         let mut session = aboard(catalog);
-        for record in &mut session.ships {
+        for record in &mut session.statics_mut().ships {
             if record.id == ShipId(128) {
                 record.crew = 0;
             }
@@ -1050,7 +1050,10 @@ mod tests {
     #[test]
     fn an_abandoned_prize_runs_no_hook() {
         let (mut session, probe) = captured_kitted("S222", "S223", Rulebook::default());
-        session.ships.retain(|record| record.id != ShipId(129));
+        session
+            .statics_mut()
+            .ships
+            .retain(|record| record.id != ShipId(129));
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::Abandoned)

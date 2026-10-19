@@ -129,7 +129,7 @@ impl Session {
     /// leaves the cargo past the holds untrimmed (see the module docs).
     pub(super) fn reset_precalced_for(&mut self, cause: ResetCause) {
         self.scan_latches = Latches::ARMED;
-        self.junk_latches = market::JunkLatches::of(&self.goods, &self.pilot.cargo);
+        self.junk_latches = market::JunkLatches::of(&self.statics.goods, &self.pilot.cargo);
         self.refresh_sabotage();
         self.reset_inhibitors();
         self.reset_iff_scramblers();

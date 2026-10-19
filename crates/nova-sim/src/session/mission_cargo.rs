@@ -229,7 +229,7 @@ impl Session {
         let Some(govt_id) = npc.govt else {
             return;
         };
-        let Some(govt) = self.govts.get(govt_id).cloned() else {
+        let Some(govt) = self.statics.govts.get(govt_id).cloned() else {
             return;
         };
         if !scan::goes_on(ai_type, &govt, off, chance) || self.warp_holds_scans() {
@@ -238,9 +238,9 @@ impl Session {
         self.scan_mission_cargo(id, scanner, &govt, chance);
         let carried = scan::Carried {
             cargo: &self.pilot.cargo,
-            junk: self.goods.junk(),
+            junk: self.statics.goods.junk(),
             outfits: &self.pilot.outfits,
-            outfit_records: &self.outfits,
+            outfit_records: &self.statics.outfits,
         };
         let rules = scan::ScanRules {
             outfits_past_junk: self.rules.source_for(RuleKey::ScanOutfitsPastJunk),
@@ -1024,7 +1024,7 @@ mod tests {
                 .accept_mission(MissionId(id), &mut NeverFires)
                 .expect("accepted");
         }
-        session.missions.clear();
+        session.statics_mut().missions.clear();
         land_on(&mut session, &catalog, 128);
         assert!(aboard(&session, 1), "no DropOffMode: kept at its return");
         land_on(&mut session, &catalog, 129);

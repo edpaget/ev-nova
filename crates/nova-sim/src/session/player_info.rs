@@ -121,16 +121,16 @@ impl Session {
         let reserves = self.reserves();
         let totals = HandlingTotals::new(
             self.fields,
-            &outfit_mods(&self.pilot.outfits, &self.outfits),
+            &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
         );
-        let records = &self.outfits[..];
+        let records = &self.statics.outfits[..];
         let owned = &self.pilot.outfits;
         let ranks = self.pilot_info_ranks();
         let any_rank = self
             .pilot
             .ranks
             .iter()
-            .any(|id| self.ranks.iter().any(|rank| rank.id == *id));
+            .any(|id| self.statics.ranks.iter().any(|rank| rank.id == *id));
         let honors = player_info::honors_shown(any_rank, records, owned).then(|| {
             let specials = player_info::special_groups(records, owned);
             player_info::honors_text(&ranks, &specials, records, &words).unwrap_or_default()
@@ -156,6 +156,7 @@ impl Session {
             pilot_name: self.pilot.name().to_owned(),
             date: self.med_date_text(),
             system: self
+                .statics
                 .place_names
                 .systems
                 .get(&self.pilot.system)
@@ -251,7 +252,7 @@ impl Session {
                 .map_or(0, |record| record.cost),
             self.fields.mass,
             &self.pilot.outfits,
-            &self.outfits,
+            &self.statics.outfits,
             self.rules.source_for(RuleKey::TradeInOutfits),
             &self.rules,
         )
@@ -261,7 +262,8 @@ impl Session {
     /// lists that is dominated and active, its tribute read from its
     /// holder's stellars in `catalog`.
     fn tribute(&self, catalog: &impl PilotCatalog) -> i64 {
-        self.listed_stellars
+        self.statics
+            .listed_stellars
             .iter()
             .filter(|listed| listed.flags2 & DOMINATED != 0)
             .filter_map(|listed| {
@@ -315,8 +317,8 @@ impl Session {
         });
         let index = player_info::legal_status_index(
             i64::from(self.record_in(system, None)),
-            i64::from(self.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
-            self.govts.xenophobic(govt),
+            i64::from(self.statics.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
+            self.statics.govts.xenophobic(govt),
             Domination::of(counting.map(|site| site.flags2 & DOMINATED != 0)),
         );
         match index {

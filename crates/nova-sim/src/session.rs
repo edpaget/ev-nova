@@ -456,6 +456,7 @@ mod slot_search;
 mod slot_visibility;
 mod smoke_frame;
 mod stale_sprites;
+mod statics;
 mod status_cargo;
 mod steering;
 mod stellars;
@@ -499,6 +500,7 @@ use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::outfits::{carries, launches};
 use self::ship_change::ClassChange;
+use self::statics::Statics;
 use crate::afterburner::MaxVel;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
@@ -510,11 +512,9 @@ use crate::board::{
     check_board,
 };
 use crate::catalog::{
-    AsteroidCatalog, CombatCatalog, CronRecord, DateAffixes, DescMovie, DudeId, EscortClass,
-    GateSite, GovtId, JunkId, LandingSite, ListedStellar, MissionId, MissionRecord, MissionTexts,
-    NebulaRecord, OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, SystemVisibility,
-    TrafficCatalog, WeaponId,
+    AsteroidCatalog, CombatCatalog, CronRecord, DescMovie, EscortClass, GateSite, GovtId, JunkId,
+    LandingSite, ListedStellar, MissionId, OutfitId, OutfitRecord, PersonId, PilotCatalog, RankId,
+    RankRecord, ShipId, ShipRecord, StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -594,7 +594,7 @@ use crate::text_tags::RankTagGovts;
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
-use crate::traffic::table::{SpawnDude, SpawnTable};
+use crate::traffic::table::SpawnTable;
 use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
 use crate::trig::intercept_angle;
 use crate::wares::DayRolls;
@@ -781,6 +781,9 @@ impl From<LandOutcome> for LandPress {
 pub struct Session {
     /// The pilot flying: everything a save keeps.
     pilot: Pilot,
+    /// The catalog data read when the session starts and never written
+    /// again, shared by every clone (see the `statics` module).
+    statics: Rc<Statics>,
     /// The ship's fields, read when the session starts.
     fields: ShipFields,
     /// The ship's default items, read when the session starts.
@@ -788,10 +791,6 @@ pub struct Session {
     /// The ship's stock weapons and their ammunition, as outfits
     /// ([`Arsenal::stock_outfits`]), read when the session starts.
     stock: BTreeMap<OutfitId, u16>,
-    /// Every `oütf`, read when the session starts.
-    outfits: Vec<OutfitRecord>,
-    /// Every `shïp`, read when the session starts.
-    ships: Vec<ShipRecord>,
     /// How the ship performs, with the outfits it carries.
     stats: ShipStats,
     player: ShipState,
@@ -830,18 +829,10 @@ pub struct Session {
     galaxy: OverlaidGalaxy,
     /// The jump under way, from J being accepted until the ship arrives.
     jump: Option<Jump>,
-    /// The warp sounds' durations, in Mac ticks, read when the session
-    /// starts: `snd ` 128's and 129's, `_jumpSoundLength`, of which
-    /// [`Session::warp_sound`] gives the d of the warp's clock
-    /// ([`warp::sound_duration`]).
-    warp_sounds: [u32; 2],
     /// Which warp-up sound is still playing, `snd ` 128 or 129, for the
     /// warp start's still-playing skip and the double-time switch (see
     /// [`warp::WarpUps`]); not saved, as the original's sounds are not.
     warp_ups: warp::WarpUps,
-    /// The warp-out's duration, in Mac ticks, read when the session
-    /// starts from `snd ` 130 ([`warp::warp_out_duration`]).
-    warp_out_sound: u32,
     /// Whether the warp-out, `snd ` 130, is still playing, for a jump's
     /// natural end (see [`warp::WarpOut`]); not saved, as the original's
     /// sounds are not.
@@ -864,9 +855,6 @@ pub struct Session {
     gate_arrival: GateArrivalRule,
     /// The rule an unlinked wormhole follows.
     wormholes: WormholeRule,
-    /// The goods traded and the events that move their prices, read when
-    /// the session starts.
-    goods: Goods,
     /// Whether the ship is thrusting, as the last sounds told it.
     thrusting: bool,
     /// The engine glow's base level (see [`glow`](crate::glow)), an
@@ -908,23 +896,12 @@ pub struct Session {
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     save_due: bool,
-    /// What the date is wrapped in when it is displayed, read when the
-    /// session starts.
-    date_affixes: DateAffixes,
     /// The NPCs in the system.
     traffic: Traffic,
     /// Whether the system is to be populated on the next traffic tick in
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     traffic_due: bool,
-    /// Every weapon and ship type's combat fields, read when the session
-    /// starts.
-    arsenal: Arsenal,
-    /// Every government and their relations, read when the session
-    /// starts.
-    govts: Governments,
-    /// Each ammunition outfit, with the weapon it is the rounds of.
-    ammo_outfits: Vec<(WeaponId, OutfitId)>,
     /// The player's ship type's hull.
     hull: HullSpec,
     /// The player's weapons.
@@ -1003,14 +980,6 @@ pub struct Session {
     /// The asteroid field about the player (see the `asteroids` module);
     /// never saved, as the original saves none.
     asteroids: crate::asteroid::Asteroids,
-    /// Every asteroid type, by kind, read when the session starts.
-    asteroid_types: Rc<[crate::asteroid::AsteroidType; crate::asteroid::KINDS]>,
-    /// Each box graphic's frame size, read when the session starts, which
-    /// a scoop tests ships against (see [`scoop`](crate::scoop)).
-    box_frames: crate::scoop::BoxFrames,
-    /// Every system's asteroid field, read when the session starts; a
-    /// system not here holds none.
-    asteroid_fields: BTreeMap<SystemId, crate::asteroid::FieldSpec>,
     /// The pass frame a kill of the asteroid field holds through, as
     /// `_killAsteroids` holds to the frame's end (see the `asteroids`
     /// module); never saved.
@@ -1223,10 +1192,6 @@ pub struct Session {
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
-    /// Every stellar's life, by ID, read when the session starts: what `Y`
-    /// and the daily step read of a stellar's destruction and
-    /// regeneration (see the `stellars` module).
-    lives: BTreeMap<StellarId, StellarLife>,
     /// The current strength of each whole stellar shots have damaged, by
     /// ID; one not here has its full `Strength` (see the `stellars`
     /// module). Never saved, as the original saves none.
@@ -1242,24 +1207,6 @@ pub struct Session {
     /// last place (see the `stale_sprites` module); never saved, as it
     /// lives as long as the original's process.
     stellar_sprites: StellarSpritePool,
-    /// Graphic type 0's sheet's frame size, or `None` when it cannot be
-    /// read, read from the catalog as the session starts: what a rebuild
-    /// point fills an empty sprite slot with, and the box a click on that
-    /// slot reads (see the `stellars` module).
-    fallback_frame: Option<(u32, u32)>,
-    /// Every `mïsn`, read when the session starts.
-    missions: Vec<MissionRecord>,
-    /// The `düde`s of every `mïsn` of `Flags` 0x0800 with a `ShipDude`
-    /// that can be read, read when the session starts: what such a
-    /// mission draws its ships' one type from at accept (see the
-    /// `mission_ships` module).
-    uniform_dudes: BTreeMap<DudeId, SpawnDude>,
-    /// Every `crön`, read when the session starts, shared so the daily
-    /// pass holds them while their scripts run (see the `crons` module).
-    crons: Rc<[CronRecord]>,
-    /// Every `ränk` 128-255, read when the session starts (see the
-    /// `ranks` module).
-    ranks: Rc<[RankRecord]>,
     /// The rank last activated, which `<RRK>` reads, until `L` or a sweep
     /// clears it. Never saved: `None` on every [`Session::fly`], as the
     /// original's `ResetPlayer` (@0x1db44) and `ResetPlayerRecord`
@@ -1294,38 +1241,16 @@ pub struct Session {
     /// [`market::JunkLatches`]). Both clear until the first. Never saved,
     /// as the original's are globals.
     junk_latches: market::JunkLatches,
-    /// What the screens show of each `mïsn`, read when the session
-    /// starts (see the `mission_screens` module).
-    mission_texts: BTreeMap<MissionId, MissionTexts>,
-    /// Every stellar some system lists, read when the session starts:
-    /// what a mission's stellars are chosen from, with the galaxy overlay.
-    listed_stellars: Vec<ListedStellar>,
     /// The systems known (+0x1ec): what the galaxy map draws besides the
     /// explored ones, and what the escape search needs (see the
     /// [`exploration`](crate::exploration) module's "Known" and the
     /// `explored` module). Never saved, as the original saves no flag:
     /// each rebuild point works it out afresh.
     known: BTreeSet<SystemId>,
-    /// Every system's `Visibility`, read when the session starts: what the
-    /// galaxy refresh evaluates (see the `story` module).
-    visibility: Rc<[SystemVisibility]>,
-    /// Every `nëbu` 128-159, read when the session starts: their
-    /// `ActiveOn`, which the galaxy refresh evaluates, and their
-    /// `OnExplore` (see the `nebulae` module).
-    nebulae: Rc<[NebulaRecord]>,
     /// Whether a set expression has changed the pilot since the last
     /// settling: by the other reading of [`RuleKey::VisibilityRefresh`]
     /// the settling refreshes the galaxy then.
     galaxy_stale: bool,
-    /// Every stellar's and system's name, read when the session starts:
-    /// what the text tags read (see the `missions` module).
-    place_names: PlaceNames,
-    /// Each system's first stellar that can be read, read when the session
-    /// starts: what a landed `M` selects (see the `nav` module).
-    first_stellars: BTreeMap<SystemId, StellarId>,
-    /// Every stellar's place and name, read when the session starts: what
-    /// a mission's stop is matched by (see the `missions` module).
-    stellar_marks: StellarMarks,
     /// The offers of the visit under way and the stellar they were rolled
     /// at (see the `missions` module); never saved, as the original saves
     /// none of it.
@@ -1611,13 +1536,48 @@ impl Session {
         let stock = arsenal.stock_outfits(ship, &outfits);
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
+        let statics = Statics {
+            ammo_outfits: Arsenal::ammo_outfits(&outfits),
+            outfits,
+            ships,
+            warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
+                .map(warp::sound_duration),
+            warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
+            goods: Goods::read(catalog),
+            date_affixes: catalog.date_affixes(),
+            arsenal,
+            govts,
+            asteroid_types: Rc::new(crate::asteroid::AsteroidType::table(
+                &catalog.asteroid_types(),
+            )),
+            box_frames: crate::scoop::BoxFrames::new(catalog.box_frame_sizes()),
+            asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
+            lives: catalog
+                .stellar_lives()
+                .into_iter()
+                .map(|life| (life.id, life))
+                .collect(),
+            fallback_frame: catalog.fallback_frame_size(),
+            uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
+            missions,
+            crons,
+            ranks,
+            mission_texts: catalog
+                .mission_texts()
+                .into_iter()
+                .map(|texts| (texts.id, texts))
+                .collect(),
+            listed_stellars: listed,
+            visibility: catalog.system_visibility().into(),
+            nebulae: catalog.nebulae().into(),
+            place_names: catalog.place_names(),
+            first_stellars: catalog.first_stellars().into_iter().collect(),
+            stellar_marks: StellarMarks::new(catalog.stellar_marks()),
+        };
         let mut session = Self {
             fields,
             defaults,
             stock,
-            ammo_outfits: Arsenal::ammo_outfits(&outfits),
-            outfits,
-            ships,
             // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
             player,
@@ -1632,10 +1592,7 @@ impl Session {
             gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
-            warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
-                .map(warp::sound_duration),
             warp_ups: warp::WarpUps::default(),
-            warp_out_sound: warp::warp_out_duration(catalog.warp_out_sound()),
             warp_out: warp::WarpOut::default(),
             warp: warp_stage::PlayerWarp::default(),
             multi_jump: MultiJumpRule::default(),
@@ -1645,7 +1602,6 @@ impl Session {
             gate: None,
             gate_arrival: GateArrivalRule::default(),
             wormholes: WormholeRule::default(),
-            goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
             ship_display: ship_display::PlayerDisplay::default(),
@@ -1656,11 +1612,8 @@ impl Session {
             messages: Vec::new(),
             events: Vec::new(),
             save_due: false,
-            date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
             traffic_due: true,
-            arsenal,
-            govts,
             // Refitted below, from the ship and the outfits the pilot owns.
             hull: HullSpec::default(),
             armament: Armament::default(),
@@ -1683,11 +1636,6 @@ impl Session {
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
             asteroids: crate::asteroid::Asteroids::default(),
-            asteroid_types: Rc::new(crate::asteroid::AsteroidType::table(
-                &catalog.asteroid_types(),
-            )),
-            box_frames: crate::scoop::BoxFrames::new(catalog.box_frame_sizes()),
-            asteroid_fields: asteroids::fields(&catalog.asteroid_fields()),
             asteroid_kill: None,
             // A session starts or loads in flight, as `_DoNewPilot`
             // (@0x19384) and the main screen's entries (@0x1a8cf,
@@ -1755,20 +1703,10 @@ impl Session {
             slot_shown: BTreeMap::new(),
             slot_placed: BTreeMap::new(),
             story: story::StoryRuntime::default(),
-            lives: catalog
-                .stellar_lives()
-                .into_iter()
-                .map(|life| (life.id, life))
-                .collect(),
             strength: BTreeMap::new(),
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
             stellar_sprites: StellarSpritePool::default(),
-            fallback_frame: catalog.fallback_frame_size(),
-            uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
-            missions,
-            crons,
-            ranks,
             recent_rank: None,
             port_ranks: ranks::PortRanks::default(),
             blessing_ranks: BTreeSet::new(),
@@ -1779,19 +1717,8 @@ impl Session {
             },
             sabotage: crate::sabotage::SabotageClock::default(),
             junk_latches: market::JunkLatches::default(),
-            mission_texts: catalog
-                .mission_texts()
-                .into_iter()
-                .map(|texts| (texts.id, texts))
-                .collect(),
-            listed_stellars: listed,
             known: BTreeSet::new(),
-            visibility: catalog.system_visibility().into(),
-            nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
-            place_names: catalog.place_names(),
-            first_stellars: catalog.first_stellars().into_iter().collect(),
-            stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
             goal_checks_due: Vec::new(),
@@ -1816,6 +1743,7 @@ impl Session {
             script_slot: None,
             load_repaired,
             pilot,
+            statics: Rc::new(statics),
         };
         session.register_offer_roll();
         session.register_nebulae();
@@ -2036,7 +1964,7 @@ impl Session {
     fn current_stats(&self) -> ShipStats {
         ShipStats::for_player(
             self.fields,
-            &outfit_mods(&self.pilot.outfits, &self.outfits),
+            &outfit_mods(&self.pilot.outfits, &self.statics.outfits),
         )
     }
 
@@ -2066,13 +1994,14 @@ impl Session {
     /// carries (see the module docs).
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
-        self.hull = self.arsenal.hull(self.pilot.ship);
+        self.hull = self.statics.arsenal.hull(self.pilot.ship);
         // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
         // set (+0xc8fc): the new armament carries the old's (a change of
         // class resets the fold set after, in `become_class`).
         self.armament = self
+            .statics
             .arsenal
-            .player(&self.pilot.outfits, &self.outfits)
+            .player(&self.pilot.outfits, &self.statics.outfits)
             .with_exit_cursors(*self.armament.exit_cursors())
             .with_fold_set(self.armament.fold_set());
         let stats = self.current_stats();
@@ -2086,7 +2015,7 @@ impl Session {
         }
         self.stats = stats;
         if self.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
-            && !carries(&self.pilot, &self.outfits, self.secondary)
+            && !carries(&self.pilot, &self.statics.outfits, self.secondary)
         {
             self.secondary = None;
         }
@@ -2198,7 +2127,7 @@ impl Session {
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
-                &self.goods,
+                &self.statics.goods,
                 &mut self.pilot.cargo,
                 capacity,
                 self.pilot.missions.tons_aboard(),
@@ -2495,11 +2424,11 @@ impl Session {
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
             pilot: &self.pilot,
-            ammo_outfits: &self.ammo_outfits,
+            ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.armament,
         };
         let world = World {
-            govts: &self.govts,
+            govts: &self.statics.govts,
             persons: PersonWorld {
                 rules: &*self.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -2541,10 +2470,10 @@ impl Session {
             catalog,
             system,
             self.galaxy.govt(system),
-            &self.govts,
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.govts,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             &*self.person_rules.0,
             &self
                 .pilot
@@ -2557,9 +2486,9 @@ impl Session {
         table.add_mission_dudes(
             catalog,
             &self.mission_dudes(),
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             self.npc_items(),
         );
         table
@@ -2723,7 +2652,7 @@ impl Session {
         let system_govt = self.galaxy.govt(self.pilot.system);
         let facts = control::Facts {
             pilot: &self.pilot,
-            ammo_outfits: &self.ammo_outfits,
+            ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.armament,
         };
         let targeted = self.combat.targeted_damage();
@@ -2731,7 +2660,7 @@ impl Session {
         let world = World {
             sites: &self.sites,
             player: Some(self.player_side()),
-            govts: &self.govts,
+            govts: &self.statics.govts,
             system_govt,
             record: self.system_record(),
             persons: PersonWorld {
@@ -2742,7 +2671,7 @@ impl Session {
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
-            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.statics.ships),
             led_speed: self.led_speed(),
             flight: self.flight_rules(),
             targeted: &targeted,
@@ -2766,7 +2695,7 @@ impl Session {
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
             warp: self.warp_world(),
             tractor_step: self.tractor_step(),
-            weapons: &self.arsenal,
+            weapons: &self.statics.arsenal,
         };
         let stepped = f(&mut self.traffic, world);
         // The grudges the traffic decided as it answered strikes, in turn
@@ -2824,7 +2753,7 @@ impl Session {
         World {
             sites: &self.sites,
             player: Some(self.player_side()),
-            govts: &self.govts,
+            govts: &self.statics.govts,
             system_govt,
             record: self.system_record(),
             persons: PersonWorld {
@@ -2835,7 +2764,7 @@ impl Session {
                 pilot: self,
                 fleet: &self.pilot.escorts,
             },
-            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.statics.ships),
             led_speed: self.led_speed(),
             flight: self.flight_rules(),
             targeted: &crate::ai::NO_AIMED_DAMAGE,
@@ -2859,7 +2788,7 @@ impl Session {
             plunder_marines: self.rules.source_for(RuleKey::PlunderMarines),
             warp: self.warp_world(),
             tractor_step: self.tractor_step(),
-            weapons: &self.arsenal,
+            weapons: &self.statics.arsenal,
         }
     }
 
@@ -2882,7 +2811,7 @@ impl Session {
             // charge (see the `ionization` module).
             handling: self.ionized(self.stats.handling),
             rating: self.pilot.combat_rating,
-            yardstick: self.arsenal.strength(ShipId(128)),
+            yardstick: self.statics.arsenal.strength(ShipId(128)),
             untargetable: record
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
             blessing: self.blessing(),
@@ -2917,7 +2846,7 @@ impl Session {
     /// of its rounds.
     fn next_secondary(&self, current: Option<WeaponId>, backwards: bool) -> Option<WeaponId> {
         next_secondary(self.armament.mounts(), current, backwards, |ammo| {
-            outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo)
+            outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo)
         })
     }
 
@@ -2948,10 +2877,10 @@ impl Session {
     /// session has no record of the weapon.
     #[must_use]
     pub fn secondary_line_count(&self) -> Option<u32> {
-        let counted = self.arsenal.weapon(self.secondary?)?.line_count?;
+        let counted = self.statics.arsenal.weapon(self.secondary?)?.line_count?;
         Some(outfit_rounds(
             &self.pilot.outfits,
-            &self.ammo_outfits,
+            &self.statics.ammo_outfits,
             counted,
         ))
     }
@@ -3130,9 +3059,9 @@ impl Session {
             .ship_record(self.pilot.ship)
             .and_then(|record| record.inherent_govt);
         Jamming::of_player(
-            self.govts.inh_jam(class_govt),
+            self.statics.govts.inh_jam(class_govt),
             &self.pilot.outfits,
-            &self.outfits,
+            &self.statics.outfits,
         )
     }
 
@@ -3146,14 +3075,14 @@ impl Session {
         };
         let freighter = npc.ai_type.trades();
         let halving = Halving::of(
-            self.govts.flag(npc.govt, HALF_JAMMING),
+            self.statics.govts.flag(npc.govt, HALF_JAMMING),
             freighter,
             self.rules.source_for(RuleKey::JamHalving),
         );
         Jamming::of_npc(
-            self.govts.inh_jam(record.inherent_govt),
+            self.statics.govts.inh_jam(record.inherent_govt),
             &record.defaults,
-            &self.outfits,
+            &self.statics.outfits,
             halving,
         )
     }
@@ -3355,9 +3284,14 @@ impl Session {
     /// so a crime convicted again walks the same systems and each
     /// conviction truncates in turn.
     fn convict_of(&mut self, law: &dyn LegalCode, crime: Crime, victim: Option<GovtId>) {
-        let govt_changes = law.penalties(crime, victim, &self.govts);
-        let system_changes =
-            law.system_penalties(crime, victim, self.system(), &self.galaxy, &self.govts);
+        let govt_changes = law.penalties(crime, victim, &self.statics.govts);
+        let system_changes = law.system_penalties(
+            crime,
+            victim,
+            self.system(),
+            &self.galaxy,
+            &self.statics.govts,
+        );
         legal::convict(&mut self.pilot, &govt_changes, &system_changes);
     }
 
@@ -3400,13 +3334,13 @@ impl Session {
                             .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player)
                 }
             };
-            if !rating::counts(by_players_fleet, self.govts.derelict(govt)) {
+            if !rating::counts(by_players_fleet, self.statics.govts.derelict(govt)) {
                 continue;
             }
             let Some(victim) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
                 continue;
             };
-            let strength = i64::from(self.arsenal.strength(victim.ship));
+            let strength = i64::from(self.statics.arsenal.strength(victim.ship));
             self.pilot.combat_rating = rating::credit(self.pilot.combat_rating, strength);
         }
     }
@@ -3578,7 +3512,7 @@ impl Session {
         let mut armaments: Vec<Armament> = ships
             .iter()
             .filter_map(|&ship| self.ship_record(ship))
-            .map(|record| self.arsenal.of_class(record.id))
+            .map(|record| self.statics.arsenal.of_class(record.id))
             .collect();
         armaments.push(self.armament.clone());
         let launched: Vec<ShipId> = armaments
@@ -3596,7 +3530,7 @@ impl Session {
     /// it, if the session has its record.
     #[must_use]
     pub fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
-        let record = self.ships.iter().find(|record| record.id == ship)?;
+        let record = self.statics.ships.iter().find(|record| record.id == ship)?;
         Some(&record.long_name)
     }
 
@@ -3604,7 +3538,7 @@ impl Session {
     /// session has its record.
     #[must_use]
     pub fn ship_name(&self, ship: ShipId) -> Option<&str> {
-        let record = self.ships.iter().find(|record| record.id == ship)?;
+        let record = self.statics.ships.iter().find(|record| record.id == ship)?;
         Some(&record.name)
     }
 
@@ -3612,7 +3546,12 @@ impl Session {
     /// scan that finds it calls it.
     #[must_use]
     pub fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
-        let record = self.goods.junk().iter().find(|record| record.id == id)?;
+        let record = self
+            .statics
+            .goods
+            .junk()
+            .iter()
+            .find(|record| record.id == id)?;
         Some(&record.lc_name)
     }
 
@@ -3806,7 +3745,7 @@ impl Session {
             return;
         }
         let rate = warp::warp_up_rate(self.player_warp_factor());
-        let duration = self.warp_sounds[usize::from(double_time)];
+        let duration = self.statics.warp_sounds[usize::from(double_time)];
         self.warp_ups
             .start(double_time, warp::pitched_length(duration, rate));
         self.clear_warp_sound_done();
@@ -3838,7 +3777,7 @@ impl Session {
     /// double time, else 128's, as `_WarpSoundDuration` gives it
     /// (@0x8203-0x8224; [`warp::warp_sound_duration`]).
     fn warp_sound(&self) -> u32 {
-        warp::warp_sound_duration(self.warp_sounds, self.double_time)
+        warp::warp_sound_duration(self.statics.warp_sounds, self.double_time)
     }
 
     /// Whether `_ScanPlayer`'s jump-timing check holds a scan back now
@@ -4143,7 +4082,7 @@ impl Session {
     /// suffix: for example "June 23, 1177 NC".
     #[must_use]
     pub fn date_text(&self) -> String {
-        date::date_text(self.pilot.date, &self.date_affixes)
+        date::date_text(self.pilot.date, &self.statics.date_affixes)
     }
 
     /// Today's date as the mission screens show it, the original's medium
@@ -4151,7 +4090,7 @@ impl Session {
     /// ([`date::med_date_text`]): for example "June 23rd, 1177 NC".
     #[must_use]
     pub fn med_date_text(&self) -> String {
-        date::med_date_text(self.pilot.date, &self.date_affixes)
+        date::med_date_text(self.pilot.date, &self.statics.date_affixes)
     }
 
     /// The fuel the ship gains each tick in flight.
@@ -4292,7 +4231,7 @@ impl Session {
     /// Every system listing `stellar`, by ascending ID ([`listers_of`]):
     /// what its owner and the systems resolving it are derived from.
     fn listers(&self, stellar: StellarId) -> &[SystemId] {
-        listers_of(&self.listed_stellars, stellar)
+        listers_of(&self.statics.listed_stellars, stellar)
     }
 
     /// The system that holds `stellar` now, with the player where they
@@ -4778,7 +4717,7 @@ impl Session {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
         market::market(&market::Exchange {
-            goods: &self.goods,
+            goods: &self.statics.goods,
             stellar,
             flags: site.flags,
             pilot: &self.pilot,
@@ -4844,7 +4783,7 @@ impl Session {
     /// every slot, failed ones included (@0x67996-0x679b4), and whether its
     /// government blesses landing.
     fn standing(&self, site: &LandingSite, blessing: &crate::rank::Blessing) -> Standing {
-        let require = self.govts.require(site.govt);
+        let require = self.statics.govts.require(site.govt);
         let mission_stellar = self.pilot.missions().iter().any(|(_, active)| {
             [active.destination, active.return_to]
                 .into_iter()
@@ -4924,9 +4863,9 @@ impl Session {
         // Out of the session while the gate reads it.
         let mut rolls = std::mem::take(&mut self.outfit_rolls);
         let outfitter = Shop {
-            records: &self.outfits,
-            crons: &self.crons,
-            ranks: &self.ranks,
+            records: &self.statics.outfits,
+            crons: &self.statics.crons,
+            ranks: &self.statics.ranks,
             fields: self.fields,
             standard: &self.standard(),
             site,
@@ -5292,6 +5231,7 @@ impl Session {
         }
         let price = outfitter.row(order.outfit).map_or(0, |row| row.buy_price);
         let record = self
+            .statics
             .outfits
             .iter()
             .find(|record| record.id == order.outfit)
@@ -5320,7 +5260,9 @@ impl Session {
                     RuleSource::Engine => {
                         self.pilot.owned(record.id) == 0 && launches(&record, self.secondary)
                     }
-                    RuleSource::Bible => !carries(&self.pilot, &self.outfits, self.secondary),
+                    RuleSource::Bible => {
+                        !carries(&self.pilot, &self.statics.outfits, self.secondary)
+                    }
                 };
                 if let_go {
                     self.secondary = None;
@@ -5412,11 +5354,11 @@ impl Session {
         // Out of the session while the gate reads it.
         let mut rolls = std::mem::take(&mut self.ship_rolls);
         let shipyard = Yard {
-            ships: &self.ships,
-            outfits: &self.outfits,
-            crons: &self.crons,
-            ranks: &self.ranks,
-            arsenal: &self.arsenal,
+            ships: &self.statics.ships,
+            outfits: &self.statics.outfits,
+            crons: &self.statics.crons,
+            ranks: &self.statics.ranks,
+            arsenal: &self.statics.arsenal,
             fields: self.fields,
             site,
             mults: self.price_mults(),
@@ -5441,6 +5383,7 @@ impl Session {
             .ok_or(ShipRefusal::NoShipyard)?;
         shipyard.can(ship)?;
         let record = self
+            .statics
             .ships
             .iter()
             .find(|record| record.id == ship)
@@ -5511,7 +5454,7 @@ impl Session {
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
-        let fits = self.arsenal.stock_fits(ship, &self.outfits);
+        let fits = self.statics.arsenal.stock_fits(ship, &self.statics.outfits);
         let Purchase {
             outfits,
             settlement,
@@ -5523,7 +5466,7 @@ impl Session {
                 new: &record,
                 name,
                 fits: &fits,
-                records: &self.outfits,
+                records: &self.statics.outfits,
                 escorts: &escorts,
                 rules: self.rules,
             },
@@ -5755,14 +5698,18 @@ impl Session {
     /// ([`Goods::name`](crate::market::Goods::name)).
     #[must_use]
     pub fn good_name(&self, good: Good) -> Option<&str> {
-        self.goods.name(good)
+        self.statics.goods.name(good)
     }
 
     /// Outfit `outfit`'s name, as its [`OutfitRecord`] gives it, if the
     /// session has its record.
     #[must_use]
     pub fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
-        let record = self.outfits.iter().find(|record| record.id == outfit)?;
+        let record = self
+            .statics
+            .outfits
+            .iter()
+            .find(|record| record.id == outfit)?;
         Some(&record.name)
     }
 
@@ -5770,13 +5717,17 @@ impl Session {
     /// the session has its record.
     #[must_use]
     pub fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
-        let record = self.outfits.iter().find(|record| record.id == outfit)?;
+        let record = self
+            .statics
+            .outfits
+            .iter()
+            .find(|record| record.id == outfit)?;
         Some((&record.lc_name, &record.lc_plural))
     }
 
     /// Ship class `ship`'s record, if the session has it.
     fn ship_record(&self, ship: ShipId) -> Option<&ShipRecord> {
-        self.ships.iter().find(|record| record.id == ship)
+        self.statics.ships.iter().find(|record| record.id == ship)
     }
 
     /// Ship class `ship`'s `Crew`; none without a record.
@@ -5941,6 +5892,7 @@ impl Session {
         let person = self.traffic.person(npc.person?.id)?;
         let grant = PersonGrant::of(&person.record)?;
         let stock: Vec<GrantStock> = self
+            .statics
             .outfits
             .iter()
             .map(|record| self.grant_stock(record))
@@ -6026,7 +5978,7 @@ impl Session {
                 .rounds
                 .iter()
                 .filter_map(|(slot, rounds)| {
-                    let launcher = self.arsenal.weapon(slot)?;
+                    let launcher = self.statics.arsenal.weapon(slot)?;
                     Some(HeldRounds {
                         slot,
                         rounds: u32::try_from(rounds).ok()?,
@@ -6034,7 +5986,7 @@ impl Session {
                         outfit: crate::board::player_fires(launcher, &carried, bays)
                             .then(|| {
                                 crate::combat::armament::lowest_ammo_outfit(
-                                    &self.ammo_outfits,
+                                    &self.statics.ammo_outfits,
                                     slot,
                                 )
                             })
@@ -6061,20 +6013,20 @@ impl Session {
                 .into_iter()
                 .map(|ship| EscortCrew {
                     crew: i32::from(self.crew(ship)),
-                    strength: self.arsenal.hull(ship).strength as i32,
+                    strength: self.statics.arsenal.hull(ship).strength as i32,
                     inherent_ai: self
                         .ship_record(ship)
                         .map_or(0, |record| record.inherent_ai),
                 })
                 .collect(),
-            marines: outfit_mods(&self.pilot.outfits, &self.outfits)
+            marines: outfit_mods(&self.pilot.outfits, &self.statics.outfits)
                 .into_iter()
                 .filter(|outfit| outfit.mod_type == MARINES)
                 .map(|outfit| (outfit.mod_val, outfit.count))
                 .collect(),
             target_crew: i32::from(self.crew(npc.ship)),
             target_strength: npc.hull.strength as i32,
-            derelict: self.govts.derelict(npc.govt),
+            derelict: self.statics.govts.derelict(npc.govt),
             fleet_room: self.can_hire_escorts(),
         }
     }
@@ -6200,7 +6152,7 @@ impl Session {
         outfitter::raised_max(
             record,
             &self.pilot.outfits,
-            &self.outfits,
+            &self.statics.outfits,
             self.rules.source_for(RuleKey::RaisedMax),
         )
     }
@@ -6221,6 +6173,7 @@ impl Session {
     /// (@0x93cc9).
     fn take_ammo(&mut self, outfit: OutfitId, rounds: u32) -> u32 {
         let Some(record) = self
+            .statics
             .outfits
             .iter()
             .find(|record| record.id == outfit)
@@ -6236,7 +6189,7 @@ impl Session {
                 self.fields,
                 &self.standard(),
                 &self.pilot.outfits,
-                &self.outfits,
+                &self.statics.outfits,
                 &self.rules,
             ) >= unit
         {
@@ -6477,7 +6430,7 @@ impl Session {
         // ship's) or the one worked out afresh from the old outfits, read
         // before they change (@0x41786).
         let fuel = self.capture_fuel(&record);
-        let records = &self.outfits;
+        let records = &self.statics.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
         // whatever the ship-change rules say, and tops the stock weapons
         // up rather than adding them.
@@ -6491,9 +6444,9 @@ impl Session {
             None,
             records,
         );
-        let fits = self.arsenal.stock_fits(record.id, records);
+        let fits = self.statics.arsenal.stock_fits(record.id, records);
         fit_stock(&mut outfits, &fits, records);
-        let share = if self.arsenal.hull(record.id).tough {
+        let share = if self.statics.arsenal.hull(record.id).tough {
             TOUGH_TAKEOVER_ARMOR_SHARE
         } else {
             TAKEOVER_ARMOR_SHARE
@@ -6971,6 +6924,7 @@ pub(super) mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, GateSite, LandingSite, SoundId, StellarId};
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
+    use crate::catalog::{DateAffixes, MissionRecord, MissionTexts};
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
     use crate::control::{SetExpr, Test};
@@ -18441,7 +18395,7 @@ pub(super) mod tests {
         session.pilot.combat_rating = 320_000;
         let seen = session.player_side();
         assert_eq!((seen.rating, seen.yardstick), (320_000, 25));
-        session.arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
+        session.statics_mut().arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
         assert_eq!(session.player_side().yardstick, 0, "no shïp 128");
     }
 
@@ -18450,12 +18404,13 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         let flags2 = |session: &mut Session, flags2: u16| {
-            session.ships = vec![ship(session.pilot.ship.0, ShipFields { flags2, ..FAST })];
+            session.statics_mut().ships =
+                vec![ship(session.pilot.ship.0, ShipFields { flags2, ..FAST })];
             session.player_side().untargetable
         };
         assert!(!flags2(&mut session, 0x0003), "other bits");
         assert!(flags2(&mut session, crate::cloak::UNTARGETABLE | 0x0001));
-        session.ships.clear();
+        session.statics_mut().ships.clear();
         assert!(!session.player_side().untargetable, "no record");
     }
 
@@ -18471,7 +18426,7 @@ pub(super) mod tests {
     fn rating_after_npc_kills(escorting: bool) -> (i64, i64) {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        assert_eq!(session.arsenal.strength(ShipId(129)), 10);
+        assert_eq!(session.statics.arsenal.strength(ShipId(129)), 10);
         if escorting {
             session.traffic.npcs_mut()[1].escort = Some(EscortDuty {
                 formation: FormationSlot {
@@ -25354,7 +25309,7 @@ pub(super) mod tests {
         );
         assert_eq!(session.pilot().cash(), 777);
         assert_eq!(session.stats(), ShipStats::new(FAST, &[]));
-        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
+        assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
         assert_eq!(
             session.pilot().escorts(),
             [Escort {

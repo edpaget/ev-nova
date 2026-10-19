@@ -24,7 +24,7 @@ impl Session {
                     }
                 }
                 Good::Junk(id) => junk.push((
-                    self.goods.abbrev(id).unwrap_or_default().to_owned(),
+                    self.statics.goods.abbrev(id).unwrap_or_default().to_owned(),
                     i64::from(tons),
                 )),
             }

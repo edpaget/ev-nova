@@ -329,15 +329,15 @@ impl Session {
     /// each government, its government's `InitialRec` (see the module
     /// docs).
     fn reset_records_for_rescue(&mut self) {
-        let govts: Vec<_> = self.govts.ids().collect();
+        let govts: Vec<_> = self.statics.govts.ids().collect();
         for govt in govts {
-            let record = self.govts.initial_record(Some(govt));
+            let record = self.statics.govts.initial_record(Some(govt));
             self.pilot.set_legal_record(govt, record);
         }
         self.pilot.system_legal = Some(crate::legal::systems_from_govts(
             self.galaxy.governed(),
             &BTreeMap::new(),
-            &self.govts,
+            &self.statics.govts,
         ));
     }
 
@@ -362,6 +362,7 @@ impl Session {
     /// The system a visible system owns `stellar` in, if any.
     fn stellar_owner(&self, stellar: StellarId) -> Option<SystemId> {
         let listed = self
+            .statics
             .listed_stellars
             .iter()
             .find(|listed| listed.id == stellar)?;

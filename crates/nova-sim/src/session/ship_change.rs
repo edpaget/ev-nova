@@ -395,7 +395,12 @@ impl Session {
         self.pilot.ship = ship.id;
         self.fields = ship.fields;
         self.defaults = pilot::tally(ship.defaults.iter().copied());
-        self.stock = armament::fitted(&self.arsenal.stock_fits(ship.id, &self.outfits));
+        self.stock = armament::fitted(
+            &self
+                .statics
+                .arsenal
+                .stock_fits(ship.id, &self.statics.outfits),
+        );
         self.refit(false, change.reserves);
         // The original's ship change writes no exit cursor (+0xc8fe-+0xc905),
         // so the turn of exits goes on, as the refit carried it; by the
@@ -425,13 +430,19 @@ impl Session {
         // `E` and `H` add the stock weapons and their `AmmoLoad` to the
         // weapon and rounds arrays and fold them into the outfits after
         // the default items (step 5).
-        let stock = (self.arsenal).stock_added(record.id, rules.bay_ammo, rules.negative_stock);
+        let stock =
+            (self.statics.arsenal).stock_added(record.id, rules.bay_ammo, rules.negative_stock);
         let fold = Fold {
             stock: &stock,
             default_weapons: rules.default_weapons,
         };
         let folds = (carry != OutfitCarry::Keep).then_some(&fold);
-        let max_ammo = |weapon| self.arsenal.weapon(weapon).map_or(0, |spec| spec.max_ammo);
+        let max_ammo = |weapon| {
+            self.statics
+                .arsenal
+                .weapon(weapon)
+                .map_or(0, |spec| spec.max_ammo)
+        };
         let limits = Limits {
             hardpoints: Hardpoints {
                 guns: record.max_gun,
@@ -448,7 +459,7 @@ impl Session {
                 &defaults,
                 folds,
                 held,
-                &self.outfits,
+                &self.statics.outfits,
             ),
             reserves: ReservePolicy::reading(rules.reserves),
         };
@@ -826,9 +837,9 @@ mod tests {
         assert_eq!(session.stock, owned(&[(OutfitId(405), 1)]));
         assert_eq!(
             session.stats(),
-            ShipStats::new(BIG, &outfit_mods(&outfits, &session.outfits))
+            ShipStats::new(BIG, &outfit_mods(&outfits, &session.statics.outfits))
         );
-        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
+        assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
         assert_eq!(session.armament.mounts().len(), 1, "405 mounts weapon 200");
         assert!(session.take_save_due());
     }
@@ -910,17 +921,20 @@ mod tests {
         assert_eq!(session.pilot.outfits, kept, "every outfit, no default");
         assert_eq!(
             session.stats(),
-            ShipStats::new(BIG, &outfit_mods(&kept, &session.outfits))
+            ShipStats::new(BIG, &outfit_mods(&kept, &session.statics.outfits))
         );
         assert_eq!(
             session.stats().shield,
             400.0,
             "the class's and the outfits'"
         );
-        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
+        assert_eq!(session.hull(), session.statics.arsenal.hull(ShipId(129)));
         assert_eq!(
             session.armament,
-            session.arsenal.player(&kept, &session.outfits)
+            session
+                .statics
+                .arsenal
+                .player(&kept, &session.statics.outfits)
         );
         assert!(
             session.armament.mounts().is_empty(),
@@ -1052,7 +1066,10 @@ mod tests {
         assert_eq!(session.pilot.outfits, before);
         assert_eq!(
             session.armament,
-            session.arsenal.player(&before, &session.outfits)
+            session
+                .statics
+                .arsenal
+                .player(&before, &session.statics.outfits)
         );
         let mounted: Vec<(WeaponId, u32)> = session
             .armament
@@ -1082,8 +1099,9 @@ mod tests {
         assert_eq!(
             session.armament,
             session
+                .statics
                 .arsenal
-                .player(&session.pilot.outfits, &session.outfits)
+                .player(&session.pilot.outfits, &session.statics.outfits)
         );
     }
 
@@ -1609,7 +1627,10 @@ mod tests {
         );
         assert_eq!(
             session.stats(),
-            ShipStats::new(BIG, &outfit_mods(&session.pilot.outfits, &session.outfits))
+            ShipStats::new(
+                BIG,
+                &outfit_mods(&session.pilot.outfits, &session.statics.outfits)
+            )
         );
         let mut session = self::session(&catalog);
         session.pilot.outfits.insert(LIMITED, 5);

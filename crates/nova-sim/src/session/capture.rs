@@ -137,7 +137,7 @@ impl Session {
     /// The capacities "Use As My Ship" taking a ship of `record` can draw
     /// its fuel below, read before the swap (see the module docs).
     pub(super) fn capture_fuel(&self, record: &ShipRecord) -> CaptureFuel {
-        let more: i64 = outfit_mods(&self.pilot.outfits, &self.outfits)
+        let more: i64 = outfit_mods(&self.pilot.outfits, &self.statics.outfits)
             .into_iter()
             .filter(|outfit| outfit.mod_type == MORE_FUEL)
             .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
@@ -178,7 +178,7 @@ impl Session {
     pub(super) fn old_ship_escort(&self) -> Escort {
         let stock = ShipStats::for_npc(
             self.fields,
-            &outfit_mods(&self.defaults, &self.outfits),
+            &outfit_mods(&self.defaults, &self.statics.outfits),
             self.npc_items(),
         );
         let mut reserves = stock.full();

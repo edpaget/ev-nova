@@ -18,6 +18,11 @@ impl Session {
     /// A ship of class `record` as an NPC flies it, its default items
     /// counted as [`Session::npc_items`] says ([`table::kind`]).
     pub(super) fn ship_kind(&self, record: &ShipRecord) -> ShipKind {
-        table::kind(record, &self.outfits, &self.arsenal, self.npc_items())
+        table::kind(
+            record,
+            &self.statics.outfits,
+            &self.statics.arsenal,
+            self.npc_items(),
+        )
     }
 }

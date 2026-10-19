@@ -139,7 +139,13 @@ impl Session {
             RuleSource::Engine => (&self.port_ranks.active, self.port_ranks.govt),
             RuleSource::Bible => (&self.pilot.ranks, self.docked_govt()),
         };
-        rank::price_mults(&self.ranks, active, govt, &self.govts, reach)
+        rank::price_mults(
+            &self.statics.ranks,
+            active,
+            govt,
+            &self.statics.govts,
+            reach,
+        )
     }
 
     /// The ranks' factor the outfitter's buy price takes, as the
@@ -165,7 +171,7 @@ impl Session {
             RuleSource::Engine => &self.blessing_ranks,
             RuleSource::Bible => &self.pilot.ranks,
         };
-        rank::blessing(&self.ranks, active, &self.govts, reach)
+        rank::blessing(&self.statics.ranks, active, &self.statics.govts, reach)
     }
 
     /// The pilot's ranks and the recent rank, as `K` and `L` change them.
@@ -180,7 +186,7 @@ impl Session {
     /// ranks grouped by the session's `rank_unaffiliated_group` rule.
     pub(super) fn activate_rank(&mut self, rank: RankId) {
         let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        let records = std::rc::Rc::clone(&self.ranks);
+        let records = std::rc::Rc::clone(&self.statics.ranks);
         rank::activate(&records, self.held_ranks(), rank, unaffiliated);
     }
 
@@ -189,7 +195,7 @@ impl Session {
     /// `rank_unaffiliated_group` rule.
     pub(super) fn deactivate_rank(&mut self, rank: RankId) {
         let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
-        let records = std::rc::Rc::clone(&self.ranks);
+        let records = std::rc::Rc::clone(&self.statics.ranks);
         rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
     }
 
@@ -204,14 +210,14 @@ impl Session {
         let reach = self.rules.source_for(RuleKey::RankCrimeReach);
         let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
         rank::lose_to_crime(
-            &self.ranks,
+            &self.statics.ranks,
             Held {
                 active: &mut self.pilot.ranks,
                 recent: &mut self.recent_rank,
             },
             crime,
             victim,
-            &self.govts,
+            &self.statics.govts,
             reach,
             unaffiliated,
         );
@@ -223,7 +229,7 @@ impl Session {
     /// default).
     pub(super) fn rank_names(&self) -> RankNames<'_> {
         RankNames {
-            records: &self.ranks,
+            records: &self.statics.ranks,
             active: &self.pilot.ranks,
             recent: self.recent_rank,
             fallback: self
@@ -244,12 +250,12 @@ impl Session {
             .nth_string(MISC_STRINGS, AND_STRING)
             .unwrap_or_default();
         rank::pilot_info(
-            &self.ranks,
+            &self.statics.ranks,
             &self.pilot.ranks,
             self.pilot.cash,
             self.rules.source_for(RuleKey::SalaryCap),
             &and,
-            crate::player_info::special_groups(&self.outfits, &self.pilot.outfits).len(),
+            crate::player_info::special_groups(&self.statics.outfits, &self.pilot.outfits).len(),
         )
     }
 
@@ -259,7 +265,12 @@ impl Session {
     pub(super) fn ranks_day(&mut self) {
         let cap = self.rules.source_for(RuleKey::SalaryCap);
         let before = self.pilot.cash;
-        rank::pay_salaries(&self.ranks, &self.pilot.ranks, &mut self.pilot.cash, cap);
+        rank::pay_salaries(
+            &self.statics.ranks,
+            &self.pilot.ranks,
+            &mut self.pilot.cash,
+            cap,
+        );
         if self.pilot.cash != before {
             self.save_due = true;
         }
@@ -1201,7 +1212,7 @@ pub(super) mod tests {
                 assert_eq!(take(session, Take::Capture, &[43, 0]).0, Taken::Tripped);
             }),
             ("a capture straight into the fleet", |session| {
-                for record in &mut session.ships {
+                for record in &mut session.statics_mut().ships {
                     if record.id == ShipId(128) {
                         record.crew = 0;
                     }

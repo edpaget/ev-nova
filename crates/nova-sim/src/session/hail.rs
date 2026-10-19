@@ -347,13 +347,13 @@ impl Session {
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
         let favour = rank::favour(
-            &self.ranks,
+            &self.statics.ranks,
             &self.pilot.ranks,
             npc.govt,
-            &self.govts,
+            &self.statics.govts,
             self.rules.source_for(RuleKey::RankGovtReach),
         );
-        Dispositions::of(npc, inherent, &self.govts, favour)
+        Dispositions::of(npc, inherent, &self.statics.govts, favour)
     }
 
     /// The hail of `npc` in conversation `talk`, as the options see it.
@@ -442,7 +442,7 @@ impl Session {
                 .unwrap_or_default(),
             govt_name: npc
                 .govt
-                .and_then(|govt| self.govts.get(govt))
+                .and_then(|govt| self.statics.govts.get(govt))
                 .map(|record| record.comm_name.clone()),
             hostile: hail.attitude == Attitude::Hostile,
             options: buttons,

@@ -71,10 +71,10 @@ impl Session {
             .unwrap_or_default();
         let mut story = self.disaster_story(site.id, chance);
         let found = candidates().of(&NewsFacts {
-            crons: &self.crons,
+            crons: &self.statics.crons,
             states: &self.pilot.crons,
             stellar_govt: site.govt,
-            govts: &self.govts,
+            govts: &self.statics.govts,
             rules: &self.rules,
         });
         let pool = if found.government.is_empty() {
@@ -101,7 +101,9 @@ impl Session {
     #[must_use]
     pub fn news_picture(&self) -> Option<i16> {
         let site = self.bar_site()?;
-        Some(news_picture(site.govt.and_then(|id| self.govts.get(id))))
+        Some(news_picture(
+            site.govt.and_then(|id| self.statics.govts.get(id)),
+        ))
     }
 
     /// The news of the bar visit under way, as it was drawn: `None`
@@ -119,7 +121,7 @@ impl Session {
     fn disaster_story(&self, docked: StellarId, chance: &mut dyn Chance) -> String {
         let pool = oops_pool().of(&OopsFacts {
             events: &self.pilot.events,
-            disasters: &self.goods.disasters,
+            disasters: &self.statics.goods.disasters,
             docked,
             rules: &self.rules,
         });
@@ -129,7 +131,11 @@ impl Session {
         let id = pool[pick(pool.len(), chance)];
         let (Some(&active), Some(record)) = (
             self.pilot.events.get(&id),
-            self.goods.disasters.iter().find(|record| record.id == id),
+            self.statics
+                .goods
+                .disasters
+                .iter()
+                .find(|record| record.id == id),
         ) else {
             return String::new();
         };

@@ -230,13 +230,13 @@ mod tests {
             let mut record = ship(session.pilot.ship.0, ShipFields { mass, ..FAST });
             record.escort_type = escort_type;
             record.inherent_ai = inherent_ai;
-            session.ships = vec![record];
+            session.statics_mut().ships = vec![record];
             session.player_side().class
         };
         assert_eq!(class(&mut session, 0, 1, 500), EscortClass::Fighter);
         assert_eq!(class(&mut session, -1, 3, 49), EscortClass::Fighter);
         assert_eq!(class(&mut session, 2, 3, 49), EscortClass::Warship);
-        session.ships = vec![ship(129, FAST)];
+        session.statics_mut().ships = vec![ship(129, FAST)];
         assert_eq!(session.player_side().class, EscortClass::Freighter);
         assert_eq!(session.pilot.ship, ShipId(128));
     }
@@ -248,10 +248,10 @@ mod tests {
         for crew in [-1, 0, 7] {
             let mut record = ship(session.pilot.ship.0, FAST);
             record.crew = crew;
-            session.ships = vec![record];
+            session.statics_mut().ships = vec![record];
             assert_eq!(session.player_side().hull.crew, crew);
         }
-        session.ships = vec![ship(129, FAST)];
+        session.statics_mut().ships = vec![ship(129, FAST)];
         assert_eq!(session.player_side().hull.crew, 0, "no record of its own");
     }
 }

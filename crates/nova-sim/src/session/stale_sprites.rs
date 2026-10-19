@@ -120,7 +120,7 @@ impl Session {
     /// The disc of an unowned slot placed at `top_left` from the player:
     /// graphic type 0's frame there, none when it cannot be read.
     fn ghost_disc(&self, top_left: (i32, i32)) -> Option<DeadlyDisc> {
-        let frame = self.fallback_frame?;
+        let frame = self.statics.fallback_frame?;
         // A screen offset and a sprite's side are far within a float's
         // exact range.
         #[allow(clippy::cast_precision_loss)]
@@ -179,7 +179,7 @@ mod tests {
         session.player.velocity = Vec2::ZERO;
         session.listed = listed.to_vec();
         session.sites = Vec::new();
-        session.fallback_frame = Some((100, 100));
+        session.statics_mut().fallback_frame = Some((100, 100));
         session
     }
 
@@ -262,7 +262,7 @@ mod tests {
         let mut session = among(&catalog, &[hidden], Rulebook::default());
         // Graphic type 0 a 300 x 40 sheet: its top left (-50, -200) from
         // the player, its centre (100, -180), half its larger side 150.
-        session.fallback_frame = Some((300, 40));
+        session.statics_mut().fallback_frame = Some((300, 40));
         shown_then(&mut session, &[hidden], &[]);
         assert_eq!(
             session.deadly_discs(),
@@ -279,7 +279,7 @@ mod tests {
         let hidden = deadly_at(140, 0.0, -150.0);
         let mut session = among(&catalog, &[hidden], Rulebook::default());
         shown_then(&mut session, &[hidden], &[]);
-        session.fallback_frame = None;
+        session.statics_mut().fallback_frame = None;
         assert_eq!(session.deadly_discs(), []);
         fight(&mut session);
         assert_eq!(session.npcs().len(), 1);

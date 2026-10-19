@@ -49,7 +49,7 @@ impl Session {
     /// What the player's cloak scanners give, from the outfits it owns.
     #[must_use]
     pub fn scanner(&self) -> Scanner {
-        Scanner::of(&self.pilot.outfits, &self.outfits)
+        Scanner::of(&self.pilot.outfits, &self.statics.outfits)
     }
 
     /// Whether the player sees `npc` (see the module docs).
@@ -163,7 +163,7 @@ impl Session {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
-            let arsenal = &self.arsenal;
+            let arsenal = &self.statics.arsenal;
             let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
                 continue;
             };

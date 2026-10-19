@@ -318,14 +318,14 @@ impl Session {
             return_to: held(active.return_to),
         };
         let mut draw_type = |dude: DudeId, chance: &mut dyn Chance| {
-            let dude = self.uniform_dudes.get(&dude)?;
+            let dude = self.statics.uniform_dudes.get(&dude)?;
             dude_ship_type(dude, |ship| self.appear_on(ship), self.gate(), chance)
         };
         SpecialShips::at_accept(
             &record.ships,
             record.flags,
             &facts,
-            (self.galaxy.map(), &self.govts),
+            (self.galaxy.map(), &self.statics.govts),
             self.strings(),
             &mut draw_type,
             chance,
@@ -334,7 +334,8 @@ impl Session {
 
     /// Ship type `ship`'s `AppearOn`: none when it has no record.
     fn appear_on(&self, ship: ShipId) -> Option<&Test> {
-        self.ships
+        self.statics
+            .ships
             .iter()
             .find(|record| record.id == ship)
             .map(|record| &record.appear_on)
@@ -854,9 +855,9 @@ impl Session {
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             items,
         );
         let nav = Vec::new();
@@ -884,7 +885,7 @@ impl Session {
         let came = self.traffic.bring_in_within(
             ships,
             self.spawn_reserve(SPAWN_RESERVE),
-            &self.govts,
+            &self.statics.govts,
             &mut *chance,
         );
         self.mission_ships_came(last);
@@ -951,9 +952,9 @@ impl Session {
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             items,
         );
         // `_MissionDudeSpawn` finds its slot (@0x3cd50) before it hands the
@@ -997,9 +998,9 @@ impl Session {
             ship.held = false;
         }
         let last = self.last_npc();
-        let came = self
-            .traffic
-            .bring_in_within(vec![ship], reserve, &self.govts, &mut *chance);
+        let came =
+            self.traffic
+                .bring_in_within(vec![ship], reserve, &self.statics.govts, &mut *chance);
         if came == 0 {
             return;
         }
@@ -2747,6 +2748,7 @@ pub(super) mod tests {
     /// with it still active, as a swap leaves them.
     fn take_off_unaborted(session: &mut Session, catalog: &FakePilotCatalog) {
         let record = session
+            .statics_mut()
             .missions
             .iter_mut()
             .find(|record| record.id == MissionId(140))
@@ -2755,6 +2757,7 @@ pub(super) mod tests {
         record.flags &= !AUTO_ABORT;
         take_off(session, catalog);
         if let Some(record) = session
+            .statics_mut()
             .missions
             .iter_mut()
             .find(|record| record.id == MissionId(140))
@@ -4387,6 +4390,7 @@ pub(super) mod tests {
         // Unmet, with `Flags` 0x0001: the landing's leading check meets
         // its goals and auto-aborts it.
         if let Some(record) = session
+            .statics_mut()
             .missions
             .iter_mut()
             .find(|record| record.id == MissionId(145))

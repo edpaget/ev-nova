@@ -258,7 +258,7 @@ impl Session {
         let spec = self.hull.frames;
         let rounds = OutfitRounds {
             owned: &mut self.pilot.outfits,
-            sources: &self.ammo_outfits,
+            sources: &self.statics.ammo_outfits,
         };
         let moment = Moment {
             disabled: self.condition.disabled(),
@@ -274,7 +274,7 @@ impl Session {
         self.ship_display.drawn = drawn;
         let capacity = self.ion_capacity();
         self.ship_display.ion_tint = ion_tint::display(&mut self.ion, capacity, &mut *chance);
-        let govts = &self.govts;
+        let govts = &self.statics.govts;
         self.traffic
             .display_ships(|govt| govts.derelict(govt), rules, chance);
     }
@@ -303,7 +303,11 @@ impl Session {
     /// origins rolls its animation on
     /// (`nova_sim::traffic::ship_display::FirstClass`).
     pub(super) fn set_first_class(&mut self) {
-        let first = self.arsenal.hull(crate::catalog::ShipId(128)).frames;
+        let first = self
+            .statics
+            .arsenal
+            .hull(crate::catalog::ShipId(128))
+            .frames;
         self.traffic.set_first_class(first);
     }
 

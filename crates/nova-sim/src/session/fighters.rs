@@ -100,6 +100,7 @@ impl Session {
             placed.push(id);
             if sortie.carrier == ShipRef::Player {
                 glows |= self
+                    .statics
                     .arsenal
                     .weapon(sortie.bay)
                     .is_some_and(WeaponSpec::glows);
@@ -125,7 +126,11 @@ impl Session {
     ) -> Option<NpcId> {
         let berth = self.traffic.free_berth(self.spawn_reserve(SPAWN_RESERVE))?;
         let record = self.ship_record(sortie.ship).cloned()?;
-        let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
+        let push = self
+            .statics
+            .arsenal
+            .weapon(sortie.bay)
+            .map_or(0.0, |bay| bay.speed);
         let kind = self.ship_kind(&record);
         let carrier = Carrier {
             ship: sortie.carrier,
@@ -266,7 +271,7 @@ impl Session {
             ShipRef::Player => {
                 let mut rounds = OutfitRounds {
                     owned: &mut self.pilot.outfits,
-                    sources: &self.ammo_outfits,
+                    sources: &self.statics.ammo_outfits,
                 };
                 let stowed = self.armament.stow(ship, &mut rounds);
                 self.unfleet(id);
@@ -351,7 +356,7 @@ impl Session {
         for fighter in self.drop_fighters(|_, _, _| false) {
             let mut rounds = OutfitRounds {
                 owned: &mut self.pilot.outfits,
-                sources: &self.ammo_outfits,
+                sources: &self.statics.ammo_outfits,
             };
             if !self.armament.stow(fighter.ship, &mut rounds) {
                 self.save_due = true;
@@ -397,8 +402,13 @@ impl Session {
     /// of that type; none when the ship carries no such bay.
     pub(super) fn fighter_room(&self) -> BTreeMap<OutfitId, u32> {
         let mut room = BTreeMap::new();
-        for &(ammo, outfit) in &self.ammo_outfits {
-            let Some(bay) = self.arsenal.weapon(ammo).filter(|spec| spec.is_bay()) else {
+        for &(ammo, outfit) in &self.statics.ammo_outfits {
+            let Some(bay) = self
+                .statics
+                .arsenal
+                .weapon(ammo)
+                .filter(|spec| spec.is_bay())
+            else {
                 continue;
             };
             let bays: u32 = self
@@ -409,11 +419,12 @@ impl Session {
                 .map(|mount| mount.count)
                 .sum();
             let max = self
+                .statics
                 .outfits
                 .iter()
                 .find(|record| record.id == outfit)
                 .map_or(0, |record| record.max);
-            let held = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo)
+            let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo)
                 .saturating_add(self.fighters_out(bay.carried));
             room.insert(
                 outfit,
@@ -433,13 +444,18 @@ impl Session {
     /// is not read here.
     pub(super) fn ammo_caps(&self) -> BTreeMap<OutfitId, i16> {
         let mut caps = BTreeMap::new();
-        for record in &self.outfits {
+        for record in &self.statics.outfits {
             let (kind, val) = record.mods[0];
             if kind != MOD_AMMO {
                 continue;
             }
             let weapon = WeaponId(val);
-            let Some(spec) = self.arsenal.weapon(weapon).filter(|spec| spec.max_ammo > 0) else {
+            let Some(spec) = self
+                .statics
+                .arsenal
+                .weapon(weapon)
+                .filter(|spec| spec.max_ammo > 0)
+            else {
                 continue;
             };
             let launchers: u32 = self
@@ -473,11 +489,16 @@ impl Session {
     /// fighters out counted, as the outfitter's Sell counts them
     /// (`_DoOutfitDialog` @0x5cadb-0x5cb8e).
     pub(super) fn launchers(&self) -> BTreeMap<OutfitId, Launcher> {
-        self.arsenal
-            .magazines(&self.outfits)
+        self.statics
+            .arsenal
+            .magazines(&self.statics.outfits)
             .into_iter()
             .map(|(outfit, magazine)| {
-                let aboard = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, magazine.ammo);
+                let aboard = outfit_rounds(
+                    &self.pilot.outfits,
+                    &self.statics.ammo_outfits,
+                    magazine.ammo,
+                );
                 let out = if magazine.carried.is_some() {
                     self.fighters_out(magazine.carried)
                 } else {
@@ -504,7 +525,7 @@ impl Session {
         match sortie.carrier {
             ShipRef::Player => OutfitRounds {
                 owned: &mut self.pilot.outfits,
-                sources: &self.ammo_outfits,
+                sources: &self.statics.ammo_outfits,
             }
             .stow(sortie.bay),
             ShipRef::Npc(id) => {

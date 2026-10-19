@@ -170,7 +170,7 @@ impl Session {
                 leaving: false,
                 glow: self.engine_glow,
             },
-            durations: self.warp_sounds,
+            durations: self.statics.warp_sounds,
             double_time: self.double_time,
         }
     }
@@ -478,7 +478,7 @@ mod tests {
     /// jump at once.
     fn jumping(catalog: &FakePilotCatalog) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
-        session.warp_sounds = [364, 252];
+        session.statics_mut().warp_sounds = [364, 252];
         session.begin_jump().expect("jumps");
         assert_eq!(session.jumping(), Some(SystemId(131)));
         session
@@ -939,7 +939,7 @@ mod tests {
     /// `catalog`'s ship, as [`jumping`], its jump begun in double time.
     fn jumping_in_double_time(catalog: &FakePilotCatalog) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
-        session.warp_sounds = [364, 252];
+        session.statics_mut().warp_sounds = [364, 252];
         session.set_double_time_key(true);
         session.begin_jump().expect("jumps");
         assert!(session.double_time());
@@ -1013,7 +1013,7 @@ mod tests {
         // would end the next warp at a stage of 30 though its warp-up
         // plays (@0x6b695 clears it as the warp-up plays).
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
-        session.warp_sounds = [364, 252];
+        session.statics_mut().warp_sounds = [364, 252];
         session.warp.sound_done = true;
         session.begin_jump().expect("jumps");
         for _ in 0..40 {
@@ -1027,7 +1027,7 @@ mod tests {
         // d 0: t > d / w at once, and no warp-up plays; the stage reaches
         // 31 on the 29th pass.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
-        session.warp_sounds = [0, 0];
+        session.statics_mut().warp_sounds = [0, 0];
         session.begin_jump().expect("jumps");
         for _ in 0..28 {
             tick(&mut session);
@@ -1051,7 +1051,7 @@ mod tests {
             }),
         )];
         let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 270.0);
-        session.warp_sounds = [0, 0];
+        session.statics_mut().warp_sounds = [0, 0];
         session.begin_jump().expect("jumps");
         for _ in 0..28 {
             tick(&mut session);

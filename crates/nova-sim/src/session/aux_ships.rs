@@ -105,7 +105,7 @@ impl Session {
                 self.pilot.system,
                 holders,
                 map,
-                &self.govts,
+                &self.statics.govts,
             )
         {
             return;
@@ -117,9 +117,9 @@ impl Session {
         self.traffic.table_mut().add_mission_dudes(
             catalog,
             &[dude],
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
+            &self.statics.ships,
+            &self.statics.outfits,
+            &self.statics.arsenal,
             items,
         );
         let spawn = AuxSpawn {
@@ -131,7 +131,7 @@ impl Session {
         let came = self.traffic.bring_in_within(
             ships,
             self.spawn_reserve(SPAWN_RESERVE),
-            &self.govts,
+            &self.statics.govts,
             &mut *chance,
         );
         if let Some(active) = self.pilot.missions.get_mut(slot) {

@@ -364,7 +364,7 @@ mod tests {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
         let top = session.top_speed();
         assert!(at_8 > 0.0 && at_8 < top && at_10 > at_8, "{at_8} {at_10}");
-        session.warp_sounds[1] = d;
+        session.statics_mut().warp_sounds[1] = d;
         session.set_double_time_key(true);
         session.begin_jump().expect("jumps");
         for _ in 0..3 {

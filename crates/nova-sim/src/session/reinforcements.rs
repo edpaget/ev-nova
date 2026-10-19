@@ -182,8 +182,8 @@ impl Session {
                 fleet,
                 clock: self.clock_here(),
                 odds: cached_odds_at(npc, &around, think_odds),
-                allied: self.govts.allies(npc.govt, fleet_govt),
-                fleet_max_odds: self.govts.max_odds(fleet_govt),
+                allied: self.statics.govts.allies(npc.govt, fleet_govt),
+                fleet_max_odds: self.statics.govts.max_odds(fleet_govt),
                 force,
                 inhibitors: self.inhibitors(npc.govt, fleet_govt),
             }
@@ -207,7 +207,7 @@ impl Session {
         let fleet = self.traffic.reinforcement_fleet();
         let name = fleet
             .and_then(|fleet| fleet.govt)
-            .and_then(|govt| self.govts.get(govt))
+            .and_then(|govt| self.statics.govts.get(govt))
             .map(|record| record.medium_name.clone())
             .unwrap_or_default();
         let mut clock = self.clock_here();
@@ -271,7 +271,7 @@ impl Session {
             self.reinforcements.every_government = false;
             self.reinforcements.inhibited.clear();
         }
-        for owned in outfit_mods(&self.pilot.outfits, &self.outfits) {
+        for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
             if owned.mod_type != INHIBITOR {
                 continue;
             }
@@ -280,10 +280,12 @@ impl Session {
                 continue;
             }
             let classed: Vec<GovtId> = self
+                .statics
                 .govts
                 .ids()
                 .filter(|&govt| {
-                    self.govts
+                    self.statics
+                        .govts
                         .get(govt)
                         .is_some_and(|record| record.classes.contains(&owned.mod_val))
                 })

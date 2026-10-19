@@ -22,7 +22,7 @@ impl Session {
         let loaded = murk::loaded_murk(raw, self.rules.source_for(RuleKey::LowMurk));
         murk::effective_murk(
             loaded,
-            murk::outfit_murk(&self.pilot.outfits, &self.outfits),
+            murk::outfit_murk(&self.pilot.outfits, &self.statics.outfits),
         )
     }
 }

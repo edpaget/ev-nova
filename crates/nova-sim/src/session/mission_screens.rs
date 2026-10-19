@@ -320,7 +320,7 @@ impl Session {
     /// it started: `None` for a `mïsn` it has no texts of.
     #[must_use]
     pub fn mission_texts(&self, id: MissionId) -> Option<&MissionTexts> {
-        self.mission_texts.get(&id)
+        self.statics.mission_texts.get(&id)
     }
 
     /// The mission texts and offer movies to show since they were last
@@ -467,13 +467,15 @@ impl Session {
         map: Option<MapMarks>,
         chance: &mut dyn Chance,
     ) -> bool {
-        let Some((raw, graphic, movie)) = self.mission_texts.get(&mission).and_then(|texts| {
-            Some((
-                kind.of(texts)?.to_owned(),
-                kind.graphic_of(texts),
-                kind.movie_of(texts),
-            ))
-        }) else {
+        let Some((raw, graphic, movie)) =
+            self.statics.mission_texts.get(&mission).and_then(|texts| {
+                Some((
+                    kind.of(texts)?.to_owned(),
+                    kind.graphic_of(texts),
+                    kind.movie_of(texts),
+                ))
+            })
+        else {
             return false;
         };
         let raw = self.load_description(Some(&raw), movie.as_ref(), chance);

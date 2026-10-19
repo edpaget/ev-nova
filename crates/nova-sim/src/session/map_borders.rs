@@ -57,7 +57,7 @@ impl Session {
         BorderSources {
             coarse,
             walk,
-            govts: self.govts.clone(),
+            govts: self.statics.govts.clone(),
         }
     }
 
@@ -69,7 +69,7 @@ impl Session {
             return None;
         }
         let govt = galaxy.govt(system)?;
-        if self.govts.flag2(Some(govt), NO_INFLUENCE) {
+        if self.statics.govts.flag2(Some(govt), NO_INFLUENCE) {
             return None;
         }
         let inhabited = exploration::inhabited(
@@ -84,7 +84,7 @@ impl Session {
             system,
             pos,
             govt,
-            small: self.govts.flag2(Some(govt), SMALL_INFLUENCE),
+            small: self.statics.govts.flag2(Some(govt), SMALL_INFLUENCE),
         })
     }
 }

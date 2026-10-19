@@ -81,7 +81,7 @@ impl Session {
                 system: active.ships.system,
                 behav: ShipBehav::from_code(record.ships.behav),
                 left: active.ships.left,
-                flags2: govt.map(|govt| self.govts.get(govt).map_or(0, |govt| govt.flags2)),
+                flags2: govt.map(|govt| self.statics.govts.get(govt).map_or(0, |govt| govt.flags2)),
             };
             let Some(timer) = through_gate(kind, &facts, chance) else {
                 continue;

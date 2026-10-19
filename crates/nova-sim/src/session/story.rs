@@ -233,7 +233,12 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
                 // `ActivateOn` can read the pilot through the session's
                 // control bits: no test reads the events.
                 let mut events = std::mem::take(&mut session.pilot.events);
-                market::step_day(&session.goods, &mut events, session.gate(), self.chance);
+                market::step_day(
+                    &session.statics.goods,
+                    &mut events,
+                    session.gate(),
+                    self.chance,
+                );
                 session.pilot.events = events;
             }
             // The destroyed stellars' regeneration; the dominated ones'
@@ -432,8 +437,12 @@ impl Session {
     pub(super) fn refresh_now(&self) -> Refresh {
         let gate = self.gate();
         Refresh {
-            hidden: hidden_by(self.galaxy.catalog_systems(), &self.visibility, &gate),
-            inactive: inactive_by(&self.nebulae, &gate),
+            hidden: hidden_by(
+                self.galaxy.catalog_systems(),
+                &self.statics.visibility,
+                &gate,
+            ),
+            inactive: inactive_by(&self.statics.nebulae, &gate),
         }
     }
 
@@ -685,14 +694,14 @@ impl Session {
             &mut self.hire_rolls,
             &mut self.ship_rolls,
             &mut self.outfit_rolls,
-            self.ships.iter().map(|ship| {
+            self.statics.ships.iter().map(|ship| {
                 (
                     ship.id,
                     hire::hire_roll(ship.hire_random),
                     shipyard::buy_roll(ship.buy_random, buy_random),
                 )
             }),
-            self.outfits.iter().map(|record| {
+            self.statics.outfits.iter().map(|record| {
                 (
                     record.id,
                     outfitter::buy_roll(record.buy_random, buy_random),

@@ -118,7 +118,7 @@ impl Session {
                 .ship_record(self.pilot.ship)
                 .map_or(0, |record| i32::from(record.strength)),
             marines: Marines::owned(
-                outfit_mods(&self.pilot.outfits, &self.outfits)
+                outfit_mods(&self.pilot.outfits, &self.statics.outfits)
                     .into_iter()
                     .map(|outfit| (outfit.mod_type, outfit.mod_val, outfit.count)),
             ),

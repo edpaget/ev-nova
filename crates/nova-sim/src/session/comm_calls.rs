@@ -258,8 +258,8 @@ impl Session {
             .and_then(|record| record.inherent_govt);
         Some(DistressFacts {
             person: npc.person.is_some(),
-            quiet: self.govts.flag2(npc.govt, QUIET),
-            quiet_inherent: self.govts.flag2(inherent, QUIET),
+            quiet: self.statics.govts.flag2(npc.govt, QUIET),
+            quiet_inherent: self.statics.govts.flag2(inherent, QUIET),
             line_free: self.comm_line.free_for_calls(),
             liked: likes_player(npc, &around, self.mission_hail(npc)),
             threatens: threatens_player(npc, &around, self.condition == Condition::Intact),
@@ -298,7 +298,7 @@ impl Session {
         let Some(npc) = self.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };
-        let Some(govt) = npc.govt.and_then(|govt| self.govts.get(govt)) else {
+        let Some(govt) = npc.govt.and_then(|govt| self.statics.govts.get(govt)) else {
             return;
         };
         let found = hail_finds(govt, &self.pilot.missions, |mission| {

@@ -373,7 +373,8 @@ mod tests {
             "passed over"
         );
         session.target = None;
-        session.outfits = vec![crate::testkit::outfit(250, &[(MOD_SCANNER, SCAN_TARGET)])];
+        session.statics_mut().outfits =
+            vec![crate::testkit::outfit(250, &[(MOD_SCANNER, SCAN_TARGET)])];
         session
             .pilot
             .outfits

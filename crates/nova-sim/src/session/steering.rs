@@ -116,7 +116,7 @@ impl Session {
         let here = self.sites.iter().find(|site| site.id == id);
         Some(here.map_or_else(
             || {
-                let (x, y) = self.stellar_marks.place(id).unwrap_or_default();
+                let (x, y) = self.statics.stellar_marks.place(id).unwrap_or_default();
                 Vec2::new(f32::from(x), f32::from(y))
             },
             |site| site.position,

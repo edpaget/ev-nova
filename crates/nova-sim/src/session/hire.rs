@@ -188,11 +188,11 @@ impl Session {
         let site = self.bar_site()?;
         let facts = Facts {
             pilot: &self.pilot,
-            ammo_outfits: &self.ammo_outfits,
+            ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.armament,
         };
         let bar = Bar {
-            ships: &self.ships,
+            ships: &self.statics.ships,
             site: &site,
             contributed: self.contributed(),
             cash: self.pilot.cash,
@@ -204,8 +204,8 @@ impl Session {
             control_bits: &*self.control_bits.0,
             pilot: &facts,
             rules: self.rules,
-            arsenal: &self.arsenal,
-            outfits: &self.outfits,
+            arsenal: &self.statics.arsenal,
+            outfits: &self.statics.outfits,
         };
         let rolls = &mut self.hire_rolls;
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))

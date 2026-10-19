@@ -73,7 +73,7 @@ impl Session {
     #[must_use]
     pub fn player_scoops(&self) -> bool {
         crate::scoop::player_scoops(
-            has_asteroid_scoop(&self.pilot.outfits, &self.outfits),
+            has_asteroid_scoop(&self.pilot.outfits, &self.statics.outfits),
             self.capacity(),
             self.pilot.total_cargo(),
         )
@@ -119,7 +119,7 @@ impl Session {
                 let Some(taken) = self.boxes.take_touching(
                     self.player.position,
                     self.hull.hit_radius,
-                    &self.box_frames,
+                    &self.statics.box_frames,
                 ) else {
                     break;
                 };
@@ -135,7 +135,7 @@ impl Session {
                 self.reset_precalced();
             }
         }
-        let (boxes, frames) = (&mut self.boxes, &self.box_frames);
+        let (boxes, frames) = (&mut self.boxes, &self.statics.box_frames);
         for npc in self.traffic.npcs_mut() {
             if npc.is_scooping() && npc_in_ship_layer(npc) {
                 npc_scoop(

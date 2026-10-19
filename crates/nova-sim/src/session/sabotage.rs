@@ -77,12 +77,17 @@ impl Session {
     /// ([`death_descs`](crate::sabotage::death_descs)).
     #[must_use]
     pub fn sabotage_death_descs(&self) -> Vec<i16> {
-        crate::sabotage::death_descs(self.sabotage.flag(), &self.pilot.outfits, &self.outfits)
+        crate::sabotage::death_descs(
+            self.sabotage.flag(),
+            &self.pilot.outfits,
+            &self.statics.outfits,
+        )
     }
 
     /// The sabotage clock's part of the refresh (see the module docs).
     pub(super) fn refresh_sabotage(&mut self) {
-        self.sabotage.refresh(&self.pilot.outfits, &self.outfits);
+        self.sabotage
+            .refresh(&self.pilot.outfits, &self.statics.outfits);
     }
 
     /// A tick of the sabotage clock, and what goes off with it, drawing on
@@ -110,7 +115,7 @@ impl Session {
     /// module docs' **Bomb outfits**), `rule` saying when the player is
     /// disabled, each bomb's damage drawn on `chance`.
     fn sabotage_bombs(&mut self, rule: &dyn DisableRule, chance: &mut dyn Chance) {
-        for bomb in bombs(&self.pilot.outfits, &self.outfits) {
+        for bomb in bombs(&self.pilot.outfits, &self.statics.outfits) {
             self.say(SimMessage::BombExploded {
                 outfit: bomb.outfit,
                 one: bomb.one,
@@ -146,7 +151,7 @@ impl Session {
         reserves.armor.now = -1.0;
         reserves.shield.now = -1.0;
         self.jump = None;
-        let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
+        let outfit = kill_notice(&self.pilot.outfits, &self.statics.outfits);
         self.halt_sounds(&WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
         self.say(if outfit.is_none() && self.leet {

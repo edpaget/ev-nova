@@ -61,7 +61,7 @@ impl Session {
     /// What the colour codes read, worked out once.
     fn coding(&self) -> Coding<'_> {
         let mut listed: BTreeMap<SystemId, Vec<&ListedStellar>> = BTreeMap::new();
-        for stellar in &self.listed_stellars {
+        for stellar in &self.statics.listed_stellars {
             for &system in &stellar.systems {
                 listed.entry(system).or_default().push(stellar);
             }

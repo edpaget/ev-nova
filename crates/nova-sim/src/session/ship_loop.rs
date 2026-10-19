@@ -175,7 +175,7 @@ impl Session {
         }
         self.lay_out_displayed();
         self.traffic.step_fades();
-        self.traffic.after_firing(&self.arsenal);
+        self.traffic.after_firing(&self.statics.arsenal);
     }
 
     /// The NPC in the lowest berth above `after` (any, with none), and

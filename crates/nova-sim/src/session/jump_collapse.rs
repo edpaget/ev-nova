@@ -213,7 +213,7 @@ mod tests {
         session.begin_jump().expect("jumps");
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.warp_clock(), None, "braking");
-        session.warp_sounds[0] = duration;
+        session.statics_mut().warp_sounds[0] = duration;
         session.take_sounds();
         session.take_messages();
         session
@@ -259,7 +259,7 @@ mod tests {
     fn a_player_disabled_while_turning_collapses_on_the_clock_from_the_turns_start() {
         // At rest facing up, 90 degrees off east: J turns at once.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
-        session.warp_sounds[0] = 25;
+        session.statics_mut().warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         assert_eq!(
             session.take_sounds(),
@@ -286,7 +286,7 @@ mod tests {
         // At rest facing east, the bearing: the jump begins at once, and
         // the fight runs through it.
         let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
-        session.warp_sounds[0] = 25;
+        session.statics_mut().warp_sounds[0] = 25;
         session.begin_jump().expect("jumps");
         for _ in 0..3 {
             session.tick(Controls::default());
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn a_disabled_player_with_no_jump_collapses_nothing() {
         let mut session = bound_for_131(&catalog(), OUT, Vec2::new(1.0, 0.0), 0.0);
-        session.warp_sounds[0] = 9;
+        session.statics_mut().warp_sounds[0] = 9;
         disable_and_tick(&mut session);
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.take_sounds(), []);

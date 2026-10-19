@@ -89,6 +89,7 @@ impl Session {
             .into_iter()
             .map(|site| PanelStellar {
                 name: self
+                    .statics
                     .place_names
                     .stellars
                     .get(&site.id)
@@ -107,18 +108,21 @@ impl Session {
         PanelFacts {
             level: self.pilot.explored_level(system),
             name: self
+                .statics
                 .place_names
                 .systems
                 .get(&system)
                 .cloned()
                 .unwrap_or_default(),
             government: self.galaxy.govt(system).map(|govt| {
-                self.govts
+                self.statics
+                    .govts
                     .get(govt)
                     .map(|record| record.name.clone())
                     .unwrap_or_default()
             }),
             asteroids: self
+                .statics
                 .asteroid_fields
                 .get(&system)
                 .map_or(0, |field| field.count),

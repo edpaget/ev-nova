@@ -50,7 +50,7 @@ impl Session {
     /// government (@0x2cf1-0x2d14), or a rescue mission's ship not yet
     /// boarded ([`Session::mission_ship_held`]).
     pub(crate) fn held_disabled(&self, npc: &Npc) -> bool {
-        self.govts.derelict(npc.govt) || self.mission_ship_held(npc)
+        self.statics.govts.derelict(npc.govt) || self.mission_ship_held(npc)
     }
 
     /// Stores each intact NPC of a Derelict government disabled, with no
@@ -62,7 +62,7 @@ impl Session {
     /// after the ships before it have thought is held before the frame
     /// is drawn, a lag no player sees.
     pub(super) fn hold_derelicts(&mut self) {
-        let govts = &self.govts;
+        let govts = &self.statics.govts;
         for npc in self.traffic.npcs_mut() {
             if npc.condition == Condition::Intact && govts.derelict(npc.govt) {
                 npc.condition = Condition::Disabled;

@@ -69,7 +69,7 @@ impl Session {
     /// Registers each nebula's `OnExplore` subscription (see the module
     /// docs). A nebula registered already is left as it is.
     pub(super) fn register_nebulae(&mut self) {
-        for record in self.nebulae.clone().iter() {
+        for record in self.statics.nebulae.clone().iter() {
             let _ = self.register_story(Subscription::new(
                 nebula_hook(record.id),
                 EventFilter::Any(StoryEventKind::Explored),
@@ -86,7 +86,12 @@ impl Session {
         let StoryEvent::Explored { system } = *event else {
             return false;
         };
-        let Some(record) = self.nebulae.iter().find(|record| record.id == nebula) else {
+        let Some(record) = self
+            .statics
+            .nebulae
+            .iter()
+            .find(|record| record.id == nebula)
+        else {
             return false;
         };
         nebula::explores(

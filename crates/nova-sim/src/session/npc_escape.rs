@@ -191,9 +191,12 @@ impl Session {
             return;
         };
         let death_delay = npc.hull.signed_death_delay;
-        let govt_flags = npc
-            .govt
-            .map(|govt| self.govts.get(govt).map_or(0, |record| record.flags));
+        let govt_flags = npc.govt.map(|govt| {
+            self.statics
+                .govts
+                .get(govt)
+                .map_or(0, |record| record.flags)
+        });
         let person = npc
             .person
             .is_some_and(|person| person_pod_due(timer, death_delay, person.flags, govt_flags));
@@ -223,9 +226,9 @@ impl Session {
             return;
         };
         let bay = escape_ship_bay(
-            self.arsenal.weapons(),
+            self.statics.arsenal.weapons(),
             |weapon| npc.rounds.held(weapon),
-            &self.ships,
+            &self.statics.ships,
         );
         if !escape_roll_due(true, bay.is_some(), timer, npc.hull.signed_death_delay) {
             return;

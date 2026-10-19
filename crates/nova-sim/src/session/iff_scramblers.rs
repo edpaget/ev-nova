@@ -47,15 +47,17 @@ impl Session {
         if self.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
             self.iff_marked.clear();
         }
-        for owned in outfit_mods(&self.pilot.outfits, &self.outfits) {
+        for owned in outfit_mods(&self.pilot.outfits, &self.statics.outfits) {
             if owned.mod_type != IFF_SCRAMBLER || owned.mod_val == NO_CLASS {
                 continue;
             }
             let classed: Vec<GovtId> = self
+                .statics
                 .govts
                 .ids()
                 .filter(|&govt| {
-                    self.govts
+                    self.statics
+                        .govts
                         .get(govt)
                         .is_some_and(|record| record.classes.contains(&owned.mod_val))
                 })

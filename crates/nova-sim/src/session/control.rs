@@ -289,7 +289,7 @@ impl Session {
     pub(crate) fn facts(&self) -> Facts<'_> {
         Facts {
             pilot: &self.pilot,
-            ammo_outfits: &self.ammo_outfits,
+            ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.armament,
         }
     }

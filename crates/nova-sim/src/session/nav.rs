@@ -361,7 +361,7 @@ impl Session {
         }
         self.set_nav(match self.nav {
             NavMode::Stellar(_) if first => {
-                NavMode::Stellar(self.first_stellars.get(&system).copied())
+                NavMode::Stellar(self.statics.first_stellars.get(&system).copied())
             }
             mode => mode.deselected(),
         });
