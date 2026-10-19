@@ -487,6 +487,55 @@ impl Condition {
     pub fn disabled(self) -> bool {
         matches!(self, Self::Disabled | Self::Dying { .. })
     }
+
+    /// The breakup a standing ship with `armor` starts, if it does: `Dying`
+    /// with its timer unset, which the ship's next display step sets (see
+    /// the `display` module), when it is intact or disabled and its armour
+    /// is gone ([`armour_gone`]). A ship breaking up or destroyed is left
+    /// as it is: `None`.
+    ///
+    /// It is `_IsDying`'s (@0x253d) armour test, the timer above 0 or the
+    /// armour at 0.0 or below, read off a ship whose condition has not yet
+    /// followed its armour, with the engine's [`holds_armour`] guard: a
+    /// ship type that holds none has none to lose. The fight's settling
+    /// of a condition (`Combat::settle_condition`) and the player's eject
+    /// check (`nova_sim::Session::eject_check`) both read it, so the rule
+    /// has one home.
+    ///
+    /// It leaves out, on purpose:
+    ///
+    /// - The escape pod's exemption ([`never_breaks_up`]). It is
+    ///   `_HandleShipDisplay`'s, which skips its dying block for class
+    ///   0x2ff (@0x2d803), not `_IsDying`'s, which never reads the class.
+    ///   The fight's settling checks it before asking this; the eject
+    ///   check reads `_IsDying` as `_HandlePlayer` caches it (@0x6f22c),
+    ///   with no class test, and so does not.
+    /// - [`Fighter::held_disabled`](super::Fighter::held_disabled). It
+    ///   holds a standing ship disabled only while its armour is left: a
+    ///   held ship whose armour is gone breaks up all the same, so it
+    ///   never changes this answer.
+    #[must_use]
+    pub fn breaking_up(self, armor: Gauge) -> Option<Self> {
+        (self.standing() && armour_gone(armor)).then_some(Self::Dying {
+            ticks_left: 0,
+            starting: true,
+        })
+    }
+}
+
+/// Whether `armor` is gone: at or below none, on a ship that holds any.
+#[must_use]
+pub fn armour_gone(armor: Gauge) -> bool {
+    armor.now <= 0.0 && holds_armour(armor)
+}
+
+/// Whether a ship with `armor` holds any. A ship type with no armour at
+/// all (stock `shïp` 895, plug-in or test data) has none to lose, so it
+/// never breaks up, and the [`DisableRule`] is never asked of it, so it is
+/// never disabled either.
+#[must_use]
+pub fn holds_armour(armor: Gauge) -> bool {
+    armor.max > 0.0
 }
 
 /// What the player's `DeathDelay` is multiplied by as its breakup starts
@@ -568,6 +617,53 @@ mod tests {
             ..HullSpec::default()
         };
         NovaDisable.disabled(armor(now, max), &hull)
+    }
+
+    const UNSET: Condition = Condition::Dying {
+        ticks_left: 0,
+        starting: true,
+    };
+
+    #[test]
+    fn a_standing_ship_whose_armour_is_gone_starts_breaking_up_its_timer_unset() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            for now in [0.0, -1.0] {
+                assert_eq!(
+                    condition.breaking_up(armor(now, 100.0)),
+                    Some(UNSET),
+                    "{condition:?} at {now}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_standing_ship_with_armour_left_or_none_to_lose_is_not_breaking_up() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert_eq!(condition.breaking_up(armor(0.5, 100.0)), None);
+            assert_eq!(condition.breaking_up(armor(0.0, 0.0)), None);
+        }
+    }
+
+    #[test]
+    fn a_ship_breaking_up_or_destroyed_is_left_as_it_is() {
+        let dying = Condition::Dying {
+            ticks_left: 7,
+            starting: false,
+        };
+        for condition in [dying, Condition::Destroyed] {
+            assert_eq!(condition.breaking_up(armor(-1.0, 100.0)), None);
+        }
+    }
+
+    #[test]
+    fn armour_is_gone_at_or_below_none_on_a_ship_that_holds_any() {
+        assert!(armour_gone(armor(0.0, 1.0)));
+        assert!(armour_gone(armor(-1.0, 1.0)));
+        assert!(!armour_gone(armor(0.1, 1.0)));
+        assert!(!armour_gone(armor(0.0, 0.0)));
+        assert!(holds_armour(armor(0.0, 0.1)));
+        assert!(!holds_armour(armor(5.0, 0.0)));
     }
 
     #[test]

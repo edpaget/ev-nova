@@ -186,24 +186,21 @@ impl Session {
     /// It reads the player as `_IsDisabled` and `_IsDying` (@0x253d) do,
     /// the armour live: a player whose armour is gone is dying though no
     /// display has settled its condition yet (a sabotage kill this pass),
-    /// its timer unset. Dying with the timer unset (0) arms auto-eject
-    /// whatever the threshold, as the original's first frame of a breakup
-    /// does, and so does a stalled breakup's; otherwise the threshold
-    /// reads the timer as its tick left it. The hulk takes the condition
+    /// its timer unset ([`Condition::breaking_up`], the fight's own rule,
+    /// with no escape-pod exemption: `_IsDying` never reads the class).
+    /// Dying with the timer unset (0) arms auto-eject whatever the
+    /// threshold, as the original's first frame of a breakup does, and so
+    /// does a stalled breakup's; otherwise the threshold reads the timer
+    /// as its tick left it. The hulk takes the condition
     /// as it stands (@0x6f365), and its own step ticks and displays it
     /// again this pass.
     pub(super) fn eject_check(&mut self, chance: &mut dyn Chance) {
-        let armor = self.pilot.reserves.armor;
-        let armour_gone = armor.now <= 0.0 && armor.max > 0.0;
-        let (hulk, timer) = match self.condition {
-            Condition::Dying { ticks_left, .. } => (self.condition, Some(ticks_left)),
-            Condition::Intact | Condition::Disabled if armour_gone => (
-                Condition::Dying {
-                    ticks_left: 0,
-                    starting: true,
-                },
-                Some(0),
-            ),
+        let condition = self
+            .condition
+            .breaking_up(self.pilot.reserves.armor)
+            .unwrap_or(self.condition);
+        let (hulk, timer) = match condition {
+            Condition::Dying { ticks_left, .. } => (condition, Some(ticks_left)),
             Condition::Disabled => (Condition::Disabled, None),
             Condition::Intact | Condition::Destroyed => return,
         };
@@ -2033,7 +2030,7 @@ mod tests {
     #[test]
     fn a_player_whose_class_holds_no_armour_is_never_dying_at_the_eject_check() {
         // `_IsDying` reads armour at none or below (@0x253d), but a ship
-        // that holds none has none to lose (see `holds_armour`): the
+        // that holds none has none to lose (see `hull::holds_armour`): the
         // chord on an intact player of no armour ejects nothing.
         let catalog = ejecting(100);
         let mut session = flying(&catalog, &[POD]);

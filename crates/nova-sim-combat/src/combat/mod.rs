@@ -409,7 +409,9 @@ use damage::{Blast, Hit};
 use defence::{Candidate, Guard, PointDefenceRule, Quarry, Side};
 pub use display::Displayed;
 use exits::{Compression, ExitCursors, ExitPoints, StrayWord, drawn_frame, frame_angle};
-use hull::{Breakup, Condition, DisableRule, HullSpec, immune, never_breaks_up};
+use hull::{
+    Breakup, Condition, DisableRule, HullSpec, armour_gone, holds_armour, immune, never_breaks_up,
+};
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion};
 use jamming::Jamming;
@@ -3023,9 +3025,10 @@ impl Combat {
     /// condition follows its armour, as `rule` says. How it was downed,
     /// if it was.
     ///
-    /// - Intact or disabled with no armour left, it starts breaking up:
-    ///   [`CombatEvent::BreakingUp`], and `Dying` with its timer unset,
-    ///   which its next display step sets (see the `display` module).
+    /// - Intact or disabled with no armour left, it starts breaking up
+    ///   ([`Condition::breaking_up`]): [`CombatEvent::BreakingUp`], and
+    ///   `Dying` with its timer unset, which its next display step sets
+    ///   (see the `display` module).
     /// - Held disabled ([`Fighter::held_disabled`]), it is kept disabled.
     /// - Otherwise it is disabled, or intact, as `rule` says, a ship that
     ///   holds no armour never disabled; newly disabled, it raises
@@ -3045,19 +3048,16 @@ impl Combat {
             return None;
         }
         let ship = fighter.ship;
+        if let Some(dying) = fighter.condition.breaking_up(fighter.reserves.armor) {
+            self.events.push(CombatEvent::BreakingUp {
+                ship,
+                at: fighter.state.position,
+                explosion: fighter.hull.breakup,
+            });
+            *fighter.condition = dying;
+            return Some(Downed::BreakingUp);
+        }
         match *fighter.condition {
-            Condition::Intact | Condition::Disabled if armour_gone(fighter.reserves.armor) => {
-                self.events.push(CombatEvent::BreakingUp {
-                    ship,
-                    at: fighter.state.position,
-                    explosion: fighter.hull.breakup,
-                });
-                *fighter.condition = Condition::Dying {
-                    ticks_left: 0,
-                    starting: true,
-                };
-                Some(Downed::BreakingUp)
-            }
             Condition::Intact | Condition::Disabled if fighter.held_disabled => {
                 *fighter.condition = Condition::Disabled;
                 None
@@ -3477,19 +3477,6 @@ fn truncate_downed_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
     if armour_gone(armor) || holds_armour(armor) && rule.disabled(armor, &fighter.hull) {
         fighter.reserves.armor.now = armor.now.trunc();
     }
-}
-
-/// Whether `armor` is gone: at or below none, on a ship that holds any.
-fn armour_gone(armor: Gauge) -> bool {
-    armor.now <= 0.0 && holds_armour(armor)
-}
-
-/// Whether a ship with `armor` holds any. A ship type with no armour at
-/// all (stock `shïp` 895, plug-in or test data) has none to lose, so it
-/// never breaks up, and the [`DisableRule`] is never asked of it, so it is
-/// never disabled either.
-fn holds_armour(armor: Gauge) -> bool {
-    armor.max > 0.0
 }
 
 /// Whether `shot` meets a ship by contact on its move here from `from`
