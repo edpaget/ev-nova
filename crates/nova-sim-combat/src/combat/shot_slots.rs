@@ -216,6 +216,18 @@ impl Combat {
     /// engine reading; by the other, on 0, the slot's put back to 0. The
     /// slot it took, if it found one.
     pub(super) fn put_in_flight(&mut self, mut shot: Shot) -> Option<usize> {
+        let free = self.seat(&mut shot)?;
+        self.insert_seated(&shot);
+        Some(free)
+    }
+
+    /// Seats `shot` at the first free slot, as [`Combat::put_in_flight`]
+    /// does, without putting it in flight: its slot, its layer, its spin
+    /// timer and its miss roll, written or read. A sub-munition is aimed
+    /// between the two ([`submunition::aim`](super::submunition::aim)),
+    /// as `_SpawnShotSubmunitions` seeks only once `_SpawnShot` has
+    /// seated it (@0x3f328, @0x3f3cf). The slot it took, if it found one.
+    pub(super) fn seat(&mut self, shot: &mut Shot) -> Option<usize> {
         let free = self.first_free_slot()?;
         shot.slot = free;
         self.slots.put(free, shot.layer);
@@ -228,9 +240,14 @@ impl Combat {
         } else if self.reused_roll == RuleSource::Engine {
             shot.miss_roll = self.slots.roll(free);
         }
-        let at = self.shots.partition_point(|flying| flying.slot < free);
-        self.shots.insert(at, shot);
         Some(free)
+    }
+
+    /// Puts `shot`, seated ([`Combat::seat`]), in flight, keeping the
+    /// shots in slot order.
+    pub(super) fn insert_seated(&mut self, shot: &Shot) {
+        let at = self.shots.partition_point(|flying| flying.slot < shot.slot);
+        self.shots.insert(at, *shot);
     }
 
     /// Moves the shot in flight in `slot` to `layer`, as

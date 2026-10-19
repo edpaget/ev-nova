@@ -342,6 +342,7 @@ mod tests {
             condition: Condition::Intact,
             disabled: false,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(0),
         }
     }
 

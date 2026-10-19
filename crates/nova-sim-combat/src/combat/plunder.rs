@@ -149,6 +149,7 @@ mod tests {
             condition,
             disabled: condition != Condition::Intact,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(id),
         }
     }
 

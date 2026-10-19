@@ -5,7 +5,7 @@
 
 use super::collision_walk::{BESIDE_C, D, INTO_C, fly, fused, missile, rolled_over, three, walk};
 use super::*;
-use crate::combat::weapon::SPINS;
+use crate::combat::weapon::{PROXIMITY_BY_OTHERS, SPINS, SUBS_SEEK_NEAREST};
 
 /// A long-lived shot of C's, far from every ship, never moving.
 fn idle() -> Shot {
@@ -548,6 +548,130 @@ fn a_sub_munition_after_a_shot_of_no_roll_or_in_a_slot_never_used_carries_none()
     assert_eq!((subs[0].slot, subs[0].miss_roll), (1, None), "never used");
 }
 
+/// A shell whose `count` sub-munitions of `sub` (weapon 148) seek the
+/// nearest ship (`Flags2` 0x0010) unspread, and the arsenal with them.
+fn seeking_shell(count: i16, sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
+    let (shell, _) = one_sub();
+    let shell = WeaponRecord {
+        sub_count: count,
+        sub_theta: 0,
+        flags2: SUBS_SEEK_NEAREST,
+        ..shell
+    };
+    (shell, Arsenal::new(&[shell, sub], Vec::new()))
+}
+
+/// An unguided sub-munition, 148.
+fn unguided_sub() -> WeaponRecord {
+    WeaponRecord {
+        guidance: -1,
+        count: 50,
+        speed: 500,
+        ..weapon(148)
+    }
+}
+
+/// B, 50 below the shell spent at (0, 300), of turret miss class 80, as
+/// `condition`; and C, 200 to its right, of class 100.
+fn near_and_far(condition: Condition) -> [Ship; 2] {
+    let near = Ship {
+        hull: HullSpec {
+            miss_class: 80,
+            ..HullSpec::default()
+        },
+        condition,
+        ..Ship::at(2, 0.0, 350.0)
+    };
+    [near, Ship::at(3, 200.0, 300.0)]
+}
+
+/// A turret's roll of 90 left in slot 0, then `shell` spent in slot 1,
+/// aimed at C, releasing at slot 1's visit among `ships`, by `source`'s
+/// reading of the leftover roll, in a system of `interference`: each
+/// sub-munition's slot, target and heading.
+fn seeks(
+    (shell, arsenal): (WeaponRecord, Arsenal),
+    ships: &mut [Ship],
+    source: RuleSource,
+    interference: i16,
+) -> Vec<(usize, Option<ShipRef>, f32)> {
+    let mut combat = Combat::default();
+    combat.set_reused_shot_slot_roll(source);
+    combat.put_in_flight(Shot {
+        miss_roll: Some(90),
+        ..idle()
+    });
+    combat.put_in_flight(Shot {
+        aimed_at: Some(C),
+        ..spent_shell(shell)
+    });
+    end_and_free(&mut combat, 0);
+    let field = Field {
+        interference,
+        ..Field::default()
+    };
+    handle_in(&mut combat, ships, &arsenal, field);
+    sub_shots(&combat)
+        .iter()
+        .map(|shot| (shot.slot, shot.target, shot.heading))
+        .collect()
+}
+
+#[test]
+fn two_sub_munitions_of_one_release_seek_different_ships_by_their_slots_rolls() {
+    // The first takes slot 0 and its leftover roll of 90, over B's class
+    // of 80: seeking after `_SpawnShot` seats it (@0x3f328, @0x3f3cf), it
+    // passes the intact B (`_ShotCanHitShip` @0x448bd-0x448d5) and heads
+    // at C. The second takes slot 2, never used, and heads at B. By the
+    // other reading neither carries a roll, and both head at B.
+    let seeking = || seeking_shell(2, unguided_sub());
+    let mut ships = near_and_far(Condition::Intact);
+    assert_eq!(
+        seeks(seeking(), &mut ships, RuleSource::Engine, 0),
+        [(0, Some(C), 90.0), (2, Some(B), 180.0)]
+    );
+    assert_eq!(
+        seeks(seeking(), &mut ships, RuleSource::Bible, 0),
+        [(0, Some(B), 180.0), (2, Some(B), 180.0)]
+    );
+}
+
+#[test]
+fn a_disabled_near_ship_draws_every_sub_munition_whatever_its_roll() {
+    for source in RuleSource::ALL {
+        let mut ships = near_and_far(Condition::Disabled);
+        let seen = seeks(seeking_shell(2, unguided_sub()), &mut ships, source, 0);
+        assert_eq!(
+            seen,
+            [(0, Some(B), 180.0), (2, Some(B), 180.0)],
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn an_interfered_homing_sub_munition_seeks_nothing_and_takes_the_given_target() {
+    // A homing `Seeker` 0x0008 sub-munition rolls interference as
+    // `_SpawnShot` seats it (@0x3eab2-0x3eb43): jammed, it can hit no
+    // ship (@0x447f7), so it takes the given target, C, the shell's, and
+    // heads at it. With no interference it takes the nearest, B, here of
+    // a class its slot's leftover roll of 90 is under. Slot 0, behind the
+    // visit, sits out the tick.
+    let homing = WeaponRecord {
+        guidance: 1,
+        seeker: SENSOR_INTERFERENCE,
+        flags2: PROXIMITY_BY_OTHERS,
+        ..unguided_sub()
+    };
+    for (interference, seen) in [(100, (0, Some(C), 90.0)), (0, (0, Some(B), 180.0))] {
+        let mut ships = near_and_far(Condition::Intact);
+        ships[0].hull.miss_class = 100;
+        let shell = seeking_shell(1, homing);
+        let subs = seeks(shell, &mut ships, RuleSource::Engine, interference);
+        assert_eq!(subs, [seen], "interference {interference}");
+    }
+}
+
 /// A shell releasing one turret (4) of weapon 148, and the arsenal with
 /// it, class 128 without `Flags3` 0x0040 and class 129 with it.
 fn turret_cluster() -> (WeaponRecord, Arsenal) {
@@ -589,13 +713,19 @@ fn shell_from_berth_3(shell: WeaponRecord, over: bool) -> Shot {
 
 /// `_HandleShot`'s pass among `ships`, sub-munitions read from `arsenal`.
 fn handle_among(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) {
+    handle_in(combat, ships, arsenal, Field::default());
+}
+
+/// `_HandleShot`'s pass among `ships` in `field`, sub-munitions read from
+/// `arsenal`.
+fn handle_in(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, field: Field) {
     let govts = Governments::default();
     let arena = Arena {
         pass: GamePass::Advance { double_time: false },
         arsenal,
         govts: &govts,
         rules: Rules::default(),
-        field: Field::default(),
+        field,
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
     combat.fly_shots(&mut fighters, arena, &mut NeverFires);
@@ -684,14 +814,7 @@ fn a_sub_munitions_own_sub_munitions_read_the_same_slot() {
         count: 50,
         ..weapon(148)
     });
-    let sides = crate::combat::fixture::among(&[]);
-    let grandchildren = submunition::release(
-        &sub_of(&parent),
-        &arsenal_sub,
-        (None, false),
-        &sides,
-        &mut NeverFires,
-    );
+    let grandchildren = submunition::release(&sub_of(&parent), &arsenal_sub, (None, false));
     assert!(
         grandchildren
             .iter()

@@ -104,9 +104,13 @@
 //! are released after the pass, in the order their hits landed, where
 //! `_HandleShipHit` releases them in place (@0x36f12-0x36f47). A
 //! sub-munition is not tested in the frame it spawns (its sprite is not
-//! shown), carries no miss roll, and its seek reads the ships as the
-//! pass's hits left them, an escort's cleared leader included, so the
-//! deferral crosses no boundary. The struck ships' conditions settle after the pass too
+//! shown). Each seeks once seated, with its slot's leftover miss roll
+//! and its interference jam (see [`submunition`](super::submunition)),
+//! and reads the ships as the whole pass's hits left them, an escort's
+//! cleared leader included, where in place it would read only the hits
+//! before its own. The target it takes is kept, so this crosses a
+//! boundary: rdm weapons-fidelity phase 47 (item 6) releases them in
+//! place. The struck ships' conditions settle after the pass
 //! (`Combat::settle_struck`), as nothing in the pass reads them but
 //! whether a ship is destroyed, which no hit there changes.
 

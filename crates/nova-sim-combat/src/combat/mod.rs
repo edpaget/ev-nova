@@ -3011,7 +3011,7 @@ impl Combat {
         // `_SpawnShotSubmunitions` spawns as the parent's source slot
         // (+0x2c): its ship's class and plunder as they are now.
         let (turret_over, owner) = self.source_slot_reads(parent, fighters, arsenal);
-        let shots = submunition::release(parent, sub, (target, turret_over), sides, chance);
+        let shots = submunition::release(parent, sub, (target, turret_over));
         if shots.is_empty() {
             return placed;
         }
@@ -3034,15 +3034,21 @@ impl Combat {
             at: parent.position,
             sound: Some(FireSound::at(SUBMUNITION_PRIORITY)),
         });
-        for mut shot in shots {
+        for (mut shot, n) in shots.into_iter().zip(0..) {
             // `_SpawnShot` failing ends the loop (@0x3f32d-0x3f331).
-            if !sub.spawns_shot() || !self.shot_room() {
+            if !sub.spawns_shot() {
                 break;
             }
+            let Some(seated_at) = self.seat(&mut shot) else {
+                break;
+            };
             shot.id = self.next_id();
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
             shot.roll_at_launch(self.field.interference, chance);
-            placed.extend(self.put_in_flight(shot));
+            // Each seeks once seated, with its own roll and jam (@0x3f3cf).
+            let shot = submunition::aim(parent, shot, n, sides, chance);
+            self.insert_seated(&shot);
+            placed.push(seated_at);
         }
         placed
     }
@@ -3363,6 +3369,7 @@ impl Fighter<'_> {
             condition: *self.condition,
             disabled: self.disabled_as_tick_began(),
             miss_class: self.hull.miss_class,
+            slot: self.slot,
         }
     }
 }

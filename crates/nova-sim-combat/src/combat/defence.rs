@@ -1082,6 +1082,7 @@ mod tests {
                 condition: Condition::Intact,
                 disabled: false,
                 miss_class: 80,
+                slot: crate::ship_layer::Slot::Berth(0),
             },
             pd_target: true,
             held_disabled: false,

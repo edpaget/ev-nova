@@ -185,6 +185,11 @@ pub struct Target {
     /// ([`HullSpec::miss_class`](super::hull::HullSpec::miss_class)): a
     /// shot whose roll is above it misses it while it is intact.
     pub miss_class: u32,
+    /// Its ship slot ([`Fighter::slot`](super::Fighter::slot)): a seeking
+    /// sub-munition that finds two ships equally near takes the one in the
+    /// lower slot, as `_FindNearestValidShotTarget` walks the ship table
+    /// (@0x6abd-0x6ace; see [`submunition`](super::submunition)).
+    pub slot: crate::ship_layer::Slot,
 }
 
 impl Target {
@@ -1614,6 +1619,7 @@ mod tests {
             condition,
             disabled: condition != Condition::Intact,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(id),
         }
     }
 

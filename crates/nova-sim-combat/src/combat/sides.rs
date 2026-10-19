@@ -42,8 +42,9 @@
 //!   does every roll on a disabled or breaking-up ship (`_IsDisabled`, true
 //!   at armour 0 or less), whose [`Condition`] is anything but intact, and
 //!   on one an earlier hit this pass took under the armour line. Any
-//!   other shot carries the original's -1 and is never missed, a
-//!   sub-munition too (see [`submunition`](super::submunition));
+//!   other ship-fired shot carries the original's -1 and is never missed;
+//!   a sub-munition writes no roll and carries its slot's leftover, which
+//!   its seek reads too (see [`submunition`](super::submunition));
 //! - that is an escort's fighter (its leader's leader the player), allied
 //!   with the player, when its firer is on the player's side (6f,
 //!   @0x44936-0x4495f);
@@ -404,6 +405,7 @@ mod tests {
             condition: Condition::Intact,
             disabled: false,
             miss_class: 100,
+            slot: crate::ship_layer::Slot::Berth(0),
         }
     }
 
