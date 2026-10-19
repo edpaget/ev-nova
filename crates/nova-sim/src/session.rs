@@ -425,6 +425,7 @@ mod script_effects;
 mod self_repair;
 mod ship_change;
 mod shot_slots;
+mod smoke_frame;
 mod status_cargo;
 mod steering;
 mod stellars;
