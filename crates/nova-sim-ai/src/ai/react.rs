@@ -325,15 +325,16 @@ fn focused(hit: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
     else {
         return false;
     };
-    let wanted = hit
-        .pursuit
-        .frame
-        .filter(|frame| frame.goal == hit.goal)
-        .and_then(|frame| frame.last())
-        .map_or_else(
-            || trig::intercept_angle(hit.state.position, at),
-            |body| body.heading,
-        );
+    let wanted = match around.wanted {
+        Some(wanted) => wanted.get(&hit.id).copied(),
+        None => hit
+            .pursuit
+            .frame
+            .filter(|frame| frame.goal == hit.goal)
+            .and_then(|frame| frame.last())
+            .map(|body| body.heading),
+    }
+    .unwrap_or_else(|| trig::intercept_angle(hit.state.position, at));
     trig::angular_difference(trig::whole(hit.state.heading), wanted) <= FOCUS_DEGREES
         && by > FOCUS * target
 }

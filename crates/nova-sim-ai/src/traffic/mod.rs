@@ -155,6 +155,7 @@ pub mod fixture;
 pub mod gate_entry;
 #[cfg(test)]
 mod hit_goal_tests;
+pub mod in_turn;
 pub mod inertialess;
 mod launch_room;
 mod launch_think;
@@ -597,6 +598,7 @@ impl<'a> World<'a> {
             iff_marked: self.iff_marked,
             fighter_room: true,
             hit_focus: self.hit_focus,
+            wanted: None,
         }
     }
 }
@@ -1660,27 +1662,30 @@ impl Traffic {
         if strikes.is_empty() {
             return;
         }
-        let around = world.around(&self.npcs);
-        let reactions: Vec<Vec<Reaction>> = self
-            .npcs
-            .iter()
-            .map(|npc| {
-                let answers = match world.arrival_hits {
-                    RuleSource::Engine => true,
-                    RuleSource::Bible => npc.arrived(),
-                };
-                if !answers || npc.condition != Condition::Intact {
-                    return Vec::new();
-                }
-                strikes
-                    .iter()
-                    .map(|strike| behaviour.react(npc, strike, &around))
-                    .collect()
-            })
-            .collect();
         let view = world.gate_view();
-        for (at, reactions) in reactions.into_iter().enumerate() {
-            for (reaction, strike) in reactions.into_iter().zip(&strikes) {
+        let wanted = in_turn::wanted_headings(&self.npcs);
+        for strike in strikes {
+            let reactions: Vec<Option<Reaction>> = {
+                let around = Surroundings {
+                    wanted: Some(&wanted),
+                    ..world.around(&self.npcs)
+                };
+                self.npcs
+                    .iter()
+                    .map(|npc| {
+                        let answers = match world.arrival_hits {
+                            RuleSource::Engine => true,
+                            RuleSource::Bible => npc.arrived(),
+                        };
+                        (answers && npc.condition == Condition::Intact)
+                            .then(|| behaviour.react(npc, strike, &around))
+                    })
+                    .collect()
+            };
+            for (at, reaction) in reactions.into_iter().enumerate() {
+                let Some(reaction) = reaction else {
+                    continue;
+                };
                 let id = self.npcs[at].id;
                 // The victim's reaction ran when it took a target or was
                 // provoked: an answered hit by no ship, which takes none,

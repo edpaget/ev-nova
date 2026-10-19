@@ -563,6 +563,13 @@ pub struct Surroundings<'a> {
     /// test of the ship struck by the engine, the engine's test before
     /// weapons-fidelity phase 37 by the other reading.
     pub hit_focus: RuleSource,
+    /// The heading each NPC wanted as the pass of strikes being answered
+    /// began (+0x68, see `traffic::in_turn`), while one is: the focus test
+    /// reads it ([`react::keeps_target`]), as +0x68 is the low level's
+    /// alone and no reaction moves it. An NPC not in it wanted none, and
+    /// the bearing to its target stands in. With none, the test reads
+    /// each NPC's frame as it is now.
+    pub wanted: Option<&'a BTreeMap<NpcId, i16>>,
 }
 
 /// No government marked by an IFF scrambler.
@@ -572,7 +579,8 @@ impl<'a> Surroundings<'a> {
     /// `npcs` among `sites`, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no reinforcements coming, no
     /// cloak scanner, no government marked by an IFF scrambler, room for
-    /// a fighter and the engine's [`hit_focus`](Surroundings::hit_focus).
+    /// a fighter, the engine's [`hit_focus`](Surroundings::hit_focus) and
+    /// no pass's [`wanted`](Surroundings::wanted) headings.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -589,6 +597,7 @@ impl<'a> Surroundings<'a> {
             iff_marked: &NO_IFF_MARKS,
             fighter_room: true,
             hit_focus: RuleSource::Engine,
+            wanted: None,
         }
     }
 
