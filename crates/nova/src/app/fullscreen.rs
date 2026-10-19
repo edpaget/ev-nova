@@ -3,11 +3,13 @@
 //! window's size before it is given back on leaving.
 //!
 //! [`Fullscreen`] holds the decisions; the window adapter only carries
-//! them out. The shortcut is the platform's usual one: Control+Command+F
-//! on macOS, and Alt+Enter or F11 elsewhere. The system can change the
-//! state without it (macOS's green button, its Window menu), and reports
-//! the change through [`Fullscreen::observed`]; either way, leaving gives
-//! the window back the size it had before entering.
+//! them out. Off macOS the shortcut is the platform's usual one, Alt+Enter
+//! or F11. On macOS the system toggles it: the View menu's Enter Full
+//! Screen (its key equivalent Control+Command+F, which the menu bar takes
+//! before the window), Globe+F and the green button, each reported
+//! through [`Fullscreen::observed`]. The system can change the state
+//! without the shortcut elsewhere too, reported the same way; either way,
+//! leaving gives the window back the size it had before entering.
 //!
 //! # Kinds
 //!
@@ -55,11 +57,9 @@ pub(crate) enum Shortcut {
     Swallowed,
 }
 
-/// The modifiers the shortcuts use, as held down.
+/// The modifier the shortcut uses, as held down.
 #[derive(Clone, Copy, Debug, Default)]
 struct Modifiers {
-    control: bool,
-    command: bool,
     alt: bool,
 }
 
@@ -191,11 +191,8 @@ impl Fullscreen {
     /// not flicker, but it is swallowed with the press it repeats.
     pub(crate) fn key(&mut self, key: Key, pressed: bool, repeat: bool) -> Shortcut {
         self.drop_text = false;
-        match key {
-            Key::Control => self.held_modifiers.control = pressed,
-            Key::Command => self.held_modifiers.command = pressed,
-            Key::Alt => self.held_modifiers.alt = pressed,
-            _ => {}
+        if key == Key::Alt {
+            self.held_modifiers.alt = pressed;
         }
         if self.held == Some(key) {
             if !pressed {
@@ -212,12 +209,16 @@ impl Fullscreen {
         Shortcut::None
     }
 
-    /// Whether pressing `key` with the modifiers held is the shortcut.
+    /// Whether pressing `key` with the modifiers held is the shortcut:
+    /// never on macOS, where the View menu's Enter Full Screen takes
+    /// Control+Command+F before the window, as a key equivalent, and the
+    /// change comes back as the system's ([`Fullscreen::observed`]).
     fn is_shortcut(&self, key: Key) -> bool {
-        let held = self.held_modifiers;
         match self.os {
-            Os::MacOs => key == Key::Char('f') && held.control && held.command,
-            Os::Windows | Os::Other => (key == Key::Enter && held.alt) || key == Key::Function(11),
+            Os::MacOs => false,
+            Os::Windows | Os::Other => {
+                (key == Key::Enter && self.held_modifiers.alt) || key == Key::Function(11)
+            }
         }
     }
 
@@ -492,14 +493,13 @@ mod tests {
     }
 
     #[test]
-    fn on_macos_control_command_f_is_the_shortcut() {
+    fn on_macos_no_key_is_the_shortcut() {
         let mac = Os::MacOs;
-        assert!(toggles(mac, &[Key::Control, Key::Command, Key::Char('f')]));
-        assert!(toggles(mac, &[Key::Command, Key::Control, Key::Char('f')]));
+        // The View menu's key equivalent takes Control+Command+F before
+        // the window: the keys that reach the game are the game's.
+        assert!(!toggles(mac, &[Key::Control, Key::Command, Key::Char('f')]));
+        assert!(!toggles(mac, &[Key::Command, Key::Control, Key::Char('f')]));
         assert!(!toggles(mac, &[Key::Char('f')]));
-        assert!(!toggles(mac, &[Key::Control, Key::Char('f')]));
-        assert!(!toggles(mac, &[Key::Command, Key::Char('f')]));
-        assert!(!toggles(mac, &[Key::Control, Key::Command, Key::Char('g')]));
         assert!(!toggles(mac, &[Key::Alt, Key::Enter]));
         assert!(!toggles(mac, &[Key::Function(11)]));
     }
@@ -521,16 +521,6 @@ mod tests {
 
     #[test]
     fn a_released_modifier_stops_counting() {
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
-        press(&mut fullscreen, Key::Control);
-        press(&mut fullscreen, Key::Command);
-        assert_eq!(release(&mut fullscreen, Key::Control), Shortcut::None);
-        assert_eq!(press(&mut fullscreen, Key::Char('f')), Shortcut::None);
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
-        press(&mut fullscreen, Key::Control);
-        press(&mut fullscreen, Key::Command);
-        release(&mut fullscreen, Key::Command);
-        assert_eq!(press(&mut fullscreen, Key::Char('f')), Shortcut::None);
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         press(&mut fullscreen, Key::Alt);
         release(&mut fullscreen, Key::Alt);
@@ -539,12 +529,7 @@ mod tests {
 
     #[test]
     fn losing_focus_forgets_the_held_modifiers() {
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
-        press(&mut fullscreen, Key::Control);
-        press(&mut fullscreen, Key::Command);
         let mut window = RecordingWindow::new((1024, 768));
-        fullscreen.focus_lost(&mut window);
-        assert_eq!(press(&mut fullscreen, Key::Char('f')), Shortcut::None);
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         press(&mut fullscreen, Key::Alt);
         fullscreen.focus_lost(&mut window);
@@ -588,11 +573,10 @@ mod tests {
 
     #[test]
     fn only_the_text_right_after_a_shortcut_press_is_dropped() {
-        let mut fullscreen = Fullscreen::new(Os::MacOs, (1024, 768));
+        let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         assert!(!fullscreen.drops_text(), "no shortcut yet");
-        press(&mut fullscreen, Key::Control);
-        press(&mut fullscreen, Key::Command);
-        press(&mut fullscreen, Key::Char('f'));
+        press(&mut fullscreen, Key::Alt);
+        press(&mut fullscreen, Key::Enter);
         assert!(fullscreen.drops_text());
         assert!(!fullscreen.drops_text(), "the one text only");
         press(&mut fullscreen, Key::Char('f'));

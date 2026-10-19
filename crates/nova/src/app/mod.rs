@@ -46,12 +46,14 @@
 //! # Fullscreen
 //!
 //! The game runs fullscreen borderless, or exclusive in a display mode the
-//! player picked ([`FullscreenSetting`]). The platform's fullscreen
-//! shortcut (Control+Command+F on macOS, Alt+Enter or F11 elsewhere)
-//! toggles between the window and the saved kind through the
-//! [`WindowPort`], whatever shows, and never reaches the screen or the
-//! overlay. The system can change the state itself, and says so with
-//! [`WindowEvent::FullscreenChanged`]. Leaving, either way, gives the
+//! player picked ([`FullscreenSetting`]). Off macOS the platform's
+//! fullscreen shortcut (Alt+Enter or F11) toggles between the window and
+//! the saved kind through the [`WindowPort`], whatever shows, and never
+//! reaches the screen or the overlay. The system can change the state
+//! itself, and says so with [`WindowEvent::FullscreenChanged`]: on macOS
+//! that is the only way it changes, through the View menu's Enter Full
+//! Screen (Control+Command+F, which the menu bar takes before the
+//! window), Globe+F or the green button. Leaving, either way, gives the
 //! window back its size from before, and keeps the kind. Each change is
 //! saved as [`GameSettings::fullscreen`] through the settings keeper, if
 //! any, and [`App::restore_window`] opens the game the way the player left
@@ -358,7 +360,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// The app behaving as on `os`, rather than the system it was built
-    /// for, in fullscreen: it reads `os`'s fullscreen shortcut, and offers
+    /// for, in fullscreen: it reads `os`'s fullscreen shortcut (none on
+    /// macOS, whose View menu takes Control+Command+F), and offers
     /// exclusive fullscreen only off macOS. On [`Os::MacOs`] the
     /// Preferences picker lists no modes, and a saved exclusive kind is
     /// entered borderless, the native Space; other systems offer the
@@ -2902,7 +2905,12 @@ mod tests {
 
     use crate::config::Os;
 
-    const MAC_SHORTCUT: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
+    /// The Windows shortcut, Alt+Enter.
+    const SHORTCUT: [Key; 2] = [Key::Alt, Key::Enter];
+
+    /// macOS's Control+Command+F, which its View menu's key equivalent
+    /// takes before the window.
+    const MAC_FULL_SCREEN: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
 
     const BORDERLESS: Option<FullscreenKind> = Some(FullscreenKind::Borderless);
 
@@ -2960,27 +2968,78 @@ mod tests {
     #[test]
     fn the_shortcut_goes_fullscreen_and_never_reaches_the_screen() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
-        let mut app = app(&window).with_os(Os::MacOs);
+        let mut app = app(&window).with_os(Os::Windows);
         let mut gpu = RecordingGpu::new();
-        for key in MAC_SHORTCUT {
+        for key in SHORTCUT {
             let handled = app.handle_routed(self::key(key, true), &mut window, &mut gpu);
             assert_eq!(handled, handled_game(), "{key:?}");
         }
-        handle(&mut app, &mut window, WindowEvent::Text('f'));
-        handle(&mut app, &mut window, key(Key::Char('f'), false));
+        handle(&mut app, &mut window, WindowEvent::Text('\r'));
+        handle(&mut app, &mut window, key(Key::Enter, false));
         assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(
             app.screen().inputs,
-            [key_input(Key::Control, true), key_input(Key::Command, true)],
-            "the modifiers only"
+            [key_input(Key::Alt, true)],
+            "the modifier only"
         );
-        handle(&mut app, &mut window, key(Key::Command, false));
+        handle(&mut app, &mut window, key(Key::Alt, false));
         handle(&mut app, &mut window, WindowEvent::Text('g'));
         assert_eq!(
-            app.screen().inputs[2..],
-            [key_input(Key::Command, false), Input::Text('g')],
+            app.screen().inputs[1..],
+            [key_input(Key::Alt, false), Input::Text('g')],
             "later text arrives"
         );
+    }
+
+    #[test]
+    fn on_macos_control_command_f_is_the_games_keys_and_toggles_nothing() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window).with_os(Os::MacOs);
+        let mut gpu = RecordingGpu::new();
+        for key in MAC_FULL_SCREEN {
+            app.handle_routed(self::key(key, true), &mut window, &mut gpu);
+        }
+        handle(&mut app, &mut window, WindowEvent::Text('f'));
+        for key in MAC_FULL_SCREEN.iter().rev() {
+            app.handle_routed(self::key(*key, false), &mut window, &mut gpu);
+        }
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN, "the View menu's to take");
+        assert_eq!(
+            app.screen().inputs,
+            [
+                key_input(Key::Control, true),
+                key_input(Key::Command, true),
+                key_input(Key::Char('f'), true),
+                Input::Text('f'),
+                key_input(Key::Char('f'), false),
+                key_input(Key::Command, false),
+                key_input(Key::Control, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn on_macos_a_system_toggle_is_saved_each_way_and_gives_back_the_windows_size() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = app(&window)
+            .with_os(Os::MacOs)
+            .with_settings(keeper(&store));
+        let resized = |size_px| WindowEvent::Resized {
+            size_px,
+            scale_factor: 2.0,
+        };
+        handle(&mut app, &mut window, resized((1280, 960)));
+        // The View menu's item, Globe+F and the green button all arrive
+        // as the system's report.
+        handle(&mut app, &mut window, reported(true));
+        assert!(saved_fullscreen(&store));
+        handle(&mut app, &mut window, resized((3024, 1964)));
+        handle(&mut app, &mut window, reported(false));
+        assert!(!saved_fullscreen(&store));
+        assert_eq!(store.writes(), 2);
+        assert_eq!(window.size_requests, [(1280, 960)]);
+        assert_eq!(window.fullscreen, NOT_FULLSCREEN, "the system did it");
     }
 
     fn handled_game() -> Handled {
@@ -3005,13 +3064,13 @@ mod tests {
         let mut window = FakeWindow::new((2048, 1536), 2.0);
         let store = MemorySettings::new();
         let mut app = app(&window)
-            .with_os(Os::MacOs)
+            .with_os(Os::Windows)
             .with_settings(keeper(&store));
-        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        chord(&mut app, &mut window, &SHORTCUT);
         assert!(saved_fullscreen(&store));
         assert_eq!(store.writes(), 1);
         window.size_px = (3024, 1964);
-        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        chord(&mut app, &mut window, &SHORTCUT);
         assert!(!saved_fullscreen(&store));
         assert_eq!(store.writes(), 2);
         assert_eq!(window.fullscreen, [BORDERLESS, None]);
@@ -3050,9 +3109,9 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let store = MemorySettings::new();
         let mut app = app(&window)
-            .with_os(Os::MacOs)
+            .with_os(Os::Windows)
             .with_settings(keeper(&store));
-        chord(&mut app, &mut window, &MAC_SHORTCUT);
+        chord(&mut app, &mut window, &SHORTCUT);
         for frame in 1..=5 {
             handle(&mut app, &mut window, reported(true));
             let elapsed = Duration::from_millis(16 * frame);

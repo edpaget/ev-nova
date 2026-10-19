@@ -410,3 +410,37 @@ fn quit_from_the_menu_in_flight_saves_the_pilot_as_command_q_does() {
     screen.quit();
     assert_eq!(store.writes(), writes + 1, "saved as the app quits");
 }
+
+#[test]
+fn an_f_released_after_the_view_menu_took_its_press_changes_nothing() {
+    // The View menu's Enter Full Screen takes Control+Command+F's press;
+    // the window still sees the modifiers and F's release.
+    for (name, make) in [
+        ("the main menu", main_menu as fn() -> AppScreen),
+        ("the ship browser", ships),
+        ("the galaxy viewer", galaxy),
+        ("flight", flying),
+        ("the spaceport", landed),
+    ] {
+        let mut screen = make();
+        screen.take_sounds();
+        let before = screen.showing();
+        let action = feed(
+            &mut screen,
+            &[
+                key(Key::Control, true),
+                key(Key::Command, true),
+                key(Key::Char('f'), false),
+                key(Key::Command, false),
+                key(Key::Control, false),
+            ],
+        );
+        assert!(!action, "{name}");
+        assert_eq!(screen.showing(), before, "{name}");
+        assert_eq!(screen.take_sounds(), [], "{name}");
+        assert!(!screen.take_quit(), "{name}");
+        assert!(screen.menu_hold.is_none(), "{name}: no click waits");
+        screen.tick(TICK);
+        assert_eq!(screen.showing(), before, "{name}: after a tick");
+    }
+}
