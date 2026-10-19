@@ -1632,13 +1632,24 @@ impl Traffic {
     /// person may hold ([`Traffic::take_grudges`], [`in_turn::grudge`]).
     ///
     /// The strikes a caller leaves for the traffic tick (one that never
-    /// calls [`Traffic::answer`]) are answered in turn too, but after that
-    /// tick's think, against the NPCs as the think left them, where the
-    /// original answered them as they landed. The answers settle in that
-    /// tick, before its frame is drawn, so this crosses no boundary the
-    /// player sees and is not filed. A hit on it that it answers (taking
-    /// a target) cuts its wait, in its gate, held at it or holding its
-    /// course ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
+    /// calls [`Traffic::answer`]) are answered in turn too, but at the
+    /// start of the next traffic tick ([`Traffic::think_holding`]): after
+    /// that tick's arrivals (the session's mission-ship arrivals, then
+    /// `_EnterMoreShips`), before its think, against the NPCs as the
+    /// previous tick's motion left them, where the original answered them
+    /// as they landed. A strike that lands after its frame's traffic tick
+    /// (the separate parts run `nova_sim::Session::tick_combat` after
+    /// `nova_sim::Session::tick_traffic`) is then answered only after that
+    /// frame is drawn, and the pilot may be saved in between: the frame
+    /// shows the struck ship unanswered (a ship hit in its gate neither
+    /// held nor seen). Only a caller that skips
+    /// `nova_sim::Session::answer_strikes` meets this: `Session::game_work`
+    /// and `Session::tick_again` answer after their collision passes and
+    /// after `_HandleShot`, and a flight answers what each pass's close
+    /// struck, so nothing is left for the traffic tick. A hit on it that
+    /// it answers (taking a target) cuts its wait, in its gate, held at it
+    /// or holding its course ([`autopilot::cut_wait`], `_DamageShip`
+    /// @0x3be6e-0x3be7c).
     ///
     /// A ship still coming in answers as `_DamageShip` has it (see the
     /// [`ai::react`](crate::ai::react) module):
