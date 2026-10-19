@@ -333,7 +333,7 @@ use hull::{
     never_breaks_up,
 };
 use impact::{Body, Tractor, TractorLock};
-use ion::{Burst, Dose, Ion};
+use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
 use plunder::Plunderer;
 use projectile::{
@@ -348,7 +348,7 @@ use weapon::{Explosion, Guidance};
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::flight::{ShipState, normalized};
+use crate::flight::{Flyer, ShipState, normalized};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::legal::{LegalCode, NovaLaw};
@@ -852,8 +852,13 @@ pub struct Fighter<'a> {
     /// session's to come.
     pub tractor: &'a mut Option<TractorLock>,
     /// Its ionization (the original's +0x5c and +0xb0): the fight raises
-    /// it ([`ion`]); what it does to the ship is the session's to come.
+    /// it ([`ion`]) and holds its `Seeker` 0x0020 weapons by it
+    /// ([`IonLockout`]); its session sheds it and slows the ship by it.
     pub ion: &'a mut Ion,
+    /// The ion charge at which it is fully ionized, its ionization
+    /// factor's divisor (`_ShipIonizationFactor`): its class's
+    /// `IonizeMax`, and the player's Ion Absorbers'.
+    pub ion_capacity: f32,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -1080,6 +1085,9 @@ pub struct Combat {
     /// ([`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)): by default on
     /// each axis, as `_SpeedLimit` does.
     speed_cap: SpeedCap,
+    /// Which weapons an ionized ship can't fire
+    /// ([`RuleKey::IonFireLockout`](crate::RuleKey::IonFireLockout)).
+    ion_lockout: IonLockout,
     /// The shots that left the table whose slots the original frees only
     /// at its next `_HandleShot` (see [`Combat::shot_room`]): from the
     /// late part of a tick (step 7) to the next tick's hit pass, the
@@ -1192,9 +1200,13 @@ impl Combat {
             Firers::Npcs,
         );
         self.fire(fighters, &targets, chance, Firers::Npcs);
-        // Step 5.
+        // Step 5, its ionized weapons held ([`IonLockout`]).
+        let lockout = self.ion_lockout;
         for fighter in fighters.iter_mut() {
-            fighter.armament.reload();
+            let (flyer, factor) = fighter.ion_factor();
+            fighter
+                .armament
+                .reload_holding(|spec| lockout.holds(spec, flyer, factor));
         }
         // Step 6.
         let beams_held = self.beams.len();
@@ -1539,6 +1551,12 @@ impl Combat {
     /// point test at the shot's end point, in slot order.
     pub fn set_proximity_fuse(&mut self, source: RuleSource) {
         self.proximity_fuse = ProximityFuse::from(source);
+    }
+
+    /// Holds an ionized ship's `Seeker` 0x0020 weapons as `source` says
+    /// ([`IonLockout`]): by default, the engine's.
+    pub fn set_ion_lockout(&mut self, source: RuleSource) {
+        self.ion_lockout = IonLockout::from(source);
     }
 
     /// Has the player's quadrant turrets (7 and 8) test their blind spots
@@ -3294,6 +3312,18 @@ impl Fighter<'_> {
         }
     }
 
+    /// Who flies it, and its ionization factor
+    /// ([`factor`](crate::ionization::factor)) as the reload loops read it.
+    fn ion_factor(&self) -> (Flyer, f32) {
+        let flyer = if self.ship == ShipRef::Player {
+            Flyer::Player
+        } else {
+            Flyer::Npc
+        };
+        let factor = crate::ionization::factor(self.ion.charge, self.ion_capacity);
+        (flyer, factor)
+    }
+
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
@@ -3722,6 +3752,7 @@ mod tests {
         jumping: bool,
         tractor: Option<TractorLock>,
         ion: Ion,
+        ion_capacity: f32,
         armament: Armament,
         rounds: LauncherRounds,
         /// The heading it was last drawn at, when not its heading.
@@ -3779,6 +3810,7 @@ mod tests {
                 jumping: false,
                 tractor: None,
                 ion: Ion::default(),
+                ion_capacity: 0.0,
                 armament: Armament::default(),
                 rounds: LauncherRounds::default(),
                 drawn_heading: None,
@@ -3833,6 +3865,7 @@ mod tests {
                 afterburner: false,
                 tractor: &mut self.tractor,
                 ion: &mut self.ion,
+                ion_capacity: self.ion_capacity,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
                 drawn_heading: self.drawn_heading.unwrap_or(self.state.heading),

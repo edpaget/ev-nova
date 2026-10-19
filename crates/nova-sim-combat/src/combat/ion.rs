@@ -39,11 +39,63 @@
 //! shockwave (@0x2da89), sabotage and `_HandlePlayer`'s own `_DamageShip`
 //! calls never ionize. `_IonizeShip` plays no sound.
 //!
-//! What the charge does (deionization, the slowdown, the fire lockout and
-//! the tint) is ship-handling-fidelity phase 11's. Nothing here is saved.
+//! **What the charge does.** The ship sheds it each frame and flies, turns
+//! and thrusts slower while it lasts (`nova_sim_base::ionization`, run by
+//! the session for the player and by the traffic for each NPC). A
+//! `Seeker` 0x0020 weapon is held while it is ionized ([`IonLockout`]).
+//! The ship glows with it ([`ion_tint`](super::ion_tint)), and the
+//! display, which runs for every ship in the system each frame, clears the
+//! colour once the charge is gone (`_HandleShipDisplay` @0x2bf8a), so a
+//! colour outlives its charge by a frame at most. Nothing here is saved.
 
-use super::weapon::WeaponSpec;
+use super::weapon::{Guidance, WeaponSpec};
+use crate::flight::Flyer;
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
+
+/// The `wëap` `Seeker` bit of a weapon that can't fire while its ship is
+/// ionized (in-memory +0x26 bit 0x20, `shrl $5` @0x338e3).
+pub const CANT_FIRE_IONIZED: u16 = 0x0020;
+
+/// Which weapons an ionized ship can't fire, as
+/// [`RuleKey::IonFireLockout`](crate::RuleKey::IonFireLockout) reads: the
+/// reload loops' hold (`_HandlePlayer` @0x6ae73-0x6ae9c, `_HandleShip`
+/// @0x338d6-0x338f0), which sets a held weapon's reload to 1.0 after its
+/// countdown ([`Armament::reload_holding`](super::armament::Armament::reload_holding)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IonLockout(RuleSource);
+
+/// How long a held weapon's reload is kept, in ticks (the float 1.0
+/// written @0x338f0 and @0x6ae9c).
+pub const HELD_RELOAD: f32 = 1.0;
+
+impl From<RuleSource> for IonLockout {
+    fn from(source: RuleSource) -> Self {
+        Self(source)
+    }
+}
+
+impl IonLockout {
+    /// Whether `spec`, carried by a ship flown by `flyer` of ionization
+    /// factor `factor`, is held this tick. By the engine, any weapon of
+    /// [`CANT_FIRE_IONIZED`], whatever its guidance: the player's while
+    /// the factor is above 0, an NPC's while trunc(factor) ≥ 1, which is a
+    /// factor of 1 or more. By the other reading, only a guided one, and
+    /// only at a factor of 1 or more, either flyer.
+    #[must_use]
+    pub fn holds(self, spec: &WeaponSpec, flyer: Flyer, factor: f32) -> bool {
+        if spec.seeker & CANT_FIRE_IONIZED == 0 {
+            return false;
+        }
+        match self.0 {
+            RuleSource::Engine => match flyer {
+                Flyer::Player => factor > 0.0,
+                Flyer::Npc => factor >= 1.0,
+            },
+            RuleSource::Bible => spec.guidance == Guidance::Homing && factor >= 1.0,
+        }
+    }
+}
 
 /// A ship's ionization (the original's +0x5c and +0xb0): none as it
 /// spawns.
@@ -127,6 +179,99 @@ impl Ion {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// A weapon of `guidance` and `Seeker` `seeker`.
+    fn seeking(guidance: i16, seeker: u16) -> WeaponSpec {
+        WeaponSpec::new(&crate::catalog::WeaponRecord {
+            guidance,
+            seeker,
+            ..nova_sim_catalog::fixture::weapon(128)
+        })
+    }
+
+    const ENGINE: IonLockout = IonLockout(RuleSource::Engine);
+    const BIBLE: IonLockout = IonLockout(RuleSource::Bible);
+
+    #[test]
+    fn by_the_engine_the_player_is_held_at_any_ionization() {
+        let gun = seeking(-1, CANT_FIRE_IONIZED);
+        assert!(ENGINE.holds(&gun, Flyer::Player, 0.01));
+        assert!(ENGINE.holds(&gun, Flyer::Player, 3.0));
+        assert!(!ENGINE.holds(&gun, Flyer::Player, 0.0));
+        assert!(!ENGINE.holds(&gun, Flyer::Player, -0.1));
+    }
+
+    #[test]
+    fn by_the_engine_an_npc_is_held_from_a_factor_of_1() {
+        let gun = seeking(-1, CANT_FIRE_IONIZED);
+        assert!(!ENGINE.holds(&gun, Flyer::Npc, 0.99));
+        assert!(ENGINE.holds(&gun, Flyer::Npc, 1.0));
+        assert!(ENGINE.holds(&gun, Flyer::Npc, 2.5));
+    }
+
+    #[test]
+    fn by_the_engine_any_guidance_is_held() {
+        for guidance in [-1, 0, 1, 3, 4, 5, 6, 7, 8, 9, 10] {
+            let weapon = seeking(guidance, CANT_FIRE_IONIZED | 0x0001);
+            assert!(ENGINE.holds(&weapon, Flyer::Npc, 1.0), "{guidance}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_only_a_guided_weapon_is_held_and_only_from_a_factor_of_1() {
+        let missile = seeking(1, CANT_FIRE_IONIZED);
+        let gun = seeking(-1, CANT_FIRE_IONIZED);
+        for flyer in [Flyer::Player, Flyer::Npc] {
+            assert!(BIBLE.holds(&missile, flyer, 1.0), "{flyer:?}");
+            assert!(!BIBLE.holds(&missile, flyer, 0.99), "{flyer:?}");
+            assert!(!BIBLE.holds(&gun, flyer, 5.0), "{flyer:?}");
+        }
+    }
+
+    #[test]
+    fn a_weapon_without_the_bit_is_never_held() {
+        let missile = seeking(1, !CANT_FIRE_IONIZED);
+        for lockout in [ENGINE, BIBLE] {
+            for flyer in [Flyer::Player, Flyer::Npc] {
+                assert!(!lockout.holds(&missile, flyer, 5.0));
+            }
+        }
+        assert_eq!(CANT_FIRE_IONIZED, 0x0020);
+    }
+
+    #[test]
+    fn a_held_mount_sits_at_1_after_its_countdown_and_the_others_count_down() {
+        use super::super::armament::Armament;
+        let record = |id, seeker| crate::catalog::WeaponRecord {
+            reload: 5,
+            seeker,
+            ..nova_sim_catalog::fixture::weapon(id)
+        };
+        let held = WeaponSpec::new(&record(128, CANT_FIRE_IONIZED));
+        let free = WeaponSpec::new(&record(129, 0));
+        let mut armament = Armament::new([(held, 1), (free, 1)]);
+        armament.hold(held.id);
+        armament.hold(free.id);
+        let reloads = |armament: &Armament| -> Vec<f32> {
+            armament.mounts().iter().map(|mount| mount.reload).collect()
+        };
+        armament.reload_holding(|spec| ENGINE.holds(spec, Flyer::Npc, 1.0));
+        assert_eq!(reloads(&armament), [HELD_RELOAD, 4.0]);
+        armament.reload_holding(|spec| ENGINE.holds(spec, Flyer::Npc, 1.0));
+        assert_eq!(reloads(&armament), [1.0, 3.0]);
+        // Released: the countdown runs it to none, ready to fire.
+        armament.reload_holding(|spec| ENGINE.holds(spec, Flyer::Npc, 0.99));
+        assert_eq!(reloads(&armament), [0.0, 2.0]);
+        armament.reload();
+        assert_eq!(reloads(&armament), [0.0, 1.0]);
+        assert_eq!(HELD_RELOAD, 1.0);
+    }
+
+    #[test]
+    fn the_lockout_reads_its_source() {
+        assert_eq!(IonLockout::from(RuleSource::Bible), BIBLE);
+        assert_eq!(IonLockout::default(), ENGINE);
+    }
 
     const AT: Vec2 = Vec2::new(300.0, -200.0);
 

@@ -1428,6 +1428,7 @@ impl Combatant {
             afterburner: false,
             tractor: &mut self.tractor,
             ion: &mut self.ion,
+            ion_capacity: 0.0,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
             drawn_heading: self.state.heading,

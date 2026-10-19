@@ -653,6 +653,7 @@ impl FightTerms {
             jumping: npc.warp.under_way(),
             afterburner: false,
             tractor,
+            ion_capacity: stats.ion.capacity(crate::flight::Flyer::Npc),
             ion,
             armament,
             rounds,
@@ -1853,6 +1854,8 @@ impl Session {
         ));
         self.combat
             .set_proximity_fuse(rules.source_for(RuleKey::ProximityFuse));
+        self.combat
+            .set_ion_lockout(rules.source_for(RuleKey::IonFireLockout));
         self.traffic
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.traffic
@@ -2837,6 +2840,7 @@ impl Session {
             jumping: self.jump.is_some(),
             afterburner,
             tractor: &mut self.tractor,
+            ion_capacity: self.stats.ion.capacity(crate::flight::Flyer::Player),
             ion: &mut self.ion,
             armament: &mut self.armament,
             rounds: &mut rounds,

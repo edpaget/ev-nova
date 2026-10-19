@@ -4,8 +4,11 @@
 //!
 //! A bit applies to every weapon unless the Bible limits it: to guided
 //! weapons (Guidance 1: `Flags` 0x0008 and 0x0080, `Flags2` 0x0008 and
-//! every `Seeker` bit but 0x0001, which the original reads on any
-//! guidance), to turrets (3, 4 and 7-10: the blind spots,
+//! every `Seeker` bit but 0x0001 and 0x0020, which the original reads on
+//! any guidance: 0x0020's hold while ionized follows
+//! [`RuleKey::IonFireLockout`](crate::RuleKey::IonFireLockout), whose
+//! other reading holds only a guided weapon,
+//! [`IonLockout`](super::ion::IonLockout)), to turrets (3, 4 and 7-10: the blind spots,
 //! `Flags` 0x1000-0x4000) or to beams (0, 3 and 10: `Flags2` 0x2000). A
 //! weapon a bit does not apply to is [`Status::NotApplicable`] for it.
 //!
@@ -136,7 +139,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // Confused by sensor interference; turns away when jammed.
     (Seeker, 0x0008, Guided, Implemented),
     (Seeker, 0x0010, Guided, Implemented),
-    (Seeker, 0x0020, Guided, Unimplemented),
+    // Can't fire while ionized, on any guidance by the engine
+    // (`IonLockout`).
+    (Seeker, 0x0020, Any, Implemented),
     // Loses its lock off ahead; may turn on its firer.
     (Seeker, 0x4000, Guided, Implemented),
     (Seeker, 0x8000, Guided, Implemented),
@@ -261,7 +266,7 @@ mod tests {
         (Seeker, 0x0002, [NA, NA, Unimplemented, NA]),
         (Seeker, 0x0008, [NA, NA, Implemented, NA]),
         (Seeker, 0x0010, [NA, NA, Implemented, NA]),
-        (Seeker, 0x0020, [NA, NA, Unimplemented, NA]),
+        (Seeker, 0x0020, [Implemented; 4]),
         (Seeker, 0x4000, [NA, NA, Implemented, NA]),
         (Seeker, 0x8000, [NA, NA, Implemented, NA]),
         (Flags2, 0x0001, [Presentation; 4]),
@@ -415,8 +420,8 @@ mod tests {
         });
         assert_eq!(
             unimplemented(&seeking),
-            [(Seeker, 0x0002), (Seeker, 0x0020)],
-            "asteroids, jamming, interference and the 0x4000 lock are done"
+            [(Seeker, 0x0002)],
+            "asteroids, jamming, interference, the ion lockout and the 0x4000 lock are done"
         );
     }
 

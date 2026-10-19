@@ -402,6 +402,51 @@ mod tests {
         assert_eq!(session.npc(id).expect("there").ion.charge, 9.0);
     }
 
+    // The lockout.
+
+    /// The ticks, from 1, on which the player fires its blaster of
+    /// `Seeker` 0x0020 (reload 2), holding fire from a charge of `charge`
+    /// shedding 1 a tick, over 8 steps.
+    fn fired_ticks(charge: f32) -> Vec<u32> {
+        use crate::combat::ion::CANT_FIRE_IONIZED;
+        use crate::session::tests::armed;
+        let mut catalog = armed();
+        catalog.weapons[0].seeker = CANT_FIRE_IONIZED;
+        catalog.ships = vec![(
+            ShipId(128),
+            Ok(ShipFields {
+                ionize_max: 100,
+                deionize: 100,
+                ..FAST
+            }),
+        )];
+        let mut session = Session::start(&catalog).expect("starts");
+        session.ion.charge = charge;
+        session.hold_fire(true, false);
+        let mut fired = Vec::new();
+        for tick in 1..=8 {
+            let before = session.shots().len();
+            session.tick(Controls::default());
+            session.tick_combat(
+                crate::combat::Rules::default(),
+                &mut crate::chance::NeverFires,
+            );
+            if session.shots().len() > before {
+                fired.push(tick);
+            }
+        }
+        fired
+    }
+
+    #[test]
+    fn an_ionized_players_seeker_0x0020_gun_is_held_until_its_charge_is_shed() {
+        assert_eq!(fired_ticks(0.0), [1, 3, 5, 7], "uncharged, every 2");
+        // Shed to 2, 1, then 0 on tick 3, whose reload the hold no longer
+        // tops up: the first held tick is 2, and it fires again on tick 4.
+        assert_eq!(fired_ticks(3.0), [1, 4, 6, 8]);
+        assert_eq!(fired_ticks(6.0), [1, 7]);
+    }
+
     // The dissipator.
 
     #[test]

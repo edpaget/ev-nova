@@ -1404,12 +1404,31 @@ impl Armament {
     /// ([`Armament::fire_point_defence`]); one at or below none is set to
     /// none.
     pub fn reload(&mut self) {
+        self.reload_holding(|_| false);
+    }
+
+    /// [`Armament::reload`], then each weapon `held` says can't fire held
+    /// at [`HELD_RELOAD`](super::ion::HELD_RELOAD), as the reload loops
+    /// hold an ionized ship's `Seeker` 0x0020 weapons
+    /// ([`IonLockout`](super::ion::IonLockout)).
+    ///
+    /// The original's reload loops read the factor before their frame's
+    /// ion block (`_HandlePlayer` @0x6ae20 before @0x6d7fd, `_HandleShip`
+    /// @0x3383e before @0x342b2), and the player's fire (@0x6ab55) comes
+    /// before its loop. The engine sheds the charge in each ship's flight,
+    /// before the fight, and holds at the fight's step 5 on the charge
+    /// left, so a held weapon is released a tick sooner than the
+    /// original's (rdm:phase/ship-handling-fidelity/phase-23-left-out-of-phase-11).
+    pub fn reload_holding(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
         for mount in &mut self.mounts {
             mount.reload = if mount.reload > 0.0 {
                 mount.reload - 1.0
             } else {
                 0.0
             };
+            if held(&mount.spec) {
+                mount.reload = super::ion::HELD_RELOAD;
+            }
         }
     }
 }
