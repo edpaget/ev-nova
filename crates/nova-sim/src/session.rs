@@ -429,6 +429,7 @@ mod self_repair;
 mod ship_change;
 mod ship_display;
 mod shot_slots;
+mod slot_visibility;
 mod smoke_frame;
 mod status_cargo;
 mod steering;
@@ -1153,6 +1154,10 @@ pub struct Session {
     /// [`Session::framed_by`]): kept from the session's start, across
     /// every system entry and every ship leaving; never saved.
     slot_sprites: crate::ship_layer::SlotSprites,
+    /// The ship each slot last displayed and showed (see
+    /// [`Session::is_displayed`]); never carried into another session, as
+    /// every entry into flight displays every slot again.
+    slot_shown: BTreeMap<crate::ship_layer::Slot, ShipRef>,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -1670,6 +1675,7 @@ impl Session {
             touchdown: player.position,
             rules: Rulebook::default(),
             slot_sprites: crate::ship_layer::SlotSprites::default(),
+            slot_shown: BTreeMap::new(),
             story: story::StoryRuntime::default(),
             lives: catalog
                 .stellar_lives()
@@ -1758,6 +1764,8 @@ impl Session {
         // Game entry's reset (`_EnterGameFromMainScreen` @0x19ffb; see the
         // `precalced` module).
         session.reset_precalced();
+        // `_EnterGameFromMainScreen` (@0x1a36c).
+        session.prepare_all_sprites();
         Ok(session)
     }
 
@@ -2354,13 +2362,17 @@ impl Session {
     /// and rolled on `chance`, its stationary warships placed by the
     /// first stellar shown, destroyed or not, and its `LinkSyst` fleets
     /// coming out of a gate shown that the governments allow, or by
-    /// hyperspace.
+    /// hyperspace. Then every slot is displayed
+    /// ([`Session::prepare_all_sprites`]), as the take-off
+    /// (`_HandlePlayerDockRequest` @0x6764e) and the entry into flight
+    /// (`_PlayGame` @0x45834) that populate the system display them.
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.populate_as(catalog, chance, None);
+        self.prepare_all_sprites();
     }
 
     /// Fills the system as [`Session::populate`] does, the active
@@ -3906,6 +3918,8 @@ impl Session {
         // The arrival's reset, after the days, the enter-system hook and
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();
+        // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
+        self.prepare_all_sprites();
         Some(self.pilot.system)
     }
 
@@ -4355,6 +4369,10 @@ impl Session {
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
+        // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
+        // out (`_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
+        // @0x64743).
+        self.prepare_all_sprites();
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();

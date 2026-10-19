@@ -12,7 +12,11 @@
 //! the last frame drew them: [`Session::draw_layers`], by either reading
 //! of [`RuleKey::ShipOverlap`](crate::RuleKey::ShipOverlap), a hidden
 //! ship ([`Session::is_hidden`]) left out, as its base sprite is hidden
-//! and the walk skips it (@0x2cc6b, @0xacba3).
+//! and the walk skips it (@0x2cc6b, @0xacba3), and so is a ship its slot
+//! has not yet displayed, whose sprites the slot's last display hid
+//! (@0x2b555-0x2b60a), by
+//! [`RuleKey::UndisplayedShips`](crate::RuleKey::UndisplayedShips)'
+//! engine reading (see the `slot_visibility` module).
 //!
 //! The session lays each ship out at its own display step, as the
 //! original does (`Session::lay_out_displayed`): the player's just before
@@ -27,7 +31,8 @@ impl Session {
     /// Each ship the collision passes walk, with where its slot sprite
     /// stands: its layer and its place in the layer's order, bottom
     /// first, as [`Session::draw_layers`] gives them (see the module
-    /// docs). A hidden ship is left out.
+    /// docs). A hidden ship, and one its slot has not yet displayed, is
+    /// left out.
     pub(super) fn sprite_ranks(&self) -> Vec<(ShipRef, SpriteRank)> {
         self.draw_layers()
             .into_iter()

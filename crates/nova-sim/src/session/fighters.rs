@@ -851,6 +851,52 @@ mod tests {
         assert_ne!(fighters[0].state.position, stood, "moved off the bay");
     }
 
+    /// The fighter the player's bay launches in `_HandlePlayer`, by
+    /// `undisplayed`: whether the collision passes walk it and the frame
+    /// draws it after the player's trigger, then after the NPCs' display
+    /// steps.
+    fn launched_fighter_shown(undisplayed: RuleSource) -> [(bool, bool); 2] {
+        let catalog = carrying();
+        let rules = Rulebook::default()
+            .with_override(RuleKey::FighterLaunch, RuleSource::Engine)
+            .with_override(RuleKey::UndisplayedShips, undisplayed);
+        let mut session = flying_by(&catalog, pilot(&catalog, 2, Vec::new()), rules);
+        session.select_secondary(false);
+        session.hold_fire(false, true);
+        let pass = crate::combat::GamePass::Advance { double_time: false };
+        session.player_fires(pass, Rules::default(), &mut NeverFires);
+        let fighter = ShipRef::Npc(fleet_npcs(&session)[0].id);
+        let shown = |session: &Session| {
+            let walked = session
+                .sprite_ranks()
+                .iter()
+                .any(|&(ship, _)| ship == fighter);
+            (walked, session.draw_order().contains(&fighter))
+        };
+        let launched = shown(&session);
+        session.handle_npcs(pass, Rules::default(), &mut NeverFires);
+        [launched, shown(&session)]
+    }
+
+    #[test]
+    fn a_fighter_the_player_launches_is_not_walked_until_its_display_step() {
+        // `_LaunchFighter` from `_HandlePlayer` (@0x62c61) makes active a
+        // slot whose last display hid it (@0x2b555-0x2b60a): the collision
+        // passes skip it (@0xacba3) until its own display (@0x444ad).
+        assert_eq!(
+            launched_fighter_shown(RuleSource::Engine),
+            [(false, false), (true, true)]
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_fighter_the_player_launches_is_walked_at_once() {
+        assert_eq!(
+            launched_fighter_shown(RuleSource::Bible),
+            [(true, true), (true, true)]
+        );
+    }
+
     #[test]
     fn firing_the_bay_launches_a_fighter_into_the_fleet_beside_the_player() {
         let catalog = carrying();

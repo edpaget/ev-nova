@@ -101,8 +101,11 @@ impl Session {
     ///
     /// By the engine the frame is drawn as `_PlayGame` draws it
     /// (@0x45839), each ship where its own display left it, even when a
-    /// beam disabled it after (`_HandleBeams` @0x4453d). A ship not yet
-    /// displayed keeps its slot's last layer.
+    /// beam disabled it after (`_HandleBeams` @0x4453d). A ship its slot
+    /// has not yet displayed is left out by either reading, as its slot's
+    /// sprites are hidden until then, unless [`RuleKey::UndisplayedShips`]
+    /// reads otherwise ([`Session::is_displayed`]; see the
+    /// `slot_visibility` module).
     #[must_use]
     pub fn draw_order(&self) -> Vec<ShipRef> {
         self.draw_layers()
@@ -120,7 +123,8 @@ impl Session {
             match self.rules.source_for(RuleKey::ShipOverlap) {
                 RuleSource::Engine => {
                     let entries = &self.slot_sprites.layers;
-                    let ships = self.shown_slots();
+                    let mut ships = self.shown_slots();
+                    ships.retain(|&(ship, slot)| self.is_displayed(ship, slot));
                     let order = entries.in_entry_order(ships.iter().copied());
                     let layers = ships
                         .into_iter()
@@ -132,14 +136,15 @@ impl Session {
                         .npcs()
                         .iter()
                         .filter(|npc| self.shown(npc.hull))
+                        .filter(|npc| self.is_displayed(ShipRef::Npc(npc.id), slot_of(npc)))
                         .map(|npc| {
                             let layer =
                                 ShipLayer::of(disabled(npc.condition), npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
-                    let player = self
-                        .shown(self.hull)
-                        .then(|| (ShipRef::Player, self.player_layer()));
+                    let player = (self.shown(self.hull)
+                        && self.is_displayed(ShipRef::Player, Slot::Player))
+                    .then(|| (ShipRef::Player, self.player_layer()));
                     let layers: Vec<(ShipRef, ShipLayer)> = npcs.chain(player).collect();
                     (in_draw_order(layers.iter().copied()), layers)
                 }
@@ -255,10 +260,14 @@ impl Session {
     /// ([`Session::player_display_step`], @0x43e29) and after the NPCs'
     /// (`Session::handle_npcs`, @0x444ad), so the collision passes walk
     /// the player in the layer its display just gave it and each NPC in
-    /// the one its last display gave it, and the frame is drawn so.
+    /// the one its last display gave it, and the frame is drawn so. Each
+    /// display is noted ([`Session::note_display`]): a ship shown is
+    /// displayed from then on ([`Session::is_displayed`]).
     pub(super) fn lay_out_displayed(&mut self) {
         for displayed in self.combat.take_displays() {
-            if self.is_hidden(displayed.ship) {
+            let hidden = self.is_hidden(displayed.ship);
+            self.note_display(displayed.ship, displayed.slot, !hidden);
+            if hidden {
                 continue;
             }
             let led = match displayed.ship {
@@ -690,6 +699,9 @@ mod tests {
             ..class
         });
         session.traffic.npcs_mut().rotate_right(1);
+        // Every slot displayed, as a system entry displays them
+        // (`_PrepareAllSprites` @0x3a75a).
+        session.prepare_all_sprites();
         assert_eq!(session.npcs()[0].id, traffic);
         let led: Vec<NpcId> = session
             .npcs()
@@ -983,6 +995,10 @@ mod tests {
             },
             1,
         );
+        // A ship new at a berth is shown at its slot's first display
+        // (@0x2b555-0x2b60a, @0xacba3), where it keeps the slot's place.
+        assert!(!drawn(&session).contains(&Some(stranger)));
+        combat_tick(&mut session);
         let order = drawn(&session);
         assert_eq!(
             order.last(),
@@ -1044,7 +1060,14 @@ mod tests {
     fn a_session_starts_from_the_launch_layers_and_takes_the_ones_it_is_given() {
         let catalog = ships_catalog(ships(1));
         let session = accepted(&catalog);
-        assert_eq!(session.slot_sprites(), &SlotSprites::default());
+        assert_eq!(session.slot_sprites().layers, SlotSprites::default().layers);
+        assert_eq!(session.slot_sprites().shots, SlotSprites::default().shots);
+        // Game entry displays the player's slot, which clones its frames
+        // (`_EnterGameFromMainScreen` @0x1a36c, @0x2b824).
+        assert_eq!(
+            session.slot_sprites().frames.of(Slot::Player),
+            session.pilot.ship
+        );
         let mut sprites = SlotSprites::default();
         sprites.layers.put(Slot::Berth(3), ShipLayer::Disabled);
         let session = session.with_slot_sprites(sprites.clone());
@@ -1062,6 +1085,14 @@ mod tests {
     fn a_ship_of_a_cost_minus_one_type_is_left_out_of_the_draw_order_and_the_layer_history() {
         let (mut session, _, hired) = flying(1);
         let berth = berth(&session, hired);
+        // A place its own display would never give it: the take-off
+        // displayed it in the escorts' layer (`_PrepareAllSprites`
+        // @0x3a75a).
+        session
+            .slot_sprites
+            .layers
+            .put(Slot::Berth(berth), ShipLayer::Disabled);
+        let had = session.slot_sprites().layers.rank(Slot::Berth(berth));
         crate::fixture::hide(&mut session, hired);
         assert!(session.is_hidden(ShipRef::Npc(hired)));
         combat_tick(&mut session);
@@ -1069,7 +1100,7 @@ mod tests {
         assert!(!drawn(&session).contains(&Some(hired)));
         assert_eq!(
             session.slot_sprites().layers.rank(Slot::Berth(berth)),
-            (ShipLayer::Ships, -1 - i64::from(berth)),
+            had,
             "its slot keeps the place it had"
         );
 
@@ -1078,7 +1109,8 @@ mod tests {
 
         let mut session = showing_hidden(session);
         assert!(!session.is_hidden(ShipRef::Npc(hired)));
-        assert!(drawn(&session).contains(&Some(hired)));
+        // Its slot's last display hid it: it is shown at its next.
+        assert!(!drawn(&session).contains(&Some(hired)));
         combat_tick(&mut session);
         assert!(drawn(&session).contains(&Some(hired)));
         assert_eq!(
