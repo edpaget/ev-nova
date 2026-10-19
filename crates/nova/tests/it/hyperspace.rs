@@ -1198,10 +1198,13 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     assert!(before < 300.0, "below full, so regen could show: {before}");
 
     let arrived = harness.arrive_in(130);
-    assert_eq!(
-        harness.session().reserves().fuel.now,
-        before - JUMP_FUEL,
-        "none regained during the jump or as a lump on arrival"
+    // `_HandlePlayer` regenerates through the warp stage too
+    // (@0x6d96d-0x6d9c3): at its normal rate, a unit a second, over a warp
+    // shorter than 6 seconds, and no lump on arrival.
+    let landed_with = harness.session().reserves().fuel.now;
+    assert!(
+        before - JUMP_FUEL < landed_with && landed_with < before - JUMP_FUEL + 6.0,
+        "regained through the warp at its rate alone: {landed_with}"
     );
     assert!(fuel_bar(&arrived) < bar_before, "{}", fuel_bar(&arrived));
 
@@ -1211,10 +1214,10 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // boundaries the fixed step may fall either side of.
     let ticks = f32::from(seconds) * TICKS_PER_SECOND as f32;
     let regen_over_the_run = ticks / f32::from(REGEN_TICKS);
-    let at_most = before - JUMP_FUEL + regen_over_the_run + 1.0;
+    let at_most = landed_with + regen_over_the_run + 1.0;
     let fuel = harness.session().reserves().fuel.now;
     assert!(
-        before - JUMP_FUEL < fuel && fuel <= at_most,
+        landed_with < fuel && fuel <= at_most,
         "creeping back at its normal rate, at most {at_most}: {fuel}"
     );
 }
