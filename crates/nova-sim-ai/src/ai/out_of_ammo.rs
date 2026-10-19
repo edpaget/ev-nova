@@ -139,4 +139,26 @@ mod tests {
         let armed = police(AmmoLeft::Armed, true);
         assert_eq!(after_patrol(&armed, Goal::Inspect(p)), Goal::Inspect(p));
     }
+
+    #[test]
+    fn only_a_retreat_with_no_ship_to_flee_and_not_leaving_stops() {
+        // State 3 with a target flees it, and state 2 leaves; only state 3
+        // with target -1 is made 0, its provocation zeroed (@0x8e228-0x8e23d).
+        let p = ShipRef::Player;
+        let dry = police(AmmoLeft::Dry, true);
+        assert!(stops(&dry, Goal::Wait), "retreating, waiting");
+        assert!(stops(&dry, Goal::Idle), "retreating, idle");
+        assert!(
+            !stops(&dry, Goal::Inspect(p)),
+            "retreating, it flees what it inspects"
+        );
+        assert!(!stops(&dry, Goal::JumpOut), "retreating, it leaves");
+        let armed = police(AmmoLeft::Armed, true);
+        assert!(!stops(&armed, Goal::Wait), "not retreating, waiting");
+        assert!(
+            !stops(&armed, Goal::Inspect(p)),
+            "not retreating, inspecting"
+        );
+        assert!(!stops(&armed, Goal::JumpOut), "not retreating, leaving");
+    }
 }

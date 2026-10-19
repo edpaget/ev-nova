@@ -283,6 +283,46 @@ mod tests {
     }
 
     #[test]
+    fn a_dry_interceptor_fleeing_what_it_inspects_or_leaving_keeps_its_provocation() {
+        // State 3 with a target is a flight, and state 2 is not retreated
+        // from: neither reaches @0x8e228, so +0x96 stays.
+        let police = Interceptor::default();
+        let dry = |goal: Goal| {
+            let mut npc = short_of_ammo(
+                ship(1, POLICE, AiType::Interceptor, 0.0, 0.0),
+                AmmoLeft::Dry,
+                true,
+            );
+            npc.goal = goal;
+            npc.provoked = 5.0;
+            npc
+        };
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let mut inspecting = dry(Goal::Inspect(n(2)));
+        inspecting.target = Some(n(2));
+        let fleeing = decided(&police, &inspecting, std::slice::from_ref(&trader));
+        assert_eq!(fleeing.goal, Goal::Flee(n(2)));
+        assert!(!fleeing.forgets_provocation, "fleeing what it inspects");
+        let mut flown = inspecting.clone();
+        take(&mut flown, &fleeing);
+        assert_eq!(flown.provoked, 5.0, "fleeing what it inspects");
+        // With no player to inspect and nowhere to land, leaving it leaves.
+        let jumping = dry(Goal::JumpOut);
+        let govts = govts(0, 0);
+        let npcs = [jumping.clone()];
+        let around = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&[], &npcs)
+        };
+        let leaving = police.decision(&jumping, &around, &mut Draws::of(&[0; 16]));
+        assert_eq!(leaving.goal, Goal::JumpOut);
+        assert!(!leaving.forgets_provocation, "leaving");
+        let mut left = jumping.clone();
+        take(&mut left, &leaving);
+        assert_eq!(left.provoked, 5.0, "leaving");
+    }
+
+    #[test]
     fn a_flight_from_a_ship_gone_from_its_slot_forgets_its_provocation_whatever_its_type() {
         // The slot test makes the target -1 (@0x8d4e4-0x8d50d), and state
         // 3 with none is state 0, +0x96 0 (@0x8e228-0x8e23d), after every
