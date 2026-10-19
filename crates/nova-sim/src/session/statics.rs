@@ -121,4 +121,19 @@ mod tests {
         let clone = session.clone();
         assert!(Rc::ptr_eq(&session.statics, &clone.statics));
     }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_class_speed_is_its_ships_speed_alone_and_none_without_a_record() {
+        use crate::catalog::ShipId;
+        use crate::handling::ShipFields;
+        use crate::testkit::{FAST, ship};
+        let mut catalog = crate::testkit::catalog();
+        catalog
+            .ship_records
+            .push(ship(200, ShipFields { speed: 350, ..FAST }));
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.statics.class_speed(ShipId(200)), 3.5);
+        assert_eq!(session.statics.class_speed(ShipId(999)), 0.0, "no record");
+    }
 }
