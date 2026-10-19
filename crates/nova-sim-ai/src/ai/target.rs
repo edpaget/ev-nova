@@ -513,17 +513,19 @@ fn pick_by_steps(
     if xenophobe_pick.is_some() || threats == Threats::Skipped {
         return xenophobe_pick;
     }
-    nearest_threat(npc, around, rules).map(kept)
+    nearest_threat(npc, others(), around, rules).map(kept)
 }
 
-/// Step 8, threats (see the module docs): the nearest NPC among `around`
-/// threatening `npc` or a ship it leads, other than one it spares by
-/// `rules`.
-fn nearest_threat(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRef> {
-    let threats = around
-        .by_slot()
-        .into_iter()
-        .filter(|other| other.id != npc.id && present(ShipRef::Npc(other.id), around))
+/// Step 8, threats (see the module docs): the nearest of `others` among
+/// `around` threatening `npc` or a ship it leads, other than one it spares
+/// by `rules`.
+fn nearest_threat<'a>(
+    npc: &Npc,
+    others: impl Iterator<Item = &'a Npc>,
+    around: &Surroundings,
+    rules: TargetRules,
+) -> Option<ShipRef> {
+    let threats = others
         .filter(|other| other.threatens_npc_among(npc.id, around.npcs))
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| !spares(npc, ship, around, rules))

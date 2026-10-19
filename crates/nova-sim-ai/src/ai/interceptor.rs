@@ -250,19 +250,15 @@ fn re_pick(
     if npc.govt.is_none() {
         return decision;
     }
-    let inspecting = Npc {
-        goal: decision.goal,
-        ..npc.clone()
-    };
-    let Some(pick) = re_pick_target(&inspecting, around, rules, chance) else {
+    let Some(pick) = re_pick_target(npc, around, rules, chance) else {
         return decision;
     };
     let turns_on_player = decision.turns_on_player || pick.turns_on_player;
     let (goal, clears_target) = if !pick.attacks {
         (Goal::Inspect(pick.ship), false)
-    } else if dropped(&inspecting, pick.ship, around, rules) {
+    } else if dropped(npc, pick.ship, around, rules) {
         (Goal::Idle, true)
-    } else if !npc.hull.stands_off && hopeless_chase(&inspecting, pick.ship, around) {
+    } else if !npc.hull.stands_off && hopeless_chase(npc, pick.ship, around) {
         (Goal::Snipe(pick.ship), false)
     } else {
         (Goal::Attack(pick.ship), false)
@@ -1248,5 +1244,33 @@ mod tests {
         let (decision, _) = re_picked(police_cop, &[trader, fleeing, wreck], 0, None, &[]);
         assert_eq!(decision.goal, Goal::Idle);
         assert!(decision.clears_target);
+    }
+
+    #[test]
+    fn a_re_picked_attack_in_a_hopeless_chase_snipes_unless_its_hull_stands_off() {
+        // `_HighLevelAIHandler` asks `_AIEvalHopelessChase` of the state-4
+        // pick that frame, past a stand-off hull (@0x8e48e).
+        let (mut cop, trader) = trader_cop_inspecting();
+        cop.hull.mass = 100.0;
+        cop.hull.class_speed = 6.0;
+        let decide = |cop: &Npc| {
+            let (sites, govts) = (sites(), govts(0, 0));
+            let npcs = [cop.clone(), trader.clone()];
+            let mut seen = around(&sites, &npcs, &govts, (0.0, -1000.0), -10);
+            if let Some(player) = seen.player.as_mut() {
+                player.state.velocity = Vec2::new(0.0, -1.0);
+                player.hull.class_speed = 6.0;
+            }
+            Interceptor::default()
+                .decision(&npcs[0], &seen, &mut Draws::of(&[]))
+                .goal
+        };
+        assert_eq!(decide(&cop), Goal::Snipe(P), "the player opens the gap");
+        cop.hull.stands_off = true;
+        assert_eq!(
+            decide(&cop),
+            Goal::Attack(P),
+            "a stand-off hull asks nothing"
+        );
     }
 }
