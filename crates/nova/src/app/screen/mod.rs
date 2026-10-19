@@ -368,8 +368,9 @@ pub const PREFERENCES_KEY: Key = Key::Char(',');
 /// The key a menu command's Command chord presses: Q for Quit (Command-Q,
 /// see [`AppScreen::route`]) and [`PREFERENCES_KEY`] for Preferences…;
 /// About has none. The one table of the game's menu chords: the router's
-/// Command-Q, its Preferences key, the entry's held chords and the menu
-/// bar's key equivalents all read it.
+/// Command-Q, its Preferences key and the entry's held chords read it
+/// ([`chord_command`]), and the macOS menu bar's key equivalents are
+/// checked against it (`platform::menu_bar`).
 #[must_use]
 pub const fn menu_chord(command: MenuCommand) -> Option<Key> {
     match command {
@@ -377,6 +378,14 @@ pub const fn menu_chord(command: MenuCommand) -> Option<Key> {
         MenuCommand::Preferences => Some(PREFERENCES_KEY),
         MenuCommand::About => None,
     }
+}
+
+/// The menu command whose chord presses `key` ([`menu_chord`]), if any.
+#[must_use]
+pub fn chord_command(key: Key) -> Option<MenuCommand> {
+    MenuCommand::ALL
+        .into_iter()
+        .find(|&command| menu_chord(command) == Some(key))
 }
 
 /// The About text's `dësc`.

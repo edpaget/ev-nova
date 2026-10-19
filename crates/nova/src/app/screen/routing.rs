@@ -4,7 +4,7 @@
 use nova_sim::VenueOffer;
 use nova_view::flight::FlightView;
 use nova_view::spaceport::offer::OfferChoice;
-use nova_view::{Input, Key, MouseButton, Point, Screen, ScreenAction, Showing};
+use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
@@ -12,7 +12,7 @@ use super::port_dialogs::{
 };
 use nova_view::menu::MenuChoice;
 
-use super::{AppScreen, ENTERED, LANDED, MenuAction, PREFERENCES_KEY, Side};
+use super::{AppScreen, ENTERED, LANDED, MenuAction, Side, chord_command};
 
 impl AppScreen {
     /// The spaceport's input, all of it: the outfitter opening tells the
@@ -324,8 +324,8 @@ impl AppScreen {
             return false;
         };
         let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
-        let taken =
-            (key == PREFERENCES_KEY && self.command_held) || (key == Key::Char('p') && away);
+        let chord = chord_command(key) == Some(MenuCommand::Preferences);
+        let taken = (chord && self.command_held) || (key == Key::Char('p') && away);
         if !taken || self.dialogs.is_none() {
             return false;
         }
@@ -466,11 +466,10 @@ impl AppScreen {
         // which the engine doesn't yet
         // (rdm:phase/main-screen-fidelity/phase-1-ask-before-quitting-play).
         if let Input::Key {
-            key: Key::Char('q'),
-            pressed: true,
-            ..
+            key, pressed: true, ..
         } = *input
             && self.command_held
+            && chord_command(key) == Some(MenuCommand::Quit)
         {
             return ScreenAction::Quit;
         }

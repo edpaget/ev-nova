@@ -15,6 +15,17 @@ fn quit_and_preferences_are_command_q_and_command_comma_and_about_has_no_chord()
     assert_eq!(menu_chord(MenuCommand::About), None);
 }
 
+#[test]
+fn a_chords_key_names_its_command() {
+    assert_eq!(chord_command(Key::Char('q')), Some(MenuCommand::Quit));
+    assert_eq!(
+        chord_command(PREFERENCES_KEY),
+        Some(MenuCommand::Preferences)
+    );
+    assert_eq!(chord_command(Key::Char('i')), None, "About has no chord");
+    assert_eq!(chord_command(Key::Char('p')), None);
+}
+
 /// What a command left: whether the app quits (an input's action or a
 /// quit taken), whether Quit's delay runs, what shows, whether the
 /// Preferences or the About text are open, and the sounds made.

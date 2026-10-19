@@ -68,10 +68,10 @@ use nova_view::flight::FlightView;
 use nova_view::menu::entry::{Deferred, Entry, Verdict};
 use nova_view::menu::intro::{CharacterIntro, Intro, IntroSource};
 use nova_view::ui::DescDialog;
-use nova_view::{DrawList, Input, Key, Screen, ScreenAction, Showing, Sound, UiSound};
+use nova_view::{DrawList, Input, Key, MenuCommand, Screen, ScreenAction, Showing, Sound, UiSound};
 
 use super::port_dialogs::desc_dialog;
-use super::{AppScreen, CLASSIC_VIEW, PREFERENCES_KEY, Side};
+use super::{AppScreen, CLASSIC_VIEW, Side, chord_command};
 
 /// An entry running, and its intro's text while it is open.
 #[derive(Clone, Debug)]
@@ -397,10 +397,10 @@ impl AppScreen {
     /// opens the Preferences, with dialogs
     /// ([`AppScreen::preferences_key`]). Any other chord does nothing.
     fn entry_command(&mut self, key: Key) {
-        match key {
-            Key::Char('q') => self.quit_due = true,
-            PREFERENCES_KEY => self.open_preferences(),
-            _ => {}
+        match chord_command(key) {
+            Some(MenuCommand::Quit) => self.quit_due = true,
+            Some(MenuCommand::Preferences) => self.open_preferences(),
+            Some(MenuCommand::About) | None => {}
         }
     }
 }
