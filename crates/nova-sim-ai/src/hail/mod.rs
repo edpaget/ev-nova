@@ -291,7 +291,7 @@ impl<'a> Hail<'a> {
                 || assisting_player
                 || matches!(
                     npc.goal,
-                    Goal::Formation { .. } | Goal::Hold | Goal::CountWait { .. } | Goal::Drift
+                    Goal::Formation { .. } | Goal::Hold | Goal::CountWait | Goal::Drift
                 )
                 || attacked,
             assisting_player,
@@ -928,7 +928,7 @@ mod tests {
                 ship: ShipRef::Npc(NpcId(5)),
                 hopeless: false,
             },
-            Goal::CountWait { ticks_left: 3 },
+            Goal::CountWait,
             Goal::Drift,
         ] {
             let npcs = [flying(1, goal)];

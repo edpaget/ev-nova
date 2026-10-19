@@ -2130,6 +2130,36 @@ mod tests {
     }
 
     #[test]
+    fn a_pirate_taunted_in_its_count_wait_attacks_once_its_wait_is_out() {
+        // `_DoCommDialog`'s attack (`_AIMakeShipAttackPlayer` @0x9621f)
+        // writes no +0x4c, and nor does its bribe (`_AIMakeShipLeave`
+        // @0x961eb, @0x7e2b0-0x7e2e7): every deed's goal keeps the wait,
+        // as the count lives in the AI wait, not the goal.
+        let mut catalog = hailable();
+        catalog
+            .strings
+            .push((9000, vec!["Your mother was a tug.".to_owned()]));
+        let options = HailOptions::default().with(Rc::new(Taunt));
+        let mut session = targeting(&catalog);
+        crate::testkit::count_waiting(npc(&mut session), 50);
+        let mut chance = Draws::of(&opening(0));
+        let view = session
+            .hail(&catalog, &options, &mut chance)
+            .expect("answered");
+        let taunt = labels(&view)
+            .iter()
+            .position(|(label, _)| *label == "Taunt")
+            .expect("listed");
+        session
+            .answer(taunt, &catalog, &options, &mut chance)
+            .expect("open");
+        let pirate = &session.npcs()[0];
+        assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(pirate.ai_wait, 50, "the wait outlives goal 0x16");
+        assert!(pirate.wait_running());
+    }
+
+    #[test]
     fn hanging_up_ends_the_hail_and_a_press_after_does_nothing() {
         let catalog = hailable();
         let mut session = targeting(&catalog);

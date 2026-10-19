@@ -111,7 +111,7 @@ pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
     if npc.condition != Condition::Intact {
         return Goal::Idle;
     }
-    if let Goal::CountWait { .. } = npc.goal {
+    if let Goal::CountWait = npc.goal {
         return npc.goal;
     }
     if let Some(attacker) = provoked_by(npc, around) {
@@ -261,7 +261,7 @@ mod tests {
         for bits in [MINES, SCOOPS, MINER_BITS] {
             for can_scoop in [false, true] {
                 let mut waiting = miner(bits, can_scoop);
-                waiting.goal = Goal::CountWait { ticks_left: 7 };
+                crate::traffic::fixture::count_waiting(&mut waiting, 7);
                 waiting.provoked = 5.0;
                 waiting.target = Some(n(2));
                 let attacker = ship(2, PIRATES, AiType::Warship, 0.0, 100.0);

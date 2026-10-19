@@ -102,9 +102,8 @@
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier,
 //!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
-//!    started boarding the victim, and a tick off each pirate's count wait
-//!    ([`board_wait::count_down`]) and each flying ship's AI wait
-//!    ([`plunder::count_down`]);
+//!    started boarding the victim, and a tick off each flying ship's AI
+//!    wait, a pirate's count wait's included ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
 //! 7. the removal of those that landed, jumped out, entered a gate or
@@ -139,6 +138,8 @@ pub mod berth_picks;
 pub mod board_wait;
 #[cfg(test)]
 mod comm_call_tests;
+#[cfg(test)]
+mod count_wait_turn_tests;
 pub mod destination;
 pub mod emerge;
 #[cfg(any(test, feature = "fixture"))]
@@ -1175,7 +1176,6 @@ impl Traffic {
         self.cloaks(player, &states, think);
         let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
         let outcomes = self.fly_all(world, player, &states, still, chance);
-        board_wait::count_down(&mut self.npcs);
         plunder::count_down(&mut self.npcs);
         self.release_followers(&entering);
         self.departed = self
@@ -1948,8 +1948,9 @@ impl Traffic {
     /// provocation; and one whose decision clears its target
     /// ([`Decision::clears_target`]) loses it. Its search timer takes the
     /// lost-sight block's write ([`Decision::lost_sight`]), and stays as
-    /// it was when the block did not run. Each decision's calls, then its
-    /// scan, are queued on the line in slot order ([`on_line`]).
+    /// it was when the block did not run. One that starts a count wait
+    /// takes its AI wait ([`board_wait::enter`]). Each decision's calls,
+    /// then its scan, are queued on the line in slot order ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
             let Some(decision) = decision else {
@@ -1998,6 +1999,7 @@ impl Traffic {
             ) {
                 npc.docking = None;
             }
+            board_wait::enter(npc, goal);
             npc.goal = goal;
         }
     }

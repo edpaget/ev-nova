@@ -1,5 +1,6 @@
 //! Test support for the ai and traffic layer's tests and the tests above
-//! it, behind the `fixture` feature: a default NPC ([`npc`]).
+//! it, behind the `fixture` feature: a default NPC ([`npc`]), and one put
+//! in a pirate's count wait ([`count_waiting`]).
 
 use super::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::ai::Goal;
@@ -78,6 +79,13 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         pods_left: 0,
         odds: 0.0,
     }
+}
+
+/// `npc` put in goal 0x16, a pirate's count wait ([`Goal::CountWait`]),
+/// with `ticks` of its wait left.
+pub fn count_waiting(npc: &mut Npc, ticks: u32) {
+    npc.goal = Goal::CountWait;
+    npc.ai_wait = ticks;
 }
 
 /// A class `Fuel` holding the tank of `stats`, saturating at the word.

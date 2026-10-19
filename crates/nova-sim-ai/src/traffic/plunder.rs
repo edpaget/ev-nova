@@ -10,7 +10,10 @@
 //! - **The high level** ([`high_level`]): while a ship's AI wait runs
 //!   ([`Npc::ai_wait`]) `_HighLevelAIHandler` returns before every goal but
 //!   10 and 0xe (@0x8d4b9-0x8d4d2), so the traffic keeps its pursuit and
-//!   docking as they were. A plunder of a disabled ship docks
+//!   docking as they were. Goal 0x16's block comes before that return
+//!   (@0x8d462-0x8d4ac), so a pirate's count wait ([`Goal::CountWait`])
+//!   flies on as a fight with no quarry; a ship turned out of it onto
+//!   another goal keeps the wait and is skipped. A plunder of a disabled ship docks
 //!   ([`plunder_dock::high_level`]); any other goal flies its fight, which
 //!   drops any docking, as goal 4's and goal 0xd's other substates do.
 //! - **The plunder** ([`resolve`]), over the decisions that plunder
@@ -124,7 +127,7 @@ pub enum HighLevel {
 /// docs).
 #[must_use]
 pub fn high_level(npc: &Npc, around: &Surroundings) -> HighLevel {
-    if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift) {
+    if npc.ai_wait > 0 && !matches!(npc.goal, Goal::Hold | Goal::Drift | Goal::CountWait) {
         return HighLevel::Skipped;
     }
     let Goal::Plunder { ship, .. } = npc.goal else {

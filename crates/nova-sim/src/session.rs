@@ -22441,7 +22441,7 @@ pub(super) mod tests {
             (Goal::Idle, None, false),
             (plunder(false), None, true),
             (plunder(true), None, true),
-            (Goal::CountWait { ticks_left: 3 }, None, false),
+            (Goal::CountWait, None, false),
         ] {
             npc.goal = goal;
             let fighter = terms(false).fighter(&mut npc);

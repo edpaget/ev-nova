@@ -324,13 +324,12 @@ pub enum Goal {
         hopeless: bool,
     },
     /// Wait while another ship boards the ship it would plunder: a
-    /// pirate's goal 0x16, its +0x4c the ticks left (see
-    /// [`board_wait`](crate::traffic::board_wait)). It brakes, targets and
-    /// fires nothing, and fights nothing: its quarry is none.
-    CountWait {
-        /// The ticks of the wait left.
-        ticks_left: u32,
-    },
+    /// pirate's goal 0x16, its ticks the AI wait [`Npc::ai_wait`] (the
+    /// original's +0x4c, apart from the goal, so a goal that replaces it
+    /// keeps the wait; see [`board_wait`](crate::traffic::board_wait)). It
+    /// brakes, targets and fires nothing, and fights nothing: its quarry is
+    /// none.
+    CountWait,
     /// Drift off from the ship it plundered: a pirate's goal 0xe
     /// (`_HighLevelAIHandler` @0x8eb6b-0x8ebd4), its ticks the AI wait
     /// [`Npc::ai_wait`] its plunder set (see
@@ -415,7 +414,7 @@ impl Goal {
             | Self::Hold
             | Self::Mine
             | Self::Plunder { .. }
-            | Self::CountWait { .. }
+            | Self::CountWait
             | Self::Drift => false,
         }
     }
@@ -458,7 +457,7 @@ impl Goal {
             | Self::Flee(_)
             | Self::Mine
             | Self::Plunder { .. }
-            | Self::CountWait { .. }
+            | Self::CountWait
             | Self::Drift => false,
         }
     }
@@ -1635,14 +1634,12 @@ mod tests {
 
     #[test]
     fn a_count_wait_fights_nothing_and_is_not_spared_as_a_threat() {
-        for ticks_left in [0, 1, 120] {
-            let wait = Goal::CountWait { ticks_left };
-            assert_eq!((wait.quarry(), wait.attacking()), (None, None));
-            assert!(!wait.fights());
-            assert_eq!(wait.plundering(), None);
-            assert!(!wait.scooping());
-            assert!(!wait.spares_player_threat(), "0x16 isn't in the list");
-        }
+        let wait = Goal::CountWait;
+        assert_eq!((wait.quarry(), wait.attacking()), (None, None));
+        assert!(!wait.fights());
+        assert_eq!(wait.plundering(), None);
+        assert!(!wait.scooping());
+        assert!(!wait.spares_player_threat(), "0x16 isn't in the list");
     }
 
     #[test]

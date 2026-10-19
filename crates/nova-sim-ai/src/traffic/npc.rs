@@ -458,14 +458,16 @@ pub struct Npc {
     /// spawns. Never saved.
     pub pursuit: Pursuit,
     /// Its AI wait (the original's +0x4c) for the waits it takes while it
-    /// flies, outside its [`Mode`] and a pirate's count wait: a pirate's
-    /// dock with its victim (`Rand(80)` + 100), its hold after a plunder
-    /// (100) and a ship a pirate took into its fleet (150) (see
-    /// [`plunder`](crate::traffic::plunder)). While it runs it counts in
-    /// [`Npc::wait_running`], the traffic counts it down as the ship
-    /// flies, its high level is skipped but for a drift or a hold, and the
-    /// ship moves on at its velocity with no turn or thrust. A hit's answer
-    /// cuts it to 20. None as it spawns. Never saved.
+    /// flies, outside its [`Mode`]: a pirate's dock with its victim
+    /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
+    /// took into its fleet (150) (see [`plunder`](crate::traffic::plunder))
+    /// and a pirate's count wait (120, see
+    /// [`board_wait`](crate::traffic::board_wait)). While it runs it counts
+    /// in [`Npc::wait_running`], the traffic counts it down as the ship
+    /// flies, its high level is skipped but for a drift, a hold or a count
+    /// wait, and the ship moves on at its velocity with no turn or thrust
+    /// but in its count wait, where it brakes. A hit's answer cuts it to
+    /// 20. None as it spawns. Never saved.
     pub ai_wait: u32,
     /// The docking it flies with a disabled ship it plunders, its sub-goal
     /// and nav kept from tick to tick (see
@@ -938,11 +940,12 @@ impl Npc {
     /// the warp out after a leader) will count here once built (rdm
     /// weapons-fidelity phase 17's findings).
     ///
-    /// A pirate's count wait ([`Goal::CountWait`]) runs it while ticks are
-    /// left: it is the original's +0x4c too, read so by
-    /// `_ExtendedIsThreatToPlayer` (@0x81bed). `_HandleShip` exempts it from
-    /// its gate ([`Npc::count_wait`]), and so does
-    /// [`fire::gated`](crate::ai::fire::gated).
+    /// A pirate's count wait ([`Goal::CountWait`]) is this AI wait too, as
+    /// the original keeps it in +0x4c, read so by
+    /// `_ExtendedIsThreatToPlayer` (@0x81bed). `_HandleShip` exempts goal
+    /// 0x16 from its gate ([`Npc::count_wait`]), and so does
+    /// [`fire::gated`](crate::ai::fire::gated); a pirate turned out of it
+    /// onto another goal keeps the wait, gate and all.
     #[must_use]
     pub fn wait_running(&self) -> bool {
         matches!(
@@ -951,8 +954,7 @@ impl Npc {
                 | Mode::HeldAtGate { .. }
                 | Mode::Coasting { .. }
                 | Mode::EnteringGate { .. }
-        ) || matches!(self.goal, Goal::CountWait { ticks_left } if ticks_left > 0)
-            || self.ai_wait > 0
+        ) || self.ai_wait > 0
     }
 
     /// Whether it is in its count wait, goal 0x16 ([`Goal::CountWait`]):
@@ -961,7 +963,7 @@ impl Npc {
     /// @0x34a54-0x34a72).
     #[must_use]
     pub fn count_wait(&self) -> bool {
-        matches!(self.goal, Goal::CountWait { .. })
+        self.goal == Goal::CountWait
     }
 
     /// Sets its AI wait (+0x4c) to `ticks_left`, as boarding a mission's
@@ -2012,13 +2014,14 @@ mod tests {
         // A hit sets its target to the player (`_DamageShip` @0x3be5d), but
         // its wait (+0x4c) runs, and the next frame clears the target.
         let waiting = Npc {
-            goal: Goal::CountWait { ticks_left: 20 },
+            goal: Goal::CountWait,
+            ai_wait: 20,
             target: Some(ShipRef::Player),
             ..plain(1)
         };
         assert!(!waiting.threatens_player_extended(&[], true));
         let done = Npc {
-            goal: Goal::CountWait { ticks_left: 0 },
+            ai_wait: 0,
             ..waiting
         };
         assert!(done.threatens_player_extended(&[], true), "its wait is out");
@@ -2028,7 +2031,8 @@ mod tests {
     fn a_count_wait_runs_its_wait_while_ticks_are_left_and_is_always_a_count_wait() {
         for (ticks_left, running) in [(0, false), (1, true), (120, true)] {
             let waiting = Npc {
-                goal: Goal::CountWait { ticks_left },
+                goal: Goal::CountWait,
+                ai_wait: ticks_left,
                 ..plain(1)
             };
             assert_eq!(waiting.wait_running(), running, "{ticks_left}");

@@ -3371,7 +3371,8 @@ mod tests {
     #[test]
     fn a_pirates_count_wait_is_exempt_from_the_wait_gate() {
         // `_AIIsShipDoingCountWait` lets its trigger through (@0x34a5d-0x34a67).
-        let mut npc = shooter(&[gun(128, 1, 1)], Goal::CountWait { ticks_left: 5 });
+        let mut npc = shooter(&[gun(128, 1, 1)], Goal::CountWait);
+        npc.ai_wait = 5;
         npc.trigger = FULL;
         assert!(npc.wait_running());
         assert_eq!(gated(&npc), FULL);

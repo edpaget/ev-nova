@@ -100,9 +100,11 @@
 //!   [`plunder_dock`](crate::traffic::plunder_dock)), braking until its
 //!   high level gives it one.
 //! - While its AI wait runs ([`Npc::ai_wait`]: a pirate's dock or hold, a
-//!   ship a pirate took into its fleet), whatever its goal, it moves on at
-//!   its velocity with no turn, thrust or slowing, as `_HandleShip` skips
-//!   them while +0x4c runs (@0x34a54-0x34a72); a drift
+//!   ship a pirate took into its fleet, or a pirate turned out of its
+//!   count wait onto another goal), whatever its goal but the count wait
+//!   itself, it moves on at its velocity with no turn, thrust or slowing,
+//!   as `_HandleShip` skips them while +0x4c runs (@0x34a54-0x34a72) but
+//!   for goal 0x16 (@0x3443f-0x34454); a drift
 //!   ([`Goal::Drift`]) so too, its 0.7 a tick along its heading being the
 //!   high level's (see [`plunder`](crate::traffic::plunder)).
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
@@ -118,7 +120,8 @@
 //!   its top speed).
 //! - [`Goal::Idle`], [`Goal::Wait`] (state 6, a stop, @0x8f101),
 //!   [`Goal::Mine`] (order 1 for now, see its docs),
-//!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c), or a
+//!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c, its AI wait running),
+//!   or a
 //!   goal it cannot fly (a stellar, lead, player or carrier that is not
 //!   there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
@@ -403,10 +406,12 @@ fn fly_mobile(
         return outcome;
     }
     hand_off(npc, sites);
-    if npc.ai_wait > 0 {
+    if npc.ai_wait > 0 && !npc.count_wait() {
         // `_HandleShip` skips its turn and thrust while +0x4c runs
         // (@0x34a54-0x34a72) and moves it first (@0x34274-0x342aa), an
-        // inertialess ship's velocity following its speed (@0x3425f).
+        // inertialess ship's velocity following its speed (@0x3425f);
+        // goal 0x16 is exempt (`_AIIsShipDoingCountWait`, @0x3443f-0x34454)
+        // and brakes below.
         match inertia {
             Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
             Inertia::Inertialess { .. } => inertialess::drift(npc, &handling),
@@ -484,9 +489,7 @@ fn fly_mobile(
         },
         // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
         // is a wait (state 6, @0x8f101).
-        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait { .. } => {
-            brake(&state, &handling, inertia)
-        }
+        Goal::Idle | Goal::Wait | Goal::Mine | Goal::CountWait => brake(&state, &handling, inertia),
         // A drift moves on with no turn or thrust (its wait above).
         Goal::Hold | Goal::Drift => Controls::default(),
     };
@@ -965,18 +968,16 @@ fn burst(
 /// ([`Mode::Coasting`]) has a wait to cut: a glide or burst has none
 /// (+0x4c = -1, @0x8dd83). A ship the player hit in its gate was cut as
 /// it was held, but a Good Samaritan held there kept its wait
-/// (@0x82b82-0x82b97), which a later hit cuts. A pirate's count wait
-/// ([`Goal::CountWait`], goal 0x16) is cut the same way: `_DamageShip`
-/// reads no goal; and so is a flying ship's [`Npc::ai_wait`], a pirate's
-/// dock or hold or a ship it took into its fleet.
+/// (@0x82b82-0x82b97), which a later hit cuts. So is a flying ship's
+/// [`Npc::ai_wait`]: a pirate's dock or hold, a ship it took into its
+/// fleet, or a pirate's count wait ([`Goal::CountWait`], goal 0x16), as
+/// `_DamageShip` reads no goal; the player's hit turns that pirate on it
+/// (goal 4) with what is left of the wait, 20 at most.
 pub(crate) fn cut_wait(npc: &mut Npc) {
     if let Mode::Coasting { ticks_left }
     | Mode::Emerging { ticks_left }
     | Mode::HeldAtGate { ticks_left } = &mut npc.mode
     {
-        *ticks_left = (*ticks_left).min(HIT_WAIT);
-    }
-    if let Goal::CountWait { ticks_left } = &mut npc.goal {
         *ticks_left = (*ticks_left).min(HIT_WAIT);
     }
     npc.ai_wait = npc.ai_wait.min(HIT_WAIT);
@@ -1979,13 +1980,11 @@ mod tests {
         // `_DamageShip` reads no goal (@0x3be6e-0x3be7c): goal 0x16's
         // +0x4c is cut as any other.
         for (left, cut) in [(120, 20), (21, 20), (20, 20), (19, 19), (0, 0)] {
-            let mut pirate = npc(
-                AVERAGE,
-                Goal::CountWait { ticks_left: left },
-                at(0.0, 0.0, 0.0, 0.0, 0.0),
-            );
+            let mut pirate = npc(AVERAGE, Goal::CountWait, at(0.0, 0.0, 0.0, 0.0, 0.0));
+            pirate.ai_wait = left;
             cut_wait(&mut pirate);
-            assert_eq!(pirate.goal, Goal::CountWait { ticks_left: cut }, "{left}");
+            assert_eq!(pirate.ai_wait, cut, "{left}");
+            assert_eq!(pirate.goal, Goal::CountWait, "{left}");
             assert_eq!(pirate.mode, Mode::Flying);
         }
     }
@@ -3641,13 +3640,12 @@ mod tests {
     fn a_count_wait_brakes_as_an_idle_ship_does() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         for ticks_left in [0, 1, 120] {
+            let waiting = Npc {
+                ai_wait: ticks_left,
+                ..npc(FAST, Goal::CountWait, start)
+            };
             assert_eq!(
-                flown_for(
-                    npc(FAST, Goal::CountWait { ticks_left }, start),
-                    &start,
-                    false,
-                    40
-                ),
+                flown_for(waiting, &start, false, 40),
                 flown_for(npc(FAST, Goal::Idle, start), &start, false, 40),
                 "{ticks_left}"
             );

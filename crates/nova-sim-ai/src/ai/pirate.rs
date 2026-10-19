@@ -153,7 +153,7 @@ impl Behaviour for PirateWarship {
     /// keeps (see the module docs).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
-            Goal::CountWait { .. } | Goal::Drift => None,
+            Goal::CountWait | Goal::Drift => None,
             goal => goal.quarry().or(npc.target),
         }
     }
@@ -172,7 +172,7 @@ pub fn think(
     rules: TargetRules,
     chance: &mut dyn Chance,
 ) -> Decision {
-    if matches!(npc.goal, Goal::CountWait { .. }) {
+    if matches!(npc.goal, Goal::CountWait) {
         return of(npc.goal);
     }
     let dropped = npc.target.is_some_and(|ship| gone_or_dying(ship, around));
@@ -962,10 +962,14 @@ mod tests {
 
     #[test]
     fn its_count_wait_is_kept_whatever_became_of_the_victim() {
-        for ticks_left in [0, 1, 120] {
-            let wait = Goal::CountWait { ticks_left };
-            assert_eq!(decided(&[holding(wait, None), wreck(2, 300.0)]), only(wait));
-            assert_eq!(decided(&[holding(wait, Some(n(9)))]), only(wait));
+        let wait = Goal::CountWait;
+        for ai_wait in [0, 1, 120] {
+            let waiting = |target| Npc {
+                ai_wait,
+                ..holding(wait, target)
+            };
+            assert_eq!(decided(&[waiting(None), wreck(2, 300.0)]), only(wait));
+            assert_eq!(decided(&[waiting(Some(n(9)))]), only(wait));
         }
     }
 
@@ -1049,7 +1053,7 @@ mod tests {
         assert_eq!(target(Goal::Attack(n(2)), None), Some(n(2)));
         assert_eq!(target(IDLE, Some(n(3))), Some(n(3)), "kept with its goal");
         assert_eq!(target(Goal::Idle, None), None);
-        assert_eq!(target(Goal::CountWait { ticks_left: 3 }, Some(n(3))), None);
+        assert_eq!(target(Goal::CountWait, Some(n(3))), None);
     }
 
     #[test]
@@ -1071,10 +1075,11 @@ mod tests {
             let around = Surroundings::new(&sites, &npcs);
             ai.trigger(&npcs[0], &around)
         };
-        assert_eq!(
-            fired(armed(Goal::CountWait { ticks_left: 9 })),
-            Trigger::default()
-        );
+        let waiting = Npc {
+            ai_wait: 9,
+            ..armed(Goal::CountWait)
+        };
+        assert_eq!(fired(waiting), Trigger::default());
         let plundering = fired(armed(plunder(n(2))));
         assert_eq!(plundering.only, Some(crate::catalog::WeaponId(141)));
     }
