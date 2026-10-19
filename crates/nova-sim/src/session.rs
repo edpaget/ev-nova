@@ -419,6 +419,7 @@ mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
+mod refuel_dock;
 mod reinforcements;
 mod repair_dock;
 mod rescue;
@@ -2544,6 +2545,7 @@ impl Session {
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
             odds_cache: self.rules.source_for(RuleKey::OddsCache),
+            refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),
@@ -2623,6 +2625,7 @@ impl Session {
             snipe_brake_lead: self.rules.source_for(RuleKey::SnipeBrakeLead),
             npc_jump_fuel: self.rules.source_for(RuleKey::NpcJumpFuel),
             odds_cache: self.rules.source_for(RuleKey::OddsCache),
+            refuel_cap: self.rules.source_for(RuleKey::RefuelCap),
             cloak_scanner: self.scanner().on_screen,
             mining_rock: self.asteroids.get(0).copied(),
             reinforcements: self.reinforcements_coming(),

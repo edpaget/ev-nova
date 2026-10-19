@@ -510,6 +510,11 @@ pub struct World<'a> {
     /// engine, fresh by the other reading
     /// ([`RuleKey::OddsCache`](crate::RuleKey::OddsCache)).
     pub odds_cache: RuleSource,
+    /// How much fuel a refuelling ship gives and when it is done
+    /// (`refuel_dock::fuel_step`): no cap, done only above 100, by the
+    /// engine; capped at the tank, a full tank done too, by the other
+    /// reading ([`RuleKey::RefuelCap`](crate::RuleKey::RefuelCap)).
+    pub refuel_cap: RuleSource,
     /// Whether the player scans for cloaked ships on screen
     /// ([`Scanner::on_screen`](crate::cloak::Scanner::on_screen)), as
     /// `_ShipVisibleToShip` reads it for the player's sight of a cloaked
@@ -592,6 +597,7 @@ impl<'a> World<'a> {
             snipe_brake_lead: RuleSource::Engine,
             npc_jump_fuel: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
+            refuel_cap: RuleSource::Engine,
             cloak_scanner: false,
             mining_rock: None,
             reinforcements: None,
