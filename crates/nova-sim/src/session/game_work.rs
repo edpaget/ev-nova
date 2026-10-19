@@ -98,6 +98,7 @@
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
+use super::npc_escape::AtStep;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, TrafficMarks};
 use crate::ai::Behaviour;
@@ -247,12 +248,12 @@ impl Session {
             Some(None) => Motion::Populated,
             None => Motion::Again,
         };
-        self.ship_loop(motion, pass, rules, chance);
+        let stepped = self.ship_loop(motion, pass, rules, chance);
         // `_HandleBeams` (@0x4453d), and what the pass leaves.
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(start, rules, chance);
+        self.fight_tail(start, &stepped, rules, chance);
         // After the shots, as `_SpawnAsteroid` and `_HandleAsteroids`
         // come after the collision passes (see the `asteroids` module).
         self.tick_asteroids(chance);
@@ -519,12 +520,19 @@ impl Session {
     /// `rules`, drawing on `chance`, against the session as the pass
     /// `start`ed: each NPC's exit cursors kept for its berth; the fighters launched from
     /// bays put in the system (see the `fighters` module); each dying
-    /// NPC's escape pods (see the `npc_escape` module); the fleet kept in
+    /// NPC's escape pods and escape-ship roll, read as each NPC's own step
+    /// found it (`stepped`; see the `npc_escape` module); the fleet kept in
     /// step; the escorts lost; the NPCs' self-repair; each NPC destroyed
     /// taken out; the fighters orphaned; a target gone let go; the
     /// stellars seen; the ships laid out; and the heading each ship is
     /// drawn at noted, which its next tick's shots leave from.
-    pub(super) fn fight_tail(&mut self, start: &PassStart, rules: Rules, chance: &mut dyn Chance) {
+    pub(super) fn fight_tail(
+        &mut self,
+        start: &PassStart,
+        stepped: &[AtStep],
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
         self.traffic.keep_berth_exits();
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
@@ -533,7 +541,7 @@ impl Session {
         // beam's spawn; settling here, in the same tick before the frame
         // is drawn, crosses no boundary (see the `stray_words` module).
         self.step_stray_words(chance);
-        self.npc_escapes(&start.npcs, chance);
+        self.npc_escapes(&start.npcs, stepped, chance);
         self.sync_fleet();
         self.lose_escorts();
         self.lose_dying_mission_escorts();

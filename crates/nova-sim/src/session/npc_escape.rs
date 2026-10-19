@@ -14,11 +14,17 @@
 //! whole pod block), nor on a stalled breakup's
 //! ([`Breakup`](crate::combat::hull::Breakup)). The escape
 //! ship's check sits outside that guard and asks only `_IsDying`
-//! (@0x253d): it reads the same timer, or 0 on the breakup's first tick
-//! or a stalled one. An NPC the fight destroys this tick is still here,
-//! as `_HandleShip` runs before `_HandleShipDisplay` explodes it
-//! (`_DoPlayGameWork` @0x44483, @0x444ad), so its last pod comes out on
-//! its explosion tick.
+//! (@0x253d) as the NPC's own step finds it ([`AtStep`], noted by the
+//! ship loop before the step's fire, `Session::ship_loop`): its death
+//! timer running or its armour at none or below. It reads the same
+//! timer, or 0 on the breakup's first tick or a stalled one. A breakup
+//! the collision passes or the shots begin is found by that tick's step;
+//! one a beam begins (`_HandleBeams` @0x4453d, after the whole loop) is
+//! first found by the next tick's, its timer still 0, as the display
+//! that sets it comes after the step. An NPC the fight destroys this
+//! tick is still here, as `_HandleShip` runs before
+//! `_HandleShipDisplay` explodes it (`_DoPlayGameWork` @0x44483,
+//! @0x444ad), so its last pod comes out on its explosion tick.
 //!
 //! In order, for each NPC in the system's order:
 //!
@@ -46,9 +52,10 @@
 //!
 //! **Ordering.** The original runs the block in `_HandleShip`, after the
 //! frame's collision passes and before its display pass; here it runs
-//! after the fight's tick, on each of double time's passes as
-//! `_HandleShip` runs on each game-work pass. Every pod event is shown
-//! in the same frame, so the order crosses no boundary the player sees.
+//! after the fight's tick (`Session::fight_tail`), reading each NPC as
+//! its step found it, on each of double time's passes as `_HandleShip`
+//! runs on each game-work pass. Every pod event is shown in the same
+//! frame, so the order crosses no boundary the player sees.
 //!
 //! Left out: snd 372's priority 5 (`_PlaySoundDistance` @0x351fa,
 //! @0x35300), which the view doesn't play by yet
@@ -99,41 +106,46 @@ impl AtStep {
 }
 
 /// The death timers an NPC's checks read this tick, from its condition
-/// before and after the fight's tick: the pods' (none unless it was dying
-/// with its timer above 0) and the escape ship's (none unless it is
-/// dying, or was destroyed this tick).
-fn timers(was: Condition, now: Condition) -> (Option<i32>, Option<i32>) {
+/// before the fight's tick and whether its own step found it `dying`
+/// ([`AtStep`]): the pods' (none unless it was dying with its timer above
+/// 0) and the escape ship's (none unless its step found it dying).
+fn timers(was: Condition, dying: bool) -> (Option<i32>, Option<i32>) {
     let pods = match was {
         Condition::Dying { ticks_left, .. } if ticks_left > 0 => {
             Some(i32::try_from(ticks_left - 1).unwrap_or(i32::MAX))
         }
         _ => None,
     };
-    let dying = matches!(now, Condition::Dying { .. })
-        || (now == Condition::Destroyed && was != Condition::Destroyed);
     (pods, dying.then(|| pods.unwrap_or(0)))
 }
 
 impl Session {
     /// Runs each dying NPC's escape pods and its escape-ship roll for
-    /// this tick, against what each NPC `was` before the fight's tick,
-    /// drawing on `chance` (see the module docs).
-    pub(super) fn npc_escapes(&mut self, was: &[NpcBefore], chance: &mut dyn Chance) {
+    /// this tick, against what each NPC `was` before the fight's tick and
+    /// how its own step found it (`stepped`), drawing on `chance` (see the
+    /// module docs). An NPC that took no step this tick takes neither.
+    pub(super) fn npc_escapes(
+        &mut self,
+        was: &[NpcBefore],
+        stepped: &[AtStep],
+        chance: &mut dyn Chance,
+    ) {
         let frame = self.field().frame;
-        let ids: Vec<(NpcId, Condition)> = self
+        let ids: Vec<(NpcId, Condition, bool)> = self
             .traffic
             .npcs()
             .iter()
             .filter_map(|npc| {
                 let before = was.iter().find(|before| before.id == npc.id)?;
-                Some((npc.id, before.condition))
+                let at_step = stepped.iter().find(|at_step| at_step.id == npc.id)?;
+                Some((npc.id, before.condition, at_step.dying))
             })
             .collect();
-        for (id, before) in ids {
-            let Some(npc) = self.npc(id) else {
+        for (id, before, dying) in ids {
+            if self.npc(id).is_none() {
                 continue;
-            };
-            let (pods, escape) = timers(before, npc.condition);
+            }
+            let (pods, escape) = timers(before, dying);
             if let Some(timer) = pods {
                 self.eject_pods(id, timer, frame);
             }
@@ -324,7 +336,12 @@ mod tests {
     /// The test catalog with the Viper, its bay of `inaccuracy` and the
     /// two governments.
     fn escaping(inaccuracy: i16) -> FakePilotCatalog {
-        let mut catalog = catalog();
+        escaping_from(catalog(), inaccuracy)
+    }
+
+    /// `catalog` with the Viper, its bay of `inaccuracy` and the two
+    /// governments.
+    fn escaping_from(mut catalog: FakePilotCatalog, inaccuracy: i16) -> FakePilotCatalog {
         catalog.ship_records.push(ShipRecord {
             flags: 0x8000,
             ..ship(VIPER.0, ShipFields { shield: 50, ..FAST })
@@ -679,41 +696,149 @@ mod tests {
     }
 
     #[test]
-    fn the_timers_read_the_condition_before_and_after_the_tick() {
+    fn the_timers_read_the_condition_before_the_tick_and_at_the_step() {
         let dying = |ticks_left, starting| Condition::Dying {
             ticks_left,
             starting,
         };
         assert_eq!(
-            timers(Condition::Intact, dying(100, true)),
+            timers(Condition::Intact, true),
             (None, Some(0)),
             "the breakup tick"
         );
+        assert_eq!(timers(dying(100, true), true), (Some(99), Some(99)));
         assert_eq!(
-            timers(Condition::Disabled, Condition::Destroyed),
-            (None, Some(0)),
-            "broken up and destroyed at once"
-        );
-        assert_eq!(
-            timers(dying(100, true), dying(99, false)),
-            (Some(99), Some(99))
-        );
-        assert_eq!(
-            timers(dying(3, false), Condition::Destroyed),
+            timers(dying(3, false), true),
             (Some(2), Some(2)),
             "the explosion tick"
         );
         assert_eq!(
-            timers(dying(0, true), dying(0, true)),
+            timers(dying(0, true), true),
             (None, Some(0)),
-            "a stalled breakup"
+            "a stalled breakup, or one a beam began"
         );
-        assert_eq!(timers(Condition::Intact, Condition::Intact), (None, None));
-        assert_eq!(timers(Condition::Intact, Condition::Disabled), (None, None));
-        assert_eq!(
-            timers(Condition::Destroyed, Condition::Destroyed),
-            (None, None)
+        assert_eq!(timers(Condition::Intact, false), (None, None));
+        assert_eq!(timers(Condition::Disabled, false), (None, None));
+    }
+
+    #[test]
+    fn the_step_finds_a_ship_dying_by_its_timer_or_its_armour() {
+        // `_IsDying` (@0x253d): the timer above 0, or the armour at none or
+        // below, though no display has settled the condition yet.
+        let mut ship = npc(0, ShipStats::new(FAST, &[]));
+        assert!(!AtStep::of(&ship).dying, "intact");
+        ship.condition = Condition::Disabled;
+        assert!(!AtStep::of(&ship).dying, "disabled");
+        ship.reserves.armor.now = 0.0;
+        assert!(AtStep::of(&ship).dying, "its armour gone");
+        ship.reserves.armor.now = 1.0;
+        ship.condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        assert!(AtStep::of(&ship).dying, "breaking up");
+        ship.reserves.armor.now = 0.0;
+        ship.condition = Condition::Destroyed;
+        assert!(!AtStep::of(&ship).dying, "gone");
+    }
+
+    /// The session's armed catalog, the player's weapon a 200-pixel beam
+    /// doing 5 mass and 5 energy damage, with the escape ship's Viper and
+    /// bay; its NPC, a carrier of `DeathDelay` 100 holding 2 escape
+    /// fighters, 100 pixels ahead of the player, its shield gone and 1
+    /// armour left; the player's trigger held.
+    fn beamed() -> (FakePilotCatalog, Session) {
+        let beam = WeaponRecord {
+            guidance: 0,
+            count: 3,
+            reload: 10,
+            speed: 0,
+            beam_length: 200,
+            mass_dmg: 5,
+            energy_dmg: 5,
+            ..crate::session::tests::blaster()
+        };
+        carrier_ahead(FakePilotCatalog {
+            weapons: vec![beam],
+            ..crate::session::tests::armed()
+        })
+    }
+
+    /// `armed`, the session's armed catalog with its weapon as the test
+    /// gives it, with the escape ship's Viper and bay; its NPC, a carrier
+    /// of `DeathDelay` 100 holding 2 escape fighters, 100 pixels ahead of
+    /// the player, its shield gone and 1 armour left; the player's
+    /// trigger held.
+    fn carrier_ahead(armed: FakePilotCatalog) -> (FakePilotCatalog, Session) {
+        let catalog = escaping_from(armed, 0);
+        let mut session = crate::session::tests::facing_an_npc(&catalog, 180);
+        let carrier = &mut session.traffic.npcs_mut()[0];
+        carrier.rounds = LauncherRounds::from([(BAY, 2)]);
+        carrier.hull.death_delay = 100;
+        carrier.hull.signed_death_delay = 100;
+        carrier.reserves.shield.now = 0.0;
+        carrier.reserves.armor.now = 1.0;
+        session.hold_trigger(crate::session::tests::FIRE);
+        (catalog, session)
+    }
+
+    /// Keeps every NPC's goal and holds no trigger.
+    #[derive(Debug)]
+    struct Keep;
+
+    impl crate::ai::Behaviour for Keep {
+        fn decide(
+            &self,
+            npc: &Npc,
+            _around: &crate::ai::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> crate::ai::Goal {
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn an_npc_a_beam_breaks_up_rolls_its_escape_ship_on_the_next_pass() {
+        // `_HandleBeams` (@0x4453d) breaks it up after its `_HandleShip`
+        // (@0x44483), whose escape check (@0x3547d) first finds it dying
+        // on the next frame, its timer still 0 (@0x253d).
+        let (catalog, mut session) = beamed();
+        let mut chance = Rolls::launching(1, 0);
+        let controls = crate::flight::Controls::default();
+        let rules = Rules::default();
+        assert!(!session.game_work(controls, &catalog, &Keep, rules, &mut chance));
+        let condition = session.npcs()[0].condition;
+        assert!(
+            matches!(condition, Condition::Dying { ticks_left: 0, .. }),
+            "broken up by the beam: {condition:?}"
         );
+        assert_eq!(chance.rolls(), 0, "not on the beam's pass");
+        assert!(!session.game_work(controls, &catalog, &Keep, rules, &mut chance));
+        assert_eq!(chance.rolls(), 1, "on the next");
+    }
+
+    #[test]
+    fn an_npc_a_shot_breaks_up_in_the_collision_passes_rolls_in_that_pass() {
+        // The collision passes (@0x43e70) come before its `_HandleShip`.
+        let (catalog, mut session) = carrier_ahead(FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 50,
+                energy_dmg: 50,
+                ..crate::session::tests::blaster()
+            }],
+            ..crate::session::tests::armed()
+        });
+        let mut chance = Rolls::launching(1, 0);
+        let controls = crate::flight::Controls::default();
+        for _ in 0..40 {
+            assert!(!session.game_work(controls, &catalog, &Keep, Rules::default(), &mut chance));
+            if matches!(session.npcs()[0].condition, Condition::Dying { .. }) {
+                assert_eq!(chance.rolls(), 1, "on the breakup's pass");
+                return;
+            }
+            assert_eq!(chance.rolls(), 0);
+        }
+        panic!("never broken up");
     }
 
     /// The test-support `fixture::place`, which only other crates' tests

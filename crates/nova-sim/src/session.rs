@@ -2959,11 +2959,19 @@ impl Session {
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.fly_shots(fighters, arena, chance);
         });
+        // `_HandleShip`'s escape check reads each NPC as its step finds
+        // it (see the `npc_escape` module).
+        let stepped: Vec<npc_escape::AtStep> = self
+            .traffic
+            .npcs()
+            .iter()
+            .map(npc_escape::AtStep::of)
+            .collect();
         self.handle_npcs(pass, rules, chance);
         self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.close_tick(fighters, arena, chance);
         });
-        self.fight_tail(&start, rules, chance);
+        self.fight_tail(&start, &stepped, rules, chance);
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
