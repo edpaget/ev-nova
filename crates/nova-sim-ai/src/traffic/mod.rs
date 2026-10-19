@@ -1917,7 +1917,8 @@ impl Traffic {
     /// provocation; and one whose decision clears its target
     /// ([`Decision::clears_target`]) loses it. Its search timer takes the
     /// lost-sight block's write ([`Decision::lost_sight`]), and stays as
-    /// it was when the block did not run.
+    /// it was when the block did not run. Each decision's calls, then its
+    /// scan, are queued on the line in slot order ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, player_at: Option<Vec2>) {
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
             let Some(decision) = decision else {
