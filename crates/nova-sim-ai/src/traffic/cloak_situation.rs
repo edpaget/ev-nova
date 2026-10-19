@@ -11,6 +11,13 @@
 //! 0x15, which no term tests. While either holds, the goal the NPC keeps
 //! here (its [`Npc::goal`]) is not the original's, so no goal term but
 //! the jump's reads it.
+//!
+//! Goal 0xb, a jump with its parent (`_AIMakeShipJumpWithParent`, which
+//! replaces goal 0xa), is handled like goal 8: here a
+//! [`WarpGoal::Follow`] warp, whose kept [`Npc::goal`] (an escort's
+//! formation, or a stale attack) no goal term but the jump's reads. Its
+//! own jump ([`WarpGoal::Own`], sub-goal 4) keeps its goal, as the
+//! original's sub-goal does.
 
 use crate::ai::Goal;
 use crate::cloak::{self, Cloak, MineOrder};
@@ -19,6 +26,7 @@ use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Mode, Npc};
+use crate::traffic::warp_out::WarpGoal;
 
 /// What the think reads around an NPC, besides the NPC itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -63,8 +71,10 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         Mode::LeavingGate { tick } => tick > 0,
         _ => false,
     };
+    let following_jump = matches!(npc.warp.goal, Some(WarpGoal::Follow(_)));
     let goal = match npc.mode {
         Mode::JumpingIn { .. } | Mode::LeavingGate { .. } | Mode::Emerging { .. } => None,
+        _ if following_jump => None,
         _ => Some(npc.goal),
     };
     let close_to_cloaked_parent = goal.is_some()
@@ -108,7 +118,7 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::traffic::fixture;
     use crate::traffic::npc::NpcId;
-    use crate::traffic::warp_out::{Warp, WarpGoal};
+    use crate::traffic::warp_out::Warp;
     use nova_sim_catalog::catalog::WeaponRecord;
     use nova_sim_catalog::fixture::weapon;
 
@@ -207,6 +217,45 @@ mod tests {
             assert!(situation(&jumper, Around::default()).jumping, "{warp:?}");
         }
         assert!(!of(Goal::JumpOut, FLYING).jumping);
+    }
+
+    fn following_jump(goal: Goal) -> Npc {
+        Npc {
+            warp: Warp {
+                goal: Some(WarpGoal::Follow(ShipRef::Player)),
+                ..Warp::default()
+            },
+            ..npc(goal, FLYING)
+        }
+    }
+
+    #[test]
+    fn a_jump_with_its_parent_is_goal_0xb_and_reads_no_goal_term() {
+        let jumping = cloak::Situation {
+            jumping: true,
+            ..cloak::Situation::default()
+        };
+        for goal in [
+            Goal::Formation { guard: None },
+            Goal::Follow(NpcId(2)),
+            Goal::Hold,
+            Goal::Idle,
+            Goal::Flee(ShipRef::Player),
+        ] {
+            assert_eq!(
+                situation(&following_jump(goal), Around::default()),
+                jumping,
+                "{goal:?}"
+            );
+        }
+        let attacker = situation(
+            &following_jump(Goal::Attack(ShipRef::Player)),
+            Around {
+                attacking: Some(Vec2::new(200.0, 0.0)),
+                ..Around::default()
+            },
+        );
+        assert_eq!(attacker, jumping, "goal 0xb attacks nothing");
     }
 
     #[test]
