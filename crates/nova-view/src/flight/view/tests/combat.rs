@@ -839,6 +839,7 @@ fn the_sessions_diagnostics_come_through_the_screen() {
         flags3: 0,
         decay: 0,
         beam_length: 0,
+        beam_width: 0,
         falloff: 0,
         li_density: 0,
         burst_count: 0,

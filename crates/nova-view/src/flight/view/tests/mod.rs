@@ -2162,6 +2162,7 @@ fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::W
         flags3: 0,
         decay: 0,
         beam_length: 50,
+        beam_width: 0,
         falloff: 0,
         li_density: 0,
         burst_count: 0,

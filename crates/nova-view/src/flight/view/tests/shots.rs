@@ -62,6 +62,54 @@ fn a_spinning_shot_of_flags_0x0004_starts_on_its_first_frame() {
     assert_eq!(effects.borrow().asked, Vec::<u32>::new());
 }
 
+#[test]
+fn a_spinning_shot_in_a_reused_slot_steps_on_the_timer_its_slot_left() {
+    // The blaster spins from its first frame, a step every 4 passes, and
+    // lives 3 ticks; the simulation runs its slot's timer, and the next
+    // shot in the slot starts on what it left (`_SpawnShot` never writes
+    // +0x1c, @0x3e550-0x3f143).
+    let mut catalog = with_blaster(|look| {
+        look.flags = SPINS | crate::flight::spin::FIRST_FRAME_START;
+        look.beam_width = 4;
+    });
+    catalog.weapons[0].flags |= SPINS;
+    catalog.weapons[0].beam_width = 4;
+    catalog.weapons[0].count = 3;
+    catalog.weapons[0].reload = 1000;
+    let mut view = fighting(catalog, &[]);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    assert_eq!(view.session().expect("flying").shots()[0].spin_timer, 0);
+    while !view.session().expect("flying").shots().is_empty() {
+        view.tick(TICK);
+    }
+    ticks(&mut view, 1100);
+    view.input(&key(FIRE_KEY, true));
+    view.tick(TICK);
+    view.input(&key(FIRE_KEY, false));
+    let shot = view.session().expect("flying").shots()[0];
+    assert_eq!(shot.slot, 0, "the slot reused");
+    let timer = shot.spin_timer;
+    assert_ne!(timer, 0, "the slot's leftover");
+    let look = WeaponLook {
+        flags: SPINS | crate::flight::spin::FIRST_FRAME_START,
+        beam_width: 4,
+        ..WeaponLook::default()
+    };
+    let frames = NonZeroU16::new(36).expect("non-zero");
+    let (mut shown, mut expected, mut from_0) = (Vec::new(), Vec::new(), Vec::new());
+    while let Some(shot) = view.session().expect("flying").shots().first() {
+        let age = shot.age;
+        shown.extend(blaster_frames(&view));
+        expected.push(weapons::shot_frame(90.0, age, frames, &look, 0, timer));
+        from_0.push(weapons::shot_frame(90.0, age, frames, &look, 0, 0));
+        view.tick(TICK);
+    }
+    assert_eq!(shown, expected, "from timer {timer}");
+    assert_ne!(shown, from_0, "not as from 0");
+}
+
 /// Each frame's draw of the blaster's shot over `ticks` ticks from the
 /// tick it is fired, one shot alone: its tint and whether it is drawn by OR, or
 /// none once it is gone.

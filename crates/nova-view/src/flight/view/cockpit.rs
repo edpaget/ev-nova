@@ -914,6 +914,7 @@ impl<C> FlightView<C> {
             .map(|shot| ShotShown {
                 id: shot.id,
                 spin_start: self.shot_looks.spin_starts.start(shot.id),
+                spin_timer: shot.spin_timer,
                 murk: murk::sprite_murk(shot.position, viewer, murk),
                 at: camera.world_to_screen(Point::new(
                     shot.velocity.x.mul_add(-behind, shot.position.x),
