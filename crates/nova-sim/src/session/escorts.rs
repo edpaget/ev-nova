@@ -1760,6 +1760,37 @@ mod tests {
     }
 
     #[test]
+    fn a_trader_escort_a_deadly_stellar_kills_leaves_at_once_taking_its_share_only_when_destroyed()
+    {
+        let catalog = fleeted();
+        let kept = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
+        let shared = BTreeMap::from([(FOOD, 5), (OPALS, 2)]);
+        for (reading, left) in [(RuleSource::Engine, kept), (RuleSource::Bible, shared)] {
+            let session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+            let rules = session
+                .rules
+                .with_override(RuleKey::DeadlyStellarKill, reading);
+            let mut session = session.with_rules(rules);
+            let id = session.fleet[1].expect("placed");
+            let at = session.npc(id).expect("there").state.position;
+            session.sites = vec![crate::catalog::LandingSite {
+                flags2: crate::deadly_stellar::DEADLY_STELLAR,
+                frame_size: Some((2, 2)),
+                ..crate::testkit::planet(160, at.x, at.y)
+            }];
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert!(session.npc(id).is_none(), "{reading:?}");
+            assert_eq!(
+                session.pilot().escorts().len(),
+                2,
+                "{reading:?}: it is lost"
+            );
+            assert_eq!(cargo(&session), left, "{reading:?}");
+            assert_eq!(session.condition, Condition::Intact);
+        }
+    }
+
+    #[test]
     fn a_lost_escort_trims_the_cargo_to_the_fleets_holds() {
         let catalog = fleeted();
         let full = Reserves::full(30.0, 45.0, 300.0);

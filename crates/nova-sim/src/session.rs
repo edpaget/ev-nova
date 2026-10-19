@@ -369,6 +369,7 @@ mod comm_calls;
 mod control;
 mod course;
 mod crons;
+mod deadly_stellars;
 mod double_time;
 mod edit;
 mod eject;

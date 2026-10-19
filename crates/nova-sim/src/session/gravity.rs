@@ -119,9 +119,12 @@ impl Session {
     }
 
     /// The stellar hazards of a game-work pass, after the fight's tick:
-    /// gravity's pull (`_HandleGravity`).
+    /// gravity's pull (`_HandleGravity`), then the deadly stellars
+    /// (`_HandleDeadlyStellars`; see the `deadly_stellars` module), as
+    /// `_DoPlayGameWork` calls them (@0x44509, @0x4450e).
     pub(super) fn stellar_hazards(&mut self) {
         self.pull_by_gravity();
+        self.deadly_stellars();
     }
 }
 
