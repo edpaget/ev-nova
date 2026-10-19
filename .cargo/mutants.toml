@@ -16,6 +16,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The jump arrival's reverse bearing, (bearing + 180) mod 360: `_Accel`
+    # reads it through `_TableSin` and `_TableCos`, which take any whole
+    # degree mod 360 (`trig::table_radians`), so bearing + 180 + 360 and
+    # bearing - 180 place the ship at the same bits for every bearing.
+    "nova-sim-ai/src/jump_arrival\\.rs:[0-9]+:[0-9]+: replace (% with \\+|\\+ with -) in top_speed_arrival$",
     # The board check's reverse heading, (theirs + 180) mod 360: for whole
     # degrees in 0..=360, theirs - 180 is the same reverse less 360, and
     # `_AngularDifference`'s two folds give the same distance from it for
