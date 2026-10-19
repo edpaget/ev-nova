@@ -13,10 +13,11 @@
 //! The traffic decides the room once, as it asks for each NPC's trigger in
 //! berth order ([`berth_order`]): before an NPC's trigger it reads whether
 //! a berth is left ([`LaunchRoom::any`]), and its settled trigger takes
-//! one when it launches now, or with none left launches nothing
+//! one for each launch it makes now, or with none left launches nothing
 //! ([`LaunchRoom::settle`]). The fight then launches only what the room
-//! let through. One berth an NPC a tick: a `Reload`-0 bay's second launch
-//! on a snipe frame is rdm:phase/weapons-fidelity/phase-41-reload-zero-bay-second-snipe-launch.
+//! let through. An NPC can take two berths a tick: a goal-4 sniper's
+//! second launch on a snipe frame (@0x8732f), when its first left a bay
+//! ready, takes the next free slot before any higher slot's AI runs.
 //!
 //! [`Surroundings::fighter_room`]: crate::ai::Surroundings::fighter_room
 
@@ -46,13 +47,16 @@ impl LaunchRoom {
         self.left > 0
     }
 
-    /// `npc`'s `trigger` as the room lets it launch: one that launches now
-    /// ([`launches_now`]) takes a berth, or, with none left, has both its
-    /// launches cleared, as `_LaunchFighter` failing leaves no sound, round
-    /// or reload (@0x81421-0x81423); its pick stays, as `_AILaunchFighter`
-    /// writes it before the call (@0x81411). Any other is as it was.
+    /// `npc`'s `trigger` as the room lets it launch: each launch it makes
+    /// now ([`launches_now`]) takes a berth. With none left both its
+    /// launches are cleared, as `_LaunchFighter` failing leaves no sound,
+    /// round or reload (@0x81421-0x81423); with one left for two, the first
+    /// takes it and only the second (`bays_after`) is cleared. Its pick
+    /// stays either way, as `_AILaunchFighter` writes it before the call
+    /// (@0x81411). Any other is as it was.
     pub(crate) fn settle(&mut self, npc: &Npc, trigger: Trigger) -> Trigger {
-        if !launches_now(npc, trigger) {
+        let launches = launches_now(npc, trigger);
+        if launches == 0 {
             return trigger;
         }
         if self.left == 0 {
@@ -62,22 +66,44 @@ impl LaunchRoom {
                 ..trigger
             };
         }
-        self.left -= 1;
+        if launches > self.left {
+            self.left = 0;
+            return Trigger {
+                bays_after: false,
+                ..trigger
+            };
+        }
+        self.left -= launches;
         trigger
     }
 }
 
-/// Whether `npc`, holding `trigger`, launches a fighter in this tick's
-/// fight: a launch asked for ([`Trigger::launches`]), the ship intact (the
-/// high level's `_IsDisabled` gate, @0x8e6eb-0x8e6f2), not waiting at its
-/// gate ([`waits_at_gate`], whose gate wait replaces its trigger with one
-/// that launches nothing), and its bay ready
-/// ([`Armament::bay_to_launch`](crate::combat::armament::Armament::bay_to_launch)).
-fn launches_now(npc: &Npc, trigger: Trigger) -> bool {
-    trigger.launches()
-        && npc.condition == Condition::Intact
+/// How many fighters `npc`, holding `trigger`, launches in this tick's
+/// fight, room allowing. A launch needs the ship intact (the high level's
+/// `_IsDisabled` gate, @0x8e6eb-0x8e6f2), not waiting at its gate
+/// ([`waits_at_gate`], whose gate wait replaces its trigger with one that
+/// launches nothing), and a bay ready
+/// ([`Armament::bay_to_launch`](crate::combat::armament::Armament::bay_to_launch)):
+///
+/// - the high level's ([`Trigger::bays`]), when those hold;
+/// - the snipe's after it ([`Trigger::bays_after`]): after a first, when
+///   that left a bay ready
+///   ([`Armament::bay_after_launch`](crate::combat::armament::Armament::bay_after_launch):
+///   a bay of `Reload` 0, or the next once the first is empty); alone (a
+///   plunderer's, or a goal-4 launch the snipe's call alone makes), when
+///   those hold.
+fn launches_now(npc: &Npc, trigger: Trigger) -> u32 {
+    let ready = npc.condition == Condition::Intact
         && !waits_at_gate(npc.mode)
-        && npc.armament.bay_to_launch(&npc.rounds).is_some()
+        && npc.armament.bay_to_launch(&npc.rounds).is_some();
+    let first = trigger.bays && ready;
+    let second = trigger.bays_after
+        && if first {
+            npc.armament.bay_after_launch(&npc.rounds).is_some()
+        } else {
+            ready
+        };
+    u32::from(first) + u32::from(second)
 }
 
 /// Whether an NPC in `mode` waits at its gate: emerging from it or held
@@ -186,6 +212,100 @@ mod tests {
             ..Trigger::default()
         };
         assert_eq!(room.settle(&carrier(), plunderer), Trigger::default());
+    }
+
+    /// A fighter bay `id` of ship 144, reloading every `reload` ticks.
+    fn bay(id: i16, reload: i16) -> WeaponSpec {
+        WeaponSpec::new(&WeaponRecord {
+            guidance: 99,
+            ammo_type: 144,
+            flags: 0x0002,
+            reload,
+            ..weapon(id)
+        })
+    }
+
+    /// [`carrier`] whose bay reloads in 0 ticks, with three fighters.
+    fn reloading_in_zero() -> Npc {
+        Npc {
+            armament: Armament::new([(bay(149, 0), 1)]),
+            rounds: LauncherRounds::from([(WeaponId(149), 3)]),
+            ..carrier()
+        }
+    }
+
+    /// Both a goal-4 sniper's launches asked for, its pick the bay.
+    const BOTH: Trigger = Trigger {
+        bays: true,
+        bays_after: true,
+        only: Some(WeaponId(149)),
+        primary: false,
+        secondary: None,
+        turrets_only: false,
+        point_defence: false,
+        keep: Some(WeaponId(149)),
+    };
+
+    #[test]
+    fn a_bay_reloading_in_zero_takes_a_berth_for_each_call() {
+        // Its first launch leaves a reload of 0 (@0x81473-0x81491), so the
+        // snipe's call (@0x8732f) launches too, in the next free slot.
+        let mut room = LaunchRoom::new(2);
+        assert_eq!(room.settle(&reloading_in_zero(), BOTH), BOTH);
+        assert!(!room.any(), "both taken");
+    }
+
+    #[test]
+    fn with_one_berth_left_the_second_call_fails_and_keeps_its_pick() {
+        // The second `_LaunchFighter` fails (@0x81421-0x81423) after its
+        // pick write (@0x81411).
+        let mut room = LaunchRoom::new(1);
+        assert_eq!(
+            room.settle(&reloading_in_zero(), BOTH),
+            Trigger {
+                bays_after: false,
+                ..BOTH
+            }
+        );
+        assert!(!room.any());
+    }
+
+    #[test]
+    fn a_launch_emptying_its_bay_takes_a_second_berth_for_the_next_bay() {
+        // The walk passes over the emptied 149 (@0x813da) to 150, ready.
+        let two_bays = Npc {
+            armament: Armament::new([(bay(149, 60), 1), (bay(150, 60), 1)]),
+            rounds: LauncherRounds::from([(WeaponId(149), 1), (WeaponId(150), 2)]),
+            ..carrier()
+        };
+        let mut room = LaunchRoom::new(3);
+        assert_eq!(room.settle(&two_bays, BOTH), BOTH);
+        assert!(room.any(), "one of three left");
+        let mut room = LaunchRoom::new(2);
+        room.settle(&two_bays, BOTH);
+        assert!(!room.any(), "two taken");
+    }
+
+    #[test]
+    fn a_snipes_only_launch_takes_one_berth() {
+        let snipe = Trigger {
+            bays: false,
+            ..BOTH
+        };
+        let mut room = LaunchRoom::new(2);
+        assert_eq!(room.settle(&reloading_in_zero(), snipe), snipe);
+        assert!(room.any(), "one of two left");
+        room.settle(&reloading_in_zero(), snipe);
+        assert!(!room.any());
+    }
+
+    #[test]
+    fn a_second_call_finding_its_bay_reloading_takes_no_second_berth() {
+        // A kept no-room trigger on a bay of `Reload` 60: the first launch
+        // leaves it reloading (@0x81403-0x8140b).
+        let mut room = LaunchRoom::new(2);
+        assert_eq!(room.settle(&carrier(), BOTH), BOTH);
+        assert!(room.any(), "one of two left");
     }
 
     #[test]
