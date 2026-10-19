@@ -278,6 +278,20 @@ pub enum SimSound {
     /// audio side plays it at 1, its most common site's priority (rdm task
     /// `refused-and-port-ambient-priorities-by-site`).
     Refused,
+    /// The player began the self-destruct countdown: `_beepSnd[3]`,
+    /// `snd ` 153, at priority 15 (`_HandlePlayer` `PlaySound` @0x6fe33).
+    /// A dying player's start is silent and plays nothing, so it is no
+    /// [`SimSound::Refused`].
+    SelfDestructStarted,
+    /// A self-destruct countdown line, 4 to 1 seconds left: `_beepSnd[2]`,
+    /// `snd ` 152, at priority 15 (`PlaySound` @0x70065).
+    SelfDestructCountdown,
+    /// The player let go of the self-destruct chord while counting down:
+    /// `_beepSnd[1]`, `snd ` 151, at priority 15 (`PlaySound` @0x700de).
+    SelfDestructCancelled,
+    /// The self-destruct countdown ran out and the player's ship goes:
+    /// `_beepSnd[1]`, `snd ` 151, at priority 15 (`PlaySound` @0x701fb).
+    SelfDestructed,
 }
 
 /// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129

@@ -161,6 +161,15 @@ pub const JUMP_COLLAPSED: Priority = Priority::new(50);
 /// (@0x703bd) and two hail refusals (@0x6263f, and @0x626f2 from
 /// @0x6206c) play it at 5.
 pub const REFUSED: Priority = Priority::new(1);
+/// The self-destruct's start, `_beepSnd[3]`: `_HandlePlayer` @0x6fe33.
+pub const SELF_DESTRUCT_STARTED: Priority = Priority::new(15);
+/// The self-destruct's countdown lines, `_beepSnd[2]`: `_HandlePlayer`
+/// @0x70065.
+pub const SELF_DESTRUCT_COUNTDOWN: Priority = Priority::new(15);
+/// The self-destruct let go, `_beepSnd[1]`: `_HandlePlayer` @0x700de.
+pub const SELF_DESTRUCT_CANCELLED: Priority = Priority::new(15);
+/// The self-destruct run out, `_beepSnd[1]`: `_HandlePlayer` @0x701fb.
+pub const SELF_DESTRUCTED: Priority = Priority::new(15);
 /// The airlock, `snd ` 390: `_HandlePlayerBoardAttempt` @0x65907,
 /// @0x659b3, @0x65f00.
 pub const AIRLOCK: Priority = Priority::new(8);
@@ -239,6 +248,10 @@ mod tests {
             (ONBOARD_EXPLOSION, 100, "onboard explosion"),
             (JUMP_COLLAPSED, 50, "jump collapsed"),
             (REFUSED, 1, "refused"),
+            (SELF_DESTRUCT_STARTED, 15, "self-destruct started"),
+            (SELF_DESTRUCT_COUNTDOWN, 15, "self-destruct countdown"),
+            (SELF_DESTRUCT_CANCELLED, 15, "self-destruct cancelled"),
+            (SELF_DESTRUCTED, 15, "self-destructed"),
             (AIRLOCK, 8, "airlock"),
             (MAP_OPEN, 1, "map open"),
             (MAP_CLOSE, 1, "map close"),

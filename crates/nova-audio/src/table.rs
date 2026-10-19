@@ -130,6 +130,14 @@ pub struct SoundTable {
     /// Plays as a key's action is refused, whether or not the player is
     /// told why.
     pub refused: Option<SoundId>,
+    /// Plays as the player begins the self-destruct countdown.
+    pub self_destruct_started: Option<SoundId>,
+    /// Plays with each self-destruct countdown line.
+    pub self_destruct_countdown: Option<SoundId>,
+    /// Plays as the player lets the self-destruct go.
+    pub self_destruct_cancelled: Option<SoundId>,
+    /// Plays as the self-destruct countdown runs out.
+    pub self_destructed: Option<SoundId>,
     /// Plays as any board goes aboard: to plunder, or as a boarded person
     /// offers its mission.
     pub airlock: Option<SoundId>,
@@ -321,6 +329,15 @@ impl SoundTable {
     ///   with no target too (@0x626cf, @0x6206c, @0x6261c, @0x6264e). The
     ///   original plays it at priority 5 or 1 by its site (see
     ///   [`priority::REFUSED`](crate::priority::REFUSED)).
+    /// - `self_destruct_started`: 153, "Beep4", `_beepSnd[3]`, which
+    ///   `_HandlePlayer` plays as the self-destruct begins (`PlaySound`
+    ///   @0x6fe33, priority 15). It is not a refusal.
+    /// - `self_destruct_countdown`: 152, "Beep3", `_beepSnd[2]`, with each
+    ///   countdown line (@0x70065, priority 15).
+    /// - `self_destruct_cancelled`: 151, "Beep2", `_beepSnd[1]`, as the
+    ///   chord is let go while counting (@0x700de, priority 15).
+    /// - `self_destructed`: 151, "Beep2", `_beepSnd[1]`, as the countdown
+    ///   runs out (@0x701fb, priority 15).
     /// - `map_open`: 152, "Beep3", `_beepSnd[2]`, which `_HandlePlayer`
     ///   plays as the map key's press passes every gate, just before it
     ///   calls `_DoSystemMap` (`PlaySound` @0x6a7e4-0x6a809). A refused
@@ -397,6 +414,10 @@ impl SoundTable {
         onboard_explosion: Some(SoundId(300)),
         jump_collapsed: Some(SoundId(151)),
         refused: Some(SoundId(153)),
+        self_destruct_started: Some(SoundId(153)),
+        self_destruct_countdown: Some(SoundId(152)),
+        self_destruct_cancelled: Some(SoundId(151)),
+        self_destructed: Some(SoundId(151)),
         airlock: Some(SoundId(390)),
         map_open: Some(SoundId(152)),
         map_close: Some(SoundId(150)),
@@ -488,6 +509,22 @@ mod tests {
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
         assert_eq!(table.jump_collapsed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(
+            table.self_destruct_started,
+            Some(SoundId(153)),
+            "_beepSnd[3]"
+        );
+        assert_eq!(
+            table.self_destruct_countdown,
+            Some(SoundId(152)),
+            "_beepSnd[2]"
+        );
+        assert_eq!(
+            table.self_destruct_cancelled,
+            Some(SoundId(151)),
+            "_beepSnd[1]"
+        );
+        assert_eq!(table.self_destructed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.airlock, Some(SoundId(390)), "Airlock");
         assert_eq!(table.map_open, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.map_close, Some(SoundId(150)), "_beepSnd[0]");

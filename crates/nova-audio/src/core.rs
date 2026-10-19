@@ -263,6 +263,10 @@ impl<A: Audio> AudioCore<A> {
                 self.play(self.table.jump_collapsed, at::JUMP_COLLAPSED);
             }
             SimSound::Refused => self.play(self.table.refused, at::REFUSED),
+            SimSound::SelfDestructStarted
+            | SimSound::SelfDestructCountdown
+            | SimSound::SelfDestructCancelled
+            | SimSound::SelfDestructed => self.take_self_destruct(sound),
             SimSound::Halt(sounds) => self.halt(sounds),
         }
     }
@@ -375,6 +379,28 @@ impl<A: Audio> AudioCore<A> {
 
     /// Plays the klaxon, unless it is still playing, at the effects
     /// volume, while sound is on.
+    /// Plays one of the self-destruct's beeps (`_HandlePlayer` block Z),
+    /// each at priority 15; any other sound plays nothing here.
+    fn take_self_destruct(&mut self, sound: SimSound) {
+        use crate::priority as at;
+        let (beep, priority) = match sound {
+            SimSound::SelfDestructStarted => {
+                (self.table.self_destruct_started, at::SELF_DESTRUCT_STARTED)
+            }
+            SimSound::SelfDestructCountdown => (
+                self.table.self_destruct_countdown,
+                at::SELF_DESTRUCT_COUNTDOWN,
+            ),
+            SimSound::SelfDestructCancelled => (
+                self.table.self_destruct_cancelled,
+                at::SELF_DESTRUCT_CANCELLED,
+            ),
+            SimSound::SelfDestructed => (self.table.self_destructed, at::SELF_DESTRUCTED),
+            _ => return,
+        };
+        self.play(beep, priority);
+    }
+
     fn sound_klaxon(&mut self) {
         self.play_unless_playing(self.table.klaxon, crate::priority::KLAXON);
     }
@@ -802,6 +828,22 @@ mod tests {
         for (sound, priority) in cases {
             let (mut core, log) = original();
             core.update(Some(Showing::ShipBrowser), &[sound]);
+            let played = drain_prioritised(&log);
+            assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
+        }
+    }
+
+    #[test]
+    fn the_self_destructs_beeps_play_at_15() {
+        use crate::priority as at;
+        for (sound, priority) in [
+            (SimSound::SelfDestructStarted, at::SELF_DESTRUCT_STARTED),
+            (SimSound::SelfDestructCountdown, at::SELF_DESTRUCT_COUNTDOWN),
+            (SimSound::SelfDestructCancelled, at::SELF_DESTRUCT_CANCELLED),
+            (SimSound::SelfDestructed, at::SELF_DESTRUCTED),
+        ] {
+            let (mut core, log) = original();
+            core.update(Some(Showing::ShipBrowser), &[Sound::Sim(sound)]);
             let played = drain_prioritised(&log);
             assert_eq!(priorities(&played), [priority], "{sound:?}: {played:?}");
         }
@@ -1526,6 +1568,21 @@ mod tests {
             &[Sound::Sim(SimSound::OnboardExplosion)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_self_destructs_beeps_play_153_152_151_and_151() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        for (sound, id) in [
+            (SimSound::SelfDestructStarted, 153),
+            (SimSound::SelfDestructCountdown, 152),
+            (SimSound::SelfDestructCancelled, 151),
+            (SimSound::SelfDestructed, 151),
+        ] {
+            core.update(Some(Showing::ShipBrowser), &[Sound::Sim(sound)]);
+            assert_eq!(drain(&log), [play(id, 0.5)], "{sound:?}");
+        }
     }
 
     #[test]
