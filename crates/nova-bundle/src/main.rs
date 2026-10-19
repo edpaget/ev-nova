@@ -1,5 +1,5 @@
 //! `nova-bundle [OUT_DIR]`: builds `Nova.app` into
-//! `ev-nova-universal-apple-darwin.dmg` (macOS only). Run it through cargo,
+//! `ev-nova-aarch64-apple-darwin.dmg` (macOS only). Run it through cargo,
 //! as `mise run bundle -- [OUT_DIR]`: cargo sets `CARGO` and, from
 //! `.cargo/config.toml`, `MACOSX_DEPLOYMENT_TARGET`, the app's minimum
 //! macOS. See the crate's library docs.

@@ -29,7 +29,7 @@ pub const APP: &str = "Nova.app";
 /// The data dumper, shipped beside the bundle.
 pub const DUMP: &str = "nova-dump";
 /// The `.dmg`'s file name: the nightly's per-target asset name.
-pub const DMG: &str = "ev-nova-universal-apple-darwin.dmg";
+pub const DMG: &str = "ev-nova-aarch64-apple-darwin.dmg";
 /// The `.dmg`'s volume name.
 pub const VOLUME: &str = "EV Nova";
 
@@ -147,10 +147,7 @@ mod tests {
         let layout = Layout::new(&target(), Some(dist.clone())).expect("layout");
         assert_eq!(layout.out, dist);
         assert!(!layout.staging.starts_with(&layout.out));
-        assert_eq!(
-            layout.dmg(),
-            dist.join("ev-nova-universal-apple-darwin.dmg")
-        );
+        assert_eq!(layout.dmg(), dist.join("ev-nova-aarch64-apple-darwin.dmg"));
     }
 
     #[test]

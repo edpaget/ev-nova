@@ -1,5 +1,5 @@
-//! The bundler's sequence: read the spec, build both targets, stage
-//! `Nova.app`, merge the binaries, check their slices, sign, verify, and
+//! The bundler's sequence: read the spec, build for Apple silicon, stage
+//! `Nova.app` with the binaries, check they are arm64, sign, verify, and
 //! make the `.dmg`.
 //!
 //! [`steps`] is the whole sequence as data, a function of the spec and the
@@ -17,10 +17,10 @@ use crate::layout::{DUMP, Layout, StagingInOutput, VOLUME};
 use crate::ports::{Files, Invocation, Process, RunError};
 use crate::spec::{BundleSpec, GAME_PACKAGE, SpecError};
 
-/// The two targets merged into each universal binary.
-pub const TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
-/// The slices `lipo -archs` must list for each merged binary.
-pub const ARCHS: [&str; 2] = ["arm64", "x86_64"];
+/// The one target built: Apple silicon. Intel Macs are not supported.
+pub const TARGET: &str = "aarch64-apple-darwin";
+/// The architecture `lipo -archs` must list, alone, for each binary.
+pub const ARCH: &str = "arm64";
 
 /// What the edge supplies: the tools and the settings the build runs with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,8 +63,7 @@ pub enum Step {
     },
     /// Runs a program.
     Run(Invocation),
-    /// Runs `lipo -archs` on a merged binary and fails unless it lists
-    /// every one of [`ARCHS`].
+    /// Fails unless the binary is [`ARCH`] alone: see [`check_archs`].
     CheckArchs(PathBuf),
 }
 
@@ -95,13 +94,11 @@ pub enum BundleError {
         /// Why it failed.
         source: io::Error,
     },
-    /// A merged binary lacks a slice.
-    #[error("`{command}` lists `{found}`, without the {arch} slice")]
-    MissingArch {
+    /// A binary is not [`ARCH`] alone.
+    #[error("`{command}` lists `{found}`, not {ARCH} alone")]
+    NotArm64 {
         /// The `lipo -archs` command line.
         command: String,
-        /// The slice missing.
-        arch: &'static str,
         /// What it listed.
         found: String,
     },
@@ -118,16 +115,7 @@ pub fn metadata(cargo: &OsString) -> Invocation {
 /// Every step after `cargo metadata`, in order.
 #[must_use]
 pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
-    let release = |target: &str, bin: &str| spec.target_dir.join(target).join("release").join(bin);
-    let lipo = |bin: &str, output: PathBuf| {
-        Step::Run(
-            Invocation::new("lipo")
-                .arg("-create")
-                .args(TARGETS.map(|target| release(target, bin)))
-                .arg("-output")
-                .arg(output),
-        )
-    };
+    let release = |bin: &str| spec.target_dir.join(TARGET).join("release").join(bin);
     let sign = |path: PathBuf| {
         Step::Run(
             Invocation::new("codesign")
@@ -143,21 +131,18 @@ pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
         )
     };
     vec![
-        // Both targets in one build, default features only, so egui stays
-        // out of the published build.
-        Step::Run(
-            Invocation::new(&host.cargo)
-                .args([
-                    "build",
-                    "--release",
-                    "--locked",
-                    "-p",
-                    GAME_PACKAGE,
-                    "-p",
-                    DUMP,
-                ])
-                .args(TARGETS.iter().flat_map(|target| ["--target", target])),
-        ),
+        // Default features only, so egui stays out of the published build.
+        Step::Run(Invocation::new(&host.cargo).args([
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            GAME_PACKAGE,
+            "-p",
+            DUMP,
+            "--target",
+            TARGET,
+        ])),
         Step::RemoveDir(layout.staging.clone()),
         Step::CreateDir(layout.macos()),
         Step::CreateDir(layout.resources()),
@@ -169,8 +154,14 @@ pub fn steps(spec: &BundleSpec, layout: &Layout, host: &Host) -> Vec<Step> {
             path: layout.icon(),
             bytes: ICON.to_vec(),
         },
-        lipo(EXECUTABLE, layout.executable()),
-        lipo(DUMP, layout.dump()),
+        Step::Copy {
+            from: release(EXECUTABLE),
+            to: layout.executable(),
+        },
+        Step::Copy {
+            from: release(DUMP),
+            to: layout.dump(),
+        },
         Step::CheckArchs(layout.executable()),
         Step::CheckArchs(layout.dump()),
         Step::Copy {
@@ -219,6 +210,22 @@ pub fn bundle(
     Ok(layout.dmg())
 }
 
+/// Runs `lipo -archs` on `binary` and fails unless it lists [`ARCH`] and
+/// nothing else: a universal or Intel binary stops the run before signing.
+pub fn check_archs(process: &mut impl Process, binary: &Path) -> Result<(), BundleError> {
+    let invocation = Invocation::new("lipo").arg("-archs").arg(binary).captured();
+    let stdout = run(process, &invocation)?;
+    let found = String::from_utf8_lossy(&stdout);
+    if found.split_whitespace().eq([ARCH]) {
+        Ok(())
+    } else {
+        Err(BundleError::NotArm64 {
+            command: invocation.to_string(),
+            found: found.trim().to_owned(),
+        })
+    }
+}
+
 fn run(process: &mut impl Process, invocation: &Invocation) -> Result<Vec<u8>, BundleError> {
     process.run(invocation).map_err(|source| BundleError::Run {
         command: invocation.to_string(),
@@ -246,20 +253,7 @@ fn execute(
         Step::Copy { from, to } => file("copy to", to, files.copy(from, to)),
         Step::Symlink { target, link } => file("link", link, files.symlink(target, link)),
         Step::Run(invocation) => run(process, invocation).map(drop),
-        Step::CheckArchs(binary) => {
-            let invocation = Invocation::new("lipo").arg("-archs").arg(binary).captured();
-            let stdout = run(process, &invocation)?;
-            let found = String::from_utf8_lossy(&stdout);
-            let listed: Vec<&str> = found.split_whitespace().collect();
-            match ARCHS.into_iter().find(|arch| !listed.contains(arch)) {
-                None => Ok(()),
-                Some(arch) => Err(BundleError::MissingArch {
-                    command: invocation.to_string(),
-                    arch,
-                    found: found.trim().to_owned(),
-                }),
-            }
-        }
+        Step::CheckArchs(binary) => check_archs(process, binary),
     }
 }
 
@@ -394,7 +388,7 @@ mod tests {
     }
 
     fn run_ok(host: &Host) -> Run {
-        run_with(host, b"x86_64 arm64\n", |_| false, |_| false)
+        run_with(host, b"arm64\n", |_| false, |_| false)
     }
 
     fn is(program: &'static str, first: &'static str) -> impl Fn(&Invocation) -> bool {
@@ -422,9 +416,8 @@ mod tests {
         let contents = app.join("Contents");
         let exe = contents.join("MacOS").join("nova");
         let dump = staging.join("nova-dump");
-        let dmg = out.join("ev-nova-universal-apple-darwin.dmg");
+        let dmg = out.join("ev-nova-aarch64-apple-darwin.dmg");
         let arm = |b: &str| target.join("aarch64-apple-darwin").join("release").join(b);
-        let x86 = |b: &str| target.join("x86_64-apple-darwin").join("release").join(b);
         let cargo = "/rust/bin/cargo";
         let sign = "--force --sign -";
         let verify = "--verify --deep --strict --verbose=2";
@@ -438,8 +431,7 @@ mod tests {
             ),
             Event::Run(cmd(
                 cargo,
-                "build --release --locked -p nova -p nova-dump \
-                 --target aarch64-apple-darwin --target x86_64-apple-darwin",
+                "build --release --locked -p nova -p nova-dump --target aarch64-apple-darwin",
                 &[],
             )),
             Event::RemoveDir(staging.clone()),
@@ -447,16 +439,8 @@ mod tests {
             Event::CreateDir(contents.join("Resources")),
             Event::Write(contents.join("Info.plist"), info_plist(&spec(), "13.0")),
             Event::Write(contents.join("Resources").join("Nova.icns"), ICON.to_vec()),
-            Event::Run(
-                cmd("lipo", "-create", &[&arm("nova"), &x86("nova")])
-                    .arg("-output")
-                    .arg(&exe),
-            ),
-            Event::Run(
-                cmd("lipo", "-create", &[&arm("nova-dump"), &x86("nova-dump")])
-                    .arg("-output")
-                    .arg(&dump),
-            ),
+            Event::Copy(arm("nova"), exe.clone()),
+            Event::Copy(arm("nova-dump"), dump.clone()),
             Event::Run(cmd("lipo", "-archs", &[&exe]).captured()),
             Event::Run(cmd("lipo", "-archs", &[&dump]).captured()),
             Event::Copy(
@@ -510,7 +494,7 @@ mod tests {
     fn writes_the_dmg_to_the_output_dir_given() {
         let dist = Path::new("/work").join("ev-nova").join("dist");
         let run = run_ok(&host(Some(dist.clone())));
-        let dmg = dist.join("ev-nova-universal-apple-darwin.dmg");
+        let dmg = dist.join("ev-nova-aarch64-apple-darwin.dmg");
         assert_eq!(run.result.as_ref().expect("bundled"), &dmg);
         let hdiutil = run.runs().pop().expect("a run");
         assert_eq!(hdiutil.program, "hdiutil");
@@ -546,7 +530,7 @@ mod tests {
     fn a_failing_metadata_stops_everything() {
         let run = run_with(
             &host(None),
-            b"arm64 x86_64",
+            b"arm64",
             is("/rust/bin/cargo", "metadata"),
             |_| false,
         );
@@ -558,10 +542,10 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_build_stops_before_any_lipo() {
+    fn a_failing_build_stops_before_staging() {
         let run = run_with(
             &host(None),
-            b"arm64 x86_64",
+            b"arm64",
             is("/rust/bin/cargo", "build"),
             |_| false,
         );
@@ -571,49 +555,48 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("exited with code 1"), "{error}");
-        assert!(!run.ran("lipo"));
         assert_eq!(run.events.len(), 2, "nothing staged");
     }
 
     #[test]
-    fn a_binary_missing_a_slice_stops_before_signing() {
-        for (archs, missing) in [
-            (&b"arm64\n"[..], "x86_64"),
-            (b"x86_64\n", "arm64"),
-            (b"", "arm64"),
+    fn a_binary_not_arm64_alone_stops_before_signing() {
+        for archs in [
+            &b"arm64 x86_64\n"[..],
+            b"x86_64 arm64\n",
+            b"x86_64\n",
+            b"arm64e\n",
+            b"arm64 arm64\n",
+            b"",
         ] {
+            let found = String::from_utf8_lossy(archs);
             let run = run_with(&host(None), archs, |_| false, |_| false);
-            let Err(BundleError::MissingArch { arch, command, .. }) = &run.result else {
-                panic!("{:?}", run.result);
-            };
-            assert_eq!(*arch, missing);
+            let error = run.result.as_ref().expect_err("fails").to_string();
             let layout = Layout::new(&spec().target_dir, None).expect("layout");
+            let command = Invocation::new("lipo")
+                .arg("-archs")
+                .arg(layout.executable())
+                .to_string();
             assert_eq!(
-                command,
-                &Invocation::new("lipo")
-                    .arg("-archs")
-                    .arg(layout.executable())
-                    .to_string()
+                error,
+                format!("`{command}` lists `{}`, not arm64 alone", found.trim()),
             );
-            assert!(!run.ran("codesign"));
-            assert!(!run.ran("hdiutil"));
+            assert!(!run.ran("codesign"), "{found}");
+            assert!(!run.ran("hdiutil"), "{found}");
         }
     }
 
     #[test]
-    fn the_missing_slice_error_names_what_lipo_listed() {
-        let run = run_with(&host(None), b"  arm64 \n", |_| false, |_| false);
-        let error = run.result.expect_err("fails").to_string();
-        assert!(
-            error.contains("lists `arm64`, without the x86_64 slice"),
-            "{error}"
-        );
+    fn arm64_alone_passes_however_lipo_spaces_it() {
+        for archs in [&b"arm64"[..], b"arm64\n", b"  arm64 \n"] {
+            let run = run_with(&host(None), archs, |_| false, |_| false);
+            assert!(run.result.is_ok(), "{:?}", run.result);
+        }
     }
 
-    /// Answers `lipo -archs` with both slices, but only arm64 for
+    /// Answers `lipo -archs` with arm64 for `nova`, but both slices for
     /// `nova-dump`.
-    struct DumpThin(Log);
-    impl Process for DumpThin {
+    struct DumpUniversal(Log);
+    impl Process for DumpUniversal {
         fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
             self.0.borrow_mut().push(Event::Run(invocation.clone()));
             let args: Vec<_> = invocation
@@ -623,25 +606,23 @@ mod tests {
                 .collect();
             Ok(match args.first().map(AsRef::as_ref) {
                 Some("metadata") => sample_metadata(),
-                Some("-archs") if args[1].ends_with("nova-dump") => b"arm64".to_vec(),
-                Some("-archs") => b"arm64 x86_64".to_vec(),
+                Some("-archs") if args[1].ends_with("nova-dump") => b"x86_64 arm64".to_vec(),
+                Some("-archs") => b"arm64".to_vec(),
                 _ => Vec::new(),
             })
         }
     }
 
     #[test]
-    fn a_dump_missing_a_slice_stops_too() {
+    fn a_dump_not_arm64_alone_stops_too() {
         let log = Log::default();
         let mut files = FakeFiles {
             log: Rc::clone(&log),
             fails: Box::new(|_| false),
         };
-        let result = bundle(&mut DumpThin(Rc::clone(&log)), &mut files, &host(None));
-        assert!(matches!(
-            result,
-            Err(BundleError::MissingArch { arch: "x86_64", .. })
-        ));
+        let result = bundle(&mut DumpUniversal(Rc::clone(&log)), &mut files, &host(None));
+        let error = result.expect_err("fails").to_string();
+        assert!(error.contains("nova-dump` lists `x86_64 arm64`"), "{error}");
         assert!(
             !log.borrow()
                 .iter()
@@ -651,12 +632,7 @@ mod tests {
 
     #[test]
     fn a_failing_signature_check_never_makes_the_dmg() {
-        let run = run_with(
-            &host(None),
-            b"arm64 x86_64",
-            is("codesign", "--verify"),
-            |_| false,
-        );
+        let run = run_with(&host(None), b"arm64", is("codesign", "--verify"), |_| false);
         let error = run.result.as_ref().expect_err("fails").to_string();
         assert!(
             error.contains("codesign --verify --deep --strict"),
@@ -667,12 +643,7 @@ mod tests {
 
     #[test]
     fn a_failing_signature_stops_before_verifying() {
-        let run = run_with(
-            &host(None),
-            b"arm64 x86_64",
-            is("codesign", "--force"),
-            |_| false,
-        );
+        let run = run_with(&host(None), b"arm64", is("codesign", "--force"), |_| false);
         assert!(run.result.is_err());
         assert_eq!(
             run.runs()
@@ -687,7 +658,7 @@ mod tests {
     fn a_failing_file_step_names_the_path_and_stops() {
         let run = run_with(
             &host(None),
-            b"arm64 x86_64",
+            b"arm64",
             |_| false,
             |e| matches!(e, Event::Write(..)),
         );
@@ -711,7 +682,7 @@ mod tests {
             (|e| matches!(e, Event::Symlink(..)), "link"),
         ];
         for (fails, expected) in cases {
-            let run = run_with(&host(None), b"arm64 x86_64", |_| false, fails);
+            let run = run_with(&host(None), b"arm64", |_| false, fails);
             let Err(BundleError::File { action, .. }) = &run.result else {
                 panic!("{expected}: {:?}", run.result);
             };

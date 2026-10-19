@@ -60,7 +60,7 @@ description = "Run the viewer with the developer tools; backquote (`) shows and 
 run = "cargo run -p nova --features dev-tools --target-dir target/dev-run --locked --"
 
 [tasks.bundle]
-description = "macOS only: build Nova.app (universal, ad-hoc signed) into ev-nova-universal-apple-darwin.dmg; pass an output dir after -- (default target/bundle/out)"
+description = "macOS only: build Nova.app (Apple silicon, ad-hoc signed) into ev-nova-aarch64-apple-darwin.dmg; pass an output dir after -- (default target/bundle/out)"
 run = "cargo run -p nova-bundle --locked --"
 
 [tasks.mutants]

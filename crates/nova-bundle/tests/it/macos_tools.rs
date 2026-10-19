@@ -1,12 +1,12 @@
 //! The macOS tools the bundler drives, run for real through `StdProcess`
 //! with the argument lists the core builds: `plutil` on the generated
-//! plist, `lipo` and `codesign` on a binary, and `hdiutil` on the staging
-//! folder. Each works in a temporary directory it owns.
+//! plist, the `lipo -archs` arm64 check and `codesign` on a binary, and
+//! `hdiutil` on the staging folder. Each works in a temporary directory it owns.
 
 use std::fs;
 use std::path::Path;
 
-use nova_bundle::bundle::{ARCHS, Host, Step, steps};
+use nova_bundle::bundle::{BundleError, Host, Step, check_archs, steps};
 use nova_bundle::info_plist::info_plist;
 use nova_bundle::layout::Layout;
 use nova_bundle::ports::{Invocation, Process};
@@ -68,28 +68,25 @@ fn plutil_accepts_the_generated_plist() {
 }
 
 #[test]
-fn lipo_and_codesign_work_on_a_copy_of_a_binary() {
+fn the_arm64_check_and_codesign_work_on_a_copy_of_a_binary() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (layout, runs) = core_runs(dir.path());
     fs::create_dir_all(&layout.staging).expect("staging");
     let binary = layout.dump();
     fs::copy(std::env::current_exe().expect("this test"), &binary).expect("copy");
 
-    let archs = StdProcess
-        .run(
-            &Invocation::new("lipo")
-                .arg("-archs")
-                .arg(&binary)
-                .captured(),
-        )
-        .expect("lipo -archs");
-    let archs = String::from_utf8(archs).expect("utf-8");
-    let native = if cfg!(target_arch = "aarch64") {
-        ARCHS[0]
+    // This test binary is built for the host alone: arm64 on Apple
+    // silicon, which the check passes, and x86_64 elsewhere, which it
+    // refuses.
+    let checked = check_archs(&mut StdProcess, &binary);
+    if cfg!(target_arch = "aarch64") {
+        checked.expect("arm64 alone");
     } else {
-        ARCHS[1]
-    };
-    assert!(archs.split_whitespace().any(|a| a == native), "{archs}");
+        assert!(
+            matches!(checked, Err(BundleError::NotArm64 { .. })),
+            "{checked:?}"
+        );
+    }
 
     StdProcess
         .run(&find(&runs, "codesign", "--force", &binary))

@@ -1,6 +1,6 @@
 [package]
 name = "nova-bundle"
-description = "Builds Nova.app, the universal ad-hoc-signed macOS bundle, into a .dmg"
+description = "Builds Nova.app, the Apple silicon ad-hoc-signed macOS bundle, into a .dmg"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
