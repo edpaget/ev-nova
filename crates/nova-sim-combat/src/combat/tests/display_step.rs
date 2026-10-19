@@ -217,6 +217,25 @@ fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
     assert_eq!(combat.take_displays(), [], "taken");
 }
 
+/// NPC 7 at (-40, 0) regenerating a point of shield, A at (40, 0), and a
+/// wreck in slot 5 at the centre going off on its display.
+fn by_slot() -> [Ship; 3] {
+    let mut wreck = wreck(WRECK, 200.0, 0.0, 0.0);
+    wreck.slot = Slot::Berth(5);
+    let lower = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+    let mut higher = holding(7, -40.0, 0.0, 100.0, 300.0, 300.0);
+    higher.shield_regen = 1.0;
+    [higher, lower, wreck]
+}
+
+/// Each of `ships`' condition, reserves and state.
+fn read(ships: &[Ship]) -> Vec<(Condition, Reserves, ShipState)> {
+    ships
+        .iter()
+        .map(|ship| (ship.condition, ship.reserves, ship.state))
+        .collect()
+}
+
 #[test]
 fn stepping_each_npc_by_slot_matches_the_whole_loop() {
     // The session steps each NPC at its own slot, after its flight
@@ -228,20 +247,7 @@ fn stepping_each_npc_by_slot_matches_the_whole_loop() {
     // its point back.
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let arena = arena(&arsenal, &govts);
-    let ships = || {
-        let mut wreck = wreck(WRECK, 200.0, 0.0, 0.0);
-        wreck.slot = Slot::Berth(5);
-        let lower = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
-        let mut higher = holding(7, -40.0, 0.0, 100.0, 300.0, 300.0);
-        higher.shield_regen = 1.0;
-        [higher, lower, wreck]
-    };
-    let read = |ships: &[Ship]| {
-        ships
-            .iter()
-            .map(|ship| (ship.condition, ship.reserves, ship.state))
-            .collect::<Vec<_>>()
-    };
+    let ships = by_slot;
     let left = |ships: &[Ship]| {
         ships
             .iter()
@@ -325,4 +331,40 @@ fn stepping_each_npc_by_slot_matches_the_whole_loop() {
         assert_eq!(combat.take_events(), events);
         assert_eq!(combat.take_displays(), displays);
     }
+}
+
+#[test]
+fn an_npcs_step_then_its_display_match_handling_it() {
+    // The ship loop runs an NPC's step and its display apart when its
+    // pods may come out between the two (`_HandleShip`'s dying block
+    // @0x35080-0x3557b, before `_HandleShipDisplay` @0x444ad).
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = arena(&arsenal, &govts);
+    let order = [A, WRECK, ShipRef::Npc(NpcId(7))];
+    let mut whole = by_slot();
+    let mut whole_combat = Combat::default();
+    let mut whole_shown = vec![ShipRef::Player];
+    for ship in order {
+        let mut fighters: Vec<Fighter> = whole.iter_mut().map(Ship::fighter).collect();
+        whole_combat.handle_npc(
+            &mut fighters,
+            arena,
+            ship,
+            &mut whole_shown,
+            &mut NeverFires,
+        );
+    }
+    let mut split = by_slot();
+    let mut split_combat = Combat::default();
+    let mut shown = vec![ShipRef::Player];
+    for ship in order {
+        let mut fighters: Vec<Fighter> = split.iter_mut().map(Ship::fighter).collect();
+        split_combat.step_npc(&mut fighters, arena, ship, &mut NeverFires);
+        drop(fighters);
+        let mut fighters: Vec<Fighter> = split.iter_mut().map(Ship::fighter).collect();
+        split_combat.display_npc(&mut fighters, arena, ship, &mut shown);
+    }
+    assert_eq!(read(&split), read(&whole));
+    assert_eq!(split_combat, whole_combat);
+    assert_eq!(shown, whole_shown);
 }

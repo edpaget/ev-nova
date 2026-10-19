@@ -193,12 +193,30 @@ impl Combat {
     /// once. The session runs it at each NPC's slot, right after that
     /// NPC's flight (`nova_sim::Session::ship_loop`), keeping `shown`
     /// across the calls. Nothing happens for a ship not among `fighters`.
+    /// It is [`Combat::step_npc`] then [`Combat::display_npc`].
     pub fn handle_npc(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
         ship: ShipRef,
         shown: &mut Vec<ShipRef>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.step_npc(fighters, arena, ship, chance);
+        self.display_npc(fighters, arena, ship, shown);
+    }
+
+    /// The first part of [`Combat::handle_npc`], `_HandleShip`'s fight
+    /// for `ship` among `fighters`: its reloads, regeneration and fire,
+    /// drawing on `chance`, and its death timer's tick (@0x35083). The
+    /// session runs its dying block between this and its display
+    /// (`nova_sim::Session::ship_loop`). Nothing happens for a ship not
+    /// among `fighters`.
+    pub fn step_npc(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        ship: ShipRef,
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.field = arena.field;
@@ -208,14 +226,32 @@ impl Combat {
         };
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
-        let rule = arena.rules.disable;
         let fighter = &mut fighters[index];
         fighter.armament.reload();
-        regenerate(fighter, rule);
+        regenerate(fighter, arena.rules.disable);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire_one(&mut fighters[index], &targets, chance);
         fighters[index].condition.count_down();
-        self.display(fighters, index, rule, shown);
+    }
+
+    /// The second part of [`Combat::handle_npc`], `_HandleShipDisplay`
+    /// for `ship` among `fighters` (@0x444ad), the ships in `shown`
+    /// displayed before it this pass, to which it is added: its display,
+    /// its wreck's shockwave striking at once. Nothing happens for a ship
+    /// not among `fighters`.
+    pub fn display_npc(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        ship: ShipRef,
+        shown: &mut Vec<ShipRef>,
+    ) {
+        self.field = arena.field;
+        self.note_slots(fighters);
+        let Some(index) = fighters.iter().position(|fighter| fighter.ship == ship) else {
+            return;
+        };
+        self.display(fighters, index, arena.rules.disable, shown);
         shown.push(ship);
     }
 
