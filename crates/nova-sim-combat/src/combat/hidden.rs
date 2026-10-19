@@ -63,7 +63,9 @@ impl Combat {
     /// hidden and a live shot reach the same stellar or asteroid with one
     /// hit left, this can pick a different shot to down it than the
     /// original's slot order, and so a different shot is spent and another
-    /// flies on (rdm asteroids phase 9).
+    /// flies on (rdm asteroids phase 9). Each shot holds its slot
+    /// ([`Shot::slot`]), so the slot order that pass needs is there to
+    /// read ([`shot_slots`](super::shot_slots)).
     pub(super) fn test_hidden(
         &mut self,
         fighters: &[Fighter],

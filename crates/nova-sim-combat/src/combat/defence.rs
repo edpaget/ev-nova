@@ -22,7 +22,8 @@
 //!   ship or at its fleet's lead (an escort defends its lead), that is
 //!   within the weapon's [`engagement_range`] and not in a blind spot (see
 //!   [`aim`](super::aim)), its squared distance truncated. The nearest
-//!   wins; of two as near, the one fired first. The original has no
+//!   wins; of two as near, the one in the lower shot slot, as the shots
+//!   are kept by slot ([`shot_slots`](super::shot_slots)). The original has no
 //!   hostility test: "fired at me or my lead" is the whole rule, so by
 //!   default the player's point defence engages its own escort's stray
 //!   missile, and police an allied trader's. By the other reading of
@@ -170,7 +171,10 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 /// `_CalcInterceptAngle` @0x39477). Its squared distance is truncated before the range test
 /// and before the nearest test, so a missile under a square pixel past
 /// the range is in it, and of two whose squared distances truncate alike
-/// the one fired first wins. By the engine (`rule` none) there is no
+/// the first among `shots` wins: the one in the lower slot, as the fight
+/// keeps its shots by slot and `_HandleShipPointDefense` walks the slots
+/// keeping a new best only when strictly nearer (`cmpl; setg`
+/// @0x3944e-0x3945e). By the engine (`rule` none) there is no
 /// other test; by the other reading
 /// ([`RuleKey::PdHostility`](crate::RuleKey::PdHostility)), `rule` must
 /// also call the firer hostile, with the relations in `govts`.
@@ -580,7 +584,21 @@ mod tests {
     }
 
     #[test]
-    fn missiles_whose_squared_distances_truncate_alike_go_to_the_one_fired_first() {
+    fn missiles_whose_squared_distances_truncate_alike_go_to_the_one_in_the_lower_slot() {
+        // `farther` takes slot 1 while slot 0 is held; `nearer`, fired
+        // later, takes slot 0 once it is freed, and is kept first.
+        let farther = missile(1, 0.0, -10_000.9_f32.sqrt(), Some(DEFENDER));
+        let nearer = missile(2, 10_000.1_f32.sqrt(), 0.0, Some(DEFENDER));
+        let mut combat = super::super::Combat::default();
+        combat.slots.hold(0);
+        combat.put_in_flight(farther);
+        combat.slots.free(0);
+        combat.put_in_flight(nearer);
+        assert_eq!(picked(combat.shots(), 0, 0), Some(ShotId(2)), "both 10,000");
+    }
+
+    #[test]
+    fn missiles_whose_squared_distances_truncate_alike_go_to_the_first_kept() {
         let farther = missile(1, 0.0, -10_000.9_f32.sqrt(), Some(DEFENDER));
         let nearer = missile(2, 10_000.1_f32.sqrt(), 0.0, Some(DEFENDER));
         assert_eq!(

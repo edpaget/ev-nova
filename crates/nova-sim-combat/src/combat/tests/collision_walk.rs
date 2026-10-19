@@ -31,13 +31,13 @@ fn a_fighter_is_disabled_now_as_is_disabled_reads_it() {
     assert!(!above.fighter().disabled_now(&rule), "intact, at the line");
 }
 
-const D: ShipRef = ShipRef::Npc(NpcId(4));
+pub(super) const D: ShipRef = ShipRef::Npc(NpcId(4));
 const X: ShipRef = ShipRef::Npc(NpcId(5));
 
 /// The collision passes alone among `ships`, with no asteroids or
 /// stellars, by the default rules: the strikes they made, as (ship hit,
 /// by).
-fn walk(combat: &mut Combat, ships: &mut [Ship]) -> Vec<(ShipRef, Option<ShipRef>)> {
+pub(super) fn walk(combat: &mut Combat, ships: &mut [Ship]) -> Vec<(ShipRef, Option<ShipRef>)> {
     walk_amid(combat, ships, &mut [], &Arsenal::default())
 }
 
@@ -72,7 +72,7 @@ fn walk_amid(
 /// A shot of `record` that `firer` fired, in `layer`, its last move from
 /// `from` to `to`, rolling `roll`: put in flight in `combat` after the
 /// shots already there, so later in firing order.
-fn fly(
+pub(super) fn fly(
     combat: &mut Combat,
     (record, firer, layer): (WeaponRecord, ShipRef, ShotLayer),
     (from, to): (Vec2, Vec2),
@@ -84,7 +84,7 @@ fn fly(
         heading: 90.0,
     };
     let mut shot = Shot::launch(WeaponSpec::new(&record), firer, firer, &state, 90.0);
-    shot.id = ShotId(u32::try_from(combat.shots.len()).expect("few shots"));
+    shot.id = combat.next_id();
     shot.moved_from = Some(from);
     shot.age = 1;
     shot.miss_roll = roll;
@@ -93,7 +93,7 @@ fn fly(
 }
 
 /// A homing missile, aimed at C.
-fn missile() -> WeaponRecord {
+pub(super) fn missile() -> WeaponRecord {
     WeaponRecord {
         guidance: 1,
         guided_turn: 70,
@@ -105,7 +105,7 @@ fn missile() -> WeaponRecord {
 /// 30, one point above the line a blaster's 4 mass takes it under; a
 /// blaster's A at (-300, 0) and a heavy turret ship D at (300, 0), far
 /// enough that no blast reaches them.
-fn three() -> Vec<Ship> {
+pub(super) fn three() -> Vec<Ship> {
     let mut fighter = Ship::at(3, 0.0, -100.0).of(of_class(80));
     fighter.reserves.shield.now = 0.0;
     fighter.reserves.armor.now = 11.0;
@@ -117,10 +117,10 @@ fn three() -> Vec<Ship> {
 }
 
 /// A move ending inside C, from 20 below its centre.
-const INTO_C: (Vec2, Vec2) = (Vec2::new(0.0, -80.0), Vec2::new(0.0, -95.0));
+pub(super) const INTO_C: (Vec2, Vec2) = (Vec2::new(0.0, -80.0), Vec2::new(0.0, -95.0));
 
 /// A turret shot of D's, rolling 81, over a fighter's class.
-fn rolled_over(layer: ShotLayer) -> (WeaponRecord, ShipRef, ShotLayer) {
+pub(super) fn rolled_over(layer: ShotLayer) -> (WeaponRecord, ShipRef, ShotLayer) {
     (turret(4), D, layer)
 }
 
@@ -190,10 +190,10 @@ fn a_blast_from_an_earlier_hit_on_another_ship_lets_a_turret_hit_the_fighter_it_
 }
 
 /// A move passing 5 pixels outside C's hit radius, ending beside it.
-const BESIDE_C: (Vec2, Vec2) = (Vec2::new(-10.0, -121.0), Vec2::new(0.0, -121.0));
+pub(super) const BESIDE_C: (Vec2, Vec2) = (Vec2::new(-10.0, -121.0), Vec2::new(0.0, -121.0));
 
 /// `record` with a proximity fuse reaching 20 pixels.
-fn fused(record: WeaponRecord) -> WeaponRecord {
+pub(super) fn fused(record: WeaponRecord) -> WeaponRecord {
     WeaponRecord {
         prox_radius: 20,
         ..record

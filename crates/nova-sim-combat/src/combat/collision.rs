@@ -74,15 +74,17 @@
 //! in slot order that it can hit within reach and lands at once
 //! (`_HandleShipHit(shot, ship, 1)` @0x3768a).
 //!
+//! **The shots' order** (rdm weapons-fidelity phase 34). Each shot layer's
+//! entry order is its slots' ([`shot_slots`](super::shot_slots)): a shot
+//! slot reused while its sprite is still in the layer keeps its old place
+//! (`_PutSpriteInLayer` @0x768c), so the walk can meet a later shot first
+//! ([`Combat::entry_order`], by
+//! [`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)'s engine
+//! reading; firing order by the other). The proximity pass goes by slot,
+//! the order the shots are kept in, by either reading.
+//!
 //! # Left out, each with its owner
 //!
-//! - **The shots' order within a layer.** The original walks each shot
-//!   layer in entry order, a reused shot slot keeping its old place
-//!   (`_PutSpriteInLayer` @0x768c), and its proximity pass by slot; the
-//!   engine has no shot slots and keeps firing order. They differ only
-//!   when a slot is reused while an older shot of its layer still flies,
-//!   and two such shots reach one ship in one pass:
-//!   rdm:phase/weapons-fidelity/phase-34-left-out-of-phase-21.
 //! - **The asteroid layer's order.** The asteroids are the outer walk, so
 //!   a shot touching two meets the first in their entry order; the engine
 //!   takes the first along the move:
@@ -238,10 +240,11 @@ impl Combat {
     /// shots `gone` to point defence are taken out first and kept hidden
     /// at life 0 ([`Combat::hide`]); then the contact passes, a shot
     /// layer at a time in [`SHOT_LAYER_WALK`]'s order, each walking the
-    /// ships in [`walk_order`] and, for each, the layer's shots in firing
-    /// order, then the layer's shots against the asteroids; then point
-    /// defence's layer against the asteroids; then the proximity pass,
-    /// shot by shot in firing order, a ship then an asteroid. Each hit
+    /// ships in [`walk_order`] and, for each, the layer's shots in
+    /// `entry`'s order ([`Combat::entry_order`]), then the layer's shots
+    /// against the asteroids in that order; then point defence's layer
+    /// against the asteroids; then the proximity pass, shot by shot in
+    /// slot order, a ship then an asteroid. Each hit
     /// and its blast land as they are found ([`Combat::land_hit`]), and
     /// an asteroid's blast likewise. The sub-munitions of the proximity
     /// hits, their weapons read from `terms`' arsenal and their spread
@@ -257,7 +260,7 @@ impl Combat {
     pub(super) fn resolve(
         &mut self,
         (fighters, lineup): Among,
-        gone: &[bool],
+        (gone, entry): (&[bool], &[usize]),
         terms: &WalkTerms,
         chance: &mut dyn Chance,
         asteroids: &mut [AsteroidTarget],
@@ -275,7 +278,7 @@ impl Combat {
         let order = walk_order(&ranks);
         for layer in SHOT_LAYER_WALK {
             for &ship in &order {
-                for index in 0..shots.len() {
+                for &index in entry {
                     let shot = &shots[index];
                     if spent[index] || shot.layer != layer || shot.expired() {
                         continue;
@@ -297,7 +300,7 @@ impl Combat {
             }
             let in_layer = |shot: &Shot| shot.layer == layer;
             self.meet_asteroids(
-                (&shots, &mut spent),
+                (&shots, &mut spent, entry),
                 in_layer,
                 (fighters, lineup),
                 terms.rule,
@@ -306,7 +309,7 @@ impl Combat {
         }
         let point_defence = |shot: &Shot| shot.layer == ShotLayer::PointDefence;
         self.meet_asteroids(
-            (&shots, &mut spent),
+            (&shots, &mut spent, entry),
             point_defence,
             (fighters, lineup),
             terms.rule,
@@ -381,13 +384,14 @@ impl Combat {
     /// ([`Combat::land_on_asteroid`]).
     fn meet_asteroids(
         &mut self,
-        (shots, spent): (&[Shot], &mut [bool]),
+        (shots, spent, entry): (&[Shot], &mut [bool], &[usize]),
         takes: impl Fn(&Shot) -> bool,
         (fighters, lineup): Among,
         rule: &dyn DisableRule,
         asteroids: &mut [AsteroidTarget],
     ) {
-        for (index, shot) in shots.iter().enumerate() {
+        for &index in entry {
+            let shot = &shots[index];
             if spent[index] || !takes(shot) {
                 continue;
             }

@@ -2403,11 +2403,12 @@ impl Combat {
         let mut gone = vec![false; self.shots.len()];
         let ranks: Vec<_> = fighters.iter().map(|fighter| fighter.sprite).collect();
         let walked = collision::walk_order(&ranks);
-        self.intercept(camera, (&lineup.touch(), &walked), &mut gone);
+        let entry = self.entry_order();
+        self.intercept(camera, (&lineup.touch(), &walked), &entry, &mut gone);
         let terms = collision::WalkTerms { arsenal, rule };
         self.resolve(
             (fighters, &mut lineup),
-            &gone,
+            (&gone, &entry),
             &terms,
             chance,
             &mut *asteroids,
@@ -2491,19 +2492,27 @@ impl Combat {
     /// marked `gone`, and [`Combat::resolve`] keeps it hidden at life 0
     /// for the proximity pass that follows ([`hidden`]).
     ///
-    /// The shots go in the order they are kept, the order they were fired,
-    /// each against every missile in that order. The original walks each
-    /// layer in the order its sprites entered it (`_SWAddSprite`
-    /// @0xac620), the same but for a reused slot whose sprite was already
-    /// in the layer, which keeps its place; the simulation has no slots,
-    /// and the order crosses no boundary the player sees.
-    fn intercept(&mut self, camera: Vec2, (touch, walked): (&Sides, &[usize]), gone: &mut [bool]) {
-        for pd in 0..self.shots.len() {
+    /// The shots go in `entry`'s order, each layer in the order it keeps
+    /// them ([`Combat::entry_order`]), each against every missile in that
+    /// order, as `_SWCollideSpriteLayer` walks both layers from their
+    /// heads (@0xacb4b): by
+    /// [`RuleKey::ShotOverlap`](crate::RuleKey::ShotOverlap)'s engine
+    /// reading the order their slots entered them, a reused slot whose
+    /// sprite was already in the layer keeping its place (`_SWAddSprite`
+    /// @0xac620, `_PutSpriteInLayer` @0x768c); by the other, firing order.
+    fn intercept(
+        &mut self,
+        camera: Vec2,
+        (touch, walked): (&Sides, &[usize]),
+        entry: &[usize],
+        gone: &mut [bool],
+    ) {
+        for &pd in entry {
             let defender = &self.shots[pd];
             if defender.layer != ShotLayer::PointDefence || defender.moved_from.is_none() {
                 continue;
             }
-            for missile in 0..self.shots.len() {
+            for &missile in entry {
                 let shot = &self.shots[missile];
                 let Some(from) = shot.moved_from else {
                     continue;

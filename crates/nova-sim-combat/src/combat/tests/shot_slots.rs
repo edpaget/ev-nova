@@ -3,6 +3,7 @@
 //! `_HandleShot` frees it (@0x3617c), and the order each layer keeps
 //! (`_PutSpriteInLayer` @0x766c-0x76b1).
 
+use super::collision_walk::{BESIDE_C, D, INTO_C, fly, fused, missile, rolled_over, three, walk};
 use super::*;
 
 /// A long-lived shot of C's, far from every ship, never moving.
@@ -206,4 +207,127 @@ fn a_point_defence_shot_fired_at_a_ship_goes_to_the_shot_layers_tail() {
     end_and_free(&mut combat, 0);
     combat.put_in_flight(in_layer(ShotLayer::Shots, 3));
     assert_eq!(drawn(&combat), [3, 1, 2], "a gun keeps slot 0's place");
+}
+
+/// Moves slot 0's sprite out of the homing layer and back: a shot in the
+/// shot layer takes it and ends, so the next homing shot in slot 0 enters
+/// the homing layer at its tail.
+fn cycle_slot_0(combat: &mut Combat) {
+    end_and_free(combat, 0);
+    combat.put_in_flight(in_layer(ShotLayer::Shots, 99));
+    end_and_free(combat, 0);
+}
+
+/// Aims every shot in flight at C, which a missile hits alone.
+fn all_at_c(combat: &mut Combat) {
+    for shot in &mut combat.shots {
+        shot.target = Some(C);
+        shot.aimed_at = Some(C);
+    }
+}
+
+#[test]
+fn the_contact_walk_takes_a_reused_slot_in_its_old_place() {
+    // A's gun G1 takes slot 0 and D's turret T slot 1, both in the shot
+    // layer; G1 ends, and A's gun G2 takes slot 0, which keeps its place
+    // under T. By entry G2 lands first and disables C, and T, rolling 81
+    // over C's class, hits it disabled; by firing order T is tested first
+    // and passes the intact C.
+    for (source, strikes) in [
+        (RuleSource::Engine, vec![(C, Some(A)), (C, Some(D))]),
+        (RuleSource::Bible, vec![(C, Some(A))]),
+    ] {
+        let mut ships = three();
+        let mut combat = overlapping(source);
+        fly(&mut combat, (blaster(), A, ShotLayer::Shots), INTO_C, None);
+        fly(&mut combat, rolled_over(ShotLayer::Shots), INTO_C, Some(81));
+        end_and_free(&mut combat, 0);
+        fly(&mut combat, (blaster(), A, ShotLayer::Shots), INTO_C, None);
+        assert_eq!(walk(&mut combat, &mut ships), strikes, "{source:?}");
+    }
+}
+
+#[test]
+fn the_contact_walk_goes_by_entry_not_by_slot() {
+    // A's missile in slot 1 entered the homing layer before D's in slot 0,
+    // whose sprite went out and back: the walk meets A's first, which
+    // disables C, so D's, rolling 81, hits. By slot D's would pass C.
+    for source in RuleSource::ALL {
+        let mut ships = three();
+        let mut combat = overlapping(source);
+        fly(&mut combat, (missile(), A, ShotLayer::Homing), INTO_C, None);
+        fly(&mut combat, (missile(), A, ShotLayer::Homing), INTO_C, None);
+        cycle_slot_0(&mut combat);
+        fly(
+            &mut combat,
+            (missile(), D, ShotLayer::Homing),
+            INTO_C,
+            Some(81),
+        );
+        all_at_c(&mut combat);
+        assert_eq!(combat.shots()[0].firer, D, "slot 0");
+        let strikes = walk(&mut combat, &mut ships);
+        assert_eq!(strikes, [(C, Some(A)), (C, Some(D))], "{source:?}");
+    }
+}
+
+#[test]
+fn the_proximity_pass_goes_by_slot_not_by_entry() {
+    // The same two missiles, fused, beside C: `_CheckShotProximities`
+    // walks the slots (@0x371e0-0x37765), so D's in slot 0 lands first,
+    // though it entered the layer and was fired after A's.
+    for source in RuleSource::ALL {
+        let mut ships = three();
+        let mut combat = overlapping(source);
+        let fused_missile = fused(missile());
+        fly(
+            &mut combat,
+            (fused_missile, A, ShotLayer::Homing),
+            BESIDE_C,
+            None,
+        );
+        fly(
+            &mut combat,
+            (fused_missile, A, ShotLayer::Homing),
+            BESIDE_C,
+            None,
+        );
+        cycle_slot_0(&mut combat);
+        fly(
+            &mut combat,
+            (fused_missile, D, ShotLayer::Homing),
+            BESIDE_C,
+            None,
+        );
+        all_at_c(&mut combat);
+        let strikes = walk(&mut combat, &mut ships);
+        assert_eq!(strikes, [(C, Some(D)), (C, Some(A))], "{source:?}");
+    }
+}
+
+#[test]
+fn point_defence_meets_a_missile_with_its_first_shot_in_entry_order() {
+    // X takes slot 0 and Y slot 1 in point defence's layer; X ends, and Z
+    // takes slot 0, keeping its place under Y. By entry Z meets B's
+    // missile first and downs it, and Y flies on; by firing order Y does.
+    for (source, spent, kept) in [(RuleSource::Engine, 2, 1), (RuleSource::Bible, 1, 2)] {
+        let mut combat = overlapping(source);
+        let quad = pd_shot();
+        put(&mut combat, quad, A, Vec2::ZERO, Vec2::ZERO);
+        let y = put(&mut combat, quad, A, Vec2::ZERO, Vec2::ZERO);
+        end_and_free(&mut combat, 0);
+        let z = put(&mut combat, quad, A, Vec2::ZERO, Vec2::ZERO);
+        let missile = put(
+            &mut combat,
+            still_missile(),
+            B,
+            Vec2::new(3.0, 0.0),
+            Vec2::ZERO,
+        );
+        assert_eq!((y, z), (ShotId(1), ShotId(2)));
+        let mut ships = [Ship::at(1, 1000.0, 1000.0), Ship::at(2, -1000.0, 1000.0)];
+        walk(&mut combat, &mut ships);
+        let left: Vec<u32> = combat.shots().iter().map(|shot| shot.id.0).collect();
+        assert_eq!(left, [kept], "{source:?}: {spent} spent, {missile:?} gone");
+    }
 }
