@@ -92,7 +92,7 @@
 //!   ship-handling-fidelity/phase-5-inertialess-flight).
 //! - The lead of a pick or last gun the ship does not carry, which the
 //!   original reads from its global weapon record (@0x85e4c-0x85e59,
-//!   @0x2b06a-0x2b075), and a negative `Mass` in the joust: rdm phase
+//!   @0x2b06a-0x2b075): rdm phase
 //!   combat-ai-fidelity/phase-17-left-out-of-phase-7.
 //! - The order of the joust's draws: the rolls come after its other
 //!   gates here, which decides the same.
@@ -149,8 +149,8 @@ pub const FACE_OFF: i16 = 30;
 /// @0x8619a).
 pub const JOUST_AI: i16 = 2;
 /// The `Mass`, in tons, a ship's class may be at most to break off (`cmpw
-/// $0xc7` @0x861ac).
-pub const JOUST_MASS: f32 = 199.0;
+/// $0xc7` @0x861ac, signed: a negative `Mass` passes).
+pub const JOUST_MASS: i16 = 199;
 /// `Rand(2)`: the roll a joust against an NPC goes on at 0 (@0x86160).
 pub const JOUST_ROLL: u16 = 2;
 /// How far, in whole pixels on both axes, a ship must be from its target
@@ -413,8 +413,9 @@ struct Duel {
     at_player: bool,
     /// Its target's ship-table slot: the player's is 0.
     target_slot: u32,
-    /// Its target's class's mass.
-    target_mass: f32,
+    /// Its target's class's `Mass` field, signed
+    /// ([`HullSpec::signed_mass`](crate::combat::hull::HullSpec::signed_mass)).
+    target_mass: i16,
     /// The player's combat rating.
     rating: i64,
 }
@@ -422,13 +423,14 @@ struct Duel {
 /// Whether `npc` jousting `duel` breaks off, rolling on `chance` (see the
 /// module docs; @0x860c6-0x86242): its class's hull, its target within
 /// [`JOUST_RANGE`], the slot and mass tiebreak, both facing each other
-/// within [`FACE_OFF`], and the roll.
+/// within [`FACE_OFF`], and the roll. Both mass tests read the classes'
+/// `Mass` fields signed (`cmpw` @0x861ac, @0x8623a).
 fn joust(npc: &Npc, duel: &Duel, chance: &mut (impl Chance + ?Sized)) -> bool {
-    let hull = npc.hull.inherent_ai > JOUST_AI && npc.hull.mass <= JOUST_MASS;
+    let hull = npc.hull.inherent_ai > JOUST_AI && npc.hull.signed_mass <= JOUST_MASS;
     let near =
         whole_off(duel.off.x).abs() <= JOUST_RANGE && whole_off(duel.off.y).abs() <= JOUST_RANGE;
     let tiebreak = duel.target_slot < npc.berth
-        || (duel.target_slot > npc.berth && npc.hull.mass < duel.target_mass);
+        || (duel.target_slot > npc.berth && npc.hull.signed_mass < duel.target_mass);
     let reverse = (i32::from(duel.bearing) + 180).rem_euclid(360);
     #[allow(clippy::cast_possible_truncation)] // In 0..360.
     let reverse = reverse as i16;
@@ -501,10 +503,10 @@ pub fn step(
         swarm,
     );
     let (target_slot, target_mass) = match ship {
-        ShipRef::Player => (0, around.player.map_or(0.0, |player| player.hull.mass)),
+        ShipRef::Player => (0, around.player.map_or(0, |player| player.hull.signed_mass)),
         ShipRef::Npc(id) => around
             .npc(id)
-            .map_or((0, 0.0), |other| (other.berth, other.hull.mass)),
+            .map_or((0, 0), |other| (other.berth, other.hull.signed_mass)),
     };
     let duel = Duel {
         off: npc.state.position - at.position,
@@ -623,7 +625,7 @@ mod tests {
         npc.state.position = AT;
         npc.state.heading = heading;
         npc.hull.inherent_ai = 3;
-        npc.hull.mass = 100.0;
+        npc.hull.signed_mass = 100;
         npc
     }
 
@@ -656,7 +658,7 @@ mod tests {
     fn stepped_at_npc(
         npc: &Npc,
         (off, heading): (Vec2, f32),
-        (slot, mass): (u32, f32),
+        (slot, mass): (u32, i16),
         rating: i64,
         chance: &mut Ranged,
     ) -> Pursuit {
@@ -664,7 +666,7 @@ mod tests {
         other.state.position = AT + off;
         other.state.heading = heading;
         other.berth = slot;
-        other.hull.mass = mass;
+        other.hull.signed_mass = mass;
         let npcs = [npc.clone(), other];
         let around = Surroundings {
             player: Some(PlayerSide {
@@ -709,7 +711,7 @@ mod tests {
         assert_eq!((RUSH_DROP, JOUST_ROLL, FACE_OFF, JOUST_AI), (100, 2, 30, 2));
         assert_eq!(
             (BREAK_THRUST, RUSH_THRUST, BREAK_TURN, JOUST_MASS),
-            (1.5, 2.75, 135.0, 199.0)
+            (1.5, 2.75, 135.0, 199)
         );
         assert_eq!(RUSH_SPEED, 1.8);
     }
@@ -753,9 +755,9 @@ mod tests {
         npc.hull.inherent_ai = 2;
         assert_eq!(jousted(&npc, ABOVE, 180.0).kept, None);
         npc.hull.inherent_ai = 3;
-        npc.hull.mass = 200.0;
+        npc.hull.signed_mass = 200;
         assert_eq!(jousted(&npc, ABOVE, 180.0).kept, None);
-        npc.hull.mass = 199.0;
+        npc.hull.signed_mass = 199;
         assert!(jousted(&npc, ABOVE, 180.0).kept.is_some());
     }
 
@@ -802,7 +804,7 @@ mod tests {
     fn against_an_npc_a_lower_slot_goes_on_the_same_never_and_a_higher_only_for_a_lighter_ship() {
         let npc = fighter(Goal::Attack(OTHER), 0.0);
         // A roll of 0 on `Rand(2)` goes on with no complex roll.
-        let jousted_npc = |slot: u32, mass: f32| {
+        let jousted_npc = |slot: u32, mass: i16| {
             stepped_at_npc(
                 &npc,
                 (ABOVE, 180.0),
@@ -813,17 +815,50 @@ mod tests {
             .kept
             .is_some()
         };
-        assert!(jousted_npc(1, 50.0));
-        assert!(!jousted_npc(2, 500.0));
-        assert!(jousted_npc(3, 100.1));
-        assert!(!jousted_npc(3, 100.0));
+        assert!(jousted_npc(1, 50));
+        assert!(!jousted_npc(2, 500));
+        assert!(jousted_npc(3, 101));
+        assert!(!jousted_npc(3, 100));
+    }
+
+    #[test]
+    fn against_an_npc_a_higher_slot_of_negative_mass_goes_on_against_a_less_negative_one() {
+        // The joust compares `Mass` signed (`cmpw`/`jge` @0x8623a): own -10
+        // is lighter than -5.
+        let mut npc = fighter(Goal::Attack(OTHER), 0.0);
+        npc.hull.signed_mass = -10;
+        npc.hull.mass = 0.0;
+        let jousted_npc = |npc: &Npc, mass: i16| {
+            stepped_at_npc(
+                npc,
+                (ABOVE, 180.0),
+                (3, mass),
+                0,
+                &mut Ranged::of(&[(2, 0)]),
+            )
+            .kept
+            .is_some()
+        };
+        assert!(jousted_npc(&npc, -5));
+        // The mirror: own -5 is heavier than -10, and never goes on.
+        npc.hull.signed_mass = -5;
+        assert!(!jousted_npc(&npc, -10));
+    }
+
+    #[test]
+    fn a_class_of_negative_mass_passes_the_199_ton_gate() {
+        // `cmpw $0xc7` / `jg` @0x861ac, signed.
+        let mut npc = fighter(AT_PLAYER, 0.0);
+        npc.hull.signed_mass = -300;
+        npc.hull.mass = 0.0;
+        assert!(jousted(&npc, ABOVE, 180.0).kept.is_some());
     }
 
     #[test]
     fn against_an_npc_a_roll_of_0_breaks_off_and_a_1_only_with_the_complex_roll() {
         let npc = fighter(Goal::Attack(OTHER), 0.0);
         let jousted_npc = |chance: &mut Ranged, rating: i64| {
-            stepped_at_npc(&npc, (ABOVE, 180.0), (1, 100.0), rating, chance)
+            stepped_at_npc(&npc, (ABOVE, 180.0), (1, 100), rating, chance)
                 .kept
                 .is_some()
         };

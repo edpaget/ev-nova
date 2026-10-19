@@ -204,8 +204,12 @@ pub struct HullSpec {
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
     pub explosion: Option<Explosion>,
-    /// Its mass, in tons.
+    /// Its mass, in tons; none below none.
     pub mass: f32,
+    /// Its `Mass` field as the data has it, signed, which the joust
+    /// compares (`_LowLevelAIHandler` @0x861ac, @0x8623a; see
+    /// `nova_sim::ai::pursuit`).
+    pub signed_mass: i16,
     /// Where its turrets cannot fire: its `Flags` 0x1000 (front), 0x2000
     /// (sides) and 0x4000 (rear), as a weapon's `Flags` mark them.
     pub blind_spots: u16,
@@ -326,6 +330,7 @@ impl Default for HullSpec {
             breakup: None,
             explosion: None,
             mass: 0.0,
+            signed_mass: 0,
             blind_spots: 0,
             strength: 0.0,
             board_reach: DEFAULT_BOARD_REACH,
@@ -369,6 +374,7 @@ impl HullSpec {
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
+            signed_mass: record.mass,
             blind_spots: record.flags & BLIND_SPOTS,
             strength: f32::from(record.strength.max(0)),
             board_reach,
@@ -753,6 +759,22 @@ mod tests {
         assert_eq!(trader.strength, 0.0, "none below none");
         assert_eq!((trader.breakup, trader.explosion), (None, None));
         assert_eq!(TOUGH, 0x0010);
+    }
+
+    #[test]
+    fn a_hull_keeps_its_signed_mass_field() {
+        let negative = HullSpec::new(&HullRecord {
+            mass: -1,
+            ..hull(128)
+        });
+        assert_eq!(negative.mass, 0.0, "the other readers' none below none");
+        assert_eq!(negative.signed_mass, -1);
+        let heavy = HullSpec::new(&HullRecord {
+            mass: 120,
+            ..hull(128)
+        });
+        assert_eq!(heavy.signed_mass, 120);
+        assert_eq!(HullSpec::default().signed_mass, 0);
     }
 
     #[test]
