@@ -18,7 +18,8 @@
 //!   leaves by hyperspace (state 2, target -1, @0x8d7cd-0x8d7fe) if it can
 //!   jump ([`leave::can_jump`], the inlined `_AIShipHasFuelForJump`
 //!   @0x8d756-0x8d7c9), and otherwise stops and waits (state 6,
-//!   @0x8d803-0x8d80f). The timer is not touched. The leave's +0x50 clamp
+//!   @0x8d803-0x8d80f), keeping its target ([`trader_target`]), which the
+//!   threat tests then read ([`Npc::fought`]). The timer is not touched. The leave's +0x50 clamp
 //!   and +0xa4 stamp are the warp stage's
 //!   (rdm:phase/ship-handling-fidelity/phase-8-warp-out), as the mission
 //!   hunt's give-up's are.
@@ -52,12 +53,9 @@
 //!
 //! # Not modelled
 //!
-//! - A trader that can't jump keeps its target in state 6
-//!   (@0x8d803-0x8d80f), where the engine's trader targets only its
-//!   goal's quarry. And `_InterceptorAI`'s re-pick while inspecting
-//!   (@0x8d404-0x8d43a), which needs a government and inspects its pick
-//!   rather than attacking it. Both in
-//!   rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
+//! - `_InterceptorAI`'s re-pick while inspecting (@0x8d404-0x8d43a),
+//!   which needs a government and inspects its pick rather than attacking
+//!   it: rdm:phase/combat-ai-fidelity/phase-21-left-out-of-phase-13.
 //! - The slot's timer lasting the app's life, through a pilot load or a
 //!   new game: rdm:phase/combat-ai-fidelity/phase-23-left-out-of-phase-16.
 //! - The warp-stage writes of the trader's leave (+0x50, +0xa4), the
@@ -71,6 +69,8 @@ use crate::ai::plunder_target::reads_above_trader;
 use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal, Surroundings, leave};
 use crate::chance::Chance;
+use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
 /// The fewest ticks a search lasts (`Rand(100)+100`, @0x8d84b).
@@ -204,6 +204,33 @@ pub fn searching(npc: &Npc) -> bool {
         npc.goal,
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. }
     ) && matches!(npc.lost_sight, SearchTimer::Searching(_))
+}
+
+/// The ship a trader (AI type 2 or below) targets among `around`: its
+/// goal's quarry, but stopped ([`Goal::Wait`], state 6) the target it
+/// holds, which the lost-sight stop keeps (@0x8d803-0x8d80f) and the
+/// idle blocks' stop never writes (`_WimpyTraderAI` @0x8b1a3,
+/// `_BraveTraderAI` @0x8b60d), until its slot is gone
+/// (`_HighLevelAIHandler` @0x8d4e4-0x8d50d: one breaking up is still
+/// active). A stopped trader fires nothing at it (state 6 flies sub 1,
+/// @0x8f101), but the threat tests read it
+/// ([`Npc::threatens_player_or_led`], [`Npc::threatens_npc_among`],
+/// [`Npc::threatens_player_extended`]).
+///
+/// Once a stop keeps provocation
+/// (rdm:phase/combat-ai-fidelity/phase-24-provocation-kept-through-leave,
+/// as [`provoked_by`](crate::ai::provoked_by) reads this target), a
+/// stopped trader with a kept target and provocation turns on it again,
+/// as the original's provoked branch does from state 6 (@0x8b1ac,
+/// @0x8b616).
+#[must_use]
+pub fn trader_target(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+    match npc.goal {
+        Goal::Wait => npc
+            .target
+            .filter(|&ship| around.condition_of(ship).is_some_and(Condition::active)),
+        goal => goal.quarry(),
+    }
 }
 
 /// `decision`, an interceptor's think, through `_InterceptorAI`'s

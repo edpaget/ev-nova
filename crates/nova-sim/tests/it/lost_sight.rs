@@ -244,3 +244,20 @@ fn a_brave_trader_whose_target_cloaks_leaves_or_stops() {
     assert_eq!(brave_trader_with(100), Goal::JumpOut);
     assert_eq!(brave_trader_with(99), Goal::Wait, "it can't jump");
 }
+
+#[test]
+fn a_brave_trader_that_stops_keeps_its_target() {
+    // State 6 keeps +0x70 (@0x8d803-0x8d80f), which only the target's
+    // slot going inactive clears (@0x8d4e4-0x8d50d).
+    let govts = govts();
+    let mut traffic = traffic(AiType::BraveTrader);
+    traffic.npcs_mut()[0].class_fuel = 99;
+    for tick_index in 0..3 {
+        tick(&mut traffic, &govts, &mut Draws::of(&[]));
+        let hunter = hunter(&traffic);
+        assert_eq!(hunter.goal, Goal::Wait, "tick {tick_index}");
+        assert_eq!(hunter.target, Some(QUARRY), "tick {tick_index}");
+    }
+    let npcs = traffic.npcs().to_vec();
+    assert!(hunter(&traffic).threatens_npc_among(NpcId(1), &npcs));
+}

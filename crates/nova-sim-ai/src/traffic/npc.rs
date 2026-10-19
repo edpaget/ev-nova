@@ -725,8 +725,26 @@ impl Npc {
         )
     }
 
+    /// The ship the threat tests read as the one it fights: its goal's
+    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) the
+    /// target it holds. The original's tests read +0x70 and spare none of
+    /// state 6 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
+    /// `_ExtendedIsThreatToShip` @0x81a27), and a trader's stop keeps it
+    /// (@0x8d803-0x8d80f; see
+    /// [`trader_target`](crate::ai::lost_sight::trader_target)). In the
+    /// other goals that leave the quarry none, +0x70 is -1 or the state is
+    /// one the tests spare.
+    #[must_use]
+    pub fn fought(&self) -> Option<ShipRef> {
+        match self.goal {
+            Goal::Wait => self.target,
+            goal => goal.quarry(),
+        }
+    }
+
     /// Whether it fights `ship` directly: it is intact, flying, and
-    /// attacking, sniping at or fleeing from it.
+    /// attacking, sniping at or fleeing from it, or stopped holding it as
+    /// its target ([`Npc::fought`]).
     ///
     /// This is only the direct-target part of the original's threat
     /// tests: `_ExtendedIsThreatToShip` @0x81a27 also counts a ship
@@ -737,7 +755,7 @@ impl Npc {
     pub fn threatens(&self, ship: ShipRef) -> bool {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
-            && self.goal.quarry() == Some(ship)
+            && self.fought() == Some(ship)
     }
 
     /// Whether it threatens the NPC `ship`, as `_ExtendedIsThreatToShip`
@@ -752,8 +770,9 @@ impl Npc {
     /// 15, 18; and its target (+0x70) is `ship` (@0x81aa9-0x81b03) or an
     /// active ship in slots 1-63, other than itself, whose leader is
     /// `ship` (@0x81ab2-0x81b59). Here [`Condition::Intact`] stands for
-    /// the active and disabled tests and [`Goal::quarry`]'s attack, snipe
-    /// and flee for the AI states. Unlike `_IsThreatToPlayer`, there is
+    /// the active and disabled tests and [`Npc::fought`] (the quarry of an
+    /// attack, snipe or flight, or a stop's kept target) for the AI states
+    /// and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
     /// [`Npc::threatens`] keeps it, since its one modelled reader
     /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target))
@@ -769,7 +788,7 @@ impl Npc {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
             && self.leader != Some(ship)
-            && match self.goal.quarry() {
+            && match self.fought() {
                 Some(ShipRef::Npc(id)) => {
                     id == ship || npcs.iter().any(|n| n.id == id && n.leader == Some(ship))
                 }
@@ -826,7 +845,8 @@ impl Npc {
     /// coming out of a gate or jumping in has one, and so does a flying
     /// pirate docked or holding after a plunder, or a ship it took into
     /// its fleet), and
-    /// [`Goal::quarry`]'s attack, snipe and flee for the AI states.
+    /// [`Npc::fought`] (the quarry of an attack, snipe or flight, or a
+    /// stop's kept target) for the AI states and the target.
     ///
     /// `_FindNearestThreatToPlayer` (@0x9529-0x956b) also takes a ship
     /// that fails this test but targets an active ship the player leads
@@ -840,7 +860,7 @@ impl Npc {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
             && self.ai_wait == 0
-            && match self.goal.quarry() {
+            && match self.fought() {
                 Some(ShipRef::Player) => true,
                 Some(ShipRef::Npc(id)) => led(id),
                 None => false,
@@ -882,7 +902,7 @@ impl Npc {
     ///   the engine has no defence ships; rdm:task/planet-domination owns
     ///   them.
     /// - **The target clause**: it [threatens the player or a ship the
-    ///   player leads](Npc::threatens_player_or_led) by its goal's quarry,
+    ///   player leads](Npc::threatens_player_or_led) by [`Npc::fought`],
     ///   or its target ([`Npc::target`], the hit's, which
     ///   `_DamageShip` sets before `_AIMakeShipAttackPlayer`, @0x3bcf6) is
     ///   the player (@0x81be1) or a ship the player leads (@0x81c2e-0x81c4a)
@@ -1530,6 +1550,48 @@ mod tests {
                 "{quarry:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_stopped_ship_threatens_by_the_target_it_kept() {
+        // `_IsThreatToPlayer` (@0x7f536-0x7f56b) and `_ExtendedIsThreatToShip`
+        // spare none of state 6, and read +0x70, which a trader's stop
+        // keeps (@0x8d803-0x8d80f).
+        let asker = NpcId(1);
+        let escort = NpcId(9);
+        let led = |id: NpcId| id == escort;
+        let stopped = |target| Npc {
+            goal: Goal::Wait,
+            target,
+            ..crate::traffic::fixture::npc(4, ShipStats::default())
+        };
+        let on_player = stopped(Some(ShipRef::Player));
+        assert!(on_player.threatens_player_or_led(led));
+        assert!(on_player.threatens_player());
+        assert!(on_player.threatens_player_extended(&[], true));
+        assert!(stopped(Some(ShipRef::Npc(escort))).threatens_player_or_led(led));
+        assert!(!stopped(None).threatens_player_or_led(led), "no target");
+        assert!(!stopped(None).threatens_player());
+        let npcs = [crate::traffic::fixture::npc(1, ShipStats::default())];
+        assert!(stopped(Some(ShipRef::Npc(asker))).threatens_npc_among(asker, &npcs));
+        assert!(!stopped(None).threatens_npc_among(asker, &npcs));
+        let idle = Npc {
+            goal: Goal::Idle,
+            ..on_player.clone()
+        };
+        assert!(
+            !idle.threatens_player_or_led(led),
+            "an idle ship by its quarry alone"
+        );
+        let inspecting = Npc {
+            goal: Goal::Inspect(ShipRef::Npc(asker)),
+            target: Some(ShipRef::Npc(asker)),
+            ..on_player
+        };
+        assert!(
+            !inspecting.threatens_npc_among(asker, &npcs),
+            "state 7 spared"
+        );
     }
 
     #[test]
