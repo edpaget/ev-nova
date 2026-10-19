@@ -75,7 +75,7 @@
 use std::rc::Rc;
 
 use super::missions::TextSource;
-use super::{Session, Setup, hire};
+use super::{Outbox, Session, Setup, hire};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -381,7 +381,7 @@ impl Session {
     /// The hail quotes said since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_quotes(&mut self) -> Vec<PersonQuote> {
-        std::mem::take(&mut self.out.quotes)
+        self.out.take_quotes()
     }
 
     /// Person `id` is gone for good: it never appears again, and its
@@ -500,6 +500,14 @@ impl Session {
                 strike.downed = None;
             }
         }
+    }
+}
+
+impl Outbox {
+    /// The hail quotes said since they were last taken, in order; taking
+    /// them empties the list.
+    fn take_quotes(&mut self) -> Vec<PersonQuote> {
+        std::mem::take(&mut self.quotes)
     }
 }
 

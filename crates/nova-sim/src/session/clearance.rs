@@ -66,7 +66,7 @@
 //! request on the press, between ticks, and the approach from the next
 //! tick the land key is up, so the two agree.
 
-use super::Session;
+use super::{Outbox, Session};
 use crate::clearance::{DockKind, approach, approach_clears};
 use crate::landing::{DockPress, DockSaid, LandOutcome, LandingRefusal};
 use crate::message::SimMessage;
@@ -164,7 +164,7 @@ impl Session {
     /// [`Session::forget_dock_chatter`] starts forgetting.
     #[cfg(test)]
     pub(crate) fn chatter_marks(&self) -> (usize, usize) {
-        (self.out.messages.len(), self.out.sounds.len())
+        self.out.chatter_marks()
     }
 
     /// Forgets the dock request's messages and traffic control's sound
@@ -172,9 +172,26 @@ impl Session {
     /// land without pinning them.
     #[cfg(test)]
     pub(crate) fn forget_dock_chatter(&mut self, marks: (usize, usize)) {
+        self.out.forget_dock_chatter(marks);
+    }
+}
+
+impl Outbox {
+    /// How many messages and sounds are queued: where
+    /// [`Outbox::forget_dock_chatter`] starts forgetting.
+    #[cfg(test)]
+    fn chatter_marks(&self) -> (usize, usize) {
+        (self.messages.len(), self.sounds.len())
+    }
+
+    /// Forgets the dock request's messages and traffic control's sound
+    /// queued since `marks` ([`Outbox::chatter_marks`]), for fixtures that
+    /// land without pinning them.
+    #[cfg(test)]
+    fn forget_dock_chatter(&mut self, marks: (usize, usize)) {
         let (messages, sounds) = marks;
         let mut index = 0;
-        self.out.messages.retain(|message| {
+        self.messages.retain(|message| {
             index += 1;
             index <= messages
                 || !matches!(
@@ -185,7 +202,7 @@ impl Session {
                 )
         });
         let mut index = 0;
-        self.out.sounds.retain(|sound| {
+        self.sounds.retain(|sound| {
             index += 1;
             index <= sounds || *sound != SimSound::TrafficControl
         });

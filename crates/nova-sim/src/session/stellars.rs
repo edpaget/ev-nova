@@ -146,7 +146,7 @@ impl Session {
     /// when that changed either.
     pub(super) fn rebuild_stellars(&mut self) {
         if self.rebuild_quietly() {
-            self.emit(super::SessionEvent::StellarsRebuilt);
+            self.out.emit(super::SessionEvent::StellarsRebuilt);
         }
     }
 

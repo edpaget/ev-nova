@@ -455,7 +455,7 @@ mod tests {
             .with_strings(Rc::new(Cargoes));
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         let _ = session.settle_script(catalog, &mut NeverFires);
-        let _ = session.take_texts_only();
+        let _ = session.out.take_texts_only();
         session
     }
 
@@ -514,7 +514,7 @@ mod tests {
             .expect("accepted");
         assert!(aboard(&session, slot));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 text(MissionTextKind::Brief, 140, "Brief."),
                 text(
@@ -543,7 +543,7 @@ mod tests {
             .expect("accepted");
         assert!(aboard(&session, slot));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 140, "Brief.")],
             "no LoadCargText"
         );
@@ -562,7 +562,7 @@ mod tests {
                 .expect("accepted");
             assert!(!aboard(&session, slot), "{mode}");
             assert_eq!(
-                session.take_texts_only(),
+                session.out.take_texts_only(),
                 [text(MissionTextKind::Brief, 140, "Brief.")],
                 "{mode}"
             );
@@ -585,6 +585,7 @@ mod tests {
         assert_eq!(session.pilot().total_cargo(), 0);
         assert!(
             session
+                .out
                 .take_texts_only()
                 .iter()
                 .all(|shown| shown.kind != MissionTextKind::LoadCargo)
@@ -636,7 +637,7 @@ mod tests {
             session.accept_mission(MissionId(140), &mut NeverFires),
             Ok(0)
         );
-        let _ = session.take_texts_only();
+        let _ = session.out.take_texts_only();
         session
     }
 
@@ -646,6 +647,7 @@ mod tests {
 
     fn kinds(session: &mut Session) -> Vec<MissionTextKind> {
         session
+            .out
             .take_texts_only()
             .into_iter()
             .map(|shown| shown.kind)
@@ -664,7 +666,7 @@ mod tests {
         assert!(aboard(&session, 0));
         assert!(reached(&session));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(
                 MissionTextKind::LoadCargo,
                 140,
@@ -685,7 +687,7 @@ mod tests {
         session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
         land_on(&mut session, &catalog, 129);
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)],
             "20 holds"
         );
@@ -695,7 +697,7 @@ mod tests {
         session.pilot.cargo.insert(Good::Commodity(0), 16);
         land_on(&mut session, &catalog, 129);
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::NoRoom, 140, NO_SPACE_TO_LOAD)],
             "4 free"
         );
@@ -743,7 +745,7 @@ mod tests {
         assert!(!session.pick_up_boarded_cargo(0));
         assert!(!aboard(&session, 0));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)]
         );
         let catalog = cargo_catalog(vec![round_trip(140, 1, 1)], vec![]);
@@ -762,7 +764,7 @@ mod tests {
         let _ = session.load_description(Some("Earlier."), movie.as_ref(), &mut NeverFires);
         assert!(!session.pick_up_boarded_cargo(0));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [MissionText {
                 movie,
                 ..text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)
@@ -900,7 +902,7 @@ mod tests {
         land_on(&mut session, &catalog, 129);
         assert!(!aboard(&session, 0));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(
                 MissionTextKind::DumpCargo,
                 140,
@@ -1048,7 +1050,7 @@ mod tests {
         let mut session = accepted(&catalog);
         land_on(&mut session, &catalog, 129);
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::DumpCargo, 140, "Dumped.")]
         );
     }
@@ -1100,7 +1102,7 @@ mod tests {
         }
         session.pilot.cargo.insert(Good::Commodity(0), 3);
         session.pilot.cargo.insert(Good::Junk(JunkId(146)), 2);
-        let _ = session.take_texts_only();
+        let _ = session.out.take_texts_only();
         session
     }
 

@@ -46,7 +46,7 @@
 
 use std::collections::BTreeMap;
 
-use super::Session;
+use super::{Outbox, Session};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, leave};
 #[cfg(doc)]
@@ -520,7 +520,7 @@ impl Session {
     /// What the player's fighters met as it left systems since this was
     /// last taken, in order; taking it empties the list.
     pub fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
-        std::mem::take(&mut self.out.fighter_notes)
+        self.out.take_fighter_notes()
     }
 
     /// Puts the fighter of `sortie` back into its bay, a round again.
@@ -537,6 +537,14 @@ impl Session {
                 }
             }
         }
+    }
+}
+
+impl Outbox {
+    /// What the player's fighters met as it left systems since this was
+    /// last taken, in order; taking it empties the list.
+    fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
+        std::mem::take(&mut self.fighter_notes)
     }
 }
 

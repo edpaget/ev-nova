@@ -48,7 +48,7 @@
 //! @0x34a54-0x34a72, counted down @0x35026-0x35048). The pickup path sets
 //! no wait.
 
-use super::{Session, Statics};
+use super::{Outbox, Session, Statics};
 use crate::board::{BoardRefusal, BoardTarget, MissionBoardLine};
 use crate::combat::{Nominal, ShipRef, Strike};
 use crate::sound::SimSound;
@@ -59,16 +59,6 @@ use crate::traffic::npc::{Npc, NpcId};
 pub(super) const BOARDED_WAIT: u32 = 100;
 
 impl Session {
-    /// Beeps [`SimSound::Refused`] for `refusal` when it is said, as
-    /// `_HandlePlayerBoardAttempt` plays `_beepSnd[3]` before each line
-    /// (see the module docs); a silent one ([`BoardRefusal::silent`])
-    /// plays nothing.
-    pub(super) fn beep_refusal(&mut self, refusal: BoardRefusal) {
-        if !refusal.silent() {
-            self.out.sounds.push(SimSound::Refused);
-        }
-    }
-
     /// Calls the NPCs to `npc`'s help as for a hit by the player: an
     /// intended strike of no damage answered on the next traffic tick
     /// (`_DoGoodSamaritan`, called by `_HandlePlayerBoardAttempt` itself,
@@ -116,7 +106,7 @@ impl Session {
     /// none. Any other board leaves none here: a standing mission's ship
     /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
     pub fn take_board_line(&mut self) -> Option<MissionBoardLine> {
-        self.out.board_line.take()
+        self.out.take_board_line()
     }
 
     /// Puts the player's ship over NPC `id`, at its place, velocity and
@@ -129,6 +119,26 @@ impl Session {
             self.player = state;
             self.target = Some(id);
         }
+    }
+}
+
+impl Outbox {
+    /// Beeps [`SimSound::Refused`] for `refusal` when it is said, as
+    /// `_HandlePlayerBoardAttempt` plays `_beepSnd[3]` before each line
+    /// (see the module docs); a silent one ([`BoardRefusal::silent`])
+    /// plays nothing.
+    pub(super) fn beep_refusal(&mut self, refusal: BoardRefusal) {
+        if !refusal.silent() {
+            self.sounds.push(SimSound::Refused);
+        }
+    }
+
+    /// The comm line a failed mission's ship said as the last board
+    /// plundered it, on its pickup or assist path, once: taking it leaves
+    /// none. Any other board leaves none here: a standing mission's ship
+    /// says its line in [`Boarding::MissionShip`](crate::board::Boarding::MissionShip).
+    fn take_board_line(&mut self) -> Option<MissionBoardLine> {
+        self.board_line.take()
     }
 }
 

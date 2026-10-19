@@ -78,8 +78,8 @@
 //!   (`_AICallForReinforcements(ship, 1)` @0x9636d; see the
 //!   `reinforcements` module).
 
-use super::Session;
 use super::missions::TextSource;
+use super::{Outbox, Session};
 use crate::ai::Goal;
 use crate::catalog::{CommCatalog, MissionId, ShipId, StellarId};
 use crate::chance::Chance;
@@ -169,7 +169,8 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<HailView, HailRefusal> {
         self.talk = None;
-        self.beep_unanswered(self.answering().map(|npc| npc.id))?;
+        self.out
+            .beep_unanswered(self.answering().map(|npc| npc.id))?;
         let npc = self.answering()?;
         let dispositions = self.dispositions(npc);
         let escort = npc.escort.is_some();
@@ -207,19 +208,6 @@ impl Session {
             release: false,
         });
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
-    }
-
-    /// `answered`, beeping [`SimSound::Refused`] once with its
-    /// refusal, if any, as every refusal of `_HandlePlayerCommunication`
-    /// plays `_beepSnd[3]` (@0x626cf, @0x6206c, @0x6261c, @0x6264e).
-    pub(super) fn beep_unanswered<T>(
-        &mut self,
-        answered: Result<T, HailRefusal>,
-    ) -> Result<T, HailRefusal> {
-        if answered.is_err() {
-            self.out.sounds.push(SimSound::Refused);
-        }
-        answered
     }
 
     /// What the comm key hails, Option held as `option` says, drawing
@@ -652,7 +640,28 @@ impl Session {
     /// What the NPCs assisting the player have done since this was last
     /// taken, in order; taking it empties the list.
     pub fn take_comm(&mut self) -> Vec<CommNote> {
-        std::mem::take(&mut self.out.comm)
+        self.out.take_comm()
+    }
+}
+
+impl Outbox {
+    /// `answered`, beeping [`SimSound::Refused`] once with its
+    /// refusal, if any, as every refusal of `_HandlePlayerCommunication`
+    /// plays `_beepSnd[3]` (@0x626cf, @0x6206c, @0x6261c, @0x6264e).
+    pub(super) fn beep_unanswered<T>(
+        &mut self,
+        answered: Result<T, HailRefusal>,
+    ) -> Result<T, HailRefusal> {
+        if answered.is_err() {
+            self.sounds.push(SimSound::Refused);
+        }
+        answered
+    }
+
+    /// What the NPCs assisting the player have done since this was last
+    /// taken, in order; taking it empties the list.
+    fn take_comm(&mut self) -> Vec<CommNote> {
+        std::mem::take(&mut self.comm)
     }
 }
 

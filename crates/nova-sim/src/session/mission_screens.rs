@@ -36,7 +36,7 @@
 
 #[cfg(test)]
 use super::missions::TextSource;
-use super::{Session, Statics};
+use super::{Outbox, Session, Statics};
 use crate::catalog::{DescMovie, MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::galaxy_map::MapMarks;
@@ -327,21 +327,7 @@ impl Session {
     /// taken, in the order they came. Taking them lets go of the bars
     /// noted with them ([`Session::text_bars`]).
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown> {
-        self.out.text_bars.clear();
-        std::mem::take(&mut self.out.shown_texts)
-    }
-
-    /// The mission texts to show since they were last taken, for a test
-    /// that queues no offer movie: it panics on one.
-    #[cfg(test)]
-    pub(crate) fn take_texts_only(&mut self) -> Vec<MissionText> {
-        self.take_mission_texts()
-            .into_iter()
-            .map(|shown| match shown {
-                MissionShown::Text(text) => text,
-                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
-            })
-            .collect()
+        self.out.take_mission_texts()
     }
 
     /// Queues `mission`'s offer movie to show next, when its `dësc` names
@@ -416,7 +402,7 @@ impl Session {
     /// whether the last text was queued after its last redraw.
     #[must_use]
     pub fn texts_queued(&self) -> u64 {
-        self.out.texts_queued
+        self.out.texts_queued()
     }
 
     /// The status bar as each mission text since they were last taken
@@ -427,7 +413,7 @@ impl Session {
     /// Taking the texts lets go of them.
     #[must_use]
     pub fn text_bars(&self) -> &[TextBar] {
-        &self.out.text_bars
+        self.out.text_bars()
     }
 
     /// The nav mode ([`Session::nav_mode`]) as the last text since they
@@ -435,7 +421,7 @@ impl Session {
     /// [`Session::text_bars`]'s.
     #[must_use]
     pub fn text_nav(&self) -> Option<NavMode> {
-        self.out.text_bars.last().map(|bar| bar.nav)
+        self.out.text_nav()
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
@@ -803,6 +789,56 @@ impl Session {
     }
 }
 
+impl Outbox {
+    /// The mission texts and offer movies to show since they were last
+    /// taken, in the order they came. Taking them lets go of the bars
+    /// noted with them ([`Session::text_bars`]).
+    fn take_mission_texts(&mut self) -> Vec<MissionShown> {
+        self.text_bars.clear();
+        std::mem::take(&mut self.shown_texts)
+    }
+
+    /// The mission texts to show since they were last taken, for a test
+    /// that queues no offer movie: it panics on one.
+    #[cfg(test)]
+    pub(super) fn take_texts_only(&mut self) -> Vec<MissionText> {
+        self.take_mission_texts()
+            .into_iter()
+            .map(|shown| match shown {
+                MissionShown::Text(text) => text,
+                MissionShown::Movie(movie) => panic!("an offer movie: {movie:?}"),
+            })
+            .collect()
+    }
+
+    /// How many mission texts have been queued since the session started,
+    /// never reset: a view that notes it at each of its redraws can tell
+    /// whether the last text was queued after its last redraw.
+    #[must_use]
+    fn texts_queued(&self) -> u64 {
+        self.texts_queued
+    }
+
+    /// The status bar as each mission text since they were last taken
+    /// was queued, in order, one for each text ([`TextBar`]): what each
+    /// text's caller redraws the whole bar with as it closes, where a
+    /// script run after it, such as an `OnSuccess` after the `CompText`
+    /// (@0xa048c, @0xa0491, then @0xa04f8), has written the bar since.
+    /// Taking the texts lets go of them.
+    #[must_use]
+    fn text_bars(&self) -> &[TextBar] {
+        &self.text_bars
+    }
+
+    /// The nav mode ([`Session::nav_mode`]) as the last text since they
+    /// were last taken was queued, `None` with none: the last of
+    /// [`Session::text_bars`]'s.
+    #[must_use]
+    fn text_nav(&self) -> Option<NavMode> {
+        self.text_bars.last().map(|bar| bar.nav)
+    }
+}
+
 impl Statics {
     /// What the screens show of mission `id`, as the session read it as
     /// it started: `None` for a `mïsn` it has no texts of.
@@ -1007,7 +1043,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off you go, captain.")],
             "the earlier <SRK129> is reset (@0x71926-0x71930)"
         );
@@ -1679,7 +1715,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 MissionText {
                     graphic: Some(5008),
@@ -1771,7 +1807,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 MissionText {
                     movie: film("No.mov", 0x0001),
@@ -1799,14 +1835,14 @@ mod tests {
         session
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
-        assert_eq!(session.take_texts_only(), []);
+        assert_eq!(session.out.take_texts_only(), []);
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().get(0).is_none(), "completed");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Comp, 130, "Delivered to Luna.")]
         );
-        assert_eq!(session.take_texts_only(), [], "taken");
+        assert_eq!(session.out.take_texts_only(), [], "taken");
     }
 
     // The nav each text notes as it is queued.
@@ -1925,7 +1961,7 @@ mod tests {
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().get(0).is_none(), "failed");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Fail, 130, "Failed at [Error].")]
         );
     }
@@ -1959,7 +1995,7 @@ mod tests {
             .refuse_mission(MissionId(130), &mut NeverFires)
             .expect("refused");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [
                 text(MissionTextKind::Refuse, 130, "No trip to [Error]."),
                 text(MissionTextKind::Brief, 131, "Off to Mars."),
@@ -1985,7 +2021,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off to [Error].")],
             "its OnAccept aborted it, freeing the slot"
         );
@@ -2001,7 +2037,7 @@ mod tests {
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [text(MissionTextKind::Brief, 130, "Off to Mars.")]
         );
     }
@@ -2032,7 +2068,7 @@ mod tests {
         run(&mut session, "F131");
         land_on(&mut session, &catalog, 129);
         assert!(session.pilot().missions().iter().next().is_none());
-        assert_eq!(session.take_texts_only(), []);
+        assert_eq!(session.out.take_texts_only(), []);
     }
 
     /// Mission `id`, offered at the bar, to Mars for 900.
@@ -2717,7 +2753,7 @@ mod tests {
                 session.accept_mission(MissionId(141), &mut NeverFires),
                 Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
             );
-            assert_eq!(session.take_texts_only(), [], "{source:?}");
+            assert_eq!(session.out.take_texts_only(), [], "{source:?}");
             assert_eq!(session.take_sounds(), [], "{source:?}");
             assert_eq!(outside(&session), [141, 142, 143], "{source:?}");
             assert_eq!(

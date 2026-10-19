@@ -62,7 +62,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use super::control::Facts;
-use super::{Session, Setup, Statics};
+use super::{Outbox, Session, Setup, Statics};
 use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
 use crate::control::ControlBits;
@@ -117,7 +117,7 @@ impl Session {
     /// What paying the escorts did since this was last taken, in order;
     /// taking it empties the list.
     pub fn take_pay_notes(&mut self) -> Vec<PayNote> {
-        std::mem::take(&mut self.out.pay_notes)
+        self.out.take_pay_notes()
     }
 
     /// Pays every hired escort its wage for each of `days`, in fleet
@@ -281,6 +281,14 @@ impl Session {
             .collect();
         self.traffic
             .free_berth_skipping(self.setup.spawn_reserve(SPAWN_RESERVE), &unplaced)
+    }
+}
+
+impl Outbox {
+    /// What paying the escorts did since this was last taken, in order;
+    /// taking it empties the list.
+    fn take_pay_notes(&mut self) -> Vec<PayNote> {
+        std::mem::take(&mut self.pay_notes)
     }
 }
 

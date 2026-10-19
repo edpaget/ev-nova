@@ -39,7 +39,7 @@
 //! notes, fighter notes and the rest, each with its own `take_*`) are not
 //! folded into this one; doing so is a possible follow-up.
 
-use super::Session;
+use super::{Outbox, Session};
 
 /// A change to what a view draws of the session (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,15 +58,23 @@ pub enum SessionEvent {
 }
 
 impl Session {
+    /// The events since they were last taken, in order; taking them
+    /// empties the list.
+    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+        self.out.take_events()
+    }
+}
+
+impl Outbox {
     /// Tells `event` to whoever takes the events next.
     pub(super) fn emit(&mut self, event: SessionEvent) {
-        self.out.events.push(event);
+        self.events.push(event);
     }
 
     /// The events since they were last taken, in order; taking them
     /// empties the list.
-    pub fn take_events(&mut self) -> Vec<SessionEvent> {
-        std::mem::take(&mut self.out.events)
+    fn take_events(&mut self) -> Vec<SessionEvent> {
+        std::mem::take(&mut self.events)
     }
 }
 
@@ -84,8 +92,8 @@ mod tests {
     #[test]
     fn the_events_are_taken_in_order_once() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.emit(SessionEvent::SystemChanged);
-        session.emit(SessionEvent::ShipChanged);
+        session.out.emit(SessionEvent::SystemChanged);
+        session.out.emit(SessionEvent::ShipChanged);
         assert_eq!(
             session.take_events(),
             [SessionEvent::SystemChanged, SessionEvent::ShipChanged]

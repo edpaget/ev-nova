@@ -2853,7 +2853,7 @@ mod tests {
             .insert(crate::market::Good::Commodity(0), held);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, catalog);
-        let _ = session.take_texts_only();
+        let _ = session.out.take_texts_only();
         session
     }
 
@@ -2880,7 +2880,7 @@ mod tests {
                 "20 holds, 21 tons of {cargo_type}"
             );
             assert_eq!(
-                session.take_texts_only(),
+                session.out.take_texts_only(),
                 [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
             );
             assert!(!session.control_bit(bit(20)), "no OnAccept");
@@ -2900,7 +2900,7 @@ mod tests {
             "10 free, 11 tons"
         );
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [refusal_text(140, NO_SPACE_TO_ACCEPT)]
         );
         assert!(!session.control_bit(bit(20)));
@@ -2945,7 +2945,7 @@ mod tests {
         assert_eq!(held(&session), []);
         assert!(!session.control_bit(bit(20)));
         assert_eq!(
-            session.take_texts_only(),
+            session.out.take_texts_only(),
             [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
         );
         run(&mut session, "S141");
@@ -2966,7 +2966,7 @@ mod tests {
             Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
         );
         run(&mut session, "S140");
-        assert_eq!(session.take_texts_only(), []);
+        assert_eq!(session.out.take_texts_only(), []);
     }
 
     #[test]

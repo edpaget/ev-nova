@@ -162,7 +162,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use super::hire::Shared;
-use super::{ReservePolicy, Session, SessionEvent, Setup};
+use super::{Outbox, ReservePolicy, Session, SessionEvent, Setup};
 use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
@@ -408,7 +408,7 @@ impl Session {
         // by either reading (see the `ship_display` module).
         self.last_set_fold();
         self.out.save_due = true;
-        self.emit(SessionEvent::ShipChanged);
+        self.out.emit(SessionEvent::ShipChanged);
     }
 
     /// Changes the player's ship to class `ship`, its outfits carried as
@@ -484,7 +484,7 @@ impl Session {
     /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
     /// or a purchase that is refused before it begins clears nothing.
     pub fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
-        std::mem::take(&mut self.out.interface_loads)
+        self.out.take_interface_loads()
     }
 
     /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
@@ -507,6 +507,25 @@ impl Session {
         };
         let previous = self.pilot.ship_name.as_deref().unwrap_or_default();
         self.pilot.ship_name = Some(pick.replace('*', previous));
+    }
+}
+
+impl Outbox {
+    /// The `C`, `E` and `H` run while docked since the last run of docked
+    /// scripts began, in order, each as the status bar's
+    /// `_LoadIntfResource` saw it at the operator ([`InterfaceLoad`]);
+    /// taking them empties the list. Each of these begins a run, clearing
+    /// what the one before left untaken: an outfit order
+    /// ([`Session::outfit_order`]), a ship purchase
+    /// ([`Session::buy_ship`]), a mission accept, refusal or abort
+    /// ([`Session::accept_mission`], [`Session::refuse_mission`],
+    /// [`Session::abort_mission`]), an offer asked for at a venue
+    /// ([`Session::next_offer`]), a settling ([`Session::settle_script`],
+    /// a landing's mission checks among what it settles) and a jettison
+    /// ([`Session::jettison_cargo`], its failures' `OnFailure`). An order
+    /// or a purchase that is refused before it begins clears nothing.
+    fn take_interface_loads(&mut self) -> Vec<InterfaceLoad> {
+        std::mem::take(&mut self.interface_loads)
     }
 }
 

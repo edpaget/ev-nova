@@ -373,13 +373,13 @@ mod tests {
         session
             .accept_mission(MissionId(300), &mut NeverFires)
             .expect("accepted");
-        let texts = session.take_texts_only();
+        let texts = session.out.take_texts_only();
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].kind, MissionTextKind::Brief);
         assert_eq!(texts[0].map, Some(green(131, true)));
         let mut session = landed(&catalog);
         let _ = session.refuse_mission(MissionId(300), &mut NeverFires);
-        let texts = session.take_texts_only();
+        let texts = session.out.take_texts_only();
         assert_eq!(texts[0].kind, MissionTextKind::Refuse);
         assert_eq!(texts[0].map, None, "no map from a refusal's text");
     }

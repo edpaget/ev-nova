@@ -676,7 +676,7 @@ impl Session {
         let resolved = self.galaxy.arrival(asked);
         if story::show(&mut self.pilot, &mut self.galaxy, resolved) {
             self.out.save_due = true;
-            self.emit(SessionEvent::GalaxyChanged);
+            self.out.emit(SessionEvent::GalaxyChanged);
         }
         let system = resolved.to;
         let left = self.pilot.system;
@@ -1075,7 +1075,7 @@ impl Session {
             self.tutorial.jumped();
         }
         if let Some(event) = event {
-            self.emit(event);
+            self.out.emit(event);
         }
         if let Some(how) = how.entrance() {
             self.raise(StoryEvent::EnteredSystem { system, how });

@@ -235,7 +235,7 @@ impl Session {
     ) -> Result<Hailed, HailRefusal> {
         self.talk = None;
         // Beeps here once: once answering, it answers in `hail` too.
-        if let HailTarget::Stellar(stellar) = self.beep_unanswered(self.hail_target(option))? {
+        if let HailTarget::Stellar(stellar) = self.out.beep_unanswered(self.hail_target(option))? {
             return Ok(Hailed::Stellar(stellar));
         }
         let linked = self.linked_ship(self.answering()?, OfferedBy::Hail);
@@ -941,7 +941,11 @@ pub(super) mod tests {
         assert!(!session.pilot().gone(PersonId(600)));
         assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(0));
         assert_eq!(session.offer_text(MissionId(130), ""), None, "answered");
-        assert_eq!(session.take_texts_only().len(), 0, "130 has no BriefText");
+        assert_eq!(
+            session.out.take_texts_only().len(),
+            0,
+            "130 has no BriefText"
+        );
     }
 
     #[test]
@@ -1033,6 +1037,7 @@ pub(super) mod tests {
         );
         assert!(session.control_bit(Bit::new(5).expect("a bit")));
         let texts: Vec<String> = session
+            .out
             .take_texts_only()
             .into_iter()
             .map(|text| text.text)
@@ -1062,6 +1067,7 @@ pub(super) mod tests {
         assert!(session.pilot().missions().missions().is_empty());
         assert_eq!(
             session
+                .out
                 .take_texts_only()
                 .into_iter()
                 .map(|text| text.kind)

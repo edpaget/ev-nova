@@ -109,7 +109,7 @@ impl Session {
     pub(super) fn explore_nebula(&mut self, nebula: NebulaId) {
         self.pilot.galaxy.set_nebula_explored(nebula, true);
         self.galaxy.set_overlay(self.pilot.galaxy.clone());
-        self.emit(SessionEvent::GalaxyChanged);
+        self.out.emit(SessionEvent::GalaxyChanged);
         if self.setup.rules.source_for(RuleKey::NebulaExploreOnce) == RuleSource::Bible {
             self.pilot.story_fired.insert(nebula_hook(nebula));
             self.out.save_due = true;

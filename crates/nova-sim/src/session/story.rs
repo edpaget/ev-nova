@@ -524,7 +524,7 @@ impl Session {
             let system = self.pilot.system;
             let sites = self.read_sites(catalog, system);
             if self.set_player_system(system, sites, Dock::AsItWas) {
-                self.emit(SessionEvent::SystemChanged);
+                self.out.emit(SessionEvent::SystemChanged);
             }
         }
         if moved || self.galaxy.govt(self.pilot.system) != govt {
@@ -532,7 +532,7 @@ impl Session {
             let every: BTreeSet<NpcId> = self.traffic.npcs().iter().map(|npc| npc.id).collect();
             self.traffic.retarget(table, &every, Leave::Dropped);
         }
-        self.emit(SessionEvent::GalaxyChanged);
+        self.out.emit(SessionEvent::GalaxyChanged);
     }
 
     /// The writer's one core, for both its entries: changes the pilot's
@@ -575,7 +575,7 @@ impl Session {
         };
         if before.stellar(stellar).destroyed.is_some() != destroyed.is_some() {
             self.stamp_sites();
-            self.emit(SessionEvent::GalaxyChanged);
+            self.out.emit(SessionEvent::GalaxyChanged);
         }
         true
     }

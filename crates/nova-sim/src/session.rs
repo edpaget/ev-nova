@@ -370,8 +370,9 @@
 //! - `setup: setup::Setup` (`setup` module; phase 2, done): the rule set
 //!   and the strategy ports the `with_*` builders set, written only by
 //!   those builders and `set_sound_quiet`.
-//! - `out: outbox::Outbox` (`outbox` module; phase 3, to come): what the
-//!   view takes each frame.
+//! - `out: outbox::Outbox` (`outbox` module; phase 3, done): what the
+//!   session fills and the view takes with the `take_*` methods; nothing
+//!   reads it back but to undo its own writes.
 //! - `ship: player_ship::PlayerShip` (`player_ship` module; phase 4, to
 //!   come): the player's ship.
 //! - `space: space::Space` (`space` module; phase 5, to come): what is in
@@ -2220,7 +2221,7 @@ impl Session {
     /// ([`Session::sabotage_death_descs`]).
     /// True once.
     pub fn take_hold_expired(&mut self) -> bool {
-        std::mem::take(&mut self.out.hold_expiry_due)
+        self.out.take_hold_expired()
     }
 
     /// Begins the fade to black after an expired hold: `_PlayGame`'s exit
@@ -3863,7 +3864,7 @@ impl Session {
             })
             .is_some()
         {
-            self.emit(SessionEvent::GalaxyChanged);
+            self.out.emit(SessionEvent::GalaxyChanged);
         }
         self.pilot.jumped_from = Some(from);
         self.enter_system(
@@ -3905,13 +3906,13 @@ impl Session {
     /// The sounds emitted since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_sounds(&mut self) -> Vec<SimSound> {
-        std::mem::take(&mut self.out.sounds)
+        self.out.take_sounds()
     }
 
     /// The messages raised since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_messages(&mut self) -> Vec<SimMessage> {
-        std::mem::take(&mut self.out.messages)
+        self.out.take_messages()
     }
 
     /// The star map every reader sees: the catalog's, read when the
@@ -4513,7 +4514,7 @@ impl Session {
         if let Some(sites) = self.next_sites.take()
             && self.set_player_system(self.pilot.system, sites, Dock::AsItWas)
         {
-            self.emit(SessionEvent::SystemChanged);
+            self.out.emit(SessionEvent::SystemChanged);
         }
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
@@ -5417,7 +5418,7 @@ impl Session {
     /// changed in the spaceport or, playing strictly, been rescued from the
     /// escape pod since this was last taken. Taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
-        std::mem::take(&mut self.out.save_due)
+        self.out.take_save_due()
     }
 
     /// The stellar the ship is docked at, if it has landed.
@@ -5631,7 +5632,7 @@ impl Session {
         self.out.board_line = None;
         let boarded = self.attempt_board(law, rule, chance);
         if let Err(refusal) = boarded {
-            self.beep_refusal(refusal);
+            self.out.beep_refusal(refusal);
         }
         boarded
     }
@@ -5760,7 +5761,7 @@ impl Session {
 
     /// What the last boarding granted, once: taking it leaves none.
     pub fn take_grant(&mut self) -> Option<Granted> {
-        self.out.granted.take()
+        self.out.take_grant()
     }
 
     /// Every NPC other than `id` that targets it, or fights it, lets it go
@@ -6486,6 +6487,41 @@ impl Setup {
     /// [`FlightRules`]).
     pub(crate) fn flight_rules(&self) -> FlightRules {
         FlightRules::from_rulebook(&self.rules)
+    }
+}
+
+impl Outbox {
+    /// Whether the hold ran out since this was last asked: the seam at the
+    /// countdown's expiry, before the original's `gPause = 1` (0x68838),
+    /// where the sabotage dialogs show over the flight scene
+    /// ([`Session::sabotage_death_descs`]).
+    /// True once.
+    fn take_hold_expired(&mut self) -> bool {
+        std::mem::take(&mut self.hold_expiry_due)
+    }
+
+    /// The sounds emitted since they were last taken, in order; taking
+    /// them empties the list.
+    fn take_sounds(&mut self) -> Vec<SimSound> {
+        std::mem::take(&mut self.sounds)
+    }
+
+    /// The messages raised since they were last taken, in order; taking
+    /// them empties the list.
+    fn take_messages(&mut self) -> Vec<SimMessage> {
+        std::mem::take(&mut self.messages)
+    }
+
+    /// Whether the pilot should be saved: it has landed, taken off,
+    /// changed in the spaceport or, playing strictly, been rescued from the
+    /// escape pod since this was last taken. Taking it clears it.
+    fn take_save_due(&mut self) -> bool {
+        std::mem::take(&mut self.save_due)
+    }
+
+    /// What the last boarding granted, once: taking it leaves none.
+    fn take_grant(&mut self) -> Option<Granted> {
+        self.granted.take()
     }
 }
 

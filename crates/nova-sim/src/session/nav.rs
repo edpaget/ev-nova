@@ -212,7 +212,7 @@
 //! the land key's own selection keeps it, and so does a script's `M` or
 //! `N`.
 
-use super::Session;
+use super::{Outbox, Session};
 use crate::catalog::{StellarId, SystemId};
 use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
 use crate::landing::nearest_stellar;
@@ -279,7 +279,7 @@ impl Session {
     /// as its deselect (@0x674d2) comes later in the same dock request
     /// (see the flight view's `took_off`).
     pub fn take_takeoff_nav(&mut self) -> Option<NavMode> {
-        self.out.takeoff_nav.take()
+        self.out.take_takeoff_nav()
     }
 
     /// The system the galaxy map selects as it opens, as `_DoSystemMap`
@@ -780,6 +780,17 @@ impl Session {
         self.set_nav(NavMode::Hyperspace(link));
         self.out.sounds.push(SimSound::HyperSelected);
         true
+    }
+}
+
+impl Outbox {
+    /// The nav mode and selection as the last take-off began, before
+    /// the stay's days and its deselect, or `None` once taken: what the
+    /// original's take-off redraw (`_PlayerLandOnStellar` @0x633a0) draws,
+    /// as its deselect (@0x674d2) comes later in the same dock request
+    /// (see the flight view's `took_off`).
+    fn take_takeoff_nav(&mut self) -> Option<NavMode> {
+        self.takeoff_nav.take()
     }
 }
 

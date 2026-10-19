@@ -43,9 +43,9 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
+use super::{Outbox, Session};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
@@ -282,7 +282,7 @@ impl Session {
     /// What running set expressions had to tell since this was last taken,
     /// in order; taking it empties the list.
     pub fn take_script_notes(&mut self) -> Vec<ScriptNote> {
-        std::mem::take(&mut self.out.script_notes)
+        self.out.take_script_notes()
     }
 
     /// What a control-bit test reads about the pilot.
@@ -319,6 +319,14 @@ impl Session {
             bits.clear(bit);
         }
         self.out.save_due = true;
+    }
+}
+
+impl Outbox {
+    /// What running set expressions had to tell since this was last taken,
+    /// in order; taking it empties the list.
+    fn take_script_notes(&mut self) -> Vec<ScriptNote> {
+        std::mem::take(&mut self.script_notes)
     }
 }
 
